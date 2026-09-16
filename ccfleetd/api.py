@@ -153,9 +153,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             except HeartbeatError as exc:
                 self._json(400, {"error": str(exc)})
                 return
-            now = time.time()
-            ctx.store.insert_heartbeat(node["id"], now, payload)
-            events = ctx.monitor.check_node(node, now)
+            events = ctx.monitor.record_heartbeat(node, payload, time.time())
             self._json(200, {"ok": True, "pinned_version": node["pinned_version"],
                              "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                              "events": len(events)})

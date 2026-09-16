@@ -26,10 +26,25 @@ class Monitor:
         self._notifier = notifier
         self._clock = clock or time.time
         self._last_prune = 0.0
+        # One lock serialises "read heartbeats -> evaluate -> reconcile alerts" so the
+        # periodic loop and concurrent heartbeat handlers never interleave on a node.
+        self._lock = threading.RLock()
+
+    def record_heartbeat(self, node: dict[str, Any], payload: dict[str, Any],
+                         now: Optional[float] = None) -> list[dict[str, Any]]:
+        """Store a heartbeat and evaluate the node atomically with respect to other checks."""
+        now = self._clock() if now is None else now
+        with self._lock:
+            self._store.insert_heartbeat(node["id"], now, payload)
+            return self._check_node_locked(node, now)
 
     def check_node(self, node: dict[str, Any], now: Optional[float] = None) -> list[dict[str, Any]]:
         """Evaluate one node and reconcile its open alerts. Returns transition events."""
         now = self._clock() if now is None else now
+        with self._lock:
+            return self._check_node_locked(node, now)
+
+    def _check_node_locked(self, node: dict[str, Any], now: float) -> list[dict[str, Any]]:
         recent = self._store.recent_heartbeats(node["id"], limit=2)
         latest = recent[0] if recent else None
         previous = recent[1] if len(recent) > 1 else None

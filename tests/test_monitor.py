@@ -84,3 +84,38 @@ def test_run_forever_survives_check_errors(store, cfg, monkeypatch):
     monkeypatch.setattr(stop, "wait", lambda timeout: stop.set())
     monitor.run_forever(stop)
     assert calls["n"] == 1
+
+
+def test_concurrent_checks_never_duplicate_alerts(store, cfg):
+    """Periodic checks racing heartbeat handlers must leave at most one open alert per rule."""
+    store.add_node("node-a", "erik", now=NOW - 86400)
+    monitor, notifier, clock = make_monitor(store, cfg)
+    errors = []
+
+    def periodic():
+        for _ in range(40):
+            try:
+                monitor.check_all()
+            except Exception as exc:  # noqa: BLE001 - surfaced through the assertion below
+                errors.append(exc)
+
+    def poster():
+        node = store.get_node("node-a")
+        for i in range(40):
+            hb = heartbeat(NOW, disk={"used_pct": 99.0 if i % 2 else 10.0})
+            try:
+                monitor.record_heartbeat(node, hb["payload"], NOW)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+    threads = [threading.Thread(target=periodic), threading.Thread(target=poster),
+               threading.Thread(target=periodic)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    open_alerts = store.open_alerts("node-a")
+    rules_open = [a["rule"] for a in open_alerts]
+    assert len(rules_open) == len(set(rules_open))
+    assert "no_heartbeat" not in rules_open
