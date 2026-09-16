@@ -1,0 +1,4 @@
+# TLS in front of the dashboard. ccfleetd itself listens on loopback only.
+fleet.example.com {
+    reverse_proxy 127.0.0.1:8110
+}

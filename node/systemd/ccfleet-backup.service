@@ -1,0 +1,8 @@
+[Unit]
+Description=ccfleet backup of Claude Code state (credentials excluded)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/ccfleet/backup.env
+ExecStart=%h/.local/bin/ccfleet-backup
+NoNewPrivileges=yes

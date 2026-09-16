@@ -1,0 +1,15 @@
+services:
+  ccfleetd:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ccfleetd:local
+    restart: unless-stopped
+    env_file: ccfleetd.env
+    ports:
+      - "127.0.0.1:8110:8110"
+    volumes:
+      - ccfleet-data:/data
+
+volumes:
+  ccfleet-data:

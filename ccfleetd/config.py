@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping, Optional
+from typing import Optional
 
 ENV_PREFIX = "CCFLEET_"
 MIN_ADMIN_TOKEN_LEN = 16
