@@ -152,7 +152,7 @@ html{scroll-behavior:smooth}
 
 <section id="what">
   <h2><span class="n">01</span>What you get</h2>
-  <p>ccfleet manages several personal Claude Code installations without ever touching their traffic or their logins. Each person gets a small hosted machine (a <em>node</em>) running the unmodified Claude Code CLI, signed in with their own subscription through Anthropic's normal login flow. A tiny agent on each node reports public facts to one fleet server, which draws a dashboard and sends alerts. That is the whole system.</p>
+  <p>ccfleet manages several personal Claude Code installations without proxying their traffic or holding their logins. Each person gets a small hosted machine (a <em>node</em>) running the unmodified Claude Code CLI, signed in with their own subscription through Anthropic's normal login flow. A tiny agent on each node reports public facts to one fleet server, which draws a dashboard and sends alerts. That is the whole system.</p>
 
   <figure>
     <div class="fig-wrap">
@@ -194,7 +194,7 @@ html{scroll-behavior:smooth}
       <text x="30" y="286" class="t13">Fleet server (ccfleetd) · dashboard, JSON, Telegram alerts</text>
       <text x="30" y="306" class="t11">receives: version · uptime · disk · load · egress IP · login present? · last refresh · token expiry · remote-control state</text>
       <text x="30" y="322" class="t11">alerts: no heartbeat · claude missing · version drift · login missing/stale/expired · disk · egress change · RC down</text>
-      <text x="30" y="338" class="t11 mute">never receives a token value · never proxies traffic · read-only view of the fleet</text>
+      <text x="30" y="338" class="t11 mute">never receives or stores a token value · never proxies traffic · read-only view of the fleet</text>
       <path d="M438 230 L438 262" class="ln-dash"/>
       <text x="452" y="252" class="t10 mute">heartbeat, facts only</text>
     </svg>
@@ -216,7 +216,7 @@ html{scroll-behavior:smooth}
       <h3>Deliberately absent</h3>
       <ul>
         <li>No relay or proxy for model traffic.</li>
-        <li>No storage or forwarding of anyone's credentials.</li>
+        <li>No storage of anyone's credentials; the optional gateway forwards an owner's own requests unchanged and keeps nothing.</li>
         <li>No header or request rewriting, no fingerprint games.</li>
         <li>No account pools, share links, seats or automatic failover between accounts.</li>
       </ul>
@@ -353,7 +353,7 @@ claude</code></pre>
     <p>The Login row must show your account. There must be no <em>Anthropic base URL</em> line and no <em>Auth token</em> or <em>API key</em> line. If there is, an environment variable is set that should not be; unset it and restart <code>claude</code>.</p>
     <div class="note ok">
       <p class="t">Where the login lives</p>
-      <p>On Linux, Claude Code keeps it in <code class="long">~/.claude/.credentials.json</code> with mode 0600 and refreshes it by itself. ccfleet never reads the token values; the agent looks only at the file's modification time and the expiry timestamp.</p>
+      <p>On Linux, Claude Code keeps it in <code class="long">~/.claude/.credentials.json</code> with mode 0600 and refreshes it by itself. The agent parses this file only to pick out the expiry timestamp and plan type; the token values are discarded in memory and never sent, logged or stored, and the file's modification time is read from its metadata.</p>
     </div>
   </div>
 
@@ -463,7 +463,7 @@ ccfleetd node pin node-a 2.1.92</code></pre>
       <h3>Rebuild a node</h3>
       <ol>
         <li>New VPS, <code>bootstrap.sh</code>, <code>setup-owner.sh</code>.</li>
-        <li>Restore the latest <code>claude-state-*.tar.gz</code> into the owner's home. It contains settings, projects and history, never credentials.</li>
+        <li>Restore the latest <code>claude-state-*.tar.gz</code> with <code class="long">tar -xzf claude-state-&lt;stamp&gt;.tar.gz -C /</code> (archive paths are relative to <code>/</code>). It contains settings, projects and history, never credentials.</li>
         <li>Owner runs <code>claude</code> and <code>/login</code>.</li>
         <li>Rotate the node token and start the agent.</li>
       </ol>

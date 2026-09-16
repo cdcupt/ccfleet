@@ -41,9 +41,11 @@ Same legal page:
 > Anthropic reserves the right to take measures to enforce these restrictions
 > and may do so without prior notice.
 
-So ccfleet has no relay, no token store, no header or body rewriting, no
-account pool, no sharing. The agent reads two non-secret facts about the
-credentials file and nothing else, and its tests enforce that.
+So ccfleet has no token store, no header or body rewriting, no account pool,
+no sharing. The agent parses the credentials file only to extract the token
+expiry and plan type; token values never leave the process, and its tests
+enforce that. The optional gateway below is a pass-through: it forwards the
+owner's own request, OAuth header included, and keeps nothing.
 
 ## The optional gateway
 

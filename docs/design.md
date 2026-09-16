@@ -57,7 +57,7 @@ to a node without packaging. Every five minutes it collects:
 | --- | --- | --- |
 | `claude.version`, `claude.path` | `claude --version` | version pinning and drift |
 | `credentials.present`, `store` | existence of `~/.claude/.credentials.json` | login missing → owner must `/login` |
-| `credentials.mtime`, `expires_at`, `subscription_type` | file stat and two non-secret JSON fields | stale or expired login; token values are never read into the payload |
+| `credentials.mtime`, `expires_at`, `subscription_type` | file stat, plus two non-secret fields parsed from the JSON | stale or expired login; the parsed token values are discarded and never enter the payload |
 | `disk`, `mem`, `load`, `uptime_s`, `hostname` | `shutil.disk_usage`, `/proc` | capacity and health |
 | `egress.ip`, `egress.source` | first well-formed answer from several public echo services | the node's public identity, alerts on change |
 | `remote_control.state` | `systemctl --user is-active claude-remote-control.service` | phone/browser access up or down |
@@ -109,14 +109,17 @@ nodes (which is how `no_heartbeat` fires without any heartbeat arriving).
 `node/backup.sh` archives the Claude Code state directory nightly, excludes
 `.credentials.json`, `debug/` and `cache/`, refuses to keep an archive that
 contains the credentials file, keeps the last 14 archives locally and uploads
-to an rclone remote when configured. Restoring a node never restores a
-credentials file: the owner logs in again.
+to an rclone remote when configured. Archive paths are relative to `/`
+(`home/<owner>/.claude/...`), so restore with `tar -xzf <archive> -C /`.
+Restoring a node never restores a credentials file: the owner logs in again.
 
 ## Security model
 
-- Nothing in ccfleet ever holds, forwards or logs a token. The agent reads two
-  timestamps from the credentials file and its tests assert no token material
-  reaches the payload.
+- No ccfleet component stores or logs a token. The agent parses the credentials
+  file in memory to extract the expiry and plan type, discards the rest, and its
+  tests assert no token material reaches the payload. The server never receives
+  token values. The optional gateway forwards an owner's own requests, OAuth
+  header included, in transit only and keeps nothing.
 - The server stores node token hashes, validates every heartbeat field, caps
   body size, and escapes every value it renders.
 - Nodes are single-owner machines: keys-only SSH, firewall, unattended security

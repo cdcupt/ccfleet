@@ -11,19 +11,24 @@ they control, with someone keeping an eye on the whole fleet. It gives you:
   off so upgrades are staged, tmux, optional Claude Code Remote Control).
 - **A heartbeat agent** on each node that reports public facts (Claude Code
   version, uptime, disk, load, egress IP, whether a login exists and when it
-  was last refreshed) and never reads a token value.
+  was last refreshed). It parses the credentials file only to extract the
+  token expiry and plan type; token values are dropped in memory and never
+  sent, logged or stored.
 - **A fleet server** with a dashboard and Telegram alerts: missing heartbeat,
   Claude Code missing or drifted from the pinned version, login missing, stale
   or expired, disk high, egress IP changed, Remote Control service down.
 - **Profiles** (`ccp`) so one laptop can hold several accounts, each in its own
   `CLAUDE_CONFIG_DIR`, switched explicitly and never pooled.
 
-What it deliberately does **not** do: proxy model traffic, store or forward
-anyone's credentials, rewrite headers or request bodies, pool or share accounts,
-or fail over one session across accounts. Every request goes from the
-unmodified Claude Code binary, signed in by its owner through Anthropic's own
-flow, straight to Anthropic. See [docs/compliance.md](docs/compliance.md) for
-the reasoning and the exact passages of Anthropic's documentation it follows.
+What it deliberately does **not** do: proxy model traffic, store anyone's
+credentials, rewrite headers or request bodies, pool or share accounts, or
+fail over one session across accounts. Every request goes from the unmodified
+Claude Code binary, signed in by its owner through Anthropic's own flow,
+straight to Anthropic. The one optional component that sits on the request
+path, the pass-through gateway in `gateway/`, forwards an owner's own requests
+unchanged (including their own OAuth header, in transit) and stores nothing.
+See [docs/compliance.md](docs/compliance.md) for the reasoning and the exact
+passages of Anthropic's documentation it follows.
 
 ```
  Owner A ──ssh / Remote Control──▶ Node A (unmodified claude, login A) ──▶ api.anthropic.com

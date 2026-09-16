@@ -71,9 +71,11 @@ very first start must be interactive to accept the one-time prompt.
 
 ## Rebuild a node
 
-1. New VPS, `bootstrap.sh`, `setup-owner.sh`, restore the latest
-   `claude-state-*.tar.gz` from `~/backups/ccfleet` or the rclone remote into
-   the owner's home (it contains no credentials).
+1. New VPS, `bootstrap.sh`, `setup-owner.sh`, then restore the latest
+   `claude-state-*.tar.gz` from `~/backups/ccfleet` or the rclone remote.
+   Archive paths are relative to `/` (`home/<owner>/.claude/...`), so as the
+   owner run `tar -xzf claude-state-<stamp>.tar.gz -C /`. It contains no
+   credentials.
 2. Owner runs `claude` and `/login`.
 3. *server*: `ccfleetd node rotate-token <node-id>` and put the new token in
    `agent.env`; the old token is revoked immediately.
