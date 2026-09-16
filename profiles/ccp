@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# ccp: one Claude Code profile per account, switched explicitly.
+#
+# Each profile is its own CLAUDE_CONFIG_DIR, so each has its own login,
+# settings and history. Nothing is pooled or proxied; `ccp use work` simply
+# runs the unmodified `claude` with that directory.
+#
+#   ccp add <name> [--share]   create a profile (optionally link shared skills/settings)
+#   ccp use <name> [args...]   run claude under that profile (args pass through)
+#   ccp list                   show profiles, masked account emails, login state
+#   ccp env <name>             print an export line for the current shell
+#   ccp path <name>            print the profile directory
+#   ccp rm <name>              delete a profile (asks for confirmation)
+set -euo pipefail
+
+ROOT="${CCP_ROOT:-$HOME/.claude-profiles}"
+SHARED_ITEMS=(settings.json CLAUDE.md skills agents commands)
+
+die() { echo "ccp: $*" >&2; exit 1; }
+valid() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$ ]] || die "invalid profile name '$1'"; }
+
+masked_email() {  # masked_email <profile-dir>
+  local file="$1/.claude.json"
+  [[ -f "$file" ]] || { echo "-"; return; }
+  python3 - "$file" <<'PY' 2>/dev/null || echo "-"
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    email = (data.get("oauthAccount") or {}).get("emailAddress") or ""
+except Exception:
+    email = ""
+if "@" in email:
+    user, domain = email.split("@", 1)
+    print(f"{user[:1]}***@{domain}")
+else:
+    print("-")
+PY
+}
+
+login_state() {  # login_state <profile-dir>
+  if [[ -f "$1/.credentials.json" ]]; then echo "file"; return; fi
+  if [[ "$(uname -s)" == "Darwin" ]]; then echo "keychain?"; else echo "none"; fi
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  add)
+    name="${1:-}"; [[ -n "$name" ]] || die "usage: ccp add <name> [--share]"; valid "$name"
+    dir="$ROOT/$name"
+    [[ ! -e "$dir" ]] || die "profile '$name' already exists at $dir"
+    mkdir -p "$dir"; chmod 700 "$dir"
+    if [[ "${2:-}" == "--share" ]]; then
+      for item in "${SHARED_ITEMS[@]}"; do
+        [[ -e "$HOME/.claude/$item" ]] && ln -s "$HOME/.claude/$item" "$dir/$item"
+      done
+    fi
+    echo "created $dir"
+    echo "next: ccp use $name   (then /login with the account this profile is for)"
+    ;;
+  use)
+    name="${1:-}"; [[ -n "$name" ]] || die "usage: ccp use <name> [claude args]"; valid "$name"; shift
+    dir="$ROOT/$name"; [[ -d "$dir" ]] || die "no profile '$name' (ccp add $name)"
+    CLAUDE_CONFIG_DIR="$dir" exec claude "$@"
+    ;;
+  list)
+    [[ -d "$ROOT" ]] || { echo "no profiles yet (ccp add <name>)"; exit 0; }
+    printf '%-20s %-28s %-10s %s\n' PROFILE ACCOUNT LOGIN DIR
+    for dir in "$ROOT"/*/; do
+      [[ -d "$dir" ]] || continue
+      name="$(basename "$dir")"
+      printf '%-20s %-28s %-10s %s\n' "$name" "$(masked_email "$dir")" "$(login_state "$dir")" "$dir"
+    done
+    ;;
+  env)
+    name="${1:-}"; [[ -n "$name" ]] || die "usage: ccp env <name>"; valid "$name"
+    echo "export CLAUDE_CONFIG_DIR=\"$ROOT/$name\""
+    ;;
+  path)
+    name="${1:-}"; [[ -n "$name" ]] || die "usage: ccp path <name>"; valid "$name"
+    echo "$ROOT/$name"
+    ;;
+  rm)
+    name="${1:-}"; [[ -n "$name" ]] || die "usage: ccp rm <name>"; valid "$name"
+    dir="$ROOT/$name"; [[ -d "$dir" ]] || die "no profile '$name'"
+    read -r -p "delete $dir and its login? [y/N] " answer
+    [[ "$answer" == "y" || "$answer" == "Y" ]] || { echo "kept"; exit 0; }
+    rm -rf "$dir"; echo "removed $dir"
+    ;;
+  help|-h|--help)
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    die "unknown command '$cmd' (try: ccp help)"
+    ;;
+esac

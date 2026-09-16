@@ -1,0 +1,24 @@
+# System unit for a plain (non-Docker) install:
+#   sudo useradd --system --home /var/lib/ccfleet --create-home ccfleet
+#   sudo -u ccfleet python3 -m venv /var/lib/ccfleet/venv
+#   sudo -u ccfleet /var/lib/ccfleet/venv/bin/pip install git+https://github.com/cdcupt/ccfleet
+#   sudo install -m 600 -o ccfleet deploy/ccfleetd.env /etc/ccfleet/env
+[Unit]
+Description=ccfleet dashboard and alerts
+After=network-online.target
+
+[Service]
+User=ccfleet
+EnvironmentFile=/etc/ccfleet/env
+Environment=CCFLEET_DB=/var/lib/ccfleet/ccfleet.db
+ExecStart=/var/lib/ccfleet/venv/bin/ccfleetd serve
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/ccfleet
+
+[Install]
+WantedBy=multi-user.target

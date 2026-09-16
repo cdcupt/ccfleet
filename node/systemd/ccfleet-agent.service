@@ -1,0 +1,9 @@
+[Unit]
+Description=ccfleet heartbeat agent (one run)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/ccfleet/agent.env
+ExecStart=%h/.local/bin/ccfleet-agent
+NoNewPrivileges=yes

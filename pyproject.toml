@@ -28,6 +28,14 @@ target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["UP007", "UP045"]  # keep Optional[...] for Python 3.9 readers
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
 
 [tool.coverage.run]
 source = ["ccfleetd", "ccfleet_agent"]
+omit = ["ccfleetd/__main__.py"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]

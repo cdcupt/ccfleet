@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude Code Remote Control server inside a tmux session
+Documentation=https://code.claude.com/docs/en/remote-control
+After=network-online.target
+
+# First run must be interactive: `claude remote-control` asks a one-time
+# "Enable Remote Control? (y/n)" and needs an existing /login. Accept it once,
+# stop it, then enable this unit.
+[Service]
+Type=forking
+Environment=DISABLE_AUTOUPDATER=1
+WorkingDirectory=%h
+ExecStart=/usr/bin/tmux new-session -d -s remote-control "%h/.local/bin/claude remote-control --name %H --continue"
+ExecStop=/usr/bin/tmux kill-session -t remote-control
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=default.target
