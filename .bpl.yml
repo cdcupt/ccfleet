@@ -1,0 +1,22 @@
+# Per-project config for bpl-run (local mode).
+# Anything not set here falls back to defaults inside bin/bpl-run.
+
+# Bounded fix-loop limit. Higher = more chances to converge, more API time.
+loop_count_max: 3
+
+# Models. Override per project if you want a beefier reviewer on a critical repo.
+claude_model: claude-sonnet-4-6
+codex_model:  o4-mini
+
+# Glob patterns. If a change touches any of these, bpl-run halts before
+# opening a PR. Defaults are reasonable; extend per project as needed.
+sensitive_paths:
+  - .github/workflows/**
+  - "**/auth/**"
+  - "**/billing/**"
+  - "**/migrations/**"
+  - "**/secrets/**"
+
+# While true: --auto-merge is ignored. You always review and merge manually.
+# Use for the first ~10 PRs in a new repo until you trust the loop here.
+calibration_mode: true

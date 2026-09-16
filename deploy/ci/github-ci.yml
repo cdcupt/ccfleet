@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip pytest pytest-cov ruff
+      - run: ruff check .
+      - run: pytest -q --cov --cov-report=term-missing --cov-fail-under=80
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+      - run: |
+          set -e
+          files=$(git ls-files '*.sh' 'profiles/*' 'node/*' | while read -r f; do head -c 200 "$f" | grep -q '^#!/.*sh' && echo "$f"; done || true)
+          if [ -n "$files" ]; then shellcheck -S warning $files; bash -n $files; else echo "no shell files yet"; fi
