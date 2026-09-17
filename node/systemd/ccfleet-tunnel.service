@@ -13,13 +13,21 @@ Before=ccfleet-agent.service
 #   CCFLEET_TUNNEL_LOCAL_PORT=8110
 #   CCFLEET_TUNNEL_REMOTE_PORT=8110
 #   CCFLEET_TUNNEL_KEY=%h/.ssh/ccfleet_tunnel
+#   CCFLEET_TUNNEL_KNOWN_HOSTS=%h/.config/ccfleet/tunnel_known_hosts
+#
+# The host key is pinned, not trusted on first use: this connection runs
+# unattended and carries the node token, so accepting an unknown server once
+# would hand that token to whoever answered. Populate the known-hosts file with
+# a fingerprint you verified out of band; see docs/tunnel.md.
 [Service]
 EnvironmentFile=%h/.config/ccfleet/tunnel.env
 ExecStart=/usr/bin/ssh -N -T \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
-    -o StrictHostKeyChecking=accept-new \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=${CCFLEET_TUNNEL_KNOWN_HOSTS} \
+    -o IdentitiesOnly=yes \
     -o BatchMode=yes \
     -i ${CCFLEET_TUNNEL_KEY} \
     -L 127.0.0.1:${CCFLEET_TUNNEL_LOCAL_PORT}:127.0.0.1:${CCFLEET_TUNNEL_REMOTE_PORT} \
