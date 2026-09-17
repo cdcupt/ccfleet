@@ -54,6 +54,8 @@ docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node add node
 `node add` prints the node's token once, plus the three lines to put in the
 node's `agent.env`. Put a TLS proxy in front of `127.0.0.1:8110`
 (`deploy/Caddyfile.example`) and open it with user `admin` and the admin token.
+If you would rather not expose a public endpoint at all, nodes can report over an
+SSH tunnel instead: see [docs/tunnel.md](docs/tunnel.md).
 
 Without Docker: `pip install git+https://github.com/cdcupt/ccfleet` gives you
 `ccfleetd` and `ccfleet-agent`; `deploy/ccfleetd.service` is a systemd unit.
@@ -92,6 +94,7 @@ ccp add work --share && ccp list
 | `node/` | bootstrap, owner setup, backup, egress probe, staged upgrade, systemd user units |
 | `profiles/ccp` | per-account profile switcher for laptops |
 | `gateway/` | optional pass-through gateway (Caddy), for owners who must keep files local |
+| `docs/tunnel.md` | reporting over an SSH tunnel when the server has no public endpoint |
 | `deploy/` | Dockerfile, compose, systemd unit, Caddy TLS example, CI workflow |
 | `docs/` | guidebook, design, compliance notes, runbooks |
 | `tests/` | pytest suite (`uv run --with pytest --with pytest-cov pytest --cov`) |
