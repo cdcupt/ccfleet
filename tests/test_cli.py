@@ -42,3 +42,24 @@ def test_bad_config_exits_2(db, monkeypatch, capsys):
     monkeypatch.setenv("CCFLEET_BIND", "nonsense")
     assert cli.main(["--db", db, "node", "list"]) == 2
     assert "CCFLEET_BIND" in capsys.readouterr().err
+
+
+def test_rc_expected_toggle_and_listing(db, capsys):
+    assert cli.main(["--db", db, "node", "add", "node-a", "--owner", "erik"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "list"]) == 0
+    assert " off " in capsys.readouterr().out  # default: no Remote Control alerting
+
+    assert cli.main(["--db", db, "node", "rc-expected", "node-a", "on"]) == 0
+    assert "will alert" in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "list"]) == 0
+    assert " on " in capsys.readouterr().out
+
+    assert cli.main(["--db", db, "node", "rc-expected", "node-a", "off"]) == 0
+    assert "will not alert" in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "rc-expected", "ghost", "on"]) == 2
+
+
+def test_rc_expected_rejects_bad_state(db):
+    with pytest.raises(SystemExit):
+        cli.main(["--db", db, "node", "rc-expected", "node-a", "maybe"])

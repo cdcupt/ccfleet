@@ -108,7 +108,7 @@ ccp add work --share && ccp list
 | `token_expired` | warn | access token expired over an hour ago and was not refreshed |
 | `disk_high` | warn / critical | disk at 85% / 95% |
 | `egress_changed` | warn | public IP differs from the previous heartbeat |
-| `remote_control_down` | warn | node was added with `--rc-expected` and the service is not active |
+| `remote_control_down` | warn | node has Remote Control alerting on and the service is not active (`node add --rc-expected`, or `node rc-expected <id> on\|off` later) |
 
 Alerts open once, close when the condition clears, and re-open on level change.
 Each transition is logged and, when configured, sent to Telegram.
