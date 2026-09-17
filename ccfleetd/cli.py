@@ -47,6 +47,10 @@ def _parser() -> argparse.ArgumentParser:
     pin = node.add_parser("pin", help="set the pinned Claude Code version")
     pin.add_argument("node_id")
     pin.add_argument("version")
+    rc = node.add_parser("rc-expected",
+                         help="turn the remote_control_down alert on or off for a node")
+    rc.add_argument("node_id")
+    rc.add_argument("state", choices=("on", "off"))
     return parser
 
 
@@ -67,13 +71,14 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         _print_token(args.node_id, token, cfg)
     elif args.node_command == "list":
         latest = store.latest_heartbeats()
-        print(f"{'id':<20} {'owner':<14} {'region':<12} {'pinned':<10} {'enabled':<8} last seen")
+        print(f"{'id':<20} {'owner':<14} {'region':<12} {'pinned':<10} {'enabled':<8} "
+              f"{'rc':<4} last seen")
         for node in store.list_nodes():
             hb = latest.get(node["id"])
             seen = time.strftime("%Y-%m-%d %H:%M", time.localtime(hb["ts"])) if hb else "never"
             print(f"{node['id']:<20} {node['owner']:<14} {node['region'] or '-':<12} "
                   f"{node['pinned_version'] or '-':<10} {'yes' if node['enabled'] else 'no':<8} "
-                  f"{seen}")
+                  f"{'on' if node['rc_expected'] else 'off':<4} {seen}")
     elif args.node_command == "remove":
         store.remove_node(args.node_id)
         print(f"removed {args.node_id}")
@@ -88,6 +93,11 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     elif args.node_command == "pin":
         store.set_pinned_version(args.node_id, args.version)
         print(f"pinned {args.node_id} to {args.version}")
+    elif args.node_command == "rc-expected":
+        expected = args.state == "on"
+        store.set_rc_expected(args.node_id, expected)
+        verb = "will alert" if expected else "will not alert"
+        print(f"{args.node_id}: {verb} when the Remote Control service is not active")
     return EXIT_OK
 
 
