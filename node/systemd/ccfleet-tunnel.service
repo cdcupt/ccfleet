@@ -1,0 +1,32 @@
+[Unit]
+Description=ccfleet SSH tunnel to the fleet server (for nodes with no public endpoint)
+Documentation=https://github.com/cdcupt/ccfleet/blob/main/docs/tunnel.md
+After=network-online.target
+Before=ccfleet-agent.service
+
+# Forwards a loopback port on THIS node to the fleet server's loopback port, so
+# the agent can post to http://127.0.0.1:<local port> with no DNS record, no
+# public listener and no TLS certificate. SSH provides the encryption.
+#
+# Settings live in %h/.config/ccfleet/tunnel.env:
+#   CCFLEET_TUNNEL_SSH=ccfleet-tunnel@fleet.example.com
+#   CCFLEET_TUNNEL_LOCAL_PORT=8110
+#   CCFLEET_TUNNEL_REMOTE_PORT=8110
+#   CCFLEET_TUNNEL_KEY=%h/.ssh/ccfleet_tunnel
+[Service]
+EnvironmentFile=%h/.config/ccfleet/tunnel.env
+ExecStart=/usr/bin/ssh -N -T \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o StrictHostKeyChecking=accept-new \
+    -o BatchMode=yes \
+    -i ${CCFLEET_TUNNEL_KEY} \
+    -L 127.0.0.1:${CCFLEET_TUNNEL_LOCAL_PORT}:127.0.0.1:${CCFLEET_TUNNEL_REMOTE_PORT} \
+    ${CCFLEET_TUNNEL_SSH}
+Restart=always
+RestartSec=15s
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

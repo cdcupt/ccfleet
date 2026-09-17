@@ -51,7 +51,7 @@ fi
 chmod 600 "$CONF/agent.env"
 
 # 5. User-level systemd units.
-for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service; do
+for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service; do
   fetch "node/systemd/$unit" "$UNITS/$unit"
 done
 systemctl --user daemon-reload
