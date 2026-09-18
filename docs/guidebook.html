@@ -178,7 +178,7 @@ html{scroll-behavior:smooth}
   <h3>If you prefer a terminal</h3>
   <p>A terminal is optional, not required. If you want one, connect over SSH and attach to a persistent session so that closing the window does not end your work:</p>
   <pre><code>ssh &lt;owner&gt;@&lt;node&gt;
-tmux attach -t cc || claude   # you are already in the persistent session</code></pre>
+claude            # logging in already attached you to the persistent session</code></pre>
   <p>Detach with <kbd>Ctrl</kbd>+<kbd>b</kbd> then <kbd>d</kbd>, or just close the window. The session survives a disconnect, though not a node reboot; after a reboot, start a new one. Remote Control does come back by itself, which is the main reason to prefer it.</p>
 </section>
 

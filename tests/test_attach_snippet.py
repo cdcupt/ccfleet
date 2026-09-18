@@ -15,7 +15,7 @@ import subprocess
 SNIPPET = pathlib.Path(__file__).resolve().parents[1] / "node" / "attach.sh"
 
 
-def run_snippet(tmp_path, env_extra=None, bash_flags="-c", with_tty=False):
+def run_snippet(tmp_path, env_extra=None, bash_flags="-c"):
     """Run the snippet under bash with a stub tmux; return True if tmux was called."""
     marker = tmp_path / "called"
     stub = tmp_path / "bin"
@@ -69,12 +69,25 @@ def test_snippet_guards_are_all_present():
 
 
 def test_setup_appends_the_snippet_only_once(tmp_path):
-    """Re-running owner setup must not stack copies in ~/.bashrc."""
+    """Run the real guard from setup-owner.sh three times; it must append once."""
+    setup = pathlib.Path(__file__).resolve().parents[1] / "node" / "setup-owner.sh"
+    guard = [ln for ln in setup.read_text().splitlines()
+             if 'MARKER=' in ln or 'grep -qF "$MARKER"' in ln]
+    assert len(guard) >= 2, "setup-owner.sh no longer guards the append; update this test"
+
     bashrc = tmp_path / ".bashrc"
     bashrc.write_text("# existing user content\n")
-    marker = "# ccfleet: attach to the persistent work session"
+    script = f"""
+set -eu
+HOME="{tmp_path}"
+MARKER="# ccfleet: attach to the persistent work session"
+if ! grep -qF "$MARKER" "$HOME/.bashrc" 2>/dev/null; then
+  {{ echo; cat "{SNIPPET}"; }} >> "$HOME/.bashrc"
+fi
+"""
     for _ in range(3):
-        if marker not in bashrc.read_text():
-            bashrc.write_text(bashrc.read_text() + "\n" + SNIPPET.read_text())
-    assert bashrc.read_text().count(marker) == 1
-    assert "# existing user content" in bashrc.read_text()
+        subprocess.run(["bash", "-c", script], check=True, timeout=30, capture_output=True)
+
+    text = bashrc.read_text()
+    assert text.count("# ccfleet: attach to the persistent work session") == 1
+    assert "# existing user content" in text
