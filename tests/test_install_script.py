@@ -138,5 +138,15 @@ def test_remote_control_is_not_treated_as_a_readiness_gate():
     check = text[text.index('CHECK="ccfleet-shell.service'):text.index("if [ -n \"$FAILED\" ]")]
     assert "claude-remote-control.service" not in check.split("for unit in")[0], \
         "remote control must not be in the list whose failure fails the install"
-    assert "activates after sign-in" in text, "its state should still be reported, just not gated"
-    assert "retrying every 30 seconds" in text, "the owner should know it comes up by itself"
+    assert "enabled, starts after sign-in" in text, "its state should still be reported"
+    assert "systemctl --user start claude-remote-control.service" in text, \
+        "the owner must be told the one command that turns it on"
+    assert "retrying every 30 seconds" not in text, \
+        "Type=forking around tmux means Restart=on-failure never sees the auth failure"
+
+
+def test_remote_control_is_enabled_but_not_started_during_install():
+    text = INSTALL.read_text()
+    assert "user_systemctl enable claude-remote-control.service" in text
+    assert "enable --now claude-remote-control.service" not in text, \
+        "starting it before a login exists cannot work"

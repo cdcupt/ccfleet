@@ -221,12 +221,17 @@ if [ "$NO_REMOTE" = yes ]; then
     note "remote control disabled on request (verified $rc_state)"
   fi
 else
-  # Enabled and started, but deliberately NOT part of the readiness gate below.
-  # Remote Control needs an authenticated Claude session and there is not one yet:
-  # the owner signs in after this script finishes. The unit has Restart=on-failure
-  # with a 30s delay, and because that spacing never trips systemd's start limit it
-  # keeps retrying and comes up by itself the moment the sign-in completes.
-  user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 || true
+  # Enabled for future boots but deliberately NOT started now. Remote Control needs
+  # an authenticated Claude session and there is not one until the owner signs in,
+  # which happens after this script finishes.
+  #
+  # It is tempting to start it anyway and rely on Restart=on-failure, and an earlier
+  # version of this script claimed exactly that. It is not true: the unit is
+  # Type=forking around `tmux new-session -d`, so ExecStart succeeds the moment tmux
+  # detaches and Claude's later authentication failure inside that session is never
+  # reported to systemd. The restart would not fire, and the promise would be a lie.
+  # The owner starts it once, after signing in; the closing message says so.
+  user_systemctl enable claude-remote-control.service >/dev/null 2>&1 || true
 fi
 sleep 3
 
@@ -238,8 +243,7 @@ for unit in $CHECK; do
   case "$state" in active) ;; *) case "$FAILED" in *"$unit"*) ;; *) FAILED="$FAILED $unit" ;; esac ;; esac
 done
 if [ "$NO_REMOTE" != yes ]; then
-  rc_now="$(user_systemctl is-active claude-remote-control.service 2>/dev/null || echo inactive)"
-  note "$(printf '%-32s %s' claude-remote-control.service "$rc_now (activates after sign-in)")"
+  note "$(printf '%-32s %s' claude-remote-control.service "enabled, starts after sign-in")"
 fi
 if [ -n "$FAILED" ]; then
   printf '\n\033[31mnot ready:\033[0m these services did not come up:%s\n' "$FAILED" >&2
@@ -262,9 +266,12 @@ cat <<MSG
                      # paste the code back
      /status         # confirms the account, with no base URL and no auth token
 
- Remote Control cannot start until that sign-in exists, so it is currently
- retrying every 30 seconds and will come up on its own within a minute of it.
- To watch: systemctl --user status claude-remote-control.service
+ Then, once, to turn on access from claude.ai and the phone app:
+
+     systemctl --user start claude-remote-control.service
+
+ It is already enabled, so it comes back by itself after a reboot. It could not
+ be started before the sign-in because Remote Control needs a login to exist.
 
  After that, $OWNER works from a terminal (ssh lands in a live session) or
  from claude.ai/code and the Claude phone app, with nothing installed there.

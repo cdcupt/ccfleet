@@ -85,6 +85,7 @@ The owner finishes it themselves, on that machine:
 ```bash
 claude          # choose the claude.ai login, approve in a browser, paste the code back
 /status         # confirms their account, no base URL, no auth token
+systemctl --user start claude-remote-control.service   # once, to enable claude.ai access
 ```
 
 Nobody else can do that step: a subscription login must complete through
