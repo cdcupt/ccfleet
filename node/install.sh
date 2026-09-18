@@ -80,7 +80,19 @@ printf '%s' "$OWNER"   | grep -qE '^[a-z][a-z0-9_-]{0,31}$'   || die "--owner mu
 # properly rather than assuming /home/$OWNER.
 if id "$OWNER" >/dev/null 2>&1; then
   OWNER_UID="$(id -u "$OWNER")"
-  [ "$OWNER_UID" -ge 1000 ] || die "$OWNER is a system account (uid $OWNER_UID); pick a normal user"
+  # Debian and Ubuntu allocate ordinary logins in FIRST_UID..LAST_UID, 1000..59999.
+  # A bare "uid >= 1000" lets `nobody` through at 65534, and step 2 below puts this
+  # argument in the sudo group with NOPASSWD:ALL -- which would hand passwordless
+  # root to the shared identity many daemons drop privileges to.
+  [ "$OWNER_UID" -ge 1000 ] && [ "$OWNER_UID" -le 59999 ] \
+    || die "$OWNER is a system account (uid $OWNER_UID); pick a normal user"
+  # A uid inside that range is not on its own proof of a human account: service
+  # accounts get created there too, and they are told apart by their login shell.
+  OWNER_SHELL="$(getent passwd "$OWNER" | cut -d: -f7)"
+  case "$OWNER_SHELL" in
+    */nologin | */false | "")
+      die "$OWNER is a service account (login shell '${OWNER_SHELL:-none}'); pick a normal user" ;;
+  esac
   HOME_DIR="$(getent passwd "$OWNER" | cut -d: -f6)"
   [ -n "$HOME_DIR" ] && [ "$HOME_DIR" != "/" ] || die "$OWNER has no usable home directory"
 else

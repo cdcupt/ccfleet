@@ -184,3 +184,24 @@ def test_fail2ban_verification_checks_the_jail_not_just_the_service():
         "an active service says nothing about whether our jail was loaded"
     assert '"$(fail2ban-client get sshd maxretry 2>/dev/null)" = 4' in text, \
         "verify the value we set, which is what proves the jail file was actually read"
+
+
+def test_owner_cannot_be_a_system_identity_like_nobody():
+    """The owner is given NOPASSWD:ALL, so `nobody` (uid 65534) passing uid>=1000 was a hole."""
+    text = INSTALL.read_text()
+    assert '[ "$OWNER_UID" -le 59999 ]' in text, \
+        "uid must be bounded above; nobody is 65534 and would otherwise be accepted"
+    assert '*/nologin | */false | ""' in text, \
+        "a service account inside the normal uid range is identified by its login shell"
+    # The grant this protects is still the one being made.
+    assert "ALL=(ALL) NOPASSWD:ALL" in text
+
+
+def test_the_uid_bounds_match_the_sudo_grant_they_guard():
+    """Order matters: validation has to run before the account is given sudo."""
+    text = INSTALL.read_text()
+    # Match the grant itself, not the comment above the check that explains it.
+    grant = text.index("usermod -aG sudo")
+    sudoers = text.index("printf '%s ALL=(ALL) NOPASSWD:ALL")
+    assert text.index('[ "$OWNER_UID" -le 59999 ]') < grant < sudoers, \
+        "the uid and shell checks must happen before the account is given sudo"
