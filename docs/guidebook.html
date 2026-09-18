@@ -126,7 +126,7 @@ html{scroll-behavior:smooth}
   <div class="meta">
     <span>Repo <b>github.com/cdcupt/ccfleet</b></span>
     <span>Runtime <b>Python 3.9+, no dependencies</b></span>
-    <span>Nodes <b>Ubuntu 22.04 / 24.04</b></span>
+    <span>Nodes <b>Debian 12, Ubuntu 22.04 / 24.04</b></span>
     <span>Time to first node <b>about 40 minutes</b></span>
   </div>
 </header>
@@ -238,7 +238,8 @@ claude            # logging in already attached you to the persistent session</c
     <div>
       <h3>Included</h3>
       <ul>
-        <li><strong>Node scripts</strong>: bootstrap (root, once) and owner setup, hardened defaults, staged upgrades, backups without credentials.</li>
+        <li><strong>Node install</strong>: one command takes a blank server to ready-for-sign-in, hardened, with the agent reporting. The older bootstrap and owner-setup scripts remain for machines you manage by hand.</li>
+        <li><strong>Node upkeep</strong>: staged upgrades and backups that exclude credentials.</li>
         <li><strong>Agent</strong>: one Python file, standard library only, systemd timer every five minutes.</li>
         <li><strong>Fleet server</strong>: dashboard, JSON API, alert rules, Telegram, node token management.</li>
         <li><strong><code>ccp</code></strong>: several accounts on one laptop, each in its own profile, switched by hand.</li>
@@ -262,7 +263,7 @@ claude            # logging in already attached you to the persistent session</c
     <thead><tr><th>You need</th><th>Details</th></tr></thead>
     <tbody>
       <tr><td>One Claude subscription per owner</td><td>Pro or Max. Each owner signs in themselves. Nobody shares an account.</td></tr>
-      <tr><td>One small VPS per owner</td><td>Ubuntu 22.04 or 24.04, 1 vCPU, 1–2 GB RAM, 20 GB disk, in a region Anthropic supports. About $5–12 per month.</td></tr>
+      <tr><td>One small VPS per owner</td><td>Debian 12, or Ubuntu 22.04 or 24.04. 1 vCPU, 1–2 GB RAM, 20 GB disk, in a region Anthropic supports. About $5–12 per month. The installer is verified end to end on a blank Debian 12.</td></tr>
       <tr><td>One box for the fleet server</td><td>Anything that runs Docker or Python 3.9+. It can be one of your existing servers. It must sit behind TLS.</td></tr>
       <tr><td>SSH keys</td><td>Each owner has an SSH key pair; nodes accept keys only.</td></tr>
       <tr><td>Optional</td><td>A Telegram bot for alerts, an rclone remote for off-node backups, a domain for the dashboard.</td></tr>
@@ -320,13 +321,8 @@ fleet.example.com {
   <div class="step">
     <div class="num">4</div>
     <h3>Register each owner's node</h3>
-    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
-  ccfleetd node add node-a --owner alice --region us-west --rc-expected</code></pre>
-    <p>The command prints the node's token <strong>once</strong>, together with the three lines to place in the node's <code>agent.env</code>. Send them to the owner over a private channel. Lost the token? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</p>
-    <ul>
-      <li><code>--rc-expected</code> makes the dashboard alert when the owner's Remote Control service is not running. Leave it out for owners who only use SSH.</li>
-      <li><code>--pinned-version 2.1.92</code> can be given now or set later with <code>ccfleetd node pin</code>.</li>
-    </ul>
+    <p>Do this from the console once it is up: add the node, and the page that follows gives you an install command with the server URL, node id and token already in it. <strong>Append the owner's <code>--ssh-key</code> before you run it</strong>, or the installer skips SSH, firewall and fail2ban hardening rather than risk locking everyone out. <a href="#node">Section 04</a> has the detail.</p>
+    <p>The token is shown <strong>once</strong>. Send it to the owner over a private channel, or run the install yourself. Lost it? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</p>
   </div>
 
   <div class="step">
@@ -339,50 +335,93 @@ fleet.example.com {
 
 <section id="node">
   <h2><span class="n">04</span>A node per owner</h2>
-  <p>Two scripts and one login. The root script prepares the machine; the owner script installs Claude Code and the agent for that user; the owner signs in. Nothing here needs the fleet server to be reachable until the last step.</p>
+  <p>One command, then one sign-in. The console prints a ready-made install line when you add the node; you run it once on a blank server as root and it takes the machine all the way to the sign-in. It cannot do the sign-in itself, because a subscription login has to complete through Anthropic's own flow, so the owner does that part and nobody else can.</p>
 
   <figure>
     <div class="fig-wrap">
-    <svg viewBox="0 0 980 150" role="img" aria-label="Node setup sequence: bootstrap as root, setup-owner as the owner, claude login in tmux, agent dry run, first heartbeat, dashboard shows the node">
+    <svg viewBox="0 0 980 200" role="img" aria-label="Node setup: the console prints one command, that command hardens the server and installs everything, it stops at the sign-in which only the owner can do, and the node then heartbeats and turns green on the dashboard">
       <defs><marker id="g-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
-      <rect x="14" y="40" width="150" height="60" rx="8" class="box"/><text x="89" y="64" text-anchor="middle" class="t12">bootstrap.sh</text><text x="89" y="82" text-anchor="middle" class="t10 mute">root, once</text>
-      <line x1="164" y1="70" x2="182" y2="70" class="ln" marker-end="url(#g-arr2)"/>
-      <rect x="184" y="40" width="150" height="60" rx="8" class="box"/><text x="259" y="64" text-anchor="middle" class="t12">setup-owner.sh</text><text x="259" y="82" text-anchor="middle" class="t10 mute">owner user</text>
-      <line x1="334" y1="70" x2="352" y2="70" class="ln" marker-end="url(#g-arr2)"/>
-      <rect x="354" y="40" width="150" height="60" rx="8" class="box-acc"/><text x="429" y="64" text-anchor="middle" class="t12">claude → /login</text><text x="429" y="82" text-anchor="middle" class="t10 mute">paste the code</text>
-      <line x1="504" y1="70" x2="522" y2="70" class="ln" marker-end="url(#g-arr2)"/>
-      <rect x="524" y="40" width="150" height="60" rx="8" class="box"/><text x="599" y="64" text-anchor="middle" class="t12">agent.env</text><text x="599" y="82" text-anchor="middle" class="t10 mute">url · id · token</text>
-      <line x1="674" y1="70" x2="692" y2="70" class="ln" marker-end="url(#g-arr2)"/>
-      <rect x="694" y="40" width="130" height="60" rx="8" class="box"/><text x="759" y="64" text-anchor="middle" class="t12">agent --print</text><text x="759" y="82" text-anchor="middle" class="t10 mute">dry run</text>
-      <line x1="824" y1="70" x2="842" y2="70" class="ln" marker-end="url(#g-arr2)"/>
-      <rect x="844" y="40" width="122" height="60" rx="8" class="box"/><text x="905" y="64" text-anchor="middle" class="t12">dashboard</text><text x="905" y="82" text-anchor="middle" class="t10 mute">node appears</text>
-      <text x="14" y="128" class="t11 mute">Order matters only in one place: the login must be done by the owner, in their own terminal, before the agent has anything useful to report.</text>
+
+      <rect x="8" y="55" width="150" height="72" rx="8" class="box"/>
+      <text x="83" y="86" text-anchor="middle" class="t12">console</text>
+      <text x="83" y="105" text-anchor="middle" class="t10 mute">add node</text>
+
+      <text x="201" y="84" text-anchor="middle" class="t10 mute">copy line</text>
+      <line x1="158" y1="91" x2="240" y2="91" class="ln" marker-end="url(#g-arr2)"/>
+
+      <rect x="244" y="34" width="230" height="114" rx="8" class="box"/>
+      <text x="359" y="58" text-anchor="middle" class="t12">install.sh, as root</text>
+      <text x="359" y="80" text-anchor="middle" class="t10 mute">hardening, firewall, fail2ban</text>
+      <text x="359" y="97" text-anchor="middle" class="t10 mute">Claude Code, unmodified</text>
+      <text x="359" y="114" text-anchor="middle" class="t10 mute">agent, timers, work session</text>
+      <text x="359" y="131" text-anchor="middle" class="t10 mute">Remote Control: on, not started</text>
+
+      <text x="517" y="84" text-anchor="middle" class="t10 mute">hands off</text>
+      <line x1="474" y1="91" x2="556" y2="91" class="ln" marker-end="url(#g-arr2)"/>
+
+      <rect x="560" y="48" width="200" height="86" rx="8" class="box-acc"/>
+      <text x="660" y="76" text-anchor="middle" class="t12">the owner</text>
+      <text x="660" y="95" text-anchor="middle" class="t10 mute">claude, then /login</text>
+      <text x="660" y="112" text-anchor="middle" class="t10 mute">starts Remote Control</text>
+
+      <text x="803" y="84" text-anchor="middle" class="t10 mute">heartbeat</text>
+      <line x1="760" y1="91" x2="842" y2="91" class="ln" marker-end="url(#g-arr2)"/>
+
+      <rect x="846" y="55" width="126" height="72" rx="8" class="box"/>
+      <text x="909" y="86" text-anchor="middle" class="t12">dashboard</text>
+      <text x="909" y="105" text-anchor="middle" class="t10 mute">row goes green</text>
+
+      <text x="8" y="180" class="t11 mute">Everything left of the accent box runs unattended. What is inside it only the owner can do.</text>
     </svg>
     </div>
-    <figcaption><b>Figure 2.</b> Node setup from a blank VPS to a green row on the dashboard.</figcaption>
+    <figcaption><b>Figure 2.</b> Blank server to a green row. The single install command replaces what used to be two scripts and four manual steps.</figcaption>
   </figure>
 
   <div class="step">
     <div class="num">1</div>
-    <h3>Bootstrap as root</h3>
-    <pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/bootstrap.sh -o bootstrap.sh
-sudo bash bootstrap.sh alice ~/.ssh/id_ed25519.pub</code></pre>
-    <p>This creates the Linux user <code>alice</code> with passwordless sudo, installs tmux, mosh, ufw, unattended-upgrades and Python, switches SSH to keys only (only when a key was provided), enables the firewall with SSH and mosh open, and enables lingering so the owner's timers run without a login session. Re-running it is safe.</p>
+    <h3>Add the node and copy the command</h3>
+    <p>Open the console, fill in the node id and the owner, and submit. The page that follows shows the token <strong>once</strong>, and an install command with the server URL, node id, token and owner already filled in. Copy it.</p>
+    <div class="note bad">
+      <p class="t">The copied command is missing one thing on purpose</p>
+      <p>The console cannot know the owner's public key, so the command it prints has no <code>--ssh-key</code>. Run it as-is and step 2 will <strong>skip SSH, firewall and fail2ban hardening altogether</strong>, on purpose, rather than disable password logins on a machine with no key on it and lock everyone out. Add the flag before you run it, or add a key and re-run afterwards.</p>
+    </div>
+    <p>If you prefer the terminal, the CLI does the same thing and prints the same three identity lines:</p>
+    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
+  ccfleetd node add node-a --owner alice --region us-west --rc-expected</code></pre>
+    <ul>
+      <li><code>--rc-expected</code> makes the dashboard alert when the owner's Remote Control service is not running. Leave it out for owners who only use SSH.</li>
+      <li><code>--pinned-version 2.1.92</code> can be given now or set later with <code>ccfleetd node pin</code>.</li>
+      <li>Lost the token? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</li>
+    </ul>
   </div>
 
   <div class="step">
     <div class="num">2</div>
-    <h3>Set up the owner</h3>
-    <pre><code>ssh alice@&lt;node&gt;
-git clone https://github.com/cdcupt/ccfleet.git
-ccfleet/node/setup-owner.sh</code></pre>
-    <p>The script runs Anthropic's installer for Claude Code (the binary is not modified), sets <code>DISABLE_AUTOUPDATER=1</code> in the owner's profile so upgrades happen when you choose, installs <code>ccfleet-agent</code>, <code>ccfleet-backup</code>, <code>exitip</code> and <code>ccfleet-upgrade-claude</code> into <code>~/.local/bin</code>, and enables the agent and backup timers. Log out and back in once so the profile takes effect.</p>
+    <h3>Run it on the blank server, as root</h3>
+    <pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \
+  | sudo bash -s -- \
+      --server https://fleet.example.com \
+      --node node-a \
+      --token &lt;the 64-character token&gt; \
+      --owner alice \
+      --ssh-key "ssh-ed25519 AAAA... alice"</code></pre>
+    <p>It installs packages, creates the owner with a lingering session so their timers survive logout, hardens SSH and the firewall, installs Claude Code, pre-answers the two setup prompts that are not about anyone's account, installs the agent and its units, starts the work session and the timers, and posts a first heartbeat. It prints each step and refuses to call the machine ready if a service did not come up.</p>
+    <ul>
+      <li><code>--ssh-key</code> takes the owner's public key. <strong>Without it, SSH hardening is skipped on purpose</strong> rather than risk locking everyone out, and you must add a key yourself.</li>
+      <li><code>--skip-harden</code> leaves the firewall and sshd alone. Use it on a box already carrying other services.</li>
+      <li><code>--no-remote-control</code> sets up everything else and leaves Remote Control off.</li>
+    </ul>
+    <div class="note ok">
+      <p class="t">Rerunning it is safe</p>
+      <p>Every step checks before it acts, so a second run repairs a half-finished install rather than duplicating it. If a service fails to start, the script exits non-zero and names the unit instead of reporting success.</p>
+    </div>
   </div>
 
   <div class="step">
     <div class="num">3</div>
-    <h3>Sign in with your own account</h3>
-    <pre><code>claude   # you are already in the persistent session</code></pre>
+    <h3>The owner signs in</h3>
+    <pre><code>ssh alice@&lt;node&gt;     <span class="c"># you land straight in the persistent work session</span>
+claude</code></pre>
     <p>Choose the claude.ai login. Over SSH the browser cannot call back into the node, so Claude Code shows a URL: open it on your laptop, approve, copy the code the page shows, paste it into the terminal. Then check:</p>
     <pre><code>/status</code></pre>
     <p>The Login row must show your account. There must be no <em>Anthropic base URL</em> line and no <em>Auth token</em> or <em>API key</em> line. If there is, an environment variable is set that should not be; unset it and restart <code>claude</code>.</p>
@@ -394,29 +433,35 @@ ccfleet/node/setup-owner.sh</code></pre>
 
   <div class="step">
     <div class="num">4</div>
-    <h3>Connect the agent</h3>
-    <pre><code>$EDITOR ~/.config/ccfleet/agent.env      <span class="c"># the three lines printed by "ccfleetd node add"</span>
-chmod 600 ~/.config/ccfleet/agent.env
-ccfleet-agent --print                    <span class="c"># dry run: shows exactly what would be sent</span>
-systemctl --user start ccfleet-agent.service
-journalctl --user -u ccfleet-agent.service -n 5</code></pre>
-    <p>The log line <code>heartbeat accepted</code> means the dashboard has the node. From here the timer posts every five minutes.</p>
+    <h3>The owner turns on Remote Control, once</h3>
+    <pre><code>systemctl --user start claude-remote-control.service</code></pre>
+    <p>After this, claude.ai/code and the Claude phone app can drive this node with nothing installed on the machine you are sitting at. <code class="long">tmux attach -t remote-control</code> shows the URL and QR code.</p>
+    <div class="note">
+      <p class="t">Why the installer does not do this for you</p>
+      <p>Remote Control needs an authenticated session, and there is none until the sign-in above. The installer therefore <em>enables</em> the service, so it returns by itself after a reboot, but does not start it. It cannot usefully retry either: the unit runs Claude inside a detached tmux session, so systemd sees the launch succeed the moment tmux detaches and never learns that the session failed to authenticate. One command by the owner is honest; an automatic retry would not work.</p>
+    </div>
   </div>
 
   <div class="step">
     <div class="num">5</div>
-    <h3>Optional: phone and browser access with Remote Control</h3>
-    <pre><code>claude remote-control        <span class="c"># first time: answer y to the one-time prompt, then Ctrl-C</span>
-systemctl --user enable --now claude-remote-control.service</code></pre>
-    <p>The service keeps a Remote Control server inside a tmux session named <code>remote-control</code>. Open claude.ai/code or the Claude app to continue sessions from anywhere; <code class="long">tmux attach -t remote-control</code> shows the URL and QR code. Register the node with <code>--rc-expected</code> so the dashboard notices when it stops.</p>
-  </div>
-
-  <div class="step">
-    <div class="num">6</div>
     <h3>Optional: off-node backups</h3>
     <p>The nightly backup already runs locally (<code>~/backups/ccfleet</code>, last 14 kept, credentials excluded). To copy archives elsewhere, install rclone, configure a remote, and create <code>~/.config/ccfleet/backup.env</code>:</p>
     <pre><code>CCFLEET_BACKUP_REMOTE=r2:my-bucket/ccfleet/node-a
 CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
+  </div>
+
+  <div class="note bad">
+    <p class="t">The long way round is still there, but it is not equivalent</p>
+    <p>If you would rather not paste a token into a command, the console also prints the three <code>agent.env</code> lines on their own. Run <code>node/bootstrap.sh</code> as root, then <code>node/setup-owner.sh</code> as the owner, and place those lines in <code class="long">~/.config/ccfleet/agent.env</code> afterwards. That order is not optional: the owner's account and home directory do not exist until the first script has run.</p>
+    <p>Those two scripts cover the packages, the owner account, sudo, the firewall, lingering, the helper binaries and the agent, backup and work-session timers. They do <strong>not</strong> do the rest, and you are taking it on yourself:</p>
+    <ul>
+      <li><strong>No fail2ban.</strong> <code>bootstrap.sh</code> does not install or configure it, so the node has no SSH brute-force protection until you add it.</li>
+      <li>Claude Code's two setup prompts are not pre-answered, so the owner meets them interactively.</li>
+      <li><code>agent.env</code> is created, but from a template. The URL, node id and token in it are placeholders you replace by hand.</li>
+      <li>Remote Control is not enabled by the script. Its closing message tells the owner to do it, so until they do it will not return after a reboot.</li>
+      <li>Both scripts run under <code>set -euo pipefail</code>, so a unit that fails to start does abort them. Neither re-checks the units afterwards nor sends a first heartbeat, so a service that starts and then dies goes unnoticed until the dashboard misses it.</li>
+    </ul>
+    <p>Section 04 above is the supported path. Reach for this one only on a machine you are managing by hand, and close those gaps deliberately.</p>
   </div>
 </section>
 
@@ -457,7 +502,7 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
     <thead><tr><th>Alert</th><th>Level</th><th>Meaning</th><th>Who acts</th></tr></thead>
     <tbody>
       <tr><td><code>no_heartbeat</code></td><td><span class="pill bad">critical</span></td><td>No report for 15 min: node down, agent broken, or token rotated without updating the node</td><td>operator</td></tr>
-      <tr><td><code>claude_missing</code></td><td><span class="pill bad">critical</span></td><td><code>claude</code> not found for the owner user</td><td>owner re-runs setup-owner.sh</td></tr>
+      <tr><td><code>claude_missing</code></td><td><span class="pill bad">critical</span></td><td><code>claude</code> not found for the owner user</td><td>re-run the install command; it repairs rather than duplicates</td></tr>
       <tr><td><code>credentials_missing</code></td><td><span class="pill bad">critical</span></td><td>No login on the node</td><td>owner: <code>claude</code>, <code>/login</code></td></tr>
       <tr><td><code>token_expired</code></td><td><span class="pill warn">warn</span></td><td>Access token expired over an hour ago and was not refreshed</td><td>owner opens a session; <code>/login</code> if asked</td></tr>
       <tr><td><code>token_stale</code></td><td><span class="pill warn">warn</span></td><td>Credentials untouched for a day; usually just an idle node</td><td>owner, when convenient</td></tr>
@@ -497,10 +542,9 @@ ccfleetd node pin node-a 2.1.92</code></pre>
     <div>
       <h3>Rebuild a node</h3>
       <ol>
-        <li>New VPS, <code>bootstrap.sh</code>, <code>setup-owner.sh</code>.</li>
+        <li>New VPS, then the one install command from the console (rotate the token first, so the command carries a valid one).</li>
         <li>Restore the latest <code>claude-state-*.tar.gz</code> with <code class="long">tar -xzf claude-state-&lt;stamp&gt;.tar.gz -C /</code> (archive paths are relative to <code>/</code>). It contains settings, projects and history, never credentials.</li>
         <li>Owner runs <code>claude</code> and <code>/login</code>.</li>
-        <li>Rotate the node token and start the agent.</li>
       </ol>
       <h3>Remove an owner</h3>
       <pre><code>ccfleetd node disable node-b   <span class="c"># keep history</span>
@@ -566,6 +610,7 @@ claude
       <tr><td>server</td><td><code>ccfleetd node add|list|pin|rc-expected|rotate-token|enable|disable|remove</code></td><td>Node registry</td></tr>
       <tr><td>server</td><td><code>ccfleetd check</code></td><td>Evaluate every node once and print transitions</td></tr>
       <tr><td>server</td><td><code>ccfleetd alert-test</code></td><td>Send a test notification</td></tr>
+      <tr><td>node</td><td><code>node/install.sh</code></td><td>Blank server to ready-for-sign-in, in one command</td></tr>
       <tr><td>node</td><td><code>ccfleet-agent [--print]</code></td><td>Post one heartbeat, or print it</td></tr>
       <tr><td>node</td><td><code>ccfleet-backup</code></td><td>Archive state without credentials</td></tr>
       <tr><td>node</td><td><code>ccfleet-upgrade-claude [version]</code></td><td>Staged upgrade via the official installer</td></tr>
