@@ -19,6 +19,10 @@ CONF="$HOME/.config/ccfleet"
 UNITS="$HOME/.config/systemd/user"
 mkdir -p "$BIN" "$CONF" "$UNITS"
 
+fetch_text() {  # fetch_text <relative-path>  -> prints the file
+  if [ -f "$SRC_DIR/../$1" ]; then cat "$SRC_DIR/../$1"; else curl -fsSL "$REPO_RAW/$1"; fi
+}
+
 fetch() {  # fetch <relative-path> <destination>
   if [[ -f "$SRC_DIR/../$1" ]]; then
     install -m "${3:-644}" "$SRC_DIR/../$1" "$2"
@@ -100,21 +104,11 @@ systemctl --user enable --now ccfleet-shell.service
 mkdir -p "$HOME/workspace"
 
 # 7. Auto-attach on login, so a terminal user never has to know about tmux.
-#    Interactive logins land in the always-on "cc" session; closing the window,
-#    losing wifi or shutting the laptop no longer ends their work.
+#    The snippet and its reasoning live in node/attach.sh; appended once.
 MARKER="# ccfleet: attach to the persistent work session"
 if ! grep -qF "$MARKER" "$HOME/.bashrc" 2>/dev/null; then
-  cat >> "$HOME/.bashrc" <<'ATTACH'
-
-# ccfleet: attach to the persistent work session
-# Only for real interactive logins: never for scp, rsync, git-over-ssh, or when
-# already inside tmux, all of which break if a multiplexer writes to the stream.
-if [ -z "${TMUX:-}" ] && [ -n "${PS1:-}" ] && [ -t 1 ] && [ -z "${CCFLEET_NO_ATTACH:-}" ]; then
-  case "$-" in
-    *i*) command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s cc -c "$HOME/workspace" ;;
-  esac
-fi
-ATTACH
+  { echo; fetch_text node/attach.sh; } >> "$HOME/.bashrc"
+  echo "  login auto-attach installed in ~/.bashrc"
 fi
 
 cat <<MSG
