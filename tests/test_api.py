@@ -1,6 +1,7 @@
 import base64
 import http.client
 import json
+import re
 import threading
 import time
 
@@ -91,3 +92,112 @@ def test_heartbeat_round_trip(server, cfg):
     bad_disk = {**payload, "disk": {"used_pct": 99.0}}
     reply = json.loads(call(srv, "POST", "/api/heartbeat", bad_disk, auth)[1])
     assert reply["open_alerts"] == ["disk_high"] and reply["events"] == 1
+
+
+def csrf_for(cfg):
+    from ccfleetd.api import csrf_token
+    return csrf_token(cfg)
+
+
+def form_post(srv, path, fields, headers=None):
+    import urllib.parse
+    body = urllib.parse.urlencode(fields).encode()
+    h = {"Content-Type": "application/x-www-form-urlencoded"}
+    h.update(headers or {})
+    conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+    conn.request("POST", path, body=body, headers=h)
+    resp = conn.getresponse()
+    raw = resp.read()
+    loc = resp.getheader("Location", "")
+    conn.close()
+    return resp.status, raw, loc
+
+
+def test_console_requires_auth_and_csrf(server, cfg):
+    srv, store = server
+    auth = basic(cfg.admin_token)
+    # no auth at all
+    assert form_post(srv, "/actions/node/add", {"node_id": "n1", "owner": "e"})[0] == 401
+    # authed but no csrf
+    assert form_post(srv, "/actions/node/add", {"node_id": "n1", "owner": "e"}, auth)[0] == 403
+    # authed but wrong csrf
+    assert form_post(srv, "/actions/node/add",
+                     {"node_id": "n1", "owner": "e", "csrf": "0" * 64}, auth)[0] == 403
+    assert store.list_nodes() == []
+
+
+def test_console_add_shows_token_once_then_node_exists(server, cfg):
+    srv, store = server
+    status, body, _ = form_post(srv, "/actions/node/add",
+                                {"node_id": "node-a", "owner": "erik", "region": "us",
+                                 "rc_expected": "1", "csrf": csrf_for(cfg)},
+                                basic(cfg.admin_token))
+    assert status == 200
+    page = body.decode()
+    assert "CCFLEET_NODE_ID=node-a" in page and "CCFLEET_NODE_TOKEN=" in page
+    node = store.get_node("node-a")
+    assert node["owner"] == "erik" and node["rc_expected"] is True
+    # the token in the page is a real working node token
+    token = re.search(r"CCFLEET_NODE_TOKEN=([0-9a-f]{64})", page).group(1)
+    assert store.node_for_token(token)["id"] == "node-a"
+
+
+def test_console_add_rejects_a_bad_node_id(server, cfg):
+    srv, store = server
+    status, body, _ = form_post(srv, "/actions/node/add",
+                                {"node_id": "Bad Id!", "owner": "erik", "csrf": csrf_for(cfg)},
+                                basic(cfg.admin_token))
+    assert status == 400 and store.list_nodes() == []
+    assert b"<script>" not in body
+
+
+def test_console_node_actions(server, cfg):
+    srv, store = server
+    store.add_node("node-a", "erik", now=1.0)
+    auth = basic(cfg.admin_token)
+    csrf = csrf_for(cfg)
+
+    for action, check in (("disable", lambda n: n["enabled"] is False),
+                          ("enable", lambda n: n["enabled"] is True),
+                          ("rc-on", lambda n: n["rc_expected"] is True),
+                          ("rc-off", lambda n: n["rc_expected"] is False)):
+        status, _, loc = form_post(srv, f"/actions/node/node-a/{action}", {"csrf": csrf}, auth)
+        assert status == 303 and loc == "/"
+        assert check(store.get_node("node-a"))
+
+    status, _, _ = form_post(srv, "/actions/node/node-a/pin",
+                             {"csrf": csrf, "version": "2.1.276"}, auth)
+    assert status == 303 and store.get_node("node-a")["pinned_version"] == "2.1.276"
+
+    # rotating shows a fresh token and invalidates nothing else
+    status, body, _ = form_post(srv, "/actions/node/node-a/rotate-token", {"csrf": csrf}, auth)
+    assert status == 200
+    new = re.search(r"CCFLEET_NODE_TOKEN=([0-9a-f]{64})", body.decode()).group(1)
+    assert store.node_for_token(new)["id"] == "node-a"
+
+    # remove needs the node id typed back
+    assert form_post(srv, "/actions/node/node-a/remove", {"csrf": csrf}, auth)[0] == 400
+    assert store.get_node("node-a") is not None
+    status, _, loc = form_post(srv, "/actions/node/node-a/remove",
+                               {"csrf": csrf, "confirm": "node-a"}, auth)
+    assert status == 303 and store.get_node("node-a") is None
+
+
+def test_console_unknown_action_and_unknown_node(server, cfg):
+    srv, store = server
+    auth = basic(cfg.admin_token)
+    csrf = csrf_for(cfg)
+    store.add_node("node-a", "erik", now=1.0)
+    assert form_post(srv, "/actions/node/node-a/fly", {"csrf": csrf}, auth)[0] == 404
+    assert form_post(srv, "/actions/node/ghost/enable", {"csrf": csrf}, auth)[0] == 400
+
+
+def test_dashboard_carries_the_forms(server, cfg):
+    srv, store = server
+    store.add_node("node-a", "erik", now=1.0)
+    status, body, _ = call(srv, "GET", "/", headers=basic(cfg.admin_token))
+    page = body.decode()
+    assert status == 200
+    assert "Add a node" in page
+    assert f'value="{csrf_for(cfg)}"' in page
+    assert "/actions/node/node-a/disable" in page
