@@ -68,8 +68,38 @@ def test_credentials_summary_missing_and_corrupt(tmp_path, monkeypatch):
     assert summary["present"] is True and summary.get("parse_error") is True
 
 
+def test_find_claude_falls_back_to_install_locations(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda name: None)
+    monkeypatch.setattr(agent, "EXTRA_CLAUDE_PATHS", (str(tmp_path / "missing"),))
+    assert agent.find_claude() is None
+
+    installed = tmp_path / "claude"
+    installed.write_text("#!/bin/sh\necho 2.1.276\n")
+    installed.chmod(0o755)
+    monkeypatch.setattr(agent, "EXTRA_CLAUDE_PATHS", (str(installed),))
+    assert agent.find_claude() == str(installed)
+
+    # a path that exists but is not executable must not be picked
+    notexe = tmp_path / "notexe"
+    notexe.write_text("x")
+    notexe.chmod(0o644)
+    monkeypatch.setattr(agent, "EXTRA_CLAUDE_PATHS", (str(notexe),))
+    assert agent.find_claude() is None
+
+
+def test_claude_info_uses_the_fallback_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda name: None)
+    installed = tmp_path / "claude"
+    installed.write_text("#!/bin/sh\n")
+    installed.chmod(0o755)
+    monkeypatch.setattr(agent, "EXTRA_CLAUDE_PATHS", (str(installed),))
+    info = agent.claude_info(fake_runner("2.1.276 (Claude Code)\n"))
+    assert info == {"version": "2.1.276", "path": str(installed)}
+
+
 def test_claude_info(monkeypatch):
     monkeypatch.setattr(agent.shutil, "which", lambda name: None)
+    monkeypatch.setattr(agent, "EXTRA_CLAUDE_PATHS", ())
     assert agent.claude_info(fake_runner()) == {"version": None, "path": None}
     monkeypatch.setattr(agent.shutil, "which", lambda name: "/usr/bin/claude")
     info = agent.claude_info(fake_runner("2.1.92 (Claude Code)\n"))
