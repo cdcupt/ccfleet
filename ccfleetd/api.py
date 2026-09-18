@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -10,14 +11,16 @@ import re
 import signal
 import threading
 import time
+import urllib.parse
+from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
 from .config import Config
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
-from .render import build_rows, render_dashboard
-from .store import Store
+from .render import build_rows, render_add_result, render_dashboard
+from .store import Store, StoreError
 
 log = logging.getLogger("ccfleetd.api")
 
@@ -55,6 +58,17 @@ def _admin_ok(header: Optional[str], cfg: Config) -> bool:
         _user, _, password = decoded.partition(b":")
         return hmac.compare_digest(password, expected)
     return False
+
+
+def csrf_token(cfg: Config) -> str:
+    """Form token for the console's write actions.
+
+    Derived from the admin token, so it cannot be computed by a third-party page.
+    Browsers attach Basic credentials automatically, which is exactly what makes a
+    cross-site POST possible, and this is what stops it.
+    """
+    return hmac.new(cfg.admin_token.encode("utf-8"), b"ccfleet-csrf",
+                    hashlib.sha256).hexdigest()
 
 
 def _bearer_token(header: Optional[str]) -> Optional[str]:
@@ -132,8 +146,24 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def do_HEAD(self) -> None:  # noqa: N802
             self.do_GET()
 
+        def _form(self) -> Optional[dict[str, str]]:
+            body = self._read_body()
+            if body is None:
+                return None
+            parsed = urllib.parse.parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True)
+            return {k: v[0] for k, v in parsed.items()}
+
+        def _redirect(self, location: str) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path.startswith("/actions/"):
+                self._console_action(path)
+                return
             if path != "/api/heartbeat":
                 self._json(404, {"error": "not found"})
                 return
@@ -158,6 +188,63 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                              "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                              "events": len(events)})
 
+        # -- console actions -----------------------------------------------
+
+        def _console_action(self, path: str) -> None:
+            if not self._require_admin():
+                return
+            form = self._form()
+            if form is None:
+                return
+            if not hmac.compare_digest(form.get("csrf", ""), csrf_token(ctx.cfg)):
+                self._json(403, {"error": "bad or missing csrf token"})
+                return
+            parts = path.strip("/").split("/")          # actions/node/<id|add>/<action>
+            try:
+                if parts[:3] == ["actions", "node", "add"]:
+                    self._action_add(form)
+                elif len(parts) == 4 and parts[:2] == ["actions", "node"]:
+                    self._action_on_node(parts[2], parts[3], form)
+                else:
+                    self._json(404, {"error": "not found"})
+            except StoreError as exc:
+                page = f'<!doctype html><p>{html_escape(str(exc))}</p><p><a href="/">back</a></p>'
+                self._send(400, page.encode("utf-8"), HTML_HEADERS)
+
+        def _action_add(self, form: dict[str, str]) -> None:
+            token = ctx.store.add_node(
+                form.get("node_id", "").strip(), form.get("owner", "").strip(),
+                form.get("region", "").strip(), form.get("pinned_version", "").strip(),
+                form.get("rc_expected") == "1", now=time.time())
+            body = render_add_result(form["node_id"].strip(), token, ctx.cfg)
+            self._send(200, body.encode("utf-8"), HTML_HEADERS)
+
+        def _action_on_node(self, node_id: str, action: str, form: dict[str, str]) -> None:
+            if action == "enable":
+                ctx.store.set_enabled(node_id, True)
+            elif action == "disable":
+                ctx.store.set_enabled(node_id, False)
+            elif action == "rc-on":
+                ctx.store.set_rc_expected(node_id, True)
+            elif action == "rc-off":
+                ctx.store.set_rc_expected(node_id, False)
+            elif action == "pin":
+                ctx.store.set_pinned_version(node_id, form.get("version", "").strip())
+            elif action == "rotate-token":
+                token = ctx.store.rotate_token(node_id)
+                self._send(200, render_add_result(node_id, token, ctx.cfg).encode("utf-8"),
+                           HTML_HEADERS)
+                return
+            elif action == "remove":
+                if form.get("confirm") != node_id:
+                    self._json(400, {"error": "confirmation did not match the node id"})
+                    return
+                ctx.store.remove_node(node_id)
+            else:
+                self._json(404, {"error": "unknown action"})
+                return
+            self._redirect("/")
+
         # -- views ---------------------------------------------------------
 
         def _rows(self) -> list[dict[str, Any]]:
@@ -165,7 +252,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                               ctx.store.open_alerts(), time.time())
 
         def _dashboard(self) -> str:
-            return render_dashboard(self._rows(), ctx.store.open_alerts(), time.time(), ctx.cfg)
+            return render_dashboard(self._rows(), ctx.store.open_alerts(), time.time(),
+                                    ctx.cfg, csrf_token(ctx.cfg))
 
     return FleetHandler
 
