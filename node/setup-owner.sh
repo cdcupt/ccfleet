@@ -50,7 +50,35 @@ if [[ ! -f "$CONF/agent.env" ]]; then
 fi
 chmod 600 "$CONF/agent.env"
 
-# 5. User-level systemd units.
+# 5. User-level systemd units. These need a working per-user systemd manager,
+# which a minimal image can lack: without libpam-systemd there is no
+# pam_systemd.so, so XDG_RUNTIME_DIR is never set and user@<uid>.service fails.
+# Enabling timers there looks like it worked and then nothing ever runs, so
+# check before relying on it.
+if ! systemctl --user is-system-running >/dev/null 2>&1; then
+  cat >&2 <<'WARN'
+
+ERROR: this user has no working systemd manager, so the ccfleet timers cannot run.
+
+That usually means libpam-systemd is missing, so pam_systemd.so never sets
+XDG_RUNTIME_DIR. Check with:
+
+    systemctl status user@$(id -u).service
+    journalctl -u user@$(id -u).service -n 20
+
+On Debian or Ubuntu, as root:
+
+    apt-get install -y libpam-systemd
+    loginctl enable-linger $(id -un)
+
+then log out, log back in and re-run this script. Installing that package
+changes PAM configuration, so on a box whose SSH access you depend on, keep a
+second session open while you do it.
+
+WARN
+  exit 1
+fi
+
 for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service; do
   fetch "node/systemd/$unit" "$UNITS/$unit"
 done

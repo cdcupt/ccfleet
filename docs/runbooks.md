@@ -15,6 +15,19 @@ Commands marked *node* run as the owner on the node; *server* runs where
 5. *node*: `ccfleet-agent --print`, then `systemctl --user start ccfleet-agent.service`.
 6. *server*: `ccfleetd node pin <node-id> <version>` with the version from `/status`.
 
+## Timers never run after setup
+
+`setup-owner.sh` now refuses to continue when the owner has no working per-user
+systemd manager, because enabling a timer there looks successful and then
+nothing ever fires. The usual cause is a minimal image without `libpam-systemd`,
+so `pam_systemd.so` is absent and `XDG_RUNTIME_DIR` is never set.
+
+1. *node*: `systemctl status user@$(id -u).service` and
+   `journalctl -u user@$(id -u).service -n 20`.
+2. *root*: `apt-get install -y libpam-systemd && loginctl enable-linger <owner>`.
+   This edits PAM, so keep a second SSH session open while you do it.
+3. Log out, back in, re-run `setup-owner.sh`.
+
 ## `credentials_missing` or `token_expired`
 
 The owner needs to sign in again; nobody else can do it for them.
