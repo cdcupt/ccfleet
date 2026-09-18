@@ -68,7 +68,9 @@ done
 case "$SERVER" in http://*|https://*) ;; *) die "--server must start with http:// or https://" ;; esac
 printf '%s' "$NODE_ID" | grep -qE '^[a-z0-9][a-z0-9-]{1,39}$' || die "--node must be lowercase letters, digits and hyphens"
 printf '%s' "$TOKEN"   | grep -qE '^[0-9a-f]{64}$'            || die "--token must be the 64-character value from the console"
-printf '%s' "$OWNER"   | grep -qE '^[a-z_][a-z0-9_-]{0,31}$'  || die "--owner must be a valid unix user name"
+# Same pattern as adduser's NAME_REGEX on Debian and Ubuntu: a name this accepts
+# must be one adduser will actually create, or the install fails after changing things.
+printf '%s' "$OWNER"   | grep -qE '^[a-z][a-z0-9_-]{0,31}$'   || die "--owner must start with a lowercase letter, then lowercase letters, digits, underscore or hyphen"
 
 # Root is required for the work, but only after the arguments are known good, so a
 # typo is caught without sudo and the checks above can be exercised by tests.

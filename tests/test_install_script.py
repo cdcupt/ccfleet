@@ -75,7 +75,7 @@ def test_rejects_a_token_that_is_not_the_console_value():
 
 
 def test_rejects_an_owner_that_could_reach_a_shell():
-    for bad in ("alice; rm -rf /", "Alice", "alice owner", "-alice", "a" * 33):
+    for bad in ("alice; rm -rf /", "Alice", "alice owner", "-alice", "a" * 33, "_svc"):
         r = run(swap(GOOD, "--owner", bad))
         assert r.returncode != 0, f"{bad!r} should have been refused"
         assert "--owner" in (r.stdout + r.stderr)
