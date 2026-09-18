@@ -11,7 +11,7 @@ Commands marked *node* run as the owner on the node; *server* runs where
 2. New VPS in a supported region. *root*: `bootstrap.sh <owner> <pubkey>`.
 3. *node*: `git clone https://github.com/cdcupt/ccfleet.git && ccfleet/node/setup-owner.sh`,
    fill `~/.config/ccfleet/agent.env`, `chmod 600` it.
-4. *node*: `tmux new -s cc`, `claude`, `/login`, paste the code, `/status`.
+4. *node*: `tmux attach -t cc   # or just log in: it attaches for you`, `claude`, `/login`, paste the code, `/status`.
 5. *node*: `ccfleet-agent --print`, then `systemctl --user start ccfleet-agent.service`.
 6. *server*: `ccfleetd node pin <node-id> <version>` with the version from `/status`.
 
@@ -32,7 +32,7 @@ so `pam_systemd.so` is absent and `XDG_RUNTIME_DIR` is never set.
 
 The owner needs to sign in again; nobody else can do it for them.
 
-1. *node*: `tmux attach -t cc` (or `tmux new -s cc`), `claude`, `/login`.
+1. *node*: `tmux attach -t cc` (or `tmux attach -t cc   # or just log in: it attaches for you`), `claude`, `/login`.
 2. If the CLI says the login expired, the same command renews it.
 3. *node*: `systemctl --user start ccfleet-agent.service`; the alert closes on
    the next heartbeat.

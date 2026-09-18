@@ -118,7 +118,7 @@ Owner setup done. Remaining steps, in order:
 
   1. Edit $CONF/agent.env with the URL, node id and token printed by
      'ccfleetd node add' on the fleet server.
-  2. tmux new -s cc
+  2. tmux attach -t cc   # or just log in: it attaches for you
      claude              # sign in with YOUR account: /login, open the URL on your
                          # laptop, paste the code back into this terminal
      /status             # Login row shows your account; no base URL, no auth token
