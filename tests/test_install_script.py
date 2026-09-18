@@ -19,6 +19,12 @@ def run(args):
                           text=True, timeout=60)
 
 
+def run_piped(args):
+    """The documented form: curl … | bash -s -- …, where $0 is 'bash', not a path."""
+    return subprocess.run(["bash", "-s", "--", *args], input=INSTALL.read_text(),
+                          capture_output=True, text=True, timeout=60)
+
+
 def test_script_ships_and_parses():
     assert INSTALL.is_file()
     subprocess.run(["bash", "-n", str(INSTALL)], check=True, timeout=30)
@@ -94,3 +100,33 @@ def test_it_refuses_to_claim_success_it_did_not_verify():
     assert 'is-active fail2ban' in text, "hardening must confirm fail2ban actually started"
     assert 'if [ -n "$FAILED" ]; then' in text, "service failures must fail the install"
     assert "exit 1" in text
+
+
+def test_usage_works_when_the_script_is_piped_into_bash():
+    """The documented invocation pipes this in, so $0 is 'bash' and usage must not read it."""
+    r = run_piped([])
+    out = r.stdout + r.stderr
+    assert r.returncode == 2
+    assert "--server" in out and "--owner" in out
+    assert "curl -fsSL" in out, "usage should show the real invocation"
+
+
+def test_validation_still_refuses_when_piped():
+    r = run_piped(swap(GOOD, "--owner", "alice; rm -rf /"))
+    assert r.returncode != 0
+    assert "--owner" in (r.stdout + r.stderr)
+
+
+def test_usage_does_not_read_its_own_path():
+    assert 'sed -n' not in INSTALL.read_text().split("Required:")[0], \
+        "usage must be self-contained; $0 is 'bash' when piped"
+
+
+def test_sudo_is_installed_before_the_first_call_that_needs_it():
+    """A definition is not a use: what matters is the first as_owner CALL."""
+    lines = INSTALL.read_text().splitlines()
+    install_at = next(i for i, ln in enumerate(lines) if "apt-get install -y -q sudo" in ln)
+    call_at = next(i for i, ln in enumerate(lines)
+                   if ln.lstrip().startswith(("as_owner ", "as_owner'", 'as_owner"')))
+    assert install_at < call_at, (
+        f"sudo installed at line {install_at + 1} but first used at {call_at + 1}")

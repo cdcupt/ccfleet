@@ -23,8 +23,17 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  # Self-contained on purpose. The documented form pipes this script into bash, so
+  # $0 is "bash", not a path, and anything that reads $0 prints rubbish or dies
+  # under pipefail before the user ever sees how to call it.
   cat <<'USAGE'
+ccfleet node install — takes a blank server to ready-for-sign-in.
+
+  curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \
+    | sudo bash -s -- --server https://fleet.example.com \
+                      --node alice-node --token <64-hex> --owner alice \
+                      --ssh-key "ssh-ed25519 AAAA... alice"
+
 Required:
   --server URL      fleet server base URL, from the console
   --node ID         node id, from the console
@@ -88,8 +97,11 @@ apt-get update -q >/dev/null
 # libpam-systemd is not optional: without it there is no pam_systemd.so, so
 # XDG_RUNTIME_DIR is never set, the per-user systemd manager never starts, and
 # every timer this script enables would silently never run.
-apt-get install -y -q tmux mosh curl git python3 ca-certificates libpam-systemd >/dev/null
-note "installed, including libpam-systemd so user services can run"
+# sudo is in this list because the script drops to the owner for every user-level
+# step from here on, and a minimal image does not necessarily ship it; without it
+# the install would modify the system and then fail at the first as_owner call.
+apt-get install -y -q sudo tmux mosh curl git python3 ca-certificates libpam-systemd >/dev/null
+note "installed: sudo, tmux, mosh, git, python3, and libpam-systemd so user services can run"
 
 step "2/8  owner account"
 if ! id "$OWNER" >/dev/null 2>&1; then adduser --disabled-password --gecos "" "$OWNER" >/dev/null; fi
