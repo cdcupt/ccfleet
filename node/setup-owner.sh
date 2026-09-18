@@ -94,6 +94,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now ccfleet-agent.timer
 systemctl --user enable --now ccfleet-backup.timer
 
+# 6. Workspace. Claude Code will not serve Remote Control from a home directory,
+#    so every node needs a project directory that the owner trusts once.
+mkdir -p "$HOME/workspace"
+
 cat <<MSG
 
 Owner setup done. Remaining steps, in order:
@@ -105,7 +109,10 @@ Owner setup done. Remaining steps, in order:
                          # laptop, paste the code back into this terminal
      /status             # Login row shows your account; no base URL, no auth token
   3. ccfleet-agent --print   # dry run; then: systemctl --user start ccfleet-agent.service
-  4. Optional phone/browser access:
-     claude remote-control    # accept the one-time prompt once, then Ctrl-C and run
+  4. Phone and browser access, which is how most people will use this node:
+     cd ~/workspace && claude          # answer "Yes, I trust this folder", then /exit
+     claude remote-control             # answer y to the one-time prompt, then Ctrl-C
      systemctl --user enable --now claude-remote-control.service
+     Afterwards open claude.ai/code and the session is there. Nothing is installed
+     on the machine you sit at.
 MSG
