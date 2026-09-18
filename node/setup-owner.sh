@@ -87,16 +87,35 @@ WARN
   ;;
 esac
 
-for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service; do
+for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service ccfleet-shell.service; do
   fetch "node/systemd/$unit" "$UNITS/$unit"
 done
 systemctl --user daemon-reload
 systemctl --user enable --now ccfleet-agent.timer
 systemctl --user enable --now ccfleet-backup.timer
+systemctl --user enable --now ccfleet-shell.service
 
 # 6. Workspace. Claude Code will not serve Remote Control from a home directory,
 #    so every node needs a project directory that the owner trusts once.
 mkdir -p "$HOME/workspace"
+
+# 7. Auto-attach on login, so a terminal user never has to know about tmux.
+#    Interactive logins land in the always-on "cc" session; closing the window,
+#    losing wifi or shutting the laptop no longer ends their work.
+MARKER="# ccfleet: attach to the persistent work session"
+if ! grep -qF "$MARKER" "$HOME/.bashrc" 2>/dev/null; then
+  cat >> "$HOME/.bashrc" <<'ATTACH'
+
+# ccfleet: attach to the persistent work session
+# Only for real interactive logins: never for scp, rsync, git-over-ssh, or when
+# already inside tmux, all of which break if a multiplexer writes to the stream.
+if [ -z "${TMUX:-}" ] && [ -n "${PS1:-}" ] && [ -t 1 ] && [ -z "${CCFLEET_NO_ATTACH:-}" ]; then
+  case "$-" in
+    *i*) command -v tmux >/dev/null 2>&1 && exec tmux new-session -A -s cc -c "$HOME/workspace" ;;
+  esac
+fi
+ATTACH
+fi
 
 cat <<MSG
 

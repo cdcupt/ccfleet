@@ -1,0 +1,22 @@
+[Unit]
+Description=ccfleet persistent work session (a tmux session that is always there)
+After=network-online.target
+
+# A terminal user should never have to think about tmux. This keeps one session
+# named "cc" alive from boot, and ~/.bashrc attaches to it on login, so plain
+# `ssh <node>` lands in a session that survives disconnects, closed laptops and
+# dropped links. Without this, a user who forgets tmux loses their work the first
+# time their wifi drops.
+[Service]
+Type=forking
+Environment=DISABLE_AUTOUPDATER=1
+WorkingDirectory=%h/workspace
+ExecStartPre=/bin/mkdir -p %h/workspace
+ExecStart=/usr/bin/tmux new-session -d -s cc -c %h/workspace
+ExecStop=/usr/bin/tmux kill-session -t cc
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=15s
+
+[Install]
+WantedBy=default.target
