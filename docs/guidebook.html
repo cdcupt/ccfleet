@@ -126,7 +126,7 @@ html{scroll-behavior:smooth}
   <div class="meta">
     <span>Repo <b>github.com/cdcupt/ccfleet</b></span>
     <span>Runtime <b>Python 3.9+, no dependencies</b></span>
-    <span>Nodes <b>Ubuntu 22.04 / 24.04</b></span>
+    <span>Nodes <b>Debian 12, Ubuntu 22.04 / 24.04</b></span>
     <span>Time to first node <b>about 40 minutes</b></span>
   </div>
 </header>
@@ -238,7 +238,8 @@ claude            # logging in already attached you to the persistent session</c
     <div>
       <h3>Included</h3>
       <ul>
-        <li><strong>Node scripts</strong>: bootstrap (root, once) and owner setup, hardened defaults, staged upgrades, backups without credentials.</li>
+        <li><strong>Node install</strong>: one command takes a blank server to ready-for-sign-in, hardened, with the agent reporting. The older bootstrap and owner-setup scripts remain for machines you manage by hand.</li>
+        <li><strong>Node upkeep</strong>: staged upgrades and backups that exclude credentials.</li>
         <li><strong>Agent</strong>: one Python file, standard library only, systemd timer every five minutes.</li>
         <li><strong>Fleet server</strong>: dashboard, JSON API, alert rules, Telegram, node token management.</li>
         <li><strong><code>ccp</code></strong>: several accounts on one laptop, each in its own profile, switched by hand.</li>
@@ -320,7 +321,7 @@ fleet.example.com {
   <div class="step">
     <div class="num">4</div>
     <h3>Register each owner's node</h3>
-    <p>Do this from the console once it is up: add the node, and the page that follows hands you a complete install command with the server URL, node id and token already in it. That command is the whole of <a href="#node">section 04</a>, so the details live there rather than being repeated here.</p>
+    <p>Do this from the console once it is up: add the node, and the page that follows gives you an install command with the server URL, node id and token already in it. <strong>Append the owner's <code>--ssh-key</code> before you run it</strong>, or the installer skips SSH, firewall and fail2ban hardening rather than risk locking everyone out. <a href="#node">Section 04</a> has the detail.</p>
     <p>The token is shown <strong>once</strong>. Send it to the owner over a private channel, or run the install yourself. Lost it? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</p>
   </div>
 
@@ -379,7 +380,11 @@ fleet.example.com {
   <div class="step">
     <div class="num">1</div>
     <h3>Add the node and copy the command</h3>
-    <p>Open the console, fill in the node id and the owner, and submit. The page that follows shows the token <strong>once</strong> and a complete install command with the server URL, node id and token already filled in. Copy it.</p>
+    <p>Open the console, fill in the node id and the owner, and submit. The page that follows shows the token <strong>once</strong>, and an install command with the server URL, node id, token and owner already filled in. Copy it.</p>
+    <div class="note bad">
+      <p class="t">The copied command is missing one thing on purpose</p>
+      <p>The console cannot know the owner's public key, so the command it prints has no <code>--ssh-key</code>. Run it as-is and step 2 will <strong>skip SSH, firewall and fail2ban hardening altogether</strong>, on purpose, rather than disable password logins on a machine with no key on it and lock everyone out. Add the flag before you run it, or add a key and re-run afterwards.</p>
+    </div>
     <p>If you prefer the terminal, the CLI does the same thing and prints the same three identity lines:</p>
     <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
   ccfleetd node add node-a --owner alice --region us-west --rc-expected</code></pre>
@@ -447,7 +452,7 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 
   <div class="note bad">
     <p class="t">The long way round is still there, but it is not equivalent</p>
-    <p>If you would rather not paste a token into a command, the console also prints the three <code>agent.env</code> lines on their own. Place them by hand, then run <code>node/bootstrap.sh</code> as root and <code>node/setup-owner.sh</code> as the owner.</p>
+    <p>If you would rather not paste a token into a command, the console also prints the three <code>agent.env</code> lines on their own. Run <code>node/bootstrap.sh</code> as root, then <code>node/setup-owner.sh</code> as the owner, and place those lines in <code class="long">~/.config/ccfleet/agent.env</code> afterwards. That order is not optional: the owner's account and home directory do not exist until the first script has run.</p>
     <p>Those two scripts cover the packages, the owner account, sudo, the firewall, lingering, the helper binaries and the agent, backup and work-session timers. They do <strong>not</strong> do the rest, and you are taking it on yourself:</p>
     <ul>
       <li><strong>No fail2ban.</strong> <code>bootstrap.sh</code> does not install or configure it, so the node has no SSH brute-force protection until you add it.</li>
