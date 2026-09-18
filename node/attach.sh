@@ -1,3 +1,7 @@
+# shellcheck shell=bash
+# ^ This fragment is appended to ~/.bashrc rather than executed, so it has no
+#   shebang and shellcheck cannot infer a dialect. The directive is a comment,
+#   so it is inert once appended, and it keeps `shellcheck node/*.sh` clean.
 # ccfleet: attach to the persistent work session
 # Appended to the owner's ~/.bashrc by setup-owner.sh. Kept as its own file so the
 # guards can be tested; see tests/test_attach_snippet.py.

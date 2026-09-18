@@ -134,3 +134,14 @@ fi
     text = bashrc.read_text()
     assert text.count("# ccfleet: attach to the persistent work session") == 1
     assert "# existing user content" in text
+
+
+def test_the_marker_install_sh_greps_for_is_present():
+    """install.sh decides whether ~/.bashrc is already patched by grepping this exact line."""
+    from pathlib import Path
+    snippet = Path(__file__).resolve().parents[1] / "node" / "attach.sh"
+    install = Path(__file__).resolve().parents[1] / "node" / "install.sh"
+    marker = "# ccfleet: attach to the persistent work session"
+    assert marker in install.read_text(), "install.sh should still key off this marker"
+    assert any(line == marker for line in snippet.read_text().splitlines()), \
+        "the snippet must still contain the marker verbatim, or every re-run appends it again"
