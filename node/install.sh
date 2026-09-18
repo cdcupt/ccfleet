@@ -55,12 +55,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ "$(id -u)" -eq 0 ] || die "run this as root (prefix it with sudo)"
 [ -n "$SERVER" ] && [ -n "$NODE_ID" ] && [ -n "$TOKEN" ] && [ -n "$OWNER" ] || usage
 case "$SERVER" in http://*|https://*) ;; *) die "--server must start with http:// or https://" ;; esac
 printf '%s' "$NODE_ID" | grep -qE '^[a-z0-9][a-z0-9-]{1,39}$' || die "--node must be lowercase letters, digits and hyphens"
 printf '%s' "$TOKEN"   | grep -qE '^[0-9a-f]{64}$'            || die "--token must be the 64-character value from the console"
 printf '%s' "$OWNER"   | grep -qE '^[a-z_][a-z0-9_-]{0,31}$'  || die "--owner must be a valid unix user name"
+
+# Root is required for the work, but only after the arguments are known good, so a
+# typo is caught without sudo and the checks above can be exercised by tests.
+[ "$(id -u)" -eq 0 ] || die "run this as root (prefix it with sudo)"
 
 # 3 of the 4 lockout paths found in review start here, so resolve the account
 # properly rather than assuming /home/$OWNER.
@@ -130,8 +133,11 @@ else
   ufw --force enable >/dev/null
   printf '[sshd]\nenabled = true\nmaxretry = 4\nbantime = 1h\nfindtime = 10m\n' > /etc/fail2ban/jail.d/sshd.local
   systemctl enable --now fail2ban >/dev/null 2>&1 || true
+  if [ "$(systemctl is-active fail2ban 2>/dev/null)" != active ]; then
+    die "fail2ban did not start; refusing to report this server as hardened. Fix it, or re-run with --skip-harden if you accept the risk"
+  fi
   printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
-  note "key-only SSH, firewall, fail2ban, unattended security upgrades"
+  note "key-only SSH, firewall, fail2ban (verified active), unattended security upgrades"
 fi
 
 step "4/8  Claude Code"
@@ -193,7 +199,13 @@ if [ "$NO_REMOTE" = yes ]; then
   # Idempotent: re-running with this flag must leave Remote Control off, not
   # merely decline to switch it on.
   user_systemctl disable --now claude-remote-control.service >/dev/null 2>&1 || true
-  note "remote control disabled on request"
+  rc_state="$(user_systemctl is-active claude-remote-control.service 2>/dev/null || echo inactive)"
+  if [ "$rc_state" = active ]; then
+    FAILED="$FAILED claude-remote-control.service(still-running)"
+    note "remote control could NOT be disabled; it is still running"
+  else
+    note "remote control disabled on request (verified $rc_state)"
+  fi
 else
   user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 \
     || FAILED="$FAILED claude-remote-control.service"
