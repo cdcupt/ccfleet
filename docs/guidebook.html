@@ -179,7 +179,7 @@ html{scroll-behavior:smooth}
   <p>A terminal is optional, not required. If you want one, connect over SSH and attach to a persistent session so that closing the window does not end your work:</p>
   <pre><code>ssh &lt;owner&gt;@&lt;node&gt;
 claude            # logging in already attached you to the persistent session</code></pre>
-  <p>Detach with <kbd>Ctrl</kbd>+<kbd>b</kbd> then <kbd>d</kbd>, or just close the window. The session survives a disconnect, though not a node reboot; after a reboot, start a new one. Remote Control does come back by itself, which is the main reason to prefer it.</p>
+  <p>Detach with <kbd>Ctrl</kbd>+<kbd>b</kbd> then <kbd>d</kbd>, or just close the window. The session survives a disconnect. A reboot clears whatever was running inside it, but you do not have to create one again: the node re-creates the session at boot, so your next <code>ssh</code> still lands in it. Remote Control is enabled at boot too, so it comes back on its own.</p>
 </section>
 
 <section id="what">
@@ -516,7 +516,7 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
 
   <h3>Working on a node</h3>
   <ul>
-    <li><strong>Terminal</strong>: <code>ssh alice@node</code> or <code>mosh alice@node</code>, then <code>tmux attach -t cc</code>. mosh survives laptop sleep and roaming.</li>
+    <li><strong>Terminal</strong>: <code>ssh alice@node</code> or <code>mosh alice@node</code>. You land in the persistent session automatically, with no tmux command to remember. mosh survives laptop sleep and roaming.</li>
     <li><strong>VS Code</strong>: Remote-SSH to the node; the Claude Code extension runs there with the node's login.</li>
     <li><strong>Phone or any browser</strong>: claude.ai/code, pick the node's session (it carries the node's hostname).</li>
     <li><strong>Usage windows</strong>: type <code>/usage</code> inside a session on the node. Windows are per account; a second account is a second window, not a bigger one.</li>
