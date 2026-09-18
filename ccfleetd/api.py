@@ -216,7 +216,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 form.get("node_id", "").strip(), form.get("owner", "").strip(),
                 form.get("region", "").strip(), form.get("pinned_version", "").strip(),
                 form.get("rc_expected") == "1", now=time.time())
-            body = render_add_result(form["node_id"].strip(), token, ctx.cfg)
+            body = render_add_result(form["node_id"].strip(), token, ctx.cfg,
+                                     form.get("owner", "").strip())
             self._send(200, body.encode("utf-8"), HTML_HEADERS)
 
         def _action_on_node(self, node_id: str, action: str, form: dict[str, str]) -> None:
@@ -232,7 +233,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 ctx.store.set_pinned_version(node_id, form.get("version", "").strip())
             elif action == "rotate-token":
                 token = ctx.store.rotate_token(node_id)
-                self._send(200, render_add_result(node_id, token, ctx.cfg).encode("utf-8"),
+                node = ctx.store.get_node(node_id) or {}
+                self._send(200, render_add_result(node_id, token, ctx.cfg,
+                                                  node.get("owner", "")).encode("utf-8"),
                            HTML_HEADERS)
                 return
             elif action == "remove":

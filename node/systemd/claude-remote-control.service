@@ -27,6 +27,19 @@ Environment=DISABLE_AUTOUPDATER=1
 ExecStartPre=/bin/mkdir -p %h/workspace
 ExecStart=/usr/bin/tmux new-session -d -s remote-control -c %h/workspace "%h/.local/bin/claude remote-control --name %H"
 ExecStop=/usr/bin/tmux kill-session -t remote-control
+# Restart=on-failure covers tmux itself failing to launch (missing binary, no
+# server). It deliberately does NOT cover Claude failing to authenticate inside
+# the session, and nothing here can: with Type=forking, ExecStart returns as soon
+# as tmux detaches, so the inner exit status is never seen by systemd.
+#
+# Measured on a live node 2026-09-18 with a throwaway unit of this exact shape
+# whose inner command was `exit 7`:
+#     Result=success  ExecMainStatus=0  NRestarts=0  ActiveState=inactive
+# The unit went inactive rather than failed, so Restart=on-failure did not fire.
+#
+# That is why node/install.sh enables this unit but does not start it: before the
+# owner signs in there is no login for Remote Control to use, and the restart
+# would not retry. The owner starts it once, by hand, after /login.
 Restart=on-failure
 RestartSec=30s
 

@@ -17,6 +17,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
+# The owner becomes a unix account name and is interpolated into a command the
+# console hands an operator to paste as root, so anything outside this set is a
+# command-injection vector, not merely a cosmetic problem.
+# Matches what Debian and Ubuntu adduser will actually accept (NAME_REGEX), so a
+# name the console approves cannot fail halfway through provisioning. Notably
+# that excludes a leading underscore, which adduser refuses without
+# --allow-bad-names.
+OWNER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 TOKEN_BYTES = 32
 
 SCHEMA = """
@@ -115,8 +123,12 @@ class Store:
                  pinned_version: str = "", rc_expected: bool = False,
                  now: float = 0.0) -> str:
         validate_node_id(node_id)
-        if not owner or not owner.strip():
-            raise StoreError("owner must not be empty")
+        owner = owner.strip()
+        if not OWNER_RE.match(owner):
+            raise StoreError(
+                "owner must be a valid unix user name: start with a lowercase letter, then "
+                "lowercase letters, digits, underscore or hyphen, max 32 characters"
+            )
         token = secrets.token_hex(TOKEN_BYTES)
         with self._lock:
             try:

@@ -87,3 +87,27 @@ def test_file_backed_store_creates_parent(tmp_path):
     s.add_node("node-a", "erik")
     s.close()
     assert (tmp_path / "nested" / "fleet.db").exists()
+
+
+@pytest.mark.parametrize("bad_owner", [
+    "alice; rm -rf /",      # the injection the review found
+    "alice owner",
+    "Alice",
+    "-alice",
+    "a" * 33,
+    "",
+    "   ",
+    "root$(id)",
+    "_svc",   # adduser refuses a leading underscore, so the console must too
+])
+def test_owner_must_be_a_usable_unix_name(store, bad_owner):
+    """The owner reaches a command an operator pastes as root, so it is validated."""
+    with pytest.raises(StoreError):
+        store.add_node("node-a", bad_owner)
+    assert store.list_nodes() == []
+
+
+@pytest.mark.parametrize("ok_owner", ["alice", "svc", "bob-2", "a", "a" * 32])
+def test_reasonable_owner_names_are_accepted(store, ok_owner):
+    store.add_node("node-a", ok_owner)
+    assert store.get_node("node-a")["owner"] == ok_owner

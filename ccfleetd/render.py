@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html import escape
+from shlex import quote as shq
 from typing import Any, Optional
 
 from .config import Config
@@ -237,12 +238,21 @@ def _add_form(csrf: str) -> str:
         '</form></div>')
 
 
-def render_add_result(node_id: str, token: str, cfg: Config) -> str:
+def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
     """Shown once, right after a node is created. This is the only time the token exists."""
     url = cfg.public_url or f"http://127.0.0.1:{cfg.bind_port}"
     steps = (f"CCFLEET_URL={url}\n"
              f"CCFLEET_NODE_ID={node_id}\n"
              f"CCFLEET_NODE_TOKEN={token}")
+    # Every value below is quoted before it reaches a command an operator will paste
+    # as root. The store validates these too; this is the second line of defence.
+    install_cmd = (
+        "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \\\n"
+        "  | sudo bash -s -- \\\n"
+        f"      --server {shq(url)} \\\n"
+        f"      --node {shq(node_id)} \\\n"
+        f"      --token {shq(token)} \\\n"
+        f"      --owner {shq(owner) if owner else '<owner>'}")
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -250,14 +260,24 @@ def render_add_result(node_id: str, token: str, cfg: Config) -> str:
         f"<h1>{escape(node_id)} added</h1>"
         "<div class=\"ok-banner\">Copy the three lines below now. The token is shown once "
         "and is not stored in readable form.</div>"
-        "<div class=\"card\"><h2>1. On the node, save this as ~/.config/ccfleet/agent.env</h2>"
+        "<div class=\"card\"><h2>1. Run this on a fresh server, as root</h2>"
+        f"<pre>{escape(install_cmd)}</pre>"
+        "<p class=\"muted\">It hardens the machine, installs Claude Code, starts the agent, and "
+        "stops at the sign-in. Remote Control is enabled but not started: that needs a login "
+        "which does not exist yet, so the owner starts it in step 2. "
+        "Add <code>--ssh-key \"ssh-ed25519 …\"</code> "
+        "with the owner's public key, or SSH hardening is skipped so nobody is locked out.</p>"
+        "<h2>2. The owner signs in, on that machine</h2>"
+        "<pre>claude          # choose the claude.ai login, approve, paste the code back\n"
+        "/status         # confirms their account, no base URL, no auth token\n"
+        "systemctl --user start claude-remote-control.service   # once, for claude.ai access</pre>"
+        "<p class=\"muted\">Nobody else can do this step: a subscription login has to complete "
+        "through Anthropic's own flow. Everything before it is the command above.</p>"
+        "<h2>If you would rather not paste a token around</h2>"
         f"<pre>{escape(steps)}</pre>"
-        "<h2>2. Then run the setup script there</h2>"
-        "<pre>git clone https://github.com/cdcupt/ccfleet.git\n"
-        "ccfleet/node/setup-owner.sh</pre>"
-        "<h2>3. Sign in as yourself</h2>"
-        "<pre>tmux new -s cc\nclaude          # choose the claude.ai login\n"
-        "/status         # confirm your account, no base URL, no auth token</pre>"
+        "<p class=\"muted\">Those three lines are what the command writes to "
+        "<code>~/.config/ccfleet/agent.env</code>; you can place them by hand and run "
+        "<code>node/setup-owner.sh</code> instead.</p>"
         "</div>"
         "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
         "</body></html>")
