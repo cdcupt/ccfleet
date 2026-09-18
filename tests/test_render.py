@@ -40,3 +40,11 @@ def test_add_result_page_is_escaped_and_complete(cfg):
     # an owner name is user input and must not be able to inject markup
     nasty = render_add_result("node-a", "f" * 64, cfg, owner='"><script>x</script>')
     assert "<script>" not in nasty
+
+
+def test_install_command_is_shell_safe_even_if_a_bad_owner_got_stored(cfg):
+    """Second line of defence: the store validates, and render quotes regardless."""
+    from ccfleetd.render import render_add_result
+    page = render_add_result("node-a", "f" * 64, cfg, owner="alice; rm -rf /")
+    assert "--owner 'alice; rm -rf /'" in page or "--owner &#x27;alice; rm -rf /&#x27;" in page
+    assert "--owner alice; rm -rf /" not in page, "an unquoted owner would execute on paste"

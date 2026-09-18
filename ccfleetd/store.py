@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
+# The owner becomes a unix account name and is interpolated into a command the
+# console hands an operator to paste as root, so anything outside this set is a
+# command-injection vector, not merely a cosmetic problem.
+OWNER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 TOKEN_BYTES = 32
 
 SCHEMA = """
@@ -115,8 +119,12 @@ class Store:
                  pinned_version: str = "", rc_expected: bool = False,
                  now: float = 0.0) -> str:
         validate_node_id(node_id)
-        if not owner or not owner.strip():
-            raise StoreError("owner must not be empty")
+        owner = owner.strip()
+        if not OWNER_RE.match(owner):
+            raise StoreError(
+                "owner must be a valid unix user name: lowercase letters, digits, "
+                "underscore and hyphen, starting with a letter or underscore, max 32"
+            )
         token = secrets.token_hex(TOKEN_BYTES)
         with self._lock:
             try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html import escape
+from shlex import quote as shq
 from typing import Any, Optional
 
 from .config import Config
@@ -243,13 +244,15 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
     steps = (f"CCFLEET_URL={url}\n"
              f"CCFLEET_NODE_ID={node_id}\n"
              f"CCFLEET_NODE_TOKEN={token}")
+    # Every value below is quoted before it reaches a command an operator will paste
+    # as root. The store validates these too; this is the second line of defence.
     install_cmd = (
         "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \\\n"
         "  | sudo bash -s -- \\\n"
-        f"      --server {url} \\\n"
-        f"      --node {node_id} \\\n"
-        f"      --token {token} \\\n"
-        f"      --owner {owner or '<owner>'}")
+        f"      --server {shq(url)} \\\n"
+        f"      --node {shq(node_id)} \\\n"
+        f"      --token {shq(token)} \\\n"
+        f"      --owner {shq(owner) if owner else '<owner>'}")
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"

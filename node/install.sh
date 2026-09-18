@@ -62,7 +62,16 @@ printf '%s' "$NODE_ID" | grep -qE '^[a-z0-9][a-z0-9-]{1,39}$' || die "--node mus
 printf '%s' "$TOKEN"   | grep -qE '^[0-9a-f]{64}$'            || die "--token must be the 64-character value from the console"
 printf '%s' "$OWNER"   | grep -qE '^[a-z_][a-z0-9_-]{0,31}$'  || die "--owner must be a valid unix user name"
 
-HOME_DIR="/home/$OWNER"
+# 3 of the 4 lockout paths found in review start here, so resolve the account
+# properly rather than assuming /home/$OWNER.
+if id "$OWNER" >/dev/null 2>&1; then
+  OWNER_UID="$(id -u "$OWNER")"
+  [ "$OWNER_UID" -ge 1000 ] || die "$OWNER is a system account (uid $OWNER_UID); pick a normal user"
+  HOME_DIR="$(getent passwd "$OWNER" | cut -d: -f6)"
+  [ -n "$HOME_DIR" ] && [ "$HOME_DIR" != "/" ] || die "$OWNER has no usable home directory"
+else
+  HOME_DIR="/home/$OWNER"
+fi
 as_owner() { sudo -u "$OWNER" HOME="$HOME_DIR" bash -c "$1"; }
 user_systemctl() {
   local uid; uid="$(id -u "$OWNER")"
@@ -86,6 +95,15 @@ printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$OWNER" > "/etc/sudoers.d/90-ccfleet-$OWNE
 chmod 440 "/etc/sudoers.d/90-ccfleet-$OWNER"
 install -d -m 700 -o "$OWNER" -g "$OWNER" "$HOME_DIR/.ssh"
 if [ -n "$SSH_KEY" ]; then
+  # Validate before it can influence the hardening decision: a malformed key that
+  # still looks non-empty would leave nothing usable in authorized_keys and lock
+  # everyone out the moment password auth is disabled.
+  printf '%s\n' "$SSH_KEY" > /tmp/ccfleet-key.$$
+  if ! ssh-keygen -l -f /tmp/ccfleet-key.$$ >/dev/null 2>&1; then
+    rm -f /tmp/ccfleet-key.$$
+    die "--ssh-key is not a valid public key; refusing to continue rather than risk a lockout"
+  fi
+  rm -f /tmp/ccfleet-key.$$
   touch "$HOME_DIR/.ssh/authorized_keys"
   grep -qF "$SSH_KEY" "$HOME_DIR/.ssh/authorized_keys" || printf '%s\n' "$SSH_KEY" >> "$HOME_DIR/.ssh/authorized_keys"
   chmod 600 "$HOME_DIR/.ssh/authorized_keys"; chown "$OWNER:$OWNER" "$HOME_DIR/.ssh/authorized_keys"
@@ -100,6 +118,8 @@ elif [ -z "$SSH_KEY" ]; then
   note "SKIPPED: no --ssh-key given, and disabling password auth without one would lock everyone out"
   note "add a key, then re-run with --ssh-key, or harden by hand"
 else
+  grep -qF "$SSH_KEY" "$HOME_DIR/.ssh/authorized_keys" 2>/dev/null \
+    || die "the key is not in $HOME_DIR/.ssh/authorized_keys; not disabling password auth"
   apt-get install -y -q ufw fail2ban unattended-upgrades >/dev/null
   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nX11Forwarding no\nMaxAuthTries 3\n' \
     > /etc/ssh/sshd_config.d/60-ccfleet.conf
@@ -164,7 +184,14 @@ step "7/8  start everything"
 user_systemctl daemon-reload
 user_systemctl enable --now ccfleet-shell.service >/dev/null 2>&1 || true
 user_systemctl enable --now ccfleet-agent.timer ccfleet-backup.timer >/dev/null 2>&1 || true
-[ "$NO_REMOTE" = yes ] || user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 || true
+if [ "$NO_REMOTE" = yes ]; then
+  # Idempotent: re-running with this flag must leave Remote Control off, not
+  # merely decline to switch it on.
+  user_systemctl disable --now claude-remote-control.service >/dev/null 2>&1 || true
+  note "remote control disabled on request"
+else
+  user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 || true
+fi
 sleep 3
 for s in ccfleet-shell.service ccfleet-agent.timer ccfleet-backup.timer; do
   note "$(printf '%-30s %s' "$s" "$(user_systemctl is-active "$s" 2>/dev/null || echo inactive)")"
