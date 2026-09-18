@@ -20,7 +20,10 @@ After=network-online.target
 [Service]
 Type=forking
 Environment=DISABLE_AUTOUPDATER=1
-WorkingDirectory=%h/workspace
+# No WorkingDirectory=: systemd enters it before ExecStartPre runs, so a
+# WorkingDirectory that does not exist yet fails the unit and the mkdir below
+# could never repair it. tmux -c sets the session's directory instead, which is
+# what actually matters here.
 ExecStartPre=/bin/mkdir -p %h/workspace
 ExecStart=/usr/bin/tmux new-session -d -s remote-control -c %h/workspace "%h/.local/bin/claude remote-control --name %H"
 ExecStop=/usr/bin/tmux kill-session -t remote-control

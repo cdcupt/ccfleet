@@ -178,8 +178,7 @@ html{scroll-behavior:smooth}
   <h3>If you prefer a terminal</h3>
   <p>A terminal is optional, not required. If you want one, connect over SSH and attach to a persistent session so that closing the window does not end your work:</p>
   <pre><code>ssh &lt;owner&gt;@&lt;node&gt;
-tmux attach -t cc || tmux new -s cc
-claude</code></pre>
+claude            # logging in already attached you to the persistent session</code></pre>
   <p>Detach with <kbd>Ctrl</kbd>+<kbd>b</kbd> then <kbd>d</kbd>, or just close the window. The session survives a disconnect, though not a node reboot; after a reboot, start a new one. Remote Control does come back by itself, which is the main reason to prefer it.</p>
 </section>
 
@@ -383,8 +382,7 @@ ccfleet/node/setup-owner.sh</code></pre>
   <div class="step">
     <div class="num">3</div>
     <h3>Sign in with your own account</h3>
-    <pre><code>tmux new -s cc
-claude</code></pre>
+    <pre><code>claude   # you are already in the persistent session</code></pre>
     <p>Choose the claude.ai login. Over SSH the browser cannot call back into the node, so Claude Code shows a URL: open it on your laptop, approve, copy the code the page shows, paste it into the terminal. Then check:</p>
     <pre><code>/status</code></pre>
     <p>The Login row must show your account. There must be no <em>Anthropic base URL</em> line and no <em>Auth token</em> or <em>API key</em> line. If there is, an environment variable is set that should not be; unset it and restart <code>claude</code>.</p>

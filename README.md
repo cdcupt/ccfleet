@@ -70,7 +70,9 @@ sudo bash bootstrap.sh alice ~/.ssh/id_ed25519.pub
 # as the owner
 git clone https://github.com/cdcupt/ccfleet.git && ccfleet/node/setup-owner.sh
 $EDITOR ~/.config/ccfleet/agent.env          # URL, node id, token from step 1
-tmux new -s cc && claude                     # /login with YOUR account, paste the code
+exit                                         # the shell you are in predates the new config
+ssh <owner>@<node>                           # reconnect: now you land in the persistent session
+claude                                       # /login with YOUR account, paste the code back
 ccfleet-agent --print && systemctl --user start ccfleet-agent.service
 ```
 

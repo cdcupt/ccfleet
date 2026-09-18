@@ -1,0 +1,32 @@
+[Unit]
+Description=ccfleet persistent work session (pre-warms the tmux session at boot)
+After=network-online.target
+
+# Creates the session named "cc" once at boot so long-running work and the
+# Remote Control session have somewhere to live before anyone logs in.
+#
+# This unit is NOT what guarantees the session exists. A oneshot cannot notice
+# the session being killed later, and pretending otherwise would be a lie in the
+# unit file. The guarantee comes from `new-session -A` in node/attach.sh, which
+# recreates it on the next login.
+#
+# has-session first, rather than `new-session -A -d`: with -A on an existing
+# session tmux switches to attach semantics, where -d means "detach other
+# clients" instead of "do not attach", so it tries to take over a terminal and
+# fails under systemd with "open terminal failed: not a terminal".
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=DISABLE_AUTOUPDATER=1
+# No WorkingDirectory=: systemd enters it before ExecStartPre runs, so a
+# WorkingDirectory that does not exist yet fails the unit and the mkdir below
+# could never repair it. tmux -c sets the session's directory instead, which is
+# what actually matters here.
+ExecStartPre=/bin/mkdir -p %h/workspace
+ExecStart=/bin/sh -c '/usr/bin/tmux has-session -t cc 2>/dev/null || /usr/bin/tmux new-session -d -s cc -c %h/workspace'
+# Deliberately no ExecStop. This unit only pre-warms the session; stopping or
+# restarting it must never destroy work someone is in the middle of. The
+# session outlives the unit on purpose. Kill it by hand if you really mean to.
+
+[Install]
+WantedBy=default.target

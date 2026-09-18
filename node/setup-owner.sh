@@ -19,6 +19,10 @@ CONF="$HOME/.config/ccfleet"
 UNITS="$HOME/.config/systemd/user"
 mkdir -p "$BIN" "$CONF" "$UNITS"
 
+fetch_text() {  # fetch_text <relative-path>  -> prints the file
+  if [ -f "$SRC_DIR/../$1" ]; then cat "$SRC_DIR/../$1"; else curl -fsSL "$REPO_RAW/$1"; fi
+}
+
 fetch() {  # fetch <relative-path> <destination>
   if [[ -f "$SRC_DIR/../$1" ]]; then
     install -m "${3:-644}" "$SRC_DIR/../$1" "$2"
@@ -49,6 +53,10 @@ if [[ ! -f "$CONF/agent.env" ]]; then
   fetch node/agent.env.example "$CONF/agent.env" 600
 fi
 chmod 600 "$CONF/agent.env"
+
+# 6. Workspace. Claude Code will not serve Remote Control from a home directory,
+#    so every node needs a project directory that the owner trusts once.
+mkdir -p "$HOME/workspace"
 
 # 5. User-level systemd units. These need a working per-user systemd manager,
 # which a minimal image can lack: without libpam-systemd there is no
@@ -87,16 +95,22 @@ WARN
   ;;
 esac
 
-for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service; do
+for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service ccfleet-shell.service; do
   fetch "node/systemd/$unit" "$UNITS/$unit"
 done
 systemctl --user daemon-reload
 systemctl --user enable --now ccfleet-agent.timer
 systemctl --user enable --now ccfleet-backup.timer
+systemctl --user enable --now ccfleet-shell.service
 
-# 6. Workspace. Claude Code will not serve Remote Control from a home directory,
-#    so every node needs a project directory that the owner trusts once.
-mkdir -p "$HOME/workspace"
+
+# 7. Auto-attach on login, so a terminal user never has to know about tmux.
+#    The snippet and its reasoning live in node/attach.sh; appended once.
+MARKER="# ccfleet: attach to the persistent work session"
+if ! grep -qF "$MARKER" "$HOME/.bashrc" 2>/dev/null; then
+  { echo; fetch_text node/attach.sh; } >> "$HOME/.bashrc"
+  echo "  login auto-attach installed in ~/.bashrc"
+fi
 
 cat <<MSG
 
@@ -104,7 +118,9 @@ Owner setup done. Remaining steps, in order:
 
   1. Edit $CONF/agent.env with the URL, node id and token printed by
      'ccfleetd node add' on the fleet server.
-  2. tmux new -s cc
+  2. Log OUT and back in over SSH. The shell you are in now started before this
+     script changed your config, so it is not in the persistent session yet.
+     After reconnecting you land there automatically.
      claude              # sign in with YOUR account: /login, open the URL on your
                          # laptop, paste the code back into this terminal
      /status             # Login row shows your account; no base URL, no auth token
