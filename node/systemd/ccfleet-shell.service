@@ -24,7 +24,9 @@ Environment=DISABLE_AUTOUPDATER=1
 # what actually matters here.
 ExecStartPre=/bin/mkdir -p %h/workspace
 ExecStart=/bin/sh -c '/usr/bin/tmux has-session -t cc 2>/dev/null || /usr/bin/tmux new-session -d -s cc -c %h/workspace'
-ExecStop=-/usr/bin/tmux kill-session -t cc
+# Deliberately no ExecStop. This unit only pre-warms the session; stopping or
+# restarting it must never destroy work someone is in the middle of. The
+# session outlives the unit on purpose. Kill it by hand if you really mean to.
 
 [Install]
 WantedBy=default.target

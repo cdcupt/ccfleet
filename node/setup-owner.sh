@@ -118,7 +118,9 @@ Owner setup done. Remaining steps, in order:
 
   1. Edit $CONF/agent.env with the URL, node id and token printed by
      'ccfleetd node add' on the fleet server.
-  2. Log back in over SSH. You land in the persistent session automatically.
+  2. Log OUT and back in over SSH. The shell you are in now started before this
+     script changed your config, so it is not in the persistent session yet.
+     After reconnecting you land there automatically.
      claude              # sign in with YOUR account: /login, open the URL on your
                          # laptop, paste the code back into this terminal
      /status             # Login row shows your account; no base URL, no auth token
