@@ -457,9 +457,9 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
     <ul>
       <li><strong>No fail2ban.</strong> <code>bootstrap.sh</code> does not install or configure it, so the node has no SSH brute-force protection until you add it.</li>
       <li>Claude Code's two setup prompts are not pre-answered, so the owner meets them interactively.</li>
-      <li><code>agent.env</code> is not written for you.</li>
-      <li>Remote Control is not enabled, so it will not return after a reboot until you enable it.</li>
-      <li>Nothing verifies that the services came up, and no first heartbeat is sent.</li>
+      <li><code>agent.env</code> is created, but from a template. The URL, node id and token in it are placeholders you replace by hand.</li>
+      <li>Remote Control is not enabled by the script. Its closing message tells the owner to do it, so until they do it will not return after a reboot.</li>
+      <li>Both scripts run under <code>set -euo pipefail</code>, so a unit that fails to start does abort them. Neither re-checks the units afterwards nor sends a first heartbeat, so a service that starts and then dies goes unnoticed until the dashboard misses it.</li>
     </ul>
     <p>Section 04 above is the supported path. Reach for this one only on a machine you are managing by hand, and close those gaps deliberately.</p>
   </div>
