@@ -18,7 +18,10 @@ After=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 Environment=DISABLE_AUTOUPDATER=1
-WorkingDirectory=%h/workspace
+# No WorkingDirectory=: systemd enters it before ExecStartPre runs, so a
+# WorkingDirectory that does not exist yet fails the unit and the mkdir below
+# could never repair it. tmux -c sets the session's directory instead, which is
+# what actually matters here.
 ExecStartPre=/bin/mkdir -p %h/workspace
 ExecStart=/bin/sh -c '/usr/bin/tmux has-session -t cc 2>/dev/null || /usr/bin/tmux new-session -d -s cc -c %h/workspace'
 ExecStop=-/usr/bin/tmux kill-session -t cc

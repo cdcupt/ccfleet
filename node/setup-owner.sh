@@ -54,6 +54,10 @@ if [[ ! -f "$CONF/agent.env" ]]; then
 fi
 chmod 600 "$CONF/agent.env"
 
+# 6. Workspace. Claude Code will not serve Remote Control from a home directory,
+#    so every node needs a project directory that the owner trusts once.
+mkdir -p "$HOME/workspace"
+
 # 5. User-level systemd units. These need a working per-user systemd manager,
 # which a minimal image can lack: without libpam-systemd there is no
 # pam_systemd.so, so XDG_RUNTIME_DIR is never set and user@<uid>.service fails.
@@ -99,9 +103,6 @@ systemctl --user enable --now ccfleet-agent.timer
 systemctl --user enable --now ccfleet-backup.timer
 systemctl --user enable --now ccfleet-shell.service
 
-# 6. Workspace. Claude Code will not serve Remote Control from a home directory,
-#    so every node needs a project directory that the owner trusts once.
-mkdir -p "$HOME/workspace"
 
 # 7. Auto-attach on login, so a terminal user never has to know about tmux.
 #    The snippet and its reasoning live in node/attach.sh; appended once.
