@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.1.0 · 2026-09-16</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.2.0 · 2026-09-18 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -135,6 +135,7 @@ html{scroll-behavior:smooth}
 <nav class="toc" aria-label="Sections">
   <p class="toc-title">Contents</p>
   <ol>
+    <li><a href="#daily"><span class="n">00</span>Every day</a></li>
     <li><a href="#what"><span class="n">01</span>What you get</a></li>
     <li><a href="#before"><span class="n">02</span>Before you start</a></li>
     <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
@@ -149,6 +150,38 @@ html{scroll-behavior:smooth}
 </nav>
 
 <main>
+
+<section id="daily">
+  <h2><span class="n">00</span>Every day</h2>
+  <p>You open a web page. That is the whole thing. Claude Code runs on your node, not on the machine in front of you, so there is nothing to install, nothing to configure and no terminal.</p>
+
+  <div class="two">
+    <div>
+      <h3>To work</h3>
+      <p>Open <code class="long">https://claude.ai/code</code>, or the Code tab in the Claude mobile app, and pick your node's session. It is named after the node.</p>
+      <p>Work exactly as you would locally. Files, tools and git all live on the node.</p>
+    </div>
+    <div>
+      <h3>To check the fleet</h3>
+      <p>Open your console, the address your operator gave you. It shows every node's status, Claude Code version, egress address, disk, login freshness and any alerts, and lets you manage nodes by clicking.</p>
+    </div>
+  </div>
+
+  <div class="note ok">
+    <p class="t">Nothing depends on your laptop</p>
+    <p>The session runs on the node under a service that starts at boot. Close the browser, shut the laptop, change country, pick it up on your phone. The conversation is still there. The heartbeat agent, the tunnel and the nightly backup run the same way.</p>
+  </div>
+
+  <h3>The one thing you do yourself</h3>
+  <p>Signing in. Nobody can do it for you, by design: your subscription login must complete through Anthropic's own flow. It happens once per node, during setup, and after that the node refreshes its own credentials. The dashboard raises <code>credentials_missing</code> or <code>token_expired</code> if it ever needs doing again.</p>
+
+  <h3>If you prefer a terminal</h3>
+  <p>A terminal is optional, not required. If you want one, connect over SSH and attach to a persistent session so that closing the window does not end your work:</p>
+  <pre><code>ssh &lt;owner&gt;@&lt;node&gt;
+tmux attach -t cc || tmux new -s cc
+claude</code></pre>
+  <p>Detach with <kbd>Ctrl</kbd>+<kbd>b</kbd> then <kbd>d</kbd>, or just close the window. The session survives a disconnect, though not a node reboot; after a reboot, start a new one. Remote Control does come back by itself, which is the main reason to prefer it.</p>
+</section>
 
 <section id="what">
   <h2><span class="n">01</span>What you get</h2>
