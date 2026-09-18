@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.2.0 · 2026-09-18 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.1.0 · 2026-09-16</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -135,7 +135,6 @@ html{scroll-behavior:smooth}
 <nav class="toc" aria-label="Sections">
   <p class="toc-title">Contents</p>
   <ol>
-    <li><a href="#daily"><span class="n">00</span>Every day</a></li>
     <li><a href="#what"><span class="n">01</span>What you get</a></li>
     <li><a href="#before"><span class="n">02</span>Before you start</a></li>
     <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
@@ -150,49 +149,6 @@ html{scroll-behavior:smooth}
 </nav>
 
 <main>
-
-<section id="daily">
-  <h2><span class="n">00</span>Every day</h2>
-  <p>Two words. Everything else in this guide is background you can read when you feel like it.</p>
-
-  <div class="two">
-    <div>
-      <h3>To work</h3>
-      <pre><code>ccgo</code></pre>
-      <p>Connects to your node and puts you in a session that never dies. Run <code>claude</code> and work normally.</p>
-    </div>
-    <div>
-      <h3>To check the fleet</h3>
-      <pre><code>ccboard</code></pre>
-      <p>Opens <code class="long">https://ccfleet.daichenlab.com</code> in your browser. Add nodes, disable them, issue tokens, all by clicking.</p>
-    </div>
-  </div>
-
-  <div class="note ok">
-    <p class="t">The one habit that matters</p>
-    <p>Always start with <code>ccgo</code>, never a plain <code>ssh</code>. <code>ccgo</code> wraps your work in a persistent session, so you can close the laptop, lose wifi or quit the terminal and nothing is lost. A plain <code>ssh</code> ties Claude Code to that window, and closing it kills your conversation.</p>
-  </div>
-
-  <h3>Leaving and coming back</h3>
-  <div class="step">
-    <div class="num">1</div>
-    <h3>Leave</h3>
-    <p>Press <kbd>Ctrl</kbd>+<kbd>b</kbd>, let go, then press <kbd>d</kbd>. The session detaches and keeps running on the node. Closing the terminal window does the same thing.</p>
-  </div>
-  <div class="step">
-    <div class="num">2</div>
-    <h3>Come back</h3>
-    <p>Type <code>ccgo</code> again, from any terminal, on any machine with your key. You land exactly where you left off, mid-conversation if that is where you were.</p>
-  </div>
-  <div class="step">
-    <div class="num">3</div>
-    <h3>Check on it from anywhere</h3>
-    <p>Type <code>ccboard</code>, or just open the URL on your phone. It shows every node's status, Claude Code version, egress address, disk, login freshness and any alerts.</p>
-  </div>
-
-  <h3>What keeps running without you</h3>
-  <p>The heartbeat agent, the tunnel and the nightly backup are system services with lingering enabled. They survive logout and reboot. Your login is a file on the node, not something held by a terminal. Nothing you do on your laptop can interrupt them.</p>
-</section>
 
 <section id="what">
   <h2><span class="n">01</span>What you get</h2>
