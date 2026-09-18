@@ -55,21 +55,28 @@ chmod 600 "$CONF/agent.env"
 # pam_systemd.so, so XDG_RUNTIME_DIR is never set and user@<uid>.service fails.
 # Enabling timers there looks like it worked and then nothing ever runs, so
 # check before relying on it.
-if ! systemctl --user is-system-running >/dev/null 2>&1; then
-  cat >&2 <<'WARN'
+# Judge the reported state, not the exit status: is-system-running exits non-zero
+# for "degraded" too, and a degraded manager still runs timers perfectly well.
+# The states that matter here are the ones where no manager answers at all.
+user_state="$(systemctl --user is-system-running 2>/dev/null || true)"
+case "$user_state" in
+  running|degraded|starting|initializing) ;;
+  *)
+  cat >&2 <<WARN
 
 ERROR: this user has no working systemd manager, so the ccfleet timers cannot run.
+       systemctl --user is-system-running reported: ${user_state:-no answer}
 
 That usually means libpam-systemd is missing, so pam_systemd.so never sets
 XDG_RUNTIME_DIR. Check with:
 
-    systemctl status user@$(id -u).service
-    journalctl -u user@$(id -u).service -n 20
+    systemctl status "user@\$(id -u).service"
+    journalctl -u "user@\$(id -u).service" -n 20
 
 On Debian or Ubuntu, as root:
 
     apt-get install -y libpam-systemd
-    loginctl enable-linger $(id -un)
+    loginctl enable-linger \$(id -un)
 
 then log out, log back in and re-run this script. Installing that package
 changes PAM configuration, so on a box whose SSH access you depend on, keep a
@@ -77,7 +84,8 @@ second session open while you do it.
 
 WARN
   exit 1
-fi
+  ;;
+esac
 
 for unit in ccfleet-agent.service ccfleet-agent.timer ccfleet-backup.service ccfleet-backup.timer claude-remote-control.service ccfleet-tunnel.service; do
   fetch "node/systemd/$unit" "$UNITS/$unit"
