@@ -87,6 +87,11 @@ ccp add work --share && ccp list
 
 ## Layout
 
+
+> Nodes need a working per-user systemd manager for the agent timer. On a minimal
+> Debian or Ubuntu image that means `libpam-systemd` must be installed; `setup-owner.sh`
+> checks for this and stops with instructions rather than enabling a timer that never runs.
+
 | Path | What |
 | --- | --- |
 | `ccfleetd/` | fleet server (standard library only): API, store, rules, monitor, notifier, dashboard, CLI |
