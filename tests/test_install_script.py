@@ -130,3 +130,13 @@ def test_sudo_is_installed_before_the_first_call_that_needs_it():
                    if ln.lstrip().startswith(("as_owner ", "as_owner'", 'as_owner"')))
     assert install_at < call_at, (
         f"sudo installed at line {install_at + 1} but first used at {call_at + 1}")
+
+
+def test_remote_control_is_not_treated_as_a_readiness_gate():
+    """It cannot be active before the owner signs in, so requiring it would fail every install."""
+    text = INSTALL.read_text()
+    check = text[text.index('CHECK="ccfleet-shell.service'):text.index("if [ -n \"$FAILED\" ]")]
+    assert "claude-remote-control.service" not in check.split("for unit in")[0], \
+        "remote control must not be in the list whose failure fails the install"
+    assert "activates after sign-in" in text, "its state should still be reported, just not gated"
+    assert "retrying every 30 seconds" in text, "the owner should know it comes up by itself"

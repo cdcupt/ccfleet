@@ -221,18 +221,26 @@ if [ "$NO_REMOTE" = yes ]; then
     note "remote control disabled on request (verified $rc_state)"
   fi
 else
-  user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 \
-    || FAILED="$FAILED claude-remote-control.service"
+  # Enabled and started, but deliberately NOT part of the readiness gate below.
+  # Remote Control needs an authenticated Claude session and there is not one yet:
+  # the owner signs in after this script finishes. The unit has Restart=on-failure
+  # with a 30s delay, and because that spacing never trips systemd's start limit it
+  # keeps retrying and comes up by itself the moment the sign-in completes.
+  user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 || true
 fi
 sleep 3
 
+# Remote Control is not in this list; see the comment above.
 CHECK="ccfleet-shell.service ccfleet-agent.timer ccfleet-backup.timer"
-[ "$NO_REMOTE" = yes ] || CHECK="$CHECK claude-remote-control.service"
 for unit in $CHECK; do
   state="$(user_systemctl is-active "$unit" 2>/dev/null || echo inactive)"
   note "$(printf '%-32s %s' "$unit" "$state")"
   case "$state" in active) ;; *) case "$FAILED" in *"$unit"*) ;; *) FAILED="$FAILED $unit" ;; esac ;; esac
 done
+if [ "$NO_REMOTE" != yes ]; then
+  rc_now="$(user_systemctl is-active claude-remote-control.service 2>/dev/null || echo inactive)"
+  note "$(printf '%-32s %s' claude-remote-control.service "$rc_now (activates after sign-in)")"
+fi
 if [ -n "$FAILED" ]; then
   printf '\n\033[31mnot ready:\033[0m these services did not come up:%s\n' "$FAILED" >&2
   printf 'inspect with:  sudo -u %s XDG_RUNTIME_DIR=/run/user/%s systemctl --user status <unit>\n' \
@@ -253,6 +261,10 @@ cat <<MSG
      claude          # choose the claude.ai login, approve in a browser,
                      # paste the code back
      /status         # confirms the account, with no base URL and no auth token
+
+ Remote Control cannot start until that sign-in exists, so it is currently
+ retrying every 30 seconds and will come up on its own within a minute of it.
+ To watch: systemctl --user status claude-remote-control.service
 
  After that, $OWNER works from a terminal (ssh lands in a live session) or
  from claude.ai/code and the Claude phone app, with nothing installed there.
