@@ -445,9 +445,18 @@ claude</code></pre>
 CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
   </div>
 
-  <div class="note">
-    <p class="t">The long way round is still there</p>
-    <p>If you would rather not paste a token into a command, the console also prints the three <code>agent.env</code> lines on their own. Place them by hand and run <code>node/bootstrap.sh</code> as root followed by <code>node/setup-owner.sh</code> as the owner. That path does the same work in smaller pieces and is what to reach for on a machine you manage by hand.</p>
+  <div class="note bad">
+    <p class="t">The long way round is still there, but it is not equivalent</p>
+    <p>If you would rather not paste a token into a command, the console also prints the three <code>agent.env</code> lines on their own. Place them by hand, then run <code>node/bootstrap.sh</code> as root and <code>node/setup-owner.sh</code> as the owner.</p>
+    <p>Those two scripts cover the packages, the owner account, sudo, the firewall, lingering, the helper binaries and the agent, backup and work-session timers. They do <strong>not</strong> do the rest, and you are taking it on yourself:</p>
+    <ul>
+      <li><strong>No fail2ban.</strong> <code>bootstrap.sh</code> does not install or configure it, so the node has no SSH brute-force protection until you add it.</li>
+      <li>Claude Code's two setup prompts are not pre-answered, so the owner meets them interactively.</li>
+      <li><code>agent.env</code> is not written for you.</li>
+      <li>Remote Control is not enabled, so it will not return after a reboot until you enable it.</li>
+      <li>Nothing verifies that the services came up, and no first heartbeat is sent.</li>
+    </ul>
+    <p>Section 04 above is the supported path. Reach for this one only on a machine you are managing by hand, and close those gaps deliberately.</p>
   </div>
 </section>
 
