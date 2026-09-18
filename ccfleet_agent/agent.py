@@ -112,8 +112,26 @@ def _run(runner: Runner, argv: Sequence[str], timeout: float = 20.0) -> Optional
     return (proc.stdout or "").strip()
 
 
+# Where the official installer puts the CLI. systemd's default PATH does not
+# include ~/.local/bin, so a timer-run agent would report claude as missing on a
+# node where it is installed and working.
+EXTRA_CLAUDE_PATHS = ("~/.local/bin/claude", "/usr/local/bin/claude", "/opt/homebrew/bin/claude")
+
+
+def find_claude() -> Optional[str]:
+    """Absolute path to the claude binary, searching PATH and the usual install sites."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for candidate in EXTRA_CLAUDE_PATHS:
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
 def claude_info(runner: Runner = subprocess.run) -> dict[str, Any]:
-    path = shutil.which("claude")
+    path = find_claude()
     if not path:
         return {"version": None, "path": None}
     output = _run(runner, [path, "--version"])
