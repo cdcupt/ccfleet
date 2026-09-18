@@ -11,6 +11,12 @@ After=network-online.target
 #   mkdir -p ~/workspace && cd ~/workspace && claude      -> accept the trust prompt
 #   claude remote-control                                 -> accept the one-time y/n
 # After those two answers this unit runs unattended forever.
+#
+# Deliberately NOT --continue. The CLI's own help: "Exits with an error if nothing
+# was recorded here within roughly the last 4 hours." A reboot after a quiet night
+# is exactly that state, so with Restart=on-failure the unit would enter a restart
+# loop and never serve. Starting a fresh session always works; the previous
+# conversation is still reachable from claude.ai/code.
 [Service]
 Type=forking
 Environment=DISABLE_AUTOUPDATER=1
