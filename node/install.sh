@@ -206,6 +206,7 @@ user_systemctl daemon-reload
 # between a working node and one that looks provisioned and reports nothing, and
 # the installer must not call that ready.
 FAILED=""
+RC_ENABLED=unknown
 for unit in ccfleet-shell.service ccfleet-agent.timer ccfleet-backup.timer; do
   user_systemctl enable --now "$unit" >/dev/null 2>&1 || FAILED="$FAILED $unit"
 done
@@ -232,6 +233,11 @@ else
   # reported to systemd. The restart would not fire, and the promise would be a lie.
   # The owner starts it once, after signing in; the closing message says so.
   user_systemctl enable claude-remote-control.service >/dev/null 2>&1 || true
+  # Verified, not assumed. The closing message tells the owner this unit returns
+  # after a reboot, so an enable that did not take has to fail the install rather
+  # than be swallowed -- same rule as the --no-remote-control branch above.
+  RC_ENABLED="$(user_systemctl is-enabled claude-remote-control.service 2>/dev/null || echo unknown)"
+  [ "$RC_ENABLED" = enabled ] || FAILED="$FAILED claude-remote-control.service(enable-failed:$RC_ENABLED)"
 fi
 sleep 3
 
@@ -243,7 +249,7 @@ for unit in $CHECK; do
   case "$state" in active) ;; *) case "$FAILED" in *"$unit"*) ;; *) FAILED="$FAILED $unit" ;; esac ;; esac
 done
 if [ "$NO_REMOTE" != yes ]; then
-  note "$(printf '%-32s %s' claude-remote-control.service "enabled, starts after sign-in")"
+  note "$(printf '%-32s %s' claude-remote-control.service "$RC_ENABLED, starts after sign-in")"
 fi
 if [ -n "$FAILED" ]; then
   printf '\n\033[31mnot ready:\033[0m these services did not come up:%s\n' "$FAILED" >&2

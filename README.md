@@ -74,8 +74,10 @@ curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh
 ```
 
 It installs packages, creates the owner, hardens SSH and the firewall, installs
-Claude Code, pre-answers the two setup prompts, starts the agent, the persistent
-work session and Remote Control, and sends a first heartbeat. Then it stops.
+Claude Code, pre-answers the two setup prompts, starts the agent and the
+persistent work session, and sends a first heartbeat. Then it stops. It enables
+Remote Control but cannot start it, because that needs a login that does not
+exist yet; the owner starts it below.
 
 Without `--ssh-key` it skips SSH hardening rather than risk locking everyone out.
 On a machine already running other services, add `--skip-harden`.

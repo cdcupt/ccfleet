@@ -138,7 +138,8 @@ def test_remote_control_is_not_treated_as_a_readiness_gate():
     check = text[text.index('CHECK="ccfleet-shell.service'):text.index("if [ -n \"$FAILED\" ]")]
     assert "claude-remote-control.service" not in check.split("for unit in")[0], \
         "remote control must not be in the list whose failure fails the install"
-    assert "enabled, starts after sign-in" in text, "its state should still be reported"
+    assert '"$RC_ENABLED, starts after sign-in"' in text, \
+        "its state should still be reported, and from the verified variable rather than a guess"
     assert "systemctl --user start claude-remote-control.service" in text, \
         "the owner must be told the one command that turns it on"
     assert "retrying every 30 seconds" not in text, \
@@ -150,3 +151,14 @@ def test_remote_control_is_enabled_but_not_started_during_install():
     assert "user_systemctl enable claude-remote-control.service" in text
     assert "enable --now claude-remote-control.service" not in text, \
         "starting it before a login exists cannot work"
+
+
+def test_a_failed_remote_control_enable_fails_the_install():
+    """The closing message promises it returns after a reboot, so the enable must be verified."""
+    text = INSTALL.read_text()
+    assert 'RC_ENABLED="$(user_systemctl is-enabled claude-remote-control.service' in text, \
+        "the enable has to be read back, not assumed from the exit status we discard"
+    assert '[ "$RC_ENABLED" = enabled ] || FAILED=' in text, \
+        "an enable that did not take must land in FAILED, not be swallowed by || true"
+    # And the promise it backs is still the one being made.
+    assert "It is already enabled, so it comes back by itself after a reboot." in text
