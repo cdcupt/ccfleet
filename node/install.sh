@@ -98,12 +98,12 @@ if [ -n "$SSH_KEY" ]; then
   # Validate before it can influence the hardening decision: a malformed key that
   # still looks non-empty would leave nothing usable in authorized_keys and lock
   # everyone out the moment password auth is disabled.
-  printf '%s\n' "$SSH_KEY" > /tmp/ccfleet-key.$$
-  if ! ssh-keygen -l -f /tmp/ccfleet-key.$$ >/dev/null 2>&1; then
-    rm -f /tmp/ccfleet-key.$$
+  # Validated through stdin, not a temp file. A predictable path under /tmp that
+  # root writes to is a symlink attack: any local user can pre-create it and have
+  # the installer clobber a file of their choosing.
+  if ! printf '%s\n' "$SSH_KEY" | ssh-keygen -l -f - >/dev/null 2>&1; then
     die "--ssh-key is not a valid public key; refusing to continue rather than risk a lockout"
   fi
-  rm -f /tmp/ccfleet-key.$$
   touch "$HOME_DIR/.ssh/authorized_keys"
   grep -qF "$SSH_KEY" "$HOME_DIR/.ssh/authorized_keys" || printf '%s\n' "$SSH_KEY" >> "$HOME_DIR/.ssh/authorized_keys"
   chmod 600 "$HOME_DIR/.ssh/authorized_keys"; chown "$OWNER:$OWNER" "$HOME_DIR/.ssh/authorized_keys"
@@ -182,21 +182,37 @@ note "agent, helpers, units and login auto-attach in place"
 
 step "7/8  start everything"
 user_systemctl daemon-reload
-user_systemctl enable --now ccfleet-shell.service >/dev/null 2>&1 || true
-user_systemctl enable --now ccfleet-agent.timer ccfleet-backup.timer >/dev/null 2>&1 || true
+# No blanket || true here. A service that fails to come up is the difference
+# between a working node and one that looks provisioned and reports nothing, and
+# the installer must not call that ready.
+FAILED=""
+for unit in ccfleet-shell.service ccfleet-agent.timer ccfleet-backup.timer; do
+  user_systemctl enable --now "$unit" >/dev/null 2>&1 || FAILED="$FAILED $unit"
+done
 if [ "$NO_REMOTE" = yes ]; then
   # Idempotent: re-running with this flag must leave Remote Control off, not
   # merely decline to switch it on.
   user_systemctl disable --now claude-remote-control.service >/dev/null 2>&1 || true
   note "remote control disabled on request"
 else
-  user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 || true
+  user_systemctl enable --now claude-remote-control.service >/dev/null 2>&1 \
+    || FAILED="$FAILED claude-remote-control.service"
 fi
 sleep 3
-for s in ccfleet-shell.service ccfleet-agent.timer ccfleet-backup.timer; do
-  note "$(printf '%-30s %s' "$s" "$(user_systemctl is-active "$s" 2>/dev/null || echo inactive)")"
+
+CHECK="ccfleet-shell.service ccfleet-agent.timer ccfleet-backup.timer"
+[ "$NO_REMOTE" = yes ] || CHECK="$CHECK claude-remote-control.service"
+for unit in $CHECK; do
+  state="$(user_systemctl is-active "$unit" 2>/dev/null || echo inactive)"
+  note "$(printf '%-32s %s' "$unit" "$state")"
+  case "$state" in active) ;; *) case "$FAILED" in *"$unit"*) ;; *) FAILED="$FAILED $unit" ;; esac ;; esac
 done
-[ "$NO_REMOTE" = yes ] || note "$(printf '%-30s %s' claude-remote-control.service "$(user_systemctl is-active claude-remote-control.service 2>/dev/null || echo inactive)")"
+if [ -n "$FAILED" ]; then
+  printf '\n\033[31mnot ready:\033[0m these services did not come up:%s\n' "$FAILED" >&2
+  printf 'inspect with:  sudo -u %s XDG_RUNTIME_DIR=/run/user/%s systemctl --user status <unit>\n' \
+    "$OWNER" "$(id -u "$OWNER")" >&2
+  exit 1
+fi
 
 step "8/8  first heartbeat"
 as_owner '"$HOME"/.local/bin/ccfleet-agent 2>&1 | tail -1' || note "the agent could not reach $SERVER yet; check the URL and token"
