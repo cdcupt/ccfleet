@@ -62,22 +62,34 @@ Without Docker: `pip install git+https://github.com/cdcupt/ccfleet` gives you
 
 ### 2. Node (one VPS per owner, in a supported region)
 
-```bash
-# as root, once
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/bootstrap.sh -o bootstrap.sh
-sudo bash bootstrap.sh alice ~/.ssh/id_ed25519.pub
+Add the person in the console. It hands you one command carrying their node's
+identity. Run it on a fresh server as root:
 
-# as the owner
-git clone https://github.com/cdcupt/ccfleet.git && ccfleet/node/setup-owner.sh
-$EDITOR ~/.config/ccfleet/agent.env          # URL, node id, token from step 1
-exit                                         # the shell you are in predates the new config
-ssh <owner>@<node>                           # reconnect: now you land in the persistent session
-claude                                       # /login with YOUR account, paste the code back
-ccfleet-agent --print && systemctl --user start ccfleet-agent.service
+```bash
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \
+  | sudo bash -s -- \
+      --server https://fleet.example.com \
+      --node alice-node --token <from the console> \
+      --owner alice --ssh-key "ssh-ed25519 AAAA... alice"
 ```
 
-The owner's `/status` should show their own account on the Login row and no
-base URL or auth token. The dashboard shows the node within a minute.
+It installs packages, creates the owner, hardens SSH and the firewall, installs
+Claude Code, pre-answers the two setup prompts, starts the agent, the persistent
+work session and Remote Control, and sends a first heartbeat. Then it stops.
+
+Without `--ssh-key` it skips SSH hardening rather than risk locking everyone out.
+On a machine already running other services, add `--skip-harden`.
+
+The owner finishes it themselves, on that machine:
+
+```bash
+claude          # choose the claude.ai login, approve in a browser, paste the code back
+/status         # confirms their account, no base URL, no auth token
+```
+
+Nobody else can do that step: a subscription login must complete through
+Anthropic's own flow. After it, they work from a terminal (`ssh` lands them in a
+live session) or from claude.ai/code and the phone app with nothing installed.
 
 ### 3. Laptop (optional): several accounts, explicit switching
 

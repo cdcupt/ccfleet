@@ -201,3 +201,28 @@ def test_dashboard_carries_the_forms(server, cfg):
     assert "Add a node" in page
     assert f'value="{csrf_for(cfg)}"' in page
     assert "/actions/node/node-a/disable" in page
+
+
+def test_add_result_shows_a_runnable_install_command(server, cfg):
+    """The console's whole job here is to hand over one command that works."""
+    srv, store = server
+    status, body, _ = form_post(srv, "/actions/node/add",
+                                {"node_id": "alice-node", "owner": "alice", "region": "us",
+                                 "csrf": csrf_for(cfg)}, basic(cfg.admin_token))
+    assert status == 200
+    page = body.decode()
+    token = re.search(r"--token ([0-9a-f]{64})", page).group(1)
+    assert store.node_for_token(token)["id"] == "alice-node", "the command carries a working token"
+    for part in ("node/install.sh", "sudo bash -s --", "--server", "--node alice-node",
+                 "--owner alice"):
+        assert part in page, f"install command is missing {part}"
+    assert "claude" in page and "/status" in page, "the sign-in step must still be spelled out"
+
+
+def test_rotate_token_result_keeps_the_owner_in_the_command(server, cfg):
+    srv, store = server
+    store.add_node("bob-node", "bob", now=1.0)
+    status, body, _ = form_post(srv, "/actions/node/bob-node/rotate-token",
+                                {"csrf": csrf_for(cfg)}, basic(cfg.admin_token))
+    assert status == 200
+    assert "--owner bob" in body.decode()

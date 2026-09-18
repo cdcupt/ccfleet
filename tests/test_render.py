@@ -29,3 +29,14 @@ def test_rows_merge_alerts_and_escape_html(cfg):
 def test_empty_dashboard_has_hint(cfg):
     html = render_dashboard([], [], NOW, cfg)
     assert "No nodes yet" in html and "none" in html
+
+
+def test_add_result_page_is_escaped_and_complete(cfg):
+    from ccfleetd.render import render_add_result
+    page = render_add_result("node-a", "f" * 64, cfg, owner="erik")
+    assert "f" * 64 in page
+    assert "--owner erik" in page and "--node node-a" in page
+    assert "CCFLEET_NODE_TOKEN=" in page, "the manual fallback is still offered"
+    # an owner name is user input and must not be able to inject markup
+    nasty = render_add_result("node-a", "f" * 64, cfg, owner='"><script>x</script>')
+    assert "<script>" not in nasty
