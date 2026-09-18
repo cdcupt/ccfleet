@@ -149,7 +149,10 @@ elif [ -z "$SSH_KEY" ]; then
 else
   grep -qF "$SSH_KEY" "$HOME_DIR/.ssh/authorized_keys" 2>/dev/null \
     || die "the key is not in $HOME_DIR/.ssh/authorized_keys; not disabling password auth"
-  apt-get install -y -q ufw fail2ban unattended-upgrades >/dev/null
+  # python3-systemd is only a Recommends of fail2ban, so a box configured with
+  # APT::Install-Recommends "false" will not have it -- and the jail below asks for
+  # the systemd backend, which needs it. Name it explicitly rather than hope.
+  apt-get install -y -q ufw fail2ban python3-systemd unattended-upgrades >/dev/null
   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nX11Forwarding no\nMaxAuthTries 3\n' \
     > /etc/ssh/sshd_config.d/60-ccfleet.conf
   sshd -t || die "sshd rejected the hardening config; nothing was reloaded"
@@ -157,7 +160,14 @@ else
   ufw default deny incoming >/dev/null; ufw default allow outgoing >/dev/null
   ufw allow OpenSSH >/dev/null; ufw allow 60000:61000/udp comment mosh >/dev/null
   ufw --force enable >/dev/null
-  printf '[sshd]\nenabled = true\nmaxretry = 4\nbantime = 1h\nfindtime = 10m\n' > /etc/fail2ban/jail.d/sshd.local
+  # backend = systemd, not the default "auto". auto hunts for /var/log/auth.log and,
+  # when there is none, fails the entire service at startup with "Have not found any
+  # log file for sshd jail" -- so the box ends up with no SSH protection at all. That
+  # is not exotic: minimal cloud images ship without rsyslog and log only to the
+  # journal. Measured on a blank Debian 12 with no rsyslog, fail2ban exited 255 and
+  # this installer correctly refused to call the machine hardened. The journal exists
+  # on every systemd box, so this one setting works on both kinds of image.
+  printf '[sshd]\nenabled = true\nbackend = systemd\nmaxretry = 4\nbantime = 1h\nfindtime = 10m\n' > /etc/fail2ban/jail.d/sshd.local
   # apt-get above already started fail2ban, seconds before this jail file existed,
   # and `enable --now` does not restart a service that is already running. Without
   # an explicit restart the jail written just above sits unread until the next

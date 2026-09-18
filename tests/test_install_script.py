@@ -205,3 +205,20 @@ def test_the_uid_bounds_match_the_sudo_grant_they_guard():
     sudoers = text.index("printf '%s ALL=(ALL) NOPASSWD:ALL")
     assert text.index('[ "$OWNER_UID" -le 59999 ]') < grant < sudoers, \
         "the uid and shell checks must happen before the account is given sudo"
+
+
+def test_fail2ban_uses_the_journal_so_it_works_without_rsyslog():
+    """backend=auto needs /var/log/auth.log; minimal images have none and fail2ban dies."""
+    text = INSTALL.read_text()
+    jail = text[text.index("printf '[sshd]"):text.index("/etc/fail2ban/jail.d/sshd.local")]
+    assert "backend = systemd" in jail, \
+        "without this the whole service fails to start on a journald-only image"
+
+
+def test_the_systemd_backend_dependency_is_installed_explicitly():
+    """python3-systemd is only a Recommends of fail2ban, so --no-install-recommends drops it."""
+    text = INSTALL.read_text()
+    pkgs = text[text.index("apt-get install -y -q ufw"):]
+    pkgs = pkgs[:pkgs.index("\n")]
+    assert "python3-systemd" in pkgs, \
+        "the systemd backend cannot load without it, and it is not a hard dependency"
