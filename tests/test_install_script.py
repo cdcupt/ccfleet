@@ -97,7 +97,8 @@ def test_it_never_hardens_without_a_key_and_says_so():
 
 def test_it_refuses_to_claim_success_it_did_not_verify():
     text = INSTALL.read_text()
-    assert 'is-active fail2ban' in text, "hardening must confirm fail2ban actually started"
+    assert 'fail2ban-client get sshd maxretry' in text, \
+        "hardening must confirm the SSH jail is live, which also proves the service started"
     assert 'if [ -n "$FAILED" ]; then' in text, "service failures must fail the install"
     assert "exit 1" in text
 
@@ -162,3 +163,24 @@ def test_a_failed_remote_control_enable_fails_the_install():
         "an enable that did not take must land in FAILED, not be swallowed by || true"
     # And the promise it backs is still the one being made.
     assert "It is already enabled, so it comes back by itself after a reboot." in text
+
+
+def test_fail2ban_is_restarted_after_its_jail_is_written():
+    """apt starts fail2ban before the jail file exists, and `enable --now` will not restart it."""
+    text = INSTALL.read_text()
+    write = text.index("/etc/fail2ban/jail.d/sshd.local")
+    restart = text.index("systemctl restart fail2ban")
+    verify = text.index("fail2ban-client get sshd maxretry")
+    assert write < restart < verify, \
+        "order must be: write the jail, restart so it is read, then verify it took"
+    assert "enable --now fail2ban" not in text, \
+        "--now is a no-op on the already-running service and silently skips our config"
+
+
+def test_fail2ban_verification_checks_the_jail_not_just_the_service():
+    """A live node reported fail2ban active while running Debian's defaults, not ours."""
+    text = INSTALL.read_text()
+    assert 'is-active fail2ban' not in text, \
+        "an active service says nothing about whether our jail was loaded"
+    assert '"$(fail2ban-client get sshd maxretry 2>/dev/null)" = 4' in text, \
+        "verify the value we set, which is what proves the jail file was actually read"

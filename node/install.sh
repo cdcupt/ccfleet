@@ -146,12 +146,24 @@ else
   ufw allow OpenSSH >/dev/null; ufw allow 60000:61000/udp comment mosh >/dev/null
   ufw --force enable >/dev/null
   printf '[sshd]\nenabled = true\nmaxretry = 4\nbantime = 1h\nfindtime = 10m\n' > /etc/fail2ban/jail.d/sshd.local
-  systemctl enable --now fail2ban >/dev/null 2>&1 || true
-  if [ "$(systemctl is-active fail2ban 2>/dev/null)" != active ]; then
-    die "fail2ban did not start; refusing to report this server as hardened. Fix it, or re-run with --skip-harden if you accept the risk"
+  # apt-get above already started fail2ban, seconds before this jail file existed,
+  # and `enable --now` does not restart a service that is already running. Without
+  # an explicit restart the jail written just above sits unread until the next
+  # reboot while `is-active` cheerfully reports "active" -- measured on a live node,
+  # which ran Debian's defaults (maxretry 5, bantime 600) rather than ours for days.
+  # So: restart, and then verify the JAIL, not merely the service.
+  systemctl enable fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban >/dev/null 2>&1 || true
+  jail_ok=no
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if [ "$(fail2ban-client get sshd maxretry 2>/dev/null)" = 4 ]; then jail_ok=yes; break; fi
+    sleep 1
+  done
+  if [ "$jail_ok" != yes ]; then
+    die "fail2ban is not enforcing the SSH jail we configured (checked with 'fail2ban-client get sshd maxretry'). Refusing to report this server as hardened. Fix it, or re-run with --skip-harden if you accept the risk"
   fi
   printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
-  note "key-only SSH, firewall, fail2ban (verified active), unattended security upgrades"
+  note "key-only SSH, firewall, fail2ban (SSH jail verified live), unattended security upgrades"
 fi
 
 step "4/8  Claude Code"
