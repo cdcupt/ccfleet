@@ -354,6 +354,10 @@ INSTALL_TIMEOUT_S = 300.0
 # A failing install is usually a bad release or a full disk, and retrying every
 # five minutes fixes neither while burning the node's bandwidth. Back off an hour.
 INSTALL_RETRY_AFTER_S = 3600.0
+# A channel cannot be compared against an installed number, so left alone it would
+# reinstall on every beat. Re-check it on a schedule instead: often enough to pick
+# up a release, rarely enough that the installer is not run 288 times a day.
+CHANNEL_RECHECK_AFTER_S = 24 * 3600.0
 VERSION_CHANNELS = ("stable", "latest")
 
 
@@ -403,6 +407,26 @@ def installable_version(target: Any) -> Optional[str]:
     return None
 
 
+def _channel_is_current(state: Mapping[str, Any], target: str,
+                        installed: Optional[str], now: float) -> bool:
+    """True when a channel was resolved recently and still holds.
+
+    Without this a channel reinstalls on every heartbeat: there is no number to
+    compare it against, so "different from desired" is always true.
+    """
+    channel = state.get("channel")
+    if not isinstance(channel, Mapping):
+        return False
+    if channel.get("target") != target:
+        return False            # they switched channels; resolve again
+    if channel.get("resolved") != installed:
+        return False            # something else moved the binary; resolve again
+    ts = channel.get("ts")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return False
+    return now - ts < CHANNEL_RECHECK_AFTER_S
+
+
 def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
                       state: Mapping[str, Any], runner: Runner = subprocess.run,
                       now: Optional[float] = None) -> Optional[dict[str, Any]]:
@@ -415,9 +439,13 @@ def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
     target = installable_version(desired.get("claude_version"))
     if target is None:
         return None
-    # A channel only means "install and see"; an exact pin can be compared, and
-    # matching means there is nothing to do.
+    # An exact pin can be compared, and matching means there is nothing to do.
     if target not in VERSION_CHANNELS and installed == target:
+        return None
+    # A channel has no number to compare, so it is governed by time instead. Skip
+    # while the last resolution still holds: same channel, the version it resolved
+    # to is still what is installed, and the re-check window has not elapsed.
+    if target in VERSION_CHANNELS and _channel_is_current(state, target, installed, now):
         return None
     path = find_claude()
     if not path:
@@ -444,8 +472,13 @@ def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
                 "error": detail[:200] or f"exit {proc.returncode}"}
     # Report what is on disk now rather than what was asked for: a channel resolves
     # to a number, and an installer can succeed without changing anything.
-    return {"from": installed, "to": claude_info(runner).get("version") or target,
-            "ok": True, "ts": now, "error": None}
+    landed = claude_info(runner).get("version") or target
+    result = {"from": installed, "to": landed, "ok": True, "ts": now, "error": None}
+    if target in VERSION_CHANNELS:
+        # Remember what the channel resolved to, so the next beat can tell that
+        # this channel is already satisfied instead of installing it again.
+        result["channel"] = {"target": target, "resolved": landed, "ts": now}
+    return result
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -478,9 +511,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             installed = (payload.get("claude") or {}).get("version")
             result = reconcile_version(parse_desired(text), installed, state)
             if result is not None:
+                # The channel note is local bookkeeping, not something the server
+                # asked for, so it is filed separately and never reported.
+                channel = result.pop("channel", None)
+                new_state = {**state, "upgrade": result}
+                if channel is not None:
+                    new_state["channel"] = channel
                 # Recorded whether it worked or not: a failure is what drives the
                 # back-off, and is worth showing in the console either way.
-                write_state(cfg.state_path, {**state, "upgrade": result})
+                write_state(cfg.state_path, new_state)
         return 0
     log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
     return 1

@@ -357,7 +357,12 @@ def test_reconcile_installs_a_pin_that_differs_and_reports_what_landed(tmp_path,
     assert result == {"from": "2.1.90", "to": "2.1.99", "ok": True, "ts": 10.0, "error": None}
 
 
-def test_a_channel_always_attempts_because_it_cannot_be_compared(tmp_path, monkeypatch):
+def test_a_channel_resolves_once_then_stops_reinstalling(tmp_path, monkeypatch):
+    """A channel has no number to compare, so time governs it instead.
+
+    Left to "different from desired", `stable` would reinstall on every beat —
+    288 networked installs a day, per node.
+    """
     _claude_at(tmp_path, monkeypatch)
     calls = []
 
@@ -366,10 +371,51 @@ def test_a_channel_always_attempts_because_it_cannot_be_compared(tmp_path, monke
         out = "2.1.99 (Claude Code)" if argv[1] == "--version" else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
-    result = agent.reconcile_version({"claude_version": "stable"}, "2.1.90", {}, runner, now=1.0)
+    desired = {"claude_version": "stable"}
+    first = agent.reconcile_version(desired, "2.1.90", {}, runner, now=1000.0)
     assert calls[0][1:] == ["install", "stable"]
     # Reports the number that landed, not the word that was asked for.
-    assert result["to"] == "2.1.99" and result["ok"] is True
+    assert first["to"] == "2.1.99" and first["ok"] is True
+    assert first["channel"] == {"target": "stable", "resolved": "2.1.99", "ts": 1000.0}
+
+    state = {"upgrade": {k: v for k, v in first.items() if k != "channel"},
+             "channel": first["channel"]}
+    calls.clear()
+
+    # The next beat, five minutes later, must do nothing at all.
+    assert agent.reconcile_version(desired, "2.1.99", state, runner, now=1300.0) is None
+    assert calls == []
+
+    # ...and keep doing nothing, right up to the re-check window.
+    just_inside = 1000.0 + agent.CHANNEL_RECHECK_AFTER_S - 1
+    assert agent.reconcile_version(desired, "2.1.99", state, runner, now=just_inside) is None
+    assert calls == []
+
+    # After the window it looks again, because that is what tracking a channel means.
+    assert agent.reconcile_version(desired, "2.1.99", state, runner,
+                                   now=1000.0 + agent.CHANNEL_RECHECK_AFTER_S + 1) is not None
+
+
+def test_a_channel_is_re_resolved_when_the_ground_moves(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+
+    def runner(argv, **kw):
+        out = "2.2.0 (Claude Code)" if argv[1] == "--version" else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    resolved = {"target": "stable", "resolved": "2.1.99", "ts": 1000.0}
+    state = {"channel": resolved}
+    # Switching channel is a different question.
+    assert agent.reconcile_version({"claude_version": "latest"}, "2.1.99", state,
+                                   runner, now=1100.0) is not None
+    # Something else moved the binary, so the note no longer describes reality.
+    assert agent.reconcile_version({"claude_version": "stable"}, "2.0.0", state,
+                                   runner, now=1100.0) is not None
+    # A note with no usable timestamp is no note.
+    for bad_ts in (None, "soon", True):
+        broken = {"channel": {**resolved, "ts": bad_ts}}
+        assert agent.reconcile_version({"claude_version": "stable"}, "2.1.99", broken,
+                                       runner, now=1100.0) is not None
 
 
 def test_a_failed_install_reports_why_and_then_backs_off(tmp_path, monkeypatch):
