@@ -27,6 +27,7 @@ flowchart LR
     W[dashboard + JSON]
     N[Telegram / log]
   end
+  I[node/install.sh<br/>one command from the console] -.provisions.-> node
   T -- ssh / mosh / Remote Control --> C
   C -- HTTPS, own OAuth --> API[(api.anthropic.com)]
   A -- POST /api/heartbeat<br/>bearer node token --> D
@@ -36,17 +37,69 @@ flowchart LR
 
 ### Node
 
-A small VPS in a supported region, one Linux user per owner, one owner per
-machine. `node/bootstrap.sh` (root, once) creates the user, installs tmux,
-mosh, ufw and unattended-upgrades, hardens SSH to keys only, and enables
-lingering so user services run without a login session.
-`node/setup-owner.sh` (owner) installs Claude Code with Anthropic's installer,
-sets `DISABLE_AUTOUPDATER=1` so upgrades are staged deliberately, installs the
-agent, the backup script and the user-level systemd units.
+A small VPS in a supported region with its own public address, one Linux user
+per owner, one owner per machine. Several nodes may belong to one person, each
+with its own subscription; what never happens is two people on one account, or
+several accounts behind one endpoint.
 
-The owner signs in by running `claude` inside tmux and completing `/login`
-through Anthropic's browser flow (over SSH the browser shows a code to paste).
-Claude Code then owns its credentials file and refreshes tokens itself.
+`node/install.sh` is the supported path. The console prints it, filled in, when
+you add a node, and it takes a blank server to ready-for-sign-in in one command:
+packages, the owner account with lingering enabled, SSH and firewall hardening,
+Claude Code via Anthropic's installer, the two one-time setup prompts
+pre-answered, the agent and its units, the work session, and a first heartbeat.
+It refuses to report the machine ready if a service did not come up.
+
+Two things it deliberately does not do:
+
+- **Sign in.** A subscription login must complete through Anthropic's own flow,
+  so the owner does that themselves, once.
+- **Start Remote Control.** That needs an authenticated session, which does not
+  exist until the sign-in. The unit is enabled so it returns after a reboot, and
+  the owner starts it once by hand. It cannot usefully retry either: the unit is
+  `Type=forking` around a detached tmux session, so systemd sees the launch
+  succeed the moment tmux detaches and never learns the session failed to
+  authenticate.
+
+The command omits `--ssh-key`, because the console cannot know the owner's
+public key. Without that flag the installer skips SSH, firewall and fail2ban
+hardening rather than disable password logins on a machine with no key on it.
+
+`node/bootstrap.sh` plus `node/setup-owner.sh` remain for machines managed by
+hand. They are **not** equivalent: they install no fail2ban at all, leave the
+setup prompts unanswered, leave `agent.env` as a template, do not enable Remote
+Control, and neither re-checks the units nor sends a first heartbeat.
+
+#### Two tmux servers, deliberately
+
+The work session `cc` lives on the default tmux server; Remote Control runs on
+its own socket, `tmux -L ccfleet-rc`. This is load-bearing rather than tidy. A
+tmux server belongs to whichever systemd unit started it, and the default
+`KillMode=control-group` kills every process in a unit's control group when it
+stops. Sharing one server meant restarting Remote Control destroyed the owner's
+work. `ccfleet-shell.service` also carries `KillMode=process` so that stopping
+it leaves the session it pre-warmed alone. Attach to Remote Control with
+`tmux -L ccfleet-rc attach -t remote-control`.
+
+#### Permission posture
+
+Prompts are on by default. `--bypass-permissions` turns them off for that node,
+in the terminal and in sessions driven from claude.ai, and is opt-in because the
+owner has passwordless sudo. Tool calls run as the owner rather than as root, but
+with prompts off nothing stands between a command and root, because the owner can
+take it without being asked again.
+
+It writes two halves, because they are separate mechanisms: `CCFLEET_RC_ARGS` in
+an env file the Remote Control unit reads, since remote clients cannot select
+bypass for themselves, and `permissions.defaultMode` for sessions the owner
+starts by typing `claude`. A later run without the flag undoes both, and restarts a
+running Remote Control so the change actually lands.
+
+The two halves are undone differently, because one file is ccfleet's and the
+other is not. `remote-control.env` belongs to the installer and is rewritten
+whole on every run, so a hand edit to it does not survive.
+`~/.claude/settings.json` belongs to the owner, so only the keys a previous run
+set are removed, their prior values come back from a snapshot, and a value the
+owner has changed since is left alone.
 
 ### Agent
 
@@ -104,6 +157,13 @@ stateDiagram-v2
 Rules are evaluated on every heartbeat for that node and once a minute for all
 nodes (which is how `no_heartbeat` fires without any heartbeat arriving).
 
+One rule deliberately waits. `claude_missing` needs two consecutive misses
+before it fires, because the installed binary is a symlink that Anthropic's
+installer replaces, and a probe landing in that window finds nothing. A node
+that genuinely loses Claude Code still alerts one interval later; a node that
+never had it alerts immediately, since there is then no earlier heartbeat that
+found one.
+
 ### Backups
 
 `node/backup.sh` archives the Claude Code state directory nightly, excludes
@@ -126,6 +186,12 @@ Restoring a node never restores a credentials file: the owner logs in again.
   upgrades, user services with `NoNewPrivileges`.
 - The agent and backup run as the owner's user; the fleet server runs as an
   unprivileged user (Docker or the provided systemd unit).
+- The owner has passwordless sudo on their own node, which is why
+  `--bypass-permissions` is opt-in and says so out loud when used: with prompts
+  off nothing stands between a command and root: tool calls run as the owner, and
+  the owner can take root without being asked again.
+- The console has a single admin token and no per-user accounts, so it is the
+  operator's view only. Owners get a node, not the dashboard.
 
 ## What was left out on purpose
 
