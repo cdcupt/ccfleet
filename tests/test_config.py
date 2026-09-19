@@ -55,6 +55,7 @@ def test_bypass_by_default_accepts_the_usual_spellings():
 
 def test_bypass_by_default_rejects_a_value_it_cannot_read():
     import pytest
+
     from ccfleetd.config import Config, ConfigError
     # Silently treating "maybe" as false would turn prompts back on without a word.
     with pytest.raises(ConfigError, match="BYPASS_BY_DEFAULT"):
@@ -67,8 +68,10 @@ def test_every_config_option_is_documented_where_operators_look():
     This caught CCFLEET_BYPASS_BY_DEFAULT shipping undocumented; it exists so the
     next option cannot do the same.
     """
-    import pathlib, re
-    from ccfleetd.config import Config, ENV_PREFIX
+    import pathlib
+    import re
+
+    from ccfleetd.config import ENV_PREFIX, Config
 
     root = pathlib.Path(__file__).resolve().parent.parent
     example = (root / "deploy" / "ccfleetd.env.example").read_text()
