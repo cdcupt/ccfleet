@@ -109,3 +109,21 @@ def test_a_node_that_never_had_claude_alerts_immediately(cfg):
     """With no earlier heartbeat there is nothing to call this a blip."""
     missed = heartbeat(NOW, claude={"version": None, "path": None})
     assert "claude_missing" in rule_names(rules.evaluate(NODE, missed, None, NOW, cfg))
+
+
+def test_a_laptop_login_goes_stale_without_a_file_to_stat(cfg):
+    """No mtime on macOS, so the profile fetch time carries the staleness signal."""
+    old = (NOW - 200_000) * 1000
+    hb = heartbeat(NOW, credentials={"present": True, "store": "keychain",
+                                     "mtime": None, "expires_at": None,
+                                     "profile_fetched_at": old})
+    names = rule_names(rules.evaluate(NODE, hb, None, NOW, cfg))
+    assert "token_stale" in names
+    assert "credentials_missing" not in names, "a Keychain login is present, not missing"
+
+
+def test_a_fresh_laptop_login_raises_nothing(cfg):
+    hb = heartbeat(NOW, credentials={"present": True, "store": "keychain",
+                                     "mtime": None, "expires_at": None,
+                                     "profile_fetched_at": (NOW - 60) * 1000})
+    assert rule_names(rules.evaluate(NODE, hb, None, NOW, cfg)) == []

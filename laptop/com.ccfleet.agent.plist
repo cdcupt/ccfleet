@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs the heartbeat agent on a Mac, where there is no systemd.
+
+  The agent reads ~/.config/ccfleet/agent.env itself, so this plist carries no
+  configuration and no secret. Install it per user:
+
+    mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+    sed "s|__HOME__|$HOME|g" laptop/com.ccfleet.agent.plist \
+      > ~/Library/LaunchAgents/com.ccfleet.agent.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccfleet.agent.plist
+    launchctl kickstart -p gui/$(id -u)/com.ccfleet.agent     # run once now
+
+  Remove it with:
+    launchctl bootout gui/$(id -u)/com.ccfleet.agent
+
+  StartInterval rather than a calendar entry: five minutes matches the node timer,
+  and launchd will not stack runs if one is slow.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ccfleet.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/ccfleet-agent</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/ccfleet-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/ccfleet-agent.log</string>
+</dict>
+</plist>

@@ -65,6 +65,8 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
             "mtime": _num(creds.get("mtime")),
             "expires_at": _num(creds.get("expires_at")),
             "subscription_type": _str(creds.get("subscription_type")),
+            "profile_fetched_at": _num(creds.get("profile_fetched_at")),
+            "plan": _str(creds.get("plan")),
         },
         "disk": {"used_pct": _num(disk.get("used_pct")), "free_gb": _num(disk.get("free_gb"))},
         "mem": {"used_pct": _num(mem.get("used_pct"))},

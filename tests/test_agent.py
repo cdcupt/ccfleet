@@ -191,3 +191,94 @@ def test_main_print_and_send(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(agent, "send_heartbeat", lambda cfg, payload: (401, "nope"))
     assert agent.main(["--env-file", str(env_file)]) == 1
     assert agent.main(["--env-file", str(tmp_path / "missing.env")]) == 2
+
+
+def _write_account(tmp_path, **fields):
+    """~/.claude.json sits beside the config dir, not inside it."""
+    account = {"emailAddress": "someone@example.com", "fullName": "A Person",
+               "accountUuid": "uuid-1234", "organizationName": "Acme",
+               "profileFetchedAt": 1_700_000_000_000,
+               "organizationRateLimitTier": "default_claude_max_20x"}
+    account.update(fields)
+    sibling = tmp_path.parent / (tmp_path.name + ".json")
+    sibling.write_text(json.dumps({"oauthAccount": account}))
+
+
+def test_account_facts_carry_no_identifiers(tmp_path):
+    """The account block holds an email and a name. Neither may leave the machine."""
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    _write_account(cfg)
+    facts = agent.oauth_account_facts(cfg)
+    assert facts == {"account": True, "profile_fetched_at": 1_700_000_000_000,
+                     "plan": "default_claude_max_20x"}
+    blob = json.dumps(facts)
+    for leak in ("example.com", "A Person", "uuid-1234", "Acme"):
+        assert leak not in blob, f"{leak} must never reach the payload"
+
+
+def test_account_facts_find_the_file_beside_a_dotted_config_dir(tmp_path):
+    """with_suffix would replace ".work" and read the wrong file entirely."""
+    cfg = tmp_path / "claude.work"
+    cfg.mkdir()
+    _write_account(cfg)
+    assert agent.oauth_account_facts(cfg)["profile_fetched_at"] == 1_700_000_000_000
+    # And it must not be reading a same-stem neighbour.
+    assert not (tmp_path / "claude.json").exists()
+
+
+def test_account_facts_tolerate_a_missing_or_broken_file(tmp_path):
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    assert agent.oauth_account_facts(cfg) == {}
+    (cfg.parent / (cfg.name + ".json")).write_text("{not json")
+    assert agent.oauth_account_facts(cfg) == {}
+    (cfg.parent / (cfg.name + ".json")).write_text(json.dumps({"oauthAccount": "not a dict"}))
+    assert agent.oauth_account_facts(cfg) == {}
+
+
+def test_a_mac_reports_a_login_even_though_there_is_no_file(tmp_path, monkeypatch):
+    """Claude Code keeps the credential in the Keychain; the account block is the only signal."""
+    monkeypatch.setattr(agent.platform, "system", lambda: "Darwin")
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    _write_account(cfg)
+    summary = agent.credentials_summary(cfg)
+    assert summary["present"] is True, "a signed-in Mac must not look like a missing login"
+    assert summary["store"] == "keychain"
+    assert summary["profile_fetched_at"] == 1_700_000_000_000
+    assert "account" not in summary, "internal flag, not a payload field"
+
+
+def test_a_mac_with_no_account_reports_unknown_rather_than_missing(tmp_path, monkeypatch):
+    """Without the account block there is genuinely nothing to go on; do not cry wolf."""
+    monkeypatch.setattr(agent.platform, "system", lambda: "Darwin")
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    assert agent.credentials_summary(cfg)["present"] is None
+
+
+def test_linux_keeps_its_file_facts_and_gains_the_account_ones(tmp_path):
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    (cfg / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "secret", "expiresAt": 1_700_000_100_000, "subscriptionType": "max"}}))
+    _write_account(cfg)
+    summary = agent.credentials_summary(cfg)
+    assert summary["expires_at"] == 1_700_000_100_000 and summary["subscription_type"] == "max"
+    assert summary["profile_fetched_at"] == 1_700_000_000_000
+    assert "secret" not in json.dumps(summary)
+
+
+def test_the_mac_scheduler_carries_no_configuration():
+    """agent.env holds the token; the plist must stay free of secrets."""
+    import plistlib
+    from pathlib import Path
+    raw = (Path(__file__).resolve().parents[1] / "laptop" / "com.ccfleet.agent.plist").read_text()
+    plist = plistlib.loads(raw.replace("__HOME__", "/Users/example").encode())
+    assert plist["Label"] == "com.ccfleet.agent"
+    assert plist["ProgramArguments"] == ["/Users/example/.local/bin/ccfleet-agent"]
+    assert plist["StartInterval"] == 300, "should match the node's five-minute timer"
+    assert "EnvironmentVariables" not in plist, \
+        "the agent reads its own env file; putting the token here would publish it"
+    assert "TOKEN" not in raw and "CCFLEET_NODE_TOKEN" not in raw
