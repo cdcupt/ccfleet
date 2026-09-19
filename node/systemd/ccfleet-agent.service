@@ -4,6 +4,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# This service runs `claude --version`, which is the very call that can trigger an
+# auto-update. An update replaces ~/.local/bin/claude, and a probe landing in that
+# window finds nothing and reports the node as broken. Every other unit already
+# sets this; the one that actually invokes claude was the one missing it, and the
+# project's whole upgrade policy is that the operator stages them.
+Environment=DISABLE_AUTOUPDATER=1
 EnvironmentFile=%h/.config/ccfleet/agent.env
 ExecStart=%h/.local/bin/ccfleet-agent
 NoNewPrivileges=yes
