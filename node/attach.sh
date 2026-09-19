@@ -46,12 +46,18 @@ if [ -z "${TMUX:-}" ] && [ -n "${PS1:-}" ] && [ -t 1 ] && [ -z "${CCFLEET_NO_ATT
         tmux new-session -A -s cc -c "$HOME/workspace" && exit
         # tmux refused. Where infocmp was absent we could not check, and there
         # are other reasons besides terminfo, so retry once with a description
-        # every node has rather than trying to predict the cause. If that fails
-        # too, fall through to an ordinary shell.
+        # every node has rather than trying to predict the cause.
         if [ "$TERM" != xterm-256color ]; then
+          _ccfleet_prev_term=$TERM
           TERM=xterm-256color
           export TERM
           tmux new-session -A -s cc -c "$HOME/workspace" && exit
+          # Both attempts failed, so the terminal was not the problem after all.
+          # Hand back the owner's own TERM: leaving a speculative downgrade in
+          # place would quietly degrade their shell for the rest of the session.
+          TERM=$_ccfleet_prev_term
+          export TERM
+          unset _ccfleet_prev_term
         fi
       fi
       ;;
