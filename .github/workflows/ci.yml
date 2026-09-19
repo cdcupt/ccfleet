@@ -55,6 +55,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: stub the commands the units reference
+        run: |
+          set -eu
+          # systemd-analyze verifies that ExecStart commands exist, so on a bare
+          # runner every unit fails for the wrong reason. Stubbing the three
+          # owner-installed binaries turns that into a real check: the units must
+          # reference exactly these paths, and a typo in one still fails.
+          mkdir -p "$HOME/.local/bin"
+          for b in ccfleet-agent ccfleet-backup claude; do
+            printf '#!/bin/sh\nexit 0\n' > "$HOME/.local/bin/$b"
+            chmod 755 "$HOME/.local/bin/$b"
+          done
+          # tmux, ssh, sh and mkdir are referenced by absolute path and must be
+          # present on the runner; fail loudly rather than silently skipping.
+          for c in /usr/bin/tmux /usr/bin/ssh /bin/sh /bin/mkdir; do
+            [ -x "$c" ] || { echo "runner is missing $c, which the units require"; exit 1; }
+          done
       - name: systemd units must parse
         run: |
           set -eu
