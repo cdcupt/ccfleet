@@ -58,7 +58,7 @@ how, so you can judge how much it covers:
 | A real session works | `claude -p` with only `ANTHROPIC_BASE_URL` and the header set | completed and answered |
 | The gateway was really in the path | stopped the container, reran the same command | failed with `ECONNRESET` |
 | And recovered | restarted it, reran | succeeded again |
-| The subscription stayed the credential | checked no `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` existed | none set, so the OAuth login authenticated |
+| Nothing overrode the subscription | checked that neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN` was set | neither set, so the saved OAuth login is what authenticated |
 
 The test ran over plain HTTP on a loopback port through an SSH tunnel, so TLS
 termination and a public hostname are the parts still unexercised. Those are
