@@ -8,6 +8,7 @@ from shlex import quote as shq
 from typing import Any, Optional
 
 from .config import Config
+from .desired import is_channel
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
@@ -117,6 +118,9 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "subscription_type": creds.get("subscription_type"),
             "remote_control": (payload.get("remote_control") or {}).get("state"),
             "rc_expected": node["rc_expected"],
+            # What the node did about its pin last time it was asked. A silent
+            # reconcile is indistinguishable from one that never ran.
+            "last_upgrade": ((payload.get("reconcile") or {}).get("upgrade") or None),
             "open_alerts": [a["rule"] for a in node_alerts],
         })
     return rows
@@ -157,8 +161,18 @@ def _actions_html(row: Mapping[str, Any], csrf: str) -> str:
 def _row_html(row: Mapping[str, Any], now: float) -> str:
     version = _fmt(row["claude_version"])
     if row["pinned_version"]:
-        mark = "" if row["claude_version"] == row["pinned_version"] else " ≠ pinned"
+        # A channel is never "≠ pinned": tracking it is what the pin asks for.
+        mark = ("" if is_channel(row["pinned_version"])
+                or row["claude_version"] == row["pinned_version"] else " ≠ pinned")
         version += f' <span class="muted">{escape(row["pinned_version"] + mark)}</span>'
+    # A drifted version with no explanation reads as "not tried yet". Say when the
+    # node tried and failed, because that is the case an operator must act on.
+    upgrade = row.get("last_upgrade") or {}
+    if upgrade.get("ok") is False:
+        detail = escape(str(upgrade.get("error") or "")[:120])
+        version += (f'<br><span class="critical">upgrade to '
+                    f'{escape(str(upgrade.get("to") or "?"))} failed</span>'
+                    + (f' <span class="muted">{detail}</span>' if detail else ""))
     creds = row["credentials_present"]
     cred_text = ("unknown" if creds is None else ("missing" if creds is False else
                  f"refreshed {_age(now, row['credentials_mtime'])} ago"))

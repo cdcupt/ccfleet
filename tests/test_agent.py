@@ -183,7 +183,8 @@ def test_send_retries_network_errors_but_not_4xx():
 def test_main_print_and_send(tmp_path, monkeypatch, capsys):
     env_file = tmp_path / "agent.env"
     env_file.write_text("CCFLEET_URL=https://f.example\nCCFLEET_NODE_ID=node-a\nCCFLEET_NODE_TOKEN=t\n")
-    monkeypatch.setattr(agent, "build_payload", lambda cfg: {"node_id": cfg.node_id})
+    monkeypatch.setattr(agent, "build_payload",
+                        lambda cfg, **kw: {"node_id": cfg.node_id})
     assert agent.main(["--env-file", str(env_file), "--print"]) == 0
     assert json.loads(capsys.readouterr().out) == {"node_id": "node-a"}
     monkeypatch.setattr(agent, "send_heartbeat", lambda cfg, payload: (200, "{}"))
@@ -282,3 +283,212 @@ def test_the_mac_scheduler_carries_no_configuration():
     assert "EnvironmentVariables" not in plist, \
         "the agent reads its own env file; putting the token here would publish it"
     assert "TOKEN" not in raw and "CCFLEET_NODE_TOKEN" not in raw
+
+
+# -- desired state and reconcile ------------------------------------------------
+
+
+def test_parse_desired_tolerates_anything_a_server_might_send():
+    assert agent.parse_desired('{"desired": {"claude_version": "2.1.92"}}') == {
+        "claude_version": "2.1.92"}
+    # No block, not JSON, or a block of the wrong shape: reconcile nothing rather
+    # than crash the heartbeat that already succeeded.
+    assert agent.parse_desired('{"ok": true}') == {}
+    assert agent.parse_desired("not json") == {}
+    assert agent.parse_desired('{"desired": "stable"}') == {}
+    assert agent.parse_desired('[1,2,3]') == {}
+
+
+def test_installable_version_refuses_anything_that_is_not_a_version():
+    assert agent.installable_version("2.1.92") == "2.1.92"
+    assert agent.installable_version(" stable ") == "stable"
+    assert agent.installable_version("latest") == "latest"
+    # The server validates too. This is the node declining to hand its own
+    # installer an arbitrary argument just because a server asked.
+    for junk in ("--force", "-h", "nightly", "v2.1.92", "", "  ", "x" * 41, None, 3, True):
+        assert agent.installable_version(junk) is None
+
+
+def test_state_round_trips_and_a_corrupt_file_is_just_no_state(tmp_path):
+    path = tmp_path / "nested" / "reconcile.json"
+    agent.write_state(path, {"upgrade": {"to": "2.1.92", "ok": True}})
+    assert agent.read_state(path) == {"upgrade": {"to": "2.1.92", "ok": True}}
+    path.write_text("{half written")
+    assert agent.read_state(path) == {}
+    assert agent.read_state(tmp_path / "absent.json") == {}
+
+
+def _claude_at(tmp_path, monkeypatch):
+    binary = tmp_path / "claude"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(agent, "find_claude", lambda: str(binary))
+    return binary
+
+
+def test_reconcile_does_nothing_without_a_reason_to_act(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    # No pin at all, an unusable pin, and a pin already satisfied.
+    assert agent.reconcile_version({}, "2.1.92", {}, runner) is None
+    assert agent.reconcile_version({"claude_version": "--force"}, "2.1.92", {}, runner) is None
+    assert agent.reconcile_version({"claude_version": "2.1.92"}, "2.1.92", {}, runner) is None
+    assert calls == []
+
+
+def test_reconcile_installs_a_pin_that_differs_and_reports_what_landed(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        # `install` succeeds; the follow-up `--version` reports the new number.
+        out = "2.1.99 (Claude Code)" if argv[1] == "--version" else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    result = agent.reconcile_version({"claude_version": "2.1.99"}, "2.1.90", {}, runner, now=10.0)
+    assert [c[1] for c in calls] == ["install", "--version"]
+    assert calls[0][2] == "2.1.99"
+    assert result == {"from": "2.1.90", "to": "2.1.99", "ok": True, "ts": 10.0, "error": None}
+
+
+def test_a_channel_resolves_once_then_stops_reinstalling(tmp_path, monkeypatch):
+    """A channel has no number to compare, so time governs it instead.
+
+    Left to "different from desired", `stable` would reinstall on every beat —
+    288 networked installs a day, per node.
+    """
+    _claude_at(tmp_path, monkeypatch)
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        out = "2.1.99 (Claude Code)" if argv[1] == "--version" else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    desired = {"claude_version": "stable"}
+    first = agent.reconcile_version(desired, "2.1.90", {}, runner, now=1000.0)
+    assert calls[0][1:] == ["install", "stable"]
+    # Reports the number that landed, not the word that was asked for.
+    assert first["to"] == "2.1.99" and first["ok"] is True
+    assert first["channel"] == {"target": "stable", "resolved": "2.1.99", "ts": 1000.0}
+
+    state = {"upgrade": {k: v for k, v in first.items() if k != "channel"},
+             "channel": first["channel"]}
+    calls.clear()
+
+    # The next beat, five minutes later, must do nothing at all.
+    assert agent.reconcile_version(desired, "2.1.99", state, runner, now=1300.0) is None
+    assert calls == []
+
+    # ...and keep doing nothing, right up to the re-check window.
+    just_inside = 1000.0 + agent.CHANNEL_RECHECK_AFTER_S - 1
+    assert agent.reconcile_version(desired, "2.1.99", state, runner, now=just_inside) is None
+    assert calls == []
+
+    # After the window it looks again, because that is what tracking a channel means.
+    assert agent.reconcile_version(desired, "2.1.99", state, runner,
+                                   now=1000.0 + agent.CHANNEL_RECHECK_AFTER_S + 1) is not None
+
+
+def test_a_channel_is_re_resolved_when_the_ground_moves(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+
+    def runner(argv, **kw):
+        out = "2.2.0 (Claude Code)" if argv[1] == "--version" else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    resolved = {"target": "stable", "resolved": "2.1.99", "ts": 1000.0}
+    state = {"channel": resolved}
+    # Switching channel is a different question.
+    assert agent.reconcile_version({"claude_version": "latest"}, "2.1.99", state,
+                                   runner, now=1100.0) is not None
+    # Something else moved the binary, so the note no longer describes reality.
+    assert agent.reconcile_version({"claude_version": "stable"}, "2.0.0", state,
+                                   runner, now=1100.0) is not None
+    # A note with no usable timestamp is no note.
+    for bad_ts in (None, "soon", True):
+        broken = {"channel": {**resolved, "ts": bad_ts}}
+        assert agent.reconcile_version({"claude_version": "stable"}, "2.1.99", broken,
+                                       runner, now=1100.0) is not None
+
+
+def test_a_failed_install_reports_why_and_then_backs_off(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+
+    def failing(argv, **kw):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no such version")
+
+    desired = {"claude_version": "9.9.9"}
+    result = agent.reconcile_version(desired, "2.1.90", {}, failing, now=100.0)
+    assert result["ok"] is False and result["error"] == "no such version"
+
+    # Retrying every five minutes fixes neither a bad release nor a full disk.
+    state = {"upgrade": result}
+    assert agent.reconcile_version(desired, "2.1.90", state, failing, now=200.0) is None
+    # ...but the back-off is a delay, not a surrender.
+    later = agent.reconcile_version(desired, "2.1.90", state, failing,
+                                    now=100.0 + agent.INSTALL_RETRY_AFTER_S + 1)
+    assert later is not None and later["ok"] is False
+    # A different target is a different question, so it is not held back.
+    assert agent.reconcile_version({"claude_version": "2.1.95"}, "2.1.90", state,
+                                   failing, now=200.0) is not None
+
+
+def test_an_installer_that_will_not_run_is_reported_not_raised(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+
+    def exploding(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 300)
+
+    result = agent.reconcile_version({"claude_version": "2.1.99"}, "2.1.90", {}, exploding, now=5.0)
+    assert result["ok"] is False and result["error"] == "TimeoutExpired"
+
+
+def test_reconcile_is_skipped_when_claude_is_not_installed(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: None)
+    calls = []
+    assert agent.reconcile_version({"claude_version": "2.1.99"}, None, {},
+                                   lambda argv, **kw: calls.append(argv)) is None
+    assert calls == []
+
+
+def test_the_previous_result_rides_along_on_the_next_heartbeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: None)
+    cfg = agent.AgentConfig(url="https://f.example", node_id="node-a", token="t",
+                            claude_config_dir=tmp_path, state_path=tmp_path / "s.json")
+    upgrade = {"from": "2.1.90", "to": "2.1.92", "ok": True, "ts": 1.0, "error": None}
+    payload = agent.build_payload(cfg, runner=fake_runner(), opener=lambda *a, **k: FakeResponse(b""),
+                                  state={"upgrade": upgrade})
+    assert payload["reconcile"] == {"upgrade": upgrade}
+    # Nothing to report yet must not invent an empty section.
+    assert "reconcile" not in agent.build_payload(
+        cfg, runner=fake_runner(), opener=lambda *a, **k: FakeResponse(b""))
+
+
+def test_an_obsolete_upgrade_record_is_dropped():
+    """A failure that stopped being true must not sit in the dashboard forever."""
+    failed = {"from": "2.1.90", "to": "9.9.9", "ok": False, "ts": 1.0, "error": "no such version"}
+
+    # The pin was removed, or was never readable.
+    assert "upgrade" not in agent.prune_state({"upgrade": failed}, {}, "2.1.90")
+    assert "upgrade" not in agent.prune_state({"upgrade": failed},
+                                              {"claude_version": "--force"}, "2.1.90")
+    # The pin now names something else; the old failure is about a different question.
+    assert "upgrade" not in agent.prune_state({"upgrade": failed},
+                                              {"claude_version": "2.1.95"}, "2.1.90")
+    # Someone installed it by hand, so the failure is over.
+    satisfied = {**failed, "to": "2.1.95"}
+    assert "upgrade" not in agent.prune_state({"upgrade": satisfied},
+                                              {"claude_version": "2.1.95"}, "2.1.95")
+    # Still failing, still the live question: keep it, or the back-off is lost.
+    kept = agent.prune_state({"upgrade": failed}, {"claude_version": "9.9.9"}, "2.1.90")
+    assert kept["upgrade"] == failed
+    # Unrelated bookkeeping is never touched.
+    assert agent.prune_state({"channel": {"target": "stable"}}, {}, None) == {
+        "channel": {"target": "stable"}}

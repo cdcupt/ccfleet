@@ -39,6 +39,9 @@ from typing import Any, Callable, Optional
 
 AGENT_VERSION = "0.1.0"
 DEFAULT_ENV_FILE = "~/.config/ccfleet/agent.env"
+# The agent is one-shot under a timer, so anything it learns after posting has
+# to survive on disk to be reported on the next beat.
+DEFAULT_STATE_PATH = "~/.config/ccfleet/reconcile.json"
 DEFAULT_EGRESS_TARGETS = ("https://api.ipify.org", "https://ifconfig.me/ip",
                           "https://icanhazip.com", "https://checkip.amazonaws.com")
 DEFAULT_RC_SERVICE = "claude-remote-control.service"
@@ -85,6 +88,7 @@ class AgentConfig:
     rc_service: str = DEFAULT_RC_SERVICE
     egress_targets: tuple[str, ...] = DEFAULT_EGRESS_TARGETS
     timeout_s: float = 10.0
+    state_path: Path = Path(DEFAULT_STATE_PATH)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> AgentConfig:
@@ -106,7 +110,9 @@ class AgentConfig:
         return cls(url=url, node_id=node_id, token=token,
                    claude_config_dir=Path(config_dir).expanduser(),
                    rc_service=env.get("CCFLEET_RC_SERVICE", DEFAULT_RC_SERVICE),
-                   egress_targets=targets, timeout_s=timeout)
+                   egress_targets=targets, timeout_s=timeout,
+                   state_path=Path(env.get("CCFLEET_STATE_FILE")
+                                   or DEFAULT_STATE_PATH).expanduser())
 
 
 # -- collectors ------------------------------------------------------------------
@@ -294,7 +300,8 @@ def tmux_sessions(runner: Runner = subprocess.run) -> Optional[int]:
 
 def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
                   opener: Opener = urllib.request.urlopen,
-                  now: Callable[[], float] = time.time) -> dict[str, Any]:
+                  now: Callable[[], float] = time.time,
+                  state: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"node_id": cfg.node_id, "ts": now(),
                                "agent_version": AGENT_VERSION}
     payload.update(system_info())
@@ -304,6 +311,9 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
     payload["egress"] = egress_ip(cfg.egress_targets, opener, min(cfg.timeout_s, 5.0))
     payload["remote_control"] = remote_control_state(cfg.rc_service, runner)
     payload["tmux_sessions"] = tmux_sessions(runner)
+    upgrade = (state or {}).get("upgrade")
+    if isinstance(upgrade, Mapping):
+        payload["reconcile"] = {"upgrade": dict(upgrade)}
     return payload
 
 
@@ -336,12 +346,172 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
     return 0, "unreachable"
 
 
+# -- reconcile -------------------------------------------------------------------
+
+# An install downloads a release, so it gets far longer than a fact-collecting
+# probe. Still bounded: a hung installer must not wedge the timer unit.
+INSTALL_TIMEOUT_S = 300.0
+# A failing install is usually a bad release or a full disk, and retrying every
+# five minutes fixes neither while burning the node's bandwidth. Back off an hour.
+INSTALL_RETRY_AFTER_S = 3600.0
+# A channel cannot be compared against an installed number, so left alone it would
+# reinstall on every beat. Re-check it on a schedule instead: often enough to pick
+# up a release, rarely enough that the installer is not run 288 times a day.
+CHANNEL_RECHECK_AFTER_S = 24 * 3600.0
+VERSION_CHANNELS = ("stable", "latest")
+
+
+def read_state(path: Path) -> dict[str, Any]:
+    """Last run's notes. A missing or corrupt file is simply no notes."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_state(path: Path, state: Mapping[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        log.debug("could not write state: %s", exc.__class__.__name__)
+
+
+def parse_desired(body: str) -> dict[str, Any]:
+    """The desired block from a heartbeat response, or {} when there isn't one."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return {}
+    desired = data.get("desired") if isinstance(data, Mapping) else None
+    return dict(desired) if isinstance(desired, Mapping) else {}
+
+
+def installable_version(target: Any) -> Optional[str]:
+    """Re-check the server's version string before it reaches a subprocess.
+
+    argv is a list, so there is no shell to inject into. This is about argument
+    choice rather than quoting: a server that has been tampered with should not
+    get to hand the installer an arbitrary flag.
+    """
+    if not isinstance(target, str):
+        return None
+    target = target.strip()
+    if not target or len(target) > 40:
+        return None
+    if target in VERSION_CHANNELS:
+        return target
+    if target[0].isdigit() and all(c.isalnum() or c in ".-+" for c in target):
+        return target
+    return None
+
+
+def _channel_is_current(state: Mapping[str, Any], target: str,
+                        installed: Optional[str], now: float) -> bool:
+    """True when a channel was resolved recently and still holds.
+
+    Without this a channel reinstalls on every heartbeat: there is no number to
+    compare it against, so "different from desired" is always true.
+    """
+    channel = state.get("channel")
+    if not isinstance(channel, Mapping):
+        return False
+    if channel.get("target") != target:
+        return False            # they switched channels; resolve again
+    if channel.get("resolved") != installed:
+        return False            # something else moved the binary; resolve again
+    ts = channel.get("ts")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return False
+    return now - ts < CHANNEL_RECHECK_AFTER_S
+
+
+def prune_state(state: Mapping[str, Any], desired: Mapping[str, Any],
+                installed: Optional[str]) -> dict[str, Any]:
+    """Drop a recorded upgrade that no longer describes anything.
+
+    Without this a failure sticks: unpin the node, pin something already
+    installed, or fix it by hand, and the dashboard keeps reporting a failed
+    upgrade that stopped being true days ago.
+    """
+    pruned = dict(state)
+    upgrade = pruned.get("upgrade")
+    if not isinstance(upgrade, Mapping):
+        return pruned
+    target = installable_version(desired.get("claude_version"))
+    obsolete = (
+        target is None                       # the pin is gone or unusable
+        or upgrade.get("to") != target       # it was about a different target
+        or (target not in VERSION_CHANNELS and installed == target)  # satisfied since
+    )
+    if obsolete:
+        pruned.pop("upgrade", None)
+    return pruned
+
+
+def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
+                      state: Mapping[str, Any], runner: Runner = subprocess.run,
+                      now: Optional[float] = None) -> Optional[dict[str, Any]]:
+    """Bring the CLI to the pinned version. Returns a result to report, or None.
+
+    None means nothing was attempted: no pin, already matching, claude not found,
+    or still inside the back-off after a failure. Only a real attempt reports.
+    """
+    now = time.time() if now is None else now
+    target = installable_version(desired.get("claude_version"))
+    if target is None:
+        return None
+    # An exact pin can be compared, and matching means there is nothing to do.
+    if target not in VERSION_CHANNELS and installed == target:
+        return None
+    # A channel has no number to compare, so it is governed by time instead. Skip
+    # while the last resolution still holds: same channel, the version it resolved
+    # to is still what is installed, and the re-check window has not elapsed.
+    if target in VERSION_CHANNELS and _channel_is_current(state, target, installed, now):
+        return None
+    path = find_claude()
+    if not path:
+        return None
+
+    last = state.get("upgrade")
+    last = last if isinstance(last, Mapping) else {}
+    if (last.get("ok") is False and last.get("to") == target
+            and isinstance(last.get("ts"), (int, float))
+            and now - last["ts"] < INSTALL_RETRY_AFTER_S):
+        log.debug("not retrying install of %s yet: backing off after a failure", target)
+        return None
+
+    log.info("installing claude %s (installed: %s)", target, installed)
+    try:
+        proc = runner([path, "install", target], capture_output=True, text=True,
+                      timeout=INSTALL_TIMEOUT_S, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"from": installed, "to": target, "ok": False, "ts": now,
+                "error": exc.__class__.__name__}
+    if proc.returncode != 0:
+        detail = ((proc.stderr or "") + (proc.stdout or "")).strip()
+        return {"from": installed, "to": target, "ok": False, "ts": now,
+                "error": detail[:200] or f"exit {proc.returncode}"}
+    # Report what is on disk now rather than what was asked for: a channel resolves
+    # to a number, and an installer can succeed without changing anything.
+    landed = claude_info(runner).get("version") or target
+    result = {"from": installed, "to": landed, "ok": True, "ts": now, "error": None}
+    if target in VERSION_CHANNELS:
+        # Remember what the channel resolved to, so the next beat can tell that
+        # this channel is already satisfied instead of installing it again.
+        result["channel"] = {"target": target, "resolved": landed, "ts": now}
+    return result
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="ccfleet-agent",
                                      description="Post one heartbeat to the ccfleet server.")
     parser.add_argument("--env-file", default=DEFAULT_ENV_FILE)
     parser.add_argument("--print", action="store_true", dest="print_only",
                         help="print the payload instead of sending it")
+    parser.add_argument("--no-reconcile", action="store_true",
+                        help="report facts but never act on the server's desired state")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -352,13 +522,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except AgentConfigError as exc:
         print(f"error: {exc} (env file: {args.env_file})", file=sys.stderr)
         return 2
-    payload = build_payload(cfg)
+    state = read_state(cfg.state_path)
+    payload = build_payload(cfg, state=state)
     if args.print_only:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     status, text = send_heartbeat(cfg, payload)
     if status == 200:
         log.info("heartbeat accepted: %s", text.strip()[:200])
+        if not args.no_reconcile:
+            installed = (payload.get("claude") or {}).get("version")
+            desired = parse_desired(text)
+            state = prune_state(state, desired, installed)
+            result = reconcile_version(desired, installed, state)
+            if result is not None:
+                # The channel note is local bookkeeping, not something the server
+                # asked for, so it is filed separately and never reported.
+                channel = result.pop("channel", None)
+                new_state = {**state, "upgrade": result}
+                if channel is not None:
+                    new_state["channel"] = channel
+                # Recorded whether it worked or not: a failure is what drives the
+                # back-off, and is worth showing in the console either way.
+                write_state(cfg.state_path, new_state)
+            elif state != read_state(cfg.state_path):
+                # Nothing was attempted, but pruning may have dropped a record
+                # that had gone stale. Persist that or it comes straight back.
+                write_state(cfg.state_path, state)
         return 0
     log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
     return 1

@@ -52,16 +52,36 @@ a session; if the warning persists after use, treat it as `token_expired`.
 
 ## `version_mismatch`
 
-Either the node was upgraded and the pin is stale, or the node drifted.
+The pin is now authoritative: an agent that finds its node on a different
+version installs the pinned one and reports the result. So this alert means the
+node has not reconciled yet, or tried and failed.
 
-- Intended upgrade: *server* `ccfleetd node pin <node-id> <new version>`.
-- Unintended: *node* `ccfleet-upgrade-claude <pinned version>`.
+1. *server*: check the node's row. A failed attempt is shown under the version
+   with the installer's own error.
+2. A node that simply has not caught up closes the alert on its next heartbeat.
+3. Repeated failures back off for an hour between attempts, so a node that
+   cannot install the pinned version alerts rather than retrying in a loop.
+
+> **Upgrading a node by hand no longer sticks.** While a pin is set, the next
+> heartbeat installs the pinned version over whatever you just installed. Change
+> the pin instead; the node follows. To work on a node outside the pin, either
+> clear the pin or run its agent with `--no-reconcile`.
 
 ## Staged upgrade of the fleet
 
-1. Pick one node. *node*: `ccfleet-upgrade-claude` (latest) or with a version.
-2. Work a normal session on it for a day.
-3. Roll the same version to the other nodes, then `ccfleetd node pin` each.
+The pin drives the upgrade, so stage it one node at a time and let each one
+prove itself before the next.
+
+1. *server*: `ccfleetd node pin <first-node> <new version>`. Pick the node you
+   would least mind losing for an hour.
+2. Wait a full heartbeat interval and confirm the row shows the new version with
+   no failure. Then work a normal session on it for a day.
+3. Pin the remaining nodes. Never pin them all at once: a bad release would take
+   the whole fleet in the same five minutes.
+
+A node can also be told to track a channel — `ccfleetd node pin <node> stable`.
+It resolves once and re-checks daily rather than on every heartbeat, and a
+channel pin never reports drift, because tracking it is what the pin asks for.
 
 ## `egress_changed`
 

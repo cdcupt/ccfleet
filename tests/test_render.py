@@ -70,3 +70,40 @@ def test_add_page_emits_the_bypass_flag_and_says_so_when_configured():
     # The flag must never appear without the sentence explaining what it costs.
     assert "without permission prompts" in page
     assert "passwordless sudo" in page
+
+
+def _row_with_upgrade(upgrade):
+    from ccfleetd.render import build_rows
+    nodes = [{"id": "node-a", "owner": "erik", "region": "us", "pinned_version": "2.1.99",
+              "rc_expected": False, "enabled": True, "created_at": 0}]
+    hb = heartbeat(NOW - 30)
+    hb["payload"]["reconcile"] = {"upgrade": upgrade}
+    return build_rows(nodes, {"node-a": hb}, [], NOW)[0]
+
+
+def test_row_carries_the_last_upgrade_result():
+    row = _row_with_upgrade({"from": "2.1.90", "to": "2.1.99", "ok": True,
+                             "ts": 1.0, "error": None})
+    assert row["last_upgrade"]["ok"] is True
+    # A node that has never reported one must not look like a failure.
+    from ccfleetd.render import build_rows
+    nodes = [{"id": "node-a", "owner": "erik", "region": "us", "pinned_version": "",
+              "rc_expected": False, "enabled": True, "created_at": 0}]
+    assert build_rows(nodes, {"node-a": heartbeat(NOW - 30)}, [], NOW)[0]["last_upgrade"] is None
+
+
+def test_a_failed_upgrade_is_visible_and_escaped_in_the_dashboard():
+    from ccfleetd.render import _row_html
+    row = _row_with_upgrade({"from": "2.1.90", "to": "2.1.99", "ok": False, "ts": 1.0,
+                             "error": "<script>alert(1)</script> no such version"})
+    html = _row_html(row, NOW)
+    assert "upgrade to 2.1.99 failed" in html
+    # The error text comes from a node, so it is untrusted input on an admin page.
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+
+def test_a_successful_upgrade_does_not_shout():
+    from ccfleetd.render import _row_html
+    html = _row_html(_row_with_upgrade({"from": "2.1.90", "to": "2.1.99", "ok": True,
+                                        "ts": 1.0, "error": None}), NOW)
+    assert "failed" not in html
