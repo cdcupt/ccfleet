@@ -37,7 +37,8 @@ flowchart LR
 
 ### Deployment topology
 
-Three roles, and only one of them sits in a request path.
+The default shape: three roles, and only the node sits in a model-request path.
+Two supported variants change that, and both are called out below.
 
 ```mermaid
 flowchart LR
@@ -54,7 +55,8 @@ flowchart LR
   CC == model traffic, own OAuth, direct ==> API
   AG -- heartbeat: HTTPS to the server --> FS
   AG -. or to its own loopback,<br/>through an SSH tunnel .-> FS
-  U -- HTTPS, admin token --> FS
+  U -- console: HTTPS, admin token --> FS
+  U -. or the operator's own ssh -L,<br/>when the server is loopback-only .-> FS
 ```
 
 By default the agent posts to the server's public HTTPS URL, which is the value
@@ -63,12 +65,26 @@ server at all, `ccfleet-tunnel.service` forwards a loopback port on the node to
 the server's loopback port and the agent posts to `127.0.0.1` instead, with SSH
 providing the encryption. The installer ships that unit but does not enable it;
 `docs/tunnel.md` covers the setup and what it costs, namely that the server then
-needs a reachable SSH port. The console is separate either way: that is the
-operator's own HTTPS entry, behind the admin token.
+needs a reachable SSH port.
 
-Nothing belonging to the operator sits between a node and Anthropic. A node's
-public address is its own, which is the point of one VPS per owner: several
-nodes on one host would share that host's address and stop being independent.
+The console follows the same choice. With a public server it is an HTTPS entry
+behind the admin token. With a loopback-only server nothing outside can reach
+ccfleetd at all, so the operator forwards the port themselves with `ssh -L` and
+browses `127.0.0.1`.
+
+In this shape nothing belonging to the operator sits between a node and
+Anthropic. A node's public address is its own, which is the point of one VPS per
+owner: several nodes on one host would share that host's address and stop being
+independent.
+
+The one supported exception is the optional pass-through gateway in `gateway/`,
+and it is a different situation: it exists for an owner who must keep files on
+their laptop and cannot work on a hosted node at all. There Claude Code runs on
+the laptop, `ANTHROPIC_BASE_URL` points at the gateway, and the gateway does sit
+in the model-request path. It forwards byte for byte including the owner's own
+bearer, stores nothing and rewrites nothing, which is what keeps it a gateway
+rather than a relay, but it is still an operator-owned hop and worth knowing
+about before you reach for it.
 
 ### Node
 
