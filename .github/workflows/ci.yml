@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the project actually claims, and the two newest releases.
+        # 3.9 is here because pyproject says >=3.9 and an untested floor is a
+        # promise nobody is keeping; all three were run locally before this
+        # workflow was added.
+        python-version: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip pytest pytest-cov ruff
+      - run: ruff check .
+      - run: pytest -q --cov --cov-report=term-missing --cov-fail-under=80
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+      - name: shellcheck and parse every shell file
+        run: |
+          set -eu
+          # Two kinds of file: scripts with a shebang, and fragments that are
+          # sourced rather than run. node/attach.sh is the second kind, which is
+          # why it carries a `# shellcheck shell=` directive instead. Selecting
+          # on the shebang alone silently skipped it.
+          files=$(git ls-files '*.sh' 'profiles/*' 'node/*' | while read -r f; do
+            if head -c 200 "$f" | grep -qE '^#!/.*sh'; then echo "$f"
+            elif head -c 200 "$f" | grep -q '^# shellcheck shell='; then echo "$f"
+            fi
+          done)
+          [ -n "$files" ] || { echo "no shell files found, which is itself wrong"; exit 1; }
+          echo "checking:"; printf '  %s\n' $files
+          shellcheck -S warning $files
+          # Only the executable ones can be parsed by bash; a fragment need not
+          # stand alone.
+          for f in $files; do
+            head -c 200 "$f" | grep -qE '^#!/.*sh' && bash -n "$f"
+          done
+
+  units:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: systemd units must parse
+        run: |
+          set -eu
+          # Several real bugs this project hit were unit-file mistakes, so the
+          # units are checked rather than assumed. "Unit ... not found" lines are
+          # expected: the runner has none of the referenced targets installed.
+          fail=0
+          for u in node/systemd/*.service node/systemd/*.timer; do
+            out=$(systemd-analyze verify "$u" 2>&1 | grep -v 'not found' || true)
+            if [ -n "$out" ]; then echo "FAIL $u"; echo "$out"; fail=1; else echo "ok   $u"; fi
+          done
+          exit $fail
+      - name: the launchd plist must parse
+        run: python3 -c "import plistlib,pathlib;plistlib.loads(pathlib.Path('laptop/com.ccfleet.agent.plist').read_text().replace('__HOME__','/Users/x').encode());print('ok   laptop/com.ccfleet.agent.plist')"
