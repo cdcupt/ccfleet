@@ -52,14 +52,19 @@ flowchart LR
   U -- claude.ai / Remote Control --> CC
   U -- ssh / mosh --> CC
   CC == model traffic, own OAuth, direct ==> API
-  AG -. heartbeat over an SSH tunnel<br/>to the server's loopback .-> FS
+  AG -- heartbeat: HTTPS to the server --> FS
+  AG -. or to its own loopback,<br/>through an SSH tunnel .-> FS
   U -- HTTPS, admin token --> FS
 ```
 
-The node reaches the fleet server through an SSH local port-forward to the
-server's loopback port, so the server's HTTP endpoint never has to be exposed
-publicly for nodes to report. The console is separate: that is the operator's
-own HTTPS entry, behind the admin token.
+By default the agent posts to the server's public HTTPS URL, which is the value
+the installer writes into `agent.env`. Where you would rather not expose the
+server at all, `ccfleet-tunnel.service` forwards a loopback port on the node to
+the server's loopback port and the agent posts to `127.0.0.1` instead, with SSH
+providing the encryption. The installer ships that unit but does not enable it;
+`docs/tunnel.md` covers the setup and what it costs, namely that the server then
+needs a reachable SSH port. The console is separate either way: that is the
+operator's own HTTPS entry, behind the admin token.
 
 Nothing belonging to the operator sits between a node and Anthropic. A node's
 public address is its own, which is the point of one VPS per owner: several
