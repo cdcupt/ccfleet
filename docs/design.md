@@ -35,6 +35,36 @@ flowchart LR
   D -- alert transitions --> N
 ```
 
+### Deployment topology
+
+Three roles, and only one of them sits in a request path.
+
+```mermaid
+flowchart LR
+  U[Owner<br/>laptop · phone · any browser]
+  subgraph N [Node · its own VPS · its own public address]
+    CC[unmodified claude<br/>owner's own /login]
+    AG[ccfleet-agent]
+  end
+  FS[Fleet server<br/>ccfleetd + console]
+  API[(api.anthropic.com)]
+
+  U -- claude.ai / Remote Control --> CC
+  U -- ssh / mosh --> CC
+  CC == model traffic, own OAuth, direct ==> API
+  AG -. heartbeat over an SSH tunnel<br/>to the server's loopback .-> FS
+  U -- HTTPS, admin token --> FS
+```
+
+The node reaches the fleet server through an SSH local port-forward to the
+server's loopback port, so the server's HTTP endpoint never has to be exposed
+publicly for nodes to report. The console is separate: that is the operator's
+own HTTPS entry, behind the admin token.
+
+Nothing belonging to the operator sits between a node and Anthropic. A node's
+public address is its own, which is the point of one VPS per owner: several
+nodes on one host would share that host's address and stop being independent.
+
 ### Node
 
 A small VPS in a supported region with its own public address, one Linux user
@@ -192,6 +222,50 @@ Restoring a node never restores a credentials file: the owner logs in again.
   the owner can take root without being asked again.
 - The console has a single admin token and no per-user accounts, so it is the
   operator's view only. Owners get a node, not the dashboard.
+
+## How this differs from a hosted-account relay
+
+Products exist that host a Claude account per seat on an isolated machine with
+its own egress address, and the resemblance to this design is real. The
+difference is what sits in front of the account.
+
+```mermaid
+flowchart TB
+  subgraph R [Relay shape]
+    direction LR
+    RU[Several clients] --> AP[Access point<br/>one Base URL + API key<br/>session affinity, failover]
+    AP --> RA[(account A)]
+    AP --> RB[(account B)]
+  end
+  subgraph C [ccfleet]
+    direction LR
+    CU1[Owner A] --> CN1[Node A<br/>claude, A's own login] --> CAPI[(api.anthropic.com)]
+    CU2[Owner B] --> CN2[Node B<br/>claude, B's own login] --> CAPI
+  end
+```
+
+In the relay shape a server holds each account's OAuth token, chooses which
+account answers a given request, and rewrites the request so it looks as though
+it came from that account's own client. That is three separable things: storing
+someone's credential, pooling accounts behind one endpoint, and
+misrepresenting the client.
+
+ccfleet does none of them, and the reason is not squeamishness. Each of the
+three is the thing that makes a fleet look like account sharing rather than
+several people each using their own subscription.
+
+| | Relay / pooled access point | ccfleet |
+| --- | --- | --- |
+| What answers a request | whichever account the pool picks | the one node you are working on |
+| Who holds the OAuth token | the relay | Claude Code on the node, as always |
+| Request headers and client identity | rewritten to match the captured account | untouched; the real client is the real client |
+| Adding a second person | another seat behind the same endpoint | another machine with their own login |
+| What the management plane can see | the traffic | facts about nodes, never a request |
+| Failover between accounts | a feature | absent on purpose |
+
+The honest summary: the hosting idea is the same, one account per isolated
+machine with its own address. Everything about what sits in front of it is
+opposite. A pooled endpoint is the shape this project exists not to be.
 
 ## What was left out on purpose
 
