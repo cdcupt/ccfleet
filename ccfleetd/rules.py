@@ -85,6 +85,17 @@ def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) ->
     if isinstance(mtime, (int, float)) and now - mtime > cfg.token_stale_s:
         findings.append(Finding("token_stale", LEVEL_WARN,
                                 f"credentials not refreshed for {_fmt_age(now - mtime)}"))
+    elif not isinstance(mtime, (int, float)):
+        # No file to stat, which is every macOS machine: Claude Code keeps the
+        # credential in the Keychain. The account block gives a profile fetch
+        # time instead, and that only advances while the login still works, so a
+        # stale one means the same thing a stale mtime means.
+        fetched_ms = _get(payload, "credentials", "profile_fetched_at")
+        if isinstance(fetched_ms, (int, float)):
+            age = now - fetched_ms / 1000.0
+            if age > cfg.token_stale_s:
+                findings.append(Finding("token_stale", LEVEL_WARN,
+                                        f"login not exercised for {_fmt_age(age)}"))
     expires_ms = _get(payload, "credentials", "expires_at")
     if isinstance(expires_ms, (int, float)):
         expired_for = now - expires_ms / 1000.0

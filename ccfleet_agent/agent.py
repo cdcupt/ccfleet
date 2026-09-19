@@ -139,12 +139,48 @@ def claude_info(runner: Runner = subprocess.run) -> dict[str, Any]:
     return {"version": match.group(0) if match else None, "path": path}
 
 
+def oauth_account_facts(config_dir: Path) -> dict[str, Any]:
+    """Non-secret facts from ~/.claude.json, which exists on every platform.
+
+    This is the only way to say anything about a login on macOS, where Claude Code
+    keeps the credential in the Keychain and there is no file to stat. Reading the
+    Keychain secret would mean handling the token, which this agent never does;
+    the account block beside it is not secret and carries what we actually need.
+
+    Deliberately narrow: whether an account is signed in, when its profile was
+    last fetched (which only succeeds while the login works, so it doubles as a
+    liveness signal), and the rate-limit tier. No email, no name, no identifiers.
+    """
+    path = config_dir.with_suffix(".json")          # ~/.claude -> ~/.claude.json
+    facts: dict[str, Any] = {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return facts
+    account = data.get("oauthAccount") if isinstance(data, dict) else None
+    if not isinstance(account, dict):
+        return facts
+    facts["account"] = True
+    fetched = account.get("profileFetchedAt")
+    if isinstance(fetched, (int, float)) and not isinstance(fetched, bool):
+        facts["profile_fetched_at"] = fetched
+    tier = account.get("organizationRateLimitTier")
+    if isinstance(tier, str):
+        facts["plan"] = tier[:40]
+    return facts
+
+
 def credentials_summary(config_dir: Path) -> dict[str, Any]:
     """Facts about the credentials file that contain no secret material."""
     path = config_dir / ".credentials.json"
+    account = oauth_account_facts(config_dir)
     if not path.exists():
         if platform.system() == "Darwin":
-            return {"present": None, "store": "keychain"}
+            # No file to stat, so presence and freshness come from the account block.
+            summary: dict[str, Any] = {"present": bool(account.get("account")) or None,
+                                       "store": "keychain"}
+            summary.update({k: v for k, v in account.items() if k != "account"})
+            return summary
         return {"present": False, "store": "file"}
     summary: dict[str, Any] = {"present": True, "store": "file",
                                "mtime": path.stat().st_mtime, "expires_at": None,
@@ -162,6 +198,9 @@ def credentials_summary(config_dir: Path) -> dict[str, Any]:
         sub = oauth.get("subscriptionType")
         if isinstance(sub, str):
             summary["subscription_type"] = sub[:40]
+    # Useful on Linux too: the file's mtime moves on any write, while this only
+    # moves when a profile fetch succeeded against the live login.
+    summary.update({k: v for k, v in account.items() if k != "account"})
     return summary
 
 
