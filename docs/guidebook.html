@@ -435,7 +435,7 @@ claude</code></pre>
     <div class="num">4</div>
     <h3>The owner turns on Remote Control, once</h3>
     <pre><code>systemctl --user start claude-remote-control.service</code></pre>
-    <p>After this, claude.ai/code and the Claude phone app can drive this node with nothing installed on the machine you are sitting at. <code class="long">tmux attach -t remote-control</code> shows the URL and QR code.</p>
+    <p>After this, claude.ai/code and the Claude phone app can drive this node with nothing installed on the machine you are sitting at. <code class="long">tmux -L ccfleet-rc attach -t remote-control</code> shows the URL and QR code.</p>
     <div class="note">
       <p class="t">Why the installer does not do this for you</p>
       <p>Remote Control needs an authenticated session, and there is none until the sign-in above. The installer therefore <em>enables</em> the service, so it returns by itself after a reboot, but does not start it. It cannot usefully retry either: the unit runs Claude inside a detached tmux session, so systemd sees the launch succeed the moment tmux detaches and never learns that the session failed to authenticate. One command by the owner is honest; an automatic retry would not work.</p>

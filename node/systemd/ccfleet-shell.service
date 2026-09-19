@@ -27,6 +27,13 @@ ExecStart=/bin/sh -c '/usr/bin/tmux has-session -t cc 2>/dev/null || /usr/bin/tm
 # Deliberately no ExecStop. This unit only pre-warms the session; stopping or
 # restarting it must never destroy work someone is in the middle of. The
 # session outlives the unit on purpose. Kill it by hand if you really mean to.
+#
+# KillMode=process is what makes that true. Without it systemd's default,
+# control-group, kills every process still in this unit's cgroup when it stops --
+# and the tmux server it just started is exactly that, so `systemctl restart
+# ccfleet-shell` would take the owner's session down with it. No ExecStop alone
+# was never enough; it only meant this unit did not kill the session on purpose.
+KillMode=process
 
 [Install]
 WantedBy=default.target

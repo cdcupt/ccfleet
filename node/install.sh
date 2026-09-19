@@ -15,7 +15,7 @@
 # up to that point is this script.
 set -euo pipefail
 
-SERVER="" NODE_ID="" TOKEN="" OWNER="" SSH_KEY="" SKIP_HARDEN=no NO_REMOTE=no
+SERVER="" NODE_ID="" TOKEN="" OWNER="" SSH_KEY="" SKIP_HARDEN=no NO_REMOTE=no BYPASS=no
 REPO_RAW="${CCFLEET_REPO_RAW:-https://raw.githubusercontent.com/cdcupt/ccfleet/main}"
 
 die() { printf '\n\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -46,6 +46,10 @@ Optional:
   --skip-harden     do not touch the firewall or sshd. Use on a box that is
                     already carrying other services.
   --no-remote-control  set up everything except Remote Control.
+  --bypass-permissions  run Claude Code with no permission prompts on this node,
+                    in the terminal and in sessions driven from claude.ai. Every
+                    tool call then runs unasked, and the owner has passwordless
+                    sudo, so this grants un-prompted root. Off by default.
 USAGE
   exit 2
 }
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
     --ssh-key) SSH_KEY="${2:-}"; shift 2 ;;
     --skip-harden) SKIP_HARDEN=yes; shift ;;
     --no-remote-control) NO_REMOTE=yes; shift ;;
+    --bypass-permissions) BYPASS=yes; shift ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -217,6 +222,38 @@ os.chmod(p, 0o600)
 PY"
 note "workspace trusted$( [ "$NO_REMOTE" = yes ] && echo "" || echo ", Remote Control accepted" )"
 
+# The terminal half of --bypass-permissions. The unit flag above only covers
+# sessions Remote Control spawns; a session the owner starts by typing `claude`
+# reads this instead. Written every run so that re-running without the flag
+# removes it again rather than silently leaving the node wide open.
+as_owner "python3 - <<'PY'
+import json, os
+p = os.path.expanduser('~/.claude/settings.json')
+os.makedirs(os.path.dirname(p), exist_ok=True)
+d = json.load(open(p)) if os.path.exists(p) else {}
+perms = d.get('permissions') or {}
+bypass = '$BYPASS' == 'yes'
+if bypass:
+    perms['defaultMode'] = 'bypassPermissions'
+    # Suppresses the one-time 'accept responsibility' dialog, which would
+    # otherwise block a session that nobody is sitting in front of.
+    d['skipDangerousModePermissionPrompt'] = True
+else:
+    perms.pop('defaultMode', None)
+    d.pop('skipDangerousModePermissionPrompt', None)
+if perms:
+    d['permissions'] = perms
+else:
+    d.pop('permissions', None)
+tmp = p + '.tmp'
+json.dump(d, open(tmp, 'w'), indent=2)
+os.replace(tmp, p)
+os.chmod(p, 0o600)
+PY"
+if [ "$BYPASS" = yes ]; then
+  note "PERMISSION PROMPTS ARE OFF on this node, in the terminal and from claude.ai"
+fi
+
 step "6/8  agent and services"
 for f in ccfleet_agent/agent.py:ccfleet-agent node/backup.sh:ccfleet-backup node/exitip.sh:exitip node/upgrade-claude.sh:ccfleet-upgrade-claude; do
   src="${f%%:*}"; dst="${f##*:}"
@@ -231,6 +268,14 @@ as_owner 'MARKER="# ccfleet: attach to the persistent work session"
   grep -qF "$MARKER" ~/.bashrc 2>/dev/null || { echo; cat /tmp/attach.sh; } >> ~/.bashrc; rm -f /tmp/attach.sh'
 printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\n' "$SERVER" "$NODE_ID" "$TOKEN" \
   > "$HOME_DIR/.config/ccfleet/agent.env"
+# Read by claude-remote-control.service. Written every run, empty unless asked,
+# so re-running without the flag turns bypass back off instead of leaving it on.
+if [ "$BYPASS" = yes ]; then
+  printf 'CCFLEET_RC_ARGS=--permission-mode bypassPermissions\n' > "$HOME_DIR/.config/ccfleet/remote-control.env"
+else
+  printf 'CCFLEET_RC_ARGS=\n' > "$HOME_DIR/.config/ccfleet/remote-control.env"
+fi
+chown "$OWNER:$OWNER" "$HOME_DIR/.config/ccfleet/remote-control.env"
 chmod 600 "$HOME_DIR/.config/ccfleet/agent.env"; chown "$OWNER:$OWNER" "$HOME_DIR/.config/ccfleet/agent.env"
 note "agent, helpers, units and login auto-attach in place"
 

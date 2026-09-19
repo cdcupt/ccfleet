@@ -222,3 +222,28 @@ def test_the_systemd_backend_dependency_is_installed_explicitly():
     pkgs = pkgs[:pkgs.index("\n")]
     assert "python3-systemd" in pkgs, \
         "the systemd backend cannot load without it, and it is not a hard dependency"
+
+
+def test_bypass_permissions_is_opt_in():
+    """Un-prompted tool calls plus passwordless sudo is un-prompted root. Never the default."""
+    text = INSTALL.read_text()
+    assert "BYPASS=no" in text, "must default to off"
+    assert "--bypass-permissions) BYPASS=yes" in text
+
+
+def test_bypass_writes_both_halves_and_can_be_turned_back_off():
+    """The unit flag only covers Remote Control; a typed `claude` reads settings.json."""
+    text = INSTALL.read_text()
+    assert "CCFLEET_RC_ARGS=--permission-mode bypassPermissions" in text, "Remote Control half"
+    assert "defaultMode" in text and "bypassPermissions" in text, "terminal half"
+    # Both halves are written on every run, so dropping the flag actually reverts them.
+    assert "printf 'CCFLEET_RC_ARGS=\\n'" in text, \
+        "the env file must be rewritten empty when the flag is absent, not left stale"
+    assert "perms.pop('defaultMode', None)" in text, \
+        "settings must be cleaned when the flag is absent, not left wide open"
+
+
+def test_bypass_says_so_out_loud():
+    text = INSTALL.read_text()
+    assert "PERMISSION PROMPTS ARE OFF" in text, \
+        "an operator should not have to infer this from the absence of a prompt"

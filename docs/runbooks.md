@@ -78,7 +78,7 @@ rotate automatically (`CCFLEET_BACKUP_KEEP`); `~/.claude/debug` and
 ## `remote_control_down`
 
 *node*: `systemctl --user restart claude-remote-control.service`, then
-`tmux attach -t remote-control` to read the reason. Remote Control needs a
+`tmux -L ccfleet-rc attach -t remote-control` to read the reason. Remote Control needs a
 valid login; if it complains about eligibility, do the re-login runbook. The
 very first start must be interactive to accept the one-time prompt.
 
