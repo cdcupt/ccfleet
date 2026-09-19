@@ -76,11 +76,22 @@ jobs:
         run: |
           set -eu
           # Several real bugs this project hit were unit-file mistakes, so the
-          # units are checked rather than assumed. "Unit ... not found" lines are
-          # expected: the runner has none of the referenced targets installed.
+          # units are checked rather than assumed.
+          #
+          # What this does and does not catch, measured rather than assumed:
+          # it flags syntax and directive errors and missing ExecStart commands,
+          # which is the class of bug this project actually hit. It does NOT flag
+          # a misspelled After= target; `After=netwrok-online.target` verifies
+          # clean, because ordering against a unit that does not exist is legal.
+          # No filter width changes that, so do not rely on this job for it.
+          #
+          # The filter below is narrowed to the three targets the units really
+          # reference, so that if a future systemd does start reporting unknown
+          # ordering deps, a typo is not swallowed. Add to it deliberately.
+          expected='Unit (network-online|default|timers)\.target not found'
           fail=0
           for u in node/systemd/*.service node/systemd/*.timer; do
-            out=$(systemd-analyze verify "$u" 2>&1 | grep -v 'not found' || true)
+            out=$(systemd-analyze verify "$u" 2>&1 | grep -Ev "$expected" || true)
             if [ -n "$out" ]; then echo "FAIL $u"; echo "$out"; fail=1; else echo "ok   $u"; fi
           done
           exit $fail
