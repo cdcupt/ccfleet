@@ -60,6 +60,38 @@ def run_snippet_on_a_terminal(tmp_path, env_extra=None):
     return marker.exists(), (marker.read_text().strip() if marker.exists() else "")
 
 
+def run_snippet_recording_term(tmp_path, term, tmux_exit=0):
+    """Like the above, but the stub records the TERM it was handed, and can fail.
+
+    Both matter: the snippet rewrites an unknown TERM before calling tmux, and a
+    tmux that refuses to start must not end the login.
+    """
+    marker = tmp_path / "term-seen"
+    survived = tmp_path / "survived"
+    stub = tmp_path / "bin"
+    stub.mkdir(exist_ok=True)
+    (stub / "tmux").write_text(
+        f'#!/bin/sh\nprintf "%s" "$TERM" > "{marker}"\nexit {tmux_exit}\n')
+    (stub / "tmux").chmod(0o755)
+
+    env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}", "HOME": str(tmp_path),
+           "TERM": term}
+    env.pop("TMUX", None)
+    env.pop("CCFLEET_NO_ATTACH", None)
+
+    primary, secondary = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            ["bash", "-ic", f'PS1="$ "\n. "{SNIPPET}"\ntouch "{survived}"\n'],
+            stdin=secondary, stdout=secondary, stderr=secondary, env=env, close_fds=True)
+        proc.wait(timeout=30)
+    finally:
+        os.close(secondary)
+        os.close(primary)
+    seen = marker.read_text() if marker.exists() else None
+    return seen, survived.exists()
+
+
 def test_attaches_when_stdout_is_a_real_terminal(tmp_path):
     """The whole point: an interactive login on a terminal attaches to session cc."""
     called, args = run_snippet_on_a_terminal(tmp_path)
@@ -102,7 +134,13 @@ def test_no_attach_when_escape_hatch_is_set(tmp_path):
 def test_snippet_uses_capital_a_so_a_missing_session_is_recreated():
     text = SNIPPET.read_text()
     assert "new-session -A -s cc" in text, "without -A a killed session would not come back"
-    assert "exec tmux" in text, "attaching without exec would leave a stray parent shell"
+    # Was `exec tmux`. That ended the login whenever tmux refused to start, which
+    # a terminal the node has no terminfo for reliably causes. `&& exit` keeps the
+    # same outcome on success, where leaving tmux ends the ssh session, while a
+    # failure now falls through to an ordinary shell.
+    assert "exec tmux" not in text, "exec turns any tmux failure into a disconnect"
+    assert 'tmux new-session -A -s cc -c "$HOME/workspace" && exit' in text, \
+        "on success the shell must still exit, or leaving tmux leaves a stray prompt"
 
 
 def test_snippet_guards_are_all_present():
@@ -145,3 +183,37 @@ def test_the_marker_install_sh_greps_for_is_present():
     assert marker in install.read_text(), "install.sh should still key off this marker"
     assert any(line == marker for line in snippet.read_text().splitlines()), \
         "the snippet must still contain the marker verbatim, or every re-run appends it again"
+
+
+def test_a_terminal_the_node_does_not_know_still_attaches(tmp_path):
+    """Ghostty, kitty, wezterm and alacritty are all absent from a stock Debian.
+
+    Before this, tmux refused with "missing or unsuitable terminal" and the exec
+    meant the owner was disconnected rather than dropped to a shell.
+    """
+    # Not "xterm-ghostty": a laptop running Ghostty has that entry, so the test
+    # would pass or fail by accident depending on where it runs. This name is
+    # unknown everywhere, which is the condition under test.
+    seen, _ = run_snippet_recording_term(tmp_path, "ghostty-like-but-unknown-xyz")
+    assert seen == "xterm-256color", \
+        "an unknown TERM must be replaced with one every node has"
+
+
+def test_a_terminal_the_node_does_know_is_left_alone(tmp_path):
+    """Rewriting a good TERM would throw away colour and key handling for nothing."""
+    seen, _ = run_snippet_recording_term(tmp_path, "xterm-256color")
+    assert seen == "xterm-256color"
+    seen, _ = run_snippet_recording_term(tmp_path, "screen-256color")
+    assert seen == "screen-256color", "a known TERM must survive untouched"
+
+
+def test_a_tmux_that_will_not_start_leaves_the_owner_a_shell(tmp_path):
+    """The old exec turned any tmux failure into a disconnect."""
+    _, survived = run_snippet_recording_term(tmp_path, "xterm-256color", tmux_exit=1)
+    assert survived, "a failed tmux must fall through to a normal shell, not end the login"
+
+
+def test_a_successful_tmux_still_ends_the_login(tmp_path):
+    """Leaving the session should log you out, as it did before."""
+    _, survived = run_snippet_recording_term(tmp_path, "xterm-256color", tmux_exit=0)
+    assert not survived, "on success the shell must exit rather than drop to a prompt"
