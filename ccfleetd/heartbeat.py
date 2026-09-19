@@ -53,7 +53,12 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     rc = _section(payload, "remote_control")
     load = _section(payload, "load")
     upgrade = _section(_section(payload, "reconcile"), "upgrade")
-    return {
+    # Only carry the section when the agent actually reported one. Emitting a
+    # skeleton of Nones makes "has this node ever reconciled?" unanswerable: the
+    # dict is truthy, so every node looks like it has.
+    has_upgrade = any(upgrade.get(k) is not None
+                      for k in ("from", "to", "ok", "error", "ts"))
+    result: dict[str, Any] = {
         "node_id": node_id,
         "agent_ts": _num(payload.get("ts")),
         "agent_version": _str(payload.get("agent_version")),
@@ -75,9 +80,11 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         "egress": {"ip": _str(egress.get("ip")), "source": _str(egress.get("source"))},
         "remote_control": {"state": _str(rc.get("state"))},
         "tmux_sessions": _num(payload.get("tmux_sessions")),
+    }
+    if has_upgrade:
         # What the agent did about the last desired state it was handed. Reported
         # one beat late by construction: the agent acts after posting.
-        "reconcile": {
+        result["reconcile"] = {
             "upgrade": {
                 "from": _str(upgrade.get("from")),
                 "to": _str(upgrade.get("to")),
@@ -85,5 +92,5 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
                 "error": _str(upgrade.get("error")),
                 "ts": _num(upgrade.get("ts")),
             },
-        },
-    }
+        }
+    return result
