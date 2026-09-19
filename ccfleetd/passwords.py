@@ -19,6 +19,14 @@ import secrets
 
 ALGORITHM = "pbkdf2_sha256"
 ITERATIONS = 600_000          # OWASP's 2023 floor for PBKDF2-HMAC-SHA256
+# An upper bound on what a STORED hash may ask for. The cost of a verification is
+# attacker-controlled the moment a row can be edited or a database restored from
+# somewhere untrusted: an enormous count raises OverflowError out of
+# pbkdf2_hmac, and a merely large one burns CPU on the authentication path.
+# Measured before this bound existed: 20,000,000 iterations cost 1.4s per
+# request, and 10**20 raised. Generous headroom over ITERATIONS so the cost can
+# still be raised later.
+MAX_ITERATIONS = 5_000_000
 SALT_BYTES = 16
 
 
@@ -41,9 +49,15 @@ def verify_password(password: str, stored: str) -> bool:
         expected = bytes.fromhex(digest_hex)
     except (ValueError, AttributeError):
         return False
-    if iterations < 1 or not salt or not expected:
+    if not 1 <= iterations <= MAX_ITERATIONS or not salt or not expected:
         return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    try:
+        candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    except (ValueError, OverflowError, MemoryError):
+        # Belt as well as braces: the bound above should make this unreachable,
+        # but this function promises never to raise and a promise that depends on
+        # a bound being exactly right is not one worth making.
+        return False
     return hmac.compare_digest(candidate, expected)
 
 
