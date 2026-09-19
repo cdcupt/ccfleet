@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
 from .config import Config
+from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
@@ -249,9 +250,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(400, {"error": str(exc)})
                 return
             events = ctx.monitor.record_heartbeat(node, payload, time.time())
-            self._json(200, {"ok": True, "pinned_version": node["pinned_version"],
-                             "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
-                             "events": len(events)})
+            self._json(200, {
+                "ok": True,
+                # Kept for agents predating the desired block; same value, new home.
+                "pinned_version": node["pinned_version"],
+                "desired": desired_state(node),
+                "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
+                "events": len(events)})
 
         # -- console actions -----------------------------------------------
 

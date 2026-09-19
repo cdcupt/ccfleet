@@ -52,6 +52,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     egress = _section(payload, "egress")
     rc = _section(payload, "remote_control")
     load = _section(payload, "load")
+    upgrade = _section(_section(payload, "reconcile"), "upgrade")
     return {
         "node_id": node_id,
         "agent_ts": _num(payload.get("ts")),
@@ -74,4 +75,15 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         "egress": {"ip": _str(egress.get("ip")), "source": _str(egress.get("source"))},
         "remote_control": {"state": _str(rc.get("state"))},
         "tmux_sessions": _num(payload.get("tmux_sessions")),
+        # What the agent did about the last desired state it was handed. Reported
+        # one beat late by construction: the agent acts after posting.
+        "reconcile": {
+            "upgrade": {
+                "from": _str(upgrade.get("from")),
+                "to": _str(upgrade.get("to")),
+                "ok": _bool_or_none(upgrade.get("ok")),
+                "error": _str(upgrade.get("error")),
+                "ts": _num(upgrade.get("ts")),
+            },
+        },
     }

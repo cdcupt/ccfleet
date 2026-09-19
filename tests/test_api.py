@@ -226,3 +226,30 @@ def test_rotate_token_result_keeps_the_owner_in_the_command(server, cfg):
                                 {"csrf": csrf_for(cfg)}, basic(cfg.admin_token))
     assert status == 200
     assert "--owner bob" in body.decode()
+
+
+def test_heartbeat_response_carries_desired_state(server):
+    """An agent that cannot find `desired` has nothing to reconcile against."""
+    srv, store = server
+    token = store.add_node("node-a", "erik", pinned_version="2.1.92", rc_expected=True)
+    auth = {"Authorization": f"Bearer {token}"}
+    payload = heartbeat(time.time())["payload"]
+    reply = json.loads(call(srv, "POST", "/api/heartbeat", payload, auth)[1])
+    assert reply["desired"] == {"claude_version": "2.1.92", "remote_control": True}
+    # Agents predating the block read the flat field; it stays while they exist.
+    assert reply["pinned_version"] == "2.1.92"
+
+
+def test_reconcile_result_is_stored_and_junk_around_it_is_dropped(server):
+    srv, store = server
+    token = store.add_node("node-b", "erik")
+    auth = {"Authorization": f"Bearer {token}"}
+    payload = {**heartbeat(time.time())["payload"], "node_id": "node-b",
+               "reconcile": {"upgrade": {"from": "2.1.90", "to": "2.1.92", "ok": True,
+                                         "ts": 1.0, "error": None,
+                                         "smuggled": "x" * 5000},
+                             "other": {"whatever": 1}}}
+    assert call(srv, "POST", "/api/heartbeat", payload, auth)[0] == 200
+    stored = store.recent_heartbeats("node-b")[0]["payload"]["reconcile"]["upgrade"]
+    assert stored == {"from": "2.1.90", "to": "2.1.92", "ok": True, "ts": 1.0, "error": None}
+    assert "smuggled" not in json.dumps(store.recent_heartbeats("node-b")[0]["payload"])
