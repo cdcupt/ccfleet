@@ -151,7 +151,9 @@ def oauth_account_facts(config_dir: Path) -> dict[str, Any]:
     last fetched (which only succeeds while the login works, so it doubles as a
     liveness signal), and the rate-limit tier. No email, no name, no identifiers.
     """
-    path = config_dir.with_suffix(".json")          # ~/.claude -> ~/.claude.json
+    # Append, never with_suffix: that REPLACES an existing suffix, so a config dir
+    # named "claude.work" would silently read "claude.json" instead.
+    path = config_dir.parent / (config_dir.name + ".json")   # ~/.claude -> ~/.claude.json
     facts: dict[str, Any] = {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))

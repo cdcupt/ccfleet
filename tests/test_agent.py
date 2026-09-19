@@ -200,7 +200,8 @@ def _write_account(tmp_path, **fields):
                "profileFetchedAt": 1_700_000_000_000,
                "organizationRateLimitTier": "default_claude_max_20x"}
     account.update(fields)
-    tmp_path.with_suffix(".json").write_text(json.dumps({"oauthAccount": account}))
+    sibling = tmp_path.parent / (tmp_path.name + ".json")
+    sibling.write_text(json.dumps({"oauthAccount": account}))
 
 
 def test_account_facts_carry_no_identifiers(tmp_path):
@@ -216,13 +217,23 @@ def test_account_facts_carry_no_identifiers(tmp_path):
         assert leak not in blob, f"{leak} must never reach the payload"
 
 
+def test_account_facts_find_the_file_beside_a_dotted_config_dir(tmp_path):
+    """with_suffix would replace ".work" and read the wrong file entirely."""
+    cfg = tmp_path / "claude.work"
+    cfg.mkdir()
+    _write_account(cfg)
+    assert agent.oauth_account_facts(cfg)["profile_fetched_at"] == 1_700_000_000_000
+    # And it must not be reading a same-stem neighbour.
+    assert not (tmp_path / "claude.json").exists()
+
+
 def test_account_facts_tolerate_a_missing_or_broken_file(tmp_path):
     cfg = tmp_path / "claude"
     cfg.mkdir()
     assert agent.oauth_account_facts(cfg) == {}
-    cfg.with_suffix(".json").write_text("{not json")
+    (cfg.parent / (cfg.name + ".json")).write_text("{not json")
     assert agent.oauth_account_facts(cfg) == {}
-    cfg.with_suffix(".json").write_text(json.dumps({"oauthAccount": "not a dict"}))
+    (cfg.parent / (cfg.name + ".json")).write_text(json.dumps({"oauthAccount": "not a dict"}))
     assert agent.oauth_account_facts(cfg) == {}
 
 
