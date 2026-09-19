@@ -81,9 +81,11 @@ The one supported exception is the optional pass-through gateway in `gateway/`,
 and it is a different situation: it exists for an owner who must keep files on
 their laptop and cannot work on a hosted node at all. There Claude Code runs on
 the laptop, `ANTHROPIC_BASE_URL` points at the gateway, and the gateway does sit
-in the model-request path. It forwards byte for byte including the owner's own
-bearer, stores nothing and rewrites nothing, which is what keeps it a gateway
-rather than a relay, but it is still an operator-owned hop and worth knowing
+in the model-request path. It passes the body and Anthropic's required headers
+through unchanged, including the owner's own bearer, and stores nothing. Like any
+reverse proxy it sets `Host` and adds `X-Forwarded-*`; what keeps it a gateway
+rather than a relay is that it never substitutes a credential and never alters
+who the client says it is. It is still an operator-owned hop and worth knowing
 about before you reach for it.
 
 ### Node
@@ -244,6 +246,73 @@ Restoring a node never restores a credentials file: the owner logs in again.
 - The console has a single admin token and no per-user accounts, so it is the
   operator's view only. Owners get a node, not the dashboard.
 
+## Working on your own machine
+
+The hosted node is not the only shape. Someone who cannot work on a remote
+filesystem can run Claude Code locally and still be part of the fleet, and both
+halves of that now work.
+
+### The login, and keeping it alive
+
+A laptop has no credentials file to watch: on macOS Claude Code keeps the
+credential in the Keychain, and this agent will not read a secret out of it. It
+does not need to. `~/.claude.json` carries a non-secret account block on every
+platform, and `profileFetchedAt` inside it only advances when a profile fetch
+succeeded against the live login, so it reports liveness rather than merely a
+time. The agent reads presence, that timestamp and the rate-limit tier, and
+nothing else; the email address, full name, account uuid and organisation name in
+the same file are never collected.
+
+`token_stale` falls back to that timestamp when there is no file to stat, so a
+laptop whose login has gone cold raises the same alert a node does. Version
+pinning and `version_mismatch` work unchanged, which is what makes upgrades
+happen on your schedule rather than Anthropic's. `laptop/com.ccfleet.agent.plist`
+runs the agent every five minutes under launchd, since a Mac has no systemd, and
+it deliberately carries no configuration: the agent reads its own env file.
+
+### The traffic, and a stable address
+
+`ANTHROPIC_BASE_URL` alone points Claude Code at a gateway without replacing the
+credential, which is the arrangement Anthropic documents. `gateway/` implements
+it: a private header to authenticate, that header stripped before forwarding,
+the body and Anthropic's required headers passed through unchanged, streaming
+preserved, nothing stored. It is a proxy, so it does set `Host` and adds the
+usual `X-Forwarded-*`; what it never does is substitute a credential or rewrite
+who the client is. The owner gets a consistent egress address without anyone
+holding their login.
+
+### What this cannot do, and why
+
+It cannot let two people work under one Pro or Max subscription. For a local
+Claude Code to speak as somebody else's personal account there are two
+mechanisms and no third: give them that account's credentials, which is sharing,
+or have a server hold the token and swap it into their requests, which is
+intermediation. A product built around "use the personal account we provide,
+locally" needs the second, and that is what this design will not do.
+
+That is a narrower statement than it first sounds, and the difference matters if
+you are trying to hand access to a team.
+
+**Seats are the supported way to provide access centrally.** On Team or
+Enterprise, an organisation holds the plan and provisions a seat per person, and
+each of them signs in as themselves. Nobody shares a credential and nothing
+intermediates one, so it sits comfortably inside this design: the seat holder
+runs Claude Code locally or on their own node, and the fleet watches it the same
+way. If what you want is "we provide the account", this is the shape that does
+it, rather than a relay.
+
+**Bedrock and Vertex are a different credential model again**, authenticating
+with cloud IAM rather than a subscription. They are out of scope here because
+this project is about subscription logins, not because anything is wrong with
+them.
+
+So the local path works whenever the credential belongs to the person using it,
+whether that is their own subscription or a seat you issued them. You can still
+procure, pay for, administer and monitor it. What you give up against a pooled
+endpoint is real: no failover when someone hits a limit, no single base URL to
+point every tool at, and each person needing their own seat or subscription
+rather than a share of yours.
+
 ## How this differs from a hosted-account relay
 
 Products exist that host a Claude account per seat on an isolated machine with
@@ -279,7 +348,7 @@ several people each using their own subscription.
 | --- | --- | --- |
 | What answers a request | whichever account the pool picks | the one node you are working on |
 | Who holds the OAuth token | the relay | Claude Code on the node, as always |
-| Request headers and client identity | rewritten to match the captured account | untouched; the real client is the real client |
+| Request headers and client identity | rewritten to match the captured account | not rewritten; the real client stays the real client |
 | Adding a second person | another seat behind the same endpoint | another machine with their own login |
 | What the management plane can see | the traffic | facts about nodes, never a request |
 | Failover between accounts | a feature | absent on purpose |

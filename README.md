@@ -25,7 +25,7 @@ they control, with someone keeping an eye on the whole fleet. It gives you:
   `CLAUDE_CONFIG_DIR`, switched explicitly and never pooled.
 
 What it deliberately does **not** do: proxy model traffic, store anyone's
-credentials, rewrite headers or request bodies, pool or share accounts, or
+credentials, substitute a credential, alter the client's identity, pool or share accounts, or
 fail over one session across accounts. Every request goes from the unmodified
 Claude Code binary, signed in by its owner through Anthropic's own flow,
 straight to Anthropic. The one optional component that sits on the request

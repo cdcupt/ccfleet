@@ -60,7 +60,7 @@ From [Other LLM gateways](https://code.claude.com/docs/en/llm-gateway):
 > While a gateway credential variable or `apiKeyHelper` is active, a
 > developer's claude.ai subscription isn't used.
 
-Hence `gateway/Caddyfile.example` forwards verbatim and authenticates with a
+Hence `gateway/Caddyfile.example` preserves the body and those headers, and authenticates with a
 private header rather than `ANTHROPIC_AUTH_TOKEN`. The
 [gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol)
 adds: forward `anthropic-version` and `anthropic-beta` unchanged, stream, keep

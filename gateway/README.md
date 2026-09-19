@@ -10,12 +10,19 @@ verbatim, stream responses, and pass SSE pings through.
 What the gateway does:
 
 1. Requires a private `X-Gw-Key` header and answers 401 without it.
-2. Drops that header and forwards everything else byte for byte to
-   `api.anthropic.com`, including the owner's own OAuth bearer.
+2. Drops that header and forwards the request to `api.anthropic.com` with the
+   body and Anthropic's required headers (`anthropic-version`, `anthropic-beta`,
+   and the owner's own OAuth bearer) unchanged.
 3. Flushes every chunk immediately (`flush_interval -1`) so streaming works.
-4. Stores no credentials and rewrites nothing.
+4. Stores no credentials.
 
-What it deliberately does not do: hold tokens, rewrite headers or bodies,
+Being a reverse proxy, it does rewrite `Host` (deliberately, so TLS and routing
+reach Anthropic) and Caddy adds the usual `X-Forwarded-*` headers. "Rewrites
+nothing" would be too strong. The guarantee that matters is narrower and exact:
+it never substitutes a credential and never alters who the client says it is.
+
+What it deliberately does not do: hold tokens, substitute a credential, alter
+the client's identity, change the request body,
 pool accounts, or share one gateway between people. One gateway, one owner,
 one account.
 
@@ -40,6 +47,22 @@ Alternative to the header: mutual TLS. Caddy can require a client certificate
 and Claude Code presents one via `CLAUDE_CODE_CLIENT_CERT`,
 `CLAUDE_CODE_CLIENT_KEY` and `CLAUDE_CODE_CLIENT_KEY_PASSPHRASE`.
 
-Status: the Caddyfile follows Caddy's documented directives and Anthropic's
-forwarding rules but has not been exercised against a live session in this
-repository. Test with a 10-minute streamed session before relying on it.
+## Status: validated live, 2026-09-19
+
+A real Claude Code session completed through this handler. What was checked, and
+how, so you can judge how much it covers:
+
+| Check | Method | Result |
+| --- | --- | --- |
+| Refuses without the key | request with no `X-Gw-Key` | 401 from the gateway |
+| Reaches Anthropic with it | request with the key | 405 from Anthropic, so it was forwarded |
+| A real session works | `claude -p` with only `ANTHROPIC_BASE_URL` and the header set | completed and answered |
+| The gateway was really in the path | stopped the container, reran the same command | failed with `ECONNRESET` |
+| And recovered | restarted it, reran | succeeded again |
+| Nothing overrode the subscription | checked that neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN` was set | neither set, so the saved OAuth login is what authenticated |
+
+The test ran over plain HTTP on a loopback port through an SSH tunnel, so TLS
+termination and a public hostname are the parts still unexercised. Those are
+Caddy's ordinary job rather than anything specific to this config, but if you are
+about to depend on it, run a long streamed session over the real hostname first
+and watch that output arrives incrementally rather than in one block.

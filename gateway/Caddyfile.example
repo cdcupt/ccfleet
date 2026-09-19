@@ -2,16 +2,23 @@
 #
 # Claude Code on the laptop keeps its own /login. Only ANTHROPIC_BASE_URL points
 # here, so the saved claude.ai login stays the active credential and the gateway
-# forwards the owner's own request untouched. The gateway is authenticated with a
-# private header (never with ANTHROPIC_AUTH_TOKEN, which would replace the
-# subscription as the credential).
+# passes the owner's own request through: body and Anthropic's required headers
+# unchanged, including their OAuth bearer. Being a reverse proxy it does set Host
+# and Caddy adds the usual X-Forwarded-*, so "untouched" would be too strong; what
+# it never does is substitute a credential or alter who the client says it is. The
+# gateway is authenticated with a private header (never with ANTHROPIC_AUTH_TOKEN,
+# which would replace the subscription as the credential).
 #
 # Laptop side:
 #   export ANTHROPIC_BASE_URL=https://gw-a.example.com
 #   export ANTHROPIC_CUSTOM_HEADERS="X-Gw-Key: <the same secret as GW_KEY_A>"
 #
-# Reviewed against Anthropic's gateway compatibility guide; not yet validated
-# against a live Claude Code session. See gateway/README.md.
+# Validated against a live Claude Code session on 2026-09-19: a real session
+# completed through this handler, stopping the gateway made the same command fail
+# with ECONNRESET and restarting it made it succeed again (so the gateway really
+# was in the path), and neither ANTHROPIC_API_KEY nor ANTHROPIC_AUTH_TOKEN was
+# set, so nothing overrode the subscription and the saved OAuth login is what
+# authenticated. See gateway/README.md.
 
 gw-a.example.com {
     @keyed header X-Gw-Key {env.GW_KEY_A}

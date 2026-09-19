@@ -557,7 +557,7 @@ ccfleetd node remove node-b    <span class="c"># delete it all</span></code></pr
 
 <section id="gateway">
   <h2><span class="n">08</span>Optional pass-through gateway</h2>
-  <p>For an owner who cannot work on a remote filesystem, Anthropic's gateway docs describe a second permitted arrangement: Claude Code runs and logs in on the laptop, only <code>ANTHROPIC_BASE_URL</code> points at a gateway, and the saved claude.ai login stays the active credential. <code>gateway/Caddyfile.example</code> implements it: it requires a private header, drops that header, forwards everything else byte for byte with streaming on, and stores nothing.</p>
+  <p>For an owner who cannot work on a remote filesystem, Anthropic's gateway docs describe a second permitted arrangement: Claude Code runs and logs in on the laptop, only <code>ANTHROPIC_BASE_URL</code> points at a gateway, and the saved claude.ai login stays the active credential. <code>gateway/Caddyfile.example</code> implements it: it requires a private header, drops that header, passes the body and Anthropic's required headers through unchanged with streaming on, and stores nothing. Like any reverse proxy it does set <code>Host</code> and add <code>X-Forwarded-*</code>; what it never does is substitute a credential or alter who the client says it is.</p>
   <pre><code><span class="c"># laptop</span>
 export ANTHROPIC_BASE_URL=https://gw-a.example.com
 export ANTHROPIC_CUSTOM_HEADERS="X-Gw-Key: &lt;secret shared with the gateway&gt;"
@@ -565,7 +565,7 @@ claude
 /status      <span class="c"># base URL shows the gateway; Login row still shows your account</span></code></pre>
   <div class="note warn">
     <p class="t">Two cautions</p>
-    <p>Never authenticate the gateway with <code>ANTHROPIC_AUTH_TOKEN</code>: that variable replaces the subscription as the credential. And the Caddyfile has been reviewed against Anthropic's gateway compatibility guide but not yet exercised against a live session; run a ten-minute streamed session before relying on it. One gateway, one owner, one account.</p>
+    <p>Never authenticate the gateway with <code>ANTHROPIC_AUTH_TOKEN</code>: that variable replaces the subscription as the credential. The Caddyfile has now been exercised against a live session: a real session completed through it, and stopping the gateway made the same command fail while restarting it made it work again, so it was genuinely in the path. That test ran over a loopback port through an SSH tunnel, so TLS termination and a public hostname are still unexercised; run a long streamed session over the real hostname before depending on it. One gateway, one owner, one account.</p>
   </div>
 </section>
 
