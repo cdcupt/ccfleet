@@ -256,3 +256,9 @@ def test_dropping_the_bypass_flag_reaches_a_running_service():
     block = block[:block.index("RC_ENABLED=")]
     assert 'is-active claude-remote-control.service' in block and "restart" in block, \
         "an already-running node would keep the previous permission mode"
+    # And the restart must be checked, not assumed: a service that was working
+    # before the installer ran must not be left dead while it reports success.
+    assert 'rc_after=' in block and 'restart-failed' in block, \
+        "a restart that does not come back has to fail the install, not be swallowed"
+    assert block.index("restart claude-remote-control.service") < block.index("rc_after="), \
+        "the state has to be read after the restart, not before"

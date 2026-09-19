@@ -320,7 +320,16 @@ else
   # touch the owner's work session. It does end any live claude.ai session.
   if [ "$(user_systemctl is-active claude-remote-control.service 2>/dev/null)" = active ]; then
     user_systemctl restart claude-remote-control.service >/dev/null 2>&1 || true
-    note "remote control restarted so it reads the permission settings from this run"
+    sleep 2
+    # A restart that does not come back leaves a node that WAS working now dead,
+    # so read the state instead of trusting the exit status we just discarded.
+    rc_after="$(user_systemctl is-active claude-remote-control.service 2>/dev/null || echo inactive)"
+    if [ "$rc_after" = active ]; then
+      note "remote control restarted so it reads the permission settings from this run"
+    else
+      FAILED="$FAILED claude-remote-control.service(restart-failed:$rc_after)"
+      note "remote control was running and did NOT come back after the restart ($rc_after)"
+    fi
   fi
   # Verified, not assumed. The closing message tells the owner this unit returns
   # after a reboot, so an enable that did not take has to fail the install rather
