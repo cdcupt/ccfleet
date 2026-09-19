@@ -60,7 +60,7 @@ docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd user add alic
 
 `node add` prints the node's token once, plus the three lines to put in the
 node's `agent.env`. Put a TLS proxy in front of `127.0.0.1:8110`
-(`deploy/Caddyfile.example`) and open it with user `admin` and the admin token.
+(`deploy/Caddyfile.example`) and open it with user `admin` and the admin token. To give an owner a read-only view of their own nodes, add a named account with `ccfleetd user add NAME --owner OWNER`.
 If you would rather not expose a public endpoint at all, nodes can report over an
 SSH tunnel instead: see [docs/tunnel.md](docs/tunnel.md).
 

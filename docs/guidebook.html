@@ -312,7 +312,7 @@ ccfleetd serve</code></pre>
 fleet.example.com {
     reverse_proxy 127.0.0.1:8110
 }</code></pre>
-    <p>Open the address in a browser. User name <code>admin</code>, password the admin token. You will see an empty fleet with the hint to add a node.</p>
+    <p>Open the address in a browser. User name <code>admin</code>, password the admin token. You will see an empty fleet with the hint to add a node. That token is the operator's way in and always works; named logins for owners come later, in <a href="#accounts">section 06</a>.</p>
     <div class="note">
       <p class="t">No public endpoint?</p>
       <p>You can skip the hostname, the DNS record and the certificate entirely. A node can reach the server through an SSH tunnel instead: a user service forwards a loopback port on the node to this server's loopback port, and the agent posts to its own <code>127.0.0.1</code> with SSH providing the encryption. ccfleetd's HTTP endpoint stays private, though the server does still need a reachable SSH port, which is the one surface this design depends on. See <code>docs/tunnel.md</code> in the repo.</p>
@@ -517,7 +517,7 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
       <tr><td>Open alerts</td><td>Rule names currently firing</td><td>-</td></tr>
     </tbody>
   </table></div>
-  <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages.</p>
+  <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages. They are scoped the same way the page is, so an owner account gets only its own nodes.</p>
 
   <h3>What the alerts mean and who acts</h3>
   <div class="table-wrap"><table>
@@ -668,7 +668,7 @@ claude
       <tr><td><code>credentials_missing</code> right after setup</td><td>Login not done yet, or done as a different user</td><td>Owner runs <code>claude</code> and <code>/login</code> as their own user</td></tr>
       <tr><td><code>/status</code> shows a base URL on a node</td><td>Leftover <code>ANTHROPIC_*</code> variable</td><td><code>env | grep ANTHROPIC</code>, remove it from the shell profile</td></tr>
       <tr><td>Remote Control exits with an eligibility error</td><td>No valid login, or Team/Enterprise toggle off</td><td>Re-login; on Team/Enterprise an admin enables Remote Control</td></tr>
-      <tr><td>Dashboard asks for a password repeatedly</td><td>Token typed with spaces or changed</td><td>Password is the exact admin token; user name is ignored</td></tr>
+      <tr><td>Dashboard asks for a password repeatedly</td><td>Token typed with spaces or changed</td><td>For the admin token the password must be exact and the user name is ignored. For a named account both matter</td></tr>
       <tr><td>Egress IP shows "-"</td><td>Echo services blocked from the node</td><td>Set <code>CCFLEET_EGRESS_TARGETS</code> to reachable ones</td></tr>
       <tr><td><code>version_mismatch</code> after an intended upgrade</td><td>Pin not updated</td><td><code>ccfleetd node pin &lt;id&gt; &lt;version&gt;</code></td></tr>
     </tbody>

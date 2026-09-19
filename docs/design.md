@@ -55,7 +55,7 @@ flowchart LR
   CC == model traffic, own OAuth, direct ==> API
   AG -- heartbeat: HTTPS to the server --> FS
   AG -. or to its own loopback,<br/>through an SSH tunnel .-> FS
-  U -- console: HTTPS, admin token --> FS
+  U -- console: HTTPS, token or account --> FS
   U -. or the operator's own ssh -L,<br/>when the server is loopback-only .-> FS
 ```
 
@@ -67,8 +67,9 @@ providing the encryption. The installer ships that unit but does not enable it;
 `docs/tunnel.md` covers the setup and what it costs, namely that the server then
 needs a reachable SSH port.
 
-The console follows the same choice. With a public server it is an HTTPS entry
-behind the admin token. With a loopback-only server nothing outside can reach
+The console follows the same choice. With a public server it is an HTTPS entry,
+authenticated by the operator's admin token or by a named account (see
+[Console accounts](#console-accounts)). With a loopback-only server nothing outside can reach
 ccfleetd at all, so the operator forwards the port themselves with `ssh -L` and
 browses `127.0.0.1`.
 
