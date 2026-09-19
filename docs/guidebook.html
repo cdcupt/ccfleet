@@ -141,7 +141,7 @@ html{scroll-behavior:smooth}
     <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
     <li><a href="#node"><span class="n">04</span>A node per owner</a></li>
     <li><a href="#laptop"><span class="n">05</span>Laptop profiles</a></li>
-    <li><a href="#daily"><span class="n">06</span>Daily use</a></li>
+    <li><a href="#accounts"><span class="n">06</span>Daily use &amp; accounts</a></li>
     <li><a href="#ops"><span class="n">07</span>Operations</a></li>
     <li><a href="#gateway"><span class="n">08</span>Optional gateway</a></li>
     <li><a href="#reference"><span class="n">09</span>Reference</a></li>
@@ -323,6 +323,10 @@ fleet.example.com {
     <h3>Register each owner's node</h3>
     <p>Do this from the console once it is up: add the node, and the page that follows gives you an install command with the server URL, node id and token already in it. <strong>Append the owner's <code>--ssh-key</code> before you run it</strong>, or the installer skips SSH, firewall and fail2ban hardening rather than risk locking everyone out. <a href="#node">Section 04</a> has the detail.</p>
     <p>The token is shown <strong>once</strong>. Send it to the owner over a private channel, or run the install yourself. Lost it? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</p>
+    <p>If that owner should be able to check their own node's health, give them a console login as well. Without one they have a node and no way to see whether it is alive:</p>
+    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
+  ccfleetd user add alice --owner alice</code></pre>
+    <p>The password is generated and printed <strong>once</strong>. See <a href="#accounts">section 07</a> for what that login can and cannot do.</p>
   </div>
 
   <div class="step">
@@ -481,6 +485,23 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
 
 <section id="daily">
   <h2><span class="n">06</span>Daily use</h2>
+  <h3 id="accounts">Who can sign in</h3>
+  <p>The console takes two kinds of credential.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Credential</th><th>Sees</th><th>Can manage nodes</th></tr></thead>
+    <tbody>
+      <tr><td>The admin token<br><span class="small">user name <code>admin</code>, or any name at all</span></td><td>the whole fleet</td><td>yes</td></tr>
+      <tr><td><code>ccfleetd user add NAME --role admin</code></td><td>the whole fleet</td><td>yes</td></tr>
+      <tr><td><code>ccfleetd user add NAME --owner OWNER</code></td><td>only that owner's nodes</td><td>no</td></tr>
+    </tbody>
+  </table></div>
+  <p>An owner login is deliberately read-only. The management forms are not rendered for it, and that is only the cosmetic half: every write route checks the role, so a hand-built request is answered <strong>403 rather than 401</strong>. Their credentials were fine; the action was not theirs.</p>
+  <p>Manage them with <code>ccfleetd user list</code>, <code>ccfleetd user passwd NAME</code> and <code>ccfleetd user remove NAME</code>. Passwords are stored as salted PBKDF2 hashes and cannot be recovered, only reset.</p>
+  <div class="note">
+    <p class="t">What this is not, yet</p>
+    <p>There are no sessions, so the browser holds the credentials for the realm until it is closed, and there is no self-service password change: resetting one is the operator's job.</p>
+  </div>
+
   <h3>Reading the dashboard</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Column</th><th>Meaning</th><th>Good looks like</th></tr></thead>

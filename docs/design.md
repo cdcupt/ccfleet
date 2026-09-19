@@ -133,6 +133,22 @@ work. `ccfleet-shell.service` also carries `KillMode=process` so that stopping
 it leaves the session it pre-warmed alone. Attach to Remote Control with
 `tmux -L ccfleet-rc attach -t remote-control`.
 
+#### Landing in the work session
+
+`node/attach.sh`, appended to the owner's `~/.bashrc`, attaches an interactive
+login to `cc` so `ssh` alone puts them where their work is. The guards matter:
+it fires only when `TMUX` is empty, `PS1` is set, `$-` contains `i`, and stdout
+is a terminal. That last one is what protects scp, rsync and git over ssh, which
+pipe their output and would be corrupted by a multiplexer writing into it.
+
+Two things it learned the hard way. It does not `exec`, because that turned any
+tmux failure into a disconnect rather than a degraded login; `tmux ... && exit`
+keeps the same outcome on success while leaving a shell on failure. And it
+replaces a `TERM` the node has no terminfo for, since a stock Debian knows none
+of ghostty, kitty, wezterm or alacritty, and an unusable `TERM` is exactly what
+made tmux refuse. Unset, `dumb` and option-shaped values are replaced too:
+`TERM` arrives from the ssh client, so it is not trusted input.
+
 #### Permission posture
 
 Prompts are on by default. `--bypass-permissions` turns them off for that node,
