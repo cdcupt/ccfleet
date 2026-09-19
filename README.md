@@ -53,6 +53,9 @@ git clone https://github.com/cdcupt/ccfleet.git && cd ccfleet
 cp deploy/ccfleetd.env.example deploy/ccfleetd.env   # set CCFLEET_ADMIN_TOKEN (openssl rand -hex 32)
 docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node add node-a --owner alice --region us-west
+
+# optional: give alice her own console login, so she can see her node's health
+docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd user add alice --owner alice
 ```
 
 `node add` prints the node's token once, plus the three lines to put in the

@@ -243,8 +243,12 @@ Restoring a node never restores a credentials file: the owner logs in again.
   `--bypass-permissions` is opt-in and says so out loud when used: with prompts
   off nothing stands between a command and root: tool calls run as the owner, and
   the owner can take root without being asked again.
-- The console has a single admin token and no per-user accounts, so it is the
-  operator's view only. Owners get a node, not the dashboard.
+- The console takes the operator's admin token, and optionally named accounts.
+  An `owner` account sees only the nodes assigned to that owner and is given no
+  management controls; an `admin` account is equivalent to the token. Passwords
+  are stored as PBKDF2-SHA256 hashes and cannot be recovered, only reset.
+  The token is checked before any account, so a login cannot shadow the operator
+  by choosing the name `admin`.
 
 ## Working on your own machine
 
@@ -312,6 +316,35 @@ procure, pay for, administer and monitor it. What you give up against a pooled
 endpoint is real: no failover when someone hits a limit, no single base URL to
 point every tool at, and each person needing their own seat or subscription
 rather than a share of yours.
+
+## Console accounts
+
+The console has two kinds of caller.
+
+The **admin token** is the operator's, works over Basic with any user name or as
+a Bearer token, and is checked first so nothing can displace it.
+
+**Named accounts** are created with `ccfleetd user add`. An `owner` account is
+scoped to one node owner: the dashboard, `/api/nodes` and `/api/alerts` all show
+only that owner's nodes, and the management forms are absent. `admin` accounts
+behave like the token.
+
+The absent forms are not the control. An owner is handed no CSRF token, and every
+write route checks the role, so a hand-built POST is answered **403 rather than
+401**: the credentials were fine, the action was not theirs. That distinction is
+deliberate, because 401 would invite the owner to go looking for better
+credentials.
+
+Passwords use PBKDF2-HMAC-SHA256 at OWASP's iteration floor, salted per user, in
+a self-describing format so the cost can be raised later without invalidating
+existing hashes. Not argon2 or bcrypt, because this project has no runtime
+dependencies and this was not the place to acquire one; the threat is narrow,
+since these accounts read a private dashboard and no node token derives from
+them. An unknown user name costs the same work as a known one, so response time
+does not reveal which accounts exist.
+
+What this does not yet do: there are no sessions, so the browser holds the
+credentials for the realm, and there is no self-service password change.
 
 ## How this differs from a hosted-account relay
 

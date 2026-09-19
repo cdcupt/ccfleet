@@ -25,6 +25,10 @@ NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
 # that excludes a leading underscore, which adduser refuses without
 # --allow-bad-names.
 OWNER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+# Console login names. Same shape as an owner name so the two cannot drift, and
+# so a person's login can simply be their owner name.
+USERNAME_RE = OWNER_RE
+ROLES = ("admin", "owner")
 TOKEN_BYTES = 32
 
 SCHEMA = """
@@ -55,6 +59,13 @@ CREATE TABLE IF NOT EXISTS alerts (
     closed_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_alerts_node_rule ON alerts(node_id, rule);
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'owner',
+    owner TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -261,6 +272,73 @@ class Store:
             self._conn.execute("UPDATE alerts SET closed_at = ? WHERE id = ? AND closed_at IS NULL",
                                (now, alert_id))
             self._conn.commit()
+
+    # -- console accounts -------------------------------------------------
+
+    def add_user(self, username: str, password_hash: str, role: str = "owner",
+                 owner: str = "", now: float = 0.0) -> None:
+        """A console login. Never takes a plaintext password; hashing is the caller's job."""
+        username = username.strip()
+        if not USERNAME_RE.match(username):
+            raise StoreError(
+                "username must start with a lowercase letter, then lowercase letters, "
+                "digits, underscore or hyphen, max 32 characters"
+            )
+        if role not in ROLES:
+            raise StoreError(f"role must be one of {', '.join(ROLES)}")
+        owner = owner.strip()
+        if role == "owner":
+            # An owner login that maps to no owner would see an empty dashboard
+            # forever, which looks like a broken account rather than an empty one.
+            if not owner:
+                owner = username
+            if not OWNER_RE.match(owner):
+                raise StoreError("owner must be a valid unix user name")
+        else:
+            owner = ""
+        if not password_hash:
+            raise StoreError("password_hash must not be empty")
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO users (username, password_hash, role, owner, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (username, password_hash, role, owner, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise StoreError(f"user {username!r} already exists") from exc
+            self._conn.commit()
+
+    def get_user(self, username: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT username, password_hash, role, owner, created_at FROM users "
+                "WHERE username = ?", (username,)).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> list[dict[str, Any]]:
+        """Without the hashes: nothing that renders or logs should ever hold one."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT username, role, owner, created_at FROM users "
+                "ORDER BY role DESC, username").fetchall()
+        return [dict(r) for r in rows]
+
+    def set_password(self, username: str, password_hash: str) -> bool:
+        if not password_hash:
+            raise StoreError("password_hash must not be empty")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET password_hash = ? WHERE username = ?",
+                (password_hash, username))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_user(self, username: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM users WHERE username = ?", (username,))
+            self._conn.commit()
+        return cur.rowcount > 0
 
     def recent_alerts(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:

@@ -284,9 +284,14 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
 
 
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
-                     now: float, cfg: Config, csrf: str = "") -> str:
+                     now: float, cfg: Config, csrf: str = "", who: Any = None) -> str:
+    # who is None for callers that predate per-user accounts, which are all
+    # operator-side, so the default is the full-privilege view.
+    is_admin = who is None or getattr(who, "is_admin", True)
+    empty = ("No nodes yet. Use the form below." if is_admin else
+             "No nodes are assigned to you yet. Your operator adds them.")
     body_rows = "".join(_row_html(r, now) for r in rows) or (
-        '<tr><td colspan="10" class="muted">No nodes yet. Use the form below.</td></tr>')
+        f'<tr><td colspan="10" class="muted">{escape(empty)}</td></tr>')
     alert_items = "".join(
         f"<li>{_pill(a['level'])} <strong>{escape(a['node_id'])}</strong> "
         f"{escape(a['rule'])}: {escape(a['message'])} "
@@ -303,12 +308,17 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f"<style>{CSS}</style></head><body>"
         "<h1>ccfleet</h1>"
         f"<p class=\"sub\">one owner, one account, one node · {summary or 'no nodes'} · "
-        f"heartbeat max age {cfg.heartbeat_max_age_s // 60} min · refreshes every minute</p>"
+        f"heartbeat max age {cfg.heartbeat_max_age_s // 60} min · refreshes every minute"
+        + (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
+           f"{'' if is_admin else ' · showing only your nodes'}" if who is not None else "")
+        + "</p>"
         "<div class=\"wrap\"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>"
         "<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Login</th>"
         "<th>Remote Control</th><th>Open alerts</th></tr></thead>"
         f"<tbody>{body_rows}</tbody></table></div>"
         f"<h2>Open alerts</h2><ul class=\"alerts\">{alert_items}</ul>"
-        + (_manage_html(rows, csrf) + _add_form(csrf) if csrf else "")
+        # Management is the operator's. An owner sees their nodes and nothing to
+        # press, which is why they get no CSRF token either: there is no form.
+        + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + "</body></html>"
     )
