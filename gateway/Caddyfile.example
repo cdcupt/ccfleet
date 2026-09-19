@@ -10,8 +10,11 @@
 #   export ANTHROPIC_BASE_URL=https://gw-a.example.com
 #   export ANTHROPIC_CUSTOM_HEADERS="X-Gw-Key: <the same secret as GW_KEY_A>"
 #
-# Reviewed against Anthropic's gateway compatibility guide; not yet validated
-# against a live Claude Code session. See gateway/README.md.
+# Validated against a live Claude Code session on 2026-09-19: a real session
+# completed through this handler, stopping the gateway made the same command fail
+# with ECONNRESET and restarting it made it succeed again (so the gateway really
+# was in the path), and no API key or auth token was set anywhere, so the
+# subscription was what authenticated. See gateway/README.md.
 
 gw-a.example.com {
     @keyed header X-Gw-Key {env.GW_KEY_A}

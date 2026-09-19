@@ -244,6 +244,53 @@ Restoring a node never restores a credentials file: the owner logs in again.
 - The console has a single admin token and no per-user accounts, so it is the
   operator's view only. Owners get a node, not the dashboard.
 
+## Working on your own machine
+
+The hosted node is not the only shape. Someone who cannot work on a remote
+filesystem can run Claude Code locally and still be part of the fleet, and both
+halves of that now work.
+
+### The login, and keeping it alive
+
+A laptop has no credentials file to watch: on macOS Claude Code keeps the
+credential in the Keychain, and this agent will not read a secret out of it. It
+does not need to. `~/.claude.json` carries a non-secret account block on every
+platform, and `profileFetchedAt` inside it only advances when a profile fetch
+succeeded against the live login, so it reports liveness rather than merely a
+time. The agent reads presence, that timestamp and the rate-limit tier, and
+nothing else; the email address, full name, account uuid and organisation name in
+the same file are never collected.
+
+`token_stale` falls back to that timestamp when there is no file to stat, so a
+laptop whose login has gone cold raises the same alert a node does. Version
+pinning and `version_mismatch` work unchanged, which is what makes upgrades
+happen on your schedule rather than Anthropic's. `laptop/com.ccfleet.agent.plist`
+runs the agent every five minutes under launchd, since a Mac has no systemd, and
+it deliberately carries no configuration: the agent reads its own env file.
+
+### The traffic, and a stable address
+
+`ANTHROPIC_BASE_URL` alone points Claude Code at a gateway without replacing the
+credential, which is the arrangement Anthropic documents. `gateway/` implements
+it: a private header to authenticate, that header stripped before forwarding,
+everything else byte for byte, streaming preserved, nothing stored. The owner
+gets a consistent egress address without anyone holding their login.
+
+### What this cannot do, and why
+
+It cannot hand someone an account they do not own. For a local Claude Code to
+speak as an account that is not the user's, there are exactly two mechanisms:
+give them the account's credentials, which is sharing, or have a server hold the
+token and swap it into their requests, which is intermediation. There is no
+third. That is the whole reason a product built around "use the account we
+provide, locally" needs a relay, and it is the one thing this design will not do.
+
+So the local path works when the account belongs to the person using it. You can
+still procure it, pay for it, administer it and watch it. What you give up
+against a pooled product is real and worth stating: no failover when someone hits
+a limit, no single endpoint to point every tool at, and a second person needs a
+second subscription rather than a second seat.
+
 ## How this differs from a hosted-account relay
 
 Products exist that host a Claude account per seat on an isolated machine with
