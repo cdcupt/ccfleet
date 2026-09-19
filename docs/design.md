@@ -137,9 +137,11 @@ it leaves the session it pre-warmed alone. Attach to Remote Control with
 
 `node/attach.sh`, appended to the owner's `~/.bashrc`, attaches an interactive
 login to `cc` so `ssh` alone puts them where their work is. The guards matter:
-it fires only when `TMUX` is empty, `PS1` is set, `$-` contains `i`, and stdout
-is a terminal. That last one is what protects scp, rsync and git over ssh, which
-pipe their output and would be corrupted by a multiplexer writing into it.
+it fires only when `TMUX` is empty, `PS1` is set, `$-` contains `i`, stdout is a
+terminal, and `CCFLEET_NO_ATTACH` is unset. The terminal check is what protects
+scp, rsync and git over ssh, which pipe their output and would be corrupted by a
+multiplexer writing into it; `CCFLEET_NO_ATTACH` is the escape hatch for anyone
+who wants a plain shell.
 
 Two things it learned the hard way. It does not `exec`, because that turned any
 tmux failure into a disconnect rather than a degraded login; `tmux ... && exit`
@@ -148,6 +150,14 @@ replaces a `TERM` the node has no terminfo for, since a stock Debian knows none
 of ghostty, kitty, wezterm or alacritty, and an unusable `TERM` is exactly what
 made tmux refuse. Unset, `dumb` and option-shaped values are replaced too:
 `TERM` arrives from the ssh client, so it is not trusted input.
+
+Where the terminal cannot be checked in advance, because `infocmp` is absent,
+tmux is simply tried and then retried once with `xterm-256color` rather than
+guessing why it failed. If that second attempt fails too, the terminal was never
+the problem, so the owner's original `TERM` is handed back rather than leaving a
+speculative downgrade in their shell. A terminal the node genuinely cannot use is
+replaced permanently, because giving that back would break the fallback shell as
+well.
 
 #### Permission posture
 
