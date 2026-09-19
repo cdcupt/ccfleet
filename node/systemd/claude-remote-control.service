@@ -35,7 +35,9 @@ Environment=DISABLE_AUTOUPDATER=1
 # too. Measured on a live node 2026-09-19: the server hosting the `cc` session
 # was sitting in this unit's cgroup, and restarting this unit killed it.
 #
-# With a private socket this unit can only ever kill its own server.
+# With a private socket this unit can only ever kill its own server. kill-server
+# does end every session on the ccfleet-rc socket, so do not park unrelated work
+# there; that socket belongs to this unit.
 #
 # CCFLEET_RC_ARGS comes from the optional env file below and is normally empty.
 # install.sh --bypass-permissions writes "--permission-mode bypassPermissions"

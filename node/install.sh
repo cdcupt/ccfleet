@@ -312,6 +312,16 @@ else
   # reported to systemd. The restart would not fire, and the promise would be a lie.
   # The owner starts it once, after signing in; the closing message says so.
   user_systemctl enable claude-remote-control.service >/dev/null 2>&1 || true
+  # The env file rewritten in step 6 does not reach a process that is already
+  # running. Without this restart, re-running the installer WITHOUT
+  # --bypass-permissions would leave an already-started node still bypassing
+  # permission prompts, which is precisely the state the rewrite exists to undo.
+  # Restarting is safe now: this unit owns a private tmux server, so it cannot
+  # touch the owner's work session. It does end any live claude.ai session.
+  if [ "$(user_systemctl is-active claude-remote-control.service 2>/dev/null)" = active ]; then
+    user_systemctl restart claude-remote-control.service >/dev/null 2>&1 || true
+    note "remote control restarted so it reads the permission settings from this run"
+  fi
   # Verified, not assumed. The closing message tells the owner this unit returns
   # after a reboot, so an enable that did not take has to fail the install rather
   # than be swallowed -- same rule as the --no-remote-control branch above.

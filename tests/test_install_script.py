@@ -247,3 +247,12 @@ def test_bypass_says_so_out_loud():
     text = INSTALL.read_text()
     assert "PERMISSION PROMPTS ARE OFF" in text, \
         "an operator should not have to infer this from the absence of a prompt"
+
+
+def test_dropping_the_bypass_flag_reaches_a_running_service():
+    """Rewriting the env file changes nothing until the process restarts."""
+    text = INSTALL.read_text()
+    block = text[text.index("user_systemctl enable claude-remote-control.service"):]
+    block = block[:block.index("RC_ENABLED=")]
+    assert 'is-active claude-remote-control.service' in block and "restart" in block, \
+        "an already-running node would keep the previous permission mode"
