@@ -253,6 +253,8 @@ def test_a_reinstall_does_not_delete_settings_the_owner_chose():
         "the pre-existing values are snapshotted once, not overwritten on every run"
     assert "prev['defaultMode']" in text, \
         "turning bypass off must restore the owner's own value, not just delete the key"
+    assert "if perms.get('defaultMode') == 'bypassPermissions':" in text, \
+        "restore only while the value is still ours; a newer choice by the owner wins"
     # And the marker must live outside Claude Code's own settings file.
     assert "~/.config/ccfleet/bypass-managed" in text, \
         "do not add non-standard keys to Claude Code's settings.json"

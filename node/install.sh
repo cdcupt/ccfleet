@@ -255,14 +255,18 @@ elif os.path.exists(marker):
         prev = json.load(open(marker))
     except (ValueError, OSError):
         prev = {}
-    if prev.get('defaultMode') is None:
-        perms.pop('defaultMode', None)
-    else:
-        perms['defaultMode'] = prev['defaultMode']
-    if prev.get('skipDangerousModePermissionPrompt') is None:
-        d.pop('skipDangerousModePermissionPrompt', None)
-    else:
-        d['skipDangerousModePermissionPrompt'] = prev['skipDangerousModePermissionPrompt']
+    # Undo only while the value is still the one we set. If the owner has changed
+    # it since, that newer choice is theirs and wins; we just forget ours.
+    if perms.get('defaultMode') == 'bypassPermissions':
+        if prev.get('defaultMode') is None:
+            perms.pop('defaultMode', None)
+        else:
+            perms['defaultMode'] = prev['defaultMode']
+    if d.get('skipDangerousModePermissionPrompt') is True:
+        if prev.get('skipDangerousModePermissionPrompt') is None:
+            d.pop('skipDangerousModePermissionPrompt', None)
+        else:
+            d['skipDangerousModePermissionPrompt'] = prev['skipDangerousModePermissionPrompt']
     os.remove(marker)
 if perms:
     d['permissions'] = perms
