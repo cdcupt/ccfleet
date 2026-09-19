@@ -273,23 +273,43 @@ it deliberately carries no configuration: the agent reads its own env file.
 `ANTHROPIC_BASE_URL` alone points Claude Code at a gateway without replacing the
 credential, which is the arrangement Anthropic documents. `gateway/` implements
 it: a private header to authenticate, that header stripped before forwarding,
-everything else byte for byte, streaming preserved, nothing stored. The owner
-gets a consistent egress address without anyone holding their login.
+the body and Anthropic's required headers passed through unchanged, streaming
+preserved, nothing stored. It is a proxy, so it does set `Host` and adds the
+usual `X-Forwarded-*`; what it never does is substitute a credential or rewrite
+who the client is. The owner gets a consistent egress address without anyone
+holding their login.
 
 ### What this cannot do, and why
 
-It cannot hand someone an account they do not own. For a local Claude Code to
-speak as an account that is not the user's, there are exactly two mechanisms:
-give them the account's credentials, which is sharing, or have a server hold the
-token and swap it into their requests, which is intermediation. There is no
-third. That is the whole reason a product built around "use the account we
-provide, locally" needs a relay, and it is the one thing this design will not do.
+It cannot let two people work under one Pro or Max subscription. For a local
+Claude Code to speak as somebody else's personal account there are two
+mechanisms and no third: give them that account's credentials, which is sharing,
+or have a server hold the token and swap it into their requests, which is
+intermediation. A product built around "use the personal account we provide,
+locally" needs the second, and that is what this design will not do.
 
-So the local path works when the account belongs to the person using it. You can
-still procure it, pay for it, administer it and watch it. What you give up
-against a pooled product is real and worth stating: no failover when someone hits
-a limit, no single endpoint to point every tool at, and a second person needs a
-second subscription rather than a second seat.
+That is a narrower statement than it first sounds, and the difference matters if
+you are trying to hand access to a team.
+
+**Seats are the supported way to provide access centrally.** On Team or
+Enterprise, an organisation holds the plan and provisions a seat per person, and
+each of them signs in as themselves. Nobody shares a credential and nothing
+intermediates one, so it sits comfortably inside this design: the seat holder
+runs Claude Code locally or on their own node, and the fleet watches it the same
+way. If what you want is "we provide the account", this is the shape that does
+it, rather than a relay.
+
+**Bedrock and Vertex are a different credential model again**, authenticating
+with cloud IAM rather than a subscription. They are out of scope here because
+this project is about subscription logins, not because anything is wrong with
+them.
+
+So the local path works whenever the credential belongs to the person using it,
+whether that is their own subscription or a seat you issued them. You can still
+procure, pay for, administer and monitor it. What you give up against a pooled
+endpoint is real: no failover when someone hits a limit, no single base URL to
+point every tool at, and each person needing their own seat or subscription
+rather than a share of yours.
 
 ## How this differs from a hosted-account relay
 

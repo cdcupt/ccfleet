@@ -565,7 +565,7 @@ claude
 /status      <span class="c"># base URL shows the gateway; Login row still shows your account</span></code></pre>
   <div class="note warn">
     <p class="t">Two cautions</p>
-    <p>Never authenticate the gateway with <code>ANTHROPIC_AUTH_TOKEN</code>: that variable replaces the subscription as the credential. And the Caddyfile has been reviewed against Anthropic's gateway compatibility guide but not yet exercised against a live session; run a ten-minute streamed session before relying on it. One gateway, one owner, one account.</p>
+    <p>Never authenticate the gateway with <code>ANTHROPIC_AUTH_TOKEN</code>: that variable replaces the subscription as the credential. The Caddyfile has now been exercised against a live session: a real session completed through it, and stopping the gateway made the same command fail while restarting it made it work again, so it was genuinely in the path. That test ran over a loopback port through an SSH tunnel, so TLS termination and a public hostname are still unexercised; run a long streamed session over the real hostname before depending on it. One gateway, one owner, one account.</p>
   </div>
 </section>
 

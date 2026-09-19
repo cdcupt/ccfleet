@@ -10,10 +10,16 @@ verbatim, stream responses, and pass SSE pings through.
 What the gateway does:
 
 1. Requires a private `X-Gw-Key` header and answers 401 without it.
-2. Drops that header and forwards everything else byte for byte to
-   `api.anthropic.com`, including the owner's own OAuth bearer.
+2. Drops that header and forwards the request to `api.anthropic.com` with the
+   body and Anthropic's required headers (`anthropic-version`, `anthropic-beta`,
+   and the owner's own OAuth bearer) unchanged.
 3. Flushes every chunk immediately (`flush_interval -1`) so streaming works.
-4. Stores no credentials and rewrites nothing.
+4. Stores no credentials.
+
+Being a reverse proxy, it does rewrite `Host` (deliberately, so TLS and routing
+reach Anthropic) and Caddy adds the usual `X-Forwarded-*` headers. "Rewrites
+nothing" would be too strong. The guarantee that matters is narrower and exact:
+it never substitutes a credential and never alters who the client says it is.
 
 What it deliberately does not do: hold tokens, rewrite headers or bodies,
 pool accounts, or share one gateway between people. One gateway, one owner,
