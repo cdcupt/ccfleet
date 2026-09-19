@@ -84,12 +84,22 @@ it leaves the session it pre-warmed alone. Attach to Remote Control with
 
 Prompts are on by default. `--bypass-permissions` turns them off for that node,
 in the terminal and in sessions driven from claude.ai, and is opt-in because the
-owner has passwordless sudo, so un-prompted tool calls are un-prompted root. It
-writes two halves, because they are separate mechanisms: `CCFLEET_RC_ARGS` in an
-env file the Remote Control unit reads, since remote clients cannot select
-bypass themselves, and `permissions.defaultMode` for sessions the owner starts
-by typing `claude`. A later run without the flag undoes both, but only what the
-installer itself set, and only while the value is still the one it wrote.
+owner has passwordless sudo. Tool calls run as the owner rather than as root, but
+with prompts off nothing stands between a command and root, because the owner can
+take it without being asked again.
+
+It writes two halves, because they are separate mechanisms: `CCFLEET_RC_ARGS` in
+an env file the Remote Control unit reads, since remote clients cannot select
+bypass for themselves, and `permissions.defaultMode` for sessions the owner
+starts by typing `claude`. A later run without the flag undoes both, and restarts a
+running Remote Control so the change actually lands.
+
+The two halves are undone differently, because one file is ccfleet's and the
+other is not. `remote-control.env` belongs to the installer and is rewritten
+whole on every run, so a hand edit to it does not survive.
+`~/.claude/settings.json` belongs to the owner, so only the keys a previous run
+set are removed, their prior values come back from a snapshot, and a value the
+owner has changed since is left alone.
 
 ### Agent
 
@@ -178,7 +188,8 @@ Restoring a node never restores a credentials file: the owner logs in again.
   unprivileged user (Docker or the provided systemd unit).
 - The owner has passwordless sudo on their own node, which is why
   `--bypass-permissions` is opt-in and says so out loud when used: with prompts
-  off, every tool call runs as root without asking.
+  off nothing stands between a command and root: tool calls run as the owner, and
+  the owner can take root without being asked again.
 - The console has a single admin token and no per-user accounts, so it is the
   operator's view only. Owners get a node, not the dashboard.
 
