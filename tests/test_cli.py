@@ -63,3 +63,52 @@ def test_rc_expected_toggle_and_listing(db, capsys):
 def test_rc_expected_rejects_bad_state(db):
     with pytest.raises(SystemExit):
         cli.main(["--db", db, "node", "rc-expected", "node-a", "maybe"])
+
+
+def test_console_account_lifecycle(db, capsys):
+    assert cli.main(["--db", db, "user", "add", "alice", "--owner", "alice"]) == 0
+    out = capsys.readouterr().out
+    password = re.search(r"\n  (\S{20})\n", out).group(1)
+    assert "shown once" in out and "cannot be recovered" in out
+
+    assert cli.main(["--db", db, "user", "list"]) == 0
+    listing = capsys.readouterr().out
+    assert "alice" in listing and "owner alice" in listing
+    assert password not in listing, "a password must never appear in a listing"
+    assert "pbkdf2" not in listing, "nor a hash"
+
+    assert cli.main(["--db", db, "user", "passwd", "alice"]) == 0
+    second = re.search(r"\n  (\S{20})\n", capsys.readouterr().out).group(1)
+    assert second != password, "a reset must actually change it"
+
+    assert cli.main(["--db", db, "user", "remove", "alice"]) == 0
+    assert "removed alice" in capsys.readouterr().out
+
+
+def test_the_password_is_verifiable_and_stored_only_as_a_hash(db, capsys):
+    from ccfleetd.passwords import verify_password
+    from ccfleetd.store import Store
+    cli.main(["--db", db, "user", "add", "bob", "--password", "chosen-by-hand"])
+    capsys.readouterr()
+    store = Store(db)
+    record = store.get_user("bob")
+    store.close()
+    assert verify_password("chosen-by-hand", record["password_hash"])
+    assert "chosen-by-hand" not in record["password_hash"]
+
+
+def test_an_admin_account_maps_to_no_single_owner(db, capsys):
+    assert cli.main(["--db", db, "user", "add", "ops", "--role", "admin"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "user", "list"]) == 0
+    assert "the whole fleet" in capsys.readouterr().out
+
+
+def test_operating_on_a_missing_account_fails_rather_than_pretending(db, capsys):
+    assert cli.main(["--db", db, "user", "passwd", "ghost"]) != 0
+    assert cli.main(["--db", db, "user", "remove", "ghost"]) != 0
+
+
+def test_an_empty_account_list_says_the_token_still_works(db, capsys):
+    assert cli.main(["--db", db, "user", "list"]) == 0
+    assert "admin token still works" in capsys.readouterr().out

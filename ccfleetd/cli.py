@@ -14,6 +14,7 @@ from .api import Context, serve
 from .config import Config, ConfigError
 from .monitor import Monitor
 from .notify import build_notifier
+from .passwords import generate_password, hash_password
 from .store import Store, StoreError
 
 EXIT_OK = 0
@@ -51,6 +52,23 @@ def _parser() -> argparse.ArgumentParser:
                          help="turn the remote_control_down alert on or off for a node")
     rc.add_argument("node_id")
     rc.add_argument("state", choices=("on", "off"))
+
+    user = sub.add_parser("user", help="manage console accounts").add_subparsers(
+        dest="user_command", required=True)
+    user_add = user.add_parser("add", help="create a console login and print its password once")
+    user_add.add_argument("username")
+    user_add.add_argument("--role", choices=("owner", "admin"), default="owner",
+                          help="owner sees only their own nodes and can change nothing; "
+                               "admin sees and manages the whole fleet")
+    user_add.add_argument("--owner", default="",
+                          help="which node owner this login maps to; defaults to the username")
+    user_add.add_argument("--password", default="",
+                          help="leave unset to have one generated and printed once")
+    user.add_parser("list", help="list console accounts (never their passwords)")
+    user_pw = user.add_parser("passwd", help="set a new password, printed once")
+    user_pw.add_argument("username")
+    user_pw.add_argument("--password", default="")
+    user.add_parser("remove", help="delete a console account").add_argument("username")
     return parser
 
 
@@ -62,6 +80,45 @@ def _print_token(node_id: str, token: str, cfg: Config) -> None:
     print(f"  CCFLEET_URL={url}")
     print(f"  CCFLEET_NODE_ID={node_id}")
     print(f"  CCFLEET_NODE_TOKEN={token}")
+
+
+def _print_password(username: str, password: str, cfg: Config) -> None:
+    where = cfg.public_url or "the console"
+    print(f"\nconsole account {username!r} ready. Password (shown once):\n")
+    print(f"  {password}\n")
+    print(f"Sign in at {where} with that user name and password.")
+    print("It is stored only as a PBKDF2 hash, so it cannot be recovered; use")
+    print(f"'ccfleetd user passwd {username}' to set a new one.\n")
+
+
+def _user_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
+    if args.user_command == "add":
+        password = args.password or generate_password()
+        store.add_user(args.username, hash_password(password), args.role,
+                       args.owner, time.time())
+        _print_password(args.username, password, cfg)
+    elif args.user_command == "list":
+        users = store.list_users()
+        if not users:
+            print("no console accounts; the admin token still works")
+            return EXIT_OK
+        print(f"{'username':<20} {'role':<6} {'sees':<20} created")
+        for u in users:
+            sees = "the whole fleet" if u["role"] == "admin" else f"owner {u['owner']}"
+            stamp = time.strftime("%Y-%m-%d", time.localtime(u["created_at"]))
+            print(f"{u['username']:<20} {u['role']:<6} {sees:<20} {stamp}")
+    elif args.user_command == "passwd":
+        password = args.password or generate_password()
+        if not store.set_password(args.username, hash_password(password)):
+            print(f"error: no such account {args.username!r}", file=sys.stderr)
+            return EXIT_USAGE
+        _print_password(args.username, password, cfg)
+    elif args.user_command == "remove":
+        if not store.remove_user(args.username):
+            print(f"error: no such account {args.username!r}", file=sys.stderr)
+            return EXIT_USAGE
+        print(f"removed {args.username}")
+    return EXIT_OK
 
 
 def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
@@ -113,6 +170,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             if args.command == "node":
                 return _node_command(args, store, cfg)
+            if args.command == "user":
+                return _user_command(args, store, cfg)
             monitor = Monitor(store, cfg, build_notifier(cfg))
             if args.command == "check":
                 for event in monitor.check_all():

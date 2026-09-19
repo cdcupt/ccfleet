@@ -12,6 +12,7 @@ import signal
 import threading
 import time
 import urllib.parse
+from dataclasses import dataclass
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
@@ -19,6 +20,7 @@ from typing import Any, Optional
 from .config import Config
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
+from .passwords import verify_password
 from .render import build_rows, render_add_result, render_dashboard
 from .store import Store, StoreError
 
@@ -42,6 +44,19 @@ class Context:
         self.monitor = monitor
 
 
+@dataclass(frozen=True)
+class Identity:
+    """Who is asking. ``owner`` is empty for an admin, who sees the whole fleet."""
+
+    role: str
+    owner: str
+    label: str
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+
 def _admin_ok(header: Optional[str], cfg: Config) -> bool:
     """Accept HTTP Basic (any user name, admin token as password) or a Bearer admin token."""
     if not header or not cfg.admin_token:
@@ -58,6 +73,40 @@ def _admin_ok(header: Optional[str], cfg: Config) -> bool:
         _user, _, password = decoded.partition(b":")
         return hmac.compare_digest(password, expected)
     return False
+
+
+def identify(header: Optional[str], cfg: Config, store: Store) -> Optional[Identity]:
+    """Resolve credentials to an Identity, or None.
+
+    The admin token keeps working exactly as before, with any user name, because
+    it is the operator's key and existing scripts and bookmarks depend on it. A
+    named account is only consulted when the password is not the admin token, so
+    a user cannot shadow the operator by choosing a clever name.
+    """
+    if _admin_ok(header, cfg):
+        return Identity("admin", "", "admin token")
+    if not header:
+        return None
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "basic":
+        return None
+    try:
+        decoded = base64.b64decode(value.strip(), validate=True)
+        username, sep, password = decoded.decode("utf-8", "replace").partition(":")
+    except (ValueError, TypeError):
+        return None
+    if not sep or not username:
+        return None
+    record = store.get_user(username)
+    if record is None:
+        # Spend the same work on an unknown user as on a known one, so the
+        # response time does not say which names exist.
+        verify_password(password, "pbkdf2_sha256$600000$00$00")
+        return None
+    if not verify_password(password, record["password_hash"]):
+        return None
+    role = record["role"] if record["role"] in ("admin", "owner") else "owner"
+    return Identity(role, "" if role == "admin" else record["owner"], username)
 
 
 def csrf_token(cfg: Config) -> str:
@@ -106,11 +155,24 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 headers.update(extra)
             self._send(status, json.dumps(payload).encode("utf-8"), headers)
 
-        def _require_admin(self) -> bool:
-            if _admin_ok(self.headers.get("Authorization"), ctx.cfg):
-                return True
+        def _identity(self) -> Optional[Identity]:
+            """Any valid account. Returns None and answers 401 when there is none."""
+            who = identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
+            if who is not None:
+                return who
             self._json(401, {"error": "unauthorized"},
                        {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
+            return None
+
+        def _require_admin(self) -> bool:
+            """For anything that changes the fleet. An owner gets 403, not 401:
+            their credentials were fine, the action is not theirs to take."""
+            who = self._identity()
+            if who is None:
+                return False
+            if who.is_admin:
+                return True
+            self._json(403, {"error": "this account cannot manage nodes"})
             return False
 
         def _read_body(self) -> Optional[bytes]:
@@ -131,15 +193,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif path == "/":
-                if self._require_admin():
-                    self._send(200, self._dashboard().encode("utf-8"), HTML_HEADERS)
+                who = self._identity()
+                if who is not None:
+                    self._send(200, self._dashboard(who).encode("utf-8"), HTML_HEADERS)
             elif path == "/api/nodes":
-                if self._require_admin():
-                    self._json(200, {"nodes": self._rows()})
+                who = self._identity()
+                if who is not None:
+                    self._json(200, {"nodes": self._rows(who)})
             elif path == "/api/alerts":
-                if self._require_admin():
-                    self._json(200, {"alerts": ctx.store.open_alerts(),
-                                     "recent": ctx.store.recent_alerts()})
+                who = self._identity()
+                if who is not None:
+                    self._json(200, {"alerts": self._scope_alerts(ctx.store.open_alerts(), who),
+                                     "recent": self._scope_alerts(ctx.store.recent_alerts(), who)})
             else:
                 self._json(404, {"error": "not found"})
 
@@ -250,13 +315,31 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- views ---------------------------------------------------------
 
-        def _rows(self) -> list[dict[str, Any]]:
-            return build_rows(ctx.store.list_nodes(), ctx.store.latest_heartbeats(),
+        def _visible_nodes(self, who: Identity) -> list[dict[str, Any]]:
+            nodes = ctx.store.list_nodes()
+            if who.is_admin:
+                return nodes
+            return [n for n in nodes if n.get("owner") == who.owner]
+
+        def _scope_alerts(self, alerts: list[dict[str, Any]],
+                          who: Identity) -> list[dict[str, Any]]:
+            if who.is_admin:
+                return alerts
+            mine = {n["id"] for n in self._visible_nodes(who)}
+            return [a for a in alerts if a.get("node_id") in mine]
+
+        def _rows(self, who: Identity) -> list[dict[str, Any]]:
+            return build_rows(self._visible_nodes(who), ctx.store.latest_heartbeats(),
                               ctx.store.open_alerts(), time.time())
 
-        def _dashboard(self) -> str:
-            return render_dashboard(self._rows(), ctx.store.open_alerts(), time.time(),
-                                    ctx.cfg, csrf_token(ctx.cfg))
+        def _dashboard(self, who: Identity) -> str:
+            # An owner is handed no CSRF token, because there is nothing for them
+            # to submit. That makes the absence of the forms structural rather
+            # than cosmetic: even a hand-built POST is refused by _require_admin.
+            csrf = csrf_token(ctx.cfg) if who.is_admin else ""
+            return render_dashboard(self._rows(who),
+                                    self._scope_alerts(ctx.store.open_alerts(), who),
+                                    time.time(), ctx.cfg, csrf, who)
 
     return FleetHandler
 
