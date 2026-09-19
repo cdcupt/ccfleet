@@ -141,7 +141,7 @@ html{scroll-behavior:smooth}
     <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
     <li><a href="#node"><span class="n">04</span>A node per owner</a></li>
     <li><a href="#laptop"><span class="n">05</span>Laptop profiles</a></li>
-    <li><a href="#daily"><span class="n">06</span>Daily use</a></li>
+    <li><a href="#accounts"><span class="n">06</span>Daily use &amp; accounts</a></li>
     <li><a href="#ops"><span class="n">07</span>Operations</a></li>
     <li><a href="#gateway"><span class="n">08</span>Optional gateway</a></li>
     <li><a href="#reference"><span class="n">09</span>Reference</a></li>
@@ -162,8 +162,9 @@ html{scroll-behavior:smooth}
       <p>Work exactly as you would locally. Files, tools and git all live on the node.</p>
     </div>
     <div>
-      <h3>To check the fleet</h3>
-      <p>Open your console, the address your operator gave you. It shows every node's status, Claude Code version, egress address, disk, login freshness and any alerts, and lets you manage nodes by clicking.</p>
+      <h3>To check your node</h3>
+      <p>Open your console, the address your operator gave you. It shows status, Claude Code version, egress address, disk, login freshness and any alerts.</p>
+      <p>What you see depends on the login you were given. An <strong>owner</strong> login shows your own nodes and nothing to press; managing them is the operator's job. The operator's own login, or the admin token, shows the whole fleet and can add, disable and remove nodes. <a href="#accounts">Section 06</a> has the detail.</p>
     </div>
   </div>
 
@@ -311,7 +312,7 @@ ccfleetd serve</code></pre>
 fleet.example.com {
     reverse_proxy 127.0.0.1:8110
 }</code></pre>
-    <p>Open the address in a browser. User name <code>admin</code>, password the admin token. You will see an empty fleet with the hint to add a node.</p>
+    <p>Open the address in a browser. User name <code>admin</code>, password the admin token. You will see an empty fleet with the hint to add a node. That token is the operator's way in and always works; named logins for owners come later, in <a href="#accounts">section 06</a>.</p>
     <div class="note">
       <p class="t">No public endpoint?</p>
       <p>You can skip the hostname, the DNS record and the certificate entirely. A node can reach the server through an SSH tunnel instead: a user service forwards a loopback port on the node to this server's loopback port, and the agent posts to its own <code>127.0.0.1</code> with SSH providing the encryption. ccfleetd's HTTP endpoint stays private, though the server does still need a reachable SSH port, which is the one surface this design depends on. See <code>docs/tunnel.md</code> in the repo.</p>
@@ -323,6 +324,10 @@ fleet.example.com {
     <h3>Register each owner's node</h3>
     <p>Do this from the console once it is up: add the node, and the page that follows gives you an install command with the server URL, node id and token already in it. <strong>Append the owner's <code>--ssh-key</code> before you run it</strong>, or the installer skips SSH, firewall and fail2ban hardening rather than risk locking everyone out. <a href="#node">Section 04</a> has the detail.</p>
     <p>The token is shown <strong>once</strong>. Send it to the owner over a private channel, or run the install yourself. Lost it? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</p>
+    <p>If that owner should be able to check their own node's health, give them a console login as well. Without one they have a node and no way to see whether it is alive:</p>
+    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
+  ccfleetd user add alice --owner alice</code></pre>
+    <p>The password is generated and printed <strong>once</strong>. See <a href="#accounts">section 06</a> for what that login can and cannot do.</p>
   </div>
 
   <div class="step">
@@ -481,6 +486,23 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
 
 <section id="daily">
   <h2><span class="n">06</span>Daily use</h2>
+  <h3 id="accounts">Who can sign in</h3>
+  <p>The console takes two kinds of credential.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Credential</th><th>Sees</th><th>Can manage nodes</th></tr></thead>
+    <tbody>
+      <tr><td>The admin token<br><span class="small">user name <code>admin</code>, or any name at all</span></td><td>the whole fleet</td><td>yes</td></tr>
+      <tr><td><code>ccfleetd user add NAME --role admin</code></td><td>the whole fleet</td><td>yes</td></tr>
+      <tr><td><code>ccfleetd user add NAME --owner OWNER</code></td><td>only that owner's nodes</td><td>no</td></tr>
+    </tbody>
+  </table></div>
+  <p>An owner login is deliberately read-only. The management forms are not rendered for it, and that is only the cosmetic half: every write route checks the role, so a hand-built request is answered <strong>403 rather than 401</strong>. Their credentials were fine; the action was not theirs.</p>
+  <p>Manage them with <code>ccfleetd user list</code>, <code>ccfleetd user passwd NAME</code> and <code>ccfleetd user remove NAME</code>. Passwords are stored as salted PBKDF2 hashes and cannot be recovered, only reset.</p>
+  <div class="note">
+    <p class="t">What this is not, yet</p>
+    <p>There are no sessions, so the browser holds the credentials for the realm until it is closed, and there is no self-service password change: resetting one is the operator's job.</p>
+  </div>
+
   <h3>Reading the dashboard</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Column</th><th>Meaning</th><th>Good looks like</th></tr></thead>
@@ -495,7 +517,7 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
       <tr><td>Open alerts</td><td>Rule names currently firing</td><td>-</td></tr>
     </tbody>
   </table></div>
-  <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages.</p>
+  <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages. They are scoped the same way the page is, so an owner account gets only its own nodes.</p>
 
   <h3>What the alerts mean and who acts</h3>
   <div class="table-wrap"><table>
@@ -646,7 +668,7 @@ claude
       <tr><td><code>credentials_missing</code> right after setup</td><td>Login not done yet, or done as a different user</td><td>Owner runs <code>claude</code> and <code>/login</code> as their own user</td></tr>
       <tr><td><code>/status</code> shows a base URL on a node</td><td>Leftover <code>ANTHROPIC_*</code> variable</td><td><code>env | grep ANTHROPIC</code>, remove it from the shell profile</td></tr>
       <tr><td>Remote Control exits with an eligibility error</td><td>No valid login, or Team/Enterprise toggle off</td><td>Re-login; on Team/Enterprise an admin enables Remote Control</td></tr>
-      <tr><td>Dashboard asks for a password repeatedly</td><td>Token typed with spaces or changed</td><td>Password is the exact admin token; user name is ignored</td></tr>
+      <tr><td>Dashboard asks for a password repeatedly</td><td>Token typed with spaces or changed</td><td>For the admin token the password must be exact and the user name is ignored. For a named account both matter</td></tr>
       <tr><td>Egress IP shows "-"</td><td>Echo services blocked from the node</td><td>Set <code>CCFLEET_EGRESS_TARGETS</code> to reachable ones</td></tr>
       <tr><td><code>version_mismatch</code> after an intended upgrade</td><td>Pin not updated</td><td><code>ccfleetd node pin &lt;id&gt; &lt;version&gt;</code></td></tr>
     </tbody>

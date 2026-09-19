@@ -55,7 +55,7 @@ flowchart LR
   CC == model traffic, own OAuth, direct ==> API
   AG -- heartbeat: HTTPS to the server --> FS
   AG -. or to its own loopback,<br/>through an SSH tunnel .-> FS
-  U -- console: HTTPS, admin token --> FS
+  U -- console: HTTPS, token or account --> FS
   U -. or the operator's own ssh -L,<br/>when the server is loopback-only .-> FS
 ```
 
@@ -67,8 +67,9 @@ providing the encryption. The installer ships that unit but does not enable it;
 `docs/tunnel.md` covers the setup and what it costs, namely that the server then
 needs a reachable SSH port.
 
-The console follows the same choice. With a public server it is an HTTPS entry
-behind the admin token. With a loopback-only server nothing outside can reach
+The console follows the same choice. With a public server it is an HTTPS entry,
+authenticated by the operator's admin token or by a named account (see
+[Console accounts](#console-accounts)). With a loopback-only server nothing outside can reach
 ccfleetd at all, so the operator forwards the port themselves with `ssh -L` and
 browses `127.0.0.1`.
 
@@ -132,6 +133,32 @@ stops. Sharing one server meant restarting Remote Control destroyed the owner's
 work. `ccfleet-shell.service` also carries `KillMode=process` so that stopping
 it leaves the session it pre-warmed alone. Attach to Remote Control with
 `tmux -L ccfleet-rc attach -t remote-control`.
+
+#### Landing in the work session
+
+`node/attach.sh`, appended to the owner's `~/.bashrc`, attaches an interactive
+login to `cc` so `ssh` alone puts them where their work is. The guards matter:
+it fires only when `TMUX` is empty, `PS1` is set, `$-` contains `i`, stdout is a
+terminal, and `CCFLEET_NO_ATTACH` is unset. The terminal check is what protects
+scp, rsync and git over ssh, which pipe their output and would be corrupted by a
+multiplexer writing into it; `CCFLEET_NO_ATTACH` is the escape hatch for anyone
+who wants a plain shell.
+
+Two things it learned the hard way. It does not `exec`, because that turned any
+tmux failure into a disconnect rather than a degraded login; `tmux ... && exit`
+keeps the same outcome on success while leaving a shell on failure. And it
+replaces a `TERM` the node has no terminfo for, since a stock Debian knows none
+of ghostty, kitty, wezterm or alacritty, and an unusable `TERM` is exactly what
+made tmux refuse. Unset, `dumb` and option-shaped values are replaced too:
+`TERM` arrives from the ssh client, so it is not trusted input.
+
+Where the terminal cannot be checked in advance, because `infocmp` is absent,
+tmux is simply tried and then retried once with `xterm-256color` rather than
+guessing why it failed. If that second attempt fails too, the terminal was never
+the problem, so the owner's original `TERM` is handed back rather than leaving a
+speculative downgrade in their shell. A terminal the node genuinely cannot use is
+replaced permanently, because giving that back would break the fallback shell as
+well.
 
 #### Permission posture
 
