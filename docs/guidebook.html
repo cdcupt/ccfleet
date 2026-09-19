@@ -557,7 +557,7 @@ ccfleetd node remove node-b    <span class="c"># delete it all</span></code></pr
 
 <section id="gateway">
   <h2><span class="n">08</span>Optional pass-through gateway</h2>
-  <p>For an owner who cannot work on a remote filesystem, Anthropic's gateway docs describe a second permitted arrangement: Claude Code runs and logs in on the laptop, only <code>ANTHROPIC_BASE_URL</code> points at a gateway, and the saved claude.ai login stays the active credential. <code>gateway/Caddyfile.example</code> implements it: it requires a private header, drops that header, forwards everything else byte for byte with streaming on, and stores nothing.</p>
+  <p>For an owner who cannot work on a remote filesystem, Anthropic's gateway docs describe a second permitted arrangement: Claude Code runs and logs in on the laptop, only <code>ANTHROPIC_BASE_URL</code> points at a gateway, and the saved claude.ai login stays the active credential. <code>gateway/Caddyfile.example</code> implements it: it requires a private header, drops that header, passes the body and Anthropic's required headers through unchanged with streaming on, and stores nothing. Like any reverse proxy it does set <code>Host</code> and add <code>X-Forwarded-*</code>; what it never does is substitute a credential or alter who the client says it is.</p>
   <pre><code><span class="c"># laptop</span>
 export ANTHROPIC_BASE_URL=https://gw-a.example.com
 export ANTHROPIC_CUSTOM_HEADERS="X-Gw-Key: &lt;secret shared with the gateway&gt;"

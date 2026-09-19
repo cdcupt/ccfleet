@@ -21,7 +21,8 @@ reach Anthropic) and Caddy adds the usual `X-Forwarded-*` headers. "Rewrites
 nothing" would be too strong. The guarantee that matters is narrower and exact:
 it never substitutes a credential and never alters who the client says it is.
 
-What it deliberately does not do: hold tokens, rewrite headers or bodies,
+What it deliberately does not do: hold tokens, substitute a credential, alter
+the client's identity, change the request body,
 pool accounts, or share one gateway between people. One gateway, one owner,
 one account.
 
