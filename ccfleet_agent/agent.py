@@ -145,6 +145,42 @@ def find_claude() -> Optional[str]:
     return None
 
 
+# `claude auth status` answers the one question the filesystem cannot: is this
+# login actually usable? It also returns the owner's email address, organisation
+# name and organisation id, none of which this agent will report. Only these four
+# keys are read; the rest are never copied out of the parsed object.
+AUTH_STATUS_FIELDS = (("loggedIn", "logged_in"), ("authMethod", "auth_method"),
+                      ("apiProvider", "api_provider"), ("subscriptionType", "subscription_type"))
+
+
+def auth_status(runner: Runner = subprocess.run) -> dict[str, Any]:
+    """Whether the node is signed in, straight from the CLI rather than inferred.
+
+    Returns {} when the CLI is absent or says anything this cannot parse, so a
+    caller can tell "not signed in" apart from "could not ask".
+    """
+    path = find_claude()
+    if not path:
+        return {}
+    output = _run(runner, [path, "auth", "status"], timeout=30.0)
+    if not output:
+        return {}
+    try:
+        data = json.loads(output)
+    except ValueError:
+        return {}
+    if not isinstance(data, Mapping):
+        return {}
+    out: dict[str, Any] = {}
+    for source, name in AUTH_STATUS_FIELDS:
+        value = data.get(source)
+        if isinstance(value, bool):
+            out[name] = value
+        elif isinstance(value, str) and value:
+            out[name] = value[:40]
+    return out
+
+
 def claude_info(runner: Runner = subprocess.run) -> dict[str, Any]:
     path = find_claude()
     if not path:
@@ -306,7 +342,14 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
                                "agent_version": AGENT_VERSION}
     payload.update(system_info())
     payload["claude"] = claude_info(runner)
-    payload["credentials"] = credentials_summary(cfg.claude_config_dir)
+    credentials = credentials_summary(cfg.claude_config_dir)
+    # The CLI's own answer wins over anything inferred from a file's existence:
+    # a present file can still be a dead login, and on macOS there is no file.
+    status = auth_status(runner)
+    if status:
+        credentials.update(status)
+        credentials["present"] = status.get("logged_in", credentials.get("present"))
+    payload["credentials"] = credentials
     payload["disk"] = disk_info(cfg.claude_config_dir)
     payload["egress"] = egress_ip(cfg.egress_targets, opener, min(cfg.timeout_s, 5.0))
     payload["remote_control"] = remote_control_state(cfg.rc_service, runner)

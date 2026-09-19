@@ -1,3 +1,4 @@
+import json
 import math
 
 import pytest
@@ -49,7 +50,6 @@ def test_the_new_credential_fields_survive_validation():
 def test_reconcile_is_absent_until_a_node_actually_reports_one():
     """An invented skeleton of Nones is truthy, so every node would look as though
     it had reconciled at least once."""
-    from ccfleetd.heartbeat import validate_heartbeat
     assert "reconcile" not in validate_heartbeat({"node_id": "n"}, "n")
     assert "reconcile" not in validate_heartbeat(
         {"node_id": "n", "reconcile": {"upgrade": {}}}, "n")
@@ -59,3 +59,17 @@ def test_reconcile_is_absent_until_a_node_actually_reports_one():
         {"node_id": "n", "reconcile": {"upgrade": {"to": "2.1.99", "ok": True}}}, "n")
     assert reported["reconcile"]["upgrade"]["to"] == "2.1.99"
     assert reported["reconcile"]["upgrade"]["ok"] is True
+
+
+def test_identity_fields_cannot_reach_the_store_through_credentials():
+    """The agent does not send these, and the server would not keep them anyway."""
+    from ccfleetd.heartbeat import validate_heartbeat
+    out = validate_heartbeat({"node_id": "n", "credentials": {
+        "logged_in": True, "auth_method": "claude.ai", "api_provider": "firstParty",
+        "email": "someone@example.com", "orgId": "a7ba7d79", "orgName": "Acme",
+    }}, "n")
+    creds = out["credentials"]
+    assert creds["logged_in"] is True and creds["auth_method"] == "claude.ai"
+    blob = json.dumps(out)
+    for private in ("someone@example.com", "a7ba7d79", "Acme"):
+        assert private not in blob

@@ -73,6 +73,11 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
             "subscription_type": _str(creds.get("subscription_type")),
             "profile_fetched_at": _num(creds.get("profile_fetched_at")),
             "plan": _str(creds.get("plan")),
+            # From `claude auth status`: the CLI's own answer, not an inference
+            # from a file existing. Deliberately no email, org name or org id.
+            "logged_in": _bool_or_none(creds.get("logged_in")),
+            "auth_method": _str(creds.get("auth_method")),
+            "api_provider": _str(creds.get("api_provider")),
         },
         "disk": {"used_pct": _num(disk.get("used_pct")), "free_gb": _num(disk.get("free_gb"))},
         "mem": {"used_pct": _num(mem.get("used_pct"))},
