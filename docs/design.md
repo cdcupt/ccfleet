@@ -81,9 +81,11 @@ The one supported exception is the optional pass-through gateway in `gateway/`,
 and it is a different situation: it exists for an owner who must keep files on
 their laptop and cannot work on a hosted node at all. There Claude Code runs on
 the laptop, `ANTHROPIC_BASE_URL` points at the gateway, and the gateway does sit
-in the model-request path. It forwards byte for byte including the owner's own
-bearer, stores nothing and rewrites nothing, which is what keeps it a gateway
-rather than a relay, but it is still an operator-owned hop and worth knowing
+in the model-request path. It passes the body and Anthropic's required headers
+through unchanged, including the owner's own bearer, and stores nothing. Like any
+reverse proxy it sets `Host` and adds `X-Forwarded-*`; what keeps it a gateway
+rather than a relay is that it never substitutes a credential and never alters
+who the client says it is. It is still an operator-owned hop and worth knowing
 about before you reach for it.
 
 ### Node
@@ -346,7 +348,7 @@ several people each using their own subscription.
 | --- | --- | --- |
 | What answers a request | whichever account the pool picks | the one node you are working on |
 | Who holds the OAuth token | the relay | Claude Code on the node, as always |
-| Request headers and client identity | rewritten to match the captured account | untouched; the real client is the real client |
+| Request headers and client identity | rewritten to match the captured account | not rewritten; the real client stays the real client |
 | Adding a second person | another seat behind the same endpoint | another machine with their own login |
 | What the management plane can see | the traffic | facts about nodes, never a request |
 | Failover between accounts | a feature | absent on purpose |
