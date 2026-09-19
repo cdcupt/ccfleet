@@ -12,8 +12,12 @@ they control, with someone keeping an eye on the whole fleet. It gives you:
 - **A heartbeat agent** on each node that reports public facts (Claude Code
   version, uptime, disk, load, egress IP, whether a login exists and when it
   was last refreshed). It parses the credentials file only to extract the
-  token expiry and plan type; token values are dropped in memory and never
-  sent, logged or stored.
+  token expiry and plan type, and `~/.claude.json` only for whether an account
+  is signed in, when its profile was last fetched and the rate-limit tier. The
+  latter is the only way to report a login on macOS, where the credential lives
+  in the Keychain and this agent will not read it. Token values are dropped in
+  memory and never sent, logged or stored, and neither are the email address,
+  name, account uuid or organisation name that sit in the same file.
 - **A fleet server** with a dashboard and Telegram alerts: missing heartbeat,
   Claude Code missing or drifted from the pinned version, login missing, stale
   or expired, disk high, egress IP changed, Remote Control service down.

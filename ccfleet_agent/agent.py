@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """ccfleet node agent: posts one heartbeat about this node to the fleet server.
 
-Standard library only. Runs as the node owner's user, reads nothing but public
-facts about the machine plus two non-secret fields of the Claude Code credentials
-file (its modification time and the access-token expiry). Token values are never
-read into the payload.
+Standard library only. Runs as the node owner's user and reads nothing but public
+facts about the machine, plus a narrow set of non-secret fields from two Claude
+Code files:
+
+  ~/.claude/.credentials.json   modification time, access-token expiry, plan type
+  ~/.claude.json                whether an account is signed in, when its profile
+                                was last fetched, and the rate-limit tier
+
+The second is what makes a Mac reportable at all, since the credential itself
+lives in the Keychain there and this agent will not read it. That file also holds
+an email address, a full name, an account uuid and an organisation name; none of
+them are collected. Token values are never read into the payload, and the tests
+assert both of those.
 """
 
 from __future__ import annotations
