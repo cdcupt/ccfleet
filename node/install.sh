@@ -15,7 +15,7 @@
 # up to that point is this script.
 set -euo pipefail
 
-SERVER="" NODE_ID="" TOKEN="" OWNER="" SSH_KEY="" SKIP_HARDEN=no NO_REMOTE=no
+SERVER="" NODE_ID="" TOKEN="" OWNER="" SSH_KEY="" SKIP_HARDEN=no NO_REMOTE=no BYPASS=no
 REPO_RAW="${CCFLEET_REPO_RAW:-https://raw.githubusercontent.com/cdcupt/ccfleet/main}"
 
 die() { printf '\n\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -46,6 +46,10 @@ Optional:
   --skip-harden     do not touch the firewall or sshd. Use on a box that is
                     already carrying other services.
   --no-remote-control  set up everything except Remote Control.
+  --bypass-permissions  run Claude Code with no permission prompts on this node,
+                    in the terminal and in sessions driven from claude.ai. Every
+                    tool call then runs unasked, and the owner has passwordless
+                    sudo, so this grants un-prompted root. Off by default.
 USAGE
   exit 2
 }
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
     --ssh-key) SSH_KEY="${2:-}"; shift 2 ;;
     --skip-harden) SKIP_HARDEN=yes; shift ;;
     --no-remote-control) NO_REMOTE=yes; shift ;;
+    --bypass-permissions) BYPASS=yes; shift ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -217,6 +222,65 @@ os.chmod(p, 0o600)
 PY"
 note "workspace trusted$( [ "$NO_REMOTE" = yes ] && echo "" || echo ", Remote Control accepted" )"
 
+# The terminal half of --bypass-permissions. The unit flag above only covers
+# sessions Remote Control spawns; a session the owner starts by typing `claude`
+# reads this instead. Re-running without the flag removes what a previous run set,
+# so a node does not stay open by accident, but only what THIS installer wrote.
+as_owner "python3 - <<'PY'
+import json, os
+p = os.path.expanduser('~/.claude/settings.json')
+# Provenance lives in ccfleet's own directory, not in Claude Code's settings: it
+# records that a previous run of THIS installer set the keys below, so a later
+# run without the flag knows which ones it may remove. Settings the owner chose
+# for themselves must survive an ordinary reinstall untouched.
+marker = os.path.expanduser('~/.config/ccfleet/bypass-managed')
+os.makedirs(os.path.dirname(p), exist_ok=True)
+d = json.load(open(p)) if os.path.exists(p) else {}
+perms = d.get('permissions') or {}
+bypass = '$BYPASS' == 'yes'
+if bypass:
+    # Snapshot what was there BEFORE the first time we touch it, so turning this
+    # back off restores the owner's own choice instead of deleting it. Only on
+    # the first run: a second run with the flag must not snapshot our own values.
+    if not os.path.exists(marker):
+        json.dump({'defaultMode': perms.get('defaultMode'),
+                   'skipDangerousModePermissionPrompt': d.get('skipDangerousModePermissionPrompt')},
+                  open(marker, 'w'))
+    perms['defaultMode'] = 'bypassPermissions'
+    # Suppresses the one-time 'accept responsibility' dialog, which would
+    # otherwise block a session that nobody is sitting in front of.
+    d['skipDangerousModePermissionPrompt'] = True
+elif os.path.exists(marker):
+    try:
+        prev = json.load(open(marker))
+    except (ValueError, OSError):
+        prev = {}
+    # Undo only while the value is still the one we set. If the owner has changed
+    # it since, that newer choice is theirs and wins; we just forget ours.
+    if perms.get('defaultMode') == 'bypassPermissions':
+        if prev.get('defaultMode') is None:
+            perms.pop('defaultMode', None)
+        else:
+            perms['defaultMode'] = prev['defaultMode']
+    if d.get('skipDangerousModePermissionPrompt') is True:
+        if prev.get('skipDangerousModePermissionPrompt') is None:
+            d.pop('skipDangerousModePermissionPrompt', None)
+        else:
+            d['skipDangerousModePermissionPrompt'] = prev['skipDangerousModePermissionPrompt']
+    os.remove(marker)
+if perms:
+    d['permissions'] = perms
+else:
+    d.pop('permissions', None)
+tmp = p + '.tmp'
+json.dump(d, open(tmp, 'w'), indent=2)
+os.replace(tmp, p)
+os.chmod(p, 0o600)
+PY"
+if [ "$BYPASS" = yes ]; then
+  note "PERMISSION PROMPTS ARE OFF on this node, in the terminal and from claude.ai"
+fi
+
 step "6/8  agent and services"
 for f in ccfleet_agent/agent.py:ccfleet-agent node/backup.sh:ccfleet-backup node/exitip.sh:exitip node/upgrade-claude.sh:ccfleet-upgrade-claude; do
   src="${f%%:*}"; dst="${f##*:}"
@@ -231,6 +295,14 @@ as_owner 'MARKER="# ccfleet: attach to the persistent work session"
   grep -qF "$MARKER" ~/.bashrc 2>/dev/null || { echo; cat /tmp/attach.sh; } >> ~/.bashrc; rm -f /tmp/attach.sh'
 printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\n' "$SERVER" "$NODE_ID" "$TOKEN" \
   > "$HOME_DIR/.config/ccfleet/agent.env"
+# Read by claude-remote-control.service. Written every run, empty unless asked,
+# so re-running without the flag turns bypass back off instead of leaving it on.
+if [ "$BYPASS" = yes ]; then
+  printf 'CCFLEET_RC_ARGS=--permission-mode bypassPermissions\n' > "$HOME_DIR/.config/ccfleet/remote-control.env"
+else
+  printf 'CCFLEET_RC_ARGS=\n' > "$HOME_DIR/.config/ccfleet/remote-control.env"
+fi
+chown "$OWNER:$OWNER" "$HOME_DIR/.config/ccfleet/remote-control.env"
 chmod 600 "$HOME_DIR/.config/ccfleet/agent.env"; chown "$OWNER:$OWNER" "$HOME_DIR/.config/ccfleet/agent.env"
 note "agent, helpers, units and login auto-attach in place"
 
@@ -267,6 +339,25 @@ else
   # reported to systemd. The restart would not fire, and the promise would be a lie.
   # The owner starts it once, after signing in; the closing message says so.
   user_systemctl enable claude-remote-control.service >/dev/null 2>&1 || true
+  # The env file rewritten in step 6 does not reach a process that is already
+  # running. Without this restart, re-running the installer WITHOUT
+  # --bypass-permissions would leave an already-started node still bypassing
+  # permission prompts, which is precisely the state the rewrite exists to undo.
+  # Restarting is safe now: this unit owns a private tmux server, so it cannot
+  # touch the owner's work session. It does end any live claude.ai session.
+  if [ "$(user_systemctl is-active claude-remote-control.service 2>/dev/null)" = active ]; then
+    user_systemctl restart claude-remote-control.service >/dev/null 2>&1 || true
+    sleep 2
+    # A restart that does not come back leaves a node that WAS working now dead,
+    # so read the state instead of trusting the exit status we just discarded.
+    rc_after="$(user_systemctl is-active claude-remote-control.service 2>/dev/null || echo inactive)"
+    if [ "$rc_after" = active ]; then
+      note "remote control restarted so it reads the permission settings from this run"
+    else
+      FAILED="$FAILED claude-remote-control.service(restart-failed:$rc_after)"
+      note "remote control was running and did NOT come back after the restart ($rc_after)"
+    fi
+  fi
   # Verified, not assumed. The closing message tells the owner this unit returns
   # after a reboot, so an enable that did not take has to fail the install rather
   # than be swallowed -- same rule as the --no-remote-control branch above.

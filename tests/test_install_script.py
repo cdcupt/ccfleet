@@ -222,3 +222,60 @@ def test_the_systemd_backend_dependency_is_installed_explicitly():
     pkgs = pkgs[:pkgs.index("\n")]
     assert "python3-systemd" in pkgs, \
         "the systemd backend cannot load without it, and it is not a hard dependency"
+
+
+def test_bypass_permissions_is_opt_in():
+    """Un-prompted tool calls plus passwordless sudo is un-prompted root. Never the default."""
+    text = INSTALL.read_text()
+    assert "BYPASS=no" in text, "must default to off"
+    assert "--bypass-permissions) BYPASS=yes" in text
+
+
+def test_bypass_writes_both_halves_and_can_be_turned_back_off():
+    """The unit flag only covers Remote Control; a typed `claude` reads settings.json."""
+    text = INSTALL.read_text()
+    assert "CCFLEET_RC_ARGS=--permission-mode bypassPermissions" in text, "Remote Control half"
+    assert "defaultMode" in text and "bypassPermissions" in text, "terminal half"
+    # Both halves are written on every run, so dropping the flag actually reverts them.
+    assert "printf 'CCFLEET_RC_ARGS=\\n'" in text, \
+        "the env file must be rewritten empty when the flag is absent, not left stale"
+    assert "perms.pop('defaultMode', None)" in text, \
+        "settings must be cleaned when the flag is absent, not left wide open"
+
+
+def test_a_reinstall_does_not_delete_settings_the_owner_chose():
+    """Cleanup must only undo what a previous run of this installer set."""
+    text = INSTALL.read_text()
+    assert "bypass-managed" in text, "provenance marker is what makes the cleanup safe"
+    assert "elif os.path.exists(marker):" in text, \
+        "removal must be conditional on this installer having set the keys"
+    assert "if not os.path.exists(marker):" in text, \
+        "the pre-existing values are snapshotted once, not overwritten on every run"
+    assert "prev['defaultMode']" in text, \
+        "turning bypass off must restore the owner's own value, not just delete the key"
+    assert "if perms.get('defaultMode') == 'bypassPermissions':" in text, \
+        "restore only while the value is still ours; a newer choice by the owner wins"
+    # And the marker must live outside Claude Code's own settings file.
+    assert "~/.config/ccfleet/bypass-managed" in text, \
+        "do not add non-standard keys to Claude Code's settings.json"
+
+
+def test_bypass_says_so_out_loud():
+    text = INSTALL.read_text()
+    assert "PERMISSION PROMPTS ARE OFF" in text, \
+        "an operator should not have to infer this from the absence of a prompt"
+
+
+def test_dropping_the_bypass_flag_reaches_a_running_service():
+    """Rewriting the env file changes nothing until the process restarts."""
+    text = INSTALL.read_text()
+    block = text[text.index("user_systemctl enable claude-remote-control.service"):]
+    block = block[:block.index("RC_ENABLED=")]
+    assert 'is-active claude-remote-control.service' in block and "restart" in block, \
+        "an already-running node would keep the previous permission mode"
+    # And the restart must be checked, not assumed: a service that was working
+    # before the installer ran must not be left dead while it reports success.
+    assert 'rc_after=' in block and 'restart-failed' in block, \
+        "a restart that does not come back has to fail the install, not be swallowed"
+    assert block.index("restart claude-remote-control.service") < block.index("rc_after="), \
+        "the state has to be read after the restart, not before"

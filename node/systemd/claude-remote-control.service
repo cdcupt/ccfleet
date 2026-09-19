@@ -10,6 +10,9 @@ After=network-online.target
 # The workspace must be trusted once, interactively, before this unit can work:
 #   mkdir -p ~/workspace && cd ~/workspace && claude      -> accept the trust prompt
 #   claude remote-control                                 -> accept the one-time y/n
+#
+# To watch it, or read its URL and QR code, attach to its own server:
+#   tmux -L ccfleet-rc attach -t remote-control
 # After those two answers this unit runs unattended forever.
 #
 # Deliberately NOT --continue. The CLI's own help: "Exits with an error if nothing
@@ -24,9 +27,26 @@ Environment=DISABLE_AUTOUPDATER=1
 # WorkingDirectory that does not exist yet fails the unit and the mkdir below
 # could never repair it. tmux -c sets the session's directory instead, which is
 # what actually matters here.
+# -L ccfleet-rc puts this on its OWN tmux server, and that is load-bearing, not
+# tidiness. tmux servers belong to whichever unit started them, and systemd's
+# default KillMode=control-group kills every process in a unit's control group
+# when it is stopped or restarted. Sharing the default server therefore meant a
+# `systemctl restart claude-remote-control` destroyed the owner's work session
+# too. Measured on a live node 2026-09-19: the server hosting the `cc` session
+# was sitting in this unit's cgroup, and restarting this unit killed it.
+#
+# With a private socket this unit can only ever kill its own server. kill-server
+# does end every session on the ccfleet-rc socket, so do not park unrelated work
+# there; that socket belongs to this unit.
+#
+# CCFLEET_RC_ARGS comes from the optional env file below and is normally empty.
+# install.sh --bypass-permissions writes "--permission-mode bypassPermissions"
+# into it. Passing it through a file avoids rewriting this command line, which is
+# its own class of bug.
+EnvironmentFile=-%h/.config/ccfleet/remote-control.env
 ExecStartPre=/bin/mkdir -p %h/workspace
-ExecStart=/usr/bin/tmux new-session -d -s remote-control -c %h/workspace "%h/.local/bin/claude remote-control --name %H"
-ExecStop=/usr/bin/tmux kill-session -t remote-control
+ExecStart=/usr/bin/tmux -L ccfleet-rc new-session -d -s remote-control -c %h/workspace "%h/.local/bin/claude remote-control ${CCFLEET_RC_ARGS} --name %H"
+ExecStop=/usr/bin/tmux -L ccfleet-rc kill-server
 # Restart=on-failure covers tmux itself failing to launch (missing binary, no
 # server). It deliberately does NOT cover Claude failing to authenticate inside
 # the session, and nothing here can: with Type=forking, ExecStart returns as soon
