@@ -29,12 +29,30 @@ if [ -z "${TMUX:-}" ] && [ -n "${PS1:-}" ] && [ -t 1 ] && [ -z "${CCFLEET_NO_ATT
   case "$-" in
     *i*)
       if command -v tmux >/dev/null 2>&1; then
+        # Unset, "dumb", or something that would be read as an option. tmux
+        # cannot run on any of them, and TERM arrives over ssh from the client,
+        # so it is not ours to trust: `TERM=-V` makes infocmp print its version
+        # and succeed.
+        case "${TERM:-}" in
+          "" | dumb | -*) TERM=xterm-256color; export TERM ;;
+        esac
+        # The cheap check, which avoids an ugly error in the common case. `--`
+        # stops option parsing even though the case above already covers it.
         if command -v infocmp >/dev/null 2>&1 \
-           && ! infocmp "${TERM:-dumb}" >/dev/null 2>&1; then
+           && ! infocmp -- "$TERM" >/dev/null 2>&1; then
           TERM=xterm-256color
           export TERM
         fi
         tmux new-session -A -s cc -c "$HOME/workspace" && exit
+        # tmux refused. Where infocmp was absent we could not check, and there
+        # are other reasons besides terminfo, so retry once with a description
+        # every node has rather than trying to predict the cause. If that fails
+        # too, fall through to an ordinary shell.
+        if [ "$TERM" != xterm-256color ]; then
+          TERM=xterm-256color
+          export TERM
+          tmux new-session -A -s cc -c "$HOME/workspace" && exit
+        fi
       fi
       ;;
   esac

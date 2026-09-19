@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import pathlib
 import pty
+import shutil
 import subprocess
 
 SNIPPET = pathlib.Path(__file__).resolve().parents[1] / "node" / "attach.sh"
@@ -60,7 +61,7 @@ def run_snippet_on_a_terminal(tmp_path, env_extra=None):
     return marker.exists(), (marker.read_text().strip() if marker.exists() else "")
 
 
-def run_snippet_recording_term(tmp_path, term, tmux_exit=0):
+def run_snippet_recording_term(tmp_path, term, tmux_exit=0, hide_infocmp=False):
     """Like the above, but the stub records the TERM it was handed, and can fail.
 
     Both matter: the snippet rewrites an unknown TERM before calling tmux, and a
@@ -71,25 +72,33 @@ def run_snippet_recording_term(tmp_path, term, tmux_exit=0):
     stub = tmp_path / "bin"
     stub.mkdir(exist_ok=True)
     (stub / "tmux").write_text(
-        f'#!/bin/sh\nprintf "%s" "$TERM" > "{marker}"\nexit {tmux_exit}\n')
+        f'#!/bin/sh\nprintf "%s\\n" "$TERM" >> "{marker}"\nexit {tmux_exit}\n')
     (stub / "tmux").chmod(0o755)
 
-    env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}", "HOME": str(tmp_path),
-           "TERM": term}
+    # PATH of only the stub hides infocmp while still finding our tmux, which is
+    # the case where the snippet cannot check the terminal in advance. bash has
+    # to be resolved before PATH is stripped, or it cannot be spawned at all.
+    bash = shutil.which("bash") or "/bin/bash"
+    env_path = str(stub) if hide_infocmp else f"{stub}:{os.environ['PATH']}"
+    env = {**os.environ, "PATH": env_path, "HOME": str(tmp_path)}
+    if term is None:
+        env.pop("TERM", None)
+    else:
+        env["TERM"] = term
     env.pop("TMUX", None)
     env.pop("CCFLEET_NO_ATTACH", None)
 
     primary, secondary = pty.openpty()
     try:
         proc = subprocess.Popen(
-            ["bash", "-ic", f'PS1="$ "\n. "{SNIPPET}"\ntouch "{survived}"\n'],
+            [bash, "-ic", f'PS1="$ "\n. "{SNIPPET}"\n: > "{survived}"\n'],
             stdin=secondary, stdout=secondary, stderr=secondary, env=env, close_fds=True)
         proc.wait(timeout=30)
     finally:
         os.close(secondary)
         os.close(primary)
-    seen = marker.read_text() if marker.exists() else None
-    return seen, survived.exists()
+    calls = marker.read_text().split() if marker.exists() else []
+    return (calls[-1] if calls else None), survived.exists(), calls
 
 
 def test_attaches_when_stdout_is_a_real_terminal(tmp_path):
@@ -194,26 +203,59 @@ def test_a_terminal_the_node_does_not_know_still_attaches(tmp_path):
     # Not "xterm-ghostty": a laptop running Ghostty has that entry, so the test
     # would pass or fail by accident depending on where it runs. This name is
     # unknown everywhere, which is the condition under test.
-    seen, _ = run_snippet_recording_term(tmp_path, "ghostty-like-but-unknown-xyz")
+    seen, _, _ = run_snippet_recording_term(tmp_path, "ghostty-like-but-unknown-xyz")
     assert seen == "xterm-256color", \
         "an unknown TERM must be replaced with one every node has"
 
 
 def test_a_terminal_the_node_does_know_is_left_alone(tmp_path):
     """Rewriting a good TERM would throw away colour and key handling for nothing."""
-    seen, _ = run_snippet_recording_term(tmp_path, "xterm-256color")
+    seen, _, _ = run_snippet_recording_term(tmp_path, "xterm-256color")
     assert seen == "xterm-256color"
-    seen, _ = run_snippet_recording_term(tmp_path, "screen-256color")
+    seen, _, _ = run_snippet_recording_term(tmp_path, "screen-256color")
     assert seen == "screen-256color", "a known TERM must survive untouched"
 
 
 def test_a_tmux_that_will_not_start_leaves_the_owner_a_shell(tmp_path):
     """The old exec turned any tmux failure into a disconnect."""
-    _, survived = run_snippet_recording_term(tmp_path, "xterm-256color", tmux_exit=1)
+    _, survived, _ = run_snippet_recording_term(tmp_path, "xterm-256color", tmux_exit=1)
     assert survived, "a failed tmux must fall through to a normal shell, not end the login"
 
 
 def test_a_successful_tmux_still_ends_the_login(tmp_path):
     """Leaving the session should log you out, as it did before."""
-    _, survived = run_snippet_recording_term(tmp_path, "xterm-256color", tmux_exit=0)
+    _, survived, _ = run_snippet_recording_term(tmp_path, "xterm-256color", tmux_exit=0)
     assert not survived, "on success the shell must exit rather than drop to a prompt"
+
+
+def test_an_unset_terminal_is_replaced_rather_than_passed_on_empty(tmp_path):
+    """infocmp treats an unset TERM as "dumb" and succeeds, but tmux gets nothing."""
+    seen, _, _ = run_snippet_recording_term(tmp_path, None)
+    assert seen == "xterm-256color"
+
+
+def test_an_option_shaped_terminal_cannot_reach_infocmp(tmp_path):
+    """TERM arrives from the ssh client, so it is not ours to trust.
+
+    `TERM=-V` makes infocmp print its version and exit 0, so the check would
+    wave through a value tmux cannot use.
+    """
+    for hostile in ("-V", "-x", "--help"):
+        seen, _, _ = run_snippet_recording_term(tmp_path, hostile)
+        assert seen == "xterm-256color", f"{hostile} must never be passed through"
+
+
+def test_without_infocmp_a_failed_tmux_is_retried_with_a_safe_terminal(tmp_path):
+    """Where the terminal cannot be checked in advance, try, then try safely."""
+    _, survived, calls = run_snippet_recording_term(
+        tmp_path, "ghostty-like-but-unknown-xyz", tmux_exit=1, hide_infocmp=True)
+    assert calls == ["ghostty-like-but-unknown-xyz", "xterm-256color"], \
+        "it should attempt the real terminal, then fall back once"
+    assert survived, "and still leave a shell when both attempts fail"
+
+
+def test_the_retry_does_not_repeat_a_terminal_that_already_failed(tmp_path):
+    """A second identical attempt would only produce a second identical error."""
+    _, _, calls = run_snippet_recording_term(
+        tmp_path, "xterm-256color", tmux_exit=1, hide_infocmp=True)
+    assert calls == ["xterm-256color"], "no point retrying the fallback with itself"
