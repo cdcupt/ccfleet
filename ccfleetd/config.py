@@ -28,6 +28,19 @@ def _env_int(env: Mapping[str, str], key: str, default: int, minimum: int = 0) -
     return value
 
 
+def _env_bool(env: Mapping[str, str], key: str, default: bool = False) -> bool:
+    """A flag is on for 1/true/yes/on, off for 0/false/no/off, and nothing else."""
+    raw = env.get(ENV_PREFIX + key)
+    if raw is None or raw == "":
+        return default
+    lowered = raw.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(f"{ENV_PREFIX}{key} must be a boolean, got {raw!r}")
+
+
 def _parse_bind(raw: str) -> tuple[str, int]:
     host, sep, port = raw.rpartition(":")
     if not sep or not host or not port.isdigit():
@@ -58,6 +71,10 @@ class Config:
     check_interval_s: int = 60
     retention_days: int = 30
     max_body_bytes: int = 64 * 1024
+    # Off by default: bypass removes every permission prompt on a node whose owner
+    # also holds passwordless sudo. An operator turns it on for their own fleet;
+    # it never becomes the default for somebody else's.
+    bypass_by_default: bool = False
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> Config:
@@ -80,6 +97,7 @@ class Config:
             check_interval_s=_env_int(env, "CHECK_INTERVAL_S", 60, 5),
             retention_days=_env_int(env, "RETENTION_DAYS", 30, 1),
             max_body_bytes=_env_int(env, "MAX_BODY_BYTES", 64 * 1024, 1024),
+            bypass_by_default=_env_bool(env, "BYPASS_BY_DEFAULT", False),
         )
         if cfg.disk_warn_pct > cfg.disk_crit_pct:
             raise ConfigError("CCFLEET_DISK_WARN_PCT must not exceed CCFLEET_DISK_CRIT_PCT")

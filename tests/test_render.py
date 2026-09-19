@@ -48,3 +48,25 @@ def test_install_command_is_shell_safe_even_if_a_bad_owner_got_stored(cfg):
     page = render_add_result("node-a", "f" * 64, cfg, owner="alice; rm -rf /")
     assert "--owner 'alice; rm -rf /'" in page or "--owner &#x27;alice; rm -rf /&#x27;" in page
     assert "--owner alice; rm -rf /" not in page, "an unquoted owner would execute on paste"
+
+
+def _add_page(bypass: bool):
+    from ccfleetd.config import Config
+    from ccfleetd.render import render_add_result
+    cfg = Config.from_env({"CCFLEET_ADMIN_TOKEN": "x" * 32, "CCFLEET_DB": ":memory:",
+                           "CCFLEET_BYPASS_BY_DEFAULT": "1" if bypass else "0"})
+    return render_add_result("node-a", "f" * 64, cfg, owner="erik")
+
+
+def test_add_page_omits_the_bypass_flag_by_default():
+    page = _add_page(False)
+    assert "--bypass-permissions" not in page
+    assert "without permission prompts" not in page
+
+
+def test_add_page_emits_the_bypass_flag_and_says_so_when_configured():
+    page = _add_page(True)
+    assert "--bypass-permissions" in page
+    # The flag must never appear without the sentence explaining what it costs.
+    assert "without permission prompts" in page
+    assert "passwordless sudo" in page

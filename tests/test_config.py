@@ -36,3 +36,26 @@ def test_require_admin_token():
     with pytest.raises(ConfigError):
         Config.from_env({"CCFLEET_ADMIN_TOKEN": "short"}).require_admin_token()
     Config.from_env({"CCFLEET_ADMIN_TOKEN": "a" * 16}).require_admin_token()
+
+
+def test_bypass_by_default_is_off_unless_asked():
+    from ccfleetd.config import Config
+    cfg = Config.from_env({"CCFLEET_ADMIN_TOKEN": "x" * 32})
+    assert cfg.bypass_by_default is False
+
+
+def test_bypass_by_default_accepts_the_usual_spellings():
+    from ccfleetd.config import Config
+    base = {"CCFLEET_ADMIN_TOKEN": "x" * 32}
+    for raw in ("1", "true", "TRUE", "yes", "on"):
+        assert Config.from_env({**base, "CCFLEET_BYPASS_BY_DEFAULT": raw}).bypass_by_default is True
+    for raw in ("0", "false", "no", "off", ""):
+        assert Config.from_env({**base, "CCFLEET_BYPASS_BY_DEFAULT": raw}).bypass_by_default is False
+
+
+def test_bypass_by_default_rejects_a_value_it_cannot_read():
+    import pytest
+    from ccfleetd.config import Config, ConfigError
+    # Silently treating "maybe" as false would turn prompts back on without a word.
+    with pytest.raises(ConfigError, match="BYPASS_BY_DEFAULT"):
+        Config.from_env({"CCFLEET_ADMIN_TOKEN": "x" * 32, "CCFLEET_BYPASS_BY_DEFAULT": "maybe"})

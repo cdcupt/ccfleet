@@ -253,6 +253,15 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         f"      --node {shq(node_id)} \\\n"
         f"      --token {shq(token)} \\\n"
         f"      --owner {shq(owner) if owner else '<owner>'}")
+    if cfg.bypass_by_default:
+        install_cmd += " \\\n      --bypass-permissions"
+    bypass_note = (
+        "<p class=\"muted\"><strong>This fleet runs without permission prompts.</strong> "
+        "<code>--bypass-permissions</code> is in the command above because "
+        "<code>CCFLEET_BYPASS_BY_DEFAULT</code> is set on this server. The owner of this node "
+        "also has passwordless sudo, so with prompts off nothing stands between a tool call and "
+        "root. Drop the flag for a node where that is not wanted.</p>"
+        if cfg.bypass_by_default else "")
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -267,6 +276,7 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "which does not exist yet, so the owner starts it in step 2. "
         "Add <code>--ssh-key \"ssh-ed25519 …\"</code> "
         "with the owner's public key, or SSH hardening is skipped so nobody is locked out.</p>"
+        f"{bypass_note}"
         "<h2>2. The owner signs in, on that machine</h2>"
         "<pre>claude          # choose the claude.ai login, approve, paste the code back\n"
         "/status         # confirms their account, no base URL, no auth token\n"
