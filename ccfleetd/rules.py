@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from .config import Config
+from .desired import is_channel
 
 LEVEL_WARN = "warn"
 LEVEL_CRITICAL = "critical"
@@ -67,7 +68,9 @@ def _claude_findings(node: Mapping[str, Any], payload: Mapping[str, Any],
         return [Finding("claude_missing", LEVEL_CRITICAL,
                         "claude is not installed or not on PATH for the owner user")]
     pinned = node.get("pinned_version") or ""
-    if pinned and version != pinned:
+    # A channel pin is satisfied by definition: the node tracks it, and there is
+    # no number to compare. Comparing literally would alert forever.
+    if pinned and not is_channel(pinned) and version != pinned:
         return [Finding("version_mismatch", LEVEL_WARN,
                         f"claude {version} differs from pinned {pinned}")]
     return []

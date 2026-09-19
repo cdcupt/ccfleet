@@ -550,12 +550,19 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
   <div class="two">
     <div>
       <h3>Staged upgrades</h3>
-      <p>Auto-update is off on nodes on purpose. Upgrade one node, work on it for a day, then roll the rest:</p>
-      <pre><code><span class="c"># on the node</span>
-ccfleet-upgrade-claude            <span class="c"># latest</span>
-ccfleet-upgrade-claude 2.1.92     <span class="c"># exact version</span>
-<span class="c"># on the server</span>
-ccfleetd node pin node-a 2.1.92</code></pre>
+      <p>Auto-update is off on nodes on purpose, and the pin is authoritative: a node that
+      finds itself on a different version installs the pinned one and reports the result. So an
+      upgrade is driven from the server, one node at a time.</p>
+      <pre><code><span class="c"># on the server — pin one node first</span>
+ccfleetd node pin node-a 2.1.92
+<span class="c"># confirm the row shows it with no failure, work a day, then pin the rest</span>
+ccfleetd node pin node-b 2.1.92
+<span class="c"># or track a channel: resolves once, re-checks daily, never reports drift</span>
+ccfleetd node pin node-a stable</code></pre>
+      <p class="muted"><strong>Upgrading on the node no longer sticks.</strong> While a pin is
+      set, the next heartbeat installs the pinned version over whatever
+      <code>ccfleet-upgrade-claude</code> just put there. Change the pin instead, or run that
+      node's agent with <code>--no-reconcile</code> to work outside it.</p>
       <h3>Rotate a node token</h3>
       <pre><code>ccfleetd node rotate-token node-a
 <span class="c"># then update the node's agent.env</span></code></pre>

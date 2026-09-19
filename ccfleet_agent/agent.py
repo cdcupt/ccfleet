@@ -427,6 +427,29 @@ def _channel_is_current(state: Mapping[str, Any], target: str,
     return now - ts < CHANNEL_RECHECK_AFTER_S
 
 
+def prune_state(state: Mapping[str, Any], desired: Mapping[str, Any],
+                installed: Optional[str]) -> dict[str, Any]:
+    """Drop a recorded upgrade that no longer describes anything.
+
+    Without this a failure sticks: unpin the node, pin something already
+    installed, or fix it by hand, and the dashboard keeps reporting a failed
+    upgrade that stopped being true days ago.
+    """
+    pruned = dict(state)
+    upgrade = pruned.get("upgrade")
+    if not isinstance(upgrade, Mapping):
+        return pruned
+    target = installable_version(desired.get("claude_version"))
+    obsolete = (
+        target is None                       # the pin is gone or unusable
+        or upgrade.get("to") != target       # it was about a different target
+        or (target not in VERSION_CHANNELS and installed == target)  # satisfied since
+    )
+    if obsolete:
+        pruned.pop("upgrade", None)
+    return pruned
+
+
 def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
                       state: Mapping[str, Any], runner: Runner = subprocess.run,
                       now: Optional[float] = None) -> Optional[dict[str, Any]]:
@@ -509,7 +532,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         log.info("heartbeat accepted: %s", text.strip()[:200])
         if not args.no_reconcile:
             installed = (payload.get("claude") or {}).get("version")
-            result = reconcile_version(parse_desired(text), installed, state)
+            desired = parse_desired(text)
+            state = prune_state(state, desired, installed)
+            result = reconcile_version(desired, installed, state)
             if result is not None:
                 # The channel note is local bookkeeping, not something the server
                 # asked for, so it is filed separately and never reported.
@@ -520,6 +545,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # Recorded whether it worked or not: a failure is what drives the
                 # back-off, and is worth showing in the console either way.
                 write_state(cfg.state_path, new_state)
+            elif state != read_state(cfg.state_path):
+                # Nothing was attempted, but pruning may have dropped a record
+                # that had gone stale. Persist that or it comes straight back.
+                write_state(cfg.state_path, state)
         return 0
     log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
     return 1

@@ -23,6 +23,15 @@ VERSION_CHANNELS = ("stable", "latest")
 MAX_VERSION_LEN = 40
 
 
+def is_channel(pin: Any) -> bool:
+    """True when a pin names a channel rather than an exact version.
+
+    A channel has no number to compare an installed version against, so every
+    caller that asks "does the node match its pin?" has to ask this first.
+    """
+    return isinstance(pin, str) and pin.strip() in VERSION_CHANNELS
+
+
 def _version_target(raw: Any) -> str:
     """The version a node should be running, or "" meaning leave it alone.
 

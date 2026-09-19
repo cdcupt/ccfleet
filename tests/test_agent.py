@@ -469,3 +469,26 @@ def test_the_previous_result_rides_along_on_the_next_heartbeat(tmp_path, monkeyp
     # Nothing to report yet must not invent an empty section.
     assert "reconcile" not in agent.build_payload(
         cfg, runner=fake_runner(), opener=lambda *a, **k: FakeResponse(b""))
+
+
+def test_an_obsolete_upgrade_record_is_dropped():
+    """A failure that stopped being true must not sit in the dashboard forever."""
+    failed = {"from": "2.1.90", "to": "9.9.9", "ok": False, "ts": 1.0, "error": "no such version"}
+
+    # The pin was removed, or was never readable.
+    assert "upgrade" not in agent.prune_state({"upgrade": failed}, {}, "2.1.90")
+    assert "upgrade" not in agent.prune_state({"upgrade": failed},
+                                              {"claude_version": "--force"}, "2.1.90")
+    # The pin now names something else; the old failure is about a different question.
+    assert "upgrade" not in agent.prune_state({"upgrade": failed},
+                                              {"claude_version": "2.1.95"}, "2.1.90")
+    # Someone installed it by hand, so the failure is over.
+    satisfied = {**failed, "to": "2.1.95"}
+    assert "upgrade" not in agent.prune_state({"upgrade": satisfied},
+                                              {"claude_version": "2.1.95"}, "2.1.95")
+    # Still failing, still the live question: keep it, or the back-off is lost.
+    kept = agent.prune_state({"upgrade": failed}, {"claude_version": "9.9.9"}, "2.1.90")
+    assert kept["upgrade"] == failed
+    # Unrelated bookkeeping is never touched.
+    assert agent.prune_state({"channel": {"target": "stable"}}, {}, None) == {
+        "channel": {"target": "stable"}}

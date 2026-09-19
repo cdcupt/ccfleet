@@ -8,6 +8,7 @@ from shlex import quote as shq
 from typing import Any, Optional
 
 from .config import Config
+from .desired import is_channel
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
@@ -160,7 +161,9 @@ def _actions_html(row: Mapping[str, Any], csrf: str) -> str:
 def _row_html(row: Mapping[str, Any], now: float) -> str:
     version = _fmt(row["claude_version"])
     if row["pinned_version"]:
-        mark = "" if row["claude_version"] == row["pinned_version"] else " ≠ pinned"
+        # A channel is never "≠ pinned": tracking it is what the pin asks for.
+        mark = ("" if is_channel(row["pinned_version"])
+                or row["claude_version"] == row["pinned_version"] else " ≠ pinned")
         version += f' <span class="muted">{escape(row["pinned_version"] + mark)}</span>'
     # A drifted version with no explanation reads as "not tried yet". Say when the
     # node tried and failed, because that is the case an operator must act on.
