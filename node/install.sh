@@ -224,23 +224,46 @@ note "workspace trusted$( [ "$NO_REMOTE" = yes ] && echo "" || echo ", Remote Co
 
 # The terminal half of --bypass-permissions. The unit flag above only covers
 # sessions Remote Control spawns; a session the owner starts by typing `claude`
-# reads this instead. Written every run so that re-running without the flag
-# removes it again rather than silently leaving the node wide open.
+# reads this instead. Re-running without the flag removes what a previous run set,
+# so a node does not stay open by accident, but only what THIS installer wrote.
 as_owner "python3 - <<'PY'
 import json, os
 p = os.path.expanduser('~/.claude/settings.json')
+# Provenance lives in ccfleet's own directory, not in Claude Code's settings: it
+# records that a previous run of THIS installer set the keys below, so a later
+# run without the flag knows which ones it may remove. Settings the owner chose
+# for themselves must survive an ordinary reinstall untouched.
+marker = os.path.expanduser('~/.config/ccfleet/bypass-managed')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 d = json.load(open(p)) if os.path.exists(p) else {}
 perms = d.get('permissions') or {}
 bypass = '$BYPASS' == 'yes'
 if bypass:
+    # Snapshot what was there BEFORE the first time we touch it, so turning this
+    # back off restores the owner's own choice instead of deleting it. Only on
+    # the first run: a second run with the flag must not snapshot our own values.
+    if not os.path.exists(marker):
+        json.dump({'defaultMode': perms.get('defaultMode'),
+                   'skipDangerousModePermissionPrompt': d.get('skipDangerousModePermissionPrompt')},
+                  open(marker, 'w'))
     perms['defaultMode'] = 'bypassPermissions'
     # Suppresses the one-time 'accept responsibility' dialog, which would
     # otherwise block a session that nobody is sitting in front of.
     d['skipDangerousModePermissionPrompt'] = True
-else:
-    perms.pop('defaultMode', None)
-    d.pop('skipDangerousModePermissionPrompt', None)
+elif os.path.exists(marker):
+    try:
+        prev = json.load(open(marker))
+    except (ValueError, OSError):
+        prev = {}
+    if prev.get('defaultMode') is None:
+        perms.pop('defaultMode', None)
+    else:
+        perms['defaultMode'] = prev['defaultMode']
+    if prev.get('skipDangerousModePermissionPrompt') is None:
+        d.pop('skipDangerousModePermissionPrompt', None)
+    else:
+        d['skipDangerousModePermissionPrompt'] = prev['skipDangerousModePermissionPrompt']
+    os.remove(marker)
 if perms:
     d['permissions'] = perms
 else:

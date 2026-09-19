@@ -243,6 +243,21 @@ def test_bypass_writes_both_halves_and_can_be_turned_back_off():
         "settings must be cleaned when the flag is absent, not left wide open"
 
 
+def test_a_reinstall_does_not_delete_settings_the_owner_chose():
+    """Cleanup must only undo what a previous run of this installer set."""
+    text = INSTALL.read_text()
+    assert "bypass-managed" in text, "provenance marker is what makes the cleanup safe"
+    assert "elif os.path.exists(marker):" in text, \
+        "removal must be conditional on this installer having set the keys"
+    assert "if not os.path.exists(marker):" in text, \
+        "the pre-existing values are snapshotted once, not overwritten on every run"
+    assert "prev['defaultMode']" in text, \
+        "turning bypass off must restore the owner's own value, not just delete the key"
+    # And the marker must live outside Claude Code's own settings file.
+    assert "~/.config/ccfleet/bypass-managed" in text, \
+        "do not add non-standard keys to Claude Code's settings.json"
+
+
 def test_bypass_says_so_out_loud():
     text = INSTALL.read_text()
     assert "PERMISSION PROMPTS ARE OFF" in text, \
