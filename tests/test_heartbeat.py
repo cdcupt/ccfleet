@@ -44,3 +44,18 @@ def test_the_new_credential_fields_survive_validation():
         "profile_fetched_at": 1_700_000_000_000, "plan": "default_claude_max_20x"}}, "node-a")
     assert out["credentials"]["profile_fetched_at"] == 1_700_000_000_000
     assert out["credentials"]["plan"] == "default_claude_max_20x"
+
+
+def test_reconcile_is_absent_until_a_node_actually_reports_one():
+    """An invented skeleton of Nones is truthy, so every node would look as though
+    it had reconciled at least once."""
+    from ccfleetd.heartbeat import validate_heartbeat
+    assert "reconcile" not in validate_heartbeat({"node_id": "n"}, "n")
+    assert "reconcile" not in validate_heartbeat(
+        {"node_id": "n", "reconcile": {"upgrade": {}}}, "n")
+    assert "reconcile" not in validate_heartbeat(
+        {"node_id": "n", "reconcile": "not a mapping"}, "n")
+    reported = validate_heartbeat(
+        {"node_id": "n", "reconcile": {"upgrade": {"to": "2.1.99", "ok": True}}}, "n")
+    assert reported["reconcile"]["upgrade"]["to"] == "2.1.99"
+    assert reported["reconcile"]["upgrade"]["ok"] is True
