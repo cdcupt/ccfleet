@@ -608,6 +608,7 @@ claude
       <tr><td><code>CCFLEET_DISK_WARN_PCT</code>, <code>CCFLEET_DISK_CRIT_PCT</code></td><td>85, 95</td><td>Disk thresholds</td></tr>
       <tr><td><code>CCFLEET_CHECK_INTERVAL_S</code></td><td>60</td><td>Periodic evaluation interval</td></tr>
       <tr><td><code>CCFLEET_RETENTION_DAYS</code></td><td>30</td><td>Heartbeat history kept</td></tr>
+      <tr><td><code>CCFLEET_BYPASS_BY_DEFAULT</code></td><td>off</td><td>On: the printed install command carries <code>--bypass-permissions</code>, so new nodes run with no permission prompts. The owner also has passwordless sudo, so nothing then stands between a tool call and root &mdash; turn it on only for a fleet you own.</td></tr>
     </tbody>
   </table></div>
 

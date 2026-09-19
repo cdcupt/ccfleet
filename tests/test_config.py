@@ -59,3 +59,31 @@ def test_bypass_by_default_rejects_a_value_it_cannot_read():
     # Silently treating "maybe" as false would turn prompts back on without a word.
     with pytest.raises(ConfigError, match="BYPASS_BY_DEFAULT"):
         Config.from_env({"CCFLEET_ADMIN_TOKEN": "x" * 32, "CCFLEET_BYPASS_BY_DEFAULT": "maybe"})
+
+
+def test_every_config_option_is_documented_where_operators_look():
+    """A setting absent from the env example is a setting nobody finds.
+
+    This caught CCFLEET_BYPASS_BY_DEFAULT shipping undocumented; it exists so the
+    next option cannot do the same.
+    """
+    import pathlib, re
+    from ccfleetd.config import Config, ENV_PREFIX
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    example = (root / "deploy" / "ccfleetd.env.example").read_text()
+    guidebook = (root / "docs" / "guidebook.html").read_text()
+
+    # Derived, not hand-listed, so a new field is covered the moment it is added.
+    fields = {f.name for f in Config.__dataclass_fields__.values()}
+    # bind_host/bind_port arrive together as CCFLEET_BIND; db_path is CCFLEET_DB.
+    special = {"bind_host": "BIND", "bind_port": "BIND", "db_path": "DB",
+               "admin_user": "ADMIN_USER", "admin_token": "ADMIN_TOKEN"}
+    expected = {ENV_PREFIX + special.get(f, f.upper()) for f in fields}
+
+    missing = sorted(v for v in expected if v not in example)
+    assert not missing, f"not in deploy/ccfleetd.env.example: {missing}"
+
+    # The security-relevant one must also reach the guidebook's reference table.
+    assert ENV_PREFIX + "BYPASS_BY_DEFAULT" in guidebook
+    assert re.search(r"passwordless sudo", guidebook)
