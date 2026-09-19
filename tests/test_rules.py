@@ -88,3 +88,24 @@ def test_multiple_findings_are_all_reported(cfg):
                    credentials={"present": False})
     assert rule_names(rules.evaluate(NODE, hb, None, NOW, cfg)) == [
         "claude_missing", "credentials_missing", "disk_high"]
+
+
+def test_one_missed_claude_probe_is_not_a_broken_node(cfg):
+    """The binary is a symlink the installer replaces; a probe can land mid-swap."""
+    working = heartbeat(NOW - 300)
+    missed = heartbeat(NOW, claude={"version": None, "path": None})
+    assert "claude_missing" not in rule_names(rules.evaluate(NODE, missed, working, NOW, cfg)), \
+        "a single miss straight after a good sample is a transient, not a broken node"
+
+
+def test_two_missed_probes_in_a_row_do_alert(cfg):
+    missed = heartbeat(NOW, claude={"version": None, "path": None})
+    earlier = heartbeat(NOW - 300, claude={"version": None, "path": None})
+    assert "claude_missing" in rule_names(rules.evaluate(NODE, missed, earlier, NOW, cfg)), \
+        "a node that really lost claude must still alert, one interval later"
+
+
+def test_a_node_that_never_had_claude_alerts_immediately(cfg):
+    """With no earlier heartbeat there is nothing to call this a blip."""
+    missed = heartbeat(NOW, claude={"version": None, "path": None})
+    assert "claude_missing" in rule_names(rules.evaluate(NODE, missed, None, NOW, cfg))

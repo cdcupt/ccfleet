@@ -74,3 +74,16 @@ def test_docs_tell_people_which_server_to_attach_to():
         if "attach -t remote-control" in text:
             assert "-L ccfleet-rc attach -t remote-control" in text, \
                 f"{rel} sends people to the wrong tmux server"
+
+
+def test_the_unit_that_runs_claude_has_the_autoupdater_off():
+    """ccfleet-agent runs `claude --version`, the call that can trigger an update."""
+    agent = _service(UNITS / "ccfleet-agent.service")
+    assert agent.get("Environment") == "DISABLE_AUTOUPDATER=1", \
+        "an update mid-probe swaps the binary and the node looks broken"
+
+
+def test_every_unit_that_invokes_claude_disables_the_autoupdater():
+    for name in ("ccfleet-agent.service", "claude-remote-control.service", "ccfleet-shell.service"):
+        text = (UNITS / name).read_text()
+        assert "DISABLE_AUTOUPDATER=1" in text, f"{name} may run claude without staging upgrades"

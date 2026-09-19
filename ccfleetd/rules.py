@@ -49,9 +49,21 @@ def _heartbeat_findings(node: Mapping[str, Any], latest: Optional[Mapping[str, A
     return []
 
 
-def _claude_findings(node: Mapping[str, Any], payload: Mapping[str, Any]) -> list[Finding]:
+def _claude_findings(node: Mapping[str, Any], payload: Mapping[str, Any],
+                     previous: Optional[Mapping[str, Any]] = None) -> list[Finding]:
     version = _get(payload, "claude", "version")
     if not version:
+        # One miss is usually the binary being swapped mid-upgrade, not a broken
+        # node: the installer leaves ~/.local/bin/claude a symlink, and a probe
+        # that lands while it is being replaced sees nothing. Observed on a fresh
+        # node, which raised a critical "claude is not installed" between two
+        # heartbeats that both found 2.1.278.
+        #
+        # So require two in a row. A node that genuinely lost claude still alerts
+        # one interval later, and a node that never had it alerts immediately,
+        # because there is then no earlier heartbeat that found one.
+        if previous is not None and _get(previous, "claude", "version"):
+            return []
         return [Finding("claude_missing", LEVEL_CRITICAL,
                         "claude is not installed or not on PATH for the owner user")]
     pinned = node.get("pinned_version") or ""
@@ -129,7 +141,7 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
         return tuple(findings)
     payload = latest.get("payload") or {}
     prev_payload = (previous or {}).get("payload") if previous else None
-    findings += _claude_findings(node, payload)
+    findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg)
     findings += _disk_findings(payload, cfg)
     findings += _egress_findings(payload, prev_payload)
