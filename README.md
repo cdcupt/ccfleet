@@ -147,12 +147,18 @@ Each transition is logged and, when configured, sent to Telegram.
 ```bash
 uv run --python 3.12 --with pytest --with pytest-cov --with ruff --no-project -- ruff check .
 uv run --python 3.12 --with pytest --with pytest-cov --no-project -- pytest --cov
-uvx --from shellcheck-py shellcheck -S warning node/*.sh profiles/ccp
+uvx --from shellcheck-py shellcheck -S warning node/*.sh node/attach.sh profiles/ccp
 ```
 
-Python 3.9+, no runtime dependencies. The GitHub Actions workflow lives at
-`deploy/ci/github-ci.yml`; move it to `.github/workflows/ci.yml` from a machine
-whose token has the `workflow` scope (`gh auth refresh -h github.com -s workflow`).
+Python 3.9+, no runtime dependencies. CI runs on every push and pull request
+(`.github/workflows/ci.yml`): the test suite on 3.9, 3.12 and 3.13 with coverage
+held above 80%, shellcheck and `bash -n` over every shell file, and a parse check
+of the systemd units and the launchd plist. The unit check is there because
+several of this project's real bugs were unit-file mistakes.
+
+The shell job selects files by shebang **or** by a `# shellcheck shell=`
+directive, so `node/attach.sh`, which is sourced rather than executed and has no
+shebang, is still checked.
 
 ## License
 
