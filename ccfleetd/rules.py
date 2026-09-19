@@ -77,7 +77,11 @@ def _claude_findings(node: Mapping[str, Any], payload: Mapping[str, Any],
 
 
 def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) -> list[Finding]:
-    present = _get(payload, "credentials", "present")
+    # `claude auth status` is authoritative when the node could ask it; a present
+    # credentials file can still hold a login that no longer works.
+    logged_in = _get(payload, "credentials", "logged_in")
+    present = logged_in if isinstance(logged_in, bool) else _get(payload, "credentials",
+                                                                 "present")
     if present is None:
         return []
     if present is False:

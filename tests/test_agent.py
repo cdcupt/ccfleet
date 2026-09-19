@@ -492,3 +492,57 @@ def test_an_obsolete_upgrade_record_is_dropped():
     # Unrelated bookkeeping is never touched.
     assert agent.prune_state({"channel": {"target": "stable"}}, {}, None) == {
         "channel": {"target": "stable"}}
+
+
+# -- claude auth status ----------------------------------------------------------
+
+AUTH_JSON = json.dumps({
+    "loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
+    "subscriptionType": "max", "analyticsDisabled": False,
+    # Everything below is the owner's, and none of it is this agent's business.
+    "email": "someone@example.com", "orgId": "a7ba7d79-0aa7-4f6f",
+    "orgName": "someone@example.com's Organization",
+    "projectsDirectory": "/home/erik/.claude/projects",
+    "configDirectory": "/home/erik/.claude",
+})
+
+
+def test_auth_status_reports_the_facts_and_none_of_the_identity(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    out = agent.auth_status(fake_runner(stdout=AUTH_JSON))
+    assert out == {"logged_in": True, "auth_method": "claude.ai",
+                   "api_provider": "firstParty", "subscription_type": "max"}
+    blob = json.dumps(out)
+    for private in ("someone@example.com", "a7ba7d79", "Organization", "/home/erik"):
+        assert private not in blob
+
+
+def test_auth_status_says_nothing_rather_than_guessing(tmp_path, monkeypatch):
+    """{} means "could not ask", which is not the same as "not signed in"."""
+    monkeypatch.setattr(agent, "find_claude", lambda: None)
+    assert agent.auth_status(fake_runner(stdout=AUTH_JSON)) == {}
+    _claude_at(tmp_path, monkeypatch)
+    assert agent.auth_status(fake_runner(stdout="")) == {}
+    assert agent.auth_status(fake_runner(stdout="not json")) == {}
+    assert agent.auth_status(fake_runner(stdout="[1,2,3]")) == {}
+    # A logged-out node is a fact, not a failure to ask.
+    assert agent.auth_status(fake_runner(stdout='{"loggedIn": false}')) == {"logged_in": False}
+
+
+def test_the_cli_answer_overrides_a_file_that_merely_exists(tmp_path, monkeypatch):
+    """A credentials file can outlive the login it holds."""
+    _claude_at(tmp_path, monkeypatch)
+    (tmp_path / ".credentials.json").write_text(json.dumps(
+        {"claudeAiOauth": {"expiresAt": 1, "subscriptionType": "max"}}))
+    cfg = agent.AgentConfig(url="https://f.example", node_id="node-a", token="t",
+                            claude_config_dir=tmp_path, state_path=tmp_path / "s.json")
+
+    def runner(argv, **kw):
+        out = '{"loggedIn": false}' if argv[1:3] == ["auth", "status"] else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    creds = agent.build_payload(cfg, runner=runner,
+                               opener=lambda *a, **k: FakeResponse(b""))["credentials"]
+    assert creds["logged_in"] is False
+    # The file is there, but the login behind it is not, so present follows the CLI.
+    assert creds["present"] is False
