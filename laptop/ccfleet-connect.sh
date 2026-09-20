@@ -51,13 +51,14 @@ file_mode() {
   # fallback then never runs and chmod is handed nonsense. So try each and keep
   # the first answer that actually looks like a mode.
   local mode
-  for fmt in "-c %a" "-f %OLp"; do
-    # shellcheck disable=SC2086 - the format is two deliberate words
-    mode="$(stat $fmt "$1" 2>/dev/null)" || continue
-    case "$mode" in
-      [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) printf '%s' "$mode"; return 0 ;;
-    esac
-  done
+  mode="$(stat -c '%a' "$1" 2>/dev/null)"
+  case "$mode" in
+    [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) printf '%s' "$mode"; return 0 ;;
+  esac
+  mode="$(stat -f '%OLp' "$1" 2>/dev/null)"
+  case "$mode" in
+    [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) printf '%s' "$mode"; return 0 ;;
+  esac
   printf '600'
 }
 
