@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 MAX_STR = 200
+# Larger than any real measurement, small enough to stay a float.
+MAX_NUMBER = 10 ** 15
 # One field genuinely needs more room. A real sign-in URL carries the client id,
 # both redirect URIs, the full scope list, a PKCE challenge and the state
 # parameter: measured at 496 characters against a live node. Capped at MAX_STR it
@@ -37,6 +39,13 @@ def _str(value: Any, limit: int = MAX_STR) -> Optional[str]:
 
 def _num(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    # Python integers are arbitrary precision, so an authenticated node can post
+    # a 400-digit one. Anything that later does float arithmetic on it — the
+    # dashboard's charts, for instance — raises OverflowError and takes the page
+    # down, and math.isnan below would raise on it first anyway. Every field
+    # here is a measurement, and none of them is legitimately this large.
+    if isinstance(value, int) and abs(value) > MAX_NUMBER:
         return None
     if math.isnan(value) or math.isinf(value):
         return None

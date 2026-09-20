@@ -935,3 +935,19 @@ def test_discarded_oversized_lines_are_still_charged(monkeypatch):
     charged = sum(c for _, c in pairs)
     assert charged >= 5000, f"discarded bytes escaped the budget: {charged}"
     assert [ln for ln, _ in pairs if ln] == ["short"]
+
+
+def test_skipping_a_partial_tail_record_is_bounded(tmp_path, monkeypatch):
+    """readline() is unbounded: one enormous unterminated record would be
+    materialised whole, defeating the cap _seek_to_tail exists to apply."""
+    monkeypatch.setattr(agent, "USAGE_MAX_BYTES_PER_FILE", 1000)
+    monkeypatch.setattr(agent, "USAGE_MAX_LINE", 256)
+    monkeypatch.setattr(agent, "USAGE_CHUNK", 128)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    good = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                       "message": {"usage": {"output_tokens": 6}}})
+    # A long unterminated stretch, then a real record at the very end.
+    (d / "t.jsonl").write_text("z" * 5000 + "\n" + good + "\n")
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 6

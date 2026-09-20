@@ -512,10 +512,22 @@ def _seek_to_tail(fh: Any, path: Path) -> int:
         return 0
     try:
         fh.seek(size - USAGE_MAX_BYTES_PER_FILE)
-        # The seek lands mid-line; that partial line is discarded. It still had
-        # to be read, so it is charged to the budget like everything else — one
-        # enormous line per file would otherwise slip past the ceiling.
-        return len(fh.readline())
+        # The seek lands mid-line; that partial line is discarded. Read it in
+        # chunks rather than with readline(), which is unbounded: an enormous
+        # unterminated record would otherwise be materialised whole, defeating
+        # the cap this function exists to apply. Charged to the budget either way.
+        skipped = 0
+        while skipped <= USAGE_MAX_LINE:
+            chunk = fh.read(USAGE_CHUNK)
+            if not chunk:
+                break
+            skipped += len(chunk)
+            newline = chunk.find("\n")
+            if newline != -1:
+                # Step back to just after that newline so reading resumes clean.
+                fh.seek(fh.tell() - (len(chunk) - newline - 1))
+                break
+        return skipped
     except (OSError, ValueError):
         try:
             fh.seek(0)
