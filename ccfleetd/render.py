@@ -160,11 +160,14 @@ def _actions_html(row: Mapping[str, Any], csrf: str) -> str:
 
 def _row_html(row: Mapping[str, Any], now: float) -> str:
     version = _fmt(row["claude_version"])
-    if row["pinned_version"]:
-        # A channel is never "≠ pinned": tracking it is what the pin asks for.
-        mark = ("" if is_channel(row["pinned_version"])
-                or row["claude_version"] == row["pinned_version"] else " ≠ pinned")
-        version += f' <span class="muted">{escape(row["pinned_version"] + mark)}</span>'
+    pinned = row["pinned_version"]
+    # Only say the pin when it tells you something. Repeating it beside an equal
+    # installed version rendered "2.1.278 2.1.278", which reads as a glitch.
+    if pinned and is_channel(pinned):
+        version += f' <span class="muted">{escape(pinned)}</span>'
+    elif pinned and row["claude_version"] != pinned:
+        drift = pinned + " \u2260 pinned"
+        version += f' <span class="muted">{escape(drift)}</span>'
     # A drifted version with no explanation reads as "not tried yet". Say when the
     # node tried and failed, because that is the case an operator must act on.
     upgrade = row.get("last_upgrade") or {}
