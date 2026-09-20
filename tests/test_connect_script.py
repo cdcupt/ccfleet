@@ -141,3 +141,42 @@ def test_help_states_the_one_thing_a_token_cannot_do(home, tmp_path):
     out = run(home, tmp_path, "--help").stdout
     assert "Remote Control" in out
     assert "setup-token" in out
+
+
+HOSTILE = "weird home; touch /tmp/ccfleet-pwned $USER"
+
+
+def test_a_path_with_spaces_and_metacharacters_is_quoted(tmp_path):
+    """The generated line lands in a file every new shell sources. An unquoted
+    path with a space breaks the shell; one with a metacharacter runs it."""
+    home = tmp_path / HOSTILE
+    (home / ".config" / "ccfleet").mkdir(parents=True)
+    (home / ".zshrc").write_text("# the user's own line\n")
+
+    result = run(home, tmp_path, GOOD_TOKEN)
+    assert result.returncode == 0, result.stderr
+
+    line = [ln for ln in (home / ".zshrc").read_text().splitlines()
+            if "CLAUDE_CODE_OAUTH_TOKEN" in ln][0]
+    # The whole path sits inside single quotes, so none of it is interpreted.
+    assert "'" in line and "; touch" not in line.replace(f"'{home}", "")
+    assert str(home) in line
+
+    # And a real shell sourcing it loads the token rather than choking.
+    probe = subprocess.run(
+        ["/bin/sh", "-c", f". '{home}/.zshrc'; printf '%s' \"${{CLAUDE_CODE_OAUTH_TOKEN:+set}}\""],
+        capture_output=True, text=True, timeout=30)
+    assert probe.returncode == 0, probe.stderr
+    assert probe.stdout == "set"
+    assert not Path("/tmp/ccfleet-pwned").exists(), "the path was executed, not quoted"
+
+
+def test_a_path_containing_a_quote_is_still_safe(tmp_path):
+    home = tmp_path / "it's here"
+    (home / ".config" / "ccfleet").mkdir(parents=True)
+    (home / ".zshrc").write_text("# keep me\n")
+    assert run(home, tmp_path, GOOD_TOKEN).returncode == 0
+    probe = subprocess.run(
+        ["/bin/sh", "-c", f". \"{home}/.zshrc\"; printf '%s' \"${{CLAUDE_CODE_OAUTH_TOKEN:+set}}\""],
+        capture_output=True, text=True, timeout=30)
+    assert probe.stdout == "set", probe.stderr

@@ -46,17 +46,28 @@ strip_block() {
   ' "$rc" > "$rc.ccfleet-tmp" && mv "$rc.ccfleet-tmp" "$rc"
 }
 
+sq() {
+  # Single-quote a path for embedding in a shell line, closing and reopening the
+  # quote around any literal quote. The path lands in a file every new shell
+  # sources, so an unquoted one with a space breaks the shell and one with a
+  # metacharacter runs whatever it says.
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 write_block() {
-  local rc="$1"
+  local rc="$1" quoted
+  quoted="$(sq "$TOKEN_FILE")"
   strip_block "$rc"
   {
     printf '%s\n' "$MARK_BEGIN"
     if [ "${SHELL##*/}" = "fish" ]; then
+      # fish has no $(...); it uses (...) and its own quoting, but single quotes
+      # are literal there too.
       printf 'test -r %s; and set -gx CLAUDE_CODE_OAUTH_TOKEN (cat %s)\n' \
-             "$TOKEN_FILE" "$TOKEN_FILE"
+             "$quoted" "$quoted"
     else
       printf '[ -r %s ] && export CLAUDE_CODE_OAUTH_TOKEN="$(cat %s)"\n' \
-             "$TOKEN_FILE" "$TOKEN_FILE"
+             "$quoted" "$quoted"
     fi
     printf '%s\n' "$MARK_END"
   } >> "$rc"
