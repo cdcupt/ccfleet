@@ -98,11 +98,19 @@ cmd_connect() {
 cmd_status() {
   if [ ! -r "$TOKEN_FILE" ]; then
     note "not connected (no $TOKEN_FILE)"
-    [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && note "but CLAUDE_CODE_OAUTH_TOKEN is set in this shell"
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+      note "but CLAUDE_CODE_OAUTH_TOKEN is set in this shell"
+    fi
     return 0
   fi
   note "token file : $TOKEN_FILE"
-  note "in shell   : ${CLAUDE_CODE_OAUTH_TOKEN:+yes}${CLAUDE_CODE_OAUTH_TOKEN:-no, open a new terminal}"
+  # Never interpolate the token itself. ${VAR:-default} expands to the VALUE
+  # when set, so the obvious one-liner here printed the whole credential.
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    note "in shell   : yes"
+  else
+    note "in shell   : no, open a new terminal"
+  fi
   command -v claude >/dev/null 2>&1 || { note "claude     : not installed"; return 0; }
   local out
   out="$(CLAUDE_CODE_OAUTH_TOKEN="$(cat "$TOKEN_FILE")" claude auth status 2>&1 || true)"
