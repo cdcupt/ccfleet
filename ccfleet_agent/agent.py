@@ -406,27 +406,64 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
 USAGE_WINDOW_DAYS = 14
 # A busy node accumulates a lot of transcript. These bounds keep a five-minute
 # heartbeat from turning into a filesystem scan.
-USAGE_MAX_FILES = 400
-USAGE_MAX_BYTES_PER_FILE = 8 * 1024 * 1024
+USAGE_MAX_FILES = 200
+USAGE_MAX_BYTES_PER_FILE = 4 * 1024 * 1024
+# The real guard is the total, not the per-file cap: 200 files at 4 MiB each
+# would be 800 MiB of reading on every five-minute heartbeat. Files are taken
+# newest first, so exhausting this budget loses the oldest data in the window
+# rather than the most recent.
+USAGE_MAX_BYTES_TOTAL = 32 * 1024 * 1024
+# Enumerating every transcript is itself the unbounded part: the file cap only
+# applies after the walk. Stop walking at this many paths.
+USAGE_MAX_SCAN = 5000
 USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
                     "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
 def _usage_files(root: Path, since: float) -> list[Path]:
     """Transcripts touched inside the window, newest first and capped."""
+    fresh = []
+    seen = 0
     try:
-        found = [p for p in root.glob("**/*.jsonl") if p.is_file()]
+        for path in root.glob("**/*.jsonl"):
+            seen += 1
+            if seen > USAGE_MAX_SCAN:
+                log.debug("stopped walking transcripts at %d paths", USAGE_MAX_SCAN)
+                break
+            try:
+                # One stat, not two: this runs over every transcript on the node.
+                info = path.stat()
+            except OSError:
+                continue
+            if info.st_mtime >= since:
+                fresh.append((info.st_mtime, path))
     except OSError:
         return []
-    fresh = []
-    for path in found:
+    fresh.sort(key=lambda pair: pair[0], reverse=True)
+    return [path for _, path in fresh[:USAGE_MAX_FILES]]
+
+
+def _seek_to_tail(fh: Any, path: Path) -> None:
+    """For an oversized transcript, start near its end rather than its start.
+
+    Transcripts are append-only, so the newest records are last. Reading the
+    first N bytes of a large one skips exactly the recent usage this is meant to
+    report — the cap would silently invert the answer rather than trim it.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size <= USAGE_MAX_BYTES_PER_FILE:
+        return
+    try:
+        fh.seek(size - USAGE_MAX_BYTES_PER_FILE)
+        fh.readline()          # discard the partial line the seek landed inside
+    except (OSError, ValueError):
         try:
-            if path.stat().st_mtime >= since:
-                fresh.append((path.stat().st_mtime, path))
+            fh.seek(0)
         except OSError:
-            continue
-    fresh.sort(reverse=True)
-    return [p for _, p in fresh[:USAGE_MAX_FILES]]
+            pass
 
 
 def usage_summary(config_dir: Path, now: Optional[float] = None,
@@ -436,19 +473,25 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
     since = now - window_days * 86400
     root = config_dir / "projects"
     oldest_day = time.strftime("%Y-%m-%d", time.gmtime(since))
+    newest_day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    budget = USAGE_MAX_BYTES_TOTAL
     totals: dict[str, int] = {k: 0 for k in USAGE_TOKEN_KEYS}
     by_day: dict[str, int] = {}
     models: set[str] = set()
     sessions = 0
 
     for path in _usage_files(root, since):
+        if budget <= 0:
+            break
         counted = False
         try:
             with path.open(encoding="utf-8", errors="replace") as fh:
+                _seek_to_tail(fh, path)
                 read = 0
                 for line in fh:
                     read += len(line)
-                    if read > USAGE_MAX_BYTES_PER_FILE:
+                    budget -= len(line)
+                    if read > USAGE_MAX_BYTES_PER_FILE or budget <= 0:
                         break
                     if not line.startswith("{"):
                         continue
@@ -462,7 +505,7 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
                     if not isinstance(usage, Mapping):
                         continue
                     stamp = _usage_day(record.get("timestamp"))
-                    if not _in_window(stamp, oldest_day):
+                    if not _in_window(stamp, oldest_day, newest_day):
                         continue
                     counted = True
                     turn = 0
@@ -500,7 +543,7 @@ def _usage_day(raw: Any) -> Optional[str]:
     return day if day[4] == "-" and day[7] == "-" and day[:4].isdigit() else None
 
 
-def _in_window(day: Optional[str], oldest_day: str) -> bool:
+def _in_window(day: Optional[str], oldest_day: str, newest_day: str) -> bool:
     """Is this record's own day inside the window?
 
     Selecting files by modification time is not enough: one long-lived session
@@ -509,7 +552,10 @@ def _in_window(day: Optional[str], oldest_day: str) -> bool:
     a record whose date cannot be read is not counted — an unplaceable number is
     worse than a missing one in a figure that claims a window.
     """
-    return day is not None and day >= oldest_day
+    # Both ends. A record dated in the future — a skewed clock, or a node that
+    # simply wrote a wrong timestamp — would otherwise be counted in a window it
+    # is not in, and would inflate the total it appears in.
+    return day is not None and oldest_day <= day <= newest_day
 
 
 # -- reconcile -------------------------------------------------------------------

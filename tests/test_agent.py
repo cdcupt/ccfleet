@@ -803,3 +803,63 @@ def test_sessions_counts_transcripts_that_actually_contributed(tmp_path):
                                           "message": {"usage": {"output_tokens": 9}}}])
     u = agent.usage_summary(tmp_path, now=1789900000.0)
     assert u["sessions"] == 1 and u["total_tokens"] == 9
+
+
+def test_a_future_dated_record_is_not_counted(tmp_path):
+    """A skewed clock or a wrong timestamp would otherwise inflate the window."""
+    _transcript(tmp_path, "skewed.jsonl", [
+        {"timestamp": "2027-01-01T00:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
+        {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 8}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 8
+
+
+def test_the_scan_stops_at_a_total_byte_budget(tmp_path, monkeypatch):
+    """200 files at the per-file cap would be 800 MiB read every five minutes."""
+    monkeypatch.setattr(agent, "USAGE_MAX_BYTES_TOTAL", 2000)
+    line = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                       "message": {"usage": {"output_tokens": 1}}}) + "\n"
+    for i in range(12):
+        _transcript(tmp_path, f"f{i}.jsonl", [])
+        (tmp_path / "projects" / "proj" / f"f{i}.jsonl").write_text(line * 20)
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    # It stops early rather than reading everything, but still reports something.
+    assert 0 < u["total_tokens"] < 12 * 20
+
+
+def test_an_oversized_transcript_is_read_from_its_END(tmp_path, monkeypatch):
+    """Transcripts are append-only: the newest records are last.
+
+    Capping from the start would skip exactly the recent usage this reports —
+    inverting the answer rather than trimming it.
+    """
+    monkeypatch.setattr(agent, "USAGE_MAX_BYTES_PER_FILE", 2000)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    old_line = json.dumps({"timestamp": "2026-09-18T10:00:00Z",
+                           "message": {"usage": {"output_tokens": 1}}}) + "\n"
+    new_line = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                           "message": {"usage": {"output_tokens": 500}}}) + "\n"
+    # Plenty of old records first, then the recent one at the very end.
+    (d / "big.jsonl").write_text(old_line * 200 + new_line)
+
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    days = {p["day"]: p["tokens"] for p in u["by_day"]}
+    assert days.get("2026-09-19") == 500, "the newest record must survive the cap"
+    # Only the tail was read, so most of the 200 old records were skipped. Reading
+    # from the start would have given 200 old and lost the 500 entirely.
+    assert days.get("2026-09-18", 0) < 50, f"read too far back: {days}"
+
+
+def test_the_transcript_walk_itself_is_bounded(tmp_path, monkeypatch):
+    """USAGE_MAX_FILES only applies after the walk, so the walk needs its own cap."""
+    monkeypatch.setattr(agent, "USAGE_MAX_SCAN", 5)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    line = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                       "message": {"usage": {"output_tokens": 1}}}) + "\n"
+    for i in range(40):
+        (d / f"f{i:03d}.jsonl").write_text(line)
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert 0 < u["sessions"] <= 5, f"walked more than the cap: {u['sessions']}"
