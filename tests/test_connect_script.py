@@ -241,3 +241,42 @@ def test_an_rc_with_no_trailing_newline_is_not_corrupted(home, tmp_path):
     body = rc.read_text()
     assert "ccfleet connect" not in body
     assert "export PATH=/opt/bin:$PATH" in body
+
+
+def test_an_unfinished_block_is_refused_not_truncated(home, tmp_path):
+    """A begin marker with no end means an interrupted write. Stripping from
+    there to EOF would delete everything the user wrote after it."""
+    rc = home / ".zshrc"
+    rc.write_text("# before\n# >>> ccfleet connect >>>\n"
+                  "export SOMETHING_IMPORTANT=1\nalias deploy='make ship'\n")
+    for args in (["--remove"], [GOOD_TOKEN]):
+        result = run(home, tmp_path, *args)
+        assert result.returncode != 0, f"{args} should refuse"
+        assert "unfinished ccfleet block" in result.stderr
+    body = rc.read_text()
+    assert "SOMETHING_IMPORTANT" in body and "make ship" in body, "user content destroyed"
+
+
+def test_the_token_can_be_given_without_a_command_line(home, tmp_path):
+    """On a command line the credential lands in shell history and in `ps`."""
+    env = dict(os.environ)
+    env.update({
+        "HOME": str(home), "SHELL": "/bin/zsh",
+        "CCFLEET_TOKEN_FILE": str(token_path(home)),
+        "PATH": f"{fake_claude(tmp_path)}:{env['PATH']}",
+    })
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    result = subprocess.run([str(SCRIPT), "--stdin"], input=GOOD_TOKEN + "\n",
+                            capture_output=True, text=True, env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert token_path(home).read_text().strip() == GOOD_TOKEN
+
+
+def test_the_printed_hint_quotes_the_path(tmp_path):
+    home = tmp_path / "spaced home"
+    (home / ".config" / "ccfleet").mkdir(parents=True)
+    (home / ".zshrc").write_text("# keep\n")
+    out = run(home, tmp_path, GOOD_TOKEN).stdout
+    hint = [ln for ln in out.splitlines() if "export CLAUDE_CODE_OAUTH_TOKEN" in ln][0]
+    # Copy-pasteable on a path with a space means the path must be quoted.
+    assert "'" in hint and str(home) in hint

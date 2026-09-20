@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Connect this device to a Claude account, once, with no browser login.
 #
-#   ccfleet-connect <token>     wire this device up
+#   ccfleet-connect             prompt for the token (does not echo) - preferred
+#   echo "$TOKEN" | ccfleet-connect --stdin
 #   ccfleet-connect --status    what is this device using
 #   ccfleet-connect --remove    undo it
+#
+# Passing the token as an argument works but is discouraged: it lands in shell
+# history and is visible in `ps` to anyone else on the machine.
 #
 # The token comes from `claude setup-token`, run by the account owner. It is
 # Anthropic's own long-lived credential (one year, inference scope), so nothing
@@ -46,6 +50,13 @@ strip_block() {
   # Remove any previous block, leaving the rest of the file untouched.
   local rc="$1" mode
   [ -f "$rc" ] || return 0
+  # A begin marker with no matching end means a previous write was interrupted.
+  # Stripping from there to EOF would delete everything the user wrote after it,
+  # so refuse and say so rather than silently destroying their rc.
+  if grep -qxF "$MARK_BEGIN" "$rc" 2>/dev/null && ! grep -qxF "$MARK_END" "$rc" 2>/dev/null; then
+    die "$rc has an unfinished ccfleet block (a '$MARK_BEGIN' with no matching end).
+     Remove those lines by hand first; refusing to guess where the block ends."
+  fi
   mode="$(file_mode "$rc")"
   awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
     $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }
@@ -93,6 +104,22 @@ write_block() {
   } >> "$rc"
 }
 
+read_token() {
+  # A credential on the command line lands in shell history and is visible in
+  # `ps` to anyone on the machine. Prefer stdin, or a prompt that does not echo.
+  local token=""
+  if [ ! -t 0 ]; then
+    IFS= read -r token || true
+  else
+    printf 'Paste the token from `claude setup-token` (input hidden): ' >&2
+    stty -echo 2>/dev/null || true
+    IFS= read -r token || true
+    stty echo 2>/dev/null || true
+    printf '\n' >&2
+  fi
+  printf '%s' "$token"
+}
+
 cmd_connect() {
   local token="$1"
   case "$token" in
@@ -121,7 +148,7 @@ cmd_connect() {
   note "$rc now exports it for new shells"
   note ""
   note "This shell does not have it yet. Either open a new terminal, or run:"
-  note "    export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat $TOKEN_FILE)\""
+  note "    export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat $(sq "$TOKEN_FILE"))\""
   note ""
   note "Then just use claude. No login, on this or any device you do this on."
 }
@@ -169,8 +196,12 @@ main() {
   case "${1:-}" in
     --status|-s) cmd_status ;;
     --remove|-r) cmd_remove ;;
-    -h|--help|"")
-      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h|--help)
+      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+    "")
+      # No argument: read the token without it ever reaching a command line.
+      cmd_connect "$(read_token)" ;;
+    --stdin) cmd_connect "$(read_token)" ;;
     -*) die "unknown option: $1" ;;
     *)  cmd_connect "$1" ;;
   esac
