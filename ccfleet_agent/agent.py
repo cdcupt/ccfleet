@@ -399,6 +399,12 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
 # machine. It is NOT the OAuth usage endpoint, which would mean using the owner's
 # token outside Claude Code — see the project's compliance notes.
 #
+# Be precise about the privacy claim. Parsing a record decodes the whole of it,
+# conversation content included, so it IS read into memory here. What is
+# guaranteed is narrower and still worth having: nothing but counts is retained,
+# and nothing but counts is reported. The content is never copied out of the
+# parsed record, never stored, never logged and never sent.
+#
 # What this can say: how much this node has consumed. What it cannot say: how
 # much of a subscription window is left. That lives only behind /usage inside a
 # session, and this deliberately does not go looking for it.
@@ -468,9 +474,17 @@ def _seek_to_tail(fh: Any, path: Path) -> None:
 
 def usage_summary(config_dir: Path, now: Optional[float] = None,
                   window_days: int = USAGE_WINDOW_DAYS) -> dict[str, Any]:
-    """Token counts per day from local transcripts. Never reads message content."""
+    """Token counts per day from local transcripts.
+
+    Parsing a record decodes conversation content along with everything else;
+    what this guarantees is that nothing but counts is kept or returned.
+    """
     now = time.time() if now is None else now
-    since = now - window_days * 86400
+    # window_days counts calendar days INCLUDING today, so the oldest day is
+    # window_days - 1 back. Using a full window_days made the filter admit 15
+    # distinct dates while the series was trimmed to 14, so the total and the
+    # sparkline disagreed about the oldest one.
+    since = now - (window_days - 1) * 86400
     root = config_dir / "projects"
     oldest_day = time.strftime("%Y-%m-%d", time.gmtime(since))
     newest_day = time.strftime("%Y-%m-%d", time.gmtime(now))
@@ -530,7 +544,9 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
         "total_tokens": sum(totals.values()),
         "models": sorted(models)[:6],
         # Oldest to newest, so a sparkline can be drawn straight from it.
-        "by_day": [{"day": d, "tokens": by_day[d]} for d in sorted(by_day)][-window_days:],
+        # No trailing trim: the per-record filter already bounds this to the
+        # window, and trimming here is what made the series disagree with the total.
+        "by_day": [{"day": d, "tokens": by_day[d]} for d in sorted(by_day)],
         **totals,
     }
 

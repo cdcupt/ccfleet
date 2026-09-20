@@ -718,7 +718,7 @@ def _transcript(tmp_path, name, records):
     (d / name).write_text("\n".join(json.dumps(r) for r in records) + "\n")
 
 
-def test_usage_counts_tokens_from_transcripts_and_reads_no_content(tmp_path):
+def test_usage_reports_counts_and_no_conversation_content(tmp_path):
     secret = "the user's actual private conversation text"
     _transcript(tmp_path, "a.jsonl", [
         {"timestamp": "2026-09-18T10:00:00Z", "type": "user",
@@ -738,7 +738,8 @@ def test_usage_counts_tokens_from_transcripts_and_reads_no_content(tmp_path):
     assert u["sessions"] == 1 and u["models"] == ["claude-opus-5"]
     assert u["by_day"] == [{"day": "2026-09-18", "tokens": 370},
                            {"day": "2026-09-19", "tokens": 10}]
-    # The transcripts hold conversation content. Only counts may leave the node.
+    # Parsing decodes the content too — that is unavoidable when reading the
+    # record. The guarantee is that none of it is kept or returned, only counts.
     assert secret not in json.dumps(u)
 
 
@@ -863,3 +864,19 @@ def test_the_transcript_walk_itself_is_bounded(tmp_path, monkeypatch):
         (d / f"f{i:03d}.jsonl").write_text(line)
     u = agent.usage_summary(tmp_path, now=1789900000.0)
     assert 0 < u["sessions"] <= 5, f"walked more than the cap: {u['sessions']}"
+
+
+def test_the_window_is_n_calendar_days_and_the_total_matches_the_series(tmp_path):
+    """A full window_days of seconds admitted 15 distinct dates while the series
+    was trimmed to 14, so the headline total disagreed with the chart under it."""
+    # now = 2026-09-20; a 14-day window ending today starts on 2026-09-07.
+    _transcript(tmp_path, "span.jsonl", [
+        {"timestamp": "2026-09-06T23:59:00Z", "message": {"usage": {"output_tokens": 111}}},
+        {"timestamp": "2026-09-07T00:00:00Z", "message": {"usage": {"output_tokens": 7}}},
+        {"timestamp": "2026-09-20T00:00:00Z", "message": {"usage": {"output_tokens": 3}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    days = [p["day"] for p in u["by_day"]]
+    assert days == ["2026-09-07", "2026-09-20"], days
+    assert len(days) <= 14
+    assert u["total_tokens"] == sum(p["tokens"] for p in u["by_day"]) == 10
