@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """ccfleet node agent: posts one heartbeat about this node to the fleet server.
 
-Standard library only. Runs as the node owner's user and reads nothing but public
-facts about the machine, plus a narrow set of non-secret fields from two Claude
-Code files:
+Standard library only. Runs as the node owner's user. What it opens, and what it
+takes from each:
 
   ~/.claude/.credentials.json   modification time, access-token expiry, plan type
   ~/.claude.json                whether an account is signed in, when its profile
                                 was last fetched, and the rate-limit tier
+  claude auth status            the CLI's own answer on whether the login works
+  ~/.claude/projects/**.jsonl   session transcripts, for per-turn token counts
 
-The second is what makes a Mac reportable at all, since the credential itself
-lives in the Keychain there and this agent will not read it. That file also holds
-an email address, a full name, an account uuid and an organisation name; none of
-them are collected. Token values are never read into the payload, and the tests
-assert both of those.
+Be exact about the last one, because it is the sensitive one. Those transcripts
+are the owner's conversations, and parsing a record decodes the whole of it,
+content included. Nothing but the token counts and the model name is kept, and
+nothing but counts is reported; the content is never copied out of the parsed
+record, never stored, never logged and never sent. See usage_summary.
+
+`~/.claude.json` likewise holds an email address, a full name, an account uuid
+and an organisation name, and `claude auth status` returns an email address and
+an organisation; none of them are collected. It is also what makes a Mac
+reportable at all, since the credential there lives in the Keychain and this
+agent will not read it. Token values never reach the payload. Tests assert each
+of these, including with a secret written into a fixture transcript.
 """
 
 from __future__ import annotations
