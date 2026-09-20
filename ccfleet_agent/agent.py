@@ -449,7 +449,7 @@ def _usage_files(root: Path, since: float) -> list[Path]:
     return [path for _, path in fresh[:USAGE_MAX_FILES]]
 
 
-def _seek_to_tail(fh: Any, path: Path) -> None:
+def _seek_to_tail(fh: Any, path: Path) -> int:
     """For an oversized transcript, start near its end rather than its start.
 
     Transcripts are append-only, so the newest records are last. Reading the
@@ -459,17 +459,21 @@ def _seek_to_tail(fh: Any, path: Path) -> None:
     try:
         size = path.stat().st_size
     except OSError:
-        return
+        return 0
     if size <= USAGE_MAX_BYTES_PER_FILE:
-        return
+        return 0
     try:
         fh.seek(size - USAGE_MAX_BYTES_PER_FILE)
-        fh.readline()          # discard the partial line the seek landed inside
+        # The seek lands mid-line; that partial line is discarded. It still had
+        # to be read, so it is charged to the budget like everything else — one
+        # enormous line per file would otherwise slip past the ceiling.
+        return len(fh.readline())
     except (OSError, ValueError):
         try:
             fh.seek(0)
         except OSError:
             pass
+        return 0
 
 
 def usage_summary(config_dir: Path, now: Optional[float] = None,
@@ -485,6 +489,10 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
     # distinct dates while the series was trimmed to 14, so the total and the
     # sparkline disagreed about the oldest one.
     since = now - (window_days - 1) * 86400
+    # Files are selected by mtime but records by calendar day, so the cutoff has
+    # to be that day's midnight. Using a time of day would drop a transcript last
+    # written early on the oldest valid day, undercounting the stated window.
+    since = since - (since % 86400)
     root = config_dir / "projects"
     oldest_day = time.strftime("%Y-%m-%d", time.gmtime(since))
     newest_day = time.strftime("%Y-%m-%d", time.gmtime(now))
@@ -500,7 +508,7 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
         counted = False
         try:
             with path.open(encoding="utf-8", errors="replace") as fh:
-                _seek_to_tail(fh, path)
+                budget -= _seek_to_tail(fh, path)
                 read = 0
                 for line in fh:
                     read += len(line)

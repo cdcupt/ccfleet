@@ -880,3 +880,20 @@ def test_the_window_is_n_calendar_days_and_the_total_matches_the_series(tmp_path
     assert days == ["2026-09-07", "2026-09-20"], days
     assert len(days) <= 14
     assert u["total_tokens"] == sum(p["tokens"] for p in u["by_day"]) == 10
+
+
+def test_a_transcript_written_early_on_the_oldest_day_is_still_counted(tmp_path):
+    """Files are chosen by mtime, records by calendar day. If the file cutoff is a
+    time of day, a transcript last written early on the oldest valid day is
+    dropped and the stated window silently undercounts."""
+    import os
+    _transcript(tmp_path, "edge.jsonl", [
+        {"timestamp": "2026-09-07T01:00:00Z", "message": {"usage": {"output_tokens": 42}}},
+    ])
+    f = tmp_path / "projects" / "proj" / "edge.jsonl"
+    # now = 2026-09-20T15:46Z; 14-day window starts 2026-09-07. Touch the file at
+    # 02:00 on that day — earlier in the day than "now", which is the trap.
+    early = 1788742800.0
+    os.utime(f, (early, early))
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 42, "the oldest valid day must be included in full"
