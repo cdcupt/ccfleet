@@ -73,3 +73,31 @@ def test_identity_fields_cannot_reach_the_store_through_credentials():
     blob = json.dumps(out)
     for private in ("someone@example.com", "a7ba7d79", "Acme"):
         assert private not in blob
+
+
+def test_a_real_sign_in_url_survives_the_whitelist_intact():
+    """Measured at 496 characters against a live node.
+
+    Capped at MAX_STR the URL arrived truncated to 200 — which is worse than
+    absent, because it still looks like a URL and fails only when clicked.
+    """
+    from ccfleetd.heartbeat import MAX_URL
+    url = ("https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9"
+           "-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform."
+           "claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile"
+           "+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3A"
+           "file_upload+user%3Aplugins&code_challenge=gz7bOnSAmGyBMHOKijGzBhiB5LoTTqcHon"
+           "ZexLJsx3E&code_challenge_method=S256&state=hN1YnDdKxl6It0ZEI_hAP5HUqVDY5qZn"
+           "XiHRSFT9-N8&login_hint=someone%40example.com")
+    assert len(url) > 400, "fixture should be a realistic length"
+    out = validate_heartbeat(
+        {"node_id": "n", "reconcile": {"login": {"state": "url_ready", "url": url,
+                                                 "detail": "d" * 500}}}, "n")
+    login = out["reconcile"]["login"]
+    assert login["url"] == url, "the URL must arrive whole"
+    # The larger cap is for this one field, not a general loosening.
+    assert len(login["detail"]) == 200
+    # And it is still bounded: a node cannot post an unbounded string.
+    huge = validate_heartbeat(
+        {"node_id": "n", "reconcile": {"login": {"state": "x", "url": "h" * 9000}}}, "n")
+    assert len(huge["reconcile"]["login"]["url"]) == MAX_URL
