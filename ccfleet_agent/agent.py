@@ -485,7 +485,7 @@ LOGIN_TMUX_SOCKET = "ccfleet-login"
 LOGIN_SESSION = "login"
 # Anthropic's verification URL. Matched rather than assumed so a prompt change
 # that stops printing one is reported as a failure instead of hanging forever.
-LOGIN_URL_RE = re.compile(r"https://\S*claude\.ai/\S+")
+LOGIN_URL_RE = re.compile(r"https://\S*claude\.(?:com|ai)/\S+")
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
 
 
@@ -528,7 +528,14 @@ def start_login(email: Optional[str], runner: Runner = subprocess.run) -> bool:
 
 
 def read_login_pane(runner: Runner = subprocess.run) -> str:
-    return _tmux(runner, "capture-pane", "-p", "-t", LOGIN_SESSION) or ""
+    """Read the pane with wrapped lines joined.
+
+    Measured on a live sign-in: the verification URL is ~496 characters and wraps
+    across several rows. Without -J, capture-pane returns each row separately and
+    the URL arrives truncated to its first 166 characters — long enough to look
+    like a URL and useless to click.
+    """
+    return _tmux(runner, "capture-pane", "-p", "-J", "-t", LOGIN_SESSION) or ""
 
 
 def find_login_url(pane: str) -> Optional[str]:

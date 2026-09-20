@@ -28,7 +28,11 @@ MAX_VERSION_LEN = 40
 # link. Escaping makes it safe as *text*; it does nothing about the scheme, and
 # href="javascript:..." survives escaping intact. So the URL is checked, not
 # merely escaped, and a node that offers anything else gets no link at all.
-LOGIN_URL_HOSTS = ("claude.ai", "www.claude.ai", "console.anthropic.com")
+# Measured against a live sign-in rather than guessed: the URL Claude Code
+# actually prints is on claude.com, not claude.ai. The .ai hosts stay because
+# older builds used them and an operator may still be handed one.
+LOGIN_URL_HOSTS = ("claude.com", "www.claude.com", "platform.claude.com",
+                   "claude.ai", "www.claude.ai", "console.anthropic.com")
 
 
 def is_login_url(url: Any) -> bool:
