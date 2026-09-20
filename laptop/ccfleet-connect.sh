@@ -46,7 +46,19 @@ shell_rc() {
 
 file_mode() {
   # stat's flags differ between BSD and GNU, and this script runs on both.
-  stat -f '%OLp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || printf '600'
+  # Chaining them with || is not enough: on GNU, -f means --file-system, so
+  # `stat -f '%OLp' file` SUCCEEDS and prints the format string unexpanded. The
+  # fallback then never runs and chmod is handed nonsense. So try each and keep
+  # the first answer that actually looks like a mode.
+  local mode
+  for fmt in "-c %a" "-f %OLp"; do
+    # shellcheck disable=SC2086 - the format is two deliberate words
+    mode="$(stat $fmt "$1" 2>/dev/null)" || continue
+    case "$mode" in
+      [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) printf '%s' "$mode"; return 0 ;;
+    esac
+  done
+  printf '600'
 }
 
 check_rc_strippable() {
