@@ -8,7 +8,7 @@ from shlex import quote as shq
 from typing import Any, Optional
 
 from .config import Config
-from .desired import is_channel
+from .desired import is_channel, is_login_url
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
@@ -345,7 +345,9 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
         else:
             body = f'<span class="muted">{escape(LOGIN_WORDS.get(state, state))}</span>'
             url = login.get("url") or ""
-            if url and state in ("url_ready", "code_sent"):
+            # Checked again here: a row written before this rule existed, or by
+            # anything but the path above, must still not become a live link.
+            if is_login_url(url) and state in ("url_ready", "code_sent"):
                 # The node supplied this. It is escaped and its full text is shown,
                 # so nobody is asked to trust a link whose target they cannot read.
                 body += (f'<div><a href="{escape(url)}" target="_blank" '

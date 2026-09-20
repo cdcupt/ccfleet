@@ -13,6 +13,7 @@ the next one carries the same intent, and applying it twice is a no-op.
 
 from __future__ import annotations
 
+import urllib.parse
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -21,6 +22,27 @@ from typing import Any, Optional
 # `claude install <target>` on the node.
 VERSION_CHANNELS = ("stable", "latest")
 MAX_VERSION_LEN = 40
+
+
+# The verification URL is supplied by a node and then shown to an operator as a
+# link. Escaping makes it safe as *text*; it does nothing about the scheme, and
+# href="javascript:..." survives escaping intact. So the URL is checked, not
+# merely escaped, and a node that offers anything else gets no link at all.
+LOGIN_URL_HOSTS = ("claude.ai", "www.claude.ai", "console.anthropic.com")
+
+
+def is_login_url(url: Any) -> bool:
+    """True only for an https URL on a host we expect a sign-in to live on."""
+    if not isinstance(url, str) or len(url) > 1024:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+    # netloc rather than hostname so an embedded port or credential cannot hide.
+    return parsed.hostname is not None and parsed.hostname.lower() in LOGIN_URL_HOSTS
 
 
 def is_channel(pin: Any) -> bool:

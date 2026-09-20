@@ -493,6 +493,18 @@ def _tmux(runner: Runner, *args: str, timeout: float = 10.0) -> Optional[str]:
     return _run(runner, ["tmux", "-L", LOGIN_TMUX_SOCKET, *args], timeout=timeout)
 
 
+def _tmux_ok(runner: Runner, *args: str, timeout: float = 10.0) -> bool:
+    """Did the command actually succeed? `_run` returns output, not a verdict,
+    so a tmux that exited non-zero would otherwise read as success."""
+    try:
+        proc = runner(["tmux", "-L", LOGIN_TMUX_SOCKET, *args], capture_output=True,
+                      text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("tmux %s failed: %s", args[0] if args else "", exc.__class__.__name__)
+        return False
+    return proc.returncode == 0
+
+
 def login_email(raw: Any) -> Optional[str]:
     """The address to pre-fill, if it is one. This reaches argv, so it is checked."""
     if not isinstance(raw, str):
@@ -511,9 +523,8 @@ def start_login(email: Optional[str], runner: Runner = subprocess.run) -> bool:
     if email:
         argv += ["--email", email]
     # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
-    started = _tmux(runner, "new-session", "-d", "-s", LOGIN_SESSION,
+    return _tmux_ok(runner, "new-session", "-d", "-s", LOGIN_SESSION,
                     "-x", "200", "-y", "50", " ".join(shlex.quote(a) for a in argv))
-    return started is not None
 
 
 def read_login_pane(runner: Runner = subprocess.run) -> str:
@@ -762,8 +773,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if status != 200:
             return 1
     if desired.get("login"):
-        log.warning("sign-in still unfinished after %.0fs; leaving it for the next run",
-                    LOGIN_WINDOW_S)
+        # Leaving it running would make every later run resident for another
+        # window, forever, and leave a pane open on the node. Abandon it here and
+        # tell the server, so the row goes away instead of being re-offered.
+        log.warning("sign-in unfinished after %.0fs; abandoning it", LOGIN_WINDOW_S)
+        end_login()
+        state = {k: v for k, v in state.items() if k != "login"}
+        write_state(cfg.state_path, state)
+        run_cycle(cfg, state, {"state": "failed",
+                               "detail": f"not completed within {int(LOGIN_WINDOW_S)}s"})
     return 0
 
 

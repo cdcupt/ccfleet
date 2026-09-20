@@ -16,6 +16,9 @@ log = logging.getLogger("ccfleetd.monitor")
 
 Clock = Callable[[], float]
 PRUNE_EVERY_S = 3600
+# A sign-in is a person at a keyboard: minutes, not hours. Past this the row is
+# removed, which also stops a stale verification code sitting in the database.
+LOGIN_MAX_AGE_S = 15 * 60
 
 
 class Monitor:
@@ -57,6 +60,7 @@ class Monitor:
         for node in self._store.list_nodes():
             if node["enabled"]:
                 events.extend(self.check_node(node, now))
+        self._expire_logins(now)
         self._maybe_prune(now)
         return events
 
@@ -84,6 +88,17 @@ class Monitor:
             self._notifier.send(format_event(event["event"], event["alert"], node,
                                              self._cfg.public_url))
         return events
+
+    def _expire_logins(self, now: float) -> None:
+        """Drop sign-ins nobody finished.
+
+        A node that dies mid-login, or an owner who closes the tab, would
+        otherwise leave a row that keeps telling every agent run there is a login
+        to drive — and keeps a verification code in the database.
+        """
+        dropped = self._store.expire_logins(now - LOGIN_MAX_AGE_S)
+        if dropped:
+            log.info("expired %d unfinished sign-in(s)", dropped)
 
     def _maybe_prune(self, now: float) -> None:
         if now - self._last_prune < PRUNE_EVERY_S:

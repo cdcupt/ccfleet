@@ -9,12 +9,17 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Optional
+
+from .desired import is_login_url
+
+log = logging.getLogger("ccfleetd.store")
 
 NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
 # The owner becomes a unix account name and is interpolated into a command the
@@ -225,11 +230,18 @@ class Store:
             with self._conn:
                 self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
             return
+        # A URL that is not a sign-in URL is dropped rather than stored. It would
+        # reach an operator as a clickable link, and escaping does not make a
+        # javascript: scheme safe.
+        clean = url.strip()[:self.MAX_LOGIN_URL]
+        if clean and not is_login_url(clean):
+            log.warning("node %s offered a login url that is not one; dropping it", node_id)
+            clean = ""
         with self._conn:
             self._conn.execute(
                 "UPDATE logins SET state = ?, url = ?, detail = ?, updated_at = ? "
                 "WHERE node_id = ?",
-                (state, url.strip()[:self.MAX_LOGIN_URL], detail.strip()[:200], now, node_id))
+                (state, clean, detail.strip()[:200], now, node_id))
 
     def clear_login(self, node_id: str) -> None:
         with self._conn:

@@ -554,8 +554,8 @@ def test_the_cli_answer_overrides_a_file_that_merely_exists(tmp_path, monkeypatc
 class TmuxFake:
     """Records tmux calls and serves whatever the pane should currently show."""
 
-    def __init__(self, pane="", auth='{"loggedIn": false}'):
-        self.pane, self.auth, self.calls = pane, auth, []
+    def __init__(self, pane="", auth='{"loggedIn": false}', rc=0):
+        self.pane, self.auth, self.calls, self.rc = pane, auth, [], rc
 
     def __call__(self, argv, **kw):
         self.calls.append(argv)
@@ -564,7 +564,7 @@ class TmuxFake:
             out = self.pane
         elif argv[1:3] == ["auth", "status"]:
             out = self.auth
-        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+        return subprocess.CompletedProcess(argv, self.rc, stdout=out, stderr="")
 
     def verbs(self):
         return [a[3] if a[0] == "tmux" else a[1] for a in self.calls]
@@ -668,3 +668,12 @@ def test_a_node_without_claude_reports_that_instead_of_hanging(monkeypatch):
     tmux = TmuxFake()
     progress, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
     assert progress["state"] == "failed" and "not found" in progress["detail"]
+
+
+def test_a_tmux_that_fails_is_not_treated_as_a_started_login(tmp_path, monkeypatch):
+    """`_run` returns output, not a verdict — a non-zero tmux must not look started."""
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake(rc=1)
+    progress, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
+    assert progress["state"] == "failed"
+    assert "login" not in state or state["login"].get("phase") == "failed"
