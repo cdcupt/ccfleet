@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.2.0 · 2026-09-18 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.3.0 · 2026-09-20 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -164,7 +164,7 @@ html{scroll-behavior:smooth}
     <div>
       <h3>To check your node</h3>
       <p>Open your console, the address your operator gave you. It shows status, Claude Code version, egress address, disk, login freshness and any alerts.</p>
-      <p>What you see depends on the login you were given. An <strong>owner</strong> login shows your own nodes and nothing to press; managing them is the operator's job. The operator's own login, or the admin token, shows the whole fleet and can add, disable and remove nodes. <a href="#accounts">Section 06</a> has the detail.</p>
+      <p>What you see depends on the login you were given. An <strong>owner</strong> login shows your own nodes and one thing you can act on: signing your own node in. Everything else &mdash; adding, disabling, pinning, removing &mdash; stays with the operator. The operator's own login, or the admin token, shows the whole fleet. <a href="#accounts">Section 06</a> has the detail.</p>
     </div>
   </div>
 
@@ -425,14 +425,26 @@ fleet.example.com {
   <div class="step">
     <div class="num">3</div>
     <h3>The owner signs in</h3>
+    <p><strong>From the console, with no SSH at all.</strong> Open the dashboard, find your node under
+    <em>Sign in</em>, and press it. The node starts Claude Code's own login, and within a few seconds
+    the card shows the verification link: open it, approve, and paste the code back into the box on the
+    same card. The card confirms when the node reports the sign-in worked.</p>
+    <div class="note ok">
+      <p class="t">What passes through the server, and what does not</p>
+      <p>Only the verification URL and the code you paste, and both are discarded the moment the
+      sign-in finishes. The credential itself is written by Claude Code into your own home directory on
+      your own node and never reaches the server &mdash; the same guarantee as signing in over SSH,
+      without needing SSH.</p>
+    </div>
+    <p>The terminal route still works, and is the one to use before a node can reach the server:</p>
     <pre><code>ssh alice@&lt;node&gt;     <span class="c"># you land straight in the persistent work session</span>
 claude</code></pre>
-    <p>Choose the claude.ai login. Over SSH the browser cannot call back into the node, so Claude Code shows a URL: open it on your laptop, approve, copy the code the page shows, paste it into the terminal. Then check:</p>
+    <p>Choose the claude.ai login. Over SSH the browser cannot call back into the node, so Claude Code shows a URL: open it on your laptop, approve, copy the code the page shows, paste it into the terminal. Either way, check afterwards:</p>
     <pre><code>/status</code></pre>
     <p>The Login row must show your account. There must be no <em>Anthropic base URL</em> line and no <em>Auth token</em> or <em>API key</em> line. If there is, an environment variable is set that should not be; unset it and restart <code>claude</code>.</p>
     <div class="note ok">
       <p class="t">Where the login lives</p>
-      <p>On Linux, Claude Code keeps it in <code class="long">~/.claude/.credentials.json</code> with mode 0600 and refreshes it by itself. The agent parses this file only to pick out the expiry timestamp and plan type; the token values are discarded in memory and never sent, logged or stored, and the file's modification time is read from its metadata.</p>
+      <p>On Linux, Claude Code keeps it in <code class="long">~/.claude/.credentials.json</code> with mode 0600 and refreshes it by itself. The agent asks <code>claude auth status</code> whether the login actually works &mdash; the CLI's own answer, rather than an inference from a file existing &mdash; and keeps only whether you are signed in, the method, the plan and the expiry. That command also returns your email address and organisation; none of it is copied, and tests on both the agent and the server assert so.</p>
     </div>
   </div>
 
@@ -493,10 +505,10 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
     <tbody>
       <tr><td>The admin token<br><span class="small">user name <code>admin</code>, or any name at all</span></td><td>the whole fleet</td><td>yes</td></tr>
       <tr><td><code>ccfleetd user add NAME --role admin</code></td><td>the whole fleet</td><td>yes</td></tr>
-      <tr><td><code>ccfleetd user add NAME --owner OWNER</code></td><td>only that owner's nodes</td><td>no</td></tr>
+      <tr><td><code>ccfleetd user add NAME --owner OWNER</code></td><td>only that owner's nodes</td><td>no &mdash; except signing their own node in</td></tr>
     </tbody>
   </table></div>
-  <p>An owner login is deliberately read-only. The management forms are not rendered for it, and that is only the cosmetic half: every write route checks the role, so a hand-built request is answered <strong>403 rather than 401</strong>. Their credentials were fine; the action was not theirs.</p>
+  <p>An owner login can do exactly one thing: start a sign-in on a node they already own. That is the whole point &mdash; needing the operator to sign you in would only move the bottleneck. Everything else is refused, and the missing forms are only the cosmetic half: every write route checks the role and the node's owner, so a hand-built request is answered <strong>403 rather than 401</strong>. Their credentials were fine; the action was not theirs. An owner is given a CSRF token so their own form works, and the tests state plainly that a CSRF token is not authorisation: <code>disable</code>, <code>rc-off</code>, <code>rotate-token</code> and <code>remove</code> are all still refused to an owner holding a valid one.</p>
   <p>Manage them with <code>ccfleetd user list</code>, <code>ccfleetd user passwd NAME</code> and <code>ccfleetd user remove NAME</code>. Passwords are stored as salted PBKDF2 hashes and cannot be recovered, only reset.</p>
   <div class="note">
     <p class="t">What this is not, yet</p>
