@@ -677,3 +677,33 @@ def test_a_tmux_that_fails_is_not_treated_as_a_started_login(tmp_path, monkeypat
     progress, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
     assert progress["state"] == "failed"
     assert "login" not in state or state["login"].get("phase") == "failed"
+
+
+REAL_LOGIN_PANE = """Opening browser to sign in…
+If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=iuN8pMa919pbBIlFZyPT&login_hint=someone%40example.com
+Paste code here if prompted:"""
+
+
+def test_the_url_a_live_sign_in_actually_prints_is_scraped_whole():
+    """Both halves of this were wrong until a real node was asked.
+
+    The URL is on claude.com, not claude.ai, and it is ~500 characters, so it
+    wraps across pane rows. The original code matched only claude.ai and read the
+    pane unjoined, which truncated it to its first 166 characters.
+    """
+    url = agent.find_login_url(REAL_LOGIN_PANE)
+    assert url is not None
+    assert url.startswith("https://claude.com/cai/oauth/authorize")
+    assert url.endswith("login_hint=someone%40example.com"), "the tail must survive"
+    # The live one was 496 characters; this fixture is shorter. What matters is
+    # that the whole query string survives, not a particular length.
+    assert "code_challenge=" in url and "scope=" in url
+    assert len(url) > 250, f"truncated to {len(url)} characters"
+
+
+def test_the_pane_is_read_with_wrapped_lines_joined(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake()
+    agent.read_login_pane(tmux)
+    capture = [a for a in tmux.calls if "capture-pane" in a][0]
+    assert "-J" in capture, "without -J a wrapped URL comes back cut in three"
