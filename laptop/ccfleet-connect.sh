@@ -46,17 +46,24 @@ file_mode() {
   stat -f '%OLp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || printf '600'
 }
 
-strip_block() {
-  # Remove any previous block, leaving the rest of the file untouched.
-  local rc="$1" mode
-  [ -f "$rc" ] || return 0
+check_rc_strippable() {
   # A begin marker with no matching end means a previous write was interrupted.
-  # Stripping from there to EOF would delete everything the user wrote after it,
-  # so refuse and say so rather than silently destroying their rc.
+  # Stripping from there to EOF would delete everything written after it, so
+  # refuse. Called before anything is persisted as well as inside strip_block,
+  # so a refusal never leaves a token on disk with no rc line to use it.
+  local rc="$1"
+  [ -f "$rc" ] || return 0
   if grep -qxF "$MARK_BEGIN" "$rc" 2>/dev/null && ! grep -qxF "$MARK_END" "$rc" 2>/dev/null; then
     die "$rc has an unfinished ccfleet block (a '$MARK_BEGIN' with no matching end).
      Remove those lines by hand first; refusing to guess where the block ends."
   fi
+}
+
+strip_block() {
+  # Remove any previous block, leaving the rest of the file untouched.
+  local rc="$1" mode
+  [ -f "$rc" ] || return 0
+  check_rc_strippable "$rc"
   mode="$(file_mode "$rc")"
   awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
     $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }
@@ -137,11 +144,15 @@ cmd_connect() {
     *) die "that token was refused. Ask for a fresh one: claude setup-token" ;;
   esac
 
+  # Everything that can refuse must refuse before the credential lands on disk,
+  # or a failure here leaves a token with no rc line to use it.
+  local rc; rc="$(shell_rc)"
+  check_rc_strippable "$rc"
+
   mkdir -p "$(dirname "$TOKEN_FILE")"
   ( umask 077; printf '%s\n' "$token" > "$TOKEN_FILE" )
   chmod 600 "$TOKEN_FILE"
 
-  local rc; rc="$(shell_rc)"
   write_block "$rc"
 
   note "token stored in $TOKEN_FILE (0600)"

@@ -255,6 +255,9 @@ def test_an_unfinished_block_is_refused_not_truncated(home, tmp_path):
         assert "unfinished ccfleet block" in result.stderr
     body = rc.read_text()
     assert "SOMETHING_IMPORTANT" in body and "make ship" in body, "user content destroyed"
+    # And the refusal must land before the credential does, or the device is
+    # left with a token on disk and no rc line that uses it.
+    assert not token_path(home).exists(), "token persisted despite the refusal"
 
 
 def test_the_token_can_be_given_without_a_command_line(home, tmp_path):
