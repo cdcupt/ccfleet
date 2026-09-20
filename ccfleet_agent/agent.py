@@ -435,13 +435,14 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
     now = time.time() if now is None else now
     since = now - window_days * 86400
     root = config_dir / "projects"
+    oldest_day = time.strftime("%Y-%m-%d", time.gmtime(since))
     totals: dict[str, int] = {k: 0 for k in USAGE_TOKEN_KEYS}
     by_day: dict[str, int] = {}
     models: set[str] = set()
     sessions = 0
 
     for path in _usage_files(root, since):
-        sessions += 1
+        counted = False
         try:
             with path.open(encoding="utf-8", errors="replace") as fh:
                 read = 0
@@ -461,19 +462,24 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
                     if not isinstance(usage, Mapping):
                         continue
                     stamp = _usage_day(record.get("timestamp"))
+                    if not _in_window(stamp, oldest_day):
+                        continue
+                    counted = True
                     turn = 0
                     for key in USAGE_TOKEN_KEYS:
                         value = usage.get(key)
                         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                             totals[key] += value
                             turn += value
-                    if stamp and turn:
+                    if turn:
                         by_day[stamp] = by_day.get(stamp, 0) + turn
                     model = message.get("model")
                     if isinstance(model, str) and model:
                         models.add(model[:40])
         except OSError:
             continue
+        if counted:
+            sessions += 1
 
     return {
         "window_days": window_days,
@@ -492,6 +498,18 @@ def _usage_day(raw: Any) -> Optional[str]:
         return None
     day = raw[:10]
     return day if day[4] == "-" and day[7] == "-" and day[:4].isdigit() else None
+
+
+def _in_window(day: Optional[str], oldest_day: str) -> bool:
+    """Is this record's own day inside the window?
+
+    Selecting files by modification time is not enough: one long-lived session
+    transcript touched today carries records from weeks ago, so a "last 14 days"
+    total would quietly include them. Each record is judged on its own date, and
+    a record whose date cannot be read is not counted — an unplaceable number is
+    worse than a missing one in a figure that claims a window.
+    """
+    return day is not None and day >= oldest_day
 
 
 # -- reconcile -------------------------------------------------------------------

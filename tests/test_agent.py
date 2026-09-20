@@ -756,8 +756,9 @@ def test_usage_ignores_transcripts_outside_the_window(tmp_path):
 def test_usage_survives_a_transcript_it_cannot_parse(tmp_path):
     d = tmp_path / "projects" / "proj"
     d.mkdir(parents=True)
-    (d / "broken.jsonl").write_text('{"half written\nnot json at all\n'
-                                    '{"message": {"usage": {"output_tokens": 7}}}\n')
+    (d / "broken.jsonl").write_text(
+        '{"half written\nnot json at all\n'
+        '{"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 7}}}\n')
     u = agent.usage_summary(tmp_path, now=1789900000.0)
     assert u["total_tokens"] == 7, "one bad line must not lose the whole file"
 
@@ -765,3 +766,40 @@ def test_usage_survives_a_transcript_it_cannot_parse(tmp_path):
 def test_usage_is_empty_rather_than_absent_when_there_is_nothing(tmp_path):
     u = agent.usage_summary(tmp_path, now=1789900000.0)
     assert u["total_tokens"] == 0 and u["by_day"] == [] and u["models"] == []
+
+
+def test_a_long_lived_transcript_does_not_smuggle_old_usage_into_the_window(tmp_path):
+    """Selecting files by mtime is not enough.
+
+    One session transcript touched today can carry records from weeks ago, so a
+    figure labelled "last 14 days" would quietly include them.
+    """
+    _transcript(tmp_path, "long.jsonl", [
+        {"timestamp": "2026-07-01T10:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
+        {"timestamp": "2026-09-18T10:00:00Z", "message": {"usage": {"output_tokens": 11}}},
+        {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 22}}},
+    ])
+    # now = 2026-09-20; the July record is far outside a 14-day window.
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 33, "the July record must not be counted"
+    assert [d["day"] for d in u["by_day"]] == ["2026-09-18", "2026-09-19"]
+
+
+def test_a_record_whose_date_cannot_be_read_is_not_counted(tmp_path):
+    """An unplaceable number is worse than a missing one in a windowed figure."""
+    _transcript(tmp_path, "undated.jsonl", [
+        {"message": {"usage": {"output_tokens": 500}}},
+        {"timestamp": 12345, "message": {"usage": {"output_tokens": 500}}},
+        {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 7}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 7
+
+
+def test_sessions_counts_transcripts_that_actually_contributed(tmp_path):
+    _transcript(tmp_path, "empty.jsonl", [{"timestamp": "2026-09-19T10:00:00Z",
+                                           "type": "user", "message": {"content": "hi"}}])
+    _transcript(tmp_path, "real.jsonl", [{"timestamp": "2026-09-19T10:00:01Z",
+                                          "message": {"usage": {"output_tokens": 9}}}])
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["sessions"] == 1 and u["total_tokens"] == 9
