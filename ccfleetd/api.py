@@ -252,9 +252,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             now = time.time()
             login = (payload.get("reconcile") or {}).get("login")
             if isinstance(login, dict) and login.get("state"):
+                requested_at = login.get("requested_at")
                 ctx.store.record_login_progress(
                     node["id"], str(login.get("state")), str(login.get("url") or ""),
-                    str(login.get("detail") or ""), now)
+                    str(login.get("detail") or ""), now,
+                    requested_at if isinstance(requested_at, (int, float))
+                    and not isinstance(requested_at, bool) else None)
             events = ctx.monitor.record_heartbeat(node, payload, now)
             self._json(200, {
                 "ok": True,

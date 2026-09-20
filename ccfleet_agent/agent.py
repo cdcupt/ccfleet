@@ -580,7 +580,8 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
         # A new request supersedes anything in flight, including a stuck one.
         if not start_login(login_email(wanted.get("email")), runner):
             new_state["login"] = {"requested_at": requested_at, "phase": "failed"}
-            return {"state": "failed", "detail": "claude not found on this node"}, new_state
+            return {"state": "failed", "detail": "claude not found on this node",
+                    "requested_at": requested_at}, new_state
         new_state["login"] = {"requested_at": requested_at, "phase": "started"}
         return {"state": "requested", "requested_at": requested_at}, new_state
 
@@ -780,8 +781,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         end_login()
         state = {k: v for k, v in state.items() if k != "login"}
         write_state(cfg.state_path, state)
+        abandoned = desired.get("login") or {}
         run_cycle(cfg, state, {"state": "failed",
-                               "detail": f"not completed within {int(LOGIN_WINDOW_S)}s"})
+                               "detail": f"not completed within {int(LOGIN_WINDOW_S)}s",
+                               "requested_at": abandoned.get("requested_at")})
     return 0
 
 

@@ -220,9 +220,23 @@ class Store:
             raise StoreError("no sign-in is waiting for a code on that node")
 
     def record_login_progress(self, node_id: str, state: str, url: str,
-                              detail: str, now: float) -> None:
-        """What the node says is happening. Terminal states delete the row."""
+                              detail: str, now: float,
+                              requested_at: Optional[float] = None) -> None:
+        """What the node says is happening. Terminal states delete the row.
+
+        A report is matched against the attempt it belongs to. Without that, a
+        `done` or `failed` arriving late from an attempt the owner already
+        cancelled would delete the one they have just started — the node posts on
+        its own schedule, so overtaking is normal, not exotic.
+        """
         if state not in self.LOGIN_ACTIVE_STATES + ("done", "failed"):
+            return
+        current = self.get_login(node_id)
+        if current is None:
+            return
+        if (requested_at is not None
+                and abs(float(current["requested_at"]) - float(requested_at)) > 1e-6):
+            log.debug("ignoring login progress for a superseded attempt on %s", node_id)
             return
         if state in ("done", "failed"):
             # Nothing useful survives a finished login, and the code must not
@@ -237,10 +251,15 @@ class Store:
         if clean and not is_login_url(clean):
             log.warning("node %s offered a login url that is not one; dropping it", node_id)
             clean = ""
+        # Once the node says it has typed the code, the copy here has served its
+        # only purpose. Clearing it in the same statement means there is no
+        # window where a consumed code is still sitting in the database.
+        clear_code = state == "code_sent"
         with self._conn:
             self._conn.execute(
-                "UPDATE logins SET state = ?, url = ?, detail = ?, updated_at = ? "
-                "WHERE node_id = ?",
+                "UPDATE logins SET state = ?, url = ?, detail = ?, updated_at = ?"
+                + (", code = ''" if clear_code else "") +
+                " WHERE node_id = ?",
                 (state, clean, detail.strip()[:200], now, node_id))
 
     def clear_login(self, node_id: str) -> None:
