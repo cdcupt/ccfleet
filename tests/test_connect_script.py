@@ -283,3 +283,21 @@ def test_the_printed_hint_quotes_the_path(tmp_path):
     hint = [ln for ln in out.splitlines() if "export CLAUDE_CODE_OAUTH_TOKEN" in ln][0]
     # Copy-pasteable on a path with a space means the path must be quoted.
     assert "'" in hint and str(home) in hint
+
+
+def test_bash_gets_the_file_an_interactive_terminal_reads(tmp_path):
+    """An ordinary terminal starts a non-login bash, which reads .bashrc.
+    Writing only to .bash_profile means new terminals never see the token."""
+    home = tmp_path / "bashhome"
+    (home / ".config" / "ccfleet").mkdir(parents=True)
+    (home / ".bash_profile").write_text("# login only\n")
+    (home / ".bashrc").write_text("# interactive\n")
+    env = dict(os.environ)
+    env.update({"HOME": str(home), "SHELL": "/bin/bash",
+                "CCFLEET_TOKEN_FILE": str(home / ".config" / "ccfleet" / "token"),
+                "PATH": f"{fake_claude(tmp_path)}:{env['PATH']}"})
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    assert subprocess.run([str(SCRIPT), GOOD_TOKEN], capture_output=True, text=True,
+                          env=env, timeout=60).returncode == 0
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in (home / ".bashrc").read_text()
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in (home / ".bash_profile").read_text()

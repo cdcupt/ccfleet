@@ -34,8 +34,11 @@ shell_rc() {
   # user actually runs rather than assuming bash.
   case "${SHELL##*/}" in
     zsh)  printf '%s\n' "${ZDOTDIR:-$HOME}/.zshrc" ;;
-    bash) [ -f "$HOME/.bash_profile" ] && printf '%s\n' "$HOME/.bash_profile" \
-            || printf '%s\n' "$HOME/.bashrc" ;;
+    # .bashrc, not .bash_profile: an ordinary interactive terminal starts a
+    # non-login shell and reads .bashrc. Distro .bash_profile files conventionally
+    # source .bashrc, so the login case is covered too; if yours does not, add
+    # `. ~/.bashrc` to it.
+    bash) printf '%s\n' "$HOME/.bashrc" ;;
     fish) printf '%s\n' "$HOME/.config/fish/config.fish" ;;
     *)    printf '%s\n' "$HOME/.profile" ;;
   esac
@@ -149,11 +152,15 @@ cmd_connect() {
   local rc; rc="$(shell_rc)"
   check_rc_strippable "$rc"
 
+  # rc first, token second. The rc line is guarded by [ -r ... ], so an rc
+  # pointing at a token that does not exist yet is inert rather than broken —
+  # whereas writing the token first and then failing on the rc would clobber a
+  # previously working credential and leave nothing configured to use it.
+  write_block "$rc"
+
   mkdir -p "$(dirname "$TOKEN_FILE")"
   ( umask 077; printf '%s\n' "$token" > "$TOKEN_FILE" )
   chmod 600 "$TOKEN_FILE"
-
-  write_block "$rc"
 
   note "token stored in $TOKEN_FILE (0600)"
   note "$rc now exports it for new shells"
