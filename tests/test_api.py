@@ -235,7 +235,8 @@ def test_heartbeat_response_carries_desired_state(server):
     auth = {"Authorization": f"Bearer {token}"}
     payload = heartbeat(time.time())["payload"]
     reply = json.loads(call(srv, "POST", "/api/heartbeat", payload, auth)[1])
-    assert reply["desired"] == {"claude_version": "2.1.92", "remote_control": True}
+    assert reply["desired"] == {"claude_version": "2.1.92", "remote_control": True,
+                                "login": None, "poll_s": 300}
     # Agents predating the block read the flat field; it stays while they exist.
     assert reply["pinned_version"] == "2.1.92"
 
@@ -253,3 +254,36 @@ def test_reconcile_result_is_stored_and_junk_around_it_is_dropped(server):
     stored = store.recent_heartbeats("node-b")[0]["payload"]["reconcile"]["upgrade"]
     assert stored == {"from": "2.1.90", "to": "2.1.92", "ok": True, "ts": 1.0, "error": None}
     assert "smuggled" not in json.dumps(store.recent_heartbeats("node-b")[0]["payload"])
+
+
+def test_a_node_cannot_plant_a_javascript_link_in_the_console(server):
+    """The login URL is node-supplied and becomes a link an operator clicks."""
+    srv, store = server
+    token = store.add_node("node-a", "erik")
+    auth = {"Authorization": f"Bearer {token}"}
+    store.request_login("node-a", "", time.time())
+    payload = {**heartbeat(time.time())["payload"],
+               "reconcile": {"login": {"state": "url_ready",
+                                       "url": "javascript:alert(document.cookie)"}}}
+    assert call(srv, "POST", "/api/heartbeat", payload, auth)[0] == 200
+    # Refused at the door rather than merely escaped on the way out.
+    assert store.get_login("node-a")["url"] == ""
+    good = {**payload, "reconcile": {"login": {
+        "state": "url_ready", "url": "https://claude.ai/oauth/authorize?code=1"}}}
+    call(srv, "POST", "/api/heartbeat", good, auth)
+    assert store.get_login("node-a")["url"] == "https://claude.ai/oauth/authorize?code=1"
+
+
+def test_unfinished_sign_ins_do_not_linger(server, cfg):
+    """An abandoned attempt would keep re-offering itself and keep a code stored."""
+    from ccfleetd.monitor import LOGIN_MAX_AGE_S
+    srv, store = server
+    store.add_node("node-a", "erik")
+    now = time.time()
+    store.request_login("node-a", "a@b.com", now - LOGIN_MAX_AGE_S - 1)
+    store.submit_login_code("node-a", "a-code", now - LOGIN_MAX_AGE_S - 1)
+    assert store.get_login("node-a") is not None
+    from ccfleetd.monitor import Monitor
+    from ccfleetd.notify import LogNotifier
+    Monitor(store, cfg, LogNotifier()).check_all(now)
+    assert store.get_login("node-a") is None, "stale sign-in and its code must be gone"

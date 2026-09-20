@@ -8,7 +8,7 @@ from shlex import quote as shq
 from typing import Any, Optional
 
 from .config import Config
-from .desired import is_channel
+from .desired import is_channel, is_login_url
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
@@ -307,8 +307,68 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "</body></html>")
 
 
+# Signing in, from the console. The server carries a URL back and a code
+# forward; the credential itself is written by the CLI on the node and never
+# comes near this process.
+LOGIN_WORDS = {
+    "requested": "Starting on the node\u2026",
+    "url_ready": "Open the link, approve, then paste the code below.",
+    "code_sent": "Code sent to the node. Waiting for it to finish\u2026",
+}
+
+
+def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
+                 logins: Mapping[str, Any]) -> str:
+    """One block per node: start a sign-in, or carry the one in flight forward."""
+    if not rows:
+        return ""
+    items = []
+    for row in rows:
+        node = escape(row["id"])
+        login = logins.get(row["id"]) or {}
+        state = login.get("state") or ""
+
+        def form(action: str, inner: str, label: str, cls: str = "", node=node) -> str:
+            return (f'<form class="inline" method="post" '
+                    f'action="/actions/node/{node}/{action}">'
+                    f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
+                    f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+
+        if not state:
+            signed_in = row.get("credentials_present")
+            status = ("signed in" if signed_in else
+                      "not signed in" if signed_in is False else "unknown")
+            body = (f'<span class="muted">{escape(status)}</span> '
+                    + form("login-start",
+                           '<input type="email" name="email" placeholder="email (optional)">',
+                           "Sign in"))
+        else:
+            body = f'<span class="muted">{escape(LOGIN_WORDS.get(state, state))}</span>'
+            url = login.get("url") or ""
+            # Checked again here: a row written before this rule existed, or by
+            # anything but the path above, must still not become a live link.
+            if is_login_url(url) and state in ("url_ready", "code_sent"):
+                # The node supplied this. It is escaped and its full text is shown,
+                # so nobody is asked to trust a link whose target they cannot read.
+                body += (f'<div><a href="{escape(url)}" target="_blank" '
+                         f'rel="noopener noreferrer">{escape(url)}</a></div>')
+            if state == "url_ready":
+                body += form("login-code",
+                             '<input type="text" name="code" placeholder="paste the code" '
+                             'autocomplete="off" required>', "Send code")
+            body += " " + form("login-cancel", "", "Cancel", cls="danger")
+        items.append(f'<div class="manage-row"><div class="manage-name">{node}</div>'
+                     f'<div class="actions">{body}</div></div>')
+    return ('<div class="card"><h2>Sign in</h2>' + "".join(items) +
+            '<p class="muted" style="margin:10px 0 0;font-size:12px">'
+            "Starting a sign-in runs Claude Code's own login on the node. The credential is "
+            "written there and never reaches this server; only the verification URL and the "
+            "code you paste pass through, and both are discarded when it finishes.</p></div>")
+
+
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
-                     now: float, cfg: Config, csrf: str = "", who: Any = None) -> str:
+                     now: float, cfg: Config, csrf: str = "", who: Any = None,
+                     logins: Optional[Mapping[str, Any]] = None) -> str:
     # who is None for callers that predate per-user accounts, which are all
     # operator-side, so the default is the full-privilege view.
     is_admin = who is None or getattr(who, "is_admin", True)
@@ -343,6 +403,9 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f"<h2>Open alerts</h2><ul class=\"alerts\">{alert_items}</ul>"
         # Management is the operator's. An owner sees their nodes and nothing to
         # press, which is why they get no CSRF token either: there is no form.
+        # The sign-in card belongs to whoever owns the node, admin or not: needing
+        # the operator to sign you in would only move the bottleneck.
+        + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + "</body></html>"
     )

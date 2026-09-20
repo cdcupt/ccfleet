@@ -111,3 +111,79 @@ def test_owner_must_be_a_usable_unix_name(store, bad_owner):
 def test_reasonable_owner_names_are_accepted(store, ok_owner):
     store.add_node("node-a", ok_owner)
     assert store.get_node("node-a")["owner"] == ok_owner
+
+
+def test_a_late_report_cannot_kill_the_attempt_that_replaced_it(store):
+    """The node posts on its own schedule, so a stale report overtaking a new
+    request is ordinary, not exotic."""
+    store.add_node("node-a", "erik")
+    store.request_login("node-a", "a@b.com", 100.0)
+    first = store.get_login("node-a")["requested_at"]
+
+    # The owner gives up and starts again.
+    store.request_login("node-a", "a@b.com", 200.0)
+    assert store.get_login("node-a")["requested_at"] == 200.0
+
+    # The abandoned attempt finally reports. It must not delete the live one.
+    store.record_login_progress("node-a", "done", "", "", 201.0, requested_at=first)
+    assert store.get_login("node-a") is not None
+    assert store.get_login("node-a")["requested_at"] == 200.0
+
+    # Nor overwrite its state with its own.
+    store.record_login_progress("node-a", "url_ready", "https://claude.ai/old", "",
+                                201.0, requested_at=first)
+    assert store.get_login("node-a")["url"] == ""
+
+    # The live attempt is still perfectly able to finish.
+    store.record_login_progress("node-a", "done", "", "", 202.0, requested_at=200.0)
+    assert store.get_login("node-a") is None
+
+
+def test_the_code_is_cleared_the_moment_the_node_says_it_used_it(store):
+    store.add_node("node-a", "erik")
+    store.request_login("node-a", "a@b.com", 100.0)
+    store.record_login_progress("node-a", "url_ready", "https://claude.ai/x", "", 101.0)
+    store.submit_login_code("node-a", "the-code", 102.0)
+    assert store.get_login("node-a")["code"] == "the-code"
+    store.record_login_progress("node-a", "code_sent", "", "", 103.0)
+    row = store.get_login("node-a")
+    assert row["state"] == "code_sent"
+    assert row["code"] == "", "a consumed code must not sit in the database"
+
+
+def test_progress_for_a_node_with_no_attempt_is_simply_ignored(store):
+    store.add_node("node-a", "erik")
+    store.record_login_progress("node-a", "url_ready", "https://claude.ai/x", "", 1.0)
+    assert store.get_login("node-a") is None
+
+
+def test_the_login_path_is_safe_under_concurrent_use(store):
+    """The store shares one connection across threads under a lock.
+
+    The login methods first used `with self._conn:` instead, which is a different
+    transaction mechanism; two threads in it at once raised "cannot start a
+    transaction within a transaction". Local tests passed and CI caught it.
+    """
+    import threading
+    import time
+    store.add_node("node-a", "erik")
+    errors = []
+
+    def hammer(i):
+        try:
+            for _ in range(30):
+                store.request_login("node-a", f"a{i}@b.com", time.time())
+                store.get_login("node-a")
+                store.record_login_progress("node-a", "url_ready",
+                                            "https://claude.ai/x", "", time.time())
+                store.expire_logins(0)
+                store.clear_login("node-a")
+        except Exception as exc:                      # noqa: BLE001 - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []

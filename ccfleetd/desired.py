@@ -13,14 +13,36 @@ the next one carries the same intent, and applying it twice is a no-op.
 
 from __future__ import annotations
 
+import urllib.parse
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Optional
 
 # A node may be pinned to an exact version, or told to track a channel. Anything
 # else is refused rather than passed to the installer: this string reaches
 # `claude install <target>` on the node.
 VERSION_CHANNELS = ("stable", "latest")
 MAX_VERSION_LEN = 40
+
+
+# The verification URL is supplied by a node and then shown to an operator as a
+# link. Escaping makes it safe as *text*; it does nothing about the scheme, and
+# href="javascript:..." survives escaping intact. So the URL is checked, not
+# merely escaped, and a node that offers anything else gets no link at all.
+LOGIN_URL_HOSTS = ("claude.ai", "www.claude.ai", "console.anthropic.com")
+
+
+def is_login_url(url: Any) -> bool:
+    """True only for an https URL on a host we expect a sign-in to live on."""
+    if not isinstance(url, str) or len(url) > 1024:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+    # netloc rather than hostname so an embedded port or credential cannot hide.
+    return parsed.hostname is not None and parsed.hostname.lower() in LOGIN_URL_HOSTS
 
 
 def is_channel(pin: Any) -> bool:
@@ -51,9 +73,37 @@ def _version_target(raw: Any) -> str:
     return ""
 
 
-def desired_state(node: Mapping[str, Any]) -> dict[str, Any]:
+# A node normally reports every few minutes. That is far too slow for a sign-in,
+# where someone is watching the console waiting for a URL, so the agent is told
+# to come back quickly while one is in flight.
+IDLE_POLL_S = 300
+LOGIN_POLL_S = 5
+
+
+def _login_block(login: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """The sign-in a node should be working on, or None.
+
+    `requested_at` is what lets the agent tell a new request from one it has
+    already acted on, so a repeated heartbeat does not restart a login in
+    progress. The code is only present once someone has pasted one.
+    """
+    if not login or login.get("state") not in ("requested", "url_ready", "code_sent"):
+        return None
+    block = {"requested_at": login.get("requested_at"),
+             "email": login.get("email") or ""}
+    code = login.get("code") or ""
+    if code and login.get("state") == "code_sent":
+        block["code"] = code
+    return block
+
+
+def desired_state(node: Mapping[str, Any],
+                  login: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """What this node should look like, derived from its stored row."""
+    pending = _login_block(login)
     return {
         "claude_version": _version_target(node.get("pinned_version")),
         "remote_control": bool(node.get("rc_expected")),
+        "login": pending,
+        "poll_s": LOGIN_POLL_S if pending else IDLE_POLL_S,
     }

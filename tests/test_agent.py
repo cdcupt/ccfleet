@@ -546,3 +546,134 @@ def test_the_cli_answer_overrides_a_file_that_merely_exists(tmp_path, monkeypatc
     assert creds["logged_in"] is False
     # The file is there, but the login behind it is not, so present follows the CLI.
     assert creds["present"] is False
+
+
+# -- console-driven sign-in ------------------------------------------------------
+
+
+class TmuxFake:
+    """Records tmux calls and serves whatever the pane should currently show."""
+
+    def __init__(self, pane="", auth='{"loggedIn": false}', rc=0):
+        self.pane, self.auth, self.calls, self.rc = pane, auth, [], rc
+
+    def __call__(self, argv, **kw):
+        self.calls.append(argv)
+        out = ""
+        if argv[0] == "tmux" and "capture-pane" in argv:
+            out = self.pane
+        elif argv[1:3] == ["auth", "status"]:
+            out = self.auth
+        return subprocess.CompletedProcess(argv, self.rc, stdout=out, stderr="")
+
+    def verbs(self):
+        return [a[3] if a[0] == "tmux" else a[1] for a in self.calls]
+
+
+def test_login_email_must_look_like_one_before_it_reaches_argv():
+    assert agent.login_email("a.b+c@example.co.uk") == "a.b+c@example.co.uk"
+    for junk in ("--flag", "no-at-sign", "a@b", "; rm -rf /", "", None, 3, "x" * 300):
+        assert agent.login_email(junk) is None
+
+
+def test_find_login_url_reads_the_pane_or_admits_it_cannot():
+    assert agent.find_login_url(
+        "Visit:\nhttps://claude.ai/oauth/authorize?code=true&client_id=abc\nPaste code:"
+    ) == "https://claude.ai/oauth/authorize?code=true&client_id=abc"
+    assert agent.find_login_url('see "https://claude.ai/oauth/x?y=1".') == \
+        "https://claude.ai/oauth/x?y=1"
+    # A prompt change that stops printing a URL must surface, not hang.
+    assert agent.find_login_url("no url anywhere") is None
+
+
+def test_a_sign_in_walks_from_request_to_done(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake()
+    wanted = {"requested_at": 100.0, "email": "owner@example.com"}
+
+    # 1. a new request starts a pane and says so
+    progress, state = agent.reconcile_login({"login": wanted}, {}, tmux)
+    assert progress == {"state": "requested", "requested_at": 100.0}
+    assert "new-session" in tmux.verbs()
+    launched = [a for a in tmux.calls if "new-session" in a][0][-1]
+    assert "auth login --claudeai --email owner@example.com" in launched
+
+    # 2. nothing to say while the CLI is still printing
+    progress, state = agent.reconcile_login({"login": wanted}, state, tmux)
+    assert progress is None
+
+    # 3. the URL appears and is carried back once
+    tmux.pane = "Visit https://claude.ai/oauth/authorize?code=1 to continue"
+    progress, state = agent.reconcile_login({"login": wanted}, state, tmux)
+    assert progress["state"] == "url_ready"
+    assert progress["url"] == "https://claude.ai/oauth/authorize?code=1"
+
+    # 4. still nothing to say until someone pastes a code
+    assert agent.reconcile_login({"login": wanted}, state, tmux)[0] is None
+
+    # 5. the code is typed into the pane
+    with_code = {**wanted, "code": " the-code "}
+    progress, state = agent.reconcile_login({"login": with_code}, state, tmux)
+    assert progress["state"] == "code_sent"
+    keys = [a for a in tmux.calls if "send-keys" in a][0]
+    assert "the-code" in keys and "Enter" in keys          # stripped, then Enter
+
+    # 6. the CLI, not the pane text, decides whether it worked
+    assert agent.reconcile_login({"login": with_code}, state, tmux)[0] is None
+    tmux.auth = '{"loggedIn": true}'
+    progress, state = agent.reconcile_login({"login": with_code}, state, tmux)
+    assert progress["state"] == "done"
+    assert "kill-session" in tmux.verbs()
+    assert "login" not in state
+
+
+def test_a_rejected_code_is_reported_rather_than_waited_on(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake()
+    wanted = {"requested_at": 1.0, "email": "a@b.com", "code": "bad"}
+    _, state = agent.reconcile_login({"login": wanted}, {}, tmux)
+    tmux.pane = "https://claude.ai/oauth/x"
+    _, state = agent.reconcile_login({"login": wanted}, state, tmux)
+    _, state = agent.reconcile_login({"login": wanted}, state, tmux)   # sends the code
+    tmux.pane = "Invalid code. Please try again."
+    progress, state = agent.reconcile_login({"login": wanted}, state, tmux)
+    assert progress["state"] == "failed" and "not accepted" in progress["detail"]
+    assert "login" not in state
+
+
+def test_a_new_request_supersedes_one_that_is_stuck(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake()
+    _, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
+    progress, state = agent.reconcile_login({"login": {"requested_at": 2.0}}, state, tmux)
+    assert progress == {"state": "requested", "requested_at": 2.0}
+    assert state["login"]["requested_at"] == 2.0
+
+
+def test_cancelling_tidies_up_the_pane(tmp_path, monkeypatch):
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake()
+    _, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
+    progress, state = agent.reconcile_login({}, state, tmux)
+    assert progress is None and "login" not in state
+    assert "kill-session" in tmux.verbs()
+    # Nothing in flight and nothing asked for is simply a no-op.
+    before = len(tmux.calls)
+    assert agent.reconcile_login({}, {}, tmux) == (None, {})
+    assert len(tmux.calls) == before
+
+
+def test_a_node_without_claude_reports_that_instead_of_hanging(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: None)
+    tmux = TmuxFake()
+    progress, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
+    assert progress["state"] == "failed" and "not found" in progress["detail"]
+
+
+def test_a_tmux_that_fails_is_not_treated_as_a_started_login(tmp_path, monkeypatch):
+    """`_run` returns output, not a verdict — a non-zero tmux must not look started."""
+    _claude_at(tmp_path, monkeypatch)
+    tmux = TmuxFake(rc=1)
+    progress, state = agent.reconcile_login({"login": {"requested_at": 1.0}}, {}, tmux)
+    assert progress["state"] == "failed"
+    assert "login" not in state or state["login"].get("phase") == "failed"

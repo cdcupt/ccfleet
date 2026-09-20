@@ -61,3 +61,19 @@ def test_a_channel_pin_never_reports_drift(cfg):
     # An exact pin still drifts, or the feature would be pointless.
     exact = {**node, "pinned_version": "2.1.90"}
     assert "version_mismatch" in [f.rule for f in rules.evaluate(exact, hb, None, now, cfg)]
+
+
+def test_only_a_real_sign_in_url_is_ever_linkable():
+    """The node supplies this and an operator clicks it. Escaping makes it safe as
+    text; it does nothing about the scheme, so the scheme is checked."""
+    from ccfleetd.desired import is_login_url
+    for good in ("https://claude.ai/oauth/authorize?code=1",
+                 "https://www.claude.ai/x", "https://console.anthropic.com/y"):
+        assert is_login_url(good), good
+    for bad in ("javascript:alert(1)", "JaVaScRiPt:alert(1)",
+                "data:text/html,<script>alert(1)</script>",
+                "http://claude.ai/x",                    # not https
+                "https://evil.com/x", "https://claude.ai.evil.com/x",
+                "https://user:pw@claude.ai/x",           # credentials hidden in it
+                "//claude.ai/x", "", "   ", None, 123, "https://claude.ai/" + "x" * 2000):
+        assert not is_login_url(bad), bad

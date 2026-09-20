@@ -249,19 +249,48 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             except HeartbeatError as exc:
                 self._json(400, {"error": str(exc)})
                 return
-            events = ctx.monitor.record_heartbeat(node, payload, time.time())
+            now = time.time()
+            login = (payload.get("reconcile") or {}).get("login")
+            if isinstance(login, dict) and login.get("state"):
+                requested_at = login.get("requested_at")
+                ctx.store.record_login_progress(
+                    node["id"], str(login.get("state")), str(login.get("url") or ""),
+                    str(login.get("detail") or ""), now,
+                    requested_at if isinstance(requested_at, (int, float))
+                    and not isinstance(requested_at, bool) else None)
+            events = ctx.monitor.record_heartbeat(node, payload, now)
             self._json(200, {
                 "ok": True,
                 # Kept for agents predating the desired block; same value, new home.
                 "pinned_version": node["pinned_version"],
-                "desired": desired_state(node),
+                "desired": desired_state(node, ctx.store.get_login(node["id"])),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
 
         # -- console actions -----------------------------------------------
 
+        # Signing in is the one thing an owner must be able to do for themselves:
+        # the whole point is that they no longer need SSH to reach their node, and
+        # routing it through the operator would just move the bottleneck. These
+        # act only on a node the caller already owns; everything else stays admin.
+        OWNER_ACTIONS = ("login-start", "login-code", "login-cancel")
+
+        def _may_act_on(self, node_id: str, action: str) -> bool:
+            """Authorisation for one action on one node."""
+            who = self._identity()
+            if who is None:
+                return False                       # already answered 401
+            if who.is_admin:
+                return True
+            node = ctx.store.get_node(node_id)
+            if action in self.OWNER_ACTIONS and node is not None and node["owner"] == who.owner:
+                return True
+            # Their credentials were fine; the action is not theirs to take.
+            self._json(403, {"error": "this account cannot manage that node"})
+            return False
+
         def _console_action(self, path: str) -> None:
-            if not self._require_admin():
+            if self._identity() is None:
                 return
             form = self._form()
             if form is None:
@@ -272,8 +301,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             parts = path.strip("/").split("/")          # actions/node/<id|add>/<action>
             try:
                 if parts[:3] == ["actions", "node", "add"]:
+                    if not self._require_admin():
+                        return
                     self._action_add(form)
                 elif len(parts) == 4 and parts[:2] == ["actions", "node"]:
+                    if not self._may_act_on(parts[2], parts[3]):
+                        return
                     self._action_on_node(parts[2], parts[3], form)
                 else:
                     self._json(404, {"error": "not found"})
@@ -301,6 +334,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 ctx.store.set_rc_expected(node_id, False)
             elif action == "pin":
                 ctx.store.set_pinned_version(node_id, form.get("version", "").strip())
+            elif action == "login-start":
+                ctx.store.request_login(node_id, form.get("email", ""), time.time())
+            elif action == "login-code":
+                ctx.store.submit_login_code(node_id, form.get("code", ""), time.time())
+            elif action == "login-cancel":
+                ctx.store.clear_login(node_id)
             elif action == "rotate-token":
                 token = ctx.store.rotate_token(node_id)
                 node = ctx.store.get_node(node_id) or {}
@@ -338,13 +377,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                               ctx.store.open_alerts(), time.time())
 
         def _dashboard(self, who: Identity) -> str:
-            # An owner is handed no CSRF token, because there is nothing for them
-            # to submit. That makes the absence of the forms structural rather
-            # than cosmetic: even a hand-built POST is refused by _require_admin.
-            csrf = csrf_token(ctx.cfg) if who.is_admin else ""
-            return render_dashboard(self._rows(who),
+            # An owner now has exactly one thing to submit — their own sign-in —
+            # so they get a CSRF token where before they got none. The token is
+            # not authorisation: every write still goes through _may_act_on,
+            # which refuses an owner any action outside OWNER_ACTIONS and any
+            # node that is not theirs. The management forms are still rendered
+            # for admins only.
+            rows = self._rows(who)
+            logins = {r["id"]: ctx.store.get_login(r["id"]) for r in rows}
+            return render_dashboard(rows,
                                     self._scope_alerts(ctx.store.open_alerts(), who),
-                                    time.time(), ctx.cfg, csrf, who)
+                                    time.time(), ctx.cfg, csrf_token(ctx.cfg), who,
+                                    logins=logins)
 
     return FleetHandler
 
