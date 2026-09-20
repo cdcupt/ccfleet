@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """ccfleet node agent: posts one heartbeat about this node to the fleet server.
 
-Standard library only. Runs as the node owner's user and reads nothing but public
-facts about the machine, plus a narrow set of non-secret fields from two Claude
-Code files:
+Standard library only. Runs as the node owner's user. What it opens, and what it
+takes from each:
 
   ~/.claude/.credentials.json   modification time, access-token expiry, plan type
   ~/.claude.json                whether an account is signed in, when its profile
                                 was last fetched, and the rate-limit tier
+  claude auth status            the CLI's own answer on whether the login works
+  ~/.claude/projects/**.jsonl   session transcripts, for per-turn token counts
 
-The second is what makes a Mac reportable at all, since the credential itself
-lives in the Keychain there and this agent will not read it. That file also holds
-an email address, a full name, an account uuid and an organisation name; none of
-them are collected. Token values are never read into the payload, and the tests
-assert both of those.
+Be exact about the last one, because it is the sensitive one. Those transcripts
+are the owner's conversations, and parsing a record decodes the whole of it,
+content included. What leaves the node is token counts, per-day totals and the
+model names in use — nothing else. Conversation content is never copied out of
+the parsed record, never stored, never logged and never sent. See usage_summary.
+
+`~/.claude.json` likewise holds an email address, a full name, an account uuid
+and an organisation name, and `claude auth status` returns an email address and
+an organisation; none of them are collected. It is also what makes a Mac
+reportable at all, since the credential there lives in the Keychain and this
+agent will not read it. Token values never reach the payload. Tests assert each
+of these, including with a secret written into a fixture transcript.
 """
 
 from __future__ import annotations
@@ -355,6 +363,7 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
     payload["egress"] = egress_ip(cfg.egress_targets, opener, min(cfg.timeout_s, 5.0))
     payload["remote_control"] = remote_control_state(cfg.rc_service, runner)
     payload["tmux_sessions"] = tmux_sessions(runner)
+    payload["usage"] = usage_summary(cfg.claude_config_dir)
     upgrade = (state or {}).get("upgrade")
     if isinstance(upgrade, Mapping):
         payload["reconcile"] = {"upgrade": dict(upgrade)}
@@ -388,6 +397,252 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
         if attempt < attempts - 1:
             sleep(RETRY_DELAYS_S[attempt])
     return 0, "unreachable"
+
+
+# -- usage ----------------------------------------------------------------------
+#
+# Claude Code writes a JSONL transcript per session under the config directory,
+# and each assistant record carries that turn's token counts. Reading those files
+# is how this reports usage: they are local files the CLI wrote on its own
+# machine. It is NOT the OAuth usage endpoint, which would mean using the owner's
+# token outside Claude Code — see the project's compliance notes.
+#
+# Be precise about the privacy claim. Parsing a record decodes the whole of it,
+# conversation content included, so it IS read into memory here. What is
+# guaranteed is narrower and still worth having: only token counts, per-day
+# totals and model names are retained or reported. The content is never copied
+# out of the parsed record, never stored, never logged and never sent.
+#
+# What this can say: how much this node has consumed. What it cannot say: how
+# much of a subscription window is left. That lives only behind /usage inside a
+# session, and this deliberately does not go looking for it.
+
+USAGE_WINDOW_DAYS = 14
+# A busy node accumulates a lot of transcript. These bounds keep a five-minute
+# heartbeat from turning into a filesystem scan.
+USAGE_MAX_FILES = 200
+USAGE_MAX_BYTES_PER_FILE = 4 * 1024 * 1024
+# The real guard is the total, not the per-file cap: 200 files at 4 MiB each
+# would be 800 MiB of reading on every five-minute heartbeat. Files are taken
+# newest first, so exhausting this budget loses the oldest data in the window
+# rather than the most recent.
+USAGE_MAX_BYTES_TOTAL = 32 * 1024 * 1024
+# Enumerating every transcript is itself the unbounded part: the file cap only
+# applies after the walk. Stop walking at this many paths.
+USAGE_MAX_SCAN = 5000
+# A single transcript line can be enormous — one pasted file or tool result. It
+# is read in chunks and abandoned past this, so no one record can pull an
+# unbounded amount into memory during a heartbeat.
+USAGE_MAX_LINE = 1024 * 1024
+USAGE_CHUNK = 64 * 1024
+USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
+                    "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _usage_files(root: Path, since: float) -> list[Path]:
+    """Transcripts touched inside the window, newest first and capped."""
+    fresh = []
+    seen = 0
+    try:
+        for path in root.glob("**/*.jsonl"):
+            seen += 1
+            if seen > USAGE_MAX_SCAN:
+                log.debug("stopped walking transcripts at %d paths", USAGE_MAX_SCAN)
+                break
+            try:
+                # One stat, not two: this runs over every transcript on the node.
+                info = path.stat()
+            except OSError:
+                continue
+            if info.st_mtime >= since:
+                fresh.append((info.st_mtime, path))
+    except OSError:
+        return []
+    fresh.sort(key=lambda pair: pair[0], reverse=True)
+    return [path for _, path in fresh[:USAGE_MAX_FILES]]
+
+
+def _bounded_lines(fh: Any, limit: int) -> Any:
+    """Yield ``(line, bytes_read)`` pairs, bounding any single line.
+
+    `for line in fh` materialises a whole line before anything can measure it, so
+    one oversized record would defeat every byte cap below it. Reading in chunks
+    keeps the ceiling real; an over-long line is dropped rather than buffered.
+
+    The byte count is what was *read*, not what was yielded, and it is reported
+    even for lines that are discarded. Charging only the yielded lines would let
+    a file full of oversized records consume its whole allowance for free, which
+    is exactly the read the global budget exists to prevent.
+    """
+    buf = ""
+    spent = 0
+    while spent < limit:
+        chunk = fh.read(USAGE_CHUNK)
+        if not chunk:
+            break
+        spent += len(chunk)
+        buf += chunk
+        charge = len(chunk)
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            if len(line) <= USAGE_MAX_LINE:
+                yield line, charge
+                charge = 0
+        if len(buf) > USAGE_MAX_LINE:
+            buf = ""          # an unterminated monster; abandon it
+        if charge:
+            # Read but nothing surfaced from it — still charged.
+            yield None, charge
+    if buf and len(buf) <= USAGE_MAX_LINE:
+        yield buf, 0
+
+
+def _seek_to_tail(fh: Any, path: Path) -> int:
+    """For an oversized transcript, start near its end rather than its start.
+
+    Transcripts are append-only, so the newest records are last. Reading the
+    first N bytes of a large one skips exactly the recent usage this is meant to
+    report — the cap would silently invert the answer rather than trim it.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    if size <= USAGE_MAX_BYTES_PER_FILE:
+        return 0
+    try:
+        fh.seek(size - USAGE_MAX_BYTES_PER_FILE)
+        # The seek lands mid-line; that partial line is discarded. Read it in
+        # chunks rather than with readline(), which is unbounded: an enormous
+        # unterminated record would otherwise be materialised whole, defeating
+        # the cap this function exists to apply. Charged to the budget either way.
+        skipped = 0
+        while skipped <= USAGE_MAX_LINE:
+            chunk = fh.read(USAGE_CHUNK)
+            if not chunk:
+                break
+            skipped += len(chunk)
+            newline = chunk.find("\n")
+            if newline != -1:
+                # Step back to just after that newline so reading resumes clean.
+                fh.seek(fh.tell() - (len(chunk) - newline - 1))
+                break
+        return skipped
+    except (OSError, ValueError):
+        try:
+            fh.seek(0)
+        except OSError:
+            pass
+        return 0
+
+
+def usage_summary(config_dir: Path, now: Optional[float] = None,
+                  window_days: int = USAGE_WINDOW_DAYS) -> dict[str, Any]:
+    """Token counts per day from local transcripts.
+
+    Parsing a record decodes conversation content along with everything else;
+    what this guarantees is that nothing but counts is kept or returned.
+    """
+    now = time.time() if now is None else now
+    # window_days counts calendar days INCLUDING today, so the oldest day is
+    # window_days - 1 back. Using a full window_days made the filter admit 15
+    # distinct dates while the series was trimmed to 14, so the total and the
+    # sparkline disagreed about the oldest one.
+    since = now - (window_days - 1) * 86400
+    # Files are selected by mtime but records by calendar day, so the cutoff has
+    # to be that day's midnight. Using a time of day would drop a transcript last
+    # written early on the oldest valid day, undercounting the stated window.
+    since = since - (since % 86400)
+    root = config_dir / "projects"
+    oldest_day = time.strftime("%Y-%m-%d", time.gmtime(since))
+    newest_day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    budget = USAGE_MAX_BYTES_TOTAL
+    totals: dict[str, int] = {k: 0 for k in USAGE_TOKEN_KEYS}
+    by_day: dict[str, int] = {}
+    models: set[str] = set()
+    sessions = 0
+
+    for path in _usage_files(root, since):
+        if budget <= 0:
+            break
+        counted = False
+        try:
+            with path.open(encoding="utf-8", errors="replace") as fh:
+                budget -= _seek_to_tail(fh, path)
+                read = 0
+                allowance = min(USAGE_MAX_BYTES_PER_FILE, max(budget, 0))
+                for line, consumed in _bounded_lines(fh, allowance):
+                    read += consumed
+                    budget -= consumed
+                    if read > USAGE_MAX_BYTES_PER_FILE or budget <= 0:
+                        break
+                    if line is None:
+                        continue
+                    if not line.startswith("{"):
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    message = record.get("message")
+                    message = message if isinstance(message, Mapping) else {}
+                    usage = message.get("usage") or record.get("usage")
+                    if not isinstance(usage, Mapping):
+                        continue
+                    stamp = _usage_day(record.get("timestamp"))
+                    if not _in_window(stamp, oldest_day, newest_day):
+                        continue
+                    counted = True
+                    turn = 0
+                    for key in USAGE_TOKEN_KEYS:
+                        value = usage.get(key)
+                        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                            totals[key] += value
+                            turn += value
+                    if turn:
+                        by_day[stamp] = by_day.get(stamp, 0) + turn
+                    model = message.get("model")
+                    if isinstance(model, str) and model:
+                        models.add(model[:40])
+        except OSError:
+            continue
+        if counted:
+            sessions += 1
+
+    return {
+        "window_days": window_days,
+        "sessions": sessions,
+        "total_tokens": sum(totals.values()),
+        "models": sorted(models)[:6],
+        # Oldest to newest, so a sparkline can be drawn straight from it.
+        # No trailing trim: the per-record filter already bounds this to the
+        # window, and trimming here is what made the series disagree with the total.
+        "by_day": [{"day": d, "tokens": by_day[d]} for d in sorted(by_day)],
+        **totals,
+    }
+
+
+def _usage_day(raw: Any) -> Optional[str]:
+    """The YYYY-MM-DD an ISO timestamp falls on, or None."""
+    if not isinstance(raw, str) or len(raw) < 10:
+        return None
+    day = raw[:10]
+    return day if day[4] == "-" and day[7] == "-" and day[:4].isdigit() else None
+
+
+def _in_window(day: Optional[str], oldest_day: str, newest_day: str) -> bool:
+    """Is this record's own day inside the window?
+
+    Selecting files by modification time is not enough: one long-lived session
+    transcript touched today carries records from weeks ago, so a "last 14 days"
+    total would quietly include them. Each record is judged on its own date, and
+    a record whose date cannot be read is not counted — an unplaceable number is
+    worse than a missing one in a figure that claims a window.
+    """
+    # Both ends. A record dated in the future — a skewed clock, or a node that
+    # simply wrote a wrong timestamp — would otherwise be counted in a window it
+    # is not in, and would inflate the total it appears in.
+    return day is not None and oldest_day <= day <= newest_day
 
 
 # -- reconcile -------------------------------------------------------------------

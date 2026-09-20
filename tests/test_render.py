@@ -172,3 +172,30 @@ def test_a_pin_is_shown_when_it_still_says_something():
     # A channel is worth showing even when satisfied: it names what is tracked.
     assert "stable" in _vcell("2.1.278", "stable")
     assert _vcell("2.1.278", "") == "2.1.278"
+
+
+def test_usage_card_draws_a_sparkline_and_says_what_it_cannot_tell_you():
+    from ccfleetd.render import _usage_html
+    rows = [{"id": "att3", "owner": "erik", "usage": {
+        "total_tokens": 1_240_000, "sessions": 12, "window_days": 14,
+        "cache_read_input_tokens": 900_000, "models": ["claude-opus-5"],
+        "by_day": [{"day": "2026-09-18", "tokens": 260000},
+                   {"day": "2026-09-19", "tokens": 140000}]}}]
+    html = _usage_html(rows)
+    assert "1.2M" in html and "12 sessions" in html
+    assert '<svg class="spark"' in html and "<polyline" in html
+    # The distinction that keeps this honest.
+    assert "not how much of a subscription window is left" in html
+    # No node reporting usage means no card at all, rather than an empty one.
+    assert _usage_html([{"id": "n", "owner": "e", "usage": {}}]) == ""
+
+
+def test_a_node_supplied_usage_series_cannot_break_the_chart():
+    from ccfleetd.render import _sparkline
+    assert "no activity yet" in _sparkline([])
+    assert "no activity yet" in _sparkline([{"day": "x", "tokens": "lots"}])
+    # All-zero days must not divide by zero.
+    flat = _sparkline([{"day": "a", "tokens": 0}, {"day": "b", "tokens": 0}])
+    assert "<polyline" in flat
+    single = _sparkline([{"day": "a", "tokens": 5}])
+    assert "<polyline" in single

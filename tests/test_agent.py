@@ -707,3 +707,247 @@ def test_the_pane_is_read_with_wrapped_lines_joined(tmp_path, monkeypatch):
     agent.read_login_pane(tmux)
     capture = [a for a in tmux.calls if "capture-pane" in a][0]
     assert "-J" in capture, "without -J a wrapped URL comes back cut in three"
+
+
+# -- usage from local transcripts ------------------------------------------------
+
+
+def _transcript(tmp_path, name, records):
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+def test_usage_reports_counts_and_no_conversation_content(tmp_path):
+    secret = "the user's actual private conversation text"
+    _transcript(tmp_path, "a.jsonl", [
+        {"timestamp": "2026-09-18T10:00:00Z", "type": "user",
+         "message": {"role": "user", "content": secret}},
+        {"timestamp": "2026-09-18T10:00:05Z", "message": {
+            "role": "assistant", "model": "claude-opus-5", "content": secret,
+            "usage": {"input_tokens": 10, "output_tokens": 20,
+                      "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40}}},
+        {"timestamp": "2026-09-19T11:00:00Z", "message": {
+            "role": "assistant", "model": "claude-opus-5",
+            "usage": {"input_tokens": 5, "output_tokens": 5}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 380
+    assert u["input_tokens"] == 15 and u["output_tokens"] == 25
+    assert u["cache_read_input_tokens"] == 300
+    assert u["sessions"] == 1 and u["models"] == ["claude-opus-5"]
+    assert u["by_day"] == [{"day": "2026-09-18", "tokens": 370},
+                           {"day": "2026-09-19", "tokens": 10}]
+    # Parsing decodes the content too — that is unavoidable when reading the
+    # record. The guarantee is that none of it is kept or returned, only counts.
+    assert secret not in json.dumps(u)
+
+
+def test_usage_ignores_transcripts_outside_the_window(tmp_path):
+    import os
+    _transcript(tmp_path, "old.jsonl", [{"timestamp": "2026-01-01T00:00:00Z", "message": {
+        "usage": {"input_tokens": 999999}}}])
+    old = tmp_path / "projects" / "proj" / "old.jsonl"
+    stale = 1789900000.0 - 60 * 86400
+    os.utime(old, (stale, stale))
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 0 and u["sessions"] == 0
+
+
+def test_usage_survives_a_transcript_it_cannot_parse(tmp_path):
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    (d / "broken.jsonl").write_text(
+        '{"half written\nnot json at all\n'
+        '{"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 7}}}\n')
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 7, "one bad line must not lose the whole file"
+
+
+def test_usage_is_empty_rather_than_absent_when_there_is_nothing(tmp_path):
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 0 and u["by_day"] == [] and u["models"] == []
+
+
+def test_a_long_lived_transcript_does_not_smuggle_old_usage_into_the_window(tmp_path):
+    """Selecting files by mtime is not enough.
+
+    One session transcript touched today can carry records from weeks ago, so a
+    figure labelled "last 14 days" would quietly include them.
+    """
+    _transcript(tmp_path, "long.jsonl", [
+        {"timestamp": "2026-07-01T10:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
+        {"timestamp": "2026-09-18T10:00:00Z", "message": {"usage": {"output_tokens": 11}}},
+        {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 22}}},
+    ])
+    # now = 2026-09-20; the July record is far outside a 14-day window.
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 33, "the July record must not be counted"
+    assert [d["day"] for d in u["by_day"]] == ["2026-09-18", "2026-09-19"]
+
+
+def test_a_record_whose_date_cannot_be_read_is_not_counted(tmp_path):
+    """An unplaceable number is worse than a missing one in a windowed figure."""
+    _transcript(tmp_path, "undated.jsonl", [
+        {"message": {"usage": {"output_tokens": 500}}},
+        {"timestamp": 12345, "message": {"usage": {"output_tokens": 500}}},
+        {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 7}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 7
+
+
+def test_sessions_counts_transcripts_that_actually_contributed(tmp_path):
+    _transcript(tmp_path, "empty.jsonl", [{"timestamp": "2026-09-19T10:00:00Z",
+                                           "type": "user", "message": {"content": "hi"}}])
+    _transcript(tmp_path, "real.jsonl", [{"timestamp": "2026-09-19T10:00:01Z",
+                                          "message": {"usage": {"output_tokens": 9}}}])
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["sessions"] == 1 and u["total_tokens"] == 9
+
+
+def test_a_future_dated_record_is_not_counted(tmp_path):
+    """A skewed clock or a wrong timestamp would otherwise inflate the window."""
+    _transcript(tmp_path, "skewed.jsonl", [
+        {"timestamp": "2027-01-01T00:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
+        {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 8}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 8
+
+
+def test_the_scan_stops_at_a_total_byte_budget(tmp_path, monkeypatch):
+    """200 files at the per-file cap would be 800 MiB read every five minutes."""
+    monkeypatch.setattr(agent, "USAGE_MAX_BYTES_TOTAL", 2000)
+    line = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                       "message": {"usage": {"output_tokens": 1}}}) + "\n"
+    for i in range(12):
+        _transcript(tmp_path, f"f{i}.jsonl", [])
+        (tmp_path / "projects" / "proj" / f"f{i}.jsonl").write_text(line * 20)
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    # It stops early rather than reading everything, but still reports something.
+    assert 0 < u["total_tokens"] < 12 * 20
+
+
+def test_an_oversized_transcript_is_read_from_its_END(tmp_path, monkeypatch):
+    """Transcripts are append-only: the newest records are last.
+
+    Capping from the start would skip exactly the recent usage this reports —
+    inverting the answer rather than trimming it.
+    """
+    monkeypatch.setattr(agent, "USAGE_MAX_BYTES_PER_FILE", 2000)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    old_line = json.dumps({"timestamp": "2026-09-18T10:00:00Z",
+                           "message": {"usage": {"output_tokens": 1}}}) + "\n"
+    new_line = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                           "message": {"usage": {"output_tokens": 500}}}) + "\n"
+    # Plenty of old records first, then the recent one at the very end.
+    (d / "big.jsonl").write_text(old_line * 200 + new_line)
+
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    days = {p["day"]: p["tokens"] for p in u["by_day"]}
+    assert days.get("2026-09-19") == 500, "the newest record must survive the cap"
+    # Only the tail was read, so most of the 200 old records were skipped. Reading
+    # from the start would have given 200 old and lost the 500 entirely.
+    assert days.get("2026-09-18", 0) < 50, f"read too far back: {days}"
+
+
+def test_the_transcript_walk_itself_is_bounded(tmp_path, monkeypatch):
+    """USAGE_MAX_FILES only applies after the walk, so the walk needs its own cap."""
+    monkeypatch.setattr(agent, "USAGE_MAX_SCAN", 5)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    line = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                       "message": {"usage": {"output_tokens": 1}}}) + "\n"
+    for i in range(40):
+        (d / f"f{i:03d}.jsonl").write_text(line)
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert 0 < u["sessions"] <= 5, f"walked more than the cap: {u['sessions']}"
+
+
+def test_the_window_is_n_calendar_days_and_the_total_matches_the_series(tmp_path):
+    """A full window_days of seconds admitted 15 distinct dates while the series
+    was trimmed to 14, so the headline total disagreed with the chart under it."""
+    # now = 2026-09-20; a 14-day window ending today starts on 2026-09-07.
+    _transcript(tmp_path, "span.jsonl", [
+        {"timestamp": "2026-09-06T23:59:00Z", "message": {"usage": {"output_tokens": 111}}},
+        {"timestamp": "2026-09-07T00:00:00Z", "message": {"usage": {"output_tokens": 7}}},
+        {"timestamp": "2026-09-20T00:00:00Z", "message": {"usage": {"output_tokens": 3}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    days = [p["day"] for p in u["by_day"]]
+    assert days == ["2026-09-07", "2026-09-20"], days
+    assert len(days) <= 14
+    assert u["total_tokens"] == sum(p["tokens"] for p in u["by_day"]) == 10
+
+
+def test_a_transcript_written_early_on_the_oldest_day_is_still_counted(tmp_path):
+    """Files are chosen by mtime, records by calendar day. If the file cutoff is a
+    time of day, a transcript last written early on the oldest valid day is
+    dropped and the stated window silently undercounts."""
+    import os
+    _transcript(tmp_path, "edge.jsonl", [
+        {"timestamp": "2026-09-07T01:00:00Z", "message": {"usage": {"output_tokens": 42}}},
+    ])
+    f = tmp_path / "projects" / "proj" / "edge.jsonl"
+    # now = 2026-09-20T15:46Z; 14-day window starts 2026-09-07. Touch the file at
+    # 02:00 on that day — earlier in the day than "now", which is the trap.
+    early = 1788742800.0
+    os.utime(f, (early, early))
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 42, "the oldest valid day must be included in full"
+
+
+def test_one_enormous_transcript_line_cannot_be_pulled_into_memory(tmp_path, monkeypatch):
+    """`for line in fh` materialises a whole line before anything can measure it,
+    so a single huge record would defeat every byte cap below it."""
+    monkeypatch.setattr(agent, "USAGE_MAX_LINE", 4096)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    monster = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                          "message": {"content": "x" * 200_000,
+                                      "usage": {"output_tokens": 999}}})
+    good = json.dumps({"timestamp": "2026-09-19T10:00:01Z",
+                       "message": {"usage": {"output_tokens": 5}}})
+    (d / "big.jsonl").write_text(monster + "\n" + good + "\n")
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    # The oversized record is dropped; the ordinary one beside it still counts.
+    assert u["total_tokens"] == 5
+
+
+def test_bounded_lines_reports_every_byte_it_reads(tmp_path):
+    """Charging only the yielded lines would let a file of oversized records
+    consume its whole allowance for free — the exact read the budget prevents."""
+    import io
+    text = "".join(f"line-{i}\n" for i in range(1000))
+    pairs = list(agent._bounded_lines(io.StringIO(text), 200))
+    assert pairs and pairs[0][0] == "line-0"
+    assert sum(c for _, c in pairs) >= len("".join(ln for ln, _ in pairs if ln))
+
+
+def test_discarded_oversized_lines_are_still_charged(monkeypatch):
+    import io
+    monkeypatch.setattr(agent, "USAGE_MAX_LINE", 64)
+    monkeypatch.setattr(agent, "USAGE_CHUNK", 1024)
+    blob = "x" * 5000 + "\n" + "short\n"
+    pairs = list(agent._bounded_lines(io.StringIO(blob), 100_000))
+    charged = sum(c for _, c in pairs)
+    assert charged >= 5000, f"discarded bytes escaped the budget: {charged}"
+    assert [ln for ln, _ in pairs if ln] == ["short"]
+
+
+def test_skipping_a_partial_tail_record_is_bounded(tmp_path, monkeypatch):
+    """readline() is unbounded: one enormous unterminated record would be
+    materialised whole, defeating the cap _seek_to_tail exists to apply."""
+    monkeypatch.setattr(agent, "USAGE_MAX_BYTES_PER_FILE", 1000)
+    monkeypatch.setattr(agent, "USAGE_MAX_LINE", 256)
+    monkeypatch.setattr(agent, "USAGE_CHUNK", 128)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    good = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                       "message": {"usage": {"output_tokens": 6}}})
+    # A long unterminated stretch, then a real record at the very end.
+    (d / "t.jsonl").write_text("z" * 5000 + "\n" + good + "\n")
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 6

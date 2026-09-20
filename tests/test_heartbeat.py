@@ -101,3 +101,51 @@ def test_a_real_sign_in_url_survives_the_whitelist_intact():
     huge = validate_heartbeat(
         {"node_id": "n", "reconcile": {"login": {"state": "x", "url": "h" * 9000}}}, "n")
     assert len(huge["reconcile"]["login"]["url"]) == MAX_URL
+
+
+def test_usage_is_counts_only_and_every_part_of_it_is_bounded():
+    """A node could otherwise post an unbounded series, or smuggle content."""
+    out = validate_heartbeat({"node_id": "n", "usage": {
+        "total_tokens": 40897, "sessions": 3, "window_days": 14,
+        "models": ["claude-opus-5"],
+        "by_day": [{"day": "2026-09-19", "tokens": 40897}],
+        "transcript": "the user's private conversation",
+    }}, "n")
+    usage = out["usage"]
+    assert usage["total_tokens"] == 40897 and usage["sessions"] == 3
+    assert usage["by_day"] == [{"day": "2026-09-19", "tokens": 40897}]
+    assert "private conversation" not in json.dumps(out)
+
+    big = validate_heartbeat({"node_id": "n", "usage": {
+        "by_day": [{"day": f"d{i}", "tokens": i} for i in range(500)],
+        "models": [f"m{i}" for i in range(50)],
+    }}, "n")["usage"]
+    assert len(big["by_day"]) == 31 and len(big["models"]) == 8
+
+    junk = validate_heartbeat({"node_id": "n", "usage": {
+        "by_day": ["not a mapping", {"day": None, "tokens": 5}, {"day": "ok", "tokens": None}],
+        "models": "not a list",
+    }}, "n")["usage"]
+    assert junk["by_day"] == [] and junk["models"] == []
+
+
+def test_an_absurd_integer_cannot_take_the_dashboard_down():
+    """Python ints are arbitrary precision, so an authenticated node can post a
+    400-digit one. Anything doing float arithmetic on it later — the charts —
+    raises OverflowError and the page stops rendering for everyone."""
+    from ccfleetd.render import _human_tokens, _sparkline
+    out = validate_heartbeat({"node_id": "n",
+                              "disk": {"used_pct": 10 ** 500},
+                              "usage": {"total_tokens": 10 ** 400, "sessions": 3,
+                                        "by_day": [{"day": "a", "tokens": 10 ** 400},
+                                                   {"day": "b", "tokens": 50}]}}, "n")
+    assert out["disk"]["used_pct"] is None
+    assert out["usage"]["total_tokens"] is None
+    assert out["usage"]["by_day"] == [{"day": "b", "tokens": 50}]
+    # And what survived still renders.
+    _human_tokens(out["usage"]["total_tokens"])
+    assert "<svg" in _sparkline(out["usage"]["by_day"])
+    # Ordinary measurements are untouched.
+    fine = validate_heartbeat({"node_id": "n", "usage": {"total_tokens": 40897},
+                               "disk": {"used_pct": 12.7}}, "n")
+    assert fine["usage"]["total_tokens"] == 40897 and fine["disk"]["used_pct"] == 12.7
