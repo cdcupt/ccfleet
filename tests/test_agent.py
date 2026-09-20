@@ -916,10 +916,22 @@ def test_one_enormous_transcript_line_cannot_be_pulled_into_memory(tmp_path, mon
     assert u["total_tokens"] == 5
 
 
-def test_bounded_lines_stops_at_its_allowance(tmp_path):
+def test_bounded_lines_reports_every_byte_it_reads(tmp_path):
+    """Charging only the yielded lines would let a file of oversized records
+    consume its whole allowance for free — the exact read the budget prevents."""
     import io
     text = "".join(f"line-{i}\n" for i in range(1000))
-    got = list(agent._bounded_lines(io.StringIO(text), 200))
-    assert got, "should yield something"
-    assert len("".join(got)) <= 200 + agent.USAGE_CHUNK
-    assert got[0] == "line-0"
+    pairs = list(agent._bounded_lines(io.StringIO(text), 200))
+    assert pairs and pairs[0][0] == "line-0"
+    assert sum(c for _, c in pairs) >= len("".join(ln for ln, _ in pairs if ln))
+
+
+def test_discarded_oversized_lines_are_still_charged(monkeypatch):
+    import io
+    monkeypatch.setattr(agent, "USAGE_MAX_LINE", 64)
+    monkeypatch.setattr(agent, "USAGE_CHUNK", 1024)
+    blob = "x" * 5000 + "\n" + "short\n"
+    pairs = list(agent._bounded_lines(io.StringIO(blob), 100_000))
+    charged = sum(c for _, c in pairs)
+    assert charged >= 5000, f"discarded bytes escaped the budget: {charged}"
+    assert [ln for ln, _ in pairs if ln] == ["short"]

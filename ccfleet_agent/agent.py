@@ -463,11 +463,16 @@ def _usage_files(root: Path, since: float) -> list[Path]:
 
 
 def _bounded_lines(fh: Any, limit: int) -> Any:
-    """Yield lines without letting any single one grow past USAGE_MAX_LINE.
+    """Yield ``(line, bytes_read)`` pairs, bounding any single line.
 
     `for line in fh` materialises a whole line before anything can measure it, so
     one oversized record would defeat every byte cap below it. Reading in chunks
     keeps the ceiling real; an over-long line is dropped rather than buffered.
+
+    The byte count is what was *read*, not what was yielded, and it is reported
+    even for lines that are discarded. Charging only the yielded lines would let
+    a file full of oversized records consume its whole allowance for free, which
+    is exactly the read the global budget exists to prevent.
     """
     buf = ""
     spent = 0
@@ -477,14 +482,19 @@ def _bounded_lines(fh: Any, limit: int) -> Any:
             break
         spent += len(chunk)
         buf += chunk
+        charge = len(chunk)
         while "\n" in buf:
             line, buf = buf.split("\n", 1)
             if len(line) <= USAGE_MAX_LINE:
-                yield line
+                yield line, charge
+                charge = 0
         if len(buf) > USAGE_MAX_LINE:
             buf = ""          # an unterminated monster; abandon it
+        if charge:
+            # Read but nothing surfaced from it — still charged.
+            yield None, charge
     if buf and len(buf) <= USAGE_MAX_LINE:
-        yield buf
+        yield buf, 0
 
 
 def _seek_to_tail(fh: Any, path: Path) -> int:
@@ -549,11 +559,13 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
                 budget -= _seek_to_tail(fh, path)
                 read = 0
                 allowance = min(USAGE_MAX_BYTES_PER_FILE, max(budget, 0))
-                for line in _bounded_lines(fh, allowance):
-                    read += len(line) + 1
-                    budget -= len(line) + 1
+                for line, consumed in _bounded_lines(fh, allowance):
+                    read += consumed
+                    budget -= consumed
                     if read > USAGE_MAX_BYTES_PER_FILE or budget <= 0:
                         break
+                    if line is None:
+                        continue
                     if not line.startswith("{"):
                         continue
                     try:
