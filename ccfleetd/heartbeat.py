@@ -11,15 +11,20 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 MAX_STR = 200
+# One field genuinely needs more room. A real sign-in URL carries the client id,
+# both redirect URIs, the full scope list, a PKCE challenge and the state
+# parameter: measured at 496 characters against a live node. Capped at MAX_STR it
+# arrives truncated, which is worse than absent — it still looks like a URL.
+MAX_URL = 1024
 
 
 class HeartbeatError(ValueError):
     """Raised when the payload is not a usable heartbeat."""
 
 
-def _str(value: Any) -> Optional[str]:
+def _str(value: Any, limit: int = MAX_STR) -> Optional[str]:
     if isinstance(value, str):
-        return value[:MAX_STR]
+        return value[:limit]
     return None
 
 
@@ -94,7 +99,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     if login_state:
         result["reconcile"] = {"login": {
             "state": login_state,
-            "url": _str(login.get("url")),
+            "url": _str(login.get("url"), MAX_URL),
             "detail": _str(login.get("detail")),
             "requested_at": _num(login.get("requested_at")),
         }}
