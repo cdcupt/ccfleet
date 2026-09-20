@@ -143,13 +143,16 @@ def test_help_states_the_one_thing_a_token_cannot_do(home, tmp_path):
     assert "setup-token" in out
 
 
-HOSTILE = "weird home; touch /tmp/ccfleet-pwned $USER"
+# The sentinel lives under tmp_path so the test cannot collide with a
+# leftover file from anything else on the machine.
+HOSTILE_FMT = "weird home; touch {sentinel} $USER"
 
 
 def test_a_path_with_spaces_and_metacharacters_is_quoted(tmp_path):
     """The generated line lands in a file every new shell sources. An unquoted
     path with a space breaks the shell; one with a metacharacter runs it."""
-    home = tmp_path / HOSTILE
+    sentinel = tmp_path / "pwned"
+    home = tmp_path / HOSTILE_FMT.format(sentinel=sentinel)
     (home / ".config" / "ccfleet").mkdir(parents=True)
     (home / ".zshrc").write_text("# the user's own line\n")
 
@@ -168,7 +171,7 @@ def test_a_path_with_spaces_and_metacharacters_is_quoted(tmp_path):
         capture_output=True, text=True, timeout=30)
     assert probe.returncode == 0, probe.stderr
     assert probe.stdout == "set"
-    assert not Path("/tmp/ccfleet-pwned").exists(), "the path was executed, not quoted"
+    assert not sentinel.exists(), "the path was executed, not quoted"
 
 
 def test_a_path_containing_a_quote_is_still_safe(tmp_path):
@@ -180,3 +183,39 @@ def test_a_path_containing_a_quote_is_still_safe(tmp_path):
         ["/bin/sh", "-c", f". \"{home}/.zshrc\"; printf '%s' \"${{CLAUDE_CODE_OAUTH_TOKEN:+set}}\""],
         capture_output=True, text=True, timeout=30)
     assert probe.stdout == "set", probe.stderr
+
+
+def test_the_rc_files_permissions_are_preserved(home, tmp_path):
+    """Rewriting via a temp file gives it default permissions, so a 0600 rc
+    would quietly widen to 0644 — and people keep secrets in their rc."""
+    rc = home / ".zshrc"
+    rc.chmod(0o600)
+    assert run(home, tmp_path, GOOD_TOKEN).returncode == 0
+    assert stat.S_IMODE(rc.stat().st_mode) == 0o600, "connect widened the rc"
+    assert run(home, tmp_path, "--remove").returncode == 0
+    assert stat.S_IMODE(rc.stat().st_mode) == 0o600, "remove widened the rc"
+
+
+def test_a_shell_whose_config_directory_does_not_exist_yet(tmp_path):
+    """fish keeps its config under ~/.config/fish, which may not exist. Failing
+    there would leave the token written and the device half-connected."""
+    home = tmp_path / "fishhome"
+    (home / ".config" / "ccfleet").mkdir(parents=True)
+    env_overrides = {"SHELL": "/usr/local/bin/fish"}
+
+    env = dict(os.environ)
+    env.update({
+        "HOME": str(home),
+        "CCFLEET_TOKEN_FILE": str(home / ".config" / "ccfleet" / "token"),
+        "PATH": f"{fake_claude(tmp_path)}:{env['PATH']}",
+        **env_overrides,
+    })
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    result = subprocess.run([str(SCRIPT), GOOD_TOKEN], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    config = home / ".config" / "fish" / "config.fish"
+    assert config.exists(), "the fish config directory was not created"
+    body = config.read_text()
+    assert "set -gx CLAUDE_CODE_OAUTH_TOKEN" in body
+    assert GOOD_TOKEN not in body

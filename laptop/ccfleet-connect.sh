@@ -37,13 +37,23 @@ shell_rc() {
   esac
 }
 
+file_mode() {
+  # stat's flags differ between BSD and GNU, and this script runs on both.
+  stat -f '%OLp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || printf '600'
+}
+
 strip_block() {
   # Remove any previous block, leaving the rest of the file untouched.
-  local rc="$1"
+  local rc="$1" mode
   [ -f "$rc" ] || return 0
+  mode="$(file_mode "$rc")"
   awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
     $0 == b { skip = 1 } skip == 0 { print } $0 == e { skip = 0 }
-  ' "$rc" > "$rc.ccfleet-tmp" && mv "$rc.ccfleet-tmp" "$rc"
+  ' "$rc" > "$rc.ccfleet-tmp" || { rm -f "$rc.ccfleet-tmp"; return 1; }
+  # A fresh temp file carries default permissions, so replacing an rc with one
+  # would quietly widen a 0600 file to 0644. Carry the original mode across.
+  chmod "$mode" "$rc.ccfleet-tmp" 2>/dev/null || true
+  mv "$rc.ccfleet-tmp" "$rc"
 }
 
 sq() {
@@ -57,6 +67,9 @@ sq() {
 write_block() {
   local rc="$1" quoted
   quoted="$(sq "$TOKEN_FILE")"
+  # fish keeps its config under ~/.config/fish, which may not exist yet. Failing
+  # here would leave the token already written and the device half-connected.
+  mkdir -p "$(dirname "$rc")"
   strip_block "$rc"
   {
     printf '%s\n' "$MARK_BEGIN"
