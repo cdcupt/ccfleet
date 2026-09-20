@@ -155,3 +155,35 @@ def test_progress_for_a_node_with_no_attempt_is_simply_ignored(store):
     store.add_node("node-a", "erik")
     store.record_login_progress("node-a", "url_ready", "https://claude.ai/x", "", 1.0)
     assert store.get_login("node-a") is None
+
+
+def test_the_login_path_is_safe_under_concurrent_use(store):
+    """The store shares one connection across threads under a lock.
+
+    The login methods first used `with self._conn:` instead, which is a different
+    transaction mechanism; two threads in it at once raised "cannot start a
+    transaction within a transaction". Local tests passed and CI caught it.
+    """
+    import threading
+    import time
+    store.add_node("node-a", "erik")
+    errors = []
+
+    def hammer(i):
+        try:
+            for _ in range(30):
+                store.request_login("node-a", f"a{i}@b.com", time.time())
+                store.get_login("node-a")
+                store.record_login_progress("node-a", "url_ready",
+                                            "https://claude.ai/x", "", time.time())
+                store.expire_logins(0)
+                store.clear_login("node-a")
+        except Exception as exc:                      # noqa: BLE001 - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []

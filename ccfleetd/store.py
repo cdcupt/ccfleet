@@ -193,7 +193,7 @@ class Store:
         """Ask a node to start a sign-in, replacing any attempt already in flight."""
         if self.get_node(node_id) is None:
             raise StoreError(f"unknown node: {node_id}")
-        with self._conn:
+        with self._lock:
             self._conn.execute(
                 "INSERT INTO logins (node_id, requested_at, email, state, url, code, "
                 "detail, updated_at) VALUES (?, ?, ?, 'requested', '', '', '', ?) "
@@ -201,9 +201,12 @@ class Store:
                 "email=excluded.email, state='requested', url='', code='', detail='', "
                 "updated_at=excluded.updated_at",
                 (node_id, now, email.strip()[:200], now))
+            self._conn.commit()
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
-        row = self._conn.execute("SELECT * FROM logins WHERE node_id = ?", (node_id,)).fetchone()
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM logins WHERE node_id = ?",
+                                     (node_id,)).fetchone()
         return dict(row) if row else None
 
     def submit_login_code(self, node_id: str, code: str, now: float) -> None:
@@ -211,11 +214,12 @@ class Store:
         code = code.strip()[:self.MAX_LOGIN_CODE]
         if not code:
             raise StoreError("the verification code is empty")
-        with self._conn:
+        with self._lock:
             changed = self._conn.execute(
                 "UPDATE logins SET code = ?, state = 'code_sent', updated_at = ? "
                 "WHERE node_id = ? AND state IN ('requested', 'url_ready')",
                 (code, now, node_id)).rowcount
+            self._conn.commit()
         if not changed:
             raise StoreError("no sign-in is waiting for a code on that node")
 
@@ -241,8 +245,9 @@ class Store:
         if state in ("done", "failed"):
             # Nothing useful survives a finished login, and the code must not
             # linger in the database once it has been used.
-            with self._conn:
+            with self._lock:
                 self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+                self._conn.commit()
             return
         # A URL that is not a sign-in URL is dropped rather than stored. It would
         # reach an operator as a clickable link, and escaping does not make a
@@ -255,22 +260,26 @@ class Store:
         # only purpose. Clearing it in the same statement means there is no
         # window where a consumed code is still sitting in the database.
         clear_code = state == "code_sent"
-        with self._conn:
+        with self._lock:
             self._conn.execute(
                 "UPDATE logins SET state = ?, url = ?, detail = ?, updated_at = ?"
                 + (", code = ''" if clear_code else "") +
                 " WHERE node_id = ?",
                 (state, clean, detail.strip()[:200], now, node_id))
+            self._conn.commit()
 
     def clear_login(self, node_id: str) -> None:
-        with self._conn:
+        with self._lock:
             self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+            self._conn.commit()
 
     def expire_logins(self, older_than: float) -> int:
         """Drop attempts nobody finished, so a stale code cannot be replayed."""
-        with self._conn:
-            return self._conn.execute("DELETE FROM logins WHERE updated_at < ?",
-                                      (older_than,)).rowcount
+        with self._lock:
+            removed = self._conn.execute("DELETE FROM logins WHERE updated_at < ?",
+                                         (older_than,)).rowcount
+            self._conn.commit()
+        return removed
 
     def set_pinned_version(self, node_id: str, version: str) -> None:
         self._update_node(node_id, "pinned_version", version.strip())
