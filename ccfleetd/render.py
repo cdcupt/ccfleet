@@ -63,6 +63,19 @@ border-radius:10px;padding:12px 16px;margin:0 0 18px}
 a.back{font-size:13px}
 ul.alerts{margin:0;padding-left:18px}ul.alerts li{margin:0 0 4px}
 code{font-family:ui-monospace,Menlo,monospace;font-size:13px}
+
+.usage-row{display:grid;
+  grid-template-columns:minmax(120px,1fr) minmax(140px,2fr) minmax(150px,1.4fr);
+  gap:10px 16px;align-items:center;padding:10px 0;border-bottom:1px solid #eef0f3}
+.usage-row:last-of-type{border-bottom:0}
+.usage-name{font-weight:600;font-size:14px;min-width:0;overflow-wrap:anywhere}
+.usage-spark{min-width:0}
+.usage-nums{font-size:13px;text-align:right}
+svg.spark{display:block;width:100%;height:38px;overflow:visible}
+.spark-fill{fill:#e6ecfb;stroke:none}
+.spark-line{fill:none;stroke:#1747c7;stroke-width:1.6;vector-effect:non-scaling-stroke}
+.spark-dot{fill:#1747c7}
+@media (max-width:640px){.usage-row{grid-template-columns:1fr}.usage-nums{text-align:left}}
 """
 
 
@@ -121,6 +134,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # What the node did about its pin last time it was asked. A silent
             # reconcile is indistinguishable from one that never ran.
             "last_upgrade": ((payload.get("reconcile") or {}).get("upgrade") or None),
+            "usage": payload.get("usage") or {},
             "open_alerts": [a["rule"] for a in node_alerts],
         })
     return rows
@@ -369,6 +383,69 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
             "code you paste pass through, and both are discarded when it finishes.</p></div>")
 
 
+def _human_tokens(n: Any) -> str:
+    """Token counts run to millions; a raw integer is unreadable at a glance."""
+    if not isinstance(n, (int, float)) or isinstance(n, bool) or n <= 0:
+        return "0"
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if n >= limit:
+            trimmed = n / limit
+            return f"{trimmed:.1f}".rstrip("0").rstrip(".") + suffix
+    return str(int(n))
+
+
+def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 38) -> str:
+    """Daily tokens as a filled area. No script, no library, sized by viewBox."""
+    points = [p for p in series if isinstance(p.get("tokens"), (int, float))]
+    if not points:
+        return '<span class="muted">no activity yet</span>'
+    values = [float(p["tokens"]) for p in points]
+    peak = max(values) or 1.0
+    step = width / max(len(values) - 1, 1)
+    # y is inverted: SVG grows downward, a chart grows upward.
+    coords = [(i * step, height - 3 - (v / peak) * (height - 8)) for i, v in enumerate(values)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    area = f"0,{height} " + line + f" {coords[-1][0]:.1f},{height}"
+    last_x, last_y = coords[-1]
+    label = (f"{len(values)} day(s) of token use, peak {_human_tokens(peak)}, "
+             f"latest {_human_tokens(values[-1])}")
+    return (f'<svg class="spark" viewBox="0 0 {width} {height}" role="img" '
+            f'aria-label="{escape(label)}" preserveAspectRatio="none">'
+            f'<polygon class="spark-fill" points="{area}"/>'
+            f'<polyline class="spark-line" points="{line}"/>'
+            f'<circle class="spark-dot" cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.5"/></svg>')
+
+
+def _usage_html(rows: list[Mapping[str, Any]]) -> str:
+    """Per-node, per-account token use, counted from transcripts on each node."""
+    live = [r for r in rows if (r.get("usage") or {}).get("total_tokens")]
+    if not live:
+        return ""
+    items = []
+    for row in rows:
+        usage = row.get("usage") or {}
+        total = usage.get("total_tokens") or 0
+        days = usage.get("window_days") or 0
+        cached = usage.get("cache_read_input_tokens") or 0
+        share = f"{cached / total * 100:.0f}%" if total else "-"
+        models = ", ".join(str(m) for m in (usage.get("models") or [])[:3]) or "-"
+        items.append(
+            f'<div class="usage-row"><div class="usage-name">{escape(row["id"])}'
+            f'<span class="muted"> &middot; {escape(row["owner"])}</span></div>'
+            f'<div class="usage-spark">{_sparkline(usage.get("by_day") or [])}</div>'
+            f'<div class="usage-nums"><b>{escape(_human_tokens(total))}</b>'
+            f'<span class="muted"> tokens / {escape(str(int(days)) if days else "?")}d</span><br>'
+            f'<span class="muted">{escape(str(int(usage.get("sessions") or 0)))} sessions '
+            f'&middot; {escape(share)} cached &middot; {escape(models)}</span></div></div>')
+    return ('<div class="card"><h2>Usage</h2>' + "".join(items) +
+            '<p class="muted" style="margin:10px 0 0;font-size:12px">'
+            "Counted from the transcripts Claude Code writes on each node, so this is what each "
+            "account <em>consumed</em> &mdash; not how much of a subscription window is left. "
+            "That figure exists only behind <code>/usage</code> inside a session, and this does "
+            "not go looking for it. Conversation content never leaves the node; only counts "
+            "are reported.</p></div>")
+
+
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
                      now: float, cfg: Config, csrf: str = "", who: Any = None,
                      logins: Optional[Mapping[str, Any]] = None) -> str:
@@ -408,6 +485,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         # press, which is why they get no CSRF token either: there is no form.
         # The sign-in card belongs to whoever owns the node, admin or not: needing
         # the operator to sign you in would only move the bottleneck.
+        + _usage_html(rows)
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + "</body></html>"

@@ -16,6 +16,12 @@ MAX_STR = 200
 # parameter: measured at 496 characters against a live node. Capped at MAX_STR it
 # arrives truncated, which is worse than absent — it still looks like a URL.
 MAX_URL = 1024
+# Usage is counted from local transcripts on the node. Only counts arrive; the
+# transcripts themselves hold conversation content and never leave the machine.
+MAX_USAGE_DAYS = 31
+MAX_USAGE_MODELS = 8
+USAGE_COUNTERS = ("total_tokens", "input_tokens", "output_tokens",
+                  "cache_read_input_tokens", "cache_creation_input_tokens", "sessions")
 
 
 class HeartbeatError(ValueError):
@@ -45,6 +51,27 @@ def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return section if isinstance(section, Mapping) else {}
 
 
+def _usage(section: Mapping[str, Any]) -> dict[str, Any]:
+    """Counts only, each bounded. A node cannot post an unbounded series here."""
+    out: dict[str, Any] = {k: _num(section.get(k)) for k in USAGE_COUNTERS}
+    out["window_days"] = _num(section.get("window_days"))
+    models = section.get("models")
+    out["models"] = ([_str(m, 40) for m in models
+                      if isinstance(m, str)][:MAX_USAGE_MODELS]
+                     if isinstance(models, list) else [])
+    days = section.get("by_day")
+    series = []
+    if isinstance(days, list):
+        for entry in days[-MAX_USAGE_DAYS:]:
+            if not isinstance(entry, Mapping):
+                continue
+            day, tokens = _str(entry.get("day"), 10), _num(entry.get("tokens"))
+            if day and tokens is not None:
+                series.append({"day": day, "tokens": tokens})
+    out["by_day"] = series
+    return out
+
+
 def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise HeartbeatError("heartbeat body must be a JSON object")
@@ -60,6 +87,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     reconcile = _section(payload, "reconcile")
     upgrade = _section(reconcile, "upgrade")
     login = _section(reconcile, "login")
+    usage = _section(payload, "usage")
     # Only carry the section when the agent actually reported one. Emitting a
     # skeleton of Nones makes "has this node ever reconciled?" unanswerable: the
     # dict is truthy, so every node looks like it has.
@@ -95,6 +123,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         "egress": {"ip": _str(egress.get("ip")), "source": _str(egress.get("source"))},
         "remote_control": {"state": _str(rc.get("state"))},
         "tmux_sessions": _num(payload.get("tmux_sessions")),
+        "usage": _usage(usage),
     }
     if login_state:
         result["reconcile"] = {"login": {

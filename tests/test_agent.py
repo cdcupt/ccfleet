@@ -707,3 +707,61 @@ def test_the_pane_is_read_with_wrapped_lines_joined(tmp_path, monkeypatch):
     agent.read_login_pane(tmux)
     capture = [a for a in tmux.calls if "capture-pane" in a][0]
     assert "-J" in capture, "without -J a wrapped URL comes back cut in three"
+
+
+# -- usage from local transcripts ------------------------------------------------
+
+
+def _transcript(tmp_path, name, records):
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+def test_usage_counts_tokens_from_transcripts_and_reads_no_content(tmp_path):
+    secret = "the user's actual private conversation text"
+    _transcript(tmp_path, "a.jsonl", [
+        {"timestamp": "2026-09-18T10:00:00Z", "type": "user",
+         "message": {"role": "user", "content": secret}},
+        {"timestamp": "2026-09-18T10:00:05Z", "message": {
+            "role": "assistant", "model": "claude-opus-5", "content": secret,
+            "usage": {"input_tokens": 10, "output_tokens": 20,
+                      "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40}}},
+        {"timestamp": "2026-09-19T11:00:00Z", "message": {
+            "role": "assistant", "model": "claude-opus-5",
+            "usage": {"input_tokens": 5, "output_tokens": 5}}},
+    ])
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 380
+    assert u["input_tokens"] == 15 and u["output_tokens"] == 25
+    assert u["cache_read_input_tokens"] == 300
+    assert u["sessions"] == 1 and u["models"] == ["claude-opus-5"]
+    assert u["by_day"] == [{"day": "2026-09-18", "tokens": 370},
+                           {"day": "2026-09-19", "tokens": 10}]
+    # The transcripts hold conversation content. Only counts may leave the node.
+    assert secret not in json.dumps(u)
+
+
+def test_usage_ignores_transcripts_outside_the_window(tmp_path):
+    import os
+    _transcript(tmp_path, "old.jsonl", [{"timestamp": "2026-01-01T00:00:00Z", "message": {
+        "usage": {"input_tokens": 999999}}}])
+    old = tmp_path / "projects" / "proj" / "old.jsonl"
+    stale = 1789900000.0 - 60 * 86400
+    os.utime(old, (stale, stale))
+    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    assert u["total_tokens"] == 0 and u["sessions"] == 0
+
+
+def test_usage_survives_a_transcript_it_cannot_parse(tmp_path):
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    (d / "broken.jsonl").write_text('{"half written\nnot json at all\n'
+                                    '{"message": {"usage": {"output_tokens": 7}}}\n')
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 7, "one bad line must not lose the whole file"
+
+
+def test_usage_is_empty_rather_than_absent_when_there_is_nothing(tmp_path):
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    assert u["total_tokens"] == 0 and u["by_day"] == [] and u["models"] == []

@@ -355,6 +355,7 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
     payload["egress"] = egress_ip(cfg.egress_targets, opener, min(cfg.timeout_s, 5.0))
     payload["remote_control"] = remote_control_state(cfg.rc_service, runner)
     payload["tmux_sessions"] = tmux_sessions(runner)
+    payload["usage"] = usage_summary(cfg.claude_config_dir)
     upgrade = (state or {}).get("upgrade")
     if isinstance(upgrade, Mapping):
         payload["reconcile"] = {"upgrade": dict(upgrade)}
@@ -388,6 +389,109 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
         if attempt < attempts - 1:
             sleep(RETRY_DELAYS_S[attempt])
     return 0, "unreachable"
+
+
+# -- usage ----------------------------------------------------------------------
+#
+# Claude Code writes a JSONL transcript per session under the config directory,
+# and each assistant record carries that turn's token counts. Reading those files
+# is how this reports usage: they are local files the CLI wrote on its own
+# machine. It is NOT the OAuth usage endpoint, which would mean using the owner's
+# token outside Claude Code — see the project's compliance notes.
+#
+# What this can say: how much this node has consumed. What it cannot say: how
+# much of a subscription window is left. That lives only behind /usage inside a
+# session, and this deliberately does not go looking for it.
+
+USAGE_WINDOW_DAYS = 14
+# A busy node accumulates a lot of transcript. These bounds keep a five-minute
+# heartbeat from turning into a filesystem scan.
+USAGE_MAX_FILES = 400
+USAGE_MAX_BYTES_PER_FILE = 8 * 1024 * 1024
+USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
+                    "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _usage_files(root: Path, since: float) -> list[Path]:
+    """Transcripts touched inside the window, newest first and capped."""
+    try:
+        found = [p for p in root.glob("**/*.jsonl") if p.is_file()]
+    except OSError:
+        return []
+    fresh = []
+    for path in found:
+        try:
+            if path.stat().st_mtime >= since:
+                fresh.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    fresh.sort(reverse=True)
+    return [p for _, p in fresh[:USAGE_MAX_FILES]]
+
+
+def usage_summary(config_dir: Path, now: Optional[float] = None,
+                  window_days: int = USAGE_WINDOW_DAYS) -> dict[str, Any]:
+    """Token counts per day from local transcripts. Never reads message content."""
+    now = time.time() if now is None else now
+    since = now - window_days * 86400
+    root = config_dir / "projects"
+    totals: dict[str, int] = {k: 0 for k in USAGE_TOKEN_KEYS}
+    by_day: dict[str, int] = {}
+    models: set[str] = set()
+    sessions = 0
+
+    for path in _usage_files(root, since):
+        sessions += 1
+        try:
+            with path.open(encoding="utf-8", errors="replace") as fh:
+                read = 0
+                for line in fh:
+                    read += len(line)
+                    if read > USAGE_MAX_BYTES_PER_FILE:
+                        break
+                    if not line.startswith("{"):
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    message = record.get("message")
+                    message = message if isinstance(message, Mapping) else {}
+                    usage = message.get("usage") or record.get("usage")
+                    if not isinstance(usage, Mapping):
+                        continue
+                    stamp = _usage_day(record.get("timestamp"))
+                    turn = 0
+                    for key in USAGE_TOKEN_KEYS:
+                        value = usage.get(key)
+                        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                            totals[key] += value
+                            turn += value
+                    if stamp and turn:
+                        by_day[stamp] = by_day.get(stamp, 0) + turn
+                    model = message.get("model")
+                    if isinstance(model, str) and model:
+                        models.add(model[:40])
+        except OSError:
+            continue
+
+    return {
+        "window_days": window_days,
+        "sessions": sessions,
+        "total_tokens": sum(totals.values()),
+        "models": sorted(models)[:6],
+        # Oldest to newest, so a sparkline can be drawn straight from it.
+        "by_day": [{"day": d, "tokens": by_day[d]} for d in sorted(by_day)][-window_days:],
+        **totals,
+    }
+
+
+def _usage_day(raw: Any) -> Optional[str]:
+    """The YYYY-MM-DD an ISO timestamp falls on, or None."""
+    if not isinstance(raw, str) or len(raw) < 10:
+        return None
+    day = raw[:10]
+    return day if day[4] == "-" and day[7] == "-" and day[:4].isdigit() else None
 
 
 # -- reconcile -------------------------------------------------------------------

@@ -101,3 +101,29 @@ def test_a_real_sign_in_url_survives_the_whitelist_intact():
     huge = validate_heartbeat(
         {"node_id": "n", "reconcile": {"login": {"state": "x", "url": "h" * 9000}}}, "n")
     assert len(huge["reconcile"]["login"]["url"]) == MAX_URL
+
+
+def test_usage_is_counts_only_and_every_part_of_it_is_bounded():
+    """A node could otherwise post an unbounded series, or smuggle content."""
+    out = validate_heartbeat({"node_id": "n", "usage": {
+        "total_tokens": 40897, "sessions": 3, "window_days": 14,
+        "models": ["claude-opus-5"],
+        "by_day": [{"day": "2026-09-19", "tokens": 40897}],
+        "transcript": "the user's private conversation",
+    }}, "n")
+    usage = out["usage"]
+    assert usage["total_tokens"] == 40897 and usage["sessions"] == 3
+    assert usage["by_day"] == [{"day": "2026-09-19", "tokens": 40897}]
+    assert "private conversation" not in json.dumps(out)
+
+    big = validate_heartbeat({"node_id": "n", "usage": {
+        "by_day": [{"day": f"d{i}", "tokens": i} for i in range(500)],
+        "models": [f"m{i}" for i in range(50)],
+    }}, "n")["usage"]
+    assert len(big["by_day"]) == 31 and len(big["models"]) == 8
+
+    junk = validate_heartbeat({"node_id": "n", "usage": {
+        "by_day": ["not a mapping", {"day": None, "tokens": 5}, {"day": "ok", "tokens": None}],
+        "models": "not a list",
+    }}, "n")["usage"]
+    assert junk["by_day"] == [] and junk["models"] == []
