@@ -16,8 +16,9 @@ MAX_STR = 200
 # parameter: measured at 496 characters against a live node. Capped at MAX_STR it
 # arrives truncated, which is worse than absent — it still looks like a URL.
 MAX_URL = 1024
-# Usage is counted from local transcripts on the node. Only counts arrive; the
-# transcripts themselves hold conversation content and never leave the machine.
+# Usage is counted from local transcripts on the node. What arrives is token
+# counts, per-day totals and model names; the transcripts themselves hold
+# conversation content and never leave the machine.
 MAX_USAGE_DAYS = 31
 MAX_USAGE_MODELS = 8
 USAGE_COUNTERS = ("total_tokens", "input_tokens", "output_tokens",

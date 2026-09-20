@@ -12,9 +12,9 @@ takes from each:
 
 Be exact about the last one, because it is the sensitive one. Those transcripts
 are the owner's conversations, and parsing a record decodes the whole of it,
-content included. Nothing but the token counts and the model name is kept, and
-nothing but counts is reported; the content is never copied out of the parsed
-record, never stored, never logged and never sent. See usage_summary.
+content included. What leaves the node is token counts, per-day totals and the
+model names in use — nothing else. Conversation content is never copied out of
+the parsed record, never stored, never logged and never sent. See usage_summary.
 
 `~/.claude.json` likewise holds an email address, a full name, an account uuid
 and an organisation name, and `claude auth status` returns an email address and
@@ -409,9 +409,9 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
 #
 # Be precise about the privacy claim. Parsing a record decodes the whole of it,
 # conversation content included, so it IS read into memory here. What is
-# guaranteed is narrower and still worth having: nothing but counts is retained,
-# and nothing but counts is reported. The content is never copied out of the
-# parsed record, never stored, never logged and never sent.
+# guaranteed is narrower and still worth having: only token counts, per-day
+# totals and model names are retained or reported. The content is never copied
+# out of the parsed record, never stored, never logged and never sent.
 #
 # What this can say: how much this node has consumed. What it cannot say: how
 # much of a subscription window is left. That lives only behind /usage inside a
@@ -430,6 +430,11 @@ USAGE_MAX_BYTES_TOTAL = 32 * 1024 * 1024
 # Enumerating every transcript is itself the unbounded part: the file cap only
 # applies after the walk. Stop walking at this many paths.
 USAGE_MAX_SCAN = 5000
+# A single transcript line can be enormous — one pasted file or tool result. It
+# is read in chunks and abandoned past this, so no one record can pull an
+# unbounded amount into memory during a heartbeat.
+USAGE_MAX_LINE = 1024 * 1024
+USAGE_CHUNK = 64 * 1024
 USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
                     "cache_read_input_tokens", "cache_creation_input_tokens")
 
@@ -455,6 +460,31 @@ def _usage_files(root: Path, since: float) -> list[Path]:
         return []
     fresh.sort(key=lambda pair: pair[0], reverse=True)
     return [path for _, path in fresh[:USAGE_MAX_FILES]]
+
+
+def _bounded_lines(fh: Any, limit: int) -> Any:
+    """Yield lines without letting any single one grow past USAGE_MAX_LINE.
+
+    `for line in fh` materialises a whole line before anything can measure it, so
+    one oversized record would defeat every byte cap below it. Reading in chunks
+    keeps the ceiling real; an over-long line is dropped rather than buffered.
+    """
+    buf = ""
+    spent = 0
+    while spent < limit:
+        chunk = fh.read(USAGE_CHUNK)
+        if not chunk:
+            break
+        spent += len(chunk)
+        buf += chunk
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            if len(line) <= USAGE_MAX_LINE:
+                yield line
+        if len(buf) > USAGE_MAX_LINE:
+            buf = ""          # an unterminated monster; abandon it
+    if buf and len(buf) <= USAGE_MAX_LINE:
+        yield buf
 
 
 def _seek_to_tail(fh: Any, path: Path) -> int:
@@ -518,9 +548,10 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
             with path.open(encoding="utf-8", errors="replace") as fh:
                 budget -= _seek_to_tail(fh, path)
                 read = 0
-                for line in fh:
-                    read += len(line)
-                    budget -= len(line)
+                allowance = min(USAGE_MAX_BYTES_PER_FILE, max(budget, 0))
+                for line in _bounded_lines(fh, allowance):
+                    read += len(line) + 1
+                    budget -= len(line) + 1
                     if read > USAGE_MAX_BYTES_PER_FILE or budget <= 0:
                         break
                     if not line.startswith("{"):

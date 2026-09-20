@@ -897,3 +897,29 @@ def test_a_transcript_written_early_on_the_oldest_day_is_still_counted(tmp_path)
     os.utime(f, (early, early))
     u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
     assert u["total_tokens"] == 42, "the oldest valid day must be included in full"
+
+
+def test_one_enormous_transcript_line_cannot_be_pulled_into_memory(tmp_path, monkeypatch):
+    """`for line in fh` materialises a whole line before anything can measure it,
+    so a single huge record would defeat every byte cap below it."""
+    monkeypatch.setattr(agent, "USAGE_MAX_LINE", 4096)
+    d = tmp_path / "projects" / "proj"
+    d.mkdir(parents=True)
+    monster = json.dumps({"timestamp": "2026-09-19T10:00:00Z",
+                          "message": {"content": "x" * 200_000,
+                                      "usage": {"output_tokens": 999}}})
+    good = json.dumps({"timestamp": "2026-09-19T10:00:01Z",
+                       "message": {"usage": {"output_tokens": 5}}})
+    (d / "big.jsonl").write_text(monster + "\n" + good + "\n")
+    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    # The oversized record is dropped; the ordinary one beside it still counts.
+    assert u["total_tokens"] == 5
+
+
+def test_bounded_lines_stops_at_its_allowance(tmp_path):
+    import io
+    text = "".join(f"line-{i}\n" for i in range(1000))
+    got = list(agent._bounded_lines(io.StringIO(text), 200))
+    assert got, "should yield something"
+    assert len("".join(got)) <= 200 + agent.USAGE_CHUNK
+    assert got[0] == "line-0"
