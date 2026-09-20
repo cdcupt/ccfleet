@@ -42,6 +42,22 @@ CREATE TABLE IF NOT EXISTS nodes (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at REAL NOT NULL
 );
+-- One in-flight sign-in per node. A row exists only while a login is being
+-- driven from the console; it is deleted when the login finishes, so an absent
+-- row is the normal state. The verification code lives here for the seconds
+-- between the operator pasting it and the node consuming it, and is cleared as
+-- soon as the node reports it was used. No OAuth token ever reaches this table:
+-- the credential that results is written on the node and stays there.
+CREATE TABLE IF NOT EXISTS logins (
+    node_id TEXT PRIMARY KEY,
+    requested_at REAL NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'requested',
+    url TEXT NOT NULL DEFAULT '',
+    code TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS heartbeats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id TEXT NOT NULL,
@@ -158,6 +174,72 @@ class Store:
         token = secrets.token_hex(TOKEN_BYTES)
         self._update_node(node_id, "token_hash", hash_token(token))
         return token
+
+    # -- sign-in, driven from the console ---------------------------------
+    #
+    # The node does the signing in; the server only carries intent one way and
+    # progress the other. It never holds the resulting credential.
+
+    LOGIN_ACTIVE_STATES = ("requested", "url_ready", "code_sent")
+    MAX_LOGIN_CODE = 512
+    MAX_LOGIN_URL = 1024
+
+    def request_login(self, node_id: str, email: str, now: float) -> None:
+        """Ask a node to start a sign-in, replacing any attempt already in flight."""
+        if self.get_node(node_id) is None:
+            raise StoreError(f"unknown node: {node_id}")
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO logins (node_id, requested_at, email, state, url, code, "
+                "detail, updated_at) VALUES (?, ?, ?, 'requested', '', '', '', ?) "
+                "ON CONFLICT(node_id) DO UPDATE SET requested_at=excluded.requested_at, "
+                "email=excluded.email, state='requested', url='', code='', detail='', "
+                "updated_at=excluded.updated_at",
+                (node_id, now, email.strip()[:200], now))
+
+    def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
+        row = self._conn.execute("SELECT * FROM logins WHERE node_id = ?", (node_id,)).fetchone()
+        return dict(row) if row else None
+
+    def submit_login_code(self, node_id: str, code: str, now: float) -> None:
+        """Hand the node the verification code the owner pasted."""
+        code = code.strip()[:self.MAX_LOGIN_CODE]
+        if not code:
+            raise StoreError("the verification code is empty")
+        with self._conn:
+            changed = self._conn.execute(
+                "UPDATE logins SET code = ?, state = 'code_sent', updated_at = ? "
+                "WHERE node_id = ? AND state IN ('requested', 'url_ready')",
+                (code, now, node_id)).rowcount
+        if not changed:
+            raise StoreError("no sign-in is waiting for a code on that node")
+
+    def record_login_progress(self, node_id: str, state: str, url: str,
+                              detail: str, now: float) -> None:
+        """What the node says is happening. Terminal states delete the row."""
+        if state not in self.LOGIN_ACTIVE_STATES + ("done", "failed"):
+            return
+        if state in ("done", "failed"):
+            # Nothing useful survives a finished login, and the code must not
+            # linger in the database once it has been used.
+            with self._conn:
+                self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+            return
+        with self._conn:
+            self._conn.execute(
+                "UPDATE logins SET state = ?, url = ?, detail = ?, updated_at = ? "
+                "WHERE node_id = ?",
+                (state, url.strip()[:self.MAX_LOGIN_URL], detail.strip()[:200], now, node_id))
+
+    def clear_login(self, node_id: str) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+
+    def expire_logins(self, older_than: float) -> int:
+        """Drop attempts nobody finished, so a stale code cannot be replayed."""
+        with self._conn:
+            return self._conn.execute("DELETE FROM logins WHERE updated_at < ?",
+                                      (older_than,)).rowcount
 
     def set_pinned_version(self, node_id: str, version: str) -> None:
         self._update_node(node_id, "pinned_version", version.strip())

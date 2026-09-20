@@ -107,3 +107,41 @@ def test_a_successful_upgrade_does_not_shout():
     html = _row_html(_row_with_upgrade({"from": "2.1.90", "to": "2.1.99", "ok": True,
                                         "ts": 1.0, "error": None}), NOW)
     assert "failed" not in html
+
+
+def _signin(logins, present=False):
+    from ccfleetd.render import _signin_html
+    return _signin_html([{"id": "node-a", "credentials_present": present}], "TOK", logins)
+
+
+def test_signin_card_offers_a_start_when_nothing_is_in_flight():
+    html = _signin({})
+    assert "Sign in" in html and 'name="email"' in html
+    assert "not signed in" in html
+    assert "paste the code" not in html
+
+
+def test_signin_card_shows_the_url_and_asks_for_the_code():
+    html = _signin({"node-a": {"state": "url_ready",
+                               "url": "https://claude.ai/oauth/authorize?code=1"}})
+    assert "https://claude.ai/oauth/authorize?code=1" in html
+    assert 'name="code"' in html and "Send code" in html
+    assert 'rel="noopener noreferrer"' in html
+
+
+def test_a_url_from_a_node_cannot_inject_into_the_console():
+    """The node supplies this string, so it is untrusted input on an admin page."""
+    nasty = 'https://claude.ai/x?a="><script>alert(1)</script>'
+    html = _signin({"node-a": {"state": "url_ready", "url": nasty}})
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+
+def test_signin_card_waits_quietly_once_the_code_is_sent():
+    html = _signin({"node-a": {"state": "code_sent"}})
+    assert "Waiting" in html
+    # Nothing to paste any more, but cancelling must stay possible.
+    assert 'name="code"' not in html and "login-cancel" in html
+
+
+def test_signin_card_says_when_a_node_is_already_signed_in():
+    assert "signed in" in _signin({}, present=True)

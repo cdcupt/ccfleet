@@ -235,7 +235,8 @@ def test_heartbeat_response_carries_desired_state(server):
     auth = {"Authorization": f"Bearer {token}"}
     payload = heartbeat(time.time())["payload"]
     reply = json.loads(call(srv, "POST", "/api/heartbeat", payload, auth)[1])
-    assert reply["desired"] == {"claude_version": "2.1.92", "remote_control": True}
+    assert reply["desired"] == {"claude_version": "2.1.92", "remote_control": True,
+                                "login": None, "poll_s": 300}
     # Agents predating the block read the flat field; it stays while they exist.
     assert reply["pinned_version"] == "2.1.92"
 

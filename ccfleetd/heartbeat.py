@@ -52,12 +52,17 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     egress = _section(payload, "egress")
     rc = _section(payload, "remote_control")
     load = _section(payload, "load")
-    upgrade = _section(_section(payload, "reconcile"), "upgrade")
+    reconcile = _section(payload, "reconcile")
+    upgrade = _section(reconcile, "upgrade")
+    login = _section(reconcile, "login")
     # Only carry the section when the agent actually reported one. Emitting a
     # skeleton of Nones makes "has this node ever reconciled?" unanswerable: the
     # dict is truthy, so every node looks like it has.
     has_upgrade = any(upgrade.get(k) is not None
                       for k in ("from", "to", "ok", "error", "ts"))
+    # Sign-in progress. The URL is shown to an operator and the detail may quote
+    # the CLI, so both are length-capped like every other node-supplied string.
+    login_state = _str(login.get("state"))
     result: dict[str, Any] = {
         "node_id": node_id,
         "agent_ts": _num(payload.get("ts")),
@@ -86,16 +91,21 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         "remote_control": {"state": _str(rc.get("state"))},
         "tmux_sessions": _num(payload.get("tmux_sessions")),
     }
+    if login_state:
+        result["reconcile"] = {"login": {
+            "state": login_state,
+            "url": _str(login.get("url")),
+            "detail": _str(login.get("detail")),
+            "requested_at": _num(login.get("requested_at")),
+        }}
     if has_upgrade:
         # What the agent did about the last desired state it was handed. Reported
         # one beat late by construction: the agent acts after posting.
-        result["reconcile"] = {
-            "upgrade": {
+        result.setdefault("reconcile", {})["upgrade"] = {
                 "from": _str(upgrade.get("from")),
                 "to": _str(upgrade.get("to")),
                 "ok": _bool_or_none(upgrade.get("ok")),
                 "error": _str(upgrade.get("error")),
-                "ts": _num(upgrade.get("ts")),
-            },
+            "ts": _num(upgrade.get("ts")),
         }
     return result

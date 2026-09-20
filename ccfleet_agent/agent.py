@@ -25,6 +25,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -470,6 +471,142 @@ def _channel_is_current(state: Mapping[str, Any], target: str,
     return now - ts < CHANNEL_RECHECK_AFTER_S
 
 
+# -- console-driven sign-in ------------------------------------------------------
+#
+# The owner clicks "Sign in" in the console; this runs the real `claude auth
+# login` here, on the node, and carries only the verification URL back and the
+# code forward. The credential is written by the CLI into the owner's own home
+# directory and never leaves the machine — the server sees a URL and a state
+# name, and is deleted from even that as soon as the login finishes.
+
+# Its own tmux server, so a sign-in can never disturb (or be disturbed by) the
+# session the owner is working in. Same reasoning as the Remote Control socket.
+LOGIN_TMUX_SOCKET = "ccfleet-login"
+LOGIN_SESSION = "login"
+# Anthropic's verification URL. Matched rather than assumed so a prompt change
+# that stops printing one is reported as a failure instead of hanging forever.
+LOGIN_URL_RE = re.compile(r"https://\S*claude\.ai/\S+")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+
+
+def _tmux(runner: Runner, *args: str, timeout: float = 10.0) -> Optional[str]:
+    return _run(runner, ["tmux", "-L", LOGIN_TMUX_SOCKET, *args], timeout=timeout)
+
+
+def login_email(raw: Any) -> Optional[str]:
+    """The address to pre-fill, if it is one. This reaches argv, so it is checked."""
+    if not isinstance(raw, str):
+        return None
+    candidate = raw.strip()
+    return candidate if EMAIL_RE.match(candidate) else None
+
+
+def start_login(email: Optional[str], runner: Runner = subprocess.run) -> bool:
+    """Open a fresh pane running `claude auth login`. True if it started."""
+    path = find_claude()
+    if not path:
+        return False
+    _tmux(runner, "kill-session", "-t", LOGIN_SESSION)
+    argv = [path, "auth", "login", "--claudeai"]
+    if email:
+        argv += ["--email", email]
+    # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
+    started = _tmux(runner, "new-session", "-d", "-s", LOGIN_SESSION,
+                    "-x", "200", "-y", "50", " ".join(shlex.quote(a) for a in argv))
+    return started is not None
+
+
+def read_login_pane(runner: Runner = subprocess.run) -> str:
+    return _tmux(runner, "capture-pane", "-p", "-t", LOGIN_SESSION) or ""
+
+
+def find_login_url(pane: str) -> Optional[str]:
+    match = LOGIN_URL_RE.search(pane)
+    if not match:
+        return None
+    # tmux wraps long lines; strip anything a wrap or a quote left attached.
+    return match.group(0).rstrip('"\'),.').strip()
+
+
+def send_login_code(code: str, runner: Runner = subprocess.run) -> None:
+    """Type the code into the waiting prompt. Never logged."""
+    _tmux(runner, "send-keys", "-t", LOGIN_SESSION, code, "Enter")
+
+
+def end_login(runner: Runner = subprocess.run) -> None:
+    _tmux(runner, "kill-session", "-t", LOGIN_SESSION)
+
+
+# How long the agent will stay resident driving one sign-in. Someone is watching
+# the console, so it polls fast; but an abandoned attempt must not pin a process
+# on the node forever.
+LOGIN_WINDOW_S = 300.0
+LOGIN_POLL_MIN_S = 1.0
+LOGIN_POLL_MAX_S = 30.0
+
+
+def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
+                    runner: Runner = subprocess.run) -> tuple[Optional[dict[str, Any]],
+                                                              dict[str, Any]]:
+    """Drive one step of a console-requested sign-in.
+
+    Returns (progress to report, new state). Progress is None when there is
+    nothing new to say, which keeps a fast poll from restating the same thing.
+    """
+    new_state = dict(state)
+    wanted = desired.get("login")
+    mine = state.get("login") if isinstance(state.get("login"), Mapping) else {}
+
+    if not isinstance(wanted, Mapping):
+        # Cancelled, finished, or never asked for. Tidy up if we had one open.
+        if mine:
+            end_login(runner)
+            new_state.pop("login", None)
+        return None, new_state
+
+    requested_at = wanted.get("requested_at")
+    if mine.get("requested_at") != requested_at:
+        # A new request supersedes anything in flight, including a stuck one.
+        if not start_login(login_email(wanted.get("email")), runner):
+            new_state["login"] = {"requested_at": requested_at, "phase": "failed"}
+            return {"state": "failed", "detail": "claude not found on this node"}, new_state
+        new_state["login"] = {"requested_at": requested_at, "phase": "started"}
+        return {"state": "requested", "requested_at": requested_at}, new_state
+
+    phase = mine.get("phase")
+
+    if phase == "started":
+        url = find_login_url(read_login_pane(runner))
+        if not url:
+            return None, new_state          # still printing; try again next poll
+        new_state["login"] = {**mine, "phase": "url_ready", "url": url}
+        return {"state": "url_ready", "url": url, "requested_at": requested_at}, new_state
+
+    if phase == "url_ready":
+        code = wanted.get("code")
+        if not isinstance(code, str) or not code.strip():
+            return None, new_state          # waiting for someone to paste one
+        send_login_code(code.strip(), runner)
+        new_state["login"] = {**mine, "phase": "code_sent"}
+        return {"state": "code_sent", "requested_at": requested_at}, new_state
+
+    if phase == "code_sent":
+        # The CLI is the judge of whether the sign-in worked, not the pane text.
+        if auth_status(runner).get("logged_in") is True:
+            end_login(runner)
+            new_state.pop("login", None)
+            return {"state": "done", "requested_at": requested_at}, new_state
+        pane = read_login_pane(runner)
+        if re.search(r"(?i)\b(invalid|expired|failed|error)\b", pane):
+            end_login(runner)
+            new_state.pop("login", None)
+            return {"state": "failed", "detail": "the code was not accepted",
+                    "requested_at": requested_at}, new_state
+        return None, new_state              # still working
+
+    return None, new_state
+
+
 def prune_state(state: Mapping[str, Any], desired: Mapping[str, Any],
                 installed: Optional[str]) -> dict[str, Any]:
     """Drop a recorded upgrade that no longer describes anything.
@@ -547,6 +684,41 @@ def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
     return result
 
 
+def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
+              login_progress: Optional[Mapping[str, Any]] = None,
+              reconcile: bool = True) -> tuple[int, dict[str, Any], dict[str, Any],
+                                               Optional[dict[str, Any]]]:
+    """One post, and whatever acting on the reply calls for.
+
+    Returns (status, desired, new state, login progress to report next time).
+    """
+    payload = build_payload(cfg, state=state)
+    if login_progress:
+        payload.setdefault("reconcile", {})["login"] = dict(login_progress)
+    status, text = send_heartbeat(cfg, payload)
+    if status != 200:
+        log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
+        return status, {}, dict(state), login_progress
+    log.info("heartbeat accepted: %s", text.strip()[:200])
+    if not reconcile:
+        return status, {}, dict(state), None
+
+    desired = parse_desired(text)
+    installed = (payload.get("claude") or {}).get("version")
+    progress, state = reconcile_login(desired, state)
+    state = prune_state(state, desired, installed)
+    result = reconcile_version(desired, installed, state)
+    if result is not None:
+        # The channel note is local bookkeeping, not something the server asked
+        # for, so it is filed separately and never reported.
+        channel = result.pop("channel", None)
+        state = {**state, "upgrade": result}
+        if channel is not None:
+            state["channel"] = channel
+    write_state(cfg.state_path, state)
+    return status, desired, state, progress
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="ccfleet-agent",
                                      description="Post one heartbeat to the ccfleet server.")
@@ -566,35 +738,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: {exc} (env file: {args.env_file})", file=sys.stderr)
         return 2
     state = read_state(cfg.state_path)
-    payload = build_payload(cfg, state=state)
     if args.print_only:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(build_payload(cfg, state=state), indent=2, sort_keys=True))
         return 0
-    status, text = send_heartbeat(cfg, payload)
-    if status == 200:
-        log.info("heartbeat accepted: %s", text.strip()[:200])
-        if not args.no_reconcile:
-            installed = (payload.get("claude") or {}).get("version")
-            desired = parse_desired(text)
-            state = prune_state(state, desired, installed)
-            result = reconcile_version(desired, installed, state)
-            if result is not None:
-                # The channel note is local bookkeeping, not something the server
-                # asked for, so it is filed separately and never reported.
-                channel = result.pop("channel", None)
-                new_state = {**state, "upgrade": result}
-                if channel is not None:
-                    new_state["channel"] = channel
-                # Recorded whether it worked or not: a failure is what drives the
-                # back-off, and is worth showing in the console either way.
-                write_state(cfg.state_path, new_state)
-            elif state != read_state(cfg.state_path):
-                # Nothing was attempted, but pruning may have dropped a record
-                # that had gone stale. Persist that or it comes straight back.
-                write_state(cfg.state_path, state)
-        return 0
-    log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
-    return 1
+
+    status, desired, state, progress = run_cycle(cfg, state,
+                                                 reconcile=not args.no_reconcile)
+    if status != 200:
+        return 1
+
+    # Normally that is the whole run: one post, then exit and let the timer bring
+    # us back. A sign-in is the exception — someone is watching the console for a
+    # URL, and five minutes of dead air is not a sign-in flow. So stay resident,
+    # but only while the server says a login is in flight and only for a bounded
+    # window; an abandoned attempt must not pin a process on the node.
+    deadline = time.monotonic() + LOGIN_WINDOW_S
+    while desired.get("login") and time.monotonic() < deadline:
+        delay = desired.get("poll_s")
+        if not isinstance(delay, (int, float)) or isinstance(delay, bool):
+            delay = LOGIN_POLL_MAX_S
+        time.sleep(max(LOGIN_POLL_MIN_S, min(float(delay), LOGIN_POLL_MAX_S)))
+        status, desired, state, progress = run_cycle(cfg, state, progress)
+        if status != 200:
+            return 1
+    if desired.get("login"):
+        log.warning("sign-in still unfinished after %.0fs; leaving it for the next run",
+                    LOGIN_WINDOW_S)
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

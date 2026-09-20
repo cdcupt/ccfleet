@@ -1,12 +1,16 @@
-"""Per-user console accounts: an owner sees their nodes and can change nothing.
+"""Per-user console accounts and the boundary around them.
 
-The point of these tests is the boundary, not the happy path. An owner account
-must not be able to see another owner's node, and must not be able to act on any
-node even by hand-building the request.
+An owner sees only their own nodes, and the only thing they may change is their
+own sign-in — the one action that would otherwise force them back to SSH. The
+point of these tests is that boundary, not the happy path: an owner must not see
+another owner's node, must not take any other action on their own, and must not
+take even a permitted action on somebody else's, including by hand-building the
+request with a valid CSRF token.
 """
 import base64
 import http.client
 import json
+import re
 import threading
 
 import pytest
@@ -78,12 +82,20 @@ def test_an_owners_dashboard_does_not_mention_the_other_node(fleet):
     assert "node-a" in page and "node-b" not in page
 
 
-def test_an_owner_is_given_nothing_to_press(fleet):
+def test_an_owner_gets_their_own_sign_in_and_nothing_else(fleet):
+    """Signing in is the one thing an owner must be able to do for themselves.
+
+    Everything that manages the fleet stays with the operator.
+    """
     srv, _, _ = fleet
     _, raw = call(srv, "GET", "/", headers=creds("alice", "alice-pw"))
     page = raw.decode()
-    assert "/actions/node" not in page, "no management forms for an owner"
     assert "Add a node" not in page and "Manage nodes" not in page
+    # The only forms are the sign-in ones, and only for their own node.
+    actions = set(re.findall(r'action="/actions/node/([^/]+)/([^"]+)"', page))
+    assert actions, "an owner should be able to start their own sign-in"
+    assert {a for _, a in actions} <= {"login-start", "login-code", "login-cancel"}
+    assert {n for n, _ in actions} == {"node-a"}, "only their own node"
 
 
 def test_an_owner_cannot_act_even_by_hand_building_the_request(fleet):
@@ -168,3 +180,40 @@ def test_listing_accounts_never_exposes_a_hash():
     blob = json.dumps(store.list_users())
     assert "pbkdf2" not in blob and "secret" not in blob
     store.close()
+
+
+def test_an_owner_may_start_a_sign_in_on_their_own_node(fleet):
+    srv, store, cfg = fleet
+    body = f"csrf={csrf_token(cfg)}&email=alice%40example.com".encode()
+    headers = {**creds("alice", "alice-pw"),
+               "Content-Type": "application/x-www-form-urlencoded",
+               "Content-Length": str(len(body))}
+    status, _ = call(srv, "POST", "/actions/node/node-a/login-start", body, headers)
+    assert status in (200, 303), status
+    login = store.get_login("node-a")
+    assert login["state"] == "requested" and login["email"] == "alice@example.com"
+
+
+def test_an_owner_may_not_start_a_sign_in_on_someone_elses_node(fleet):
+    """A permitted action is still only permitted on a node they own."""
+    srv, store, cfg = fleet
+    body = f"csrf={csrf_token(cfg)}".encode()
+    headers = {**creds("alice", "alice-pw"),
+               "Content-Type": "application/x-www-form-urlencoded",
+               "Content-Length": str(len(body))}
+    status, _ = call(srv, "POST", "/actions/node/node-b/login-start", body, headers)
+    assert status == 403
+    assert store.get_login("node-b") is None
+
+
+def test_a_csrf_token_is_not_authorisation(fleet):
+    """An owner now holds a valid CSRF token; it must buy them nothing extra."""
+    srv, store, cfg = fleet
+    body = f"csrf={csrf_token(cfg)}".encode()
+    headers = {**creds("alice", "alice-pw"),
+               "Content-Type": "application/x-www-form-urlencoded",
+               "Content-Length": str(len(body))}
+    for action in ("disable", "rc-off", "rotate-token", "remove"):
+        status, _ = call(srv, "POST", f"/actions/node/node-a/{action}", body, headers)
+        assert status == 403, f"{action} must stay with the operator"
+    assert store.get_node("node-a") is not None and store.get_node("node-a")["enabled"]
