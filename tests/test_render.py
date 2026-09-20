@@ -145,3 +145,30 @@ def test_signin_card_waits_quietly_once_the_code_is_sent():
 
 def test_signin_card_says_when_a_node_is_already_signed_in():
     assert "signed in" in _signin({}, present=True)
+
+
+def _vcell(installed, pinned):
+    import re
+
+    from ccfleetd.render import _row_html
+    row = {"id": "n", "owner": "e", "region": "", "status": "ok", "enabled": True,
+           "last_seen_ts": 1.0, "hostname": "h", "claude_version": installed,
+           "pinned_version": pinned, "egress_ip": "1.2.3.4", "disk_used_pct": 10.0,
+           "load1": 0.1, "credentials_present": True, "credentials_mtime": 1.0,
+           "token_expires_at": None, "subscription_type": "max", "remote_control": "active",
+           "rc_expected": True, "last_upgrade": None, "open_alerts": [], "usage": {}}
+    return re.search(r"<td>(2\.[^<]*?(?:<span[^>]*>[^<]*</span>)?)</td>",
+                     _row_html(row, 100.0)).group(1)
+
+
+def test_a_satisfied_pin_is_not_printed_twice():
+    """It rendered "2.1.278 2.1.278", which reads as a glitch rather than a state."""
+    assert _vcell("2.1.278", "2.1.278") == "2.1.278"
+
+
+def test_a_pin_is_shown_when_it_still_says_something():
+    drifted = _vcell("2.1.276", "2.1.278")
+    assert "2.1.276" in drifted and "2.1.278" in drifted and "pinned" in drifted
+    # A channel is worth showing even when satisfied: it names what is tracked.
+    assert "stable" in _vcell("2.1.278", "stable")
+    assert _vcell("2.1.278", "") == "2.1.278"
