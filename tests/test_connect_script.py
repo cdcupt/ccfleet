@@ -219,3 +219,25 @@ def test_a_shell_whose_config_directory_does_not_exist_yet(tmp_path):
     body = config.read_text()
     assert "set -gx CLAUDE_CODE_OAUTH_TOKEN" in body
     assert GOOD_TOKEN not in body
+
+
+def test_an_rc_with_no_trailing_newline_is_not_corrupted(home, tmp_path):
+    """The invariant: the marker owns its own line whatever the rc looked like.
+
+    Note this passes with or without the explicit newline guard, because
+    strip_block rewrites through awk and awk terminates every line. The test is
+    here for the invariant, not as a regression test for the guard.
+    """
+    rc = home / ".zshrc"
+    rc.write_text("export PATH=/opt/bin:$PATH")          # deliberately no \n
+    assert run(home, tmp_path, GOOD_TOKEN).returncode == 0
+
+    lines = rc.read_text().splitlines()
+    assert lines[0] == "export PATH=/opt/bin:$PATH", "the user's last line was mangled"
+    assert "# >>> ccfleet connect >>>" in lines, "the marker must own its own line"
+
+    # And because it owns a line, removal can find it again.
+    assert run(home, tmp_path, "--remove").returncode == 0
+    body = rc.read_text()
+    assert "ccfleet connect" not in body
+    assert "export PATH=/opt/bin:$PATH" in body

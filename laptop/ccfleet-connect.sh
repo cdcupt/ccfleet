@@ -71,6 +71,13 @@ write_block() {
   # here would leave the token already written and the device half-connected.
   mkdir -p "$(dirname "$rc")"
   strip_block "$rc"
+  # Belt and braces. strip_block above rewrites the file through awk, whose
+  # print always terminates a line, so by here the rc already ends in a newline
+  # and the marker cannot be joined to the user's last command. This keeps that
+  # invariant from depending on an implementation detail of strip_block.
+  if [ -s "$rc" ] && [ -n "$(tail -c1 "$rc")" ]; then
+    printf '\n' >> "$rc"
+  fi
   {
     printf '%s\n' "$MARK_BEGIN"
     if [ "${SHELL##*/}" = "fish" ]; then
