@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.4.0 · 2026-09-21 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.5.0 · 2026-09-21 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -532,6 +532,11 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
   </div>
 
   <h3>Reading the dashboard</h3>
+  <p>Four tiles sit above the table &mdash; healthy, warning, critical, disabled &mdash;
+  so the first question ("is anything wrong?") is answered before you read a row. A
+  tile at zero stays grey rather than competing with the one that is not. Below it,
+  each row carries a coloured rail on its left edge in the same three levels, so
+  scanning the column finds trouble without parsing any number.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Column</th><th>Meaning</th><th>Good looks like</th></tr></thead>
     <tbody>
