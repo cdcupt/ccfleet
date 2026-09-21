@@ -985,12 +985,39 @@ def read_login_pane(runner: Runner = subprocess.run) -> str:
     return _tmux(runner, "capture-pane", "-p", "-J", "-t", LOGIN_SESSION) or ""
 
 
+# How many following lines a URL may be stitched from. The real ones run to a
+# few hundred characters in a 200-column pane, so two is already generous; the
+# cap is what stops a runaway from swallowing the rest of the screen.
+URL_CONTINUATION_LINES = 4
+# A continuation is a whole line of URL-safe characters and nothing else. Any
+# space means it is prose, which is what ends the stitch.
+URL_TAIL_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&\'()*+,;=%-]+$")
+
+
 def find_login_url(pane: str) -> Optional[str]:
+    """The verification URL, rejoined if the screen broke it across lines.
+
+    `capture-pane -J` joins lines *tmux* wrapped, which is not the same as
+    lines the program wrapped itself. Claude Code prints its own newline inside
+    the URL, so tmux sees two ordinary lines and leaves them apart: measured on
+    a live `setup-token`, a 346-character URL arrived as 200 characters plus a
+    separate 146. Long enough to look like a URL, and broken when clicked.
+    """
     match = LOGIN_URL_RE.search(pane)
     if not match:
         return None
-    # tmux wraps long lines; strip anything a wrap or a quote left attached.
-    return match.group(0).rstrip('"\'),.').strip()
+    url = match.group(0)
+    lines = pane.splitlines()
+    # Which line the match ended on; continuations can only follow that one.
+    at = next((i for i, line in enumerate(lines) if url in line), -1)
+    if at >= 0:
+        for line in lines[at + 1:at + 1 + URL_CONTINUATION_LINES]:
+            tail = line.strip()
+            if not tail or not URL_TAIL_RE.match(tail):
+                break
+            url += tail
+    # Strip anything a wrap or a quote left attached.
+    return url.rstrip('"\'),.').strip()
 
 
 def send_login_code(code: str, runner: Runner = subprocess.run) -> None:

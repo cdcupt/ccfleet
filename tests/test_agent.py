@@ -1390,3 +1390,51 @@ def test_start_login_only_mints_a_token_when_asked_in_exactly_those_words(monkey
         started = [a for a in seen if "new-session" in a][-1]
         assert "setup-token" not in started[-1], f"{strange!r} must not mint a credential"
         assert "auth login" in started[-1]
+
+
+# The shape a live `claude setup-token` actually produced in a 200-column pane:
+# a full-width line, the rest on the next, and prose after it. Captured rather
+# than imagined, because the imagined version is what shipped broken.
+SPLIT_URL_PANE = (
+    " Browser didn't open? Use the url below to sign in (c to copy)\n"
+    "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-"
+    "5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth"
+    "%2Fcode%2Fcallback&scope=user%3\n"
+    "Ainference&code_challenge=0ncgAOlsJicLpnqAWkH-WPuozcmFtQFF65o2V6ADc40&"
+    "code_challenge_method=S256&state=Gu3GgC9YzTPh0lxmoB5xK4cJtrgllGDhw2GCoYbGlKU\n"
+    "\n"
+    " Hold Shift while selecting to use your terminal's native copy\n"
+)
+
+
+def test_a_url_broken_across_lines_is_put_back_together():
+    """capture-pane -J joins lines *tmux* wrapped. Claude Code prints its own
+    newline inside the URL, so tmux sees two ordinary lines and leaves them
+    apart — and a third of a URL still looks like a URL until it is clicked."""
+    url = agent.find_login_url(SPLIT_URL_PANE)
+    assert url is not None
+    assert url.endswith("state=Gu3GgC9YzTPh0lxmoB5xK4cJtrgllGDhw2GCoYbGlKU")
+    assert "scope=user%3Ainference" in url, "the halves meet without losing a character"
+    assert len(url) > 300, f"stitched, not truncated: got {len(url)}"
+    assert " " not in url and "Hold" not in url, "prose after it is not swallowed"
+
+
+def test_stitching_stops_at_the_first_thing_that_is_not_a_url():
+    short = "https://claude.com/x?a=1\n\nEsc to close\n"
+    assert agent.find_login_url(short) == "https://claude.com/x?a=1"
+    # A line with a space is prose, whatever it looks like.
+    prose = "https://claude.com/x?a=1\nsome words here\n"
+    assert agent.find_login_url(prose) == "https://claude.com/x?a=1"
+    # And it cannot run away down the screen. The bound is written out rather
+    # than derived from the constant under test: an assertion that moves with
+    # the thing it checks is not an assertion.
+    runaway = "https://claude.com/x?a=1\n" + "\n".join("abc" for _ in range(50))
+    assert len(agent.find_login_url(runaway)) <= 40
+
+
+def test_a_url_that_was_never_broken_is_unchanged():
+    whole = ("prefix\nhttps://claude.com/cai/oauth/authorize?code=true&state=abc\n"
+             "\nmore prose\n")
+    assert agent.find_login_url(whole) == \
+        "https://claude.com/cai/oauth/authorize?code=true&state=abc"
+    assert agent.find_login_url("nothing here") is None
