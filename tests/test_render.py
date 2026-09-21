@@ -23,7 +23,7 @@ def test_rows_merge_alerts_and_escape_html(cfg):
     assert "&lt;script&gt;" in html
     assert "≠ pinned" in html and "203.0.113.10" in html
     assert 'class="pill critical"' in html and "active (expected)" in html
-    assert "refreshed 10m ago (max)" in html
+    assert "max \u00b7 refreshed 10m ago" in html
 
 
 def test_empty_dashboard_has_hint(cfg):
@@ -157,7 +157,7 @@ def _vcell(installed, pinned):
            "load1": 0.1, "credentials_present": True, "credentials_mtime": 1.0,
            "token_expires_at": None, "subscription_type": "max", "remote_control": "active",
            "rc_expected": True, "last_upgrade": None, "open_alerts": [], "usage": {}}
-    return re.search(r"<td>(2\.[^<]*?(?:<span[^>]*>[^<]*</span>)?)</td>",
+    return re.search(r'<td class="v">(2\.[^<]*?(?:<span[^>]*>[^<]*</span>)?)</td>',
                      _row_html(row, 100.0)).group(1)
 
 
@@ -181,13 +181,17 @@ def test_usage_card_draws_a_sparkline_and_says_what_it_cannot_tell_you():
         "cache_read_input_tokens": 900_000, "models": ["claude-opus-5"],
         "by_day": [{"day": "2026-09-18", "tokens": 260000},
                    {"day": "2026-09-19", "tokens": 140000}]}}]
-    html = _usage_html(rows)
+    html = _usage_html(rows, NOW)
     assert "1.2M" in html and "12 sessions" in html
     assert '<svg class="spark"' in html and "<polyline" in html
-    # The distinction that keeps this honest.
-    assert "not how much of a subscription window is left" in html
+    # The card now carries the subscription windows too, so the old disclaimer is
+    # gone. What still has to be said is where the numbers come from and what
+    # never leaves the node.
+    assert "/usage" in html and "Conversation content never leaves the node" in html
+    # A node with no window reading yet says so, rather than showing empty bars.
+    assert "No window reading yet" in html
     # No node reporting usage means no card at all, rather than an empty one.
-    assert _usage_html([{"id": "n", "owner": "e", "usage": {}}]) == ""
+    assert _usage_html([{"id": "n", "owner": "e", "usage": {}}], NOW) == ""
 
 
 def test_a_node_supplied_usage_series_cannot_break_the_chart():
@@ -199,3 +203,53 @@ def test_a_node_supplied_usage_series_cannot_break_the_chart():
     assert "<polyline" in flat
     single = _sparkline([{"day": "a", "tokens": 5}])
     assert "<polyline" in single
+
+
+def test_quota_meters_show_both_windows_and_colour_by_pressure():
+    """The two windows an owner asks about, as bars rather than bare numbers."""
+    from ccfleetd.render import _quota_html
+    row = {"quota": {"session": {"used_pct": 3, "resets": "7:50pm (UTC)"},
+                     "week": {"used_pct": 15, "resets": "Sep 23, 3pm (UTC)"},
+                     "checked_at": NOW - 600}}
+    html = _quota_html(row, NOW)
+    assert "5-hour session" in html and "This week" in html
+    assert "3%" in html and "15%" in html
+    assert "7:50pm (UTC)" in html and "Sep 23, 3pm (UTC)" in html
+    assert "read 10m ago" in html
+    assert html.count("meter-track") == 2
+    # Colour is the same three-level scale the rest of the page uses.
+    assert "meter-fill ok" in html
+    assert "meter-fill warn" in _quota_html({"quota": {"week": {"used_pct": 80}}}, NOW)
+    assert "meter-fill crit" in _quota_html({"quota": {"week": {"used_pct": 95}}}, NOW)
+    # Nothing read yet is a state, not an empty bar.
+    assert "No window reading yet" in _quota_html({"quota": {}}, NOW)
+
+
+def test_a_node_supplied_quota_cannot_break_a_meter():
+    from ccfleetd.render import _meter
+    assert _meter(None, "x", None) == "" and _meter("80", "x", None) == ""
+    assert _meter(True, "x", None) == "", "a bool is not a percentage"
+    # Out of range clamps rather than drawing a bar past its track.
+    assert "width:100%" in _meter(4000, "x", None) and "width:0%" in _meter(-9, "x", None)
+    assert "&lt;script&gt;" in _meter(5, "x", "<script>")
+
+
+def test_the_strip_counts_the_fleet_and_keeps_zeroes_quiet():
+    """The summary before the detail: four tiles, not a count inside a sentence."""
+    from ccfleetd.render import _strip_html
+    html = _strip_html({"ok": 2, "critical": 1})
+    assert '<div class="tile ok"><b>2</b>' in html
+    assert '<div class="tile critical"><b>1</b>' in html
+    # A window with nothing in it must not compete with the one that matters.
+    assert '<div class="tile zero"><b>0</b><span>warning</span>' in html
+    assert _strip_html({}).count("tile zero") == 4
+
+
+def test_the_dashboard_shell_is_themed_and_bounded(cfg):
+    html = render_dashboard([], [], NOW, cfg)
+    # Every colour goes through a token, so dark mode is not an afterthought.
+    assert "prefers-color-scheme:dark" in html and 'data-theme="light"' in html
+    assert "#eef0f3" not in html, "no hard-coded greys left over from the old sheet"
+    assert 'class="page"' in html and "max-width:1200px" in html
+    assert 'rel="icon"' in html
+    assert "Nothing open" in html, "an empty alert list should say so in words"

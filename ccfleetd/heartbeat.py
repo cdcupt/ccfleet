@@ -61,6 +61,27 @@ def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return section if isinstance(section, Mapping) else {}
 
 
+def _quota(section: Mapping[str, Any]) -> dict[str, Any]:
+    """Subscription windows, as /usage on the node reported them.
+
+    A percentage and a human reset string per window, nothing else. These come
+    from Claude Code reporting on itself, not from any usage endpoint.
+    """
+    out: dict[str, Any] = {}
+    for name in ("session", "week"):
+        window = section.get(name)
+        if not isinstance(window, Mapping):
+            continue
+        used = _num(window.get("used_pct"))
+        if used is None or not 0 <= used <= 100:
+            continue
+        out[name] = {"used_pct": used, "resets": _str(window.get("resets"), 40)}
+    checked = _num(section.get("checked_at"))
+    if checked is not None:
+        out["checked_at"] = checked
+    return out
+
+
 def _usage(section: Mapping[str, Any]) -> dict[str, Any]:
     """Counts only, each bounded. A node cannot post an unbounded series here."""
     out: dict[str, Any] = {k: _num(section.get(k)) for k in USAGE_COUNTERS}
@@ -98,6 +119,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     upgrade = _section(reconcile, "upgrade")
     login = _section(reconcile, "login")
     usage = _section(payload, "usage")
+    quota = _section(payload, "quota")
     # Only carry the section when the agent actually reported one. Emitting a
     # skeleton of Nones makes "has this node ever reconciled?" unanswerable: the
     # dict is truthy, so every node looks like it has.
@@ -134,6 +156,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         "remote_control": {"state": _str(rc.get("state"))},
         "tmux_sessions": _num(payload.get("tmux_sessions")),
         "usage": _usage(usage),
+        "quota": _quota(quota),
     }
     if login_state:
         result["reconcile"] = {"login": {

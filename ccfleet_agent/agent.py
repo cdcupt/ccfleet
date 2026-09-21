@@ -346,7 +346,8 @@ def tmux_sessions(runner: Runner = subprocess.run) -> Optional[int]:
 def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
                   opener: Opener = urllib.request.urlopen,
                   now: Callable[[], float] = time.time,
-                  state: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                  state: Optional[Mapping[str, Any]] = None,
+                  quota: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"node_id": cfg.node_id, "ts": now(),
                                "agent_version": AGENT_VERSION}
     payload.update(system_info())
@@ -364,6 +365,8 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
     payload["remote_control"] = remote_control_state(cfg.rc_service, runner)
     payload["tmux_sessions"] = tmux_sessions(runner)
     payload["usage"] = usage_summary(cfg.claude_config_dir)
+    if quota:
+        payload["quota"] = dict(quota)
     upgrade = (state or {}).get("upgrade")
     if isinstance(upgrade, Mapping):
         payload["reconcile"] = {"upgrade": dict(upgrade)}
@@ -645,6 +648,161 @@ def _in_window(day: Optional[str], oldest_day: str, newest_day: str) -> bool:
     return day is not None and oldest_day <= day <= newest_day
 
 
+# -- quota windows ---------------------------------------------------------------
+#
+# How much of the subscription window is left lives behind `/usage` inside a
+# Claude Code session and nowhere else. This drives the real CLI in its own tmux
+# server and reads what it prints — the same shape as the sign-in flow. It is
+# NOT the OAuth usage endpoint, which would mean using the owner's token outside
+# Claude Code; here Claude Code is the one reporting on itself.
+#
+# Starting a session is heavy compared with a heartbeat, so this runs on its own
+# slow schedule and the answer is cached in the agent's state between runs.
+
+QUOTA_TMUX_SOCKET = "ccfleet-quota"
+QUOTA_SESSION = "quota"
+QUOTA_REFRESH_S = 30 * 60
+QUOTA_TIMEOUT_S = 90.0
+# Labels /usage prints, mapped to the names reported. "Current session" is the
+# five-hour window; the weekly ones reset together.
+QUOTA_LABELS = (
+    ("Current session", "session"),
+    ("Current week (all models)", "week"),
+)
+PERCENT_RE = re.compile(r"(\d{1,3})%\s+used")
+RESETS_RE = re.compile(r"Resets\s+([^\n]{1,40})")
+# /usage draws each window as a label line, a bar, then a reset line. Reading
+# further than that lets a label whose own block has not been painted yet borrow
+# the number from the block below it, and the screen is captured mid-paint as a
+# matter of course.
+QUOTA_BLOCK_LINES = 3
+
+
+def _quota_tmux(runner: Runner, *args: str, timeout: float = 15.0) -> Optional[str]:
+    return _run(runner, ["tmux", "-L", QUOTA_TMUX_SOCKET, *args], timeout=timeout)
+
+
+def _quota_home() -> Optional[str]:
+    """The one directory this is willing to open a trusted session in."""
+    try:
+        home = Path.home()
+    except (RuntimeError, OSError):
+        return None
+    return str(home) if home.is_dir() else None
+
+
+def parse_quota(pane: str) -> dict[str, Any]:
+    """Pull the windows out of what /usage drew.
+
+    Each block is a label line, then a bar ending "N% used", then "Resets ...".
+    Matching forward from the label keeps this working when the bar characters
+    or the column width change.
+    """
+    out: dict[str, Any] = {}
+    lines = pane.splitlines()
+    for label, name in QUOTA_LABELS:
+        at = next((i for i, line in enumerate(lines) if label in line), -1)
+        if at < 0:
+            continue
+        # The block is the few lines under its own label and nothing beyond, so
+        # a half-drawn window reads as absent rather than as the next one's
+        # figure. Another known label ends it early whatever the line count.
+        block = []
+        for line in lines[at + 1:at + 1 + QUOTA_BLOCK_LINES]:
+            if any(other in line for other, _ in QUOTA_LABELS):
+                break
+            block.append(line)
+        window = "\n".join(block)
+        percent = PERCENT_RE.search(window)
+        if not percent:
+            continue
+        value = int(percent.group(1))
+        if not 0 <= value <= 100:
+            continue
+        entry: dict[str, Any] = {"used_pct": value}
+        resets = RESETS_RE.search(window)
+        if resets:
+            entry["resets"] = " ".join(resets.group(1).split())[:40]
+        out[name] = entry
+    return out
+
+
+def read_quota(runner: Runner = subprocess.run,
+               now: Optional[float] = None) -> Optional[dict[str, Any]]:
+    """Drive `claude` to its /usage screen once and read the windows off it."""
+    path = find_claude()
+    if not path:
+        return None
+    # Start it in the owner's home and nowhere else. The loop below answers
+    # Claude Code's folder-trust prompt, and answering it means trusting whatever
+    # directory this happened to start in — a checked-out project, if someone ran
+    # the agent by hand from one. Pinning the directory is what makes that answer
+    # safe, rather than assuming the service was launched somewhere harmless.
+    home = _quota_home()
+    if home is None:
+        return None
+    _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
+    started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
+                          "-c", home, "-x", "180", "-y", "45", shlex.quote(path))
+    if not started:
+        return None
+    deadline = (time.time() if now is None else now) + QUOTA_TIMEOUT_S
+    result: Optional[dict[str, Any]] = None
+    asked = False
+    try:
+        while time.time() < deadline:
+            time.sleep(3)
+            pane = _quota_tmux(runner, "capture-pane", "-p", "-J", "-t", QUOTA_SESSION) or ""
+            # A fresh working directory asks whether the folder is trusted. It is
+            # the node's own home; answer once and carry on.
+            if "trust this folder" in pane:
+                # The node's own home directory. Answer once and let it settle.
+                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Down")
+                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Enter")
+                continue
+            if not asked:
+                # Deliberately not keyed to a banner string: the welcome text
+                # changes between releases, and an earlier version of this waited
+                # for one that had scrolled away. The trust prompt being gone is
+                # the only signal that means anything stable.
+                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "/usage")
+                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Enter")
+                asked = True
+                continue
+            if asked:
+                found = parse_quota(pane)
+                # A pane captured mid-draw can hold the session block with the
+                # weekly one still to come. Taking that would cache a half
+                # answer for the next half hour, so keep the best seen and wait
+                # for both; settle for a partial one only when time runs out.
+                if len(found) > len(result or {}):
+                    result = found
+                if "session" in found and "week" in found:
+                    break
+    finally:
+        _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
+    return result
+
+
+def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
+                  now: Optional[float] = None) -> tuple[Optional[dict[str, Any]],
+                                                        Optional[dict[str, Any]]]:
+    """Cached windows, refreshed on the slow schedule. Returns (report, to_store)."""
+    now = time.time() if now is None else now
+    cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
+    if cached:
+        age = now - (cached.get("ts") or 0)
+        if age < QUOTA_REFRESH_S:
+            return {k: v for k, v in cached.items() if k != "ts"}, None
+    fresh = read_quota(runner, now)
+    if fresh is None:
+        # Keep showing the last known answer rather than blanking the card; it is
+        # stamped, so the console can say how old it is.
+        return ({k: v for k, v in cached.items() if k != "ts"} if cached else None), None
+    fresh["checked_at"] = now
+    return fresh, {**fresh, "ts": now}
+
+
 # -- reconcile -------------------------------------------------------------------
 
 # An install downloads a release, so it gets far longer than a fact-collecting
@@ -746,6 +904,16 @@ EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
 
 def _tmux(runner: Runner, *args: str, timeout: float = 10.0) -> Optional[str]:
     return _run(runner, ["tmux", "-L", LOGIN_TMUX_SOCKET, *args], timeout=timeout)
+
+
+def _tmux_ok_on(runner: Runner, socket: str, *args: str, timeout: float = 15.0) -> bool:
+    """As _tmux_ok, on a named socket."""
+    try:
+        proc = runner(["tmux", "-L", socket, *args], capture_output=True, text=True,
+                      timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
 
 
 def _tmux_ok(runner: Runner, *args: str, timeout: float = 10.0) -> bool:
@@ -966,7 +1134,12 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
 
     Returns (status, desired, new state, login progress to report next time).
     """
-    payload = build_payload(cfg, state=state)
+    # Reading the windows starts a Claude Code session, so it runs on its own slow
+    # schedule and the answer is cached between heartbeats.
+    quota, remember = quota_summary(state) if reconcile else (None, None)
+    if remember is not None:
+        state = {**state, "quota": remember}
+    payload = build_payload(cfg, state=state, quota=quota)
     if login_progress:
         payload.setdefault("reconcile", {})["login"] = dict(login_progress)
     status, text = send_heartbeat(cfg, payload)
