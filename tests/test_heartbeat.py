@@ -142,9 +142,10 @@ def test_an_absurd_integer_cannot_take_the_dashboard_down():
     assert out["disk"]["used_pct"] is None
     assert out["usage"]["total_tokens"] is None
     assert out["usage"]["by_day"] == [{"day": "b", "tokens": 50}]
-    # And what survived still renders.
+    # And what survived still renders, which is the whole point: the absurd
+    # value is dropped rather than carried into float arithmetic downstream.
     _human_tokens(out["usage"]["total_tokens"])
-    assert "<svg" in _sparkline(out["usage"]["by_day"])
+    assert _sparkline(out["usage"]["by_day"]), "the one surviving day still renders"
     # Ordinary measurements are untouched.
     fine = validate_heartbeat({"node_id": "n", "usage": {"total_tokens": 40897},
                                "disk": {"used_pct": 12.7}}, "n")

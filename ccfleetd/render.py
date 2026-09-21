@@ -73,7 +73,7 @@ padding-top:11px;border-top:1px solid var(--rule-soft)}
    glance down the column finds trouble without reading any number. */
 .wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);
 border-radius:12px;box-shadow:var(--shadow)}
-table{border-collapse:collapse;width:100%;min-width:940px;font-size:14px}
+table{border-collapse:collapse;width:100%;min-width:880px;font-size:14px}
 th,td{padding:11px 13px;text-align:left;border-bottom:1px solid var(--rule-soft);
 vertical-align:top;white-space:nowrap}
 th{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
@@ -308,7 +308,6 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     # Nothing is expected of a node that is switched off, so saying so is noise.
     if row["rc_expected"] and row["enabled"]:
         rc += " (expected)"
-    alerts = ", ".join(row["open_alerts"]) or "-"
     return (
         f'<tr class="r-{escape(row["status"])}">'
         f"<td>{_pill(row['status'])}</td>"
@@ -323,7 +322,6 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         f"<td>{escape(cred_text)}<br><span class=\"muted\">token "
         f"{escape(_in(now, row['token_expires_at']))}</span></td>"
         f"<td>{escape(rc)}</td>"
-        f'<td class="wrap">{escape(alerts)}</td>'
         "</tr>"
     )
 
@@ -506,6 +504,12 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
             "code you paste pass through, and both are discarded when it finishes.</p></div>")
 
 
+def _plural(n: Any, word: str) -> str:
+    """"1 sessions" is the sort of thing that makes a page look unfinished."""
+    count = int(n) if isinstance(n, (int, float)) and not isinstance(n, bool) else 0
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
 def _human_tokens(n: Any) -> str:
     """Token counts run to millions; a raw integer is unreadable at a glance."""
     if not isinstance(n, (int, float)) or isinstance(n, bool) or n <= 0:
@@ -523,15 +527,21 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
     if not points:
         return '<span class="muted">no activity yet</span>'
     values = [float(p["tokens"]) for p in points]
-    if len(values) == 1:
-        # One day of data has no line to draw. Rendering it as a lone dot in
-        # empty space reads as a rendering fault, so give it a flat run at its
-        # own height — the value is the same, it just looks like a measurement.
-        values = values * 2
+    if len(values) < 2:
+        # One day is not a trend. Drawn, it became a flat line across the whole
+        # frame, which reads as a full bar rather than as a single reading.
+        return '<span class="muted">one day so far</span>'
     peak = max(values) or 1.0
     step = width / max(len(values) - 1, 1)
-    # y is inverted: SVG grows downward, a chart grows upward.
-    coords = [(i * step, height - 3 - (v / peak) * (height - 8)) for i, v in enumerate(values)]
+    # y is inverted: SVG grows downward, a chart grows upward. A flat series has
+    # no shape to show, and normalising it against its own peak would pin it to
+    # the top of the frame — the one height that implies a maximum. Sit it in
+    # the middle instead, where it reads as "unvarying" and not as "full".
+    flat = peak == min(values)
+    def y_for(v: float) -> float:
+        share = 0.5 if flat else v / peak
+        return height - 3 - share * (height - 8)
+    coords = [(i * step, y_for(v)) for i, v in enumerate(values)]
     line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     area = f"0,{height} " + line + f" {coords[-1][0]:.1f},{height}"
     last_x, last_y = coords[-1]
@@ -614,7 +624,7 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
             f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
             f'<span class="muted"> tokens / {escape(window)}</span></div>'
             f'<div class="usage-meta muted">'
-            f'{escape(str(int(usage.get("sessions") or 0)))} sessions &middot; '
+            f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
             f'{escape(share)} cached<br>{escape(models)}</div></div>'
             f'<div class="usage-quota">{_quota_html(row, now)}</div>'
             f'<div class="usage-spark">{_sparkline(usage.get("by_day") or [])}'
@@ -656,7 +666,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     empty = ("No nodes yet. Use the form below." if is_admin else
              "No nodes are assigned to you yet. Your operator adds them.")
     body_rows = "".join(_row_html(r, now) for r in rows) or (
-        f'<tr><td colspan="10" class="muted">{escape(empty)}</td></tr>')
+        f'<tr><td colspan="9" class="muted">{escape(empty)}</td></tr>')
     alert_items = "".join(
         f'<div class="alert">{_pill(a["level"])}'
         f'<span class="alert-rule">{escape(a["node_id"])} · {escape(a["rule"])}</span>'
@@ -693,7 +703,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         "</header>"
         '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
         "<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Login</th>"
-        "<th>Remote Control</th><th>Open alerts</th></tr></thead>"
+        "<th>Remote Control</th></tr></thead>"
         f"<tbody>{body_rows}</tbody></table></div>"
         f'<h2>Open alerts</h2><div class="card">{alert_items}</div>'
         # Management is the operator's. An owner sees their nodes and nothing to
