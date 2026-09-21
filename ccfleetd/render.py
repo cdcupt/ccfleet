@@ -616,6 +616,11 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
         share = f"{cached / total * 100:.0f}%" if total else "-"
         models = ", ".join(str(m) for m in (usage.get("models") or [])[:3]) or "-"
         window = f"{int(days)}d" if days else "?"
+        spark = _sparkline(usage.get("by_day") or [])
+        # The caption names the axes of a chart. With no chart drawn it sat
+        # under a sentence, captioning nothing.
+        caption = (f'<div class="usage-nums muted">daily tokens, last {escape(window)}</div>'
+                   if "<svg" in spark else "")
         items.append(
             f'<div class="usage-row"><div class="usage-name">{escape(row["id"])}'
             f'<span class="muted"> &middot; {escape(row["owner"])}</span>'
@@ -625,9 +630,7 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
             f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
             f'{escape(share)} cached<br>{escape(models)}</div></div>'
             f'<div class="usage-quota">{_quota_html(row, now)}</div>'
-            f'<div class="usage-spark">{_sparkline(usage.get("by_day") or [])}'
-            f'<div class="usage-nums muted">daily tokens, last '
-            f'{escape(window)}</div></div></div>')
+            f'<div class="usage-spark">{spark}{caption}</div></div>')
     return ('<h2>Usage and quota</h2><div class="card">' + "".join(items) + tail +
             '<p class="note">'
             "Windows come from <code>/usage</code> inside a Claude Code session on the node, "

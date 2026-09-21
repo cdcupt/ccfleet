@@ -263,3 +263,22 @@ def test_the_dashboard_shell_is_themed_and_bounded(cfg):
     assert 'class="page"' in html and "max-width:1200px" in html
     assert 'rel="icon"' in html
     assert "Nothing open" in html, "an empty alert list should say so in words"
+
+
+def test_the_chart_caption_does_not_outlive_the_chart():
+    """It names the axes of a drawing; with no drawing it captioned a sentence."""
+    from ccfleetd.render import _usage_html
+    one_day = [{"id": "n", "owner": "e", "usage": {
+        "total_tokens": 50, "sessions": 1, "window_days": 14,
+        "by_day": [{"day": "2026-09-21", "tokens": 50}]}}]
+    html = _usage_html(one_day, NOW)
+    assert "one day so far" in html and "daily tokens, last" not in html
+    # Singular, too.
+    assert "1 session " in html and "1 sessions" not in html
+
+    two_days = [{"id": "n", "owner": "e", "usage": {
+        "total_tokens": 90, "sessions": 2, "window_days": 14,
+        "by_day": [{"day": "2026-09-20", "tokens": 40}, {"day": "2026-09-21", "tokens": 50}]}}]
+    drawn = _usage_html(two_days, NOW)
+    assert "<svg" in drawn and "daily tokens, last 14d" in drawn
+    assert "2 sessions" in drawn
