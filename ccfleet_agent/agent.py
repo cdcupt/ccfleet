@@ -671,6 +671,11 @@ QUOTA_LABELS = (
 )
 PERCENT_RE = re.compile(r"(\d{1,3})%\s+used")
 RESETS_RE = re.compile(r"Resets\s+([^\n]{1,40})")
+# /usage draws each window as a label line, a bar, then a reset line. Reading
+# further than that lets a label whose own block has not been painted yet borrow
+# the number from the block below it, and the screen is captured mid-paint as a
+# matter of course.
+QUOTA_BLOCK_LINES = 3
 
 
 def _quota_tmux(runner: Runner, *args: str, timeout: float = 15.0) -> Optional[str]:
@@ -685,11 +690,20 @@ def parse_quota(pane: str) -> dict[str, Any]:
     or the column width change.
     """
     out: dict[str, Any] = {}
+    lines = pane.splitlines()
     for label, name in QUOTA_LABELS:
-        start = pane.find(label)
-        if start < 0:
+        at = next((i for i, line in enumerate(lines) if label in line), -1)
+        if at < 0:
             continue
-        window = pane[start + len(label):start + len(label) + 400]
+        # The block is the few lines under its own label and nothing beyond, so
+        # a half-drawn window reads as absent rather than as the next one's
+        # figure. Another known label ends it early whatever the line count.
+        block = []
+        for line in lines[at + 1:at + 1 + QUOTA_BLOCK_LINES]:
+            if any(other in line for other, _ in QUOTA_LABELS):
+                break
+            block.append(line)
+        window = "\n".join(block)
         percent = PERCENT_RE.search(window)
         if not percent:
             continue
@@ -740,8 +754,13 @@ def read_quota(runner: Runner = subprocess.run,
                 continue
             if asked:
                 found = parse_quota(pane)
-                if "session" in found or "week" in found:
+                # A pane captured mid-draw can hold the session block with the
+                # weekly one still to come. Taking that would cache a half
+                # answer for the next half hour, so keep the best seen and wait
+                # for both; settle for a partial one only when time runs out.
+                if len(found) > len(result or {}):
                     result = found
+                if "session" in found and "week" in found:
                     break
     finally:
         _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)

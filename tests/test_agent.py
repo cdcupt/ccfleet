@@ -951,3 +951,228 @@ def test_skipping_a_partial_tail_record_is_bounded(tmp_path, monkeypatch):
     (d / "t.jsonl").write_text("z" * 5000 + "\n" + good + "\n")
     u = agent.usage_summary(tmp_path, now=1789900000.0)
     assert u["total_tokens"] == 6
+
+
+# -- quota ------------------------------------------------------------------------
+
+# What /usage actually draws, box characters and all. Matching forward from the
+# label rather than against this shape is the point of the parser, but a real
+# sample is what proves it.
+USAGE_PANE = """\
+ Usage
+
+ Current session
+ ███░░░░░░░░░░░░░░░░░░░░░░░░░  3% used
+ Resets 7:50pm (UTC)
+
+ Current week (all models)
+ ████░░░░░░░░░░░░░░░░░░░░░░░░  15% used
+ Resets Sep 23, 3pm (UTC)
+
+ Current week (Opus)
+ ██░░░░░░░░░░░░░░░░░░░░░░░░░░  8% used
+ Resets Sep 23, 3pm (UTC)
+
+ Esc to close
+"""
+
+
+def test_parse_quota_reads_both_windows_off_the_usage_screen():
+    got = agent.parse_quota(USAGE_PANE)
+    assert got == {"session": {"used_pct": 3, "resets": "7:50pm (UTC)"},
+                   "week": {"used_pct": 15, "resets": "Sep 23, 3pm (UTC)"}}
+
+
+def test_parse_quota_survives_a_screen_it_does_not_recognise():
+    assert agent.parse_quota("") == {}
+    assert agent.parse_quota("Welcome to Claude Code") == {}
+    # A label with no bar under it yet: mid-draw, not an answer.
+    assert agent.parse_quota("Current session\nResets 7:50pm") == {}
+    # Out of range is refused rather than passed up to the server.
+    assert agent.parse_quota("Current session\n999% used") == {}
+
+
+def test_parse_quota_is_not_tied_to_the_bar_characters():
+    """The bar is decoration; the label and the percentage carry the meaning."""
+    plain = "Current session\n  3% used\nResets in 2 hours\nCurrent week (all models)\n 60% used"
+    got = agent.parse_quota(plain)
+    assert got["session"] == {"used_pct": 3, "resets": "in 2 hours"}
+    assert got["week"]["used_pct"] == 60
+
+
+def test_parse_quota_does_not_read_past_its_own_block():
+    """Each window takes the first percentage after its own label, not a later one."""
+    got = agent.parse_quota(USAGE_PANE)
+    # "Current week (Opus)" sits after the weekly block with its own 8%; the
+    # weekly window must still be 15.
+    assert got["week"]["used_pct"] == 15
+    # The bound that matters: a label whose own block has not drawn yet must not
+    # borrow a number from far below. Half-drawn panes are the normal case here,
+    # because the screen is captured while Claude Code is still painting it.
+    half_drawn = ("Current session\n" + "\n" * 40 +
+                  "Current week (all models)\n 15% used\nResets Sep 23, 3pm (UTC)\n")
+    got = agent.parse_quota(half_drawn)
+    assert "session" not in got, "a label with no block yet is not an answer"
+    assert got["week"]["used_pct"] == 15
+
+
+def test_parse_quota_bounds_a_hostile_resets_line():
+    """The reset string is scraped text and goes on to the server, so it is capped."""
+    got = agent.parse_quota("Current session\n5% used\nResets " + "x" * 500)
+    assert len(got["session"]["resets"]) == 40
+    # It is one line, too: a newline ends the capture rather than swallowing the
+    # rest of the screen.
+    got = agent.parse_quota("Current session\n5% used\nResets soon\nsecret pane text")
+    assert got["session"]["resets"] == "soon"
+
+
+class QuotaTmux:
+    """A tmux that replays a sequence of panes and records what was sent to it."""
+
+    def __init__(self, panes, claude_ok=True):
+        self.panes = list(panes)
+        self.claude_ok = claude_ok
+        self.sent = []
+        self.killed = 0
+
+    def __call__(self, argv, **kwargs):
+        def done(code=0, out=""):
+            return subprocess.CompletedProcess(argv, code, stdout=out, stderr="")
+        if "new-session" in argv:
+            return done(0 if self.claude_ok else 1)
+        if "kill-session" in argv:
+            self.killed += 1
+            return done()
+        if "send-keys" in argv:
+            self.sent.append(argv[-1])
+            return done()
+        if "capture-pane" in argv:
+            return done(0, self.panes.pop(0) if self.panes else "")
+        return done()
+
+
+def test_read_quota_drives_claude_to_its_usage_screen(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    tmux = QuotaTmux(["❯ Try \"fix the build\"", USAGE_PANE])
+    assert agent.read_quota(tmux)["week"]["used_pct"] == 15
+    assert "/usage" in tmux.sent and "Enter" in tmux.sent
+    # The session is torn down whether or not it worked, so a stuck claude does
+    # not sit on the node until the next beat.
+    assert tmux.killed >= 2
+
+
+def test_read_quota_answers_the_trust_prompt_and_carries_on(monkeypatch):
+    """A fresh working directory asks before anything else can happen."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    tmux = QuotaTmux(["Do you trust this folder?", "❯ ready", USAGE_PANE])
+    assert agent.read_quota(tmux)["session"]["used_pct"] == 3
+    assert tmux.sent[:2] == ["Down", "Enter"], "answers the prompt before asking anything"
+    assert "/usage" in tmux.sent
+
+
+def test_read_quota_gives_up_rather_than_hanging(monkeypatch):
+    """A node that never draws the screen must not wedge the heartbeat."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    clock = iter([0.0] + [float(i) for i in range(1, 400)])
+    monkeypatch.setattr(agent.time, "time", lambda: next(clock))
+    tmux = QuotaTmux(["nothing useful"] * 200)
+    assert agent.read_quota(tmux) is None
+    assert tmux.killed >= 2, "still tidies up on the way out"
+
+
+def test_read_quota_needs_claude_and_a_session(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: None)
+    assert agent.read_quota(fake_runner()) is None
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    assert agent.read_quota(QuotaTmux([], claude_ok=False)) is None
+
+
+def test_quota_summary_reads_rarely_and_remembers_between_times(monkeypatch):
+    """Driving a whole Claude session is expensive; once every 30 minutes is plenty."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    reads = []
+
+    def read(runner, now=None):
+        reads.append(now)
+        return {"session": {"used_pct": 3}}
+
+    monkeypatch.setattr(agent, "read_quota", read)
+    report, store = agent.quota_summary({}, fake_runner(), now=1000.0)
+    assert report == {"session": {"used_pct": 3}, "checked_at": 1000.0}
+    assert store["ts"] == 1000.0 and len(reads) == 1
+
+    # Inside the window: the stored answer is reported, and nothing is driven.
+    again, store2 = agent.quota_summary({"quota": store}, fake_runner(), now=1000.0 + 60)
+    assert again == {"session": {"used_pct": 3}, "checked_at": 1000.0}
+    assert store2 is None and len(reads) == 1, "no second read inside the window"
+
+    # Past it: read again.
+    agent.quota_summary({"quota": store}, fake_runner(), now=1000.0 + agent.QUOTA_REFRESH_S + 1)
+    assert len(reads) == 2
+
+
+def test_quota_summary_keeps_the_last_answer_when_a_read_fails(monkeypatch):
+    """Blanking the card would read as "no quota", which is a different claim."""
+    monkeypatch.setattr(agent, "read_quota", lambda runner, now=None: None)
+    stale = {"session": {"used_pct": 3}, "checked_at": 500.0, "ts": 500.0}
+    report, store = agent.quota_summary({"quota": stale}, fake_runner(),
+                                        now=500.0 + agent.QUOTA_REFRESH_S + 1)
+    assert report == {"session": {"used_pct": 3}, "checked_at": 500.0}
+    assert store is None, "a failed read must not restamp the cache as fresh"
+    # Nothing cached and nothing read is simply nothing.
+    assert agent.quota_summary({}, fake_runner(), now=1.0) == (None, None)
+
+
+def test_quota_summary_ignores_a_corrupt_cache(monkeypatch):
+    monkeypatch.setattr(agent, "read_quota", lambda runner, now=None: {"week": {"used_pct": 9}})
+    for junk in ("not a mapping", [1, 2], 7, None):
+        report, store = agent.quota_summary({"quota": junk}, fake_runner(), now=1.0)
+        assert report == {"week": {"used_pct": 9}, "checked_at": 1.0}
+        assert store["ts"] == 1.0
+
+
+def test_read_quota_waits_for_both_windows_before_settling(monkeypatch):
+    """A half-painted screen would otherwise be cached as the answer for 30 min."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    partial = "Current session\n 3% used\nResets 7:50pm (UTC)\n"
+    tmux = QuotaTmux(["❯ ready", partial, partial, USAGE_PANE])
+    got = agent.read_quota(tmux)
+    assert got is not None and "session" in got and "week" in got
+    assert got["week"]["used_pct"] == 15
+
+
+def test_read_quota_settles_for_a_partial_screen_at_the_deadline(monkeypatch):
+    """One window is still worth reporting; a plan may simply not show the other."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    clock = iter([0.0] + [float(i) for i in range(1, 400)])
+    monkeypatch.setattr(agent.time, "time", lambda: next(clock))
+    partial = "Current session\n 3% used\nResets 7:50pm (UTC)\n"
+    tmux = QuotaTmux(["❯ ready"] + [partial] * 200)
+    got = agent.read_quota(tmux)
+    assert got == {"session": {"used_pct": 3, "resets": "7:50pm (UTC)"}}
+
+
+def test_parse_quota_will_not_borrow_a_number_from_a_window_it_does_not_report():
+    """/usage also draws per-model windows. Those are not the weekly figure.
+
+    Isolates the line bound: the block below carries no label this parser knows,
+    so only proximity stops the session window from claiming its 8%.
+    """
+    pane = ("Current session\n" + "\n" * 5 +
+            "Current week (Opus)\n ██  8% used\nResets Sep 23, 3pm (UTC)\n")
+    assert "session" not in agent.parse_quota(pane)
+
+
+def test_parse_quota_stops_at_the_next_window_even_when_it_is_adjacent():
+    """Isolates the label guard: the next block starts before the line bound would."""
+    pane = "Current session\nCurrent week (all models)\n 15% used\nResets Sep 23\n"
+    got = agent.parse_quota(pane)
+    assert "session" not in got, "the session block never drew; it has no number"
+    assert got["week"]["used_pct"] == 15
