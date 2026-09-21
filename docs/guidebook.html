@@ -177,8 +177,14 @@ html{scroll-behavior:smooth}
   <p>Signing in. Nobody can do it for you, by design: your subscription login must complete through Anthropic's own flow. It happens once per node, during setup, and after that the node refreshes its own credentials. The dashboard raises <code>credentials_missing</code> or <code>token_expired</code> if it ever needs doing again.</p>
 
   <h3>The CLI on your own machines</h3>
-  <p>If you would rather run Claude Code locally &mdash; your own files, your own editor &mdash; you can, without signing in on each machine. Ask your operator for a token, then once per device:</p>
-  <pre><code>ccfleet-connect            <span class="c"># paste the token; input is hidden</span></code></pre>
+  <p>If you would rather run Claude Code locally &mdash; your own files, your own editor &mdash; you can, without signing in on each machine. You generate the token yourself, from your own account; nobody issues it to you and your operator never sees it.</p>
+  <pre><code><span class="c"># once, on a machine already signed in as you</span>
+claude setup-token
+
+<span class="c"># then once per device, pasting what that printed</span>
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh \
+  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect
+ccfleet-connect            <span class="c"># paste the token; input is hidden</span></code></pre>
   <p>After that <code>claude</code> simply works there. The token is Anthropic's own long-lived credential, it lasts a year, and it lives only on the device you put it on. <code>ccfleet-connect --status</code> says whether it still works and <code>--remove</code> undoes it.</p>
   <div class="note warn">
     <p class="t">One thing a token cannot do</p>
@@ -595,10 +601,16 @@ ccfleetd node pin node-a stable</code></pre>
       <h3>Give someone the CLI on their own machines</h3>
       <p>The account owner does this themselves; you cannot do it for them, and
       should not be handed the result:</p>
-      <pre><code><span class="c"># on any machine already signed in as that account</span>
+      <pre><code><span class="c"># the OWNER runs this, on a machine signed in as their account</span>
 claude setup-token
-<span class="c"># then on each device they want to use</span>
+
+<span class="c"># then on each of their devices</span>
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh \
+  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect
 ccfleet-connect</code></pre>
+      <p><strong>Do not ask them to send you the token.</strong> It is their account's
+      credential for a year; the point of this route is that it never passes through
+      anyone else, including you.</p>
       <p>One year, inference scope, and it never touches this server. There is
       nothing to revoke here because nothing is stored here; revocation is in
       their Claude account.</p>
@@ -685,7 +697,7 @@ claude
       <tr><td>node</td><td><code>ccfleet-backup</code></td><td>Archive state without credentials</td></tr>
       <tr><td>node</td><td><code>ccfleet-upgrade-claude [version]</code></td><td>Staged upgrade via the official installer</td></tr>
       <tr><td>node</td><td><code>exitip</code></td><td>Print the public egress IP</td></tr>
-      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use an account on this device with no login. <code>--status</code>, <code>--remove</code></td></tr>
+      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use an account on this device with no login. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--status</code>, <code>--remove</code></td></tr>
       <tr><td>laptop</td><td><code>ccp add|use|list|env|path|rm</code></td><td>Per-account profiles</td></tr>
     </tbody>
   </table></div>
