@@ -971,7 +971,8 @@ def start_login(email: Optional[str], runner: Runner = subprocess.run,
         argv += ["--email", email]
     # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
     return _tmux_ok(runner, "new-session", "-d", "-s", LOGIN_SESSION,
-                    "-x", "200", "-y", "50", " ".join(shlex.quote(a) for a in argv))
+                    "-x", str(LOGIN_PANE_WIDTH), "-y", "50",
+                    " ".join(shlex.quote(a) for a in argv))
 
 
 def read_login_pane(runner: Runner = subprocess.run) -> str:
@@ -985,12 +986,48 @@ def read_login_pane(runner: Runner = subprocess.run) -> str:
     return _tmux(runner, "capture-pane", "-p", "-J", "-t", LOGIN_SESSION) or ""
 
 
+# The pane this agent opens, so the width a line is broken at is known rather
+# than inferred. Used to create the session and to read it back.
+LOGIN_PANE_WIDTH = 200
+# How many following lines a URL may be stitched from. The real ones run to a
+# few hundred characters in a 200-column pane, so two is already generous; the
+# cap is what stops a runaway from swallowing the rest of the screen.
+URL_CONTINUATION_LINES = 4
+# A continuation is a whole line of URL-safe characters and nothing else. Any
+# space means it is prose, which is what ends the stitch.
+URL_TAIL_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&\'()*+,;=%-]+$")
+
+
 def find_login_url(pane: str) -> Optional[str]:
+    """The verification URL, rejoined if the screen broke it across lines.
+
+    `capture-pane -J` joins lines *tmux* wrapped, which is not the same as
+    lines the program wrapped itself. Claude Code prints its own newline inside
+    the URL, so tmux sees two ordinary lines and leaves them apart: measured on
+    a live `setup-token`, a 346-character URL arrived as 200 characters plus a
+    separate 146. Long enough to look like a URL, and broken when clicked.
+    """
     match = LOGIN_URL_RE.search(pane)
     if not match:
         return None
-    # tmux wraps long lines; strip anything a wrap or a quote left attached.
-    return match.group(0).rstrip('"\'),.').strip()
+    url = match.group(0)
+    lines = pane.splitlines()
+    # Which line the match ended on; continuations can only follow that one.
+    at = next((i for i, line in enumerate(lines) if url in line), -1)
+    if at >= 0:
+        for offset in range(URL_CONTINUATION_LINES):
+            here = at + offset
+            # Only a line broken by the edge of the pane has a continuation.
+            # Without this, a bare "Esc" or "Continue" printed directly under a
+            # short URL is all URL-safe characters and gets appended to it.
+            if here >= len(lines) or len(lines[here]) < LOGIN_PANE_WIDTH:
+                break
+            tail = lines[here + 1].strip() if here + 1 < len(lines) else ""
+            if not tail or not URL_TAIL_RE.match(tail):
+                break
+            url += tail
+    # Strip anything a wrap or a quote left attached.
+    return url.rstrip('"\'),.').strip()
 
 
 def send_login_code(code: str, runner: Runner = subprocess.run) -> None:
