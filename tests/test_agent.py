@@ -1438,3 +1438,31 @@ def test_a_url_that_was_never_broken_is_unchanged():
     assert agent.find_login_url(whole) == \
         "https://claude.com/cai/oauth/authorize?code=true&state=abc"
     assert agent.find_login_url("nothing here") is None
+
+
+def test_a_ui_word_under_a_short_url_is_not_appended_to_it():
+    """The gap the first version of this had, and my own test hid.
+
+    "Esc" is entirely URL-safe characters. Under a URL that did NOT reach the
+    edge of the pane it is a label, not a continuation — and my first test put
+    a blank line between them, which is exactly the case a real screen does not
+    give you.
+    """
+    for word in ("Esc", "Continue", "Done", "c", "S256"):
+        pane = f"https://claude.com/cai/oauth/authorize?code=true&state=abc\n{word}\n"
+        assert agent.find_login_url(pane) == \
+            "https://claude.com/cai/oauth/authorize?code=true&state=abc", \
+            f"{word!r} is a label, not the rest of the URL"
+
+
+def test_a_continuation_needs_the_line_above_it_to_reach_the_edge():
+    """A line the pane broke is full width by definition. That is the evidence
+    a continuation exists; "looks like URL characters" is not."""
+    head = "https://claude.com/cai/oauth/authorize?code=true&client_id="
+    full = head + "x" * (agent.LOGIN_PANE_WIDTH - len(head))
+    assert len(full) == agent.LOGIN_PANE_WIDTH
+
+    # Broken by the edge: stitched.
+    assert agent.find_login_url(f"{full}\nstate=abc\n") == full + "state=abc"
+    # One character short of the edge: the next line is its own thing.
+    assert agent.find_login_url(f"{full[:-1]}\nstate=abc\n") == full[:-1]
