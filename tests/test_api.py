@@ -287,3 +287,80 @@ def test_unfinished_sign_ins_do_not_linger(server, cfg):
     from ccfleetd.notify import LogNotifier
     Monitor(store, cfg, LogNotifier()).check_all(now)
     assert store.get_login("node-a") is None, "stale sign-in and its code must be gone"
+
+
+def test_a_minted_token_survives_exactly_one_showing(server, cfg):
+    """End to end, over HTTP, on the path a real node takes.
+
+    The failure this guards against was not in the flow but beside it: the
+    credential was correctly handed over and deleted, while a copy of the whole
+    heartbeat that carried it sat in the archive for the retention window.
+    """
+    srv, store = server
+    token = store.add_node("node-a", "erik")
+    auth = {"Authorization": f"Bearer {token}"}
+    secret = "sk-ant-oat01-" + "Q" * 50
+
+    store.request_login("node-a", "", time.time(), kind="token")
+    status, _, _ = call(srv, "POST", "/api/heartbeat", {
+        "node_id": "node-a", "hostname": "h",
+        "reconcile": {"login": {"state": "ready", "secret": secret,
+                                "requested_at": store.get_login("node-a")["requested_at"]}},
+    }, auth)
+    assert status == 200
+
+    # It arrived where it was meant to.
+    assert store.get_login("node-a")["secret"] == secret
+    # And nowhere else. Every heartbeat ever stored for this node.
+    archived = json.dumps([dict(r) for r in
+                           store._conn.execute("SELECT payload FROM heartbeats")])
+    assert secret not in archived, "a credential must not outlive its one showing"
+    assert "ready" in archived, "the rest of the report is still kept"
+
+    # Shown once, over HTTP, to the operator.
+    admin = basic(cfg.admin_token)
+    status, body, _ = call(srv, "POST", "/actions/node/node-a/token-show",
+                           f"csrf={csrf_for(cfg)}".encode(),
+                           {**admin, "Content-Type": "application/x-www-form-urlencoded"})
+    assert status == 200 and secret.encode() in body
+
+    # A second press, or a refresh, gets a page that says so and no credential.
+    status, body, _ = call(srv, "POST", "/actions/node/node-a/token-show",
+                           f"csrf={csrf_for(cfg)}".encode(),
+                           {**admin, "Content-Type": "application/x-www-form-urlencoded"})
+    assert status == 200 and secret.encode() not in body
+    assert b"Nothing to show" in body
+    assert store.get_login("node-a") is None
+
+
+def test_the_secret_stops_travelling_once_it_has_been_handed_over(server, monkeypatch):
+    """The store redaction protects the archive. This protects everything else.
+
+    After the one call that needs it, the credential is dropped from the payload
+    the rest of the request works on — rule evaluation, alert messages, anything
+    added later. Those have no business seeing it, and the cheapest way to keep
+    it that way is for it not to be there.
+    """
+    srv, store = server
+    token = store.add_node("node-a", "erik")
+    secret = "sk-ant-oat01-" + "W" * 50
+    store.request_login("node-a", "", time.time(), kind="token")
+
+    seen = []
+    original = store.__class__.insert_heartbeat
+
+    def spy(self, node_id, ts, payload):
+        seen.append(json.dumps(payload))
+        return original(self, node_id, ts, payload)
+
+    monkeypatch.setattr(store.__class__, "insert_heartbeat", spy)
+    call(srv, "POST", "/api/heartbeat", {
+        "node_id": "node-a", "hostname": "h",
+        "reconcile": {"login": {"state": "ready", "secret": secret,
+                                "requested_at": store.get_login("node-a")["requested_at"]}},
+    }, {"Authorization": f"Bearer {token}"})
+
+    assert seen, "the heartbeat was recorded"
+    assert secret not in seen[0], "it was already gone before anything downstream saw it"
+    assert "ready" in seen[0]
+    assert store.get_login("node-a")["secret"] == secret, "and it still reached its one home"

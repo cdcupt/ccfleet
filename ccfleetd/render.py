@@ -433,6 +433,58 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "</body></html>")
 
 
+def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
+    """Shown once, and only once. This is the only time the token exists here.
+
+    It was minted on the node from the account that node is signed in as, rode
+    up on one heartbeat, and was deleted from the database before this page was
+    rendered. Nothing stores it afterwards: not this server, not the node.
+    """
+    if not token:
+        return (
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<title>ccfleet</title>"
+            f"<style>{CSS}</style></head><body><div class=\"page\">"
+            "<h1>Nothing to show</h1>"
+            "<p class=\"sub\">No token is waiting for this node. It was either already "
+            "shown \u2014 they are shown exactly once \u2014 or the attempt expired. "
+            "Start a new one from the fleet page.</p>"
+            "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
+            "</div></body></html>")
+    who = f" for {escape(owner)}" if owner else ""
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>ccfleet \u00b7 device token</title>"
+        f"<style>{CSS}</style></head><body><div class=\"page\">"
+        f"<h1>Device token{who}</h1>"
+        "<p class=\"sub\">Minted on <strong>" + escape(node_id) + "</strong>, from the "
+        "account that node is signed in as. Good for one year. "
+        "<strong>Copy it now</strong> \u2014 it is already gone from this server.</p>"
+        "<div class=\"ok-banner\">This is shown once. Closing or refreshing this page "
+        "loses it, and you would mint another.</div>"
+        f"<pre>{escape(token)}</pre>"
+        "<div class=\"card\">"
+        "<h2>Put it on a machine</h2>"
+        "<pre>mkdir -p ~/.local/bin\n"
+        "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/"
+        "ccfleet-connect.sh \\\n"
+        "  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect\n"
+        "ccfleet-connect          # paste the token; input is hidden</pre>"
+        "<p class=\"muted\">Then <code>claude</code> works there on that machine\u2019s own "
+        "files, with no login. <code>ccfleet-connect --status</code> checks it, "
+        "<code>--remove</code> undoes it.</p>"
+        "<p class=\"note\">Scope is <code>user:inference</code> only, which is Anthropic\u2019s "
+        "limit on long-lived tokens, not ours. So it runs Claude Code and it cannot drive "
+        "Remote Control \u2014 that needs a full sign-in, which is what the Sign in card does. "
+        "Revoke it from the Claude account it belongs to; there is nothing to revoke here, "
+        "because nothing here kept it.</p>"
+        "</div>"
+        "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
+        "</div></body></html>")
+
+
 # Signing in, from the console. The server carries a URL back and a code
 # forward; the credential itself is written by the CLI on the node and never
 # comes near this process.
@@ -441,6 +493,69 @@ LOGIN_WORDS = {
     "url_ready": "Open the link, approve, then paste the code below.",
     "code_sent": "Code sent to the node. Waiting for it to finish\u2026",
 }
+# The same three steps, said for the flow that ends in a credential you carry
+# away rather than one written on the node.
+TOKEN_WORDS = {
+    "requested": "Asking the node for a token\u2026",
+    "url_ready": "Open the link, approve, then paste the code below.",
+    "code_sent": "Code sent. Minting the token\u2026",
+    "ready": "Your token is ready.",
+}
+
+
+def _token_html(rows: list[Mapping[str, Any]], csrf: str,
+                logins: Mapping[str, Any]) -> str:
+    """Mint a credential for a machine that is not a node.
+
+    The node is already signed in, so it can mint one on request. This card is
+    how that is asked for and collected without anybody opening a terminal,
+    which was the last thing still requiring SSH.
+    """
+    if not rows:
+        return ""
+    items = []
+    # A flow needing a person goes first; the rest are just buttons.
+    ordered = sorted(rows, key=lambda r: not (logins.get(r["id"]) or {}).get("state"))
+    for row in ordered:
+        node = escape(row["id"])
+        login = logins.get(row["id"]) or {}
+        # This card owns only the token flow; a sign-in in flight belongs to the
+        # card above and must not be shown twice or cancelled from here.
+        state = login.get("state") or "" if login.get("kind") == "token" else ""
+
+        def form(action: str, inner: str, label: str, cls: str = "", node=node) -> str:
+            return (f'<form class="inline" method="post" '
+                    f'action="/actions/node/{node}/{action}">'
+                    f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
+                    f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+
+        if not state:
+            body = ('<span class="muted small">for a laptop, desktop or phone</span> '
+                    + form("token-start", "", "Get a device token"))
+        elif state == "ready":
+            body = (f'<span class="pill ok">{escape(TOKEN_WORDS["ready"])}</span> '
+                    + form("token-show", "", "Show it once", cls="primary"))
+        else:
+            body = f'<span class="login-say">{escape(TOKEN_WORDS.get(state, state))}</span>'
+            url = login.get("url") or ""
+            if is_login_url(url) and state in ("url_ready", "code_sent"):
+                body += (f'<a class="login-url" href="{escape(url)}" target="_blank" '
+                         f'rel="noopener noreferrer">{escape(url)}</a>')
+            if state == "url_ready":
+                body += form("login-code",
+                             '<input type="text" name="code" placeholder="paste the code" '
+                             'autocomplete="off" required>', "Send code")
+            body += " " + form("login-cancel", "", "Cancel", cls="danger")
+        cls = "row-line stacked" if state and state != "ready" else "row-line"
+        items.append(f'<div class="{cls}"><div class="row-name">{node}</div>'
+                     f'<div class="actions">{body}</div></div>')
+    return ('<h2>Device tokens</h2><div class="card">' + "".join(items) +
+            '<p class="note">'
+            "A device token lets <code>claude</code> run on your own machine, on that "
+            "machine's own files, with no login. It is minted on the node from the account "
+            "that node is signed in as, and it is shown here exactly once before this server "
+            "forgets it. One year, inference scope &mdash; Anthropic's limit, not ours, which "
+            "is why it cannot drive Remote Control.</p></div>")
 
 
 def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
@@ -450,11 +565,21 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
         return ""
     # A sign-in in flight is the only row here anyone has to act on. Settled rows
     # are reference; put the work first rather than making someone find it.
-    ordered = sorted(rows, key=lambda r: not (logins.get(r["id"]) or {}).get("state"))
+    def own(node_id: str) -> Mapping[str, Any]:
+        """The sign-in for this node, or nothing if the row is a token flow.
+
+        One table drives both flows, so each card has to say which rows are
+        its own. Without this a token in flight showed up here too, with a
+        Cancel button that would kill it from either place.
+        """
+        login = logins.get(node_id) or {}
+        return {} if login.get("kind") == "token" else login
+
+    ordered = sorted(rows, key=lambda r: not own(r["id"]).get("state"))
     items = []
     for row in ordered:
         node = escape(row["id"])
-        login = logins.get(row["id"]) or {}
+        login = own(row["id"])
         state = login.get("state") or ""
 
         def form(action: str, inner: str, label: str, cls: str = "", node=node) -> str:
@@ -713,6 +838,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         # the operator to sign you in would only move the bottleneck.
         + _usage_html(rows, now)
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
+        + (_token_html(rows, csrf, logins or {}) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + "</div></body></html>"
     )

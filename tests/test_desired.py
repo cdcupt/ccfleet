@@ -83,3 +83,35 @@ def test_only_a_real_sign_in_url_is_ever_linkable():
                 "https://user:pw@claude.ai/x",           # credentials hidden in it
                 "//claude.ai/x", "", "   ", None, 123, "https://claude.ai/" + "x" * 2000):
         assert not is_login_url(bad), bad
+
+
+def test_the_kind_handed_to_a_node_is_one_it_knows():
+    """This word picks which command the agent runs, so it is not passed through.
+
+    A row can carry a strange one: an older database, a future version writing
+    a kind this build has never heard of, or a corrupted value. Coercing beats
+    forwarding something the node has to guess about.
+    """
+    from ccfleetd.desired import desired_state
+    node = {"pinned_version": "", "rc_expected": False}
+
+    def kind_for(k):
+        d = desired_state(node, {"state": "requested", "requested_at": 1.0, "kind": k})
+        return d["login"]["kind"]
+
+    assert kind_for("token") == "token"
+    assert kind_for("login") == "login"
+    for strange in ("relay", "", None, 7, "TOKEN"):
+        assert kind_for(strange) == "login", f"{strange!r} must not reach the node"
+
+
+def test_a_waiting_token_stops_asking_the_node_for_anything():
+    """'ready' means a person has to collect it. Re-sending the block would
+    restart the flow and mint a second credential nobody asked for."""
+    from ccfleetd.desired import desired_state
+    node = {"pinned_version": "", "rc_expected": False}
+    ready = {"state": "ready", "requested_at": 1.0, "kind": "token",
+             "secret": "sk-ant-oat01-x"}
+    d = desired_state(node, ready)
+    assert d["login"] is None
+    assert d["poll_s"] == 300, "and the node goes back to its idle rhythm"

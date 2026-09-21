@@ -177,7 +177,28 @@ html{scroll-behavior:smooth}
   <p>Signing in. Nobody can do it for you, by design: your subscription login must complete through Anthropic's own flow. It happens once per node, during setup, and after that the node refreshes its own credentials. The dashboard raises <code>credentials_missing</code> or <code>token_expired</code> if it ever needs doing again.</p>
 
   <h3>The CLI on your own machines</h3>
-  <p>If you would rather run Claude Code locally &mdash; your own files, your own editor &mdash; you can, without signing in on each machine. You generate the token yourself, from your own account; nobody issues it to you and your operator never sees it.</p>
+  <p>If you would rather run Claude Code locally &mdash; your own files, your own editor &mdash; you can, without signing in on each machine.</p>
+  <p><strong>From the console, with no terminal.</strong> Open the dashboard, find your node under
+  <em>Device tokens</em>, and press <em>Get a device token</em>. Your node mints one from the account
+  it is already signed in as: a link appears, you approve it, you paste the code back, and the token
+  is shown <strong>once</strong>. Copy it then; it is deleted from the server before the page draws.</p>
+  <div class="note ok">
+    <p class="t">Why it is shown only once</p>
+    <p>The token rides up on a single heartbeat and is held only until somebody collects it. Reading
+    it deletes it in the same breath, so a refresh, a back button or a second tab gets nothing. If you
+    lose it, mint another &mdash; that is cheaper than a credential sitting in a database because
+    nobody came back for it. Unfinished attempts expire after fifteen minutes.</p>
+  </div>
+  <p>Then, on each machine you want it on:</p>
+  <pre><code>mkdir -p ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh \
+  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect
+ccfleet-connect            <span class="c"># paste the token; input is hidden</span></code></pre>
+  <p>After that <code>claude</code> simply works there, on that machine&rsquo;s own files. Nothing is
+  proxied and no base URL is set: Claude Code reads the token from the environment exactly as
+  Anthropic documents.</p>
+  <p><strong>Or generate it yourself</strong>, on a machine already signed in as that account &mdash;
+  same credential, no console involved:</p>
   <pre><code><span class="c"># once, on a machine already signed in as you</span>
 claude setup-token
 
