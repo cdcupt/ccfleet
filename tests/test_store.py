@@ -329,3 +329,30 @@ def test_redaction_leaves_an_ordinary_heartbeat_alone(store):
     rows = [dict(r) for r in store._conn.execute("SELECT payload FROM heartbeats")]
     blob = json.dumps(rows)
     assert "url_ready" in blob and "2.1.278" in blob and "hostname" in blob
+
+
+def test_a_late_report_cannot_land_on_the_attempt_that_replaced_it(store):
+    """The check and the write have to be one decision.
+
+    Checking `requested_at` outside the lock and then writing by node id alone
+    left a window: a console request landing between them replaces the row, and
+    the late report writes into an attempt it knows nothing about.
+    """
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    stale_at = store.get_login(n)["requested_at"]
+
+    # Somebody presses the button again; the first attempt is now history.
+    store.request_login(n, "", 200.0, kind="token")
+
+    # The old attempt finishes and reports its token, late.
+    store.record_login_progress(n, "ready", "", "", 210.0, stale_at,
+                                secret="sk-ant-oat01-stale")
+    row = store.get_login(n)
+    assert row["requested_at"] == 200.0, "the live attempt is untouched"
+    assert row["state"] == "requested" and row["secret"] == ""
+    assert store.take_secret(n) == "", "a stale token must not be collectable"
+
+    # And a late terminal state cannot delete the live attempt either.
+    store.record_login_progress(n, "done", "", "", 211.0, stale_at)
+    assert store.get_login(n) is not None, "the live attempt survives"

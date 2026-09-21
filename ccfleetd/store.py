@@ -290,64 +290,80 @@ class Store:
         `done` or `failed` arriving late from an attempt the owner already
         cancelled would delete the one they have just started — the node posts on
         its own schedule, so overtaking is normal, not exotic.
+
+        The whole decision is made under one lock, and every write is pinned to
+        the exact row that decision was made about. Checking outside the lock
+        and writing by node id alone left a window: a console request landing
+        between the two replaces the row, and a late report then lands on an
+        attempt it knows nothing about — planting a stale token under a request
+        that has not finished, or deleting one that has only just begun.
         """
         if state not in self.LOGIN_ACTIVE_STATES + ("ready", "done", "failed"):
             return
-        current = self.get_login(node_id)
-        if current is None:
-            return
-        if (requested_at is not None
-                and abs(float(current["requested_at"]) - float(requested_at)) > 1e-6):
-            log.debug("ignoring login progress for a superseded attempt on %s", node_id)
-            return
-        if state == "ready":
-            # A minted token. The row has to outlive the node's work, because
-            # nobody has seen the token yet — but only until someone does, which
-            # is what take_secret is for. The code is cleared in the same
-            # statement; it has served its purpose either way.
-            clean_secret = secret.strip()[:self.MAX_SECRET]
-            if not clean_secret:
-                # A 'ready' with nothing in it is a node reporting success and
-                # losing the one thing that made it useful. Treat it as failure
-                # rather than showing an empty box.
-                with self._lock:
+        with self._lock:
+            current = self.get_login(node_id)
+            if current is None:
+                return
+            # Tolerance to match the node's report, which has been through JSON
+            # and back; the exact stored value below is what pins the row.
+            if (requested_at is not None
+                    and abs(float(current["requested_at"]) - float(requested_at)) > 1e-6):
+                log.debug("ignoring login progress for a superseded attempt on %s", node_id)
+                return
+            # Pin every write to the exact row this decision was made about.
+            # While the lock above is held this cannot fail — the value is read
+            # and written inside it — so no test can reach it, and none pretends
+            # to. It is here so that moving or narrowing that lock later fails
+            # loudly rather than silently reopening the window this closed.
+            pin = (node_id, current["requested_at"])
+
+            if state == "ready":
+                # A minted token. The row has to outlive the node's work, because
+                # nobody has seen the token yet — but only until someone does,
+                # which is what take_secret is for. The code is cleared in the
+                # same statement; it has served its purpose either way.
+                clean_secret = secret.strip()[:self.MAX_SECRET]
+                if not clean_secret:
+                    # A 'ready' with nothing in it is a node reporting success
+                    # and losing the one thing that made it useful. Treat it as
+                    # failure rather than showing an empty box.
                     self._conn.execute(
                         "UPDATE logins SET state='failed', code='', secret='', "
-                        "detail=?, updated_at=? WHERE node_id = ?",
-                        ("the node finished but reported no token", now, node_id))
-                    self._conn.commit()
+                        "detail=?, updated_at=? WHERE node_id = ? AND requested_at = ?",
+                        ("the node finished but reported no token", now, *pin))
+                else:
+                    self._conn.execute(
+                        "UPDATE logins SET state='ready', code='', secret=?, "
+                        "detail='', updated_at=? WHERE node_id = ? AND requested_at = ?",
+                        (clean_secret, now, *pin))
+                self._conn.commit()
                 return
-            with self._lock:
+
+            if state in ("done", "failed"):
+                # Nothing useful survives a finished login, and the code must not
+                # linger in the database once it has been used.
                 self._conn.execute(
-                    "UPDATE logins SET state='ready', code='', secret=?, "
-                    "detail='', updated_at=? WHERE node_id = ?",
-                    (clean_secret, now, node_id))
+                    "DELETE FROM logins WHERE node_id = ? AND requested_at = ?", pin)
                 self._conn.commit()
-            return
-        if state in ("done", "failed"):
-            # Nothing useful survives a finished login, and the code must not
-            # linger in the database once it has been used.
-            with self._lock:
-                self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
-                self._conn.commit()
-            return
-        # A URL that is not a sign-in URL is dropped rather than stored. It would
-        # reach an operator as a clickable link, and escaping does not make a
-        # javascript: scheme safe.
-        clean = url.strip()[:self.MAX_LOGIN_URL]
-        if clean and not is_login_url(clean):
-            log.warning("node %s offered a login url that is not one; dropping it", node_id)
-            clean = ""
-        # Once the node says it has typed the code, the copy here has served its
-        # only purpose. Clearing it in the same statement means there is no
-        # window where a consumed code is still sitting in the database.
-        clear_code = state == "code_sent"
-        with self._lock:
+                return
+
+            # A URL that is not a sign-in URL is dropped rather than stored. It
+            # would reach an operator as a clickable link, and escaping does not
+            # make a javascript: scheme safe.
+            clean = url.strip()[:self.MAX_LOGIN_URL]
+            if clean and not is_login_url(clean):
+                log.warning("node %s offered a login url that is not one; dropping it",
+                            node_id)
+                clean = ""
+            # Once the node says it has typed the code, the copy here has served
+            # its only purpose. Clearing it in the same statement means there is
+            # no window where a consumed code is still sitting in the database.
+            clear_code = state == "code_sent"
             self._conn.execute(
                 "UPDATE logins SET state = ?, url = ?, detail = ?, updated_at = ?"
                 + (", code = ''" if clear_code else "") +
-                " WHERE node_id = ?",
-                (state, clean, detail.strip()[:200], now, node_id))
+                " WHERE node_id = ? AND requested_at = ?",
+                (state, clean, detail.strip()[:200], now, *pin))
             self._conn.commit()
 
     def take_secret(self, node_id: str) -> str:
