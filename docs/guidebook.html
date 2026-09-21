@@ -583,6 +583,7 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
       <tr><td><code>token_stale</code></td><td><span class="pill warn">warn</span></td><td>Credentials untouched for a day; usually just an idle node</td><td>owner, when convenient</td></tr>
       <tr><td><code>version_mismatch</code></td><td><span class="pill warn">warn</span></td><td>Running version differs from the pin</td><td>operator pins or owner upgrades</td></tr>
       <tr><td><code>disk_high</code></td><td><span class="pill warn">warn</span> / <span class="pill bad">critical</span></td><td>85% / 95% used</td><td>owner</td></tr>
+      <tr><td><code>quota_high_session</code><br><code>quota_high_week</code></td><td><span class="pill warn">warn</span> / <span class="pill bad">critical</span></td><td>75% / 90% of that Claude usage window used. The two windows alert separately, so a fresh session cannot hide a full week. A reading older than two hours is ignored rather than reported as current</td><td>owner &mdash; slow down, or wait for the reset the message names</td></tr>
       <tr><td><code>egress_changed</code></td><td><span class="pill warn">warn</span></td><td>Public IP differs from the previous heartbeat</td><td>operator checks the provider</td></tr>
       <tr><td><code>remote_control_down</code></td><td><span class="pill warn">warn</span></td><td>Expected service not active. Turn the expectation on or off any time with <code>ccfleetd node rc-expected &lt;id&gt; on|off</code></td><td>owner restarts it</td></tr>
     </tbody>

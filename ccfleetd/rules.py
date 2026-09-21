@@ -113,6 +113,49 @@ def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) ->
     return findings
 
 
+WINDOW_WORDS = {"session": "5-hour window", "week": "weekly window"}
+# A reading older than this is not evidence about now. The agent refreshes every
+# 30 minutes, so two missed refreshes means something is wrong with the read
+# rather than with the quota, and alerting on it would be alerting on the wrong
+# thing.
+QUOTA_MAX_AGE_S = 2 * 60 * 60
+
+
+def _quota_findings(payload: Mapping[str, Any], now: float, cfg: Config) -> list[Finding]:
+    """Warn before a window runs out, not after.
+
+    The console has shown these two numbers since the windows were added, which
+    only helps someone already looking at it. This is the half that reaches you.
+    """
+    quota = payload.get("quota")
+    if not isinstance(quota, Mapping):
+        return []
+    checked = quota.get("checked_at")
+    if isinstance(checked, (int, float)) and not isinstance(checked, bool):
+        if now - checked > QUOTA_MAX_AGE_S:
+            # Stale. Say nothing rather than report an old number as current.
+            return []
+    findings = []
+    for name, words in WINDOW_WORDS.items():
+        window = quota.get(name)
+        if not isinstance(window, Mapping):
+            continue
+        used = window.get("used_pct")
+        if not isinstance(used, (int, float)) or isinstance(used, bool):
+            continue
+        level = (LEVEL_CRITICAL if used >= cfg.quota_crit_pct else
+                 LEVEL_WARN if used >= cfg.quota_warn_pct else None)
+        if level is None:
+            continue
+        resets = window.get("resets")
+        tail = f", resets {resets}" if isinstance(resets, str) and resets else ""
+        # The rule name carries the window, so the two do not collapse into one
+        # alert that flaps as whichever is worse changes.
+        findings.append(Finding(f"quota_high_{name}", level,
+                                f"{words} {used:.0f}% used{tail}"))
+    return findings
+
+
 def _disk_findings(payload: Mapping[str, Any], cfg: Config) -> list[Finding]:
     used = _get(payload, "disk", "used_pct")
     if not isinstance(used, (int, float)):
@@ -162,6 +205,7 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
     findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg)
     findings += _disk_findings(payload, cfg)
+    findings += _quota_findings(payload, now, cfg)
     findings += _egress_findings(payload, prev_payload)
     findings += _remote_control_findings(node, payload)
     return tuple(findings)
