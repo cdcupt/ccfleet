@@ -538,10 +538,8 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
     # the top of the frame — the one height that implies a maximum. Sit it in
     # the middle instead, where it reads as "unvarying" and not as "full".
     flat = peak == min(values)
-    def y_for(v: float) -> float:
-        share = 0.5 if flat else v / peak
-        return height - 3 - share * (height - 8)
-    coords = [(i * step, y_for(v)) for i, v in enumerate(values)]
+    coords = [(i * step, height - 3 - (0.5 if flat else v / peak) * (height - 8))
+              for i, v in enumerate(values)]
     line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     area = f"0,{height} " + line + f" {coords[-1][0]:.1f},{height}"
     last_x, last_y = coords[-1]
