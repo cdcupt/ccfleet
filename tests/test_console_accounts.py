@@ -82,19 +82,26 @@ def test_an_owners_dashboard_does_not_mention_the_other_node(fleet):
     assert "node-a" in page and "node-b" not in page
 
 
-def test_an_owner_gets_their_own_sign_in_and_nothing_else(fleet):
-    """Signing in is the one thing an owner must be able to do for themselves.
+def test_an_owner_gets_their_own_credentials_and_nothing_else(fleet):
+    """An owner may do the two things that are about their own access.
 
-    Everything that manages the fleet stays with the operator.
+    Signing their node in, and minting a token for their own machines. Both
+    are credentials for the account they already own, and routing either
+    through the operator would only move the bottleneck. Everything that
+    manages the fleet stays with the operator.
     """
     srv, _, _ = fleet
     _, raw = call(srv, "GET", "/", headers=creds("alice", "alice-pw"))
     page = raw.decode()
     assert "Add a node" not in page and "Manage nodes" not in page
-    # The only forms are the sign-in ones, and only for their own node.
     actions = set(re.findall(r'action="/actions/node/([^/]+)/([^"]+)"', page))
     assert actions, "an owner should be able to start their own sign-in"
-    assert {a for _, a in actions} <= {"login-start", "login-code", "login-cancel"}
+    assert {a for _, a in actions} <= {"login-start", "login-code", "login-cancel",
+                                       "token-start", "token-show"}
+    assert "token-start" in {a for _, a in actions}, "their own device token"
+    # None of the fleet-management actions are offered, whatever else is.
+    assert not {a for _, a in actions} & {"disable", "enable", "pin", "rc-on", "rc-off",
+                                          "rotate-token", "remove"}
     assert {n for n, _ in actions} == {"node-a"}, "only their own node"
 
 

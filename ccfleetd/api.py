@@ -22,7 +22,7 @@ from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
-from .render import build_rows, render_add_result, render_dashboard
+from .render import build_rows, render_add_result, render_dashboard, render_token_result
 from .store import Store, StoreError
 
 log = logging.getLogger("ccfleetd.api")
@@ -257,7 +257,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     node["id"], str(login.get("state")), str(login.get("url") or ""),
                     str(login.get("detail") or ""), now,
                     requested_at if isinstance(requested_at, (int, float))
-                    and not isinstance(requested_at, bool) else None)
+                    and not isinstance(requested_at, bool) else None,
+                    secret=str(login.get("secret") or ""))
             events = ctx.monitor.record_heartbeat(node, payload, now)
             self._json(200, {
                 "ok": True,
@@ -273,7 +274,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         # the whole point is that they no longer need SSH to reach their node, and
         # routing it through the operator would just move the bottleneck. These
         # act only on a node the caller already owns; everything else stays admin.
-        OWNER_ACTIONS = ("login-start", "login-code", "login-cancel")
+        # A device token is the owner's own credential for their own machines,
+        # minted from the account their node already holds. Needing an operator
+        # to press it would move exactly the bottleneck this removes.
+        OWNER_ACTIONS = ("login-start", "login-code", "login-cancel",
+                         "token-start", "token-show")
 
         def _may_act_on(self, node_id: str, action: str) -> bool:
             """Authorisation for one action on one node."""
@@ -336,10 +341,22 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 ctx.store.set_pinned_version(node_id, form.get("version", "").strip())
             elif action == "login-start":
                 ctx.store.request_login(node_id, form.get("email", ""), time.time())
+            elif action == "token-start":
+                ctx.store.request_login(node_id, "", time.time(), kind="token")
             elif action == "login-code":
                 ctx.store.submit_login_code(node_id, form.get("code", ""), time.time())
             elif action == "login-cancel":
                 ctx.store.clear_login(node_id)
+            elif action == "token-show":
+                # Read-and-delete: the credential is shown on this response and
+                # is gone from the database before it is rendered, so a refresh
+                # or a second tab gets nothing.
+                secret = ctx.store.take_secret(node_id)
+                node = ctx.store.get_node(node_id) or {}
+                self._send(200, render_token_result(node_id, secret, ctx.cfg,
+                                                    node.get("owner", "")).encode("utf-8"),
+                           HTML_HEADERS)
+                return
             elif action == "rotate-token":
                 token = ctx.store.rotate_token(node_id)
                 node = ctx.store.get_node(node_id) or {}

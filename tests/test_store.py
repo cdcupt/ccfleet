@@ -187,3 +187,105 @@ def test_the_login_path_is_safe_under_concurrent_use(store):
     for t in threads:
         t.join()
     assert errors == []
+
+
+# -- device tokens ----------------------------------------------------------------
+
+def _node(store, node_id="node-a"):
+    store.add_node(node_id, "erik")
+    return node_id
+
+
+def test_a_token_request_is_a_sign_in_with_a_different_errand(store):
+    """One table drives both flows; the kind is what tells them apart."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    assert store.get_login(n)["kind"] == "token"
+    # The default stays the sign-in, so every existing caller is unchanged.
+    store.request_login(n, "e@x.com", 200.0)
+    assert store.get_login(n)["kind"] == "login"
+    with pytest.raises(StoreError):
+        store.request_login(n, "", 300.0, kind="relay")
+
+
+def test_a_minted_token_is_held_until_somebody_takes_it(store):
+    """'done' deletes the row, which would throw away the thing just minted."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "code_sent", "", "", 110.0)
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-" + "a" * 40)
+    row = store.get_login(n)
+    assert row["state"] == "ready" and row["secret"].startswith("sk-ant-oat01-")
+    assert row["code"] == "", "the verification code has served its purpose"
+
+
+def test_a_token_is_shown_exactly_once(store):
+    """The whole contract. A refresh or a second tab must get nothing."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-secret")
+    assert store.take_secret(n) == "sk-ant-oat01-secret"
+    assert store.take_secret(n) == "", "second read gets nothing"
+    assert store.get_login(n) is None, "and the row is gone, not merely blanked"
+
+
+def test_taking_a_secret_that_is_not_ready_yields_nothing(store):
+    n = _node(store)
+    assert store.take_secret(n) == "", "no attempt at all"
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "url_ready", "https://claude.com/x", "", 110.0)
+    assert store.take_secret(n) == "", "mid-flight is not ready"
+    assert store.get_login(n) is not None, "and taking must not destroy it"
+
+
+def test_a_ready_with_no_token_is_a_failure_not_an_empty_box(store):
+    """The node reporting success while losing the one thing that mattered."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="   ")
+    row = store.get_login(n)
+    assert row["state"] == "failed" and row["secret"] == ""
+    assert "no token" in row["detail"]
+
+
+def test_a_stored_token_is_bounded(store):
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="s" * 5000)
+    assert len(store.get_login(n)["secret"]) == store.MAX_SECRET
+
+
+def test_an_unfinished_token_expires_like_any_other_attempt(store):
+    """A credential must not sit in the database because nobody came back."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-x")
+    assert store.expire_logins(130.0) == 1
+    assert store.get_login(n) is None
+
+
+def test_a_database_written_before_these_columns_still_opens(tmp_path):
+    """CREATE TABLE IF NOT EXISTS does nothing to a table that already exists."""
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE logins (node_id TEXT PRIMARY KEY, requested_at REAL NOT NULL,
+            email TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'requested',
+            url TEXT NOT NULL DEFAULT '', code TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL);
+        INSERT INTO logins (node_id, requested_at, updated_at) VALUES ('old-node', 1.0, 1.0);
+    """)
+    con.commit()
+    con.close()
+
+    s = Store(path)
+    try:
+        row = s.get_login("old-node")
+        assert row["kind"] == "login", "an old row reads as the flow it was"
+        assert row["secret"] == ""
+        s.add_node("old-node", "erik")
+        s.request_login("old-node", "", 2.0, kind="token")
+        assert s.get_login("old-node")["kind"] == "token"
+    finally:
+        s.close()

@@ -1222,3 +1222,130 @@ def test_quota_home_will_not_hand_back_something_that_is_not_a_directory(monkeyp
 
     monkeypatch.setattr(agent.Path, "home", staticmethod(boom))
     assert agent._quota_home() is None
+
+
+# -- device tokens ----------------------------------------------------------------
+
+TOKEN_PANE = """\
+ Login successful. Here is your long-lived token:
+
+   sk-ant-oat01-Xk9Qp2vR7tLmN4sB1wYc8Fh3JdKa6ZgE0uTiOr5nVxMabcdef-_12345
+
+ Store it somewhere safe; it will not be shown again.
+"""
+
+
+def test_find_token_reads_the_credential_off_the_screen():
+    got = agent.find_token(TOKEN_PANE)
+    assert got is not None and got.startswith("sk-ant-oat01-") and len(got) > 40
+    # Nothing that merely looks tokenish counts.
+    assert agent.find_token("no token here") is None
+    assert agent.find_token("sk-ant-oat01-short") is None, "too short to be one"
+    assert agent.find_token("sk-ant-api03-" + "a" * 40) is None, "a different credential"
+
+
+def test_start_login_runs_a_different_command_for_a_token(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    seen = []
+
+    def tmux(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    agent.start_login("e@x.com", tmux, kind="login")
+    started = [a for a in seen if "new-session" in a][-1]
+    assert "auth login --claudeai" in started[-1] and "--email" in started[-1]
+
+    seen.clear()
+    agent.start_login("e@x.com", tmux, kind="token")
+    started = [a for a in seen if "new-session" in a][-1]
+    assert "setup-token" in started[-1]
+    assert "auth" not in started[-1], "a token flow is not a sign-in"
+    assert "--email" not in started[-1], "setup-token takes no email"
+
+
+def _reconcile_token(phase_state, pane, auth_logged_in=True):
+    """Drive one reconcile step of a token flow with a scripted pane."""
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        out = ""
+        if "capture-pane" in argv:
+            out = pane
+        elif argv[:2] == ["/usr/bin/claude", "auth"]:
+            out = '{"loggedIn": %s}' % ("true" if auth_logged_in else "false")
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    desired = {"login": {"requested_at": 5.0, "kind": "token", "code": "abc"}}
+    state = {"login": {"requested_at": 5.0, "kind": "token", "phase": phase_state}}
+    return agent.reconcile_login(desired, state, runner), calls
+
+
+def test_a_token_flow_reports_the_credential_not_a_login(monkeypatch):
+    """A token flow cannot ask `auth status` whether it worked: the node was
+    already signed in and nothing about that changes. The credential on the
+    screen is the only evidence."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    (progress, _), calls = _reconcile_token("code_sent", TOKEN_PANE)
+    assert progress["state"] == "ready"
+    assert progress["secret"].startswith("sk-ant-oat01-")
+    assert not any(a[:2] == ["/usr/bin/claude", "auth"] for a in calls), \
+        "asking auth status here would answer a question nobody posed"
+    assert any("kill-session" in a for a in calls), "the pane holding a token is closed"
+
+
+def test_a_token_flow_keeps_waiting_while_the_screen_is_blank(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    (progress, state), _ = _reconcile_token("code_sent", "still working...")
+    assert progress is None, "nothing new to say yet"
+    assert state["login"]["phase"] == "code_sent"
+
+
+def test_a_rejected_code_fails_the_token_flow(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    (progress, state), _ = _reconcile_token("code_sent", "Error: invalid code")
+    assert progress["state"] == "failed" and "not accepted" in progress["detail"]
+    assert "login" not in state, "a failed attempt is not left in flight"
+
+
+def test_the_agent_never_keeps_the_token_it_just_reported(monkeypatch):
+    """It rides up on one heartbeat and is gone from the node's state."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    (progress, state), _ = _reconcile_token("code_sent", TOKEN_PANE)
+    assert progress["secret"]
+    assert "login" not in state
+    assert "sk-ant-oat01" not in json.dumps(state)
+
+
+def test_an_unknown_kind_is_treated_as_a_sign_in(monkeypatch):
+    """This word picks which command runs, so a strange one must not be guessed."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    agent.reconcile_login({"login": {"requested_at": 9.0, "kind": "relay"}}, {}, runner)
+    started = [a for a in seen if "new-session" in a][-1]
+    assert "auth login" in started[-1] and "setup-token" not in started[-1]
+
+
+def test_start_login_only_mints_a_token_when_asked_in_exactly_those_words(monkeypatch):
+    """reconcile_login coerces the kind before it gets here, so this guard is
+    never reached through that path — which is exactly why it needs its own
+    test. Minting a credential is not a thing to do on a near-match."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    seen = []
+
+    def tmux(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    for strange in ("relay", "Token", "tokens", "", None):
+        seen.clear()
+        agent.start_login(None, tmux, kind=strange)
+        started = [a for a in seen if "new-session" in a][-1]
+        assert "setup-token" not in started[-1], f"{strange!r} must not mint a credential"
+        assert "auth login" in started[-1]

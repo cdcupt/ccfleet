@@ -61,7 +61,13 @@ CREATE TABLE IF NOT EXISTS logins (
     url TEXT NOT NULL DEFAULT '',
     code TEXT NOT NULL DEFAULT '',
     detail TEXT NOT NULL DEFAULT '',
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    -- 'login' signs the node in; 'token' mints a device credential the owner
+    -- carries away. Same dance, different command, so one table drives both.
+    kind TEXT NOT NULL DEFAULT 'login',
+    -- Only ever set for kind='token', and only between the node reporting it
+    -- and the console showing it once. See take_secret().
+    secret TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS heartbeats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,7 +149,23 @@ class Store:
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA)
+            # CREATE TABLE IF NOT EXISTS does nothing to a table that already
+            # exists, so a database written before these columns existed keeps
+            # the old shape. Add them here rather than asking anyone to migrate
+            # by hand; both are defaulted, so old rows stay valid.
+            self._add_missing_columns("logins", {
+                "kind": "TEXT NOT NULL DEFAULT 'login'",
+                "secret": "TEXT NOT NULL DEFAULT ''",
+            })
             self._conn.commit()
+
+    def _add_missing_columns(self, table: str, columns: dict[str, str]) -> None:
+        """Idempotent ALTER TABLE ADD COLUMN. Called with literals only."""
+        have = {row["name"] for row in
+                self._conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in have:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     def close(self) -> None:
         with self._lock:
@@ -186,21 +208,36 @@ class Store:
     # progress the other. It never holds the resulting credential.
 
     LOGIN_ACTIVE_STATES = ("requested", "url_ready", "code_sent")
+    # 'ready' means the node's work is done and a minted token is waiting for
+    # someone to collect it. It is not active — the node has nothing left to do
+    # — but the row must survive until it is shown, which 'done' does not.
+    LOGIN_KINDS = ("login", "token")
+    MAX_SECRET = 512
     MAX_LOGIN_CODE = 512
     MAX_LOGIN_URL = 1024
 
-    def request_login(self, node_id: str, email: str, now: float) -> None:
-        """Ask a node to start a sign-in, replacing any attempt already in flight."""
+    def request_login(self, node_id: str, email: str, now: float,
+                      kind: str = "login") -> None:
+        """Ask a node to start a sign-in, replacing any attempt already in flight.
+
+        ``kind`` picks what the node runs: a sign-in for the node itself, or
+        ``claude setup-token`` to mint a credential the owner carries to their
+        own machine. The dance is identical — a URL out, a code back — so one
+        row drives both rather than a second near-copy of this table.
+        """
+        if kind not in self.LOGIN_KINDS:
+            raise StoreError(f"unknown sign-in kind: {kind}")
         if self.get_node(node_id) is None:
             raise StoreError(f"unknown node: {node_id}")
         with self._lock:
             self._conn.execute(
                 "INSERT INTO logins (node_id, requested_at, email, state, url, code, "
-                "detail, updated_at) VALUES (?, ?, ?, 'requested', '', '', '', ?) "
+                "detail, updated_at, kind, secret) "
+                "VALUES (?, ?, ?, 'requested', '', '', '', ?, ?, '') "
                 "ON CONFLICT(node_id) DO UPDATE SET requested_at=excluded.requested_at, "
                 "email=excluded.email, state='requested', url='', code='', detail='', "
-                "updated_at=excluded.updated_at",
-                (node_id, now, email.strip()[:200], now))
+                "updated_at=excluded.updated_at, kind=excluded.kind, secret=''",
+                (node_id, now, email.strip()[:200], now, kind))
             self._conn.commit()
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
@@ -225,7 +262,8 @@ class Store:
 
     def record_login_progress(self, node_id: str, state: str, url: str,
                               detail: str, now: float,
-                              requested_at: Optional[float] = None) -> None:
+                              requested_at: Optional[float] = None,
+                              secret: str = "") -> None:
         """What the node says is happening. Terminal states delete the row.
 
         A report is matched against the attempt it belongs to. Without that, a
@@ -233,7 +271,7 @@ class Store:
         cancelled would delete the one they have just started — the node posts on
         its own schedule, so overtaking is normal, not exotic.
         """
-        if state not in self.LOGIN_ACTIVE_STATES + ("done", "failed"):
+        if state not in self.LOGIN_ACTIVE_STATES + ("ready", "done", "failed"):
             return
         current = self.get_login(node_id)
         if current is None:
@@ -241,6 +279,30 @@ class Store:
         if (requested_at is not None
                 and abs(float(current["requested_at"]) - float(requested_at)) > 1e-6):
             log.debug("ignoring login progress for a superseded attempt on %s", node_id)
+            return
+        if state == "ready":
+            # A minted token. The row has to outlive the node's work, because
+            # nobody has seen the token yet — but only until someone does, which
+            # is what take_secret is for. The code is cleared in the same
+            # statement; it has served its purpose either way.
+            clean_secret = secret.strip()[:self.MAX_SECRET]
+            if not clean_secret:
+                # A 'ready' with nothing in it is a node reporting success and
+                # losing the one thing that made it useful. Treat it as failure
+                # rather than showing an empty box.
+                with self._lock:
+                    self._conn.execute(
+                        "UPDATE logins SET state='failed', code='', secret='', "
+                        "detail=?, updated_at=? WHERE node_id = ?",
+                        ("the node finished but reported no token", now, node_id))
+                    self._conn.commit()
+                return
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE logins SET state='ready', code='', secret=?, "
+                    "detail='', updated_at=? WHERE node_id = ?",
+                    (clean_secret, now, node_id))
+                self._conn.commit()
             return
         if state in ("done", "failed"):
             # Nothing useful survives a finished login, and the code must not
@@ -267,6 +329,28 @@ class Store:
                 " WHERE node_id = ?",
                 (state, clean, detail.strip()[:200], now, node_id))
             self._conn.commit()
+
+    def take_secret(self, node_id: str) -> str:
+        """Return a minted token once, and delete it in the same breath.
+
+        Read and delete under one lock, so a refresh, a back button or a second
+        tab cannot show a credential that was meant to be seen exactly once.
+
+        Not `DELETE ... RETURNING`, which would say this in one statement: that
+        needs SQLite 3.35 and this project claims Python 3.9, where Debian 11
+        still ships 3.34. The lock is held across both statements and every
+        other caller takes the same one, so the pair is already atomic against
+        anything else in this process.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT secret FROM logins WHERE node_id = ? AND state = 'ready'",
+                (node_id,)).fetchone()
+            if row is None:
+                return ""
+            self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+            self._conn.commit()
+        return str(row["secret"])
 
     def clear_login(self, node_id: str) -> None:
         with self._lock:

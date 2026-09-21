@@ -18,6 +18,7 @@ MAX_NUMBER = 10 ** 15
 # parameter: measured at 496 characters against a live node. Capped at MAX_STR it
 # arrives truncated, which is worse than absent — it still looks like a URL.
 MAX_URL = 1024
+MAX_SECRET = 512
 # Usage is counted from local transcripts on the node. What arrives is token
 # counts, per-day totals and model names; the transcripts themselves hold
 # conversation content and never leave the machine.
@@ -164,6 +165,10 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
             "url": _str(login.get("url"), MAX_URL),
             "detail": _str(login.get("detail")),
             "requested_at": _num(login.get("requested_at")),
+            # A minted device token on its way to the person who asked for it.
+            # Bounded like every other string a node sends, and never logged:
+            # the one place it is rendered is the card that shows it once.
+            "secret": _str(login.get("secret"), MAX_SECRET),
         }}
     if has_upgrade:
         # What the agent did about the last desired state it was handed. Reported

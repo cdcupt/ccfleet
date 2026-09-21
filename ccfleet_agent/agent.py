@@ -936,13 +936,37 @@ def login_email(raw: Any) -> Optional[str]:
     return candidate if EMAIL_RE.match(candidate) else None
 
 
-def start_login(email: Optional[str], runner: Runner = subprocess.run) -> bool:
-    """Open a fresh pane running `claude auth login`. True if it started."""
+# A setup-token credential. Anthropic's prefix, and long enough that a short
+# lookalike in the surrounding text cannot be mistaken for one.
+TOKEN_RE = re.compile(r"\bsk-ant-oat[0-9]{2}-[A-Za-z0-9_-]{20,}")
+
+
+def find_token(pane: str) -> Optional[str]:
+    """The minted credential, read off the screen that printed it."""
+    match = TOKEN_RE.search(pane)
+    return match.group(0) if match else None
+
+
+def start_login(email: Optional[str], runner: Runner = subprocess.run,
+                kind: str = "login") -> bool:
+    """Open a fresh pane running the flow the console asked for. True if started.
+
+    Both flows are the same shape — a URL to approve and a code to type back —
+    so they share the pane, the reader and the code path. They differ in the
+    command and in what comes out at the end: a sign-in leaves a credential on
+    the node, a token prints one for the owner to carry away.
+    """
     path = find_claude()
     if not path:
         return False
     _tmux(runner, "kill-session", "-t", LOGIN_SESSION)
-    argv = [path, "auth", "login", "--claudeai"]
+    if kind == "token":
+        # No --email: setup-token does not take one, and the account is decided
+        # by the login this node already has.
+        argv = [path, "setup-token"]
+        email = None
+    else:
+        argv = [path, "auth", "login", "--claudeai"]
     if email:
         argv += ["--email", email]
     # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
@@ -1006,16 +1030,21 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
         return None, new_state
 
     requested_at = wanted.get("requested_at")
+    # The server decides which flow this is; an unknown word means sign-in
+    # rather than a guess, because this picks the command that gets run.
+    kind = "token" if wanted.get("kind") == "token" else "login"
     if mine.get("requested_at") != requested_at:
         # A new request supersedes anything in flight, including a stuck one.
-        if not start_login(login_email(wanted.get("email")), runner):
+        if not start_login(login_email(wanted.get("email")), runner, kind):
             new_state["login"] = {"requested_at": requested_at, "phase": "failed"}
             return {"state": "failed", "detail": "claude not found on this node",
                     "requested_at": requested_at}, new_state
-        new_state["login"] = {"requested_at": requested_at, "phase": "started"}
+        new_state["login"] = {"requested_at": requested_at, "phase": "started",
+                              "kind": kind}
         return {"state": "requested", "requested_at": requested_at}, new_state
 
     phase = mine.get("phase")
+    kind = mine.get("kind") or kind
 
     if phase == "started":
         url = find_login_url(read_login_pane(runner))
@@ -1031,6 +1060,25 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
         send_login_code(code.strip(), runner)
         new_state["login"] = {**mine, "phase": "code_sent"}
         return {"state": "code_sent", "requested_at": requested_at}, new_state
+
+    if phase == "code_sent" and kind == "token":
+        # A token flow has no auth state to check: the node was already signed
+        # in, and nothing about it changes. The credential itself is the only
+        # evidence the flow worked, and it exists only on the screen.
+        pane = read_login_pane(runner)
+        token = find_token(pane)
+        if token:
+            end_login(runner)
+            new_state.pop("login", None)
+            # The token goes up once, to be shown once. It is not kept here.
+            return {"state": "ready", "secret": token,
+                    "requested_at": requested_at}, new_state
+        if re.search(r"(?i)\b(invalid|expired|failed|error)\b", pane):
+            end_login(runner)
+            new_state.pop("login", None)
+            return {"state": "failed", "detail": "the code was not accepted",
+                    "requested_at": requested_at}, new_state
+        return None, new_state
 
     if phase == "code_sent":
         # The CLI is the judge of whether the sign-in worked, not the pane text.

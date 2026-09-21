@@ -23,6 +23,12 @@ from typing import Any, Optional
 VERSION_CHANNELS = ("stable", "latest")
 MAX_VERSION_LEN = 40
 
+# What a node may be asked to run. "login" signs the node itself in; "token"
+# mints a one-year device credential the owner takes to their own machine.
+# Anything else is coerced to "login" rather than forwarded: this word decides
+# which command the agent runs.
+LOGIN_KINDS = ("login", "token")
+
 
 # The verification URL is supplied by a node and then shown to an operator as a
 # link. Escaping makes it safe as *text*; it does nothing about the scheme, and
@@ -92,9 +98,13 @@ def _login_block(login: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]
     progress. The code is only present once someone has pasted one.
     """
     if not login or login.get("state") not in ("requested", "url_ready", "code_sent"):
+        # 'ready' is deliberately absent: a minted token is waiting for a person,
+        # not for the node. Sending the block again would restart the flow.
         return None
+    kind = login.get("kind")
     block = {"requested_at": login.get("requested_at"),
-             "email": login.get("email") or ""}
+             "email": login.get("email") or "",
+             "kind": kind if kind in LOGIN_KINDS else "login"}
     code = login.get("code") or ""
     if code and login.get("state") == "code_sent":
         block["code"] = code
