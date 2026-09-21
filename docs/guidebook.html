@@ -535,23 +535,35 @@ work                 e***@example.org             keychain?  /Users/alice/.claud
   <div class="table-wrap"><table>
     <thead><tr><th>Column</th><th>Meaning</th><th>Good looks like</th></tr></thead>
     <tbody>
-      <tr><td>Status</td><td>Worst open alert for the node</td><td><span class="pill ok">ok</span></td></tr>
+      <tr><td>Status</td><td>Worst open alert for the node, also drawn as a rail down the row's left edge</td><td><span class="pill ok">ok</span></td></tr>
       <tr><td>Last seen</td><td>Age of the newest heartbeat</td><td>under 6 min</td></tr>
       <tr><td>Claude Code</td><td>Running version, and the pin when set</td><td>version equals pin; no "≠ pinned"</td></tr>
       <tr><td>Egress IP</td><td>Public address the node answers from</td><td>stable from day to day</td></tr>
       <tr><td>Disk / Load</td><td>Home filesystem usage and 1-minute load</td><td>disk under 85%</td></tr>
       <tr><td>Login</td><td>Whether a login exists, when Claude Code last refreshed it, and when the access token expires</td><td>"refreshed &lt;1h ago", token "in Nh"</td></tr>
       <tr><td>Remote Control</td><td>State of the optional service</td><td>active, when expected</td></tr>
-      <tr><td>Open alerts</td><td>Rule names currently firing</td><td>-</td></tr>
+
     </tbody>
   </table></div>
-  <h3>Usage</h3>
-  <p>Under the fleet table, one row per node: a sparkline of daily tokens and the
-  totals behind it. It is counted from the transcripts Claude Code writes on each
-  node, so it is what that account <strong>consumed</strong> &mdash; not what is
-  left of a window. That number lives only behind <code>/usage</code> inside a
-  session and ccfleet does not go looking for it. Conversation content never
-  leaves the node; only counts do.</p>
+  <h3>Usage and quota</h3>
+  <p>Under the fleet table, one row per node, answering two different questions.</p>
+  <p><strong>How much is left.</strong> Two bars: the five-hour session window and
+  the week. This is the number an owner actually asks for, and it exists in exactly
+  one place &mdash; <code>/usage</code>, inside a running Claude Code session. So the
+  agent opens one on a slow schedule, roughly every half hour, in a throwaway tmux
+  session pinned to the owner's home directory, reads the two windows off the screen
+  and sends the percentages and reset times up with the heartbeat. Claude Code
+  reporting on itself; there is no usage endpoint behind this. A reading takes about
+  nine seconds, and the console says how old the one it is showing is.</p>
+  <p><strong>How much was spent.</strong> A sparkline of daily tokens and the totals
+  behind it, counted from the transcripts Claude Code writes on the node. Different
+  question, different source: this is what the account <strong>consumed</strong>, and
+  it says nothing about the window. A node with a single day of history says so
+  rather than drawing a chart of one point.</p>
+  <p>Conversation content never leaves the node; only counts do. The server
+  whitelists the quota block the way it whitelists everything else a node sends:
+  two named windows, an integer from 0 to 100 or nothing at all, and a short reset
+  string. A node cannot widen that by sending more.</p>
 
   <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages. They are scoped the same way the page is, so an owner account gets only its own nodes.</p>
 
