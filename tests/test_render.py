@@ -201,8 +201,18 @@ def test_a_node_supplied_usage_series_cannot_break_the_chart():
     # All-zero days must not divide by zero.
     flat = _sparkline([{"day": "a", "tokens": 0}, {"day": "b", "tokens": 0}])
     assert "<polyline" in flat
+    # One reading is not a trend. Drawn, it normalised against itself and
+    # became a full-width bar at the top of the frame, which reads as a node at
+    # its ceiling — the opposite of what one quiet day means.
     single = _sparkline([{"day": "a", "tokens": 5}])
-    assert "<polyline" in single
+    assert "one day so far" in single and "<svg" not in single
+    # A flat run does have a shape to draw, but not at the top of the frame:
+    # normalised against its own peak it would pin there and read as full.
+    flat_high = _sparkline([{"day": "a", "tokens": 9}, {"day": "b", "tokens": 9}])
+    ys = {p.split(",")[1] for p in
+          flat_high.split('class="spark-line" points="')[1].split('"')[0].split()}
+    assert len(ys) == 1, "a flat series is flat"
+    assert 12.0 < float(ys.pop()) < 26.0, "and sits mid-frame, not pinned to the top"
 
 
 def test_quota_meters_show_both_windows_and_colour_by_pressure():
