@@ -13,69 +13,173 @@ from .desired import is_channel, is_login_url
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
 CSS = """
-:root{--bg:#f7f8fa;--panel:#fff;--ink:#131820;--muted:#4e5966;--rule:#d7dde5;
---acc:#1747c7;--ok:#157f3b;--ok-bg:#e3f4e8;--warn:#a85b00;--warn-bg:#fbeedb;
---bad:#b42318;--bad-bg:#fbe4e1}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1217;--panel:#151b23;--ink:#e7ebf1;
---muted:#a3adba;--rule:#2b3440;--acc:#8fb0ff;--ok:#5ad08a;--ok-bg:#12321f;--warn:#f2b35b;
---warn-bg:#3a2a0e;--bad:#ff8a80;--bad-bg:#3e1714}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
-font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:20px}
-h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin:0 0 18px}
-.wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);border-radius:10px}
-table{border-collapse:collapse;width:100%;min-width:900px;font-size:14px}
-th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--rule);
+/* Tokens. Light is the bare :root; dark redefines only the tokens, guarded so an
+   explicit light choice still wins. Nothing below hard-codes a colour. */
+:root{
+--bg:#f2f5f8;--panel:#fff;--inset:#eef2f7;--ink:#0f1620;--muted:#586372;
+--rule:#dce3eb;--rule-soft:#e9eef4;--acc:#1d4ed8;--acc-soft:#e7edfc;
+--ok:#0f7038;--ok-bg:#e2f3e8;--warn:#94540a;--warn-bg:#fbeedb;
+--bad:#a62a1e;--bad-bg:#fce4e1;--off:#6b7684;--off-bg:#eceff3;
+--on-acc:#fff;--shadow:0 1px 2px rgba(15,22,32,.05),0 1px 12px rgba(15,22,32,.04);
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+--bg:#0b0f15;--panel:#131a23;--inset:#1b232e;--ink:#e9edf3;--muted:#96a1b0;
+--rule:#232d39;--rule-soft:#1c242f;--acc:#7ea3ff;--acc-soft:#182238;
+--ok:#48c97d;--ok-bg:#10301e;--warn:#e6a648;--warn-bg:#33260d;
+--bad:#ff9086;--bad-bg:#3a1512;--off:#8b95a3;--off-bg:#1a212b;--on-acc:#0b0f15;
+--shadow:0 1px 2px rgba(0,0,0,.4)}}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);
+padding:0;-webkit-font-smoothing:antialiased}
+.page{max-width:1200px;margin:0 auto;padding-block:26px 44px;padding-left:20px;
+padding-right:20px}
+code,.mono,td.num,.v{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* Masthead: what this is, then the fleet in one glance. */
+.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;
+flex-wrap:wrap;margin:0 0 18px}
+h1{font-size:27px;line-height:1.1;letter-spacing:-.02em;margin:0;font-weight:680}
+h1 .dot{color:var(--acc)}
+.sub{color:var(--muted);font-size:13px;margin:5px 0 0}
+.sub strong{color:var(--ink);font-weight:600}
+.strip{display:grid;grid-template-columns:repeat(4,minmax(74px,1fr));gap:8px;
+width:100%;max-width:420px}
+.tile{background:var(--panel);border:1px solid var(--rule);border-radius:9px;
+padding:8px 10px;border-top:2px solid var(--rule)}
+.tile b{display:block;font-family:var(--mono);font-size:20px;line-height:1.15;
+font-weight:600;font-variant-numeric:tabular-nums}
+.tile span{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.tile.ok{border-top-color:var(--ok);background:var(--ok-bg)}.tile.ok b{color:var(--ok)}
+.tile.warn{border-top-color:var(--warn);background:var(--warn-bg)}
+.tile.warn b{color:var(--warn)}
+.tile.critical{border-top-color:var(--bad);background:var(--bad-bg)}
+.tile.critical b{color:var(--bad)}
+.tile.zero b{color:var(--muted);font-weight:400}
+.tile.zero{border-top-color:var(--rule)}
+
+h2{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+margin:28px 0 9px;font-weight:650}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:12px;
+padding:4px 18px 14px;margin:0;box-shadow:var(--shadow)}
+.card h2{margin:14px 0 10px}
+.card.form{max-width:760px;margin-top:26px}
+.note{color:var(--muted);font-size:12px;line-height:1.5;margin:12px 0 0;
+padding-top:11px;border-top:1px solid var(--rule-soft)}
+.muted{color:var(--muted)}.small{font-size:12px}
+
+/* The table. A rail on the left edge of each row carries state as form, so a
+   glance down the column finds trouble without reading any number. */
+.wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);
+border-radius:12px;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;min-width:940px;font-size:14px}
+th,td{padding:11px 13px;text-align:left;border-bottom:1px solid var(--rule-soft);
 vertical-align:top;white-space:nowrap}
-th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--bg)}
-tr:last-child td{border-bottom:0}td.num{font-variant-numeric:tabular-nums}
+th{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+background:var(--inset);font-weight:650;border-bottom:1px solid var(--rule)}
+th:first-child,td:first-child{padding-left:16px}
+tbody tr:last-child td{border-bottom:0}
+tbody tr{border-left:3px solid transparent}
+tbody tr.r-ok{border-left-color:var(--ok)}
+tbody tr.r-warn{border-left-color:var(--warn)}
+tbody tr.r-critical{border-left-color:var(--bad)}
+tbody tr.r-disabled{border-left-color:var(--rule)}
+tbody tr.r-disabled td{opacity:.62}
 td.wrap{white-space:normal;min-width:130px}
-.pill{display:inline-block;font-size:12px;padding:2px 9px;border-radius:999px;
-border:1px solid;font-weight:600}
-.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
-.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
-.critical{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
-.muted{color:var(--muted)}h2{font-size:16px;margin:26px 0 8px}
+.node-id{font-family:var(--mono);font-weight:600;font-size:14px}
+.pill{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:999px;
+border:1px solid;font-weight:600;letter-spacing:.01em}
+.pill.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+.pill.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
+.pill.critical{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
+.pill.disabled{color:var(--off);border-color:var(--rule);background:var(--off-bg)}
+.bad-text{color:var(--bad);font-weight:600}
+
+/* Alerts: severity on the edge, rule name in mono, prose in sans. */
+.alert{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;padding:11px 0;
+border-bottom:1px solid var(--rule-soft)}
+.alert:last-of-type{border-bottom:0}
+.alert-rule{font-family:var(--mono);font-size:13px;font-weight:600}
+.alert-msg{font-size:13.5px;min-width:0;overflow-wrap:anywhere}
+.quiet{color:var(--muted);font-size:13.5px;padding:12px 0 4px;margin:0}
+
+/* Controls */
 form.inline{display:inline;margin:0}
-button,.btn{font:inherit;font-size:12px;padding:4px 10px;border-radius:7px;
+button,.btn{font:inherit;font-size:12px;padding:5px 11px;border-radius:8px;
 border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer}
 button:hover{border-color:var(--acc);color:var(--acc)}
 button.danger:hover{border-color:var(--bad);color:var(--bad)}
-button.primary{background:var(--acc);color:#fff;border-color:var(--acc);
-font-size:13px;padding:7px 16px}
-.card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;
-padding:16px 18px;margin:18px 0;max-width:760px}
-.card h2{margin:0 0 12px}
-label{display:block;font-size:12px;color:var(--muted);margin:0 0 4px}
-input[type=text]{font:inherit;font-size:14px;padding:7px 10px;border-radius:7px;
-border:1px solid var(--rule);background:var(--bg);color:var(--ink);width:100%;max-width:280px}
-.fields{display:flex;flex-wrap:wrap;gap:12px 18px;margin:0 0 14px}
-.check{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink);margin-top:18px}
-.actions{display:flex;gap:5px;flex-wrap:wrap}
-.manage-row{display:flex;align-items:center;justify-content:space-between;gap:14px;
-flex-wrap:wrap;padding:9px 0;border-bottom:1px solid var(--rule)}
-.manage-row:last-of-type{border-bottom:0}
-.manage-name{font-weight:600;font-size:14px}
-pre{background:var(--bg);border:1px solid var(--rule);border-radius:8px;
-padding:12px 14px;overflow-x:auto;font-family:ui-monospace,Menlo,monospace;
-font-size:13px;line-height:1.5;margin:0 0 14px;white-space:pre}
+button.primary{background:var(--acc);color:var(--on-acc);border-color:var(--acc);
+font-size:13px;padding:8px 17px;font-weight:600}
+button.primary:hover{filter:brightness(1.08);color:var(--on-acc)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+a{color:var(--acc)}
+label{display:block;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+color:var(--muted);margin:0 0 5px;font-weight:600}
+input[type=text],input[type=email]{font:inherit;font-size:14px;padding:8px 11px;
+border-radius:8px;border:1px solid var(--rule);background:var(--bg);color:var(--ink);
+width:100%;max-width:280px}
+input[type=text]:focus,input[type=email]:focus{border-color:var(--acc);outline:none}
+.fields{display:flex;flex-wrap:wrap;gap:14px 18px;margin:0 0 16px}
+.check{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);
+margin-top:20px;text-transform:none;letter-spacing:0}
+.actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.row-line{display:flex;align-items:center;justify-content:space-between;gap:14px;
+flex-wrap:wrap;padding:11px 0;border-bottom:1px solid var(--rule-soft)}
+.row-line:last-of-type{border-bottom:0}
+.row-name{font-family:var(--mono);font-weight:600;font-size:13.5px}
+.row-line.stacked{display:block}
+.row-line.stacked .row-name{margin-bottom:8px}
+.login-url{display:block;font-family:var(--mono);font-size:12px;word-break:break-all;
+margin:7px 0;line-height:1.45}
+.login-say{font-size:13px;margin-right:8px}
+pre{background:var(--inset);border:1px solid var(--rule);border-radius:10px;
+padding:13px 15px;overflow-x:auto;font-family:var(--mono);font-size:13px;
+line-height:1.55;margin:0 0 14px;white-space:pre}
 .ok-banner{border:1px solid var(--ok);background:var(--ok-bg);color:var(--ok);
-border-radius:10px;padding:12px 16px;margin:0 0 18px}
+border-radius:12px;padding:13px 17px;margin:0 0 20px;font-weight:500}
 a.back{font-size:13px}
-ul.alerts{margin:0;padding-left:18px}ul.alerts li{margin:0 0 4px}
-code{font-family:ui-monospace,Menlo,monospace;font-size:13px}
 
+/* Usage: who, the two windows, then the trend. */
 .usage-row{display:grid;
-  grid-template-columns:minmax(120px,1fr) minmax(140px,2fr) minmax(150px,1.4fr);
-  gap:10px 16px;align-items:center;padding:10px 0;border-bottom:1px solid #eef0f3}
+grid-template-columns:minmax(150px,.9fr) minmax(200px,1fr) minmax(190px,1.1fr);
+gap:16px 22px;align-items:start;padding:15px 0;border-bottom:1px solid var(--rule-soft)}
 .usage-row:last-of-type{border-bottom:0}
-.usage-name{font-weight:600;font-size:14px;min-width:0;overflow-wrap:anywhere}
-.usage-spark{min-width:0}
-.usage-nums{font-size:13px;text-align:right}
-svg.spark{display:block;width:100%;height:38px;overflow:visible}
-.spark-fill{fill:#e6ecfb;stroke:none}
-.spark-line{fill:none;stroke:#1747c7;stroke-width:1.6;vector-effect:non-scaling-stroke}
-.spark-dot{fill:#1747c7}
-@media (max-width:640px){.usage-row{grid-template-columns:1fr}.usage-nums{text-align:left}}
+.usage-name{font-family:var(--mono);font-weight:600;font-size:13.5px;min-width:0;
+overflow-wrap:anywhere}
+.usage-name span{font-family:var(--sans);font-weight:400}
+.usage-quota,.usage-spark{min-width:0}
+.usage-total{margin-top:9px;font-size:13px}
+.usage-total b{font-family:var(--mono);font-size:21px;font-weight:650;
+letter-spacing:-.01em;line-height:1.1}
+.usage-total span{font-family:var(--sans);font-weight:400}
+.usage-meta{font-family:var(--sans);font-weight:400;font-size:12px;margin-top:5px;
+line-height:1.45;overflow-wrap:anywhere}
+.usage-nums{font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-top:6px}
+svg.spark{display:block;width:100%;height:46px;overflow:visible}
+.spark-fill{fill:var(--acc-soft);stroke:none}
+.spark-base{stroke:var(--rule);stroke-width:1;vector-effect:non-scaling-stroke}
+.spark-line{fill:none;stroke:var(--acc);stroke-width:1.6;vector-effect:non-scaling-stroke}
+.spark-dot{fill:var(--acc)}
+
+/* One quota window. The bar is the point; the number confirms it. */
+.meter{margin:0 0 11px}
+.meter:last-child{margin-bottom:2px}
+.meter-head{display:flex;justify-content:space-between;align-items:baseline;
+font-size:12px;color:var(--muted);margin:0 0 4px}
+.meter-pct{font-family:var(--mono);font-weight:700;color:var(--ink);
+font-variant-numeric:tabular-nums;font-size:13px}
+.meter-track{height:7px;border-radius:99px;background:var(--inset);overflow:hidden;
+border:1px solid var(--rule-soft)}
+.meter-fill{display:block;height:100%;border-radius:99px;min-width:2px}
+.meter-fill.ok{background:var(--acc)}
+.meter-fill.warn{background:var(--warn)}
+.meter-fill.crit{background:var(--bad)}
+.meter-foot{font-size:11px;color:var(--muted);margin-top:3px}
+
+@media (max-width:820px){.usage-row{grid-template-columns:1fr;gap:10px}
+.strip{max-width:none}h1{font-size:23px}.page{padding-block:20px 36px}}
 """
 
 
@@ -89,7 +193,8 @@ def _age(now: float, ts: Optional[float]) -> str:
         return f"{seconds // 60}m"
     if seconds < 172800:
         return f"{seconds / 3600:.1f}h"
-    return f"{seconds / 86400:.1f}d"
+    days = seconds / 86400
+    return f"{days:.1f}d" if days < 10 else f"{days:.0f}d"
 
 
 def _in(now: float, ts_ms: Optional[float]) -> str:
@@ -135,6 +240,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # reconcile is indistinguishable from one that never ran.
             "last_upgrade": ((payload.get("reconcile") or {}).get("upgrade") or None),
             "usage": payload.get("usage") or {},
+            "quota": payload.get("quota") or {},
             "open_alerts": [a["rule"] for a in node_alerts],
         })
     return rows
@@ -187,25 +293,30 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     upgrade = row.get("last_upgrade") or {}
     if upgrade.get("ok") is False:
         detail = escape(str(upgrade.get("error") or "")[:120])
-        version += (f'<br><span class="critical">upgrade to '
+        version += (f'<br><span class="bad-text">upgrade to '
                     f'{escape(str(upgrade.get("to") or "?"))} failed</span>'
                     + (f' <span class="muted">{detail}</span>' if detail else ""))
     creds = row["credentials_present"]
     cred_text = ("unknown" if creds is None else ("missing" if creds is False else
                  f"refreshed {_age(now, row['credentials_mtime'])} ago"))
     if row["subscription_type"]:
-        cred_text += f" ({row['subscription_type']})"
+        # The plan is a label on the login, not a qualifier on the time. Trailing
+        # it read as "refreshed 10m ago (max)", where (max) looks like it modifies
+        # the age; leading it reads as what it is.
+        cred_text = f"{row['subscription_type']} \u00b7 {cred_text}"
     rc = row["remote_control"] or "-"
-    if row["rc_expected"]:
+    # Nothing is expected of a node that is switched off, so saying so is noise.
+    if row["rc_expected"] and row["enabled"]:
         rc += " (expected)"
     alerts = ", ".join(row["open_alerts"]) or "-"
     return (
-        "<tr>"
+        f'<tr class="r-{escape(row["status"])}">'
         f"<td>{_pill(row['status'])}</td>"
-        f"<td><strong>{escape(row['id'])}</strong><br><span class=\"muted\">{escape(row['owner'])}"
+        f'<td><span class="node-id">{escape(row["id"])}</span>'
+        f"<br><span class=\"muted\">{escape(row['owner'])}"
         f" · {escape(row['region'] or '-')}</span></td>"
         f"<td class=\"num\">{escape(_age(now, row['last_seen_ts']))}</td>"
-        f"<td>{version}</td>"
+        f'<td class="v">{version}</td>'
         f"<td><code>{_fmt(row['egress_ip'])}</code></td>"
         f"<td class=\"num\">{_fmt(row['disk_used_pct'], '%')}</td>"
         f"<td class=\"num\">{_fmt(row['load1'])}</td>"
@@ -240,18 +351,18 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
         buttons.append(form("rotate-token", "New token", cls="danger"))
         buttons.append(form("remove", "Remove",
                             f'<input type="hidden" name="confirm" value="{node}">', cls="danger"))
-        items.append(f'<div class="manage-row"><div class="manage-name">{node}'
+        items.append(f'<div class="row-line"><div class="row-name">{node}'
                      f'<span class="muted"> · {escape(row["owner"])}</span></div>'
                      f'<div class="actions">{"".join(buttons)}</div></div>')
-    return ('<div class="card"><h2>Manage nodes</h2>' + "".join(items) +
-            '<p class="muted" style="margin:10px 0 0;font-size:12px">'
+    return ('<h2>Manage nodes</h2><div class="card">' + "".join(items) +
+            '<p class="note">'
             "New token replaces the node's credential immediately, so update the node after. "
             "Remove deletes its history and cannot be undone.</p></div>")
 
 
 def _add_form(csrf: str) -> str:
     return (
-        '<div class="card"><h2>Add a node</h2>'
+        '<h2>Add a node</h2><div class="card form">'
         '<form method="post" action="/actions/node/add">'
         f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
         '<div class="fields">'
@@ -339,8 +450,11 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
     """One block per node: start a sign-in, or carry the one in flight forward."""
     if not rows:
         return ""
+    # A sign-in in flight is the only row here anyone has to act on. Settled rows
+    # are reference; put the work first rather than making someone find it.
+    ordered = sorted(rows, key=lambda r: not (logins.get(r["id"]) or {}).get("state"))
     items = []
-    for row in rows:
+    for row in ordered:
         node = escape(row["id"])
         login = logins.get(row["id"]) or {}
         state = login.get("state") or ""
@@ -353,31 +467,40 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
 
         if not state:
             signed_in = row.get("credentials_present")
-            status = ("signed in" if signed_in else
-                      "not signed in" if signed_in is False else "unknown")
-            body = (f'<span class="muted">{escape(status)}</span> '
-                    + form("login-start",
-                           '<input type="email" name="email" placeholder="email (optional)">',
-                           "Sign in"))
+            # "signed in" beside a button labelled "Sign in" read as a
+            # contradiction. Say the state as a state, and let the button say
+            # what pressing it would do to that state.
+            status, tone, verb = (("signed in", "ok", "Sign in again") if signed_in else
+                                  ("not signed in", "warn", "Sign in") if signed_in is False
+                                  else ("unknown", "disabled", "Sign in"))
+            field = ("" if signed_in else
+                     '<input type="email" name="email" placeholder="email (optional)">')
+            body = (f'<span class="pill {tone}">{escape(status)}</span> '
+                    + form("login-start", field, verb))
         else:
-            body = f'<span class="muted">{escape(LOGIN_WORDS.get(state, state))}</span>'
+            body = (f'<span class="login-say">'
+                    f'{escape(LOGIN_WORDS.get(state, state))}</span>')
             url = login.get("url") or ""
             # Checked again here: a row written before this rule existed, or by
             # anything but the path above, must still not become a live link.
             if is_login_url(url) and state in ("url_ready", "code_sent"):
                 # The node supplied this. It is escaped and its full text is shown,
                 # so nobody is asked to trust a link whose target they cannot read.
-                body += (f'<div><a href="{escape(url)}" target="_blank" '
-                         f'rel="noopener noreferrer">{escape(url)}</a></div>')
+                body += (f'<a class="login-url" href="{escape(url)}" target="_blank" '
+                         f'rel="noopener noreferrer">{escape(url)}</a>')
             if state == "url_ready":
                 body += form("login-code",
                              '<input type="text" name="code" placeholder="paste the code" '
                              'autocomplete="off" required>', "Send code")
             body += " " + form("login-cancel", "", "Cancel", cls="danger")
-        items.append(f'<div class="manage-row"><div class="manage-name">{node}</div>'
+        # A sign-in in flight carries a sentence, a long URL and two controls.
+        # Held on one flex line those wrap into a shape nobody designed, so give
+        # it a block of its own and keep the one-line form for settled states.
+        cls = "row-line stacked" if state else "row-line"
+        items.append(f'<div class="{cls}"><div class="row-name">{node}</div>'
                      f'<div class="actions">{body}</div></div>')
-    return ('<div class="card"><h2>Sign in</h2>' + "".join(items) +
-            '<p class="muted" style="margin:10px 0 0;font-size:12px">'
+    return ('<h2>Sign in</h2><div class="card">' + "".join(items) +
+            '<p class="note">'
             "Starting a sign-in runs Claude Code's own login on the node. The credential is "
             "written there and never reaches this server; only the verification URL and the "
             "code you paste pass through, and both are discarded when it finishes.</p></div>")
@@ -400,6 +523,11 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
     if not points:
         return '<span class="muted">no activity yet</span>'
     values = [float(p["tokens"]) for p in points]
+    if len(values) == 1:
+        # One day of data has no line to draw. Rendering it as a lone dot in
+        # empty space reads as a rendering fault, so give it a flat run at its
+        # own height — the value is the same, it just looks like a measurement.
+        values = values * 2
     peak = max(values) or 1.0
     step = width / max(len(values) - 1, 1)
     # y is inverted: SVG grows downward, a chart grows upward.
@@ -411,39 +539,112 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
              f"latest {_human_tokens(values[-1])}")
     return (f'<svg class="spark" viewBox="0 0 {width} {height}" role="img" '
             f'aria-label="{escape(label)}" preserveAspectRatio="none">'
+            # A baseline gives the area something to sit on, so a quiet week
+            # reads as low rather than as a chart that failed to draw.
+            f'<line class="spark-base" x1="0" y1="{height - 0.5}" '
+            f'x2="{width}" y2="{height - 0.5}"/>'
             f'<polygon class="spark-fill" points="{area}"/>'
             f'<polyline class="spark-line" points="{line}"/>'
             f'<circle class="spark-dot" cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.5"/></svg>')
 
 
-def _usage_html(rows: list[Mapping[str, Any]]) -> str:
+def _meter(used: Any, label: str, resets: Any) -> str:
+    """One quota window as a labelled bar.
+
+    Colour carries the same meaning as everywhere else on this page: fine,
+    getting close, nearly out. A bare number makes you do that comparison
+    yourself, every time you look.
+    """
+    if not isinstance(used, (int, float)) or isinstance(used, bool):
+        return ""
+    pct = max(0.0, min(100.0, float(used)))
+    level = "crit" if pct >= 90 else "warn" if pct >= 75 else "ok"
+    foot = f"resets {escape(str(resets))}" if resets else ""
+    return (f'<div class="meter"><div class="meter-head">'
+            f'<span>{escape(label)}</span>'
+            f'<span class="meter-pct">{pct:.0f}%</span></div>'
+            f'<div class="meter-track"><i class="meter-fill {level}" '
+            f'style="width:{pct:.0f}%"></i></div>'
+            f'<div class="meter-foot">{foot}</div></div>')
+
+
+def _quota_html(row: Mapping[str, Any], now: float) -> str:
+    """The two windows an owner actually asks about: this session, this week."""
+    quota = row.get("quota") or {}
+    session, week = quota.get("session") or {}, quota.get("week") or {}
+    if not session and not week:
+        return '<p class="muted small">No window reading yet.</p>'
+    bars = (_meter(session.get("used_pct"), "5-hour session", session.get("resets"))
+            + _meter(week.get("used_pct"), "This week", week.get("resets")))
+    checked = quota.get("checked_at")
+    if isinstance(checked, (int, float)) and not isinstance(checked, bool):
+        bars += f'<p class="muted small">read {escape(_age(now, checked))} ago</p>'
+    return bars
+
+
+def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
     """Per-node, per-account token use, counted from transcripts on each node."""
-    live = [r for r in rows if (r.get("usage") or {}).get("total_tokens")]
+    def reporting(row: Mapping[str, Any]) -> bool:
+        return bool((row.get("usage") or {}).get("total_tokens") or (row.get("quota") or {}))
+
+    live = [r for r in rows if reporting(r)]
     if not live:
         return ""
+    # A row of dashes says nothing an operator can act on, and four of them bury
+    # the two that matter. Name the quiet nodes in one line instead.
+    quiet = [r["id"] for r in rows if not reporting(r)]
+    tail = ""
+    if quiet:
+        names = ", ".join(escape(str(q)) for q in quiet[:8])
+        more = f" and {len(quiet) - 8} more" if len(quiet) > 8 else ""
+        tail = (f'<p class="quiet">No usage reported yet from <span class="mono">{names}'
+                f'</span>{more}.</p>')
     items = []
-    for row in rows:
+    for row in live:
         usage = row.get("usage") or {}
         total = usage.get("total_tokens") or 0
         days = usage.get("window_days") or 0
         cached = usage.get("cache_read_input_tokens") or 0
         share = f"{cached / total * 100:.0f}%" if total else "-"
         models = ", ".join(str(m) for m in (usage.get("models") or [])[:3]) or "-"
+        window = f"{int(days)}d" if days else "?"
         items.append(
             f'<div class="usage-row"><div class="usage-name">{escape(row["id"])}'
-            f'<span class="muted"> &middot; {escape(row["owner"])}</span></div>'
-            f'<div class="usage-spark">{_sparkline(usage.get("by_day") or [])}</div>'
-            f'<div class="usage-nums"><b>{escape(_human_tokens(total))}</b>'
-            f'<span class="muted"> tokens / {escape(str(int(days)) if days else "?")}d</span><br>'
-            f'<span class="muted">{escape(str(int(usage.get("sessions") or 0)))} sessions '
-            f'&middot; {escape(share)} cached &middot; {escape(models)}</span></div></div>')
-    return ('<div class="card"><h2>Usage</h2>' + "".join(items) +
-            '<p class="muted" style="margin:10px 0 0;font-size:12px">'
-            "Counted from the transcripts Claude Code writes on each node, so this is what each "
-            "account <em>consumed</em> &mdash; not how much of a subscription window is left. "
-            "That figure exists only behind <code>/usage</code> inside a session, and this does "
-            "not go looking for it. Conversation content never leaves the node; only counts "
-            "are reported.</p></div>")
+            f'<span class="muted"> &middot; {escape(row["owner"])}</span>'
+            f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
+            f'<span class="muted"> tokens / {escape(window)}</span></div>'
+            f'<div class="usage-meta muted">'
+            f'{escape(str(int(usage.get("sessions") or 0)))} sessions &middot; '
+            f'{escape(share)} cached<br>{escape(models)}</div></div>'
+            f'<div class="usage-quota">{_quota_html(row, now)}</div>'
+            f'<div class="usage-spark">{_sparkline(usage.get("by_day") or [])}'
+            f'<div class="usage-nums muted">daily tokens, last '
+            f'{escape(window)}</div></div></div>')
+    return ('<h2>Usage and quota</h2><div class="card">' + "".join(items) + tail +
+            '<p class="note">'
+            "Windows come from <code>/usage</code> inside a Claude Code session on the node, "
+            "read on a slow schedule &mdash; Claude Code reporting on itself, not a usage "
+            "endpoint. Token counts come from the transcripts it writes there. Conversation "
+            "content never leaves the node; only counts do.</p></div>")
+
+
+TILES = (("ok", "healthy"), ("warn", "warning"), ("critical", "critical"),
+         ("disabled", "disabled"))
+
+
+def _strip_html(counts: Mapping[str, int]) -> str:
+    """The fleet in one glance, before any detail.
+
+    A count buried in a sentence ("ok 2") makes you read to find out whether
+    anything is wrong. Four tiles answer that from across the room, and a zero
+    stays quiet rather than competing with the number that matters.
+    """
+    tiles = []
+    for key, label in TILES:
+        n = int(counts.get(key) or 0)
+        cls = f"tile {key}" if n else "tile zero"
+        tiles.append(f'<div class="{cls}"><b>{n}</b><span>{escape(label)}</span></div>')
+    return f'<div class="strip">{"".join(tiles)}</div>'
 
 
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
@@ -457,36 +658,50 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     body_rows = "".join(_row_html(r, now) for r in rows) or (
         f'<tr><td colspan="10" class="muted">{escape(empty)}</td></tr>')
     alert_items = "".join(
-        f"<li>{_pill(a['level'])} <strong>{escape(a['node_id'])}</strong> "
-        f"{escape(a['rule'])}: {escape(a['message'])} "
-        f"<span class=\"muted\">({escape(_age(now, a['opened_at']))} ago)</span></li>"
-        for a in alerts) or '<li class="muted">none</li>'
-    counts = {"ok": 0, "warn": 0, "critical": 0, "disabled": 0}
+        f'<div class="alert">{_pill(a["level"])}'
+        f'<span class="alert-rule">{escape(a["node_id"])} · {escape(a["rule"])}</span>'
+        f'<span class="alert-msg">{escape(a["message"])}</span>'
+        f'<span class="muted small">{escape(_age(now, a["opened_at"]))} ago</span></div>'
+        for a in alerts) or (
+        '<p class="quiet">Nothing open. Every node is inside its thresholds.</p>')
+    counts: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
-    summary = " · ".join(f"{escape(k)} {v}" for k, v in counts.items() if v)
+    # An inline favicon keeps the tab recognisable without a second request, and
+    # without this page depending on anything it did not render itself.
+    icon = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
+            "viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231d4ed8'/%3E"
+            "%3Ccircle cx='5' cy='8' r='1.7' fill='white'/%3E"
+            "%3Ccircle cx='11' cy='5' r='1.7' fill='white'/%3E"
+            "%3Ccircle cx='11' cy='11' r='1.7' fill='white'/%3E%3C/svg%3E")
+    whoami = ""
+    if who is not None:
+        whoami = (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
+                  + ("" if is_admin else " · showing only your nodes"))
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<meta http-equiv=\"refresh\" content=\"60\"><title>ccfleet</title>"
-        f"<style>{CSS}</style></head><body>"
-        "<h1>ccfleet</h1>"
-        f"<p class=\"sub\">one owner, one account, one node · {summary or 'no nodes'} · "
-        f"heartbeat max age {cfg.heartbeat_max_age_s // 60} min · refreshes every minute"
-        + (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
-           f"{'' if is_admin else ' · showing only your nodes'}" if who is not None else "")
-        + "</p>"
-        "<div class=\"wrap\"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta http-equiv="refresh" content="60"><title>ccfleet</title>'
+        f'<link rel="icon" href="{icon}">'
+        f"<style>{CSS}</style></head><body><div class=\"page\">"
+        '<header class="mast"><div>'
+        '<h1>ccfleet<span class="dot">.</span></h1>'
+        '<p class="sub">One owner, one account, one node · heartbeat max age '
+        f"{cfg.heartbeat_max_age_s // 60} min · this page refreshes itself every minute"
+        f"{whoami}</p></div>"
+        + _strip_html(counts) +
+        "</header>"
+        '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
         "<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Login</th>"
         "<th>Remote Control</th><th>Open alerts</th></tr></thead>"
         f"<tbody>{body_rows}</tbody></table></div>"
-        f"<h2>Open alerts</h2><ul class=\"alerts\">{alert_items}</ul>"
+        f'<h2>Open alerts</h2><div class="card">{alert_items}</div>'
         # Management is the operator's. An owner sees their nodes and nothing to
         # press, which is why they get no CSRF token either: there is no form.
         # The sign-in card belongs to whoever owns the node, admin or not: needing
         # the operator to sign you in would only move the bottleneck.
-        + _usage_html(rows)
+        + _usage_html(rows, now)
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
-        + "</body></html>"
+        + "</div></body></html>"
     )
