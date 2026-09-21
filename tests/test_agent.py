@@ -1287,12 +1287,16 @@ def test_a_token_flow_reports_the_credential_not_a_login(monkeypatch):
     already signed in and nothing about that changes. The credential on the
     screen is the only evidence."""
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
-    (progress, _), calls = _reconcile_token("code_sent", TOKEN_PANE)
+    (progress, state), calls = _reconcile_token("code_sent", TOKEN_PANE)
     assert progress["state"] == "ready"
     assert progress["secret"].startswith("sk-ant-oat01-")
     assert not any(a[:2] == ["/usr/bin/claude", "auth"] for a in calls), \
         "asking auth status here would answer a question nobody posed"
-    assert any("kill-session" in a for a in calls), "the pane holding a token is closed"
+    # The pane is NOT closed here. The credential exists on Anthropic's side the
+    # moment that screen prints it, so tearing down before the report has landed
+    # would strand a live token nobody can see and nobody knows to revoke.
+    assert not any("kill-session" in a for a in calls), "held until delivery is confirmed"
+    assert state["login"]["phase"] == "ready"
 
 
 def test_a_token_flow_keeps_waiting_while_the_screen_is_blank(monkeypatch):
@@ -1309,13 +1313,50 @@ def test_a_rejected_code_fails_the_token_flow(monkeypatch):
     assert "login" not in state, "a failed attempt is not left in flight"
 
 
-def test_the_agent_never_keeps_the_token_it_just_reported(monkeypatch):
-    """It rides up on one heartbeat and is gone from the node's state."""
+def test_the_agent_never_writes_the_token_into_its_own_state(monkeypatch):
+    """The pane is held until delivery, but the credential is not copied into
+    the state file that survives a restart. It is re-read from the screen."""
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
     (progress, state), _ = _reconcile_token("code_sent", TOKEN_PANE)
-    assert progress["secret"]
-    assert "login" not in state
-    assert "sk-ant-oat01" not in json.dumps(state)
+    assert progress["secret"], "reported"
+    assert "sk-ant-oat01" not in json.dumps(state), "and not written down"
+
+
+def test_an_undelivered_token_is_reported_again_rather_than_lost(monkeypatch):
+    """The failure this guards: the heartbeat carrying it does not reach the
+    server, `main` exits on the non-200, and a live credential is stranded."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    (progress, state), calls = _reconcile_token("ready", TOKEN_PANE)
+    assert progress["state"] == "ready"
+    assert progress["secret"].startswith("sk-ant-oat01-"), "said again, from the same pane"
+    assert not any("kill-session" in a for a in calls), "and still held"
+
+
+def test_a_token_that_cannot_be_delivered_says_so_instead_of_vanishing(monkeypatch):
+    """If the pane is gone and delivery was never confirmed, the owner has a
+    credential they cannot see. Saying nothing would leave it live for a year."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    (progress, state), calls = _reconcile_token("ready", "the pane is empty now")
+    assert progress["state"] == "failed"
+    assert "revoke it" in progress["detail"]
+    assert "login" not in state and any("kill-session" in a for a in calls)
+
+
+def test_the_pane_is_released_once_the_server_stops_asking(monkeypatch):
+    """That is how the node learns the report arrived: the desired block goes
+    away, because the server has moved the row to 'ready'."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    state = {"login": {"requested_at": 5.0, "kind": "token", "phase": "ready"}}
+    progress, new_state = agent.reconcile_login({"login": None}, state, runner)
+    assert progress is None
+    assert "login" not in new_state
+    assert any("kill-session" in a for a in calls), "the pane is finally closed"
 
 
 def test_an_unknown_kind_is_treated_as_a_sign_in(monkeypatch):

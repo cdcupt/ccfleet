@@ -1061,6 +1061,24 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
         new_state["login"] = {**mine, "phase": "code_sent"}
         return {"state": "code_sent", "requested_at": requested_at}, new_state
 
+    if phase == "ready":
+        # Said once already and not yet released, which means the report has not
+        # been confirmed. The pane still holds it, so read the same token and
+        # say the same thing again; a repeated report is a no-op on the server.
+        token = find_token(read_login_pane(runner))
+        if token:
+            return {"state": "ready", "secret": token,
+                    "requested_at": requested_at}, new_state
+        # The pane is gone and delivery was never confirmed. Say so plainly
+        # rather than silently: a credential was minted and is now unreachable,
+        # which the owner needs to know to revoke it from their account.
+        end_login(runner)
+        new_state.pop("login", None)
+        return {"state": "failed",
+                "detail": "a token was minted but could not be delivered; "
+                          "revoke it from the Claude account",
+                "requested_at": requested_at}, new_state
+
     if phase == "code_sent" and kind == "token":
         # A token flow has no auth state to check: the node was already signed
         # in, and nothing about it changes. The credential itself is the only
@@ -1068,9 +1086,13 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
         pane = read_login_pane(runner)
         token = find_token(pane)
         if token:
-            end_login(runner)
-            new_state.pop("login", None)
-            # The token goes up once, to be shown once. It is not kept here.
+            # Deliberately not torn down here. The credential already exists on
+            # Anthropic's side the moment this screen prints it, so closing the
+            # pane before the report has landed would strand a live token that
+            # nobody can see and nobody knows to revoke. Hold the pane and stay
+            # in this phase; the teardown happens when the server stops asking,
+            # which is how it learns the report arrived.
+            new_state["login"] = {**mine, "phase": "ready"}
             return {"state": "ready", "secret": token,
                     "requested_at": requested_at}, new_state
         if re.search(r"(?i)\b(invalid|expired|failed|error)\b", pane):
