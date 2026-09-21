@@ -68,6 +68,8 @@ class Config:
     token_expired_grace_s: int = 3600
     disk_warn_pct: int = 85
     disk_crit_pct: int = 95
+    quota_warn_pct: int = 75
+    quota_crit_pct: int = 90
     check_interval_s: int = 60
     retention_days: int = 30
     max_body_bytes: int = 64 * 1024
@@ -94,11 +96,16 @@ class Config:
             token_expired_grace_s=_env_int(env, "TOKEN_EXPIRED_GRACE_S", 3600, 0),
             disk_warn_pct=_env_int(env, "DISK_WARN_PCT", 85, 1),
             disk_crit_pct=_env_int(env, "DISK_CRIT_PCT", 95, 1),
+            quota_warn_pct=_env_int(env, "QUOTA_WARN_PCT", 75, 1),
+            quota_crit_pct=_env_int(env, "QUOTA_CRIT_PCT", 90, 1),
             check_interval_s=_env_int(env, "CHECK_INTERVAL_S", 60, 5),
             retention_days=_env_int(env, "RETENTION_DAYS", 30, 1),
             max_body_bytes=_env_int(env, "MAX_BODY_BYTES", 64 * 1024, 1024),
             bypass_by_default=_env_bool(env, "BYPASS_BY_DEFAULT", False),
         )
+        if cfg.quota_warn_pct > cfg.quota_crit_pct:
+            raise ConfigError(f"{ENV_PREFIX}QUOTA_WARN_PCT must be <= "
+                              f"{ENV_PREFIX}QUOTA_CRIT_PCT")
         if cfg.disk_warn_pct > cfg.disk_crit_pct:
             raise ConfigError("CCFLEET_DISK_WARN_PCT must not exceed CCFLEET_DISK_CRIT_PCT")
         return cfg

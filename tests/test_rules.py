@@ -127,3 +127,88 @@ def test_a_fresh_laptop_login_raises_nothing(cfg):
                                      "mtime": None, "expires_at": None,
                                      "profile_fetched_at": (NOW - 60) * 1000})
     assert rule_names(rules.evaluate(NODE, hb, None, NOW, cfg)) == []
+
+
+# -- quota ------------------------------------------------------------------------
+
+def _quota_payload(session=None, week=None, checked_at=1000.0):
+    quota = {"checked_at": checked_at}
+    if session is not None:
+        quota["session"] = session
+    if week is not None:
+        quota["week"] = week
+    return {"quota": quota}
+
+
+def _quota_cfg(**env):
+    from ccfleetd.config import Config
+    base = {"CCFLEET_ADMIN_TOKEN": "x" * 32, "CCFLEET_DB": ":memory:"}
+    return Config.from_env({**base, **env})
+
+
+def _quota_rules(payload, now=1000.0, **env):
+    from ccfleetd.rules import _quota_findings
+    return {f.rule: f for f in _quota_findings(payload, now, _quota_cfg(**env))}
+
+
+def test_quota_warns_before_a_window_runs_out():
+    """The console has shown these since the windows landed; this is the half
+    that reaches you without anyone looking at the page."""
+    found = _quota_rules(_quota_payload(session={"used_pct": 80, "resets": "7:50pm (UTC)"}))
+    assert set(found) == {"quota_high_session"}
+    assert found["quota_high_session"].level == "warn"
+    assert "5-hour window 80% used" in found["quota_high_session"].message
+    assert "resets 7:50pm (UTC)" in found["quota_high_session"].message, "say when it clears"
+
+    found = _quota_rules(_quota_payload(week={"used_pct": 93}))
+    assert found["quota_high_week"].level == "critical"
+    assert "weekly window 93% used" in found["quota_high_week"].message
+
+
+def test_quota_is_quiet_while_there_is_room():
+    assert _quota_rules(_quota_payload(session={"used_pct": 4}, week={"used_pct": 15})) == {}
+    # Both thresholds are inclusive: exactly at it counts, one below does not.
+    assert _quota_rules(_quota_payload(week={"used_pct": 75}))["quota_high_week"].level == "warn"
+    assert _quota_rules(_quota_payload(week={"used_pct": 74})) == {}
+    at_crit = _quota_rules(_quota_payload(week={"used_pct": 90}))["quota_high_week"]
+    assert at_crit.level == "critical", "90% is critical, not one short of it"
+    assert _quota_rules(_quota_payload(week={"used_pct": 89}))["quota_high_week"].level == "warn"
+
+
+def test_the_two_windows_alert_separately():
+    """One rule for both would flap as whichever is worse changes, and would
+    hide a full week behind a fresh session."""
+    found = _quota_rules(_quota_payload(session={"used_pct": 5}, week={"used_pct": 95}))
+    assert set(found) == {"quota_high_week"}, "a quiet session must not mask a full week"
+    found = _quota_rules(_quota_payload(session={"used_pct": 99}, week={"used_pct": 99}))
+    assert found["quota_high_session"].level == "critical"
+    assert found["quota_high_week"].level == "critical"
+
+
+def test_a_stale_reading_is_not_evidence_about_now():
+    """The agent refreshes every 30 min. Two missed refreshes means the read is
+    broken, not that the quota is; alerting would name the wrong problem."""
+    fresh = _quota_payload(week={"used_pct": 95}, checked_at=1000.0)
+    assert "quota_high_week" in _quota_rules(fresh, now=1000.0 + 3600)
+    assert _quota_rules(fresh, now=1000.0 + 3 * 3600) == {}
+    # No timestamp at all is not a reason to go quiet; older payloads lack one.
+    assert "quota_high_week" in _quota_rules({"quota": {"week": {"used_pct": 95}}}, now=9e9)
+
+
+def test_a_node_cannot_break_the_rule_with_nonsense():
+    for junk in (None, "lots", [1], {"used_pct": "high"}, {}):
+        assert _quota_rules(_quota_payload(week=junk)) == {}
+    assert _quota_rules({"quota": "not a mapping"}) == {}
+    assert _quota_rules({}) == {}
+    # True is an int in Python, so it passes an isinstance check for one. It
+    # cannot reach 75, which hides the missing guard at the default thresholds;
+    # lower the bar and a bool would alert as "window 1% used" without it.
+    assert _quota_rules(_quota_payload(week={"used_pct": True}),
+                        CCFLEET_QUOTA_WARN_PCT="1", CCFLEET_QUOTA_CRIT_PCT="2") == {}
+
+
+def test_quota_thresholds_are_configurable():
+    assert _quota_rules(_quota_payload(week={"used_pct": 60})) == {}
+    loose = _quota_rules(_quota_payload(week={"used_pct": 60}),
+                         CCFLEET_QUOTA_WARN_PCT="50", CCFLEET_QUOTA_CRIT_PCT="95")
+    assert loose["quota_high_week"].level == "warn"
