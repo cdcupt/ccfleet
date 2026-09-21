@@ -1176,3 +1176,49 @@ def test_parse_quota_stops_at_the_next_window_even_when_it_is_adjacent():
     got = agent.parse_quota(pane)
     assert "session" not in got, "the session block never drew; it has no number"
     assert got["week"]["used_pct"] == 15
+
+
+def test_read_quota_only_ever_trusts_the_owners_home(monkeypatch, tmp_path):
+    """The loop answers Claude Code's folder-trust prompt, so the directory that
+    answer applies to cannot be left to however the agent happened to be started.
+    Run it by hand from a checked-out project and that project would be trusted.
+    """
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    opened = []
+
+    class Recording(QuotaTmux):
+        def __call__(self, argv, **kwargs):
+            if "new-session" in argv:
+                opened.append(argv)
+            return super().__call__(argv, **kwargs)
+
+    tmux = Recording(["❯ ready", USAGE_PANE])
+    assert agent.read_quota(tmux) is not None
+    assert len(opened) == 1
+    argv = opened[0]
+    assert "-c" in argv and argv[argv.index("-c") + 1] == str(tmp_path)
+
+
+def test_read_quota_refuses_rather_than_trusting_an_unknown_directory(monkeypatch):
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(agent, "_quota_home", lambda: None)
+    tmux = QuotaTmux(["❯ ready", USAGE_PANE])
+    assert agent.read_quota(tmux) is None
+    assert tmux.sent == [], "nothing is typed into a session that was never opened"
+
+
+def test_quota_home_will_not_hand_back_something_that_is_not_a_directory(monkeypatch,
+                                                                        tmp_path):
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    assert agent._quota_home() == str(tmp_path)
+    missing = tmp_path / "gone"
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: missing))
+    assert agent._quota_home() is None
+
+    def boom():
+        raise RuntimeError("no home")
+
+    monkeypatch.setattr(agent.Path, "home", staticmethod(boom))
+    assert agent._quota_home() is None

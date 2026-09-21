@@ -10,6 +10,10 @@ Type=oneshot
 # sets this; the one that actually invokes claude was the one missing it, and the
 # project's whole upgrade policy is that the operator stages them.
 Environment=DISABLE_AUTOUPDATER=1
+# The quota read opens a Claude Code session and answers its folder-trust
+# prompt. The agent pins that session's directory itself, and this makes the
+# service agree rather than leaving it to whatever systemd happened to hand us.
+WorkingDirectory=%h
 EnvironmentFile=%h/.config/ccfleet/agent.env
 ExecStart=%h/.local/bin/ccfleet-agent
 NoNewPrivileges=yes

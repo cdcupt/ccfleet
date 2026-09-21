@@ -682,6 +682,15 @@ def _quota_tmux(runner: Runner, *args: str, timeout: float = 15.0) -> Optional[s
     return _run(runner, ["tmux", "-L", QUOTA_TMUX_SOCKET, *args], timeout=timeout)
 
 
+def _quota_home() -> Optional[str]:
+    """The one directory this is willing to open a trusted session in."""
+    try:
+        home = Path.home()
+    except (RuntimeError, OSError):
+        return None
+    return str(home) if home.is_dir() else None
+
+
 def parse_quota(pane: str) -> dict[str, Any]:
     """Pull the windows out of what /usage drew.
 
@@ -724,9 +733,17 @@ def read_quota(runner: Runner = subprocess.run,
     path = find_claude()
     if not path:
         return None
+    # Start it in the owner's home and nowhere else. The loop below answers
+    # Claude Code's folder-trust prompt, and answering it means trusting whatever
+    # directory this happened to start in — a checked-out project, if someone ran
+    # the agent by hand from one. Pinning the directory is what makes that answer
+    # safe, rather than assuming the service was launched somewhere harmless.
+    home = _quota_home()
+    if home is None:
+        return None
     _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
     started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
-                          "-x", "180", "-y", "45", shlex.quote(path))
+                          "-c", home, "-x", "180", "-y", "45", shlex.quote(path))
     if not started:
         return None
     deadline = (time.time() if now is None else now) + QUOTA_TIMEOUT_S
