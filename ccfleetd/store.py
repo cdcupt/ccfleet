@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -98,6 +99,25 @@ CREATE TABLE IF NOT EXISTS users (
 
 class StoreError(ValueError):
     """Raised for invalid identifiers or missing rows."""
+
+
+
+def _without_secret(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The payload as it should be kept, which is without the minted token.
+
+    A heartbeat is archived whole for the retention window. A device token
+    riding up inside one would therefore outlive the single showing it is
+    promised by thirty days, in a second copy nothing points at and
+    ``take_secret`` cannot reach. Redacting here rather than at the call site
+    makes it a property of storing a heartbeat, not something each caller has
+    to remember.
+    """
+    login = (payload.get("reconcile") or {}).get("login")
+    if not isinstance(login, Mapping) or "secret" not in login:
+        return dict(payload)
+    reconcile = dict(payload["reconcile"])
+    reconcile["login"] = {k: v for k, v in login.items() if k != "secret"}
+    return {**payload, "reconcile": reconcile}
 
 
 def hash_token(token: str) -> str:
@@ -419,7 +439,7 @@ class Store:
     # -- heartbeats --------------------------------------------------------
 
     def insert_heartbeat(self, node_id: str, ts: float, payload: dict[str, Any]) -> int:
-        body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        body = json.dumps(_without_secret(payload), separators=(",", ":"), sort_keys=True)
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO heartbeats (node_id, ts, payload) VALUES (?, ?, ?)",

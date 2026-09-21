@@ -259,6 +259,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     requested_at if isinstance(requested_at, (int, float))
                     and not isinstance(requested_at, bool) else None,
                     secret=str(login.get("secret") or ""))
+                # Consumed. The store redacts it before anything is archived,
+                # which is the guarantee; dropping it here as well keeps a
+                # credential from travelling further through this process than
+                # the one call that needed it.
+                login.pop("secret", None)
             events = ctx.monitor.record_heartbeat(node, payload, now)
             self._json(200, {
                 "ok": True,

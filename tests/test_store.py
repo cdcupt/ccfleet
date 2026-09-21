@@ -289,3 +289,43 @@ def test_a_database_written_before_these_columns_still_opens(tmp_path):
         assert s.get_login("old-node")["kind"] == "token"
     finally:
         s.close()
+
+
+def test_a_minted_token_never_reaches_the_heartbeat_archive(store):
+    """The bug this test exists for: `take_secret` deleted the copy in `logins`
+    while a second copy sat in `heartbeats` for the whole retention window,
+    which made "shown once" false by thirty days."""
+    n = _node(store)
+    secret = "sk-ant-oat01-" + "Z" * 50
+    store.request_login(n, "", 1.0, kind="token")
+    payload = {"hostname": "h",
+               "reconcile": {"login": {"state": "ready", "secret": secret,
+                                       "requested_at": 1.0}}}
+    store.record_login_progress(n, "ready", "", "", 2.0, 1.0, secret=secret)
+    store.insert_heartbeat(n, 2.0, payload)
+
+    import json
+    archived = json.dumps(store.recent_heartbeats(n, 5)) if hasattr(
+        store, "recent_heartbeats") else json.dumps(
+        [dict(r) for r in store._conn.execute("SELECT payload FROM heartbeats")])
+    assert secret not in archived, "a credential must not outlive its one showing"
+    # Everything else about the beat survives: this is a redaction, not a drop.
+    assert "ready" in archived and "hostname" in archived
+    # And the caller's own dict is untouched — it is still needed in memory.
+    assert secret in json.dumps(payload)
+    # The one legitimate copy still works, once.
+    assert store.take_secret(n) == secret
+    assert store.take_secret(n) == ""
+
+
+def test_redaction_leaves_an_ordinary_heartbeat_alone(store):
+    n = _node(store)
+    for payload in ({"hostname": "h"},
+                    {"reconcile": {}},
+                    {"reconcile": {"login": {"state": "url_ready"}}},
+                    {"reconcile": {"upgrade": {"to": "2.1.278"}}}):
+        store.insert_heartbeat(n, 1.0, payload)
+    import json
+    rows = [dict(r) for r in store._conn.execute("SELECT payload FROM heartbeats")]
+    blob = json.dumps(rows)
+    assert "url_ready" in blob and "2.1.278" in blob and "hostname" in blob
