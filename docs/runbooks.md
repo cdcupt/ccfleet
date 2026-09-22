@@ -102,6 +102,46 @@ rotate automatically (`CCFLEET_BACKUP_KEEP`); `~/.claude/debug` and
 valid login; if it complains about eligibility, do the re-login runbook. The
 very first start must be interactive to accept the one-time prompt.
 
+## `slot_wipe_failed:<user>`
+
+A slot was given back, or taken back, and removing its Linux user failed. It
+stays out of the pool, because only a finished wipe makes a slot free, and the
+machine agent tries again every 10 minutes by itself. The alert names the
+error. The usual cause is a process that outlived `pkill`; to see it, on the
+machine: `ps -u <user>`, and the agent's own account of it with
+`journalctl -u ccfleet-machine --since -1h`. Once the cause is gone, either
+wait for the next attempt or run it now as root:
+`/usr/local/lib/ccfleet/slot-remove.sh --slot <user>`. The slot turns free when
+the machine next reports the user absent.
+
+## `slot_occupied:<user>`
+
+ccfleet's records say the slot is free, but the machine says its Linux user
+exists. It is not handed out while that is true: a user that should not exist
+may still hold the last person's files. Nobody made it through ccfleet, so it
+was made by hand, or the fleet's database was restored from before a claim.
+Look at what is in the home directory before anything else. A leftover slot
+comes off with `/usr/local/lib/ccfleet/slot-remove.sh --slot <user>` on the
+machine. If that refuses because the account is not a ccfleet slot, the name
+belongs to an account ccfleet did not make: leave that account alone, remove the
+slot here with `ccfleetd slot remove <id>` (it is free, so it may go), and
+declare it again under an unused name.
+
+## `slot_missing:<user>`
+
+Somebody holds the slot, and its Linux user has gone from the machine: removed
+by hand, or the machine was rebuilt. Their files went with it. Take the slot
+back in the console (it asks for the slot's id), tell the person, and let them
+claim again; the new slot is set up from scratch.
+
+## `slot_provision_failed:<user>`
+
+Setting up a claimed slot failed, so the claim was given up and the slot is
+being wiped; the person can simply claim again. It is a warning, not a page,
+unless it repeats. Repeats mean the machine cannot make slots at all: read the
+error in the alert, then `journalctl -u ccfleet-machine --since -1h` on the
+machine. Disk space and a failed Claude Code install are the usual causes.
+
 ## Rebuild a node
 
 1. New VPS, `bootstrap.sh`, `setup-owner.sh`, then restore the latest

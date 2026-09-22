@@ -109,6 +109,54 @@ ccp add personal && ccp use personal          # /login once per profile
 ccp add work --share && ccp list
 ```
 
+### 4. Shared machines: several people on one box, one account each
+
+A machine can carry several **slots**. Each slot is its own Linux user, with
+its own home, its own Claude Code and its own Claude sign-in, so nobody shares
+a credential: one owner, one account, one slot. People sign in to ccfleet with
+Google (it learns an email address and nothing else), the operator grants them
+an allowance, and they claim a slot, sign it in to their own Claude account and
+give it back from `/account`. The guidebook predates shared machines; this
+section is their reference until it catches up.
+
+```bash
+# fleet server: Google sign-in needs an OAuth "Web application" client whose
+# redirect URI is <CCFLEET_PUBLIC_URL>/auth/google/callback, and in ccfleetd.env
+#   CCFLEET_GOOGLE_CLIENT_ID=...  CCFLEET_GOOGLE_CLIENT_SECRET=...
+#   CCFLEET_COOKIE_SECRET=<openssl rand -hex 32>
+ccfleetd node add shared-1 --owner ops --region us-west          # prints the machine's token once
+ccfleetd slot capacity shared-1 4                                 # how many slots it may hold
+ccfleetd slot add shared-1-01 --machine shared-1 --unix-user slot01   # one line per slot
+
+# the machine, as root, after hardening it with node/install.sh
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
+  | sudo bash -s -- --server https://fleet.example.com --node shared-1 --token <64-hex>
+
+# once somebody has signed in with Google
+ccfleetd account quota alice@example.com 1                        # their allowance; zero until granted
+ccfleetd account role you@example.com admin                       # an operator, who signs in with Google
+ccfleetd payment add alice@example.com 30 USD 2026-10-31          # a record for you; it enforces nothing
+```
+
+The rules the rest depends on:
+
+- **A slot is only handed out once the machine has confirmed its Linux user is
+  absent**, and it is free again only after the machine confirms the wipe.
+  Giving a slot back deletes everything in it; the person's Claude account
+  itself is untouched.
+- **Lowering an allowance takes nothing away.** It only stops more claiming.
+  Taking a held slot back is a release, with the wipe that implies; the console
+  asks for the slot's id to be typed.
+- **Nothing acts as a user.** The console can take a slot back; it cannot sign
+  in on anybody's behalf, type their code, or read their device token.
+- **Payments are a record, not a gate.** The console shows who is paid through
+  when, and marks a lapse in red while that person still holds or may claim
+  slots. A lapse takes no slot and stops no claim; what to do about it is yours.
+- **Two sites, if you want them.** `CCFLEET_ADMIN_HOST=admin.fleet.example.com`
+  puts the console on its own hostname, with its own Google redirect URI and its
+  own sessions; every other hostname is then the product. Left unset, one host
+  serves both, as before.
+
 ## Layout
 
 
@@ -118,9 +166,10 @@ ccp add work --share && ccp list
 
 | Path | What |
 | --- | --- |
-| `ccfleetd/` | fleet server (standard library only): API, store, rules, monitor, notifier, dashboard, CLI |
+| `ccfleetd/` | fleet server (standard library only): API, store, rules, monitor, notifier, dashboard, user site, payments ledger, CLI |
 | `ccfleet_agent/agent.py` | single-file heartbeat agent for nodes |
-| `node/` | bootstrap, owner setup, backup, egress probe, staged upgrade, systemd user units |
+| `ccfleet_agent/machine.py` | the shared machine's agent: runs as root, adds and wipes slot users, reports every slot |
+| `node/` | bootstrap, owner setup, backup, egress probe, staged upgrade, systemd user units; `machine-setup.sh`, `slot-add.sh`, `slot-remove.sh` for shared machines |
 | `profiles/ccp` | per-account profile switcher for laptops |
 | `gateway/` | optional pass-through gateway (Caddy), for owners who must keep files local |
 | `docs/tunnel.md` | reporting over an SSH tunnel when the server has no public endpoint |
