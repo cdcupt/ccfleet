@@ -56,15 +56,29 @@ printf '%s' "$MEMORY_MAX" | grep -qE '^[0-9]+[KMG]?$' \
 [ "$(id -u)" -eq 0 ] || die "run this as root"
 
 HOME_DIR="/home/$SLOT"
+# Membership of this group is what makes an account a slot. It is created here
+# and required by slot-remove before it will delete anything — because "no sudo
+# and a uid over 1000" describes a great many ordinary accounts, and a typo
+# should not be able to delete a colleague's home directory.
+SLOT_GROUP="ccfleet-slots"
 as_slot() { sudo -u "$SLOT" HOME="$HOME_DIR" bash -c "$1"; }
 
 step "1/4  the account"
+getent group "$SLOT_GROUP" >/dev/null 2>&1 || addgroup --system "$SLOT_GROUP" >/dev/null
 if id "$SLOT" >/dev/null 2>&1; then
-  note "user $SLOT already exists; continuing"
+  # An account with this name already exists. If this tool did not create it,
+  # it belongs to somebody else and is not ours to reshape: the steps below
+  # would tighten their home to 0700 and strip their sudo. Refuse instead.
+  if ! id -nG "$SLOT" 2>/dev/null | tr ' ' '\n' | grep -qx "$SLOT_GROUP"; then
+    die "$SLOT already exists and is not a ccfleet slot. Refusing to take it over."
+  fi
+  note "slot $SLOT already exists; continuing"
 else
   adduser --disabled-password --gecos "" "$SLOT" >/dev/null
   note "created $SLOT"
 fi
+adduser "$SLOT" "$SLOT_GROUP" >/dev/null 2>&1 || usermod -aG "$SLOT_GROUP" "$SLOT"
+note "marked as a slot (member of $SLOT_GROUP)"
 # 0700 rather than the distro default. On a shared machine the default 0755
 # means every slot can read every other slot's home, including the directory
 # Claude Code writes a credential into.

@@ -38,9 +38,16 @@ printf '%s' "$SLOT" | grep -qE '^[a-z][a-z0-9_-]{1,31}$' \
 [ "$(id -u)" -eq 0 ] || die "run this as root"
 id "$SLOT" >/dev/null 2>&1 || { note "no such user: $SLOT; nothing to release"; exit 0; }
 
-# Refuse to remove anybody who could be a real account on this box rather than a
-# slot. A slot has no sudo; if this one does, it is not a slot and removing it
-# would be the kind of mistake there is no undo for.
+# What makes an account a slot is that slot-add created it and put it in this
+# group. Nothing else does: "no sudo and a uid over 1000" describes a great many
+# ordinary accounts, and this script deletes a home directory.
+SLOT_GROUP="ccfleet-slots"
+if ! id -nG "$SLOT" 2>/dev/null | tr ' ' '\n' | grep -qx "$SLOT_GROUP"; then
+  die "$SLOT is not a ccfleet slot (not in $SLOT_GROUP). Refusing to remove it."
+fi
+# Belt and braces below the marker. A slot has no sudo and is not a system
+# account; if either is untrue, something has been edited by hand and this is
+# not the moment to find out by deleting a home directory.
 if id -nG "$SLOT" | tr ' ' '\n' | grep -qx sudo; then
   die "$SLOT has sudo, so it is not a slot. Refusing to remove it."
 fi
