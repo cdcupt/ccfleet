@@ -236,6 +236,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "egress_ip": (payload.get("egress") or {}).get("ip"),
             "disk_used_pct": (payload.get("disk") or {}).get("used_pct"),
             "load1": (payload.get("load") or {}).get("1"),
+            "device_token_at": node.get("device_token_at"),
             "credentials_present": creds.get("present"),
             "credentials_mtime": creds.get("mtime"),
             "token_expires_at": creds.get("expires_at"),
@@ -518,7 +519,7 @@ TOKEN_WORDS = {
 
 
 def _token_html(rows: list[Mapping[str, Any]], csrf: str,
-                logins: Mapping[str, Any]) -> str:
+                logins: Mapping[str, Any], now: float) -> str:
     """Mint a credential for a machine that is not a node.
 
     The node is already signed in, so it can mint one on request. This card is
@@ -544,8 +545,19 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
                     f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
 
         if not state:
-            body = ('<span class="muted small">for a laptop, desktop or phone</span> '
-                    + form("token-start", "", "Get a device token"))
+            # Say if one has been issued before. The flow deletes itself when it
+            # finishes, so without this the card after a success is identical to
+            # the card before you ever started — and someone reasonably wonders
+            # whether anything happened.
+            issued = row.get("device_token_at")
+            if isinstance(issued, (int, float)) and issued > 0:
+                said = (f'<span class="pill ok">last issued {escape(_age(now, issued))} '
+                        f'ago</span> ')
+                label = "Get another"
+            else:
+                said = '<span class="muted small">for a laptop, desktop or phone</span> '
+                label = "Get a device token"
+            body = said + form("token-start", "", label)
         elif state == "ready":
             body = (f'<span class="pill ok">{escape(TOKEN_WORDS["ready"])}</span> '
                     + form("token-show", "", "Show it once", cls="primary"))
@@ -871,7 +883,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         # the operator to sign you in would only move the bottleneck.
         + _usage_html(rows, now)
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
-        + (_token_html(rows, csrf, logins or {}) if csrf else "")
+        + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + "</div></body></html>"
     )
