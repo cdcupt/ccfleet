@@ -30,6 +30,16 @@ SLOT=""
 MEMORY_MAX="2G"
 
 die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
+_cap_bytes() {
+  local n="${1%[KMG]}" u="${1#"${1%[KMG]}"}"
+  case "$u" in
+    K) echo $((n * 1024)) ;;
+    M) echo $((n * 1024 * 1024)) ;;
+    G) echo $((n * 1024 * 1024 * 1024)) ;;
+    *) echo "$n" ;;
+  esac
+}
+
 step() { printf '\n== %s\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
 
@@ -57,20 +67,14 @@ printf '%s' "$MEMORY_MAX" | grep -qE '^[0-9]+[KMG]?$' \
 # cannot start. Measured on a live node: about 265 MB for a running session, so
 # anything under 512 MiB is a typo rather than a choice. Zero in particular
 # would write MemoryMax=0 and leave the slot unable to run anything at all.
-_cap_bytes() {
-  local n="${1%[KMG]}" u="${1#"${1%[KMG]}"}"
-  case "$u" in
-    K) echo $((n * 1024)) ;;
-    M) echo $((n * 1024 * 1024)) ;;
-    G) echo $((n * 1024 * 1024 * 1024)) ;;
-    *) echo "$n" ;;
-  esac
-}
 [ "$(_cap_bytes "$MEMORY_MAX")" -ge $((512 * 1024 * 1024)) ] \
   || die "--memory-max must be at least 512M; a slot needs about 265M to run at all"
 [ "$(id -u)" -eq 0 ] || die "run this as root"
 
-HOME_DIR="/home/$SLOT"
+# Set properly once the account exists, from what the system says rather than
+# from a guess: adduser does not have to put a home under /home, and writing to
+# the wrong path is how a provisioning script edits somebody else's files.
+HOME_DIR=""
 # Membership of this group is what makes an account a slot. It is created here
 # and required by slot-remove before it will delete anything — because "no sudo
 # and a uid over 1000" describes a great many ordinary accounts, and a typo
@@ -101,6 +105,9 @@ else
 fi
 adduser "$SLOT" "$SLOT_GROUP" >/dev/null 2>&1 || usermod -aG "$SLOT_GROUP" "$SLOT"
 note "marked as a slot (member of $SLOT_GROUP)"
+
+HOME_DIR="$(getent passwd "$SLOT" | cut -d: -f6)"
+[ -n "$HOME_DIR" ] || die "could not find a home directory for $SLOT"
 # 0700 rather than the distro default. On a shared machine the default 0755
 # means every slot can read every other slot's home, including the directory
 # Claude Code writes a credential into.
@@ -119,11 +126,13 @@ note "lingering on, so services survive logout"
 
 step "2/5  a share of the machine"
 # A soft ceiling below the hard one, so a slot that is growing gets throttled
-# and reclaimed before it is killed outright. Eighty percent, computed in
-# whatever unit the cap was given in rather than by converting between them.
-MEM_NUM="${MEMORY_MAX%[KMG]}"
-MEM_UNIT="${MEMORY_MAX#"$MEM_NUM"}"
-MEMORY_HIGH="$(( MEM_NUM * 8 / 10 ))${MEM_UNIT}"
+# and reclaimed before it is killed outright.
+#
+# Computed in bytes and written in MiB. Taking 80% of the number while keeping
+# its unit is wrong whenever the number is small: 2G became 1G, which is half
+# rather than four fifths, and 1G became 0G, which would have put the slot
+# under reclaim pressure from its first byte.
+MEMORY_HIGH="$(( $(_cap_bytes "$MEMORY_MAX") * 8 / 10 / 1024 / 1024 ))M"
 # One slice per slot. Without it a single runaway build is the whole machine's
 # problem; with it, it is that slot's problem.
 # Where systemd reads drop-ins from. Overridable so this step can be exercised

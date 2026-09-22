@@ -35,7 +35,8 @@ INERT = ("loginctl", "systemctl", "pkill", "deluser", "adduser",
          "usermod", "addgroup", "rmdir", "install", "chmod", "curl")
 
 
-def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True):
+def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
+                slot_home=None):
     """A PATH where `id` and friends describe whatever account we want to test.
 
     The scripts ask three things before touching anything: am I root, does this
@@ -66,27 +67,38 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True):
              .replace("__GROUPS__", groups)
              .replace("__EXISTS__", "0" if exists else "1"))
     (bindir / "userdel").write_text(f'#!/bin/sh\ntouch "{gone}"\nexit 0\n')
+    home = str(slot_home) if slot_home else "/home/$2"
     (bindir / "getent").write_text(textwrap.dedent("""\
         #!/bin/sh
-        if [ "$1" = "passwd" ]; then echo "$2:x:1001:1001::/home/$2:/bin/sh"; exit 0; fi
+        if [ "$1" = "passwd" ]; then echo "$2:x:1001:1001::__HOME__:/bin/sh"; exit 0; fi
         exit 0
-        """))
+        """).replace("__HOME__", home))
     (bindir / "pgrep").write_text("#!/bin/sh\nexit 1\n")   # nothing running
     # sudo runs what it is given rather than swallowing it, so anything the
     # script does *as the slot* is still observable. Without this, every
     # `sudo -u slot systemctl --user ...` vanishes and a test watching for it
     # sees nothing and concludes, wrongly, that it never happened.
+    #
+    # It APPLIES the VAR=VALUE assignments rather than discarding them, and
+    # that is not a detail. The script passes HOME=/home/<slot>; a sudo that
+    # drops it runs the rest against whoever is running the tests — and that
+    # is not hypothetical, it happened: an earlier version of this harness
+    # appended to the real ~/.profile, created a real ~/workspace and wrote
+    # hasTrustDialogAccepted into the real ~/.claude.json on the machine the
+    # suite was running on.
     (bindir / "sudo").write_text(textwrap.dedent("""\
         #!/bin/sh
+        assignments=""
         while [ $# -gt 0 ]; do
           case "$1" in
             -u) shift 2 ;;
-            *=*) shift ;;
+            *=*) assignments="$assignments $1"; shift ;;
             *) break ;;
           esac
         done
         [ $# -eq 0 ] && exit 0
-        exec "$@"
+        # `env` so the assignments actually reach the command, HOME included.
+        exec env $assignments "$@"
         """))
     for name in INERT:
         (bindir / name).write_text("#!/bin/sh\nexit 0\n")
@@ -283,7 +295,9 @@ def test_a_slot_is_given_a_way_in(tmp_path):
     "claude-remote-control.service", which still appears in the enable line
     even when nothing installs the unit at all.
     """
-    bindir = fake_system(tmp_path)
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    bindir = fake_system(tmp_path, slot_home=slot_home)
     log = tmp_path / "commands.log"
     # Not mkdir: the slice directory has to really exist, because the script
     # writes the drop-in into it with a redirect.
@@ -327,3 +341,55 @@ def test_the_closing_message_does_not_promise_what_is_not_installed():
     text = ADD.read_text()
     promises_rc = "Remote Control" in text or "remote-control" in text
     assert not promises_rc or "claude-remote-control.service" in text
+
+
+def test_the_harness_never_touches_the_home_of_whoever_runs_it(tmp_path):
+    """This is not a hypothetical. An earlier version of this file used a fake
+    `sudo` that discarded the `HOME=...` assignment the script passes, so
+    everything the script does "as the slot" ran as the developer instead: it
+    appended to the real ~/.profile, created a real ~/workspace, and wrote
+    hasTrustDialogAccepted into the real ~/.claude.json.
+
+    The sandbox is the assertion. If sudo ever stops applying HOME, this fails
+    rather than quietly editing somebody's machine again.
+    """
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    real_profile = Path.home() / ".profile"
+    before = real_profile.read_text() if real_profile.exists() else None
+
+    bindir = fake_system(tmp_path, slot_home=slot_home)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CCFLEET_SLICE_ROOT"] = str(tmp_path / "slices")
+    subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                   text=True, env=env, timeout=60)
+
+    after = real_profile.read_text() if real_profile.exists() else None
+    assert after == before, "the script wrote to the real ~/.profile"
+    # And it did do its work — somewhere safe.
+    assert (slot_home / ".profile").exists(), "the sandboxed home got the profile line"
+    assert "DISABLE_AUTOUPDATER" in (slot_home / ".profile").read_text()
+
+
+def test_the_soft_memory_ceiling_is_four_fifths_of_the_hard_one(tmp_path):
+    """Taking 80% of the number while keeping its unit is wrong whenever the
+    number is small: 2G became 1G, which is half, and 1G became 0G, which puts
+    a slot under reclaim pressure from its first byte."""
+    for cap, low, high in (("1G", 780, 860), ("2G", 1560, 1720),
+                           ("512M", 390, 430), ("4G", 3100, 3400)):
+        slot_home = tmp_path / f"home-{cap}"
+        slot_home.mkdir()
+        slices = tmp_path / f"slices-{cap}"
+        env = dict(os.environ)
+        env["PATH"] = f"{fake_system(tmp_path, slot_home=slot_home)}:{env['PATH']}"
+        env["CCFLEET_SLICE_ROOT"] = str(slices)
+        subprocess.run([str(ADD), "--slot", "slot01", "--memory-max", cap],
+                       capture_output=True, text=True, env=env, timeout=60)
+        conf = next(slices.rglob("50-ccfleet.conf"))
+        written = dict(ln.split("=", 1) for ln in conf.read_text().splitlines()
+                       if "=" in ln and not ln.startswith("#"))
+        assert written["MemoryMax"] == cap
+        got = int(written["MemoryHigh"].rstrip("M"))
+        assert low <= got <= high, f"{cap} gave MemoryHigh={got}M, want ~80%"
+        assert got > 0, "a soft ceiling of zero is not a ceiling"
