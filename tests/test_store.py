@@ -428,3 +428,55 @@ def test_a_failure_still_ends_an_attempt_that_has_a_token_waiting(store):
     store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-x")
     store.record_login_progress(n, "failed", "", "gave up", 130.0)
     assert store.get_login(n) is None
+
+
+def test_collecting_a_token_is_remembered_on_the_node(store):
+    """The row is deleted the moment the token is shown, which leaves nothing to
+    say the flow ever succeeded. The time is not a secret and is the only trace
+    worth keeping."""
+    n = _node(store)
+    assert store.get_node(n)["device_token_at"] == 0, "nothing issued yet"
+
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 110.0, secret="sk-ant-oat01-x")
+    assert store.get_node(n)["device_token_at"] == 0, "not until it is collected"
+
+    assert store.take_secret(n, now=120.0) == "sk-ant-oat01-x"
+    assert store.get_node(n)["device_token_at"] == 120.0
+
+    # And it is a time, not the credential: nothing of the token survives.
+    import json
+    assert "sk-ant" not in json.dumps(dict(store.get_node(n)))
+
+
+def test_a_failed_collection_is_not_remembered_as_a_success(store):
+    n = _node(store)
+    store.take_secret(n, now=50.0)              # nothing waiting
+    assert store.get_node(n)["device_token_at"] == 0
+
+    store.request_login(n, "", 100.0, kind="token")
+    store.take_secret(n, now=60.0)              # mid-flight, not ready
+    assert store.get_node(n)["device_token_at"] == 0
+
+
+def test_a_database_written_before_the_column_still_opens(tmp_path):
+    """Old databases keep their old nodes table; the column is added on open."""
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE nodes (id TEXT PRIMARY KEY, owner TEXT NOT NULL,
+            region TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE,
+            pinned_version TEXT NOT NULL DEFAULT '', rc_expected INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL);
+        INSERT INTO nodes (id, owner, token_hash, created_at)
+        VALUES ('old-node', 'erik', 'deadbeef', 1.0);
+    """)
+    con.commit()
+    con.close()
+
+    s = Store(path)
+    try:
+        assert s.get_node("old-node")["device_token_at"] == 0, "reads as never issued"
+    finally:
+        s.close()

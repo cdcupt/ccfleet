@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
@@ -46,7 +47,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     pinned_version TEXT NOT NULL DEFAULT '',
     rc_expected INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    -- When a device token was last handed over for this node. The time only;
+    -- the credential is shown once and kept nowhere.
+    device_token_at REAL NOT NULL DEFAULT 0
 );
 -- One in-flight sign-in per node. A row exists only while a login is being
 -- driven from the console; it is deleted when the login finishes, so an absent
@@ -142,6 +146,11 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
         "rc_expected": bool(row["rc_expected"]),
         "enabled": bool(row["enabled"]),
         "created_at": row["created_at"],
+        # A time, never a credential: when a device token was last handed over.
+        # Keys are whitelisted here, so a column that is not named is a column
+        # that does not exist as far as the rest of the server is concerned —
+        # which is why the hash beside it has never leaked.
+        "device_token_at": row["device_token_at"],
     }
 
 
@@ -173,6 +182,13 @@ class Store:
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate
             # by hand; both are defaulted, so old rows stay valid.
+            self._add_missing_columns("nodes", {
+                # When a device token was last handed over for this node. The
+                # time only — the credential itself is shown once and kept
+                # nowhere. Without this the console has no memory of a flow
+                # that worked, and looks exactly as it did before you started.
+                "device_token_at": "REAL NOT NULL DEFAULT 0",
+            })
             self._add_missing_columns("logins", {
                 "kind": "TEXT NOT NULL DEFAULT 'login'",
                 "secret": "TEXT NOT NULL DEFAULT ''",
@@ -388,7 +404,7 @@ class Store:
                 (state, clean, detail.strip()[:200], now, *pin))
             self._conn.commit()
 
-    def take_secret(self, node_id: str) -> str:
+    def take_secret(self, node_id: str, now: Optional[float] = None) -> str:
         """Return a minted token once, and delete it in the same breath.
 
         Read and delete under one lock, so a refresh, a back button or a second
@@ -407,6 +423,10 @@ class Store:
             if row is None:
                 return ""
             self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+            # Handed over, so remember that it happened. The time is not a
+            # secret and is the only trace left of a flow that succeeded.
+            self._conn.execute("UPDATE nodes SET device_token_at = ? WHERE id = ?",
+                               (now if now is not None else time.time(), node_id))
             self._conn.commit()
         return str(row["secret"])
 

@@ -291,7 +291,7 @@ def test_each_button_sends_you_back_to_the_card_you_pressed_it_on():
     rows = [{"id": "att3", "owner": "erik", "credentials_present": True,
              "enabled": True, "rc_expected": False, "claude_version": "2.1.278",
              "pinned_version": ""}]
-    assert 'id="device-tokens"' in _token_html(rows, "TOK", {})
+    assert 'id="device-tokens"' in _token_html(rows, "TOK", {}, NOW)
     assert 'id="sign-in"' in _signin_html(rows, "TOK", {})
     assert 'id="manage"' in _manage_html(rows, "TOK")
     assert 'id="add-node"' in _add_form("TOK")
@@ -356,3 +356,27 @@ def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
                             "url": "https://claude.com/x"}})
     assert 'http-equiv="refresh"' not in typing
     assert "waiting for you to paste a code" in typing
+
+
+def test_the_card_remembers_that_a_token_was_issued():
+    """The flow deletes itself when it finishes, so without this the card after
+    a success is identical to the card before you ever started — and someone
+    reasonably asks whether anything happened at all. Erik did."""
+    from ccfleetd.render import _token_html
+    fresh = [{"id": "att3", "owner": "erik", "device_token_at": 0}]
+    html = _token_html(fresh, "TOK", {}, NOW)
+    assert "Get a device token" in html and "last issued" not in html
+    assert "for a laptop, desktop or phone" in html
+
+    used = [{"id": "att3", "owner": "erik", "device_token_at": NOW - 600}]
+    html = _token_html(used, "TOK", {}, NOW)
+    assert "last issued 10m ago" in html, "the page says the flow worked"
+    assert "Get another" in html, "and the button offers the thing you would want next"
+    # It is a time, not a credential. Nothing of the token itself survives.
+    assert "sk-ant" not in html
+
+    # A node that has never had one is not described as if it had.
+    for missing in (None, "", 0):
+        html = _token_html([{"id": "n", "owner": "e", "device_token_at": missing}],
+                           "TOK", {}, NOW)
+        assert "last issued" not in html
