@@ -176,6 +176,14 @@ SLOT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 # name this accepts and the script refuses is a slot that exists in our records
 # and can never exist on the machine.
 UNIX_USER_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
+# A sign-in on a slot shares the `logins` table with a node's own, keyed by
+# this prefix and the slot id. A node id cannot contain a colon, so the two can
+# never name the same row.
+SLOT_LOGIN_PREFIX = "slot:"
+
+
+def slot_login_key(slot_id: str) -> str:
+    return SLOT_LOGIN_PREFIX + slot_id
 
 
 class StoreError(ValueError):
@@ -201,12 +209,24 @@ def _without_secret(payload: Mapping[str, Any]) -> dict[str, Any]:
     makes it a property of storing a heartbeat, not something each caller has
     to remember.
     """
+    kept = dict(payload)
     login = (payload.get("reconcile") or {}).get("login")
+    if isinstance(login, Mapping) and "secret" in login:
+        reconcile = dict(payload["reconcile"])
+        reconcile["login"] = {k: v for k, v in login.items() if k != "secret"}
+        kept["reconcile"] = reconcile
+    # A shared machine carries each slot's sign-in the same way, one level down.
+    slots = payload.get("slots")
+    if isinstance(slots, list):
+        kept["slots"] = [_slot_without_secret(s) for s in slots]
+    return kept
+
+
+def _slot_without_secret(slot: Any) -> Any:
+    login = slot.get("login") if isinstance(slot, Mapping) else None
     if not isinstance(login, Mapping) or "secret" not in login:
-        return dict(payload)
-    reconcile = dict(payload["reconcile"])
-    reconcile["login"] = {k: v for k, v in login.items() if k != "secret"}
-    return {**payload, "reconcile": reconcile}
+        return slot
+    return {**slot, "login": {k: v for k, v in login.items() if k != "secret"}}
 
 
 def hash_token(token: str) -> str:
@@ -399,15 +419,45 @@ class Store:
         if self.get_node(node_id) is None:
             raise StoreError(f"unknown node: {node_id}")
         with self._lock:
-            self._conn.execute(
-                "INSERT INTO logins (node_id, requested_at, email, state, url, code, "
-                "detail, updated_at, kind, secret) "
-                "VALUES (?, ?, ?, 'requested', '', '', '', ?, ?, '') "
-                "ON CONFLICT(node_id) DO UPDATE SET requested_at=excluded.requested_at, "
-                "email=excluded.email, state='requested', url='', code='', detail='', "
-                "updated_at=excluded.updated_at, kind=excluded.kind, secret=''",
-                (node_id, now, email.strip()[:200], now, kind))
+            self._begin_login(self._conn, node_id, email, now, kind)
             self._conn.commit()
+
+    @staticmethod
+    def _begin_login(conn: sqlite3.Connection, key: str, email: str, now: float,
+                     kind: str) -> None:
+        conn.execute(
+            "INSERT INTO logins (node_id, requested_at, email, state, url, code, "
+            "detail, updated_at, kind, secret) "
+            "VALUES (?, ?, ?, 'requested', '', '', '', ?, ?, '') "
+            "ON CONFLICT(node_id) DO UPDATE SET requested_at=excluded.requested_at, "
+            "email=excluded.email, state='requested', url='', code='', detail='', "
+            "updated_at=excluded.updated_at, kind=excluded.kind, secret=''",
+            (key, now, email.strip()[:200], now, kind))
+
+    # Only a slot that is set up and held can be signed into: claimed or
+    # active. Claiming has no user to sign in as yet, and a slot being given
+    # back must not start a login its next holder could inherit.
+    SLOT_SIGN_IN_STATES = (slotstates.CLAIMED, slotstates.ACTIVE)
+
+    def request_slot_login(self, slot_id: str, email: str, now: float,
+                           kind: str = "login") -> None:
+        """Start a sign-in, or a device token, on a slot — for its holder.
+
+        The same dance as a node's own, run by the machine as the slot's user.
+        The check and the write are one transaction, so a release landing in
+        between cannot leave a sign-in hanging off a slot being wiped.
+        """
+        if kind not in self.LOGIN_KINDS:
+            raise StoreError(f"unknown sign-in kind: {kind}")
+        with self._write_txn() as conn:
+            row = conn.execute("SELECT state FROM slots WHERE id = ?",
+                               (slot_id,)).fetchone()
+            if row is None:
+                raise StoreError(f"no slot {slot_id!r}")
+            if row["state"] not in self.SLOT_SIGN_IN_STATES:
+                raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
+                                 f"into once it is set up")
+            self._begin_login(conn, slot_login_key(slot_id), email, now, kind)
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -542,10 +592,20 @@ class Store:
         ordinary sweep, and gone at once if somebody says they are finished
         with it. The window is what bounds this, not the reading.
         """
+        return self._read_secret(node_id, "nodes", node_id, now)
+
+    def read_slot_secret(self, slot_id: str, now: Optional[float] = None) -> str:
+        """A token minted on a slot, for as long as its attempt lasts."""
+        return self._read_secret(slot_login_key(slot_id), "slots", slot_id, now)
+
+    def _read_secret(self, key: str, table: str, row_id: str,
+                     now: Optional[float]) -> str:
+        if table not in ("nodes", "slots"):
+            raise StoreError(f"no device-token record on {table!r}")
         with self._lock:
             row = self._conn.execute(
                 "SELECT secret, requested_at FROM logins "
-                "WHERE node_id = ? AND state = 'ready'", (node_id,)).fetchone()
+                "WHERE node_id = ? AND state = 'ready'", (key,)).fetchone()
             if row is None:
                 return ""
             # Remember that a token reached somebody: once per attempt, not once
@@ -554,9 +614,9 @@ class Store:
             # guard of "only if this has never been set" would have frozen the
             # console's answer at whenever the first one was.
             self._conn.execute(
-                "UPDATE nodes SET device_token_at = ? "
+                f"UPDATE {table} SET device_token_at = ? "  # noqa: S608 - two literals
                 "WHERE id = ? AND device_token_at < ?",
-                (now if now is not None else time.time(), node_id,
+                (now if now is not None else time.time(), row_id,
                  row["requested_at"]))
             self._conn.commit()
         return str(row["secret"])
@@ -1010,8 +1070,22 @@ class Store:
         return cur.rowcount > 0
 
     def begin_release(self, slot_id: str) -> bool:
-        """Start the wipe. Legal from every state a person can hold."""
-        return self.move_slot(slot_id, slotstates.RELEASING)
+        """Start the wipe. Legal from every state a person can hold.
+
+        Whatever sign-in was in flight goes with it: its URL, a code typed in,
+        a minted device token waiting to be collected. All of it belongs to the
+        person giving the slot back, and none of it may be waiting for the next.
+        """
+        moved = self.move_slot(slot_id, slotstates.RELEASING)
+        self.clear_login(slot_login_key(slot_id))
+        return moved
+
+    def slot_on_machine(self, node_id: str, unix_user: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM slots WHERE node_id = ? AND unix_user = ?",
+                (node_id, unix_user)).fetchone()
+        return dict(row) if row else None
 
     def finish_release(self, slot_id: str, *, now: float) -> bool:
         """The wipe finished: the slot is empty and may be given to somebody else.

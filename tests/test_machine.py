@@ -595,3 +595,206 @@ def test_the_installed_layout_imports_without_the_package(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "shared machine" in proc.stdout
 
+
+
+# -- signing in ------------------------------------------------------------------
+
+LOGIN = {"requested_at": 42.0, "kind": "login", "email": "me@example.com"}
+
+
+def test_a_sign_in_goes_down_only_to_a_slot_set_up_and_held():
+    wanted = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "active", "login": LOGIN},
+        {"unix_user": "slot02", "state": "claimed", "login": {**LOGIN, "code": "c0de"}},
+        {"unix_user": "slot03", "state": "releasing", "login": LOGIN},
+        {"unix_user": "slot04", "state": "free", "login": LOGIN},
+    ]})
+    assert wanted[0]["login"] == LOGIN
+    assert wanted[1]["login"]["code"] == "c0de"
+    assert "login" not in wanted[2] and "login" not in wanted[3]
+
+
+@pytest.mark.parametrize("login,expected", [
+    ({"requested_at": True}, None),                     # not a timestamp
+    ({"requested_at": "42"}, None),
+    ({}, None),
+    ({"requested_at": 1.0, "kind": "shell"}, {"requested_at": 1.0, "kind": "login"}),
+    ({"requested_at": 1.0, "code": "c" * 5000}, {"requested_at": 1.0, "kind": "login"}),
+    ({"requested_at": 1.0, "email": 7, "argv": ["rm"]}, {"requested_at": 1.0, "kind": "login"}),
+])
+def test_a_sign_in_is_copied_field_by_field_before_a_slot_sees_it(login, expected):
+    [slot] = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "active", "login": login}]})
+    assert slot.get("login") == expected
+
+
+def test_a_slot_is_handed_its_own_sign_in_and_its_progress_comes_back(cfg):
+    fake = Fake(users=["slot01", "slot02"],
+                facts={"claude": {"version": "2.1.280"},
+                       "login": {"state": "url_ready", "url": "https://claude.com/x"}})
+    state = {"slots": ["slot01", "slot02"], "slot_logins": {"slot01": LOGIN}}
+    payload = machine.machine_payload(cfg, state, fake.system())
+    asked = {kw["env"]["USER"]: json.loads(kw["input_text"])["login"]
+             for _, kw in fake.spawned}
+    assert asked == {"slot01": LOGIN, "slot02": None}, "a sign-in went to the wrong slot"
+    assert payload["slots"][0]["login"]["state"] == "url_ready"
+
+
+def test_a_fast_poll_asks_only_whoever_is_signing_in(cfg):
+    fake = Fake(users=["slot01", "slot02"])
+    state = {"slots": ["slot01", "slot02"], "slot_logins": {"slot01": LOGIN},
+             "heard": {"slot02": {"claude": {"version": "2.1.279"}}}}
+    payload = machine.machine_payload(cfg, state, fake.system(), fast=True)
+    assert [kw["env"]["USER"] for _, kw in fake.spawned] == ["slot01"]
+    # Everybody is still in the report — nothing reads as gone between two
+    # full ones — with what they said last time, and root's facts fresh.
+    other = payload["slots"][1]
+    assert other["unix_user"] == "slot02" and other["present"] is True
+    assert other["claude"] == {"version": "2.1.279"}
+
+
+def test_a_minted_token_is_reported_once_and_never_kept_on_disk(cfg):
+    token = "sk-ant-oat01-" + "Z" * 40
+    fake = Fake(users=["slot01"], desired={"slots": [
+                    {"unix_user": "slot01", "state": "active", "login": LOGIN}]},
+                facts={"claude": {"version": "2.1.280"},
+                       "login": {"state": "ready", "secret": token, "requested_at": 42.0}})
+    _, _, state = machine.run_cycle(cfg, {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}},
+                                    fake.system())
+    assert fake.posted[0]["slots"][0]["login"]["secret"] == token
+    assert token not in cfg.state_path.read_text()
+    assert "login" not in state["heard"]["slot01"]
+
+
+def test_a_sign_in_the_server_still_wants_is_handed_on_to_the_next_run(cfg):
+    fake = Fake(users=["slot01"], desired={"slots": [
+        {"unix_user": "slot01", "state": "active", "login": LOGIN}]})
+    _, _, state = machine.run_cycle(cfg, {}, fake.system())
+    assert state["slot_logins"] == {"slot01": LOGIN}
+    fake.desired = {"slots": [{"unix_user": "slot01", "state": "active"}]}
+    _, _, state = machine.run_cycle(cfg, state, fake.system())
+    assert state["slot_logins"] == {}, "a finished sign-in kept being run"
+
+
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def _resident(fake, clock):
+    return machine.System(lookup=fake.lookup, groups_of=fake.groups_of, spawn=fake.spawn,
+                          runner=fake.runner, opener=fake.opener, clock=lambda: NOW,
+                          monotonic=clock.monotonic, sleep=clock.sleep)
+
+
+def test_it_stays_while_somebody_signs_in_and_leaves_when_they_are_done(cfg):
+    signing = {"slots": [{"unix_user": "slot01", "state": "active", "login": LOGIN},
+                         {"unix_user": "slot02", "state": "active"}],
+               "poll_s": 5}
+    fake = Fake(users=["slot01", "slot02"], desired=signing)
+    clock = Clock()
+    system = _resident(fake, clock)
+
+    polls = []
+
+    def opener(request, timeout=None):
+        polls.append(json.loads(request.data))
+        if len(polls) == 20:
+            fake.desired = {"slots": [{"unix_user": "slot01", "state": "active"},
+                                      {"unix_user": "slot02", "state": "active"}]}
+        return fake.opener(request, timeout)
+    system = machine.System(**{**system.__dict__, "opener": opener})
+    state = {"slots": ["slot01", "slot02"], "slot_logins": {"slot01": LOGIN}}
+    assert machine.stay_for_sign_ins(cfg, state, dict(signing), system) == 0
+    assert len(polls) == 20, "left before the sign-in finished, or stayed after"
+    assert set(clock.slept) == {5.0}
+    # Most polls ask only the slot signing in; a full report still goes out
+    # about once a minute, so other slots are not left waiting. Twenty polls
+    # five seconds apart is a hundred seconds: one full report, maybe two.
+    asked = [kw["env"]["USER"] for _, kw in fake.spawned]
+    assert asked.count("slot01") == 20
+    assert 1 <= asked.count("slot02") <= 2
+    # A quota read opens a session; only a full report may start one.
+    refreshed = [json.loads(kw["input_text"])["refresh_quota"] for _, kw in fake.spawned]
+    assert sum(refreshed) <= asked.count("slot02")
+
+
+def test_a_sign_in_nobody_finishes_is_given_up_on_and_the_server_told(cfg):
+    signing = {"slots": [{"unix_user": "slot01", "state": "active", "login": LOGIN}],
+               "poll_s": 30}
+    fake = Fake(users=["slot01"], desired=signing)
+    clock = Clock()
+    state = {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}}
+    assert machine.stay_for_sign_ins(cfg, state, dict(signing), _resident(fake, clock)) == 0
+    assert clock.now >= machine.core.LOGIN_WINDOW_S
+    last = fake.posted[-1]["slots"][0]
+    assert last["login"]["state"] == "failed"
+    assert last["login"]["requested_at"] == 42.0
+    # And the slot was told to let the pane go: no sign-in handed on.
+    assert json.loads(fake.spawned[-1][1]["input_text"])["login"] is None
+
+
+def test_a_refused_poll_ends_the_stay(cfg, monkeypatch):
+    monkeypatch.setattr(machine.core, "RETRY_DELAYS_S", ())
+    signing = {"slots": [{"unix_user": "slot01", "state": "active", "login": LOGIN}]}
+    fake = Fake(users=["slot01"], desired=signing, status=401)
+    state = {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}}
+    assert machine.stay_for_sign_ins(cfg, state, dict(signing), _resident(fake, Clock())) == 1
+
+
+def test_a_run_that_finds_somebody_signing_in_stays_for_them(tmp_path, cfg, monkeypatch):
+    monkeypatch.setattr(machine.os, "geteuid", lambda: 0)
+    signing = {"slots": [{"unix_user": "slot01", "state": "active", "login": LOGIN}],
+               "poll_s": 5}
+    fake = Fake(users=["slot01"], desired=signing)
+    clock = Clock()
+    system = _resident(fake, clock)
+
+    def opener(request, timeout=None):
+        reply = fake.opener(request, timeout)
+        if len(fake.posted) == 3:
+            fake.desired = {"slots": [{"unix_user": "slot01", "state": "active"}]}
+        return reply
+    system = machine.System(**{**system.__dict__, "opener": opener})
+    assert machine.main(["--env-file", str(_env_file(tmp_path, cfg))], system) == 0
+    assert len(fake.posted) == 4, "a timer run left somebody mid-sign-in"
+
+
+def test_a_give_up_the_server_did_not_hear_is_a_failed_run(cfg, monkeypatch):
+    monkeypatch.setattr(machine.core, "RETRY_DELAYS_S", ())
+    signing = {"slots": [{"unix_user": "slot01", "state": "active", "login": LOGIN}],
+               "poll_s": 30}
+    fake = Fake(users=["slot01"], desired=signing)
+    clock = Clock()
+    system = _resident(fake, clock)
+
+    def opener(request, timeout=None):
+        # Refuse only the report that gives up, and nothing before it.
+        gives_up = any((s.get("login") or {}).get("state") == "failed"
+                       for s in json.loads(request.data)["slots"])
+        fake.status = 401 if gives_up else 200
+        return fake.opener(request, timeout)
+    system = machine.System(**{**system.__dict__, "opener": opener})
+    state = {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}}
+    assert machine.stay_for_sign_ins(cfg, state, dict(signing), system) == 1
+    assert (fake.posted[-1]["slots"][0]["login"] or {})["state"] == "failed"
+
+
+def test_a_fast_poll_does_not_move_the_quota_turn_on(cfg):
+    """Otherwise how many polls a sign-in took decides whose quota is read
+    next, and a slot can be skipped for as long as somebody keeps signing in."""
+    fake = Fake(users=["slot01", "slot02"], desired={"slots": [
+        {"unix_user": "slot01", "state": "active"}, {"unix_user": "slot02", "state": "active"}]})
+    state = {"slots": ["slot01", "slot02"], "quota_turn": 3}
+    _, _, state = machine.run_cycle(cfg, state, fake.system(), fast=True)
+    assert state["quota_turn"] == 3
+    _, _, state = machine.run_cycle(cfg, state, fake.system())
+    assert state["quota_turn"] == 4

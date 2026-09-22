@@ -87,6 +87,14 @@ MAX_SLOT_REPORT_BYTES = 256 * 1024
 # hundred bytes an owner node gets back. Cut short, it would parse as nothing
 # and the machine would quietly stop provisioning and wiping.
 MAX_REPLY_BYTES = 1024 * 1024
+# While somebody is signing in, the machine stays resident and polls fast; a
+# full report of every slot still goes out this often, so provisioning and
+# wiping do not wait out somebody else's sign-in.
+FULL_EVERY_S = 60.0
+# The slot states a sign-in can run in, and the kinds it can be.
+SIGN_IN_STATES = ("claimed", "active")
+LOGIN_KINDS = ("login", "token")
+MAX_LOGIN_FIELD = 512
 # How long a child that has closed its output gets to exit before it is killed.
 EXIT_GRACE_S = 5.0
 # Only these reach the server from a slot's own report. Everything else in the
@@ -208,6 +216,8 @@ class System:
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
     opener: Callable[..., Any] = urllib.request.urlopen
     clock: Callable[[], float] = time.time
+    monotonic: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
 
 
 # -- what the server asks for ----------------------------------------------------
@@ -236,8 +246,33 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
                                     or not isinstance(claimed_at, (int, float))):
             continue
         seen.add(user)
-        out.append({"unix_user": user, "state": state,
-                    "claimed_at": claimed_at if state == "claiming" else None})
+        item: dict[str, Any] = {"unix_user": user, "state": state,
+                                "claimed_at": claimed_at if state == "claiming" else None}
+        login = _login_request(entry.get("login")) if state in SIGN_IN_STATES else None
+        if login is not None:
+            item["login"] = login
+        out.append(item)
+    return out
+
+
+def _login_request(raw: Any) -> Optional[dict[str, Any]]:
+    """A sign-in the server asks a slot to run, checked and copied field by field.
+
+    It is handed on to a process running as the slot's user, which checks it
+    again before anything reaches a command line. Only these fields go.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    requested_at = raw.get("requested_at")
+    if isinstance(requested_at, bool) or not isinstance(requested_at, (int, float)):
+        return None
+    out: dict[str, Any] = {"requested_at": requested_at,
+                           "kind": raw.get("kind") if raw.get("kind") in LOGIN_KINDS
+                           else "login"}
+    for key in ("email", "code"):
+        value = raw.get(key)
+        if isinstance(value, str) and value and len(value) <= MAX_LOGIN_FIELD:
+            out[key] = value
     return out
 
 
@@ -290,14 +325,25 @@ def ask_slot(account: pwd.struct_passwd, cfg: MachineConfig, system: System,
         return {}
     if not isinstance(facts, Mapping):
         return {}
-    return {k: facts[k] for k in SLOT_FACT_KEYS if isinstance(facts.get(k), Mapping)}
+    # Sign-in progress rides along too: its URL and any minted token are for
+    # this slot's holder, and the server checks the URL and bounds the token.
+    return {k: facts[k] for k in (*SLOT_FACT_KEYS, "login")
+            if isinstance(facts.get(k), Mapping)}
 
 
 # -- reporting -------------------------------------------------------------------
 
 
 def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
-                system: System, refresh_quota: bool) -> dict[str, Any]:
+                system: System, refresh_quota: bool, ask: bool = True,
+                abandoned: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """One slot, as root knows it and as it says of itself.
+
+    `ask` False reuses what the slot said last time rather than asking again,
+    for the fast polls while somebody is signing in: the machine's own facts
+    are always fresh, and every slot is still in every report, so nothing
+    reads as gone between two full ones.
+    """
     account = system.lookup(user)
     entry: dict[str, Any] = {"unix_user": user, "present": account is not None}
     claim = (state.get("provisioned") or {}).get(user)
@@ -310,15 +356,26 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
     wipe = (state.get("wipe_failed") or {}).get(user)
     if isinstance(wipe, Mapping):
         entry["wipe_error"] = wipe.get("error")
-    if account is not None and is_slot_account(account, system.groups_of(account)):
-        # Root's facts are written first and the slot's cannot overwrite them:
-        # only the named fact keys are taken from what the slot said.
-        entry.update(ask_slot(account, cfg, system, {"refresh_quota": refresh_quota}))
+    if account is None or not is_slot_account(account, system.groups_of(account)):
+        return entry
+    # Root's facts are written first and the slot's cannot overwrite them:
+    # only the named fact keys are taken from what the slot said.
+    if ask:
+        login = (state.get("slot_logins") or {}).get(user)
+        heard = ask_slot(account, cfg, system,
+                         {"refresh_quota": refresh_quota, "login": login})
+    else:
+        heard = dict((state.get("heard") or {}).get(user) or {})
+    entry.update(heard)
+    if abandoned and user in abandoned:
+        entry["login"] = {"state": "failed", "requested_at": abandoned[user],
+                          "detail": f"not completed within {int(core.LOGIN_WINDOW_S)}s"}
     return entry
 
 
 def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System,
-                    refresh_for: Optional[str] = None) -> dict[str, Any]:
+                    refresh_for: Optional[str] = None, fast: bool = False,
+                    abandoned: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """The machine itself, then each slot. No owner login: the machine has none."""
     payload: dict[str, Any] = {"node_id": cfg.node_id, "ts": system.clock(),
                                "agent_version": core.AGENT_VERSION, "mode": "machine"}
@@ -326,7 +383,9 @@ def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System
     payload["disk"] = core.disk_info(Path(SLOT_HOMES))
     payload["egress"] = core.egress_ip(cfg.egress_targets, system.opener,
                                        min(cfg.timeout_s, 5.0))
-    payload["slots"] = [slot_report(user, state, cfg, system, user == refresh_for)
+    signing_in = set(state.get("slot_logins") or {}) | set(abandoned or {})
+    payload["slots"] = [slot_report(user, state, cfg, system, user == refresh_for,
+                                    ask=not fast or user in signing_in, abandoned=abandoned)
                         for user in state.get("slots") or []]
     return payload
 
@@ -412,28 +471,82 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
         for user in [u for u in table if u not in wanted]:
             table.pop(user)
     return {**state, "provisioned": provisioned, "provision_failed": failed,
-            "wipe_failed": wipes, "slots": [s["unix_user"] for s in slots]}
+            "wipe_failed": wipes, "slots": [s["unix_user"] for s in slots],
+            "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s}}
 
 
-def run_cycle(cfg: MachineConfig, state: Mapping[str, Any],
-              system: System) -> tuple[int, dict[str, Any], dict[str, Any]]:
+def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
+              fast: bool = False, abandoned: Optional[Mapping[str, Any]] = None
+              ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """One post, then whatever the reply calls for. Returns (status, desired, state)."""
     users = [u for u in state.get("slots") or [] if isinstance(u, str)]
     turn = int(state.get("quota_turn") or 0)
-    # One slot's quota per run. Each read starts a Claude Code session, and
-    # six at once on one machine is a spike nobody asked for.
-    refresh_for = users[turn % len(users)] if users else None
-    payload = machine_payload(cfg, state, system, refresh_for)
+    # One slot's quota per full run, and none on the fast polls. Each read
+    # starts a Claude Code session; six at once on one machine is a spike.
+    refresh_for = users[turn % len(users)] if users and not fast else None
+    payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned)
+    # What each slot said, kept for the fast polls to repeat. Never the sign-in
+    # progress: that is news once, and a device token must not sit on disk.
+    heard = dict(state.get("heard") or {})
+    for entry in payload["slots"]:
+        facts = {k: entry[k] for k in SLOT_FACT_KEYS if k in entry}
+        if facts:
+            heard[entry["unix_user"]] = facts
     status, text = core.send_heartbeat(cfg, payload, system.opener,  # type: ignore[arg-type]
                                        max_reply=MAX_REPLY_BYTES)
     if status != 200:
         log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
         return status, {}, dict(state)
     desired = core.parse_desired(text)
+    state = {**state, "heard": {u: f for u, f in heard.items() if u in users}}
     new_state = act_on_slots(wanted_slots(desired), state, cfg, system)
-    new_state["quota_turn"] = turn + 1 if users else 0
+    new_state["quota_turn"] = (turn + (0 if fast else 1)) if users else 0
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state
+
+
+def signing_in(desired: Mapping[str, Any]) -> dict[str, Any]:
+    """The slots somebody is signing into right now: user -> requested_at."""
+    return {s["unix_user"]: s["login"]["requested_at"] for s in wanted_slots(desired)
+            if "login" in s}
+
+
+def stay_for_sign_ins(cfg: MachineConfig, state: dict[str, Any], desired: dict[str, Any],
+                      system: System) -> int:
+    """Stay resident while anybody on this machine is signing in.
+
+    Their sign-in runs in a pane that belongs to this run, and a person is
+    watching their page for the URL; a minute between steps reads as broken.
+    So poll fast, the way the owner agent does — bounded, so an abandoned
+    attempt cannot pin this machine's agent for ever — and send a full report
+    of every slot once a minute throughout, so nobody else's claim or release
+    waits on somebody's sign-in.
+    """
+    deadline = system.monotonic() + core.LOGIN_WINDOW_S
+    last_full = system.monotonic()
+    while signing_in(desired) and system.monotonic() < deadline:
+        delay = desired.get("poll_s")
+        if not isinstance(delay, (int, float)) or isinstance(delay, bool):
+            delay = core.LOGIN_POLL_MAX_S
+        system.sleep(max(core.LOGIN_POLL_MIN_S, min(float(delay), core.LOGIN_POLL_MAX_S)))
+        full = system.monotonic() - last_full >= FULL_EVERY_S
+        status, desired, state = run_cycle(cfg, state, system, fast=not full)
+        if full:
+            last_full = system.monotonic()
+        if status != 200:
+            return 1
+    left = signing_in(desired)
+    if left:
+        # Out of time. Tell each slot to let its pane go — no sign-in handed on
+        # means tidy up — and tell the server, so the attempt ends there too
+        # rather than being handed to the next run to start all over again.
+        log.warning("sign-in unfinished on %s after %.0fs; abandoning",
+                    ", ".join(sorted(left)), core.LOGIN_WINDOW_S)
+        state = {**state, "slot_logins": {}}
+        status, _desired, _state = run_cycle(cfg, state, system, fast=True, abandoned=left)
+        if status != 200:
+            return 1
+    return 0
 
 
 def main(argv: Optional[Sequence[str]] = None, system: Optional[System] = None) -> int:
@@ -466,8 +579,10 @@ def main(argv: Optional[Sequence[str]] = None, system: Optional[System] = None) 
     if lock is None:
         log.info("another run is already working; leaving it to it")
         return 0
-    status, _desired, _state = run_cycle(cfg, core.read_state(cfg.state_path), system)
-    return 0 if status == 200 else 1
+    status, desired, state = run_cycle(cfg, core.read_state(cfg.state_path), system)
+    if status != 200:
+        return 1
+    return stay_for_sign_ins(cfg, state, desired, system)
 
 
 if __name__ == "__main__":  # pragma: no cover

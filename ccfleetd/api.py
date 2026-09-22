@@ -30,7 +30,7 @@ from .render import (
     render_dashboard,
     render_token_result,
 )
-from .store import Store, StoreError
+from .store import Store, StoreError, slot_login_key
 
 log = logging.getLogger("ccfleetd.api")
 
@@ -443,34 +443,49 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(400, {"error": str(exc)})
                 return
             now = time.time()
-            login = (payload.get("reconcile") or {}).get("login")
-            if isinstance(login, dict) and login.get("state"):
-                requested_at = login.get("requested_at")
-                ctx.store.record_login_progress(
-                    node["id"], str(login.get("state")), str(login.get("url") or ""),
-                    str(login.get("detail") or ""), now,
-                    requested_at if isinstance(requested_at, (int, float))
-                    and not isinstance(requested_at, bool) else None,
-                    secret=str(login.get("secret") or ""))
-                # Consumed. The store redacts it before anything is archived,
-                # which is the guarantee; dropping it here as well keeps a
-                # credential from travelling further through this process than
-                # the one call that needed it.
-                login.pop("secret", None)
+            self._record_login((payload.get("reconcile") or {}).get("login"),
+                               node["id"], now)
             # Before the alerts are evaluated and before the reply is built, so
             # both see the slots as this report left them: a wipe confirmed
             # here is a free slot in the same reply, not one beat later.
             if "slots" in payload:
                 ctx.store.apply_slot_report(node["id"], payload["slots"], now=now)
+                for report in payload["slots"]:
+                    # Looked up on this machine only: a machine can move the
+                    # sign-in of its own slots and nobody else's.
+                    slot = ctx.store.slot_on_machine(node["id"], report["unix_user"])
+                    if slot is not None:
+                        self._record_login(report.get("login"),
+                                           slot_login_key(slot["id"]), now)
             events = ctx.monitor.record_heartbeat(node, payload, now)
+            slots = ctx.store.list_slots(node_id=node["id"])
             self._json(200, {
                 "ok": True,
                 # Kept for agents predating the desired block; same value, new home.
                 "pinned_version": node["pinned_version"],
-                "desired": desired_state(node, ctx.store.get_login(node["id"]),
-                                         ctx.store.list_slots(node_id=node["id"])),
+                "desired": desired_state(
+                    node, ctx.store.get_login(node["id"]), slots,
+                    {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots}),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
+
+        def _record_login(self, login: Any, key: str, now: float) -> None:
+            """What a node says about a sign-in, filed against `key`: the node
+            itself, or one of its slots."""
+            if not isinstance(login, dict) or not login.get("state"):
+                return
+            requested_at = login.get("requested_at")
+            ctx.store.record_login_progress(
+                key, str(login.get("state")), str(login.get("url") or ""),
+                str(login.get("detail") or ""), now,
+                requested_at if isinstance(requested_at, (int, float))
+                and not isinstance(requested_at, bool) else None,
+                secret=str(login.get("secret") or ""))
+            # Consumed. The store redacts it before anything is archived,
+            # which is the guarantee; dropping it here as well keeps a
+            # credential from travelling further through this process than
+            # the one call that needed it.
+            login.pop("secret", None)
 
         # -- console actions -----------------------------------------------
 

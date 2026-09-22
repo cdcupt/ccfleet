@@ -162,7 +162,28 @@ def _slots(value: Any) -> list[dict[str, Any]]:
             "quota": _quota(_section(entry, "quota")),
             "usage": _usage(_section(entry, "usage")),
         })
+        progress = _login_progress(_section(entry, "login"))
+        if progress:
+            out[-1]["login"] = progress
     return out
+
+
+def _login_progress(login: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """Sign-in progress, for a node or for one of a machine's slots.
+
+    The URL is shown to a person and the detail may quote the CLI, so both are
+    capped like every other supplied string. The secret is a minted device
+    token on its way to whoever asked for it: bounded here, redacted before
+    the heartbeat is kept, and never logged.
+    """
+    state = _str(login.get("state"))
+    if not state:
+        return None
+    return {"state": state,
+            "url": _str(login.get("url"), MAX_URL),
+            "detail": _str(login.get("detail")),
+            "requested_at": _num(login.get("requested_at")),
+            "secret": _str(login.get("secret"), MAX_SECRET)}
 
 
 def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
@@ -226,16 +247,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         result["mode"] = MACHINE_MODE
         result["slots"] = _slots(payload.get("slots"))
     if login_state:
-        result["reconcile"] = {"login": {
-            "state": login_state,
-            "url": _str(login.get("url"), MAX_URL),
-            "detail": _str(login.get("detail")),
-            "requested_at": _num(login.get("requested_at")),
-            # A minted device token on its way to the person who asked for it.
-            # Bounded like every other string a node sends, and never logged:
-            # the one place it is rendered is the card that shows it once.
-            "secret": _str(login.get("secret"), MAX_SECRET),
-        }}
+        result["reconcile"] = {"login": _login_progress(login)}
     if has_upgrade:
         # What the agent did about the last desired state it was handed. Reported
         # one beat late by construction: the agent acts after posting.
