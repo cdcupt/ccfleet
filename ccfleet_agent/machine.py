@@ -91,6 +91,8 @@ MAX_REPLY_BYTES = 1024 * 1024
 # full report of every slot still goes out this often, so provisioning and
 # wiping do not wait out somebody else's sign-in.
 FULL_EVERY_S = 60.0
+# However many sign-ins keep arriving, one run stays no longer than this.
+MAX_RESIDENT_S = 60 * 60
 # The slot states a sign-in can run in, and the kinds it can be.
 SIGN_IN_STATES = ("claimed", "active")
 LOGIN_KINDS = ("login", "token")
@@ -517,14 +519,38 @@ def stay_for_sign_ins(cfg: MachineConfig, state: dict[str, Any], desired: dict[s
 
     Their sign-in runs in a pane that belongs to this run, and a person is
     watching their page for the URL; a minute between steps reads as broken.
-    So poll fast, the way the owner agent does — bounded, so an abandoned
-    attempt cannot pin this machine's agent for ever — and send a full report
-    of every slot once a minute throughout, so nobody else's claim or release
+    So poll fast, the way the owner agent does, and send a full report of
+    every slot once a minute throughout, so nobody else's claim or release
     waits on somebody's sign-in.
+
+    Bounded twice. Each attempt gets its own window, counted from when this
+    run first saw it — one shared deadline gave a sign-in started late in the
+    run almost none. And the run itself ends within the hour whatever keeps
+    arriving, so a stream of sign-ins cannot pin this machine's agent for ever.
     """
-    deadline = system.monotonic() + core.LOGIN_WINDOW_S
-    last_full = system.monotonic()
-    while signing_in(desired) and system.monotonic() < deadline:
+    started = last_full = system.monotonic()
+    first_seen: dict[tuple[str, Any], float] = {}
+    # Given up on once, never again this run. The server drops an attempt it
+    # is told failed, but if it did not, re-reading the same attempt would
+    # otherwise give it up again at once, in a loop with no sleep in it.
+    given_up: set[tuple[str, Any]] = set()
+    while True:
+        now = system.monotonic()
+        current = {user: requested for user, requested in signing_in(desired).items()
+                   if (user, requested) not in given_up}
+        if not current:
+            return 0
+        for attempt in current.items():
+            first_seen.setdefault(attempt, now)
+        out_of_run = now - started >= MAX_RESIDENT_S
+        expired = {user: requested for user, requested in current.items()
+                   if out_of_run or now - first_seen[(user, requested)] >= core.LOGIN_WINDOW_S}
+        if expired:
+            given_up.update(expired.items())
+            status, desired, state = _abandon(cfg, state, expired, system)
+            if status != 200:
+                return 1
+            continue
         delay = desired.get("poll_s")
         if not isinstance(delay, (int, float)) or isinstance(delay, bool):
             delay = core.LOGIN_POLL_MAX_S
@@ -535,18 +561,23 @@ def stay_for_sign_ins(cfg: MachineConfig, state: dict[str, Any], desired: dict[s
             last_full = system.monotonic()
         if status != 200:
             return 1
-    left = signing_in(desired)
-    if left:
-        # Out of time. Tell each slot to let its pane go — no sign-in handed on
-        # means tidy up — and tell the server, so the attempt ends there too
-        # rather than being handed to the next run to start all over again.
-        log.warning("sign-in unfinished on %s after %.0fs; abandoning",
-                    ", ".join(sorted(left)), core.LOGIN_WINDOW_S)
-        state = {**state, "slot_logins": {}}
-        status, _desired, _state = run_cycle(cfg, state, system, fast=True, abandoned=left)
-        if status != 200:
-            return 1
-    return 0
+
+
+def _abandon(cfg: MachineConfig, state: dict[str, Any], expired: Mapping[str, Any],
+             system: System) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """Give up on these attempts, and only these.
+
+    Each of their slots is asked once more with no sign-in handed on, which is
+    what tells it to let its pane go; the server is told they failed, so they
+    end there too rather than being handed to the next run to start over.
+    Anybody else still signing in carries on untouched.
+    """
+    log.warning("sign-in unfinished on %s after %.0fs; abandoning",
+                ", ".join(sorted(expired)), core.LOGIN_WINDOW_S)
+    keep = {user: block for user, block in (state.get("slot_logins") or {}).items()
+            if user not in expired}
+    return run_cycle(cfg, {**state, "slot_logins": keep}, system, fast=True,
+                     abandoned=expired)
 
 
 def main(argv: Optional[Sequence[str]] = None, system: Optional[System] = None) -> int:

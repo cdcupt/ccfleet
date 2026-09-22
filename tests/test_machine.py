@@ -798,3 +798,87 @@ def test_a_fast_poll_does_not_move_the_quota_turn_on(cfg):
     assert state["quota_turn"] == 3
     _, _, state = machine.run_cycle(cfg, state, fake.system())
     assert state["quota_turn"] == 4
+
+
+def _server_by_clock(fake, clock, script):
+    """An opener whose reply depends on the time and on what was just posted:
+    script(now, this_post) -> desired."""
+    def opener(request, timeout=None):
+        fake.desired = script(clock.now, json.loads(request.data))
+        return fake.opener(request, timeout)
+    return opener
+
+
+def test_a_sign_in_started_late_in_the_run_gets_its_own_window(cfg):
+    """One deadline for the whole run gave a sign-in started ten minutes in
+    about four minutes before it was abandoned."""
+    window = machine.core.LOGIN_WINDOW_S
+    first, second = {**LOGIN, "requested_at": 1.0}, {**LOGIN, "requested_at": 2.0}
+    failed = {}
+
+    handed_during_slot01s_give_up = []
+    asked_before = [0]
+
+    def script(now, this_post):
+        # The children for this post were asked since the last one: this cycle's.
+        this_cycle = fake.spawned[asked_before[0]:]
+        asked_before[0] = len(fake.spawned)
+        for report in (this_post or {}).get("slots", []):
+            if (report.get("login") or {}).get("state") == "failed":
+                if report["unix_user"] == "slot01" and "slot01" not in failed:
+                    handed_during_slot01s_give_up.extend(
+                        json.loads(kw["input_text"])["login"] for _, kw in this_cycle
+                        if kw["env"]["USER"] == "slot02")
+                failed.setdefault(report["unix_user"], now)
+        slots = []
+        if "slot01" not in failed:
+            slots.append({"unix_user": "slot01", "state": "active", "login": first})
+        else:
+            slots.append({"unix_user": "slot01", "state": "active"})
+        if now >= 600 and "slot02" not in failed:
+            slots.append({"unix_user": "slot02", "state": "active", "login": second})
+        else:
+            slots.append({"unix_user": "slot02", "state": "active"})
+        return {"slots": slots, "poll_s": 5}
+
+    fake = Fake(users=["slot01", "slot02"])
+    clock = Clock()
+    system = machine.System(**{**_resident(fake, clock).__dict__,
+                               "opener": _server_by_clock(fake, clock, script)})
+    state = {"slots": ["slot01", "slot02"], "slot_logins": {"slot01": first}}
+    assert machine.stay_for_sign_ins(cfg, state, script(0, None), system) == 0
+    assert window <= failed["slot01"] < window + 10
+    assert 600 + window <= failed["slot02"] < 600 + window + 10, "cut short by slot01's clock"
+    # Giving up on slot01 must not touch slot02's sign-in: had slot02 been
+    # handed nothing in that same cycle, its pane would have been torn down and
+    # started over, and the URL its holder was looking at would stop working.
+    assert handed_during_slot01s_give_up == [second], \
+        "slot02's sign-in was dropped, or not carried on, in the cycle slot01 gave up"
+
+
+def test_a_server_that_keeps_offering_a_given_up_attempt_does_not_spin_the_agent(cfg):
+    signing = {"slots": [{"unix_user": "slot01", "state": "active", "login": LOGIN}],
+               "poll_s": 30}
+    fake = Fake(users=["slot01"], desired=signing)      # never drops it
+    clock = Clock()
+    state = {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}}
+    assert machine.stay_for_sign_ins(cfg, state, dict(signing), _resident(fake, clock)) == 0
+    gave_up = [p for p in fake.posted
+               if (p["slots"][0].get("login") or {}).get("state") == "failed"]
+    assert len(gave_up) == 1, "gave the same attempt up again, and again"
+
+
+def test_a_stream_of_sign_ins_cannot_keep_the_agent_for_ever(cfg):
+    """A new attempt every five minutes, each inside its own window: without a
+    bound on the run itself, it would never leave."""
+    def script(now, this_post):
+        return {"slots": [{"unix_user": "slot01", "state": "active",
+                           "login": {**LOGIN, "requested_at": float(int(now // 300))}}],
+                "poll_s": 30}
+    fake = Fake(users=["slot01"])
+    clock = Clock()
+    system = machine.System(**{**_resident(fake, clock).__dict__,
+                               "opener": _server_by_clock(fake, clock, script)})
+    state = {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}}
+    assert machine.stay_for_sign_ins(cfg, state, script(0, None), system) == 0
+    assert machine.MAX_RESIDENT_S <= clock.now < machine.MAX_RESIDENT_S + 60
