@@ -264,6 +264,9 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
         # that does not exist as far as the rest of the server is concerned —
         # which is why the hash beside it has never leaked.
         "device_token_at": row["device_token_at"],
+        # How many slots the operator declared this machine may hold; one for
+        # an ordinary owner node.
+        "capacity": row["capacity"],
     }
 
 

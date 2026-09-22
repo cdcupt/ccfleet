@@ -17,7 +17,7 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
-from . import oauth, sessions, usersite
+from . import consoleslots, oauth, sessions, usersite
 from .config import Config
 from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
@@ -706,6 +706,16 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     if not self._may_act_on(parts[2], parts[3]):
                         return
                     self._action_on_node(parts[2], parts[3], form)
+                elif len(parts) == 4 and parts[1] in ("machine", "slot", "account"):
+                    # Slots and the people who hold them are the operator's alone.
+                    if not self._require_admin():
+                        return
+                    anchor = consoleslots.act(ctx.store, parts[1], parts[2], parts[3],
+                                              form, time.time())
+                    if anchor is None:
+                        self._json(404, {"error": "not found"})
+                    else:
+                        self._redirect(f"/#{anchor}")
                 else:
                     self._json(404, {"error": "not found"})
             except StoreError as exc:
@@ -809,10 +819,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             # for admins only.
             rows = self._rows(who)
             logins = {r["id"]: ctx.store.get_login(r["id"]) for r in rows}
+            now = time.time()
             return render_dashboard(rows,
                                     self._scope_alerts(ctx.store.open_alerts(), who),
-                                    time.time(), ctx.cfg, csrf_token(ctx.cfg), who,
-                                    logins=logins)
+                                    now, ctx.cfg, csrf_token(ctx.cfg), who,
+                                    logins=logins,
+                                    extra=(consoleslots.section(ctx.store, csrf_token(ctx.cfg),
+                                                                now)
+                                           if who.is_admin else ""))
 
     return FleetHandler
 
