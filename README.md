@@ -112,11 +112,13 @@ ccp add work --share && ccp list
 ### 4. Shared machines: several people on one box, one account each
 
 A machine can carry several **slots**. Each slot is its own Linux user, with
-its own home, its own Claude Code and its own Claude sign-in, so nobody shares
-a credential: one owner, one account, one slot. People sign in to ccfleet with
-Google (it learns an email address and nothing else), the operator grants them
-an allowance, and they claim a slot, sign it in to their own Claude account and
-give it back from `/account`. The guidebook predates shared machines; this
+its own home, its own Claude Code and its own Claude sign-in, made by the person
+who holds it with their own Claude account, so no credential is ever shared
+between people. People sign in to ccfleet with Google, which is asked only for
+the `openid email` scopes: ccfleet keeps the address and Google's stable account
+id, which is what an account is keyed on because addresses change. The operator
+grants each person an allowance of slots, and they claim one, sign it in to
+their own Claude account and give it back from `/account`. The guidebook predates shared machines; this
 section is their reference until it catches up.
 
 ```bash
