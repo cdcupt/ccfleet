@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at REAL NOT NULL,
     -- When a device token was last handed over for this node. The time only;
-    -- the credential is shown once and kept nowhere.
+    -- the credential itself lives in `logins` for the life of the request and
+    -- nowhere else.
     device_token_at REAL NOT NULL DEFAULT 0
 );
 -- One in-flight sign-in per node. A row exists only while a login is being
@@ -185,9 +186,10 @@ class Store:
             # by hand; both are defaulted, so old rows stay valid.
             self._add_missing_columns("nodes", {
                 # When a device token was last handed over for this node. The
-                # time only — the credential itself is shown once and kept
-                # nowhere. Without this the console has no memory of a flow
-                # that worked, and looks exactly as it did before you started.
+                # time only — the credential itself lives in `logins` for the
+                # life of the request and nowhere else. Without this the console
+                # has no memory of a flow that worked, and looks exactly as it
+                # did before you started.
                 "device_token_at": "REAL NOT NULL DEFAULT 0",
             })
             self._add_missing_columns("logins", {

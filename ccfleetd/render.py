@@ -441,11 +441,13 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
 
 
 def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
-    """Shown once, and only once. This is the only time the token exists here.
+    """The minted credential, for as long as the request it belongs to lasts.
 
-    It was minted on the node from the account that node is signed in as, rode
-    up on one heartbeat, and was deleted from the database before this page was
-    rendered. Nothing stores it afterwards: not this server, not the node.
+    It was minted on the node from the account that node is signed in as and
+    rode up on one heartbeat. It stays readable until the request expires or
+    somebody says they are done with it, which is what lets a second machine
+    have the same token without minting another. Nothing keeps it after that:
+    not this server, not the node.
     """
     if not token:
         return (
@@ -454,9 +456,8 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
             "<title>ccfleet</title>"
             f"<style>{CSS}</style></head><body><div class=\"page\">"
             "<h1>Nothing to show</h1>"
-            "<p class=\"sub\">No token is waiting for this node. It was either already "
-            "shown \u2014 they are shown exactly once \u2014 or the attempt expired. "
-            "Start a new one from the fleet page.</p>"
+            "<p class=\"sub\">No token is waiting for this node. Either it was finished "
+            "with, or the request expired. Start a new one from the fleet page.</p>"
             "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
             "</div></body></html>")
     who = f" for {escape(owner)}" if owner else ""
