@@ -615,8 +615,14 @@ def test_a_sign_in_walks_from_request_to_done(tmp_path, monkeypatch):
     with_code = {**wanted, "code": " the-code "}
     progress, state = agent.reconcile_login({"login": with_code}, state, tmux)
     assert progress["state"] == "code_sent"
-    keys = [a for a in tmux.calls if "send-keys" in a][0]
-    assert "the-code" in keys and "Enter" in keys          # stripped, then Enter
+    sends = [a for a in tmux.calls if "send-keys" in a]
+    # Two sends, not one. The prompt is still handling a hundred characters of
+    # pasted code when an Enter appended to the same send arrives, and eats it:
+    # measured on a live sign-in, the code sat typed at the prompt forever and
+    # one Enter by hand finished it instantly.
+    assert "the-code" in sends[0], "stripped, and typed on its own"
+    assert "Enter" not in sends[0], "the key does not ride along with the text"
+    assert sends[1][-1] == "Enter", "and follows once the prompt has settled"
 
     # 6. the CLI, not the pane text, decides whether it worked
     assert agent.reconcile_login({"login": with_code}, state, tmux)[0] is None

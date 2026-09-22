@@ -1,9 +1,13 @@
 [Unit]
-Description=Run the ccfleet heartbeat agent every 5 minutes
+Description=Run the ccfleet heartbeat agent every minute
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+# A console request only reaches a node when the node next checks in, so
+# this interval is the worst case someone waits staring at "asking the
+# node...". At five minutes that read as broken and got abandoned. A
+# heartbeat is a few hundred bytes; a minute costs nothing worth having.
+OnUnitActiveSec=1min
 RandomizedDelaySec=30s
 Persistent=true
 

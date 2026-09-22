@@ -320,3 +320,39 @@ def test_the_page_stops_reloading_while_it_is_asking_you_to_type(cfg):
     sent = render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins={
         "att3": {"state": "code_sent", "kind": "token"}})
     assert 'http-equiv="refresh"' in sent
+
+
+def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
+    """A step finishes on the node in seconds and then sits unseen for the rest
+    of the minute, which reads as nothing happening. So the page comes back
+    quickly while a flow is moving, and at its usual pace the rest of the time.
+    """
+    from ccfleetd.render import ACTIVE_REFRESH_S, IDLE_REFRESH_S
+    rows = [{"id": "att3", "owner": "erik", "region": "", "status": "ok",
+             "enabled": True, "last_seen_ts": NOW, "hostname": "h",
+             "claude_version": "2.1.278", "pinned_version": "", "egress_ip": "1.2.3.4",
+             "disk_used_pct": 10.0, "load1": 0.1, "credentials_present": True,
+             "credentials_mtime": NOW, "token_expires_at": None,
+             "subscription_type": "max", "remote_control": "active",
+             "rc_expected": False, "last_upgrade": None, "open_alerts": [],
+             "usage": {}, "quota": {}}]
+
+    def page(logins):
+        return render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins=logins)
+
+    assert ACTIVE_REFRESH_S < IDLE_REFRESH_S, "keeping up means sooner than usual"
+
+    idle = page({})
+    assert f'content="{IDLE_REFRESH_S}"' in idle
+    assert "refreshing itself every minute" in idle
+
+    for state in ("requested", "code_sent"):
+        active = page({"att3": {"state": state, "kind": "token"}})
+        assert f'content="{ACTIVE_REFRESH_S}"' in active, f"{state} is worth watching"
+        assert "keeping up with a sign-in" in active
+
+    # Except while someone is typing, where any reload throws away the code.
+    typing = page({"att3": {"state": "url_ready", "kind": "token",
+                            "url": "https://claude.com/x"}})
+    assert 'http-equiv="refresh"' not in typing
+    assert "waiting for you to paste a code" in typing

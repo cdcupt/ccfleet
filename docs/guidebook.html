@@ -190,10 +190,15 @@ html{scroll-behavior:smooth}
     nobody came back for it. Unfinished attempts expire after fifteen minutes.</p>
   </div>
   <p>Then, on each machine you want it on:</p>
-  <pre><code>mkdir -p ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh \
-  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect
-ccfleet-connect            <span class="c"># paste the token; input is hidden</span></code></pre>
+  <pre><code>bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
+  <p>That is the whole setup on a new machine. It asks for the token, hides what you
+  paste, and checks the token against Anthropic <strong>before writing anything at
+  all</strong> &mdash; a refused token leaves the machine exactly as it was. Once the
+  token is accepted it also installs itself to <code>~/.local/bin</code>, so
+  <code>ccfleet-connect --status</code> and <code>--remove</code> work later; if that
+  part fails it says so rather than leaving you with a command that is not there.
+  Run through <code>bash -c</code> rather than piped into a shell: a pipe takes the
+  keyboard away from the prompt.</p>
   <p>After that <code>claude</code> simply works there, on that machine&rsquo;s own files. Nothing is
   proxied and no base URL is set: Claude Code reads the token from the environment exactly as
   Anthropic documents.</p>
@@ -202,11 +207,8 @@ ccfleet-connect            <span class="c"># paste the token; input is hidden</s
   <pre><code><span class="c"># once, on a machine already signed in as you</span>
 claude setup-token
 
-<span class="c"># then once per device, pasting what that printed</span>
-mkdir -p ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh \
-  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect
-ccfleet-connect            <span class="c"># paste the token; input is hidden</span></code></pre>
+<span class="c"># then once per device &mdash; it asks for the token and hides it</span>
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
   <p>After that <code>claude</code> simply works there. The token is Anthropic's own long-lived credential, it lasts a year, and it lives only on the device you put it on. <code>ccfleet-connect --status</code> says whether it still works and <code>--remove</code> undoes it.</p>
   <div class="note warn">
     <p class="t">One thing a token cannot do</p>
@@ -645,10 +647,7 @@ ccfleetd node pin node-a stable</code></pre>
 claude setup-token
 
 <span class="c"># then on each of their devices</span>
-mkdir -p ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh \
-  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect
-ccfleet-connect</code></pre>
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
       <p><strong>Do not ask them to send you the token.</strong> It is their account's
       credential for a year; the point of this route is that it never passes through
       anyone else, including you.</p>
