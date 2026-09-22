@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
+from .sessions import MIN_TTL_S as SESSION_MIN_TTL_S
+
 ENV_PREFIX = "CCFLEET_"
 MIN_ADMIN_TOKEN_LEN = 16
 
@@ -78,6 +80,36 @@ class Config:
     # it never becomes the default for somebody else's.
     bypass_by_default: bool = False
 
+    # -- signing in with Google ------------------------------------------
+    # Absent by default: a fleet with no Google credentials still runs as the
+    # operator-only console it is today, and simply offers no user sign-in.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    # Where Google sends people back. Derived from public_url when not set,
+    # because a redirect that disagrees with the one registered at Google
+    # fails with a message that says nothing useful.
+    google_redirect_uri: str = ""
+    # Signs the session cookie. Without it there are no sessions at all — an
+    # unsigned cookie is a string the browser can write, and guessing a default
+    # would mean every deployment that forgot to set one shares a key.
+    cookie_secret: str = ""
+    session_ttl_s: int = 14 * 24 * 3600
+    # Off only for local development over plain http, where a Secure cookie is
+    # dropped and sign-in appears to do nothing at all.
+    cookie_secure: bool = True
+
+    @property
+    def google_ready(self) -> bool:
+        """Whether user sign-in can be offered at all."""
+        return bool(self.google_client_id and self.google_client_secret
+                    and self.redirect_uri and self.cookie_secret)
+
+    @property
+    def redirect_uri(self) -> str:
+        if self.google_redirect_uri:
+            return self.google_redirect_uri
+        return f"{self.public_url}/auth/google/callback" if self.public_url else ""
+
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> Config:
         env = os.environ if env is None else env
@@ -102,7 +134,33 @@ class Config:
             retention_days=_env_int(env, "RETENTION_DAYS", 30, 1),
             max_body_bytes=_env_int(env, "MAX_BODY_BYTES", 64 * 1024, 1024),
             bypass_by_default=_env_bool(env, "BYPASS_BY_DEFAULT", False),
+            google_client_id=env.get(ENV_PREFIX + "GOOGLE_CLIENT_ID", ""),
+            google_client_secret=env.get(ENV_PREFIX + "GOOGLE_CLIENT_SECRET", ""),
+            google_redirect_uri=env.get(ENV_PREFIX + "GOOGLE_REDIRECT_URI", ""),
+            cookie_secret=env.get(ENV_PREFIX + "COOKIE_SECRET", ""),
+            session_ttl_s=_env_int(env, "SESSION_TTL_S", 14 * 24 * 3600,
+                                   SESSION_MIN_TTL_S),
+            cookie_secure=_env_bool(env, "COOKIE_SECURE", True),
         )
+        # Half-configured sign-in is worse than none: the button appears and
+        # then fails on the callback, which reads as the product being broken.
+        google_bits = {
+            "GOOGLE_CLIENT_ID": cfg.google_client_id,
+            "GOOGLE_CLIENT_SECRET": cfg.google_client_secret,
+            "COOKIE_SECRET": cfg.cookie_secret,
+        }
+        given = {k for k, v in google_bits.items() if v}
+        if given and given != set(google_bits):
+            missing = sorted(set(google_bits) - given)
+            raise ConfigError(
+                f"Google sign-in needs all of {ENV_PREFIX}GOOGLE_CLIENT_ID, "
+                f"{ENV_PREFIX}GOOGLE_CLIENT_SECRET and {ENV_PREFIX}COOKIE_SECRET; "
+                f"missing " + ", ".join(ENV_PREFIX + m for m in missing))
+        if given and not cfg.redirect_uri:
+            raise ConfigError(
+                f"Google sign-in needs {ENV_PREFIX}PUBLIC_URL or "
+                f"{ENV_PREFIX}GOOGLE_REDIRECT_URI so Google knows where to "
+                f"send people back")
         if cfg.quota_warn_pct > cfg.quota_crit_pct:
             raise ConfigError(f"{ENV_PREFIX}QUOTA_WARN_PCT must be <= "
                               f"{ENV_PREFIX}QUOTA_CRIT_PCT")
