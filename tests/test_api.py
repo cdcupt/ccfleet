@@ -162,7 +162,8 @@ def test_console_node_actions(server, cfg):
                           ("rc-on", lambda n: n["rc_expected"] is True),
                           ("rc-off", lambda n: n["rc_expected"] is False)):
         status, _, loc = form_post(srv, f"/actions/node/node-a/{action}", {"csrf": csrf}, auth)
-        assert status == 303 and loc == "/"
+        assert status == 303 and loc == "/#manage", \
+            "back to the card the button is on, not the top of the page"
         assert check(store.get_node("node-a"))
 
     status, _, _ = form_post(srv, "/actions/node/node-a/pin",
@@ -399,5 +400,9 @@ def test_an_action_returns_you_to_the_card_you_used(server, cfg):
     assert press("login-start") == (303, "/#sign-in")
     store.clear_login("node-a")
 
-    # Fleet management has no card of its own to return to.
-    assert press("rc-on") == (303, "/")
+    # Management actions have a card too, and it is the furthest down of all
+    # of them — these are the buttons pressed several times in a row.
+    assert press("rc-on") == (303, "/#manage")
+    assert press("disable") == (303, "/#manage")
+    assert press("enable") == (303, "/#manage")
+    assert press("pin", "&version=2.1.278") == (303, "/#manage")

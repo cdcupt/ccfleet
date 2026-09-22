@@ -229,6 +229,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             "login-start": "sign-in",
             "login-code": "sign-in",
             "login-cancel": "sign-in",
+            # The manage card is the furthest down of all of them, and these
+            # are the buttons most likely to be pressed several times in a row.
+            "enable": "manage",
+            "disable": "manage",
+            "rc-on": "manage",
+            "rc-off": "manage",
+            "pin": "manage",
+            "remove": "manage",
         }
 
         def _redirect(self, location: str) -> None:
