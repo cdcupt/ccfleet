@@ -1466,3 +1466,29 @@ def test_a_continuation_needs_the_line_above_it_to_reach_the_edge():
     assert agent.find_login_url(f"{full}\nstate=abc\n") == full + "state=abc"
     # One character short of the edge: the next line is its own thing.
     assert agent.find_login_url(f"{full[:-1]}\nstate=abc\n") == full[:-1]
+
+
+def test_the_pane_outlives_the_command_that_printed_the_token(monkeypatch):
+    """tmux destroys a session when its command exits, and capture-pane on a
+    dead session returns nothing. `claude setup-token` prints the credential
+    and exits at once, so the one thing this flow exists to read was gone
+    before the next poll could see it. The hold is what makes it readable."""
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    seen = []
+
+    def tmux(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    for kind in ("token", "login"):
+        seen.clear()
+        agent.start_login(None, tmux, kind=kind)
+        command = [a for a in seen if "new-session" in a][-1][-1]
+        assert command.endswith(f"; sleep {agent.LOGIN_HOLD_S}"), \
+            f"{kind} must hold its pane open after the command exits"
+        # And the command itself is still the first thing in it.
+        assert command.startswith("/usr/bin/claude"), "the hold is appended, not wrapped"
+
+    # Long enough to outlast the server's own expiry, so the pane is never the
+    # thing that runs out first.
+    assert agent.LOGIN_HOLD_S > 15 * 60

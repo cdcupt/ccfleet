@@ -970,9 +970,12 @@ def start_login(email: Optional[str], runner: Runner = subprocess.run,
     if email:
         argv += ["--email", email]
     # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
+    # The trailing sleep is load-bearing: without it the session dies with the
+    # command and takes the final screen with it. tmux runs this string through
+    # a shell, so the sequence is honoured as written.
+    command = " ".join(shlex.quote(a) for a in argv) + f"; sleep {LOGIN_HOLD_S}"
     return _tmux_ok(runner, "new-session", "-d", "-s", LOGIN_SESSION,
-                    "-x", str(LOGIN_PANE_WIDTH), "-y", "50",
-                    " ".join(shlex.quote(a) for a in argv))
+                    "-x", str(LOGIN_PANE_WIDTH), "-y", "50", command)
 
 
 def read_login_pane(runner: Runner = subprocess.run) -> str:
@@ -989,6 +992,14 @@ def read_login_pane(runner: Runner = subprocess.run) -> str:
 # The pane this agent opens, so the width a line is broken at is known rather
 # than inferred. Used to create the session and to read it back.
 LOGIN_PANE_WIDTH = 200
+# tmux destroys a session the moment its command exits, and `capture-pane` on a
+# dead session returns nothing at all. `claude setup-token` prints the
+# credential and exits immediately, so the one thing the whole flow exists to
+# read was gone before the next poll could see it. Holding the pane open after
+# the command finishes is what makes its last screen readable. Bounded well
+# past the server's own fifteen-minute expiry, and killed by end_login long
+# before that in the normal case.
+LOGIN_HOLD_S = 1200
 # How many following lines a URL may be stitched from. The real ones run to a
 # few hundred characters in a 200-column pane, so two is already generous; the
 # cap is what stops a runaway from swallowing the rest of the screen.
