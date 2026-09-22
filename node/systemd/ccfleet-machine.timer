@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the ccfleet machine agent every minute
+
+[Timer]
+OnBootSec=2min
+# How long someone waits for a claimed slot to start being set up, or a
+# released one to start being wiped. A minute is short enough to watch.
+OnUnitActiveSec=1min
+RandomizedDelaySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
