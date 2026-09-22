@@ -1328,6 +1328,21 @@ SLOT_STATE_PATH = "~/.config/ccfleet/slot-state.json"
 MAX_SLOT_REQUEST = 64 * 1024
 
 
+def start_remote_control(runner: Runner = subprocess.run) -> None:
+    """Start a signed-in slot's Remote Control, if it is enabled and not running.
+
+    It is how the slot's holder reaches it at all: a slot has no SSH key and no
+    shell anybody can open. slot-add.sh enables the unit but cannot start it,
+    because Remote Control needs a login that does not exist until the holder
+    signs in — so the first report after they do starts it. The unit runs
+    under the slot's own systemd manager, not under whoever asked.
+    """
+    if _run(runner, ["systemctl", "--user", "is-enabled", DEFAULT_RC_SERVICE],
+            timeout=10) != "enabled":
+        return
+    _run(runner, ["systemctl", "--user", "start", DEFAULT_RC_SERVICE], timeout=60)
+
+
 def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
                now: Optional[float] = None) -> dict[str, Any]:
     """What this slot looks like, collected as its own user.
@@ -1337,22 +1352,33 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     state, token counts and the quota windows. The quota read starts a Claude
     Code session, so it is only refreshed when the machine agent asks —
     it spreads those across its slots rather than starting six at once.
+
+    A sign-in its holder started from their page is carried one step further
+    here, by the same code that signs an owner node in — the URL out, the code
+    back — and its progress goes back with the facts.
     """
     now = time.time() if now is None else now
+    state_path = Path(SLOT_STATE_PATH).expanduser()
+    state = read_state(state_path)
+    # First, so a sign-in that completes in this step already reads as signed
+    # in below — and the slot is active in the same heartbeat, not the next.
+    progress, state = reconcile_login({"login": request.get("login")}, state, runner)
     config_dir = Path.home() / ".claude"
     credentials = credentials_summary(config_dir)
     status = auth_status(runner)
     if status:
         credentials.update(status)
         credentials["present"] = status.get("logged_in", credentials.get("present"))
+    remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
+    if credentials.get("logged_in") is True and remote.get("state") != "active":
+        start_remote_control(runner)
+        remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
     facts: dict[str, Any] = {
         "claude": {"version": claude_info(runner).get("version")},
         "credentials": credentials,
-        "remote_control": remote_control_state(DEFAULT_RC_SERVICE, runner),
+        "remote_control": remote,
         "usage": usage_summary(config_dir),
     }
-    state_path = Path(SLOT_STATE_PATH).expanduser()
-    state = read_state(state_path)
     # A slot nobody has signed into yet has no windows to read, and the session
     # the read opens would start on the login screen — where the keystrokes it
     # types to reach /usage would land instead. Most slots spend their first
@@ -1360,12 +1386,15 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     if request.get("refresh_quota") is True and credentials.get("logged_in") is True:
         quota, remember = quota_summary(state, runner, now)
         if remember is not None:
-            write_state(state_path, {**state, "quota": remember})
+            state = {**state, "quota": remember}
     else:
         cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
         quota = {k: v for k, v in cached.items() if k != "ts"} if cached else None
+    write_state(state_path, state)
     if quota:
         facts["quota"] = quota
+    if progress:
+        facts["login"] = progress
     return facts
 
 

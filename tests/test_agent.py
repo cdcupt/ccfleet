@@ -1696,3 +1696,54 @@ def test_slot_facts_needs_no_configuration(slot_home, monkeypatch):
     facts = json.loads(out.getvalue())
     assert facts["credentials"]["logged_in"] is False
     assert os.getcwd() == str(slot_home), "started from wherever it was left"
+
+
+def test_a_slot_carries_its_holders_sign_in_one_step_further(slot_home, monkeypatch):
+    """The same code that signs an owner node in, run as the slot's user."""
+    started = []
+    monkeypatch.setattr(agent, "start_login",
+                        lambda email, runner=None, kind="login": started.append((email, kind))
+                        or True)
+    login = {"requested_at": 42.0, "kind": "token", "email": "me@example.com"}
+    facts = agent.slot_facts({"login": login}, slot_runner([]))
+    assert facts["login"] == {"state": "requested", "requested_at": 42.0}
+    assert [kind for _email, kind in started] == ["token"], "ran the wrong flow"
+    kept = json.loads((slot_home / ".config/ccfleet/slot-state.json").read_text())
+    assert kept["login"]["requested_at"] == 42.0 and kept["login"]["phase"] == "started"
+
+
+def test_a_slot_with_no_sign_in_asked_for_says_nothing_about_one(slot_home):
+    assert "login" not in agent.slot_facts({}, slot_runner([]))
+
+
+def rc_runner(calls, *, rc="inactive", enabled="enabled"):
+    base = slot_runner(calls)
+
+    def run(argv, **kwargs):
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout=rc, stderr="")
+        if argv[:3] == ["systemctl", "--user", "is-enabled"]:
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout=enabled, stderr="")
+        return base(argv, **kwargs)
+    return run
+
+
+def test_a_signed_in_slots_remote_control_is_started(slot_home):
+    """It is the only way in for a slot's holder: no SSH key, no shell."""
+    calls = []
+    agent.slot_facts({}, rc_runner(calls))
+    assert ["systemctl", "--user", "start", "claude-remote-control.service"] in calls
+
+
+@pytest.mark.parametrize("rc,enabled,logged_in", [
+    ("active", "enabled", True),       # already running
+    ("inactive", "disabled", True),    # somebody turned it off on purpose
+    ("inactive", "enabled", False),    # nobody signed in: it would only fail
+])
+def test_remote_control_is_left_alone_otherwise(slot_home, monkeypatch, rc, enabled, logged_in):
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": logged_in})
+    calls = []
+    agent.slot_facts({}, rc_runner(calls, rc=rc, enabled=enabled))
+    assert ["systemctl", "--user", "start", "claude-remote-control.service"] not in calls
