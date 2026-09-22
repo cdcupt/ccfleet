@@ -1076,9 +1076,21 @@ class Store:
         a minted device token waiting to be collected. All of it belongs to the
         person giving the slot back, and none of it may be waiting for the next.
         """
-        moved = self.move_slot(slot_id, slotstates.RELEASING)
-        self.clear_login(slot_login_key(slot_id))
-        return moved
+        # One transaction, both or neither. As two, a crash between them left
+        # the slot releasing with the sign-in still in place — and once that
+        # slot was wiped, freed and claimed again, the next holder was handed
+        # the last one's URL, or read their minted token.
+        with self._write_txn() as conn:
+            row = conn.execute("SELECT state FROM slots WHERE id = ?",
+                               (slot_id,)).fetchone()
+            if row is None:
+                raise StoreError(f"no slot {slot_id!r}")
+            slotstates.check_move(row["state"], slotstates.RELEASING)
+            conn.execute("UPDATE slots SET state = ? WHERE id = ?",
+                         (slotstates.RELEASING, slot_id))
+            conn.execute("DELETE FROM logins WHERE node_id = ?",
+                         (slot_login_key(slot_id),))
+        return True
 
     def slot_on_machine(self, node_id: str, unix_user: str) -> dict[str, Any] | None:
         with self._lock:

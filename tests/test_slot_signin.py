@@ -112,6 +112,42 @@ def test_giving_a_slot_back_takes_its_sign_in_with_it(store):
     assert store.get_login(slot_login_key("s1")) is None
 
 
+def test_giving_a_slot_back_is_all_or_nothing(store):
+    """If clearing the sign-in fails, the release must not have happened
+    either. Committed separately, a crash between the two left a releasing
+    slot whose next holder would be handed the last one's sign-in."""
+    import sqlite3
+    held(store)
+    store.request_slot_login("s1", "", NOW + 1)
+
+    class FailsOnClear:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith("DELETE FROM logins"):
+                raise sqlite3.OperationalError("disk I/O error")
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    real = store._conn
+    store._conn = FailsOnClear(real)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            store.begin_release("s1")
+    finally:
+        store._conn = real
+    assert store.get_slot("s1")["state"] == slots.ACTIVE, "released without its wipe of the sign-in"
+    assert store.get_login(slot_login_key("s1")) is not None
+
+
+def test_releasing_a_slot_that_is_not_there(store):
+    with pytest.raises(StoreError):
+        store.begin_release("ghost")
+
+
 def test_a_token_nobody_collected_goes_with_the_slot(store):
     """Minted for the person giving the slot back. The next holder is somebody
     else, and must never be able to read it."""
