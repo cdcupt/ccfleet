@@ -404,16 +404,34 @@ def signin(monkeypatch):
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
 
-    def call(method, path, headers=None):
+    jar: dict[str, str] = {}
+
+    def call(method, path, headers=None, *, browser=True):
+        """One request from a browser that keeps its cookies.
+
+        `browser=False` is a *different* browser: same server, no jar. That is
+        the whole of the login-CSRF test — the attacker's callback URL opened
+        by somebody who did not start the flow.
+        """
+        hdrs = dict(headers or {})
+        if browser and jar and "Cookie" not in hdrs:
+            hdrs["Cookie"] = "; ".join(f"{k}={v}" for k, v in jar.items())
         conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1],
                                           timeout=10)
-        conn.request(method, path, headers=headers or {})
+        conn.request(method, path, headers=hdrs)
         reply = conn.getresponse()
         reply.read()
         conn.close()
+        if browser:
+            for header in reply.headers.get_all("Set-Cookie") or []:
+                name, _, value = header.split(";")[0].partition("=")
+                if value:
+                    jar[name] = value
+                else:
+                    jar.pop(name, None)
         return reply
 
-    yield store, call
+    yield store, call, jar
 
     srv.shutdown()
     srv.server_close()
@@ -431,7 +449,7 @@ def _state_from(reply):
 def test_signing_in_creates_an_account_that_can_claim_nothing(signin):
     """The whole flow with Google stubbed: start, callback, session cookie, and
     an account with no allowance until the operator grants one."""
-    store, call = signin
+    store, call, _jar = signin
     state = _state_from(call("GET", "/auth/google/start?next=/slots"))
 
     back = call("GET", f"/auth/google/callback?state={state}&code=abc")
@@ -449,7 +467,8 @@ def test_signing_in_creates_an_account_that_can_claim_nothing(signin):
     # or a proxy log would otherwise start a second sign-in.
     replay = call("GET", f"/auth/google/callback?state={state}&code=abc")
     assert replay.status == 400
-    assert replay.getheader("Set-Cookie") is None
+    # It may clear the half-finished flow, but it must not hand out a session.
+    assert sessions.COOKIE_NAME not in (replay.getheader("Set-Cookie") or "")
     assert len(store.list_accounts()) == 1
 
     value = cookie.split(";")[0].split("=", 1)[1]
@@ -467,7 +486,7 @@ def test_signing_in_creates_an_account_that_can_claim_nothing(signin):
 def test_signing_in_twice_is_the_same_person(signin):
     """Keyed on Google's subject, so a second sign-in finds the account rather
     than making another — and an allowance already granted survives it."""
-    store, call = signin
+    store, call, _jar = signin
     for _ in range(2):
         state = _state_from(call("GET", "/auth/google/start"))
         assert call("GET",
@@ -483,15 +502,15 @@ def test_signing_in_twice_is_the_same_person(signin):
     "/auth/google/callback?state=invented&code=abc",   # a state we never issued
 ])
 def test_a_callback_nobody_started_signs_nobody_in(signin, path):
-    store, call = signin
+    store, call, _jar = signin
     reply = call("GET", path)
     assert reply.status == 400
-    assert reply.getheader("Set-Cookie") is None
+    assert sessions.COOKIE_NAME not in (reply.getheader("Set-Cookie") or "")
     assert store.list_accounts() == []
 
 
 def test_an_off_site_next_is_dropped_rather_than_followed(signin):
-    store, call = signin
+    store, call, _jar = signin
     state = _state_from(call("GET", "/auth/google/start?next=" +
                              urllib.parse.quote("https://evil.example/take")))
     back = call("GET", f"/auth/google/callback?state={state}&code=abc")
@@ -558,3 +577,56 @@ def test_an_address_someone_else_now_owns_is_not_their_account(store):
                                               now=NOW + 10)
     assert theirs["id"] != mine["id"], "handed over somebody else's account"
     assert theirs["slot_quota"] == 0, "and their allowance with it"
+
+
+def test_a_callback_opened_in_another_browser_signs_nobody_in(signin):
+    """Login CSRF, and the reason `state` alone is not enough. Held only on the
+    server it proves the flow was started by *somebody*: an attacker starts
+    one, completes it as themselves, and sends the victim the callback URL —
+    which would sign the victim into the attacker's account, where the attacker
+    can then read whatever the victim does. The state has to be in the browser
+    too, and has to match."""
+    store, call, jar = signin
+    state = _state_from(call("GET", "/auth/google/start"))
+    assert sessions.FLOW_COOKIE_NAME in jar, "the flow was never tied to a browser"
+
+    # The victim's browser: no flow of its own.
+    victim = call("GET", f"/auth/google/callback?state={state}&code=abc",
+                  browser=False)
+    assert victim.status == 400
+    assert victim.getheader("Set-Cookie") is not None
+    assert sessions.COOKIE_NAME not in victim.getheader("Set-Cookie")
+    assert store.list_accounts() == [], "signed somebody in"
+
+
+def test_a_callback_from_a_different_flow_is_refused(signin):
+    """The other shape: the victim has a sign-in of their own in progress, so a
+    cookie is present — it simply is not the one this callback belongs to."""
+    store, call, jar = signin
+    stolen = _state_from(call("GET", "/auth/google/start"))
+    # A second start replaces the cookie, as another browser's would.
+    mine = _state_from(call("GET", "/auth/google/start"))
+    assert stolen != mine
+
+    reply = call("GET", f"/auth/google/callback?state={stolen}&code=abc")
+    assert reply.status == 400
+    assert store.list_accounts() == []
+
+
+def test_a_tampered_flow_cookie_is_refused(signin):
+    store, call, jar = signin
+    state = _state_from(call("GET", "/auth/google/start"))
+    forged = sessions.sign(state, "some-other-secret")
+    reply = call("GET", f"/auth/google/callback?state={state}&code=abc",
+                 {"Cookie": f"{sessions.FLOW_COOKIE_NAME}={forged}"},
+                 browser=False)
+    assert reply.status == 400
+    assert store.list_accounts() == []
+
+
+def test_a_refused_sign_in_clears_the_half_finished_flow(signin):
+    """So the next attempt starts clean rather than against a spent state."""
+    store, call, jar = signin
+    _state_from(call("GET", "/auth/google/start"))
+    call("GET", "/auth/google/callback?state=invented&code=abc")
+    assert sessions.FLOW_COOKIE_NAME not in jar

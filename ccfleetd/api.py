@@ -224,10 +224,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 urllib.parse.urlparse(self.path).query).get("next", [""])[0])
             ctx.store.begin_oauth_flow(state, verifier, now=time.time(),
                                        ttl_s=oauth.FLOW_TTL_S, next_url=wanted)
-            self._redirect(oauth.authorize_url(
-                client_id=ctx.cfg.google_client_id,
-                redirect_uri=ctx.cfg.redirect_uri,
-                state=state, verifier=verifier))
+            # The state also goes into a cookie, and that is the half that
+            # actually ties the callback to a browser. Held only on the server
+            # it proves the flow was started by *somebody* — so an attacker can
+            # start one, sign in as themselves, and send the victim the
+            # resulting callback URL, which signs the victim into the
+            # attacker's account. Requiring the cookie means only the browser
+            # that began the flow can finish it.
+            self._redirect_with_cookies(
+                oauth.authorize_url(client_id=ctx.cfg.google_client_id,
+                                    redirect_uri=ctx.cfg.redirect_uri,
+                                    state=state, verifier=verifier),
+                [sessions.cookie_header(
+                    sessions.sign(state, ctx.cfg.cookie_secret),
+                    ttl_s=oauth.FLOW_TTL_S, secure=ctx.cfg.cookie_secure,
+                    name=sessions.FLOW_COOKIE_NAME)])
 
         def _sign_in_callback(self) -> None:
             if not ctx.cfg.google_ready:
@@ -235,17 +246,30 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             state = query.get("state", [""])[0]
-            # Taken before anything else, and taken exactly once. A callback
-            # with no matching flow is either a replay or somebody else's link,
-            # and neither may sign anybody into anything.
-            flow = ctx.store.take_oauth_flow(state, now=time.time()) if state else None
+            # The cookie first: this is the check that makes `state` mean
+            # anything. Without it a callback URL works in any browser.
+            raw_flow = sessions.read_cookie(self.headers.get("Cookie"),
+                                            sessions.FLOW_COOKIE_NAME)
+            try:
+                from_browser = (sessions.unsign(raw_flow, ctx.cfg.cookie_secret)
+                                if raw_flow else "")
+            except sessions.SessionError:
+                from_browser = ""
+            if (not state or not from_browser
+                    or not sessions.matches(state, from_browser)):
+                self._sign_in_failed("that sign-in did not start in this "
+                                     "browser; please start again")
+                return
+            # Taken exactly once. A callback with no matching flow is either a
+            # replay or somebody else's link, and neither may sign anybody in.
+            flow = ctx.store.take_oauth_flow(state, now=time.time())
             if flow is None:
-                self._json(400, {"error": "that sign-in link has expired; "
-                                          "start again"})
+                self._sign_in_failed("that sign-in link has expired; start again")
                 return
             if query.get("error"):
                 # The person pressed cancel on Google's consent screen.
-                self._redirect("/?signin=cancelled")
+                self._redirect_with_cookies("/?signin=cancelled",
+                                            [self._clear_flow_cookie()])
                 return
             try:
                 token = oauth.exchange_code(
@@ -258,18 +282,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # Logged in full, shown as a sentence. The reasons name our
                 # configuration, which is not the visitor's business.
                 log.warning("google sign-in failed: %s", exc)
-                self._json(502, {"error": "Google could not confirm that "
-                                          "sign-in. Please try again."})
+                self._sign_in_failed("Google could not confirm that sign-in. "
+                                     "Please try again.", status=502)
                 return
             account = ctx.store.upsert_account_from_google(
                 who["sub"], who["email"], now=time.time())
             session_id = ctx.store.create_session(
                 account["id"], now=time.time(), ttl_s=ctx.cfg.session_ttl_s)
-            self._redirect_with_cookie(
+            self._redirect_with_cookies(
                 flow["next_url"] or "/",
-                sessions.cookie_header(
+                [sessions.cookie_header(
                     sessions.sign(session_id, ctx.cfg.cookie_secret),
-                    ttl_s=ctx.cfg.session_ttl_s, secure=ctx.cfg.cookie_secure))
+                    ttl_s=ctx.cfg.session_ttl_s, secure=ctx.cfg.cookie_secure),
+                 self._clear_flow_cookie()])
 
         def _sign_out(self) -> None:
             raw = sessions.read_cookie(self.headers.get("Cookie"))
@@ -280,13 +305,28 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 except sessions.SessionError:
                     pass
             # Cleared whatever happened, so a cookie we cannot read still goes.
-            self._redirect_with_cookie(
-                "/", sessions.clearing_header(secure=ctx.cfg.cookie_secure))
+            self._redirect_with_cookies(
+                "/", [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
 
-        def _redirect_with_cookie(self, location: str, cookie: str) -> None:
+        def _clear_flow_cookie(self) -> str:
+            """The half-finished sign-in is over, however it ended."""
+            return sessions.clearing_header(secure=ctx.cfg.cookie_secure,
+                                            name=sessions.FLOW_COOKIE_NAME)
+
+        def _sign_in_failed(self, message: str, status: int = 400) -> None:
+            """Refuse, and take the flow cookie with it so the next attempt
+            starts clean rather than against a state that is already spent."""
+            body = json.dumps({"error": message}).encode("utf-8")
+            headers = dict(JSON_HEADERS)
+            headers["Set-Cookie"] = self._clear_flow_cookie()
+            self._send(status, body, headers)
+
+        def _redirect_with_cookies(self, location: str,
+                                   cookies: list[str]) -> None:
             self.send_response(303)
             self.send_header("Location", location)
-            self.send_header("Set-Cookie", cookie)
+            for cookie in cookies:
+                self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Length", "0")
             self.end_headers()
 

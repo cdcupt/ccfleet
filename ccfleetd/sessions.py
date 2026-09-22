@@ -32,6 +32,11 @@ import time
 #: ticket nobody enjoys.
 COOKIE_NAME = "ccfleet_session"
 
+#: The half-finished sign-in, held in the browser that started it. Separate
+#: from the session cookie because it is short-lived and means something
+#: different: not "this is who you are" but "this browser began this flow".
+FLOW_COOKIE_NAME = "ccfleet_signin"
+
 #: How long a session lasts without being renewed.
 DEFAULT_TTL_S = 14 * 24 * 3600
 
@@ -86,7 +91,8 @@ def unsign(value: str, secret: str) -> str:
     return session_id
 
 
-def cookie_header(value: str, *, ttl_s: int, secure: bool = True) -> str:
+def cookie_header(value: str, *, ttl_s: int, secure: bool = True,
+                  name: str = COOKIE_NAME) -> str:
     """A Set-Cookie for a session that has just begun.
 
     HttpOnly so script cannot read it, SameSite=Lax so it does not ride along
@@ -94,26 +100,26 @@ def cookie_header(value: str, *, ttl_s: int, secure: bool = True) -> str:
     development — a Secure cookie over http is silently dropped, which reads
     as sign-in doing nothing at all.
     """
-    parts = [f"{COOKIE_NAME}={value}", "Path=/", "HttpOnly", "SameSite=Lax",
+    parts = [f"{name}={value}", "Path=/", "HttpOnly", "SameSite=Lax",
              f"Max-Age={int(ttl_s)}"]
     if secure:
         parts.append("Secure")
     return "; ".join(parts)
 
 
-def clearing_header(*, secure: bool = True) -> str:
+def clearing_header(*, secure: bool = True, name: str = COOKIE_NAME) -> str:
     """A Set-Cookie that ends the session in the browser.
 
     The attributes have to match the ones it was set with or the browser keeps
     the original and signing out appears to do nothing.
     """
-    parts = [f"{COOKIE_NAME}=", "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"]
+    parts = [f"{name}=", "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"]
     if secure:
         parts.append("Secure")
     return "; ".join(parts)
 
 
-def read_cookie(header: str | None) -> str | None:
+def read_cookie(header: str | None, name: str = COOKIE_NAME) -> str | None:
     """Pull our cookie out of a Cookie header, or None.
 
     Browsers send every cookie for the host in one header, so this has to find
@@ -122,10 +128,15 @@ def read_cookie(header: str | None) -> str | None:
     if not header:
         return None
     for crumb in header.split(";"):
-        name, _, value = crumb.strip().partition("=")
-        if name == COOKIE_NAME and value:
+        crumb_name, _, value = crumb.strip().partition("=")
+        if crumb_name == name and value:
             return value
     return None
+
+
+def matches(a: str, b: str) -> bool:
+    """Constant-time equality, for comparing two values a stranger supplies."""
+    return hmac.compare_digest(a, b)
 
 
 def is_expired(expires_at: float, *, now: float | None = None) -> bool:
