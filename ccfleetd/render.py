@@ -489,14 +489,19 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
 # forward; the credential itself is written by the CLI on the node and never
 # comes near this process.
 LOGIN_WORDS = {
-    "requested": "Starting on the node\u2026",
+    "requested": "Asking the node\u2026 it checks in every few minutes, so this can "
+                 "take a moment. Leave the page open.",
     "url_ready": "Open the link, approve, then paste the code below.",
     "code_sent": "Code sent to the node. Waiting for it to finish\u2026",
 }
 # The same three steps, said for the flow that ends in a credential you carry
 # away rather than one written on the node.
 TOKEN_WORDS = {
-    "requested": "Asking the node for a token\u2026",
+    # The node reports on a timer, so it can be a few minutes before it even
+    # hears the request. A bare "asking..." with no sense of that reads as
+    # broken and gets abandoned, which is exactly what happened.
+    "requested": "Asking the node\u2026 it checks in every few minutes, so this can "
+                 "take a moment. Leave the page open.",
     "url_ready": "Open the link, approve, then paste the code below.",
     "code_sent": "Code sent. Minting the token\u2026",
     "ready": "Your token is ready.",

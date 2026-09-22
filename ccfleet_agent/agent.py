@@ -27,6 +27,7 @@ of these, including with a secret written into a fixture transcript.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import ipaddress
 import json
 import logging
@@ -1053,7 +1054,10 @@ def end_login(runner: Runner = subprocess.run) -> None:
 # How long the agent will stay resident driving one sign-in. Someone is watching
 # the console, so it polls fast; but an abandoned attempt must not pin a process
 # on the node forever.
-LOGIN_WINDOW_S = 300.0
+# Shorter than the timer that starts us (5 minutes), so a resident run always
+# finishes before the next one is due. They were exactly equal, which made an
+# overlap not a risk but a certainty.
+LOGIN_WINDOW_S = 240.0
 LOGIN_POLL_MIN_S = 1.0
 LOGIN_POLL_MAX_S = 30.0
 
@@ -1284,6 +1288,38 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
     return status, desired, state, progress
 
 
+# Distinct from None, which means "another run holds it". This means "there is
+# no lock to hold", which is not a reason to refuse to run.
+_UNLOCKED = object()
+
+
+def hold_the_only_run(state_path: Path) -> Optional[Any]:
+    """Take an exclusive lock for this run, or return None if one is running.
+
+    Two agents on one node fight: they drive the same tmux session and write
+    the same state file, so one calls `start_login` and kills the pane the
+    other is reading, and a sign-in dies with no error anywhere. The timer and
+    a resident login run overlapped often enough that this was the common case,
+    not an edge one.
+
+    The lock is advisory and held by an open file descriptor, so it is released
+    when the process ends however it ends — including a kill.
+    """
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(state_path.with_suffix(".lock"), "w")
+    except OSError as exc:
+        # A node that cannot make a lock file should still report facts.
+        log.debug("no lock file (%s); continuing unlocked", exc.__class__.__name__)
+        return _UNLOCKED
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="ccfleet-agent",
                                      description="Post one heartbeat to the ccfleet server.")
@@ -1302,10 +1338,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except AgentConfigError as exc:
         print(f"error: {exc} (env file: {args.env_file})", file=sys.stderr)
         return 2
-    state = read_state(cfg.state_path)
     if args.print_only:
-        print(json.dumps(build_payload(cfg, state=state), indent=2, sort_keys=True))
+        print(json.dumps(build_payload(cfg, state=read_state(cfg.state_path)),
+                         indent=2, sort_keys=True))
         return 0
+
+    # One run at a time. Held for the whole run, taken before the state file is
+    # read so two runs cannot both act on the same picture of it.
+    lock = hold_the_only_run(cfg.state_path)
+    if lock is None:
+        log.info("another run is already working; leaving it to it")
+        return 0
+    state = read_state(cfg.state_path)
 
     status, desired, state, progress = run_cycle(cfg, state,
                                                  reconcile=not args.no_reconcile)
