@@ -136,9 +136,20 @@ def test_a_memory_cap_that_is_not_one_is_refused():
         assert result.returncode != 0, f"{bad!r} was not refused"
 
 
+def test_a_cap_too_small_to_run_in_is_refused():
+    """Zero would write MemoryMax=0 and leave the slot unable to start anything.
+    A measured session is about 265 MB, so anything under 512M is a typo rather
+    than a small slot."""
+    for tiny in ("0", "1", "100M", "511M", "0G", "1K"):
+        result = run(ADD, "--slot", "slot01", "--memory-max", tiny)
+        assert result.returncode != 0, f"{tiny!r} was accepted"
+        assert "at least 512M" in result.stderr
+
+
 def test_a_valid_cap_gets_past_validation():
-    """Proves the refusals above are about the value, not about everything."""
-    for good in ("2G", "1500M", "512000K", "2000"):
+    """Proves the refusals above are about the value, not about everything.
+    512M is the boundary and must be on the accepted side of it."""
+    for good in ("512M", "2G", "1500M", "600000K", "900000000"):
         result = run(ADD, "--slot", "slot01", "--memory-max", good)
         assert "run this as root" in result.stderr, f"{good!r} should have been accepted"
 
@@ -233,3 +244,14 @@ def test_release_says_the_account_survives_the_slot():
     """The distinction somebody will be anxious about: releasing a slot destroys
     the login on that machine, not their Claude account."""
     assert "account" in run(REMOVE, "--help").stdout.lower()
+
+
+def test_the_trust_prompt_is_answered_for_the_directory_people_work_in(tmp_path):
+    """The prompt is per-directory. slot-add creates ~/workspace and that is
+    where work happens, so trusting the home leaves the prompt waiting in the
+    one place it matters."""
+    text = ADD.read_text()
+    assert "~/workspace'), {})['hasTrustDialogAccepted']" in text
+    assert "expanduser('~'), {})['hasTrustDialogAccepted']" not in text, \
+        "trusting the home is not the same as trusting the workspace"
+    assert "remoteDialogSeen" in text, "both prompts, or the step does not do what it says"

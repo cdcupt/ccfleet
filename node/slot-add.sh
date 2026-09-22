@@ -53,6 +53,21 @@ printf '%s' "$SLOT" | grep -qE '^[a-z][a-z0-9_-]{1,31}$' \
   || die "--slot must start with a lowercase letter, then lowercase letters, digits, underscore or hyphen (2-32)"
 printf '%s' "$MEMORY_MAX" | grep -qE '^[0-9]+[KMG]?$' \
   || die "--memory-max looks like 1500M or 2G"
+# A cap below what Claude Code needs is not a small slot, it is a slot that
+# cannot start. Measured on a live node: about 265 MB for a running session, so
+# anything under 512 MiB is a typo rather than a choice. Zero in particular
+# would write MemoryMax=0 and leave the slot unable to run anything at all.
+_cap_bytes() {
+  local n="${1%[KMG]}" u="${1#"${1%[KMG]}"}"
+  case "$u" in
+    K) echo $((n * 1024)) ;;
+    M) echo $((n * 1024 * 1024)) ;;
+    G) echo $((n * 1024 * 1024 * 1024)) ;;
+    *) echo "$n" ;;
+  esac
+}
+[ "$(_cap_bytes "$MEMORY_MAX")" -ge $((512 * 1024 * 1024)) ] \
+  || die "--memory-max must be at least 512M; a slot needs about 265M to run at all"
 [ "$(id -u)" -eq 0 ] || die "run this as root"
 
 HOME_DIR="/home/$SLOT"
@@ -139,7 +154,11 @@ p = os.path.expanduser('~/.claude.json')
 d = json.load(open(p)) if os.path.exists(p) else {}
 d['hasCompletedOnboarding'] = True
 d.setdefault('projects', {})
-d['projects'].setdefault(os.path.expanduser('~'), {})['hasTrustDialogAccepted'] = True
+# ~/workspace, not ~. That is the directory slot-add creates and the one
+# people work in, and the trust prompt is per-directory: trusting the home
+# leaves the prompt waiting in the place it actually matters.
+d['projects'].setdefault(os.path.expanduser('~/workspace'), {})['hasTrustDialogAccepted'] = True
+d['remoteDialogSeen'] = True
 tmp = p + '.tmp'
 json.dump(d, open(tmp, 'w'), indent=2)
 os.replace(tmp, p)
