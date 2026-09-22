@@ -12,6 +12,12 @@ from .desired import is_channel, is_login_url
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
+# How often the page comes back for more. Fast enough while a sign-in is moving
+# that a step finishing on the node shows up almost at once; slow the rest of
+# the time, because nothing else here changes minute to minute.
+IDLE_REFRESH_S = 60
+ACTIVE_REFRESH_S = 4
+
 CSS = """
 /* Tokens. Light is the bare :root; dark redefines only the tokens, guarded so an
    explicit light choice still wins. Nothing below hard-codes a colour. */
@@ -467,11 +473,14 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
         f"<pre>{escape(token)}</pre>"
         "<div class=\"card\">"
         "<h2>Put it on a machine</h2>"
-        "<pre>mkdir -p ~/.local/bin\n"
-        "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/"
-        "ccfleet-connect.sh \\\n"
-        "  -o ~/.local/bin/ccfleet-connect &amp;&amp; chmod +x ~/.local/bin/ccfleet-connect\n"
-        "ccfleet-connect          # paste the token; input is hidden</pre>"
+        "<p>One command, on any Mac or Linux box. It asks for the token and hides "
+        "what you paste.</p>"
+        "<pre>bash -c \"$(curl -fsSL https://raw.githubusercontent.com/cdcupt/"
+        "ccfleet/main/laptop/ccfleet-connect.sh)\"</pre>"
+        "<p class=\"muted\">Run through <code>bash -c</code> rather than piped into a "
+        "shell, so the prompt can still read from your terminal &mdash; a pipe would "
+        "take the keyboard away from it. It installs itself to "
+        "<code>~/.local/bin</code> on the way past.</p>"
         "<p class=\"muted\">Then <code>claude</code> works there on that machine\u2019s own "
         "files, with no login. <code>ccfleet-connect --status</code> checks it, "
         "<code>--remove</code> undoes it.</p>"
@@ -815,14 +824,26 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
             "%3Ccircle cx='5' cy='8' r='1.7' fill='white'/%3E"
             "%3Ccircle cx='11' cy='5' r='1.7' fill='white'/%3E"
             "%3Ccircle cx='11' cy='11' r='1.7' fill='white'/%3E%3C/svg%3E")
-    # The page reloads itself so a URL appearing on a node shows up without
-    # anyone pressing anything. While someone is being asked to paste a code,
-    # that same reload lands mid-typing and throws away what they had. Waiting
-    # is the one state where nothing new can arrive anyway, so the refresh has
-    # nothing to fetch and everything to lose.
-    waiting = any((login or {}).get("state") == "url_ready"
-                  for login in (logins or {}).values())
-    auto_refresh = "" if waiting else '<meta http-equiv="refresh" content="60">'
+    # How often to come back, decided by what the page is currently showing.
+    #
+    # Idle, a minute is plenty. Mid-flow it is not: a step completes on the node
+    # in seconds and then sits unseen for the rest of the minute, which reads as
+    # nothing happening. And while someone is being asked to paste a code, any
+    # reload at all lands mid-typing and throws away what they had — that is the
+    # one state where nothing can arrive anyway, so there is nothing to fetch
+    # and everything to lose.
+    states = {(login or {}).get("state") for login in (logins or {}).values()}
+    if "url_ready" in states:
+        auto_refresh = ""
+    elif states & {"requested", "code_sent"}:
+        auto_refresh = f'<meta http-equiv="refresh" content="{ACTIVE_REFRESH_S}">'
+    else:
+        auto_refresh = f'<meta http-equiv="refresh" content="{IDLE_REFRESH_S}">'
+    # Say which of the three the page is doing, so a reload that does not come
+    # is a stated choice rather than something that looks broken.
+    cadence = ("waiting for you to paste a code" if not auto_refresh else
+               "keeping up with a sign-in" if str(ACTIVE_REFRESH_S) in auto_refresh else
+               "refreshing itself every minute")
     whoami = ""
     if who is not None:
         whoami = (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
@@ -836,8 +857,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         '<header class="mast"><div>'
         '<h1>ccfleet<span class="dot">.</span></h1>'
         '<p class="sub">One owner, one account, one node · heartbeat max age '
-        f"{cfg.heartbeat_max_age_s // 60} min · this page refreshes itself every minute"
-        f"{whoami}</p></div>"
+        f"{cfg.heartbeat_max_age_s // 60} min · {cadence}{whoami}</p></div>"
         + _strip_html(counts) +
         "</header>"
         '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'

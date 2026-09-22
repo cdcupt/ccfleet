@@ -223,6 +223,29 @@ cmd_remove() {
   note "this shell still has it until you close it: unset CLAUDE_CODE_OAUTH_TOKEN"
 }
 
+SELF_URL="https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh"
+
+install_self() {
+  # Run straight from a pipe there is no file to copy, so fetch a fresh one.
+  # Without this the one-line install leaves nothing behind, and --status and
+  # --remove are commands the person was told about but does not have.
+  local dest="$HOME/.local/bin/ccfleet-connect"
+  [ -x "$dest" ] && return 0
+  mkdir -p "$(dirname "$dest")" || return 0
+  if [ -f "$0" ] && grep -q ccfleet-connect "$0" 2>/dev/null; then
+    cp "$0" "$dest" 2>/dev/null || return 0
+  else
+    curl -fsSL "$SELF_URL" -o "$dest.tmp" 2>/dev/null || return 0
+    mv "$dest.tmp" "$dest" 2>/dev/null || { rm -f "$dest.tmp"; return 0; }
+  fi
+  chmod 755 "$dest" 2>/dev/null || true
+  note "installed ccfleet-connect to $dest"
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) note "$HOME/.local/bin is not on your PATH; add it to use --status later" ;;
+  esac
+}
+
 main() {
   case "${1:-}" in
     --status|-s) cmd_status ;;
@@ -231,6 +254,7 @@ main() {
       sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
     "")
       # No argument: read the token without it ever reaching a command line.
+      install_self
       cmd_connect "$(read_token)" ;;
     --stdin) cmd_connect "$(read_token)" ;;
     -*) die "unknown option: $1" ;;

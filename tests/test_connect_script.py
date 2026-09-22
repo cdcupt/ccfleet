@@ -301,3 +301,36 @@ def test_bash_gets_the_file_an_interactive_terminal_reads(tmp_path):
                           env=env, timeout=60).returncode == 0
     assert "CLAUDE_CODE_OAUTH_TOKEN" in (home / ".bashrc").read_text()
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in (home / ".bash_profile").read_text()
+
+
+def test_the_one_line_install_leaves_the_command_behind(home, tmp_path):
+    """Run from a pipe there is no file to copy, so it installs a fresh one.
+
+    Without this the one-line install leaves nothing on the machine, and
+    --status and --remove are commands the person was told about but does not
+    have.
+    """
+    result = run(home, tmp_path, token_env=None)
+    dest = home / ".local" / "bin" / "ccfleet-connect"
+    assert dest.exists(), "the one-liner leaves the command behind"
+    assert dest.stat().st_mode & stat.S_IXUSR, "and it is runnable"
+    assert "installed ccfleet-connect" in result.stdout
+
+
+def test_it_does_not_overwrite_a_copy_already_there(home, tmp_path):
+    """Someone may have their own, edited or newer. Installing is a courtesy,
+    not a claim on the path."""
+    dest = home / ".local" / "bin" / "ccfleet-connect"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("#!/bin/sh\n# their own copy\n")
+    dest.chmod(0o755)
+    run(home, tmp_path, token_env=None)
+    assert "their own copy" in dest.read_text(), "left alone"
+
+
+def test_installing_is_separate_from_connecting(home, tmp_path):
+    """A bad token still fails, and fails after the install rather than
+    instead of it: two concerns, neither standing in for the other."""
+    result = run(home, tmp_path, "not-a-token")
+    assert result.returncode != 0 and "does not look like" in result.stderr
+    assert not token_path(home).exists()

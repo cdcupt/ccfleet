@@ -1042,9 +1042,22 @@ def find_login_url(pane: str) -> Optional[str]:
     return url.rstrip('"\'),.').strip()
 
 
+# Claude Code's prompt swallows an Enter that arrives in the same burst as a
+# hundred characters of pasted code: it is still handling the paste, and the
+# newline goes with it. Measured on a live sign-in — the code sat typed at the
+# prompt indefinitely, and a single Enter sent by hand completed it at once.
+CODE_SETTLE_S = 1.0
+
+
 def send_login_code(code: str, runner: Runner = subprocess.run) -> None:
-    """Type the code into the waiting prompt. Never logged."""
-    _tmux(runner, "send-keys", "-t", LOGIN_SESSION, code, "Enter")
+    """Type the code into the waiting prompt, then submit it. Never logged.
+
+    Two sends, with a pause. One send with the key appended looks equivalent
+    and is not: the prompt is still busy with the text when the Enter lands.
+    """
+    _tmux(runner, "send-keys", "-t", LOGIN_SESSION, code)
+    time.sleep(CODE_SETTLE_S)
+    _tmux(runner, "send-keys", "-t", LOGIN_SESSION, "Enter")
 
 
 def end_login(runner: Runner = subprocess.run) -> None:
