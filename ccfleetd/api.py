@@ -17,7 +17,7 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
-from . import oauth, sessions
+from . import oauth, sessions, usersite
 from .config import Config
 from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
@@ -25,7 +25,6 @@ from .monitor import Monitor
 from .passwords import verify_password
 from .render import (
     build_rows,
-    render_account,
     render_add_result,
     render_dashboard,
     render_token_result,
@@ -200,23 +199,29 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- signing in with Google ----------------------------------------
 
-        def _signed_in(self) -> Optional[dict[str, Any]]:
-            """The account this browser is signed in as, or None.
+        def _signed_in(self) -> tuple[Optional[dict[str, Any]], str]:
+            """The account this browser is signed in as, and its session id.
 
-            Separate from _identity(): that is the operator's basic auth, which
-            is the console's own door. These are the people who rent slots, and
-            the two must not be able to stand in for one another.
+            (None, "") when there is none. Separate from _identity(): that is
+            the operator's basic auth, which is the console's own door. These
+            are the people who rent slots, and the two must not be able to
+            stand in for one another.
             """
             if not ctx.cfg.cookie_secret:
-                return None
+                return None, ""
             raw = sessions.read_cookie(self.headers.get("Cookie"))
             if raw is None:
-                return None
+                return None, ""
             try:
                 session_id = sessions.unsign(raw, ctx.cfg.cookie_secret)
             except sessions.SessionError:
-                return None
-            return ctx.store.account_for_session(session_id, now=time.time())
+                return None, ""
+            account = ctx.store.account_for_session(session_id, now=time.time())
+            return (account, session_id) if account is not None else (None, "")
+
+        def _csrf_ok(self, form: dict[str, str], session_id: str) -> bool:
+            return hmac.compare_digest(
+                form.get("csrf", ""), usersite.csrf_for(session_id, ctx.cfg.cookie_secret))
 
         def _sign_in_start(self) -> None:
             if not ctx.cfg.google_ready:
@@ -303,16 +308,50 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                  self._clear_flow_cookie()])
 
         def _sign_out(self) -> None:
-            raw = sessions.read_cookie(self.headers.get("Cookie"))
-            if raw and ctx.cfg.cookie_secret:
-                try:
-                    ctx.store.end_session(
-                        sessions.unsign(raw, ctx.cfg.cookie_secret))
-                except sessions.SessionError:
-                    pass
-            # Cleared whatever happened, so a cookie we cannot read still goes.
+            """End this browser's session: only when the request proves it
+            came from our own page.
+
+            SameSite keeps the cookie off a cross-site POST, but not the
+            response's Set-Cookie, so another site's form could still clear it
+            — signing people out from anywhere. So a live session is ended
+            only with its own form token, and a cookie is cleared only when
+            one was actually sent with the request.
+            """
+            if sessions.read_cookie(self.headers.get("Cookie")) is None:
+                self._redirect("/account")
+                return
+            account, session_id = self._signed_in()
+            if account is not None:
+                form = self._form()
+                if form is None:
+                    return
+                if not self._csrf_ok(form, session_id):
+                    self._json(403, {"error": "bad or missing csrf token"})
+                    return
+                ctx.store.end_session(session_id)
+            # A cookie that no longer names a session is cleared as it is.
             self._redirect_with_cookies(
-                "/", [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
+                "/account", [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
+
+        def _account_action(self, path: str) -> None:
+            """A form on the user site. Signed in, with this session's token."""
+            account, session_id = self._signed_in()
+            if account is None:
+                # Their session ended while the page sat open. Back to the
+                # page, which offers sign-in, rather than an error.
+                self._redirect("/account")
+                return
+            form = self._form()
+            if form is None:
+                return
+            if not self._csrf_ok(form, session_id):
+                self._json(403, {"error": "bad or missing csrf token"})
+                return
+            outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time())
+            if outcome.location:
+                self._redirect(outcome.location)
+            else:
+                self._send(outcome.status, outcome.body.encode("utf-8"), HTML_HEADERS)
 
         def _clear_flow_cookie(self) -> str:
             """The half-finished sign-in is over, however it ended."""
@@ -354,10 +393,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif path == "/account":
-                who = self._signed_in()
-                self._send(200, render_account(
-                    who, ctx.store.held_slot_count(who["id"]) if who else 0,
-                    ctx.cfg).encode("utf-8"), HTML_HEADERS)
+                account, session_id = self._signed_in()
+                note = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(self.path).query).get("note", [""])[0]
+                self._send(200, usersite.page(ctx.store, ctx.cfg, account, session_id,
+                                              time.time(), note).encode("utf-8"),
+                           HTML_HEADERS)
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":
@@ -419,6 +460,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0]
             if path == "/auth/signout":
                 self._sign_out()
+                return
+            if path.startswith("/account/"):
+                self._account_action(path)
                 return
             if path.startswith("/actions/"):
                 self._console_action(path)

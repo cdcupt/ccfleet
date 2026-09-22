@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import urllib.error
 import urllib.parse
 
@@ -406,19 +407,25 @@ def signin(monkeypatch):
 
     jar: dict[str, str] = {}
 
-    def call(method, path, headers=None, *, browser=True):
+    def call(method, path, headers=None, *, browser=True, form=None):
         """One request from a browser that keeps its cookies.
 
         `browser=False` is a *different* browser: same server, no jar. That is
         the whole of the login-CSRF test — the attacker's callback URL opened
-        by somebody who did not start the flow.
+        by somebody who did not start the flow. `form` submits fields the way a
+        page's own form would.
         """
         hdrs = dict(headers or {})
         if browser and jar and "Cookie" not in hdrs:
             hdrs["Cookie"] = "; ".join(f"{k}={v}" for k, v in jar.items())
+        body = None
+        if form is not None:
+            body = urllib.parse.urlencode(form).encode()
+            hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+            hdrs["Content-Length"] = str(len(body))
         conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1],
                                           timeout=10)
-        conn.request(method, path, headers=hdrs)
+        conn.request(method, path, body=body, headers=hdrs)
         reply = conn.getresponse()
         # Kept, not discarded: a test that only reads status codes cannot tell
         # a page that knows who you are from one that does not.
@@ -477,9 +484,10 @@ def test_signing_in_creates_an_account_that_can_claim_nothing(signin):
     session_id = sessions.unsign(value, SECRET)
     assert store.account_for_session(session_id, now=NOW)["id"] == account["id"]
 
+    from ccfleetd.usersite import csrf_for
     out = call("POST", "/auth/signout",
-               {"Cookie": f"{sessions.COOKIE_NAME}={value}",
-                "Content-Length": "0"})
+               {"Cookie": f"{sessions.COOKIE_NAME}={value}"},
+               form={"csrf": csrf_for(session_id, SECRET)})
     assert out.status == 303
     assert "Max-Age=0" in out.getheader("Set-Cookie")
     assert store.account_for_session(session_id, now=NOW) is None
@@ -664,8 +672,9 @@ def test_the_session_signs_you_in_to_a_page(signin):
     assert "<strong>2</strong>" in granted.body
     assert "no slots yet" not in granted.body
 
-    # And signing out takes it away again.
-    assert call("POST", "/auth/signout", {"Content-Length": "0"}).status == 303
+    # And signing out, with the page's own form, takes it away again.
+    token = re.search(r'name="csrf" value="([0-9a-f]{64})"', granted.body).group(1)
+    assert call("POST", "/auth/signout", form={"csrf": token}).status == 303
     after = call("GET", "/account")
     assert "erik@example.com" not in after.body
     assert "Continue with Google" in after.body
@@ -675,43 +684,47 @@ def test_the_account_page_says_what_you_hold(store):
     """Zero is the common case for somebody who has just signed up, and the one
     worth explaining: an empty page with no reason given reads as broken."""
     from ccfleetd.config import Config
-    from ccfleetd.render import render_account
+    from ccfleetd.usersite import page
 
     cfg = Config(google_client_id="c", google_client_secret="s",
                  cookie_secret=SECRET, public_url="http://x")
     account = store.upsert_account_from_google("g-1", "erik@example.com", now=NOW)
 
-    fresh = render_account(store.get_account(account["id"]), 0, cfg)
+    fresh = page(store, cfg, store.get_account(account["id"]), "sid", NOW)
     assert "no slots yet" in fresh
     assert "erik@example.com" in fresh
+    assert "Claim a slot" not in fresh, "offered a claim with nothing to claim it with"
 
     store.set_slot_quota(account["id"], 3)
-    granted = render_account(store.get_account(account["id"]), 1, cfg)
-    assert "<strong>3</strong>" in granted and "<strong>1</strong>" in granted
+    granted = page(store, cfg, store.get_account(account["id"]), "sid", NOW)
+    assert "<strong>3</strong> slots, and hold <strong>0</strong>" in granted
     assert "no slots yet" not in granted
+    assert "Claim a slot" in granted
 
 
-def test_a_stranger_is_offered_sign_in_and_nothing_else():
+def test_a_stranger_is_offered_sign_in_and_nothing_else(store):
     from ccfleetd.config import Config
-    from ccfleetd.render import render_account
+    from ccfleetd.usersite import page
 
     ready = Config(google_client_id="c", google_client_secret="s",
                    cookie_secret=SECRET, public_url="http://x")
-    page = render_account(None, 0, ready)
-    assert "/auth/google/start" in page
-    assert "Sign out" not in page
+    shown = page(store, ready, None, "", NOW)
+    assert "/auth/google/start" in shown
+    assert "Sign out" not in shown
 
     # And where it cannot work, it says so rather than offering a dead button.
-    page = render_account(None, 0, Config())
-    assert "not set up" in page
-    assert "/auth/google/start" not in page
+    shown = page(store, Config(), None, "", NOW)
+    assert "not set up" in shown
+    assert "/auth/google/start" not in shown
 
 
-def test_a_signed_in_page_offers_the_way_out():
+def test_a_signed_in_page_offers_the_way_out(store):
     from ccfleetd.config import Config
-    from ccfleetd.render import render_account
-    page = render_account({"email": "a@b.c", "slot_quota": 0}, 0,
-                          Config(google_client_id="c", google_client_secret="s",
-                                 cookie_secret=SECRET, public_url="http://x"))
-    assert 'action="/auth/signout"' in page
-    assert "a@b.c" in page
+    from ccfleetd.usersite import csrf_for, page
+    account = store.upsert_account_from_google("g-2", "a@b.c", now=NOW)
+    shown = page(store, Config(google_client_id="c", google_client_secret="s",
+                               cookie_secret=SECRET, public_url="http://x"),
+                 store.get_account(account["id"]), "the-session", NOW)
+    assert 'action="/auth/signout"' in shown
+    assert "a@b.c" in shown
+    assert csrf_for("the-session", SECRET) in shown, "the way out has no token to carry"
