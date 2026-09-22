@@ -130,7 +130,11 @@ ccfleetd node add shared-1 --owner ops --region us-west          # prints the ma
 ccfleetd slot capacity shared-1 4                                 # how many slots it may hold
 ccfleetd slot add shared-1-01 --machine shared-1 --unix-user slot01   # one line per slot
 
-# the machine, as root, after hardening it with node/install.sh
+# the machine, as root. Harden it first with bootstrap.sh: keys-only SSH, the
+# firewall, unattended upgrades, and a login for you, but no agent. Not install.sh,
+# which turns the box into one owner's node, and machine-setup.sh refuses to run
+# beside that node's agent.
+git clone https://github.com/cdcupt/ccfleet.git && sudo ./ccfleet/node/bootstrap.sh ops "ssh-ed25519 AAAA... you"
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
   | sudo bash -s -- --server https://fleet.example.com --node shared-1 --token <64-hex>
 

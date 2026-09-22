@@ -5,8 +5,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
 #     | sudo bash -s -- --server https://fleet.example.com --node shared-1 --token <64-hex>
 #
-# Harden the box first: node/install.sh is the tool for SSH, the firewall and
-# fail2ban. This adds only what a shared machine needs on top of that — one
+# Harden the box first with node/bootstrap.sh: keys-only SSH, the firewall and
+# unattended upgrades, plus a login for the operator and no agent. Not
+# node/install.sh, which turns the box into one owner's node; its agent reports
+# under a node id, and this script refuses to run beside an agent that reports
+# as this machine. This adds only what a shared machine needs on top — one
 # agent for the whole machine, running as root, because it creates and removes
 # the slot users. Slots themselves are not made here. The agent makes each one
 # when somebody claims it, and wipes it when they give it back.
