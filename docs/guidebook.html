@@ -199,6 +199,12 @@ html{scroll-behavior:smooth}
   part fails it says so rather than leaving you with a command that is not there.
   Run through <code>bash -c</code> rather than piped into a shell: a pipe takes the
   keyboard away from the prompt.</p>
+  <p>When it finishes it hands you a fresh shell with the token already in it, so
+  <code>claude</code> works in that same window. A program cannot put a variable into
+  the shell that started it &mdash; that is what a child process is &mdash; so the
+  choice was between an export line to type by hand and a new shell that has read the
+  line just written. Pass <code>--no-exec</code> first if you are scripting this and
+  want your own shell back.</p>
   <p>After that <code>claude</code> simply works there, on that machine&rsquo;s own files. Nothing is
   proxied and no base URL is set: Claude Code reads the token from the environment exactly as
   Anthropic documents.</p>

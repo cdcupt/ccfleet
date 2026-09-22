@@ -6,6 +6,9 @@
 #   ccfleet-connect --status    what is this device using
 #   ccfleet-connect --remove    undo it
 #
+# Put --no-exec first to skip the fresh shell it hands you at the end;
+# a provisioning script wants its own shell back, not a new one.
+#
 # Passing the token as an argument works but is discouraged: it lands in shell
 # history and is visible in `ps` to anyone else on the machine.
 #
@@ -181,11 +184,30 @@ cmd_connect() {
 
   note "token stored in $TOKEN_FILE (0600)"
   note "$rc now exports it for new shells"
+
+  # A process cannot put a variable into the shell that started it — that is
+  # what a child process is. So the choice is to tell somebody to run an export
+  # by hand, or to hand them a shell that already has it. The second is what
+  # they wanted when they asked; it costs one exec and reads the rc line just
+  # written, so the token arrives the same way it will on every later shell
+  # rather than by a special case that only works today.
+  if [ "$NO_EXEC" = yes ]; then
+    note ""
+    note "This shell does not have it yet. Open a new terminal, or run:"
+    note "    exec \"\$SHELL\""
+    return 0
+  fi
+  if [ ! -t 1 ] || [ -z "${SHELL:-}" ] || [ ! -x "${SHELL:-}" ]; then
+    # No terminal to hand over, or no shell to hand over to. Say the command.
+    note ""
+    note "This shell does not have it yet. Open a new terminal, or run:"
+    note "    exec \"\$SHELL\""
+    return 0
+  fi
   note ""
-  note "This shell does not have it yet. Either open a new terminal, or run:"
-  note "    export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat $(sq "$TOKEN_FILE"))\""
+  note "Starting a fresh shell so claude works right here. Nothing else changes."
   note ""
-  note "Then just use claude. No login, on this or any device you do this on."
+  exec "$SHELL"
 }
 
 cmd_status() {
@@ -272,11 +294,23 @@ install_self() {
 }
 
 main() {
+  # --no-exec, first if given, for anything scripted: replacing the shell is
+  # the right end to an interactive setup and the wrong one inside somebody's
+  # provisioning run. Taken positionally rather than filtered out of the list,
+  # because filtering means splitting arguments and one of them is a token.
+  NO_EXEC=no
+  if [ "${1:-}" = "--no-exec" ]; then
+    NO_EXEC=yes
+    shift
+  fi
+
   case "${1:-}" in
     --status|-s) cmd_status ;;
     --remove|-r) cmd_remove ;;
     -h|--help)
-      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+      # To the first blank line rather than a counted range: the header grows
+      # and a fixed number quietly starts cutting the end off the help.
+      sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' ;;
     "")
       # No argument: read the token without it ever reaching a command line.
       cmd_connect "$(read_token)" ;;
