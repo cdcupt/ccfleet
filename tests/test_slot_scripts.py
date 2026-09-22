@@ -18,6 +18,7 @@ nobody runs.
 
 import os
 import pathlib
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -39,6 +40,28 @@ INERT = ("loginctl", "systemctl", "pkill", "adduser",
 # carry this list; the test at the bottom of this file checks they agree.
 PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root", "docker", "lxd",
                      "libvirt", "kvm", "adm", "disk", "shadow", "staff")
+
+
+@pytest.fixture(autouse=True)
+def _never_the_real_system(tmp_path_factory, monkeypatch):
+    """Point every absolute system path these scripts write at a sandbox.
+
+    slot-add removes /etc/sudoers.d/90-ccfleet-<slot>, and under test that was
+    the real directory. It went unseen because the two platforms hide it
+    differently: macOS has it 0755, so `rm -f` on a missing file exits 0 and
+    the suite quietly reached outside itself every run; Linux has it 0750, so
+    the same line failed with EACCES, which is how CI found what nine review
+    rounds and a green local suite did not. Neither outcome is a test.
+
+    Set here rather than in each helper so a path added later is covered by
+    default — as_root built its environment without either of these, and only
+    luck (its tests refuse before reaching step 2) kept it off the real
+    /etc/systemd/system.
+    """
+    sandbox = tmp_path_factory.mktemp("system")
+    (sandbox / "sudoers.d").mkdir()
+    monkeypatch.setenv("CCFLEET_SUDOERS_DIR", str(sandbox / "sudoers.d"))
+    monkeypatch.setenv("CCFLEET_SLICE_ROOT", str(sandbox / "systemd"))
 
 
 def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
@@ -591,3 +614,38 @@ def test_both_scripts_agree_on_what_counts_as_privileged(tmp_path):
     names = list(lists)
     assert lists[names[0]] == lists[names[1]], lists
     assert lists[names[0]] == list(PRIVILEGED_GROUPS), "this file has drifted too"
+
+
+def test_provisioning_clears_the_sudoers_drop_in_where_it_is_told_to(tmp_path):
+    """Proves the override is honoured rather than decorative: the file the
+    script removes is the one under CCFLEET_SUDOERS_DIR. Without this the
+    script could go on reading the real /etc/sudoers.d and every test would
+    still pass, which is exactly what happened."""
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    drop_in = pathlib.Path(os.environ["CCFLEET_SUDOERS_DIR"]) / "90-ccfleet-slot01"
+    drop_in.write_text("slot01 ALL=(ALL) NOPASSWD: ALL\n")
+    bindir = fake_system(tmp_path, slot_home=slot_home)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    result = subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert not drop_in.exists(), "left a sudoers drop-in granting the slot root"
+
+
+@pytest.mark.parametrize("script", [ADD, REMOVE])
+def test_no_system_path_is_written_without_a_way_to_redirect_it(script):
+    """A bare /etc path in these scripts is a path the test suite writes to on
+    the machine running it. Every one must come from an overridable variable,
+    so adding the next one cannot quietly re-open this."""
+    offenders = []
+    for n, line in enumerate(script.read_text().splitlines(), 1):
+        bare = line.split("#", 1)[0]
+        if "/etc/" not in bare:
+            continue
+        # Fine: the line that *defines* the overridable default.
+        if re.search(r'\$\{CCFLEET_\w+:-/etc/', bare):
+            continue
+        offenders.append(f"{script.name}:{n}: {line.strip()}")
+    assert not offenders, "unredirectable system paths:\n" + "\n".join(offenders)

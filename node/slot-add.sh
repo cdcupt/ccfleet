@@ -137,7 +137,12 @@ for PRIVILEGED in sudo admin wheel root docker lxd libvirt kvm adm disk shadow s
     note "removed $SLOT from $PRIVILEGED: a slot is a user on somebody else's machine"
   fi
 done
-rm -f "/etc/sudoers.d/90-ccfleet-$SLOT"
+# Overridable for the same reason SLICE_ROOT is: under test this must not be
+# the real directory. It was, and it went unnoticed because `rm -f` on a
+# missing file exits 0 — the suite reached outside its sandbox on every run
+# and said nothing.
+SUDOERS_DIR="${CCFLEET_SUDOERS_DIR:-/etc/sudoers.d}"
+rm -f "$SUDOERS_DIR/90-ccfleet-$SLOT"
 # Lingering, so this user's services run when nobody is logged in — which is
 # the normal state for a slot.
 loginctl enable-linger "$SLOT"
