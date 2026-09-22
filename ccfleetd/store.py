@@ -6,6 +6,7 @@ clear token is shown exactly once when the node is created or rotated.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -259,6 +260,29 @@ class Store:
         for name, decl in columns.items():
             if name not in have:
                 self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    @contextlib.contextmanager
+    def _write_txn(self):
+        """Hold SQLite's write lock across a read-then-write decision.
+
+        The instance lock only serialises threads sharing one Store. Two Stores
+        on the same file — `ccfleetd serve` and a `ccfleetd slot` command, say —
+        are two connections, and Python's sqlite3 leaves a bare SELECT outside
+        any transaction, so both could read "you hold none, here is a free one"
+        before either wrote. BEGIN IMMEDIATE takes the write lock up front, so
+        the second one waits for the first to finish rather than deciding
+        against a read that is already stale.
+        """
+        with self._lock:
+            if self._conn.in_transaction:
+                self._conn.commit()
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                self._conn.rollback()
+                raise
+            self._conn.commit()
 
     def close(self) -> None:
         with self._lock:
@@ -747,17 +771,16 @@ class Store:
         """
         if int(capacity) < 0:
             raise StoreError("capacity cannot be negative")
-        with self._lock:
-            have = self._conn.execute(
+        with self._write_txn() as conn:
+            have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
                 (node_id,)).fetchone()["n"]
             if int(capacity) < have:
                 raise StoreError(
                     f"{node_id} already has {have} slots declared; remove some "
                     f"before lowering its capacity to {capacity}")
-            cur = self._conn.execute(
+            cur = conn.execute(
                 "UPDATE nodes SET capacity = ? WHERE id = ?", (int(capacity), node_id))
-            self._conn.commit()
         return cur.rowcount > 0
 
     def list_accounts(self) -> list[dict[str, Any]]:
@@ -814,15 +837,15 @@ class Store:
         if not UNIX_USER_RE.match(unix_user or ""):
             raise StoreError("unix user must be a valid Linux login name")
         validate_node_id(node_id)
-        with self._lock:
-            node = self._conn.execute(
+        with self._write_txn() as conn:
+            node = conn.execute(
                 "SELECT capacity FROM nodes WHERE id = ?", (node_id,)).fetchone()
             if node is None:
                 raise StoreError(f"no machine {node_id!r}")
             # Capacity is what the operator declared they sold. Refuse to
             # declare more slots than that rather than discovering it as a
             # machine that will not hold them.
-            have = self._conn.execute(
+            have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
                 (node_id,)).fetchone()["n"]
             if have >= int(node["capacity"]):
@@ -830,14 +853,13 @@ class Store:
                     f"{node_id} declares capacity {node['capacity']} and already "
                     f"has {have} slots; raise its capacity first")
             try:
-                self._conn.execute(
+                conn.execute(
                     "INSERT INTO slots (id, node_id, unix_user, state, held_by, "
                     "claimed_at, released_at, device_token_at) "
                     "VALUES (?,?,?,?,NULL,NULL,NULL,0)",
                     (slot_id, node_id, unix_user, slotstates.FREE))
             except sqlite3.IntegrityError as exc:
                 raise StoreError(f"slot already exists: {exc}") from exc
-            self._conn.commit()
         return self.get_slot(slot_id)  # type: ignore[return-value]
 
     def get_slot(self, slot_id: str) -> dict[str, Any] | None:
@@ -928,14 +950,14 @@ class Store:
         """
         marks = ",".join("?" * len(slotstates.HELD))
         held_states = sorted(slotstates.HELD)
-        with self._lock:
-            account = self._conn.execute(
+        with self._write_txn() as conn:
+            account = conn.execute(
                 "SELECT slot_quota FROM accounts WHERE id = ?",
                 (account_id,)).fetchone()
             if account is None:
                 raise StoreError(f"no account {account_id!r}")
             quota = int(account["slot_quota"])
-            held = int(self._conn.execute(
+            held = int(conn.execute(
                 f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
                 f"AND state IN ({marks})",
                 (account_id, *held_states)).fetchone()["n"])
@@ -948,7 +970,7 @@ class Store:
             if node_id is not None:
                 extra = " AND s.node_id = ?"
                 args.append(node_id)
-            candidate = self._conn.execute(
+            candidate = conn.execute(
                 "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
                 "WHERE s.state = ? AND n.enabled = 1" + extra +
                 " ORDER BY s.node_id, s.unix_user LIMIT 1",
@@ -957,15 +979,11 @@ class Store:
                 raise NoSlotAvailable(
                     f"no free slot on {node_id}" if node_id
                     else "no free slot on any enabled machine")
-            cur = self._conn.execute(
+            cur = conn.execute(
                 "UPDATE slots SET state = ?, held_by = ?, claimed_at = ?, "
                 "released_at = NULL WHERE id = ? AND state = ?",
                 (slotstates.CLAIMING, account_id, now,
                  candidate["id"], slotstates.FREE))
-            if cur.rowcount == 0:
-                # Somebody took it between the select and the update. Nothing
-                # was written; the caller can ask again.
-                self._conn.rollback()
+            if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
                 raise NoSlotAvailable("the free slot was taken; try again")
-            self._conn.commit()
         return self.get_slot(candidate["id"])  # type: ignore[return-value]

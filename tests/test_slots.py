@@ -409,3 +409,156 @@ def test_an_account_role_is_one_of_two_things(store, bad):
 
 def test_setting_a_quota_on_nobody_reports_it(store):
     assert store.set_slot_quota("ghost", 3) is False
+
+
+class _PauseAfter:
+    """A real connection that stops once a named read has happened.
+
+    This forces the interleaving that a wall-clock race only reaches by luck:
+    the second claim reads "you hold none", the first claim then completes, and
+    only afterwards does the second one write. A claim holding SQLite's write
+    lock across its own read cannot be interleaved that way — the other
+    connection waits — so this is the difference the lock makes, made
+    deterministic instead of hoped for.
+    """
+
+    def __init__(self, conn, gate, marker):
+        self._conn, self._gate, self._marker = conn, gate, marker
+        #: Set once the read has happened and this connection is holding.
+        #: Without waiting on it the other thread can finish first and the
+        #: interleaving under test never occurs — the test then passes because
+        #: nothing raced, not because racing was prevented.
+        self.reached = threading.Event()
+
+    def execute(self, sql, *args):
+        cur = self._conn.execute(sql, *args)
+        if self._marker in sql:
+            self.reached.set()
+            self._gate.wait(20)
+        return cur
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_a_second_connection_cannot_decide_on_a_stale_read(tmp_path):
+    """An allowance of one, two free slots, and two connections — `ccfleetd
+    serve` and a `ccfleetd` command, say. The instance lock does not span them,
+    and Python's sqlite3 leaves a bare SELECT outside any transaction, so
+    without the write lock the second claim decides "you hold none" while the
+    first is still deciding, and both take a slot.
+    """
+    db = str(tmp_path / "fleet.db")
+    setup = Store(db)
+    try:
+        machine(setup, capacity=2)
+        account(setup, quota=1)
+        setup.add_slot("s1", "m1", "slot01", now=NOW)
+        setup.add_slot("s2", "m1", "slot02", now=NOW)
+    finally:
+        setup.close()
+
+    gate = threading.Event()
+    reached = threading.Event()
+    outcomes: dict[str, str] = {}
+
+    def slow_claim():
+        own = Store(db)
+        own._conn = _PauseAfter(own._conn, gate,
+                                "COUNT(*) AS n FROM slots WHERE held_by")
+        own._conn.reached = reached
+        try:
+            outcomes["slow"] = own.claim_slot("a1", now=NOW)["id"]
+        except (QuotaExceeded, NoSlotAvailable) as exc:
+            outcomes["slow"] = type(exc).__name__
+        finally:
+            own.close()
+
+    def plain_claim():
+        own = Store(db)
+        try:
+            outcomes["plain"] = own.claim_slot("a1", now=NOW + 1)["id"]
+        except (QuotaExceeded, NoSlotAvailable) as exc:
+            outcomes["plain"] = type(exc).__name__
+        finally:
+            own.close()
+
+    slow = threading.Thread(target=slow_claim)
+    slow.start()
+    assert reached.wait(10), "the first claim never reached its quota read"
+    plain = threading.Thread(target=plain_claim)
+    plain.start()
+    # It either blocks on the write lock or races ahead. Give it long enough to
+    # do the wrong thing, then let the first claim finish.
+    plain.join(timeout=1.5)
+    gate.set()
+    slow.join(timeout=30)
+    plain.join(timeout=30)
+
+    after = Store(db)
+    try:
+        held = after.held_slot_count("a1")
+        taken = [s["id"] for s in after.list_slots(held_by="a1")]
+    finally:
+        after.close()
+    assert held == 1, f"allowance of 1 handed out {held} slots ({taken}): {outcomes}"
+    assert "QuotaExceeded" in outcomes.values(), outcomes
+
+
+def test_a_second_connection_cannot_overfill_a_machine(tmp_path):
+    """The same shape as the stale claim, over a different decision: count the
+    slots on a machine, then insert one. Two connections each counting before
+    either inserts declare a machine past the capacity its operator sold."""
+    db = str(tmp_path / "fleet.db")
+    setup = Store(db)
+    try:
+        machine(setup, capacity=1)
+    finally:
+        setup.close()
+
+    gate = threading.Event()
+    reached = threading.Event()
+    outcomes: dict[str, str] = {}
+
+    def slow_add():
+        own = Store(db)
+        own._conn = _PauseAfter(own._conn, gate,
+                                "COUNT(*) AS n FROM slots WHERE node_id")
+        own._conn.reached = reached
+        try:
+            own.add_slot("s1", "m1", "slot01", now=NOW)
+            outcomes["slow"] = "declared"
+        except StoreError:
+            outcomes["slow"] = "refused"
+        finally:
+            own.close()
+
+    def plain_add():
+        own = Store(db)
+        try:
+            own.add_slot("s2", "m1", "slot02", now=NOW)
+            outcomes["plain"] = "declared"
+        except StoreError:
+            outcomes["plain"] = "refused"
+        finally:
+            own.close()
+
+    slow = threading.Thread(target=slow_add)
+    slow.start()
+    assert reached.wait(10), "the first declaration never reached its count"
+    plain = threading.Thread(target=plain_add)
+    plain.start()
+    plain.join(timeout=1.5)
+    gate.set()
+    slow.join(timeout=30)
+    plain.join(timeout=30)
+
+    after = Store(db)
+    try:
+        declared = after.list_slots(node_id="m1")
+    finally:
+        after.close()
+    assert len(declared) == 1, (
+        f"capacity 1 took {len(declared)} slots "
+        f"({[d['id'] for d in declared]}): {outcomes}")
+    assert "refused" in outcomes.values(), outcomes
