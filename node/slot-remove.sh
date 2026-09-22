@@ -79,8 +79,9 @@ fi
 note "nothing running as $SLOT"
 
 step "3/4  the account and its home"
-rm -f "/etc/systemd/system/user-$UID_NUM.slice.d/50-ccfleet.conf"
-rmdir "/etc/systemd/system/user-$UID_NUM.slice.d" 2>/dev/null || true
+SLICE_ROOT="${CCFLEET_SLICE_ROOT:-/etc/systemd/system}"
+rm -f "$SLICE_ROOT/user-$UID_NUM.slice.d/50-ccfleet.conf"
+rmdir "$SLICE_ROOT/user-$UID_NUM.slice.d" 2>/dev/null || true
 systemctl daemon-reload
 if [ "$KEEP_HOME" = yes ]; then
   userdel "$SLOT"

@@ -32,7 +32,7 @@ SLOT_GROUP = "ccfleet-slots"
 # nothing, so a test that gets past a refusal fails on its assertion rather
 # than on whatever the real command would have done.
 INERT = ("loginctl", "systemctl", "pkill", "deluser", "adduser",
-         "usermod", "addgroup", "rmdir", "install", "chmod", "sudo", "curl")
+         "usermod", "addgroup", "rmdir", "install", "chmod", "curl")
 
 
 def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True):
@@ -72,6 +72,22 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True):
         exit 0
         """))
     (bindir / "pgrep").write_text("#!/bin/sh\nexit 1\n")   # nothing running
+    # sudo runs what it is given rather than swallowing it, so anything the
+    # script does *as the slot* is still observable. Without this, every
+    # `sudo -u slot systemctl --user ...` vanishes and a test watching for it
+    # sees nothing and concludes, wrongly, that it never happened.
+    (bindir / "sudo").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -u) shift 2 ;;
+            *=*) shift ;;
+            *) break ;;
+          esac
+        done
+        [ $# -eq 0 ] && exit 0
+        exec "$@"
+        """))
     for name in INERT:
         (bindir / name).write_text("#!/bin/sh\nexit 0\n")
     for f in bindir.iterdir():
@@ -257,19 +273,45 @@ def test_the_trust_prompt_is_answered_for_the_directory_people_work_in(tmp_path)
     assert "remoteDialogSeen" in text, "both prompts, or the step does not do what it says"
 
 
-def test_a_slot_is_given_a_way_in():
+def test_a_slot_is_given_a_way_in(tmp_path):
     """Password login is disabled and no SSH key is installed, on purpose. If
     Remote Control is not installed too, the script provisions an account
-    nobody can reach — which is not a slot, it is a dead user."""
-    text = ADD.read_text()
-    assert "claude-remote-control.service" in text, "the stated access path must be installed"
-    assert "ccfleet-shell.service" in text, "and the work session it lives in"
-    # Enabled rather than started: Remote Control needs an authenticated
-    # session, and there is none until the holder signs in.
-    assert "enable ccfleet-shell.service claude-remote-control.service" in text
-    assert "start ccfleet-shell.service" in text
-    assert "start claude-remote-control" not in text, \
-        "starting it before a sign-in cannot work and will not retry"
+    nobody can reach — which is not a slot, it is a dead user.
+
+    Watched through the commands the script runs rather than by looking for
+    words in it: the first version of this test searched the source for
+    "claude-remote-control.service", which still appears in the enable line
+    even when nothing installs the unit at all.
+    """
+    bindir = fake_system(tmp_path)
+    log = tmp_path / "commands.log"
+    # Not mkdir: the slice directory has to really exist, because the script
+    # writes the drop-in into it with a redirect.
+    for name in ("install", "systemctl", "curl"):
+        (bindir / name).write_text(
+            f'#!/bin/sh\necho "{name} $*" >> "{log}"\nexit 0\n')
+        (bindir / name).chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CCFLEET_SLICE_ROOT"] = str(tmp_path / "slices")
+    result = subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    ran = log.read_text() if log.exists() else ""
+
+    # Per line, not per file. Both unit names appear in the single `enable`
+    # line, so a substring check passes even when nothing installs anything —
+    # which is exactly how the first two versions of this test let a gutted
+    # install loop through.
+    placed = [ln for ln in ran.splitlines() if ln.startswith(("install ", "curl "))]
+    for unit in ("ccfleet-shell.service", "claude-remote-control.service"):
+        assert any(unit in ln for ln in placed), \
+            f"{unit} was never put on the machine; only saw: {placed}"
+    assert "enable ccfleet-shell.service claude-remote-control.service" in ran, \
+        "both are enabled, so they come back after a reboot"
+    assert "start ccfleet-shell.service" in ran, "the work session is started now"
+    assert "start claude-remote-control" not in ran, \
+        "Remote Control needs a sign-in first, and Type=forking means it will not retry"
 
 
 def test_the_units_it_installs_exist_in_the_repo():

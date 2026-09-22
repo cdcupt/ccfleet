@@ -126,8 +126,12 @@ MEM_UNIT="${MEMORY_MAX#"$MEM_NUM"}"
 MEMORY_HIGH="$(( MEM_NUM * 8 / 10 ))${MEM_UNIT}"
 # One slice per slot. Without it a single runaway build is the whole machine's
 # problem; with it, it is that slot's problem.
-install -d -m 755 "/etc/systemd/system/user-$(id -u "$SLOT").slice.d"
-cat > "/etc/systemd/system/user-$(id -u "$SLOT").slice.d/50-ccfleet.conf" <<CONF
+# Where systemd reads drop-ins from. Overridable so this step can be exercised
+# somewhere writable; nothing but a test has a reason to move it.
+SLICE_ROOT="${CCFLEET_SLICE_ROOT:-/etc/systemd/system}"
+SLICE_DIR="$SLICE_ROOT/user-$(id -u "$SLOT").slice.d"
+mkdir -p "$SLICE_DIR"
+cat > "$SLICE_DIR/50-ccfleet.conf" <<CONF
 # Written by ccfleet slot-add. One slot's ceiling, so a runaway build is that
 # slot's problem rather than the machine's.
 [Slice]
