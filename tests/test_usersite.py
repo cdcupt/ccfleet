@@ -227,16 +227,18 @@ def test_the_page_shows_their_slots_and_nobody_elses(site):
 
 
 @pytest.mark.parametrize("action", usersite.SLOT_ACTIONS)
-def test_somebody_elses_slot_answers_like_one_that_is_not_there(site, action):
-    """Not 403: which slots exist, and who holds them, is not theirs to learn."""
+@pytest.mark.parametrize("fields", [{"confirm": "wipe", "code": "x"}, {}, {"confirm": "no"},
+                                    {"code": ""}])
+def test_somebody_elses_slot_answers_like_one_that_is_not_there(site, action, fields):
+    """Not 403: which slots exist, and who holds them, is not theirs to learn —
+    in every shape of request, including the ones a form would refuse."""
     store, sign_in, _ = site
     machine(store)
     ana = sign_in("google-ana", "ana@example.com", quota=1)
     held_by_ana = claimed(store, ana)
     erik = sign_in(quota=1)
-    theirs = erik.press(f"/account/slots/{held_by_ana['id']}/{action}", confirm="wipe",
-                        code="x")
-    missing = erik.press(f"/account/slots/no-such-slot/{action}", confirm="wipe", code="x")
+    theirs = erik.press(f"/account/slots/{held_by_ana['id']}/{action}", **fields)
+    missing = erik.press(f"/account/slots/no-such-slot/{action}", **fields)
     assert theirs.status == missing.status == 404
     assert theirs.body == missing.body
     after = store.get_slot(held_by_ana["id"])

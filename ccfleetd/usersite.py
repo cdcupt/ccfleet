@@ -158,8 +158,12 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
     try:
         if action == "release":
             # The box, not merely the button: this deletes somebody's work, and
-            # a form resubmitted from history must not do it by accident.
+            # a form resubmitted from history must not do it by accident. Said
+            # only to the slot's own holder — to anybody else this slot answers
+            # as a missing one, whatever shape of request they send.
             if form.get("confirm") != "wipe":
+                if slot.get("held_by") != holder:
+                    raise NotYours(f"{slot_id} is not held by this account")
                 return _back("confirm", anchor)
             store.begin_release(slot_id, held_by=holder)
             return _back("released", anchor)
