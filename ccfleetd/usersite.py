@@ -293,9 +293,9 @@ def _signed_out(cfg: Config) -> str:
                   "<p><a class=\"btn\" href=\"/auth/google/start?next=/account\">"
                   "Continue with Google</a></p>"
                   # A promise about oauth.SCOPES; a test keeps the two together.
-                  "<p class=\"muted\">We ask Google only for your email address. We keep "
-                  "it, and Google's id for your account, which stays the same if the "
-                  "address changes.</p></div>")
+                  "<p class=\"muted\">We ask Google for your email address and for the id "
+                  "it gives your account, which stays the same if the address changes. We "
+                  "keep those two things and nothing else.</p></div>")
 
 
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
