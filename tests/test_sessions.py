@@ -226,10 +226,13 @@ def test_something_that_is_not_json_is_not_treated_as_an_identity():
 
 
 def test_the_identity_comes_back_with_the_address_lowercased():
+    """And with nothing else Google says: the sign-in page promises that the
+    address and the id are all that is kept, so a name or a picture that
+    arrives anyway goes no further than this function."""
     seen = []
     who = oauth.fetch_identity("at-123", opener=_opener(
-        {"sub": "google-123", "email": "Erik@Example.COM",
-         "email_verified": True}, seen))
+        {"sub": "google-123", "email": "Erik@Example.COM", "email_verified": True,
+         "name": "Erik", "picture": "https://example.com/e.png", "locale": "en"}, seen))
     assert who == {"sub": "google-123", "email": "erik@example.com"}
     assert seen[0].get_header("Authorization") == "Bearer at-123"
 
