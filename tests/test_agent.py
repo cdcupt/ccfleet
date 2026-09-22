@@ -1492,3 +1492,78 @@ def test_the_pane_outlives_the_command_that_printed_the_token(monkeypatch):
     # Long enough to outlast the server's own expiry, so the pane is never the
     # thing that runs out first.
     assert agent.LOGIN_HOLD_S > 15 * 60
+
+
+# -- one run at a time ------------------------------------------------------------
+
+def test_two_agents_cannot_run_at_once(tmp_path):
+    """The failure this exists for: two runs drive the same tmux session and
+    write the same state file, so one calls start_login and kills the pane the
+    other is reading. A sign-in then dies with no error anywhere."""
+    state = tmp_path / "reconcile.json"
+    first = agent.hold_the_only_run(state)
+    assert first is not None and first is not agent._UNLOCKED
+
+    second = agent.hold_the_only_run(state)
+    assert second is None, "the second run must stand down"
+
+    # Released when the holder goes, however it goes.
+    first.close()
+    third = agent.hold_the_only_run(state)
+    assert third is not None and third is not agent._UNLOCKED
+    third.close()
+
+
+def test_a_node_that_cannot_lock_still_reports(tmp_path, monkeypatch):
+    """Reporting facts is the agent's main job. Losing it because a lock file
+    could not be made would be a worse failure than the one being prevented."""
+    def no_open(*a, **kw):
+        raise OSError("read-only")
+
+    monkeypatch.setattr("builtins.open", no_open)
+    assert agent.hold_the_only_run(tmp_path / "s.json") is agent._UNLOCKED, \
+        "unlocked is not the same as refused"
+
+
+def test_the_login_window_closes_before_the_next_run_is_due():
+    """They were exactly equal at 300s, which made an overlap a certainty
+    rather than a risk: a resident run was still going as the timer fired."""
+    import pathlib
+    import re
+    timer = pathlib.Path(__file__).resolve().parent.parent / "node/systemd/ccfleet-agent.timer"
+    every = re.search(r"OnUnitActiveSec=(\d+)min", timer.read_text())
+    assert every, "the timer still states its interval in minutes"
+    assert agent.LOGIN_WINDOW_S < int(every.group(1)) * 60
+
+
+def test_a_run_stands_down_when_another_holds_the_lock(tmp_path, monkeypatch):
+    """Testing the lock function alone left the gap that matters: whether main
+    actually takes it. Mutation testing walked straight through that."""
+    env_file = tmp_path / "agent.env"
+    env_file.write_text("CCFLEET_URL=https://fleet.invalid/\n"
+                        "CCFLEET_NODE_ID=node-a\n"
+                        f"CCFLEET_NODE_TOKEN={'a' * 64}\n"
+                        f"CCFLEET_STATE_FILE={tmp_path / 'reconcile.json'}\n")
+    sent = []
+    monkeypatch.setattr(agent, "send_heartbeat",
+                        lambda *a, **k: sent.append(1) or (200, "{}"))
+    # Collecting facts probes the network for the egress address and shells out
+    # to claude. Fifteen seconds of that, in a test about a lock.
+    monkeypatch.setattr(agent, "build_payload", lambda *a, **k: {"node_id": "node-a"})
+
+    # --no-reconcile so this stays a test of the lock. Without it main drives
+    # tmux and claude on whatever machine is running the suite, which is slow,
+    # not hermetic, and nothing to do with what is being checked here.
+    run = ["--env-file", str(env_file), "--no-reconcile"]
+
+    held = agent.hold_the_only_run(tmp_path / "reconcile.json")
+    assert held is not None
+    try:
+        assert agent.main(run) == 0, "standing down is not failure"
+        assert not sent, "and it does so before touching the network"
+    finally:
+        held.close()
+
+    # With the lock free it runs as usual.
+    assert agent.main(run) == 0
+    assert sent, "the heartbeat happens when nothing else is running"
