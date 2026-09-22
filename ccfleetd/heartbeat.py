@@ -26,6 +26,7 @@ MAX_SECRET = 512
 # counts, per-day totals and model names; the transcripts themselves hold
 # conversation content and never leave the machine.
 MAX_USAGE_DAYS = 31
+MAX_USAGE_HOURS = 31 * 24
 MAX_USAGE_MODELS = 8
 USAGE_COUNTERS = ("total_tokens", "input_tokens", "output_tokens",
                   "cache_read_input_tokens", "cache_creation_input_tokens", "sessions")
@@ -107,6 +108,17 @@ def _usage(section: Mapping[str, Any]) -> dict[str, Any]:
             if day and tokens is not None:
                 series.append({"day": day, "tokens": tokens})
     out["by_day"] = series
+    # The hourly series: when its first hour began, then one count per hour.
+    # Kept whole or not at all — a series cut short would put every bar in the
+    # wrong hour — and a count that is not a sane number counts as nothing.
+    out["window_hours"] = _num(section.get("window_hours"))
+    hourly = section.get("by_hour")
+    if isinstance(hourly, Mapping):
+        start, counts = _num(hourly.get("start")), hourly.get("tokens")
+        if (start is not None and isinstance(counts, list)
+                and 0 < len(counts) <= MAX_USAGE_HOURS):
+            out["by_hour"] = {"start": start,
+                              "tokens": [max(0, _num(c) or 0) for c in counts]}
     return out
 
 

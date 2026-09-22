@@ -272,7 +272,7 @@ def test_the_chart_caption_does_not_outlive_the_chart():
         "total_tokens": 50, "sessions": 1, "window_days": 14,
         "by_day": [{"day": "2026-09-21", "tokens": 50}]}}]
     html = _usage_html(one_day, NOW)
-    assert "one day so far" in html and "daily tokens, last" not in html
+    assert "one day so far" in html and "tokens per day, last" not in html
     # Singular, too.
     assert "1 session " in html and "1 sessions" not in html
 
@@ -280,8 +280,45 @@ def test_the_chart_caption_does_not_outlive_the_chart():
         "total_tokens": 90, "sessions": 2, "window_days": 14,
         "by_day": [{"day": "2026-09-20", "tokens": 40}, {"day": "2026-09-21", "tokens": 50}]}}]
     drawn = _usage_html(two_days, NOW)
-    assert "<svg" in drawn and "daily tokens, last 14d" in drawn
+    assert "<svg" in drawn and "tokens per day, last 14 days" in drawn
     assert "2 sessions" in drawn
+
+
+from ccfleetd.render import _usage_html  # noqa: E402
+
+
+def _hourly(total, tokens):
+    return [{"id": "n", "owner": "e", "usage": {
+        "total_tokens": total, "sessions": 1, "window_hours": 168, "window_days": 7,
+        "models": ["claude-opus-5"],
+        "by_hour": {"start": NOW - 167 * 3600, "tokens": tokens}}}]
+
+
+def test_the_week_is_drawn_by_the_hour_and_says_whose_it_is():
+    """Tokens are this node's, counted from its own transcripts; the windows
+    are the account's, spent by every device. Side by side and unlabelled, the
+    count looked stuck while the bars moved."""
+    html = _usage_html(_hourly(40897, [0] * 160 + [10] * 8), NOW)
+    assert "tokens on this node, last 7 days" in html
+    assert "tokens per hour, last 7 days" in html and "<svg" in html
+    assert "168 hour(s) of token use" in html
+    assert "claude-opus-5" not in html, "the model is the person's choice, not a fact to show"
+
+
+def test_a_quiet_week_says_so_rather_than_drawing_a_floor():
+    """att3 on 2026-09-22: signed in, its account busy elsewhere, nothing run
+    on the node itself all week."""
+    rows = _hourly(0, [0] * 168)
+    rows[0]["quota"] = {"week": {"used_pct": 20}}
+    html = _usage_html(rows, NOW)
+    assert "nothing on this node in the last 7 days" in html
+    assert "<svg" not in html and "tokens per hour" not in html
+
+
+def test_the_windows_are_labelled_as_the_accounts():
+    rows = [{"id": "n", "owner": "e", "usage": {"total_tokens": 5},
+             "quota": {"session": {"used_pct": 6}, "week": {"used_pct": 20}}}]
+    assert "Claude account &middot; every device" in _usage_html(rows, NOW)
 
 
 def test_each_button_sends_you_back_to_the_card_you_pressed_it_on():

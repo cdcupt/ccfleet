@@ -720,6 +720,17 @@ def test_the_pane_is_read_with_wrapped_lines_joined(tmp_path, monkeypatch):
 # -- usage from local transcripts ------------------------------------------------
 
 
+NOW_TS = 1789900000.0                       # 2026-09-20T10:26:40Z
+WINDOW_START = 1789898400.0 - 167 * 3600      # 2026-09-13T11:00:00Z: first of 168 hours
+
+
+def _hour(ts: str) -> int:
+    """Which of the week's hourly buckets an ISO time falls in."""
+    from datetime import datetime
+    return int((datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                - WINDOW_START) // 3600)
+
+
 def _transcript(tmp_path, name, records):
     d = tmp_path / "projects" / "proj"
     d.mkdir(parents=True, exist_ok=True)
@@ -739,13 +750,19 @@ def test_usage_reports_counts_and_no_conversation_content(tmp_path):
             "role": "assistant", "model": "claude-opus-5",
             "usage": {"input_tokens": 5, "output_tokens": 5}}},
     ])
-    u = agent.usage_summary(tmp_path, now=1789900000.0)
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
     assert u["total_tokens"] == 380
     assert u["input_tokens"] == 15 and u["output_tokens"] == 25
     assert u["cache_read_input_tokens"] == 300
-    assert u["sessions"] == 1 and u["models"] == ["claude-opus-5"]
-    assert u["by_day"] == [{"day": "2026-09-18", "tokens": 370},
-                           {"day": "2026-09-19", "tokens": 10}]
+    assert u["sessions"] == 1
+    # Which model did the work is the person's choice, turn by turn; the
+    # console does not show it, so the agent does not collect it.
+    assert "models" not in u and "claude-opus-5" not in json.dumps(u)
+    hours = u["by_hour"]["tokens"]
+    assert u["by_hour"]["start"] == WINDOW_START and len(hours) == 168
+    assert hours[_hour("2026-09-18T10:00:00Z")] == 370
+    assert hours[_hour("2026-09-19T11:00:00Z")] == 10
+    assert sum(hours) == 380
     # Parsing decodes the content too — that is unavoidable when reading the
     # record. The guarantee is that none of it is kept or returned, only counts.
     assert secret not in json.dumps(u)
@@ -758,7 +775,7 @@ def test_usage_ignores_transcripts_outside_the_window(tmp_path):
     old = tmp_path / "projects" / "proj" / "old.jsonl"
     stale = 1789900000.0 - 60 * 86400
     os.utime(old, (stale, stale))
-    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
     assert u["total_tokens"] == 0 and u["sessions"] == 0
 
 
@@ -773,25 +790,28 @@ def test_usage_survives_a_transcript_it_cannot_parse(tmp_path):
 
 
 def test_usage_is_empty_rather_than_absent_when_there_is_nothing(tmp_path):
-    u = agent.usage_summary(tmp_path, now=1789900000.0)
-    assert u["total_tokens"] == 0 and u["by_day"] == [] and u["models"] == []
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
+    assert u["total_tokens"] == 0
+    assert u["by_hour"]["tokens"] == [0] * 168, "an empty week is still a week of hours"
 
 
 def test_a_long_lived_transcript_does_not_smuggle_old_usage_into_the_window(tmp_path):
     """Selecting files by mtime is not enough.
 
     One session transcript touched today can carry records from weeks ago, so a
-    figure labelled "last 14 days" would quietly include them.
+    figure labelled "last 7 days" would quietly include them.
     """
     _transcript(tmp_path, "long.jsonl", [
         {"timestamp": "2026-07-01T10:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
         {"timestamp": "2026-09-18T10:00:00Z", "message": {"usage": {"output_tokens": 11}}},
         {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 22}}},
     ])
-    # now = 2026-09-20; the July record is far outside a 14-day window.
-    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    # now = 2026-09-20; the July record is far outside the week.
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
     assert u["total_tokens"] == 33, "the July record must not be counted"
-    assert [d["day"] for d in u["by_day"]] == ["2026-09-18", "2026-09-19"]
+    hours = u["by_hour"]["tokens"]
+    assert hours[_hour("2026-09-18T10:00:00Z")] == 11
+    assert hours[_hour("2026-09-19T10:00:00Z")] == 22
 
 
 def test_a_record_whose_date_cannot_be_read_is_not_counted(tmp_path):
@@ -800,8 +820,9 @@ def test_a_record_whose_date_cannot_be_read_is_not_counted(tmp_path):
         {"message": {"usage": {"output_tokens": 500}}},
         {"timestamp": 12345, "message": {"usage": {"output_tokens": 500}}},
         {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 7}}},
+        {"timestamp": "2026-09-19T99:99:99Z", "message": {"usage": {"output_tokens": 500}}},
     ])
-    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
     assert u["total_tokens"] == 7
 
 
@@ -818,9 +839,11 @@ def test_a_future_dated_record_is_not_counted(tmp_path):
     """A skewed clock or a wrong timestamp would otherwise inflate the window."""
     _transcript(tmp_path, "skewed.jsonl", [
         {"timestamp": "2027-01-01T00:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
+        # The hour after this one hasn't begun; nothing can have happened in it.
+        {"timestamp": "2026-09-20T11:00:00Z", "message": {"usage": {"output_tokens": 5000}}},
         {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 8}}},
     ])
-    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
     assert u["total_tokens"] == 8
 
 
@@ -853,12 +876,12 @@ def test_an_oversized_transcript_is_read_from_its_END(tmp_path, monkeypatch):
     # Plenty of old records first, then the recent one at the very end.
     (d / "big.jsonl").write_text(old_line * 200 + new_line)
 
-    u = agent.usage_summary(tmp_path, now=1789900000.0)
-    days = {p["day"]: p["tokens"] for p in u["by_day"]}
-    assert days.get("2026-09-19") == 500, "the newest record must survive the cap"
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
+    hours = u["by_hour"]["tokens"]
+    assert hours[_hour("2026-09-19T10:00:00Z")] == 500, "the newest record must survive the cap"
     # Only the tail was read, so most of the 200 old records were skipped. Reading
     # from the start would have given 200 old and lost the 500 entirely.
-    assert days.get("2026-09-18", 0) < 50, f"read too far back: {days}"
+    assert hours[_hour("2026-09-18T10:00:00Z")] < 50, "read too far back"
 
 
 def test_the_transcript_walk_itself_is_bounded(tmp_path, monkeypatch):
@@ -874,37 +897,48 @@ def test_the_transcript_walk_itself_is_bounded(tmp_path, monkeypatch):
     assert 0 < u["sessions"] <= 5, f"walked more than the cap: {u['sessions']}"
 
 
-def test_the_window_is_n_calendar_days_and_the_total_matches_the_series(tmp_path):
-    """A full window_days of seconds admitted 15 distinct dates while the series
-    was trimmed to 14, so the headline total disagreed with the chart under it."""
-    # now = 2026-09-20; a 14-day window ending today starts on 2026-09-07.
+def test_the_window_is_whole_hours_ending_now_and_the_total_matches_the_chart(tmp_path):
+    """168 whole hours, the last of them this one. Anything before the first
+    or after the last is out; the headline total is exactly the chart's sum."""
     _transcript(tmp_path, "span.jsonl", [
-        {"timestamp": "2026-09-06T23:59:00Z", "message": {"usage": {"output_tokens": 111}}},
-        {"timestamp": "2026-09-07T00:00:00Z", "message": {"usage": {"output_tokens": 7}}},
-        {"timestamp": "2026-09-20T00:00:00Z", "message": {"usage": {"output_tokens": 3}}},
+        {"timestamp": "2026-09-13T10:59:59Z", "message": {"usage": {"output_tokens": 111}}},
+        {"timestamp": "2026-09-13T11:00:00Z", "message": {"usage": {"output_tokens": 7}}},
+        {"timestamp": "2026-09-20T10:59:00Z", "message": {"usage": {"output_tokens": 3}}},
     ])
-    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
-    days = [p["day"] for p in u["by_day"]]
-    assert days == ["2026-09-07", "2026-09-20"], days
-    assert len(days) <= 14
-    assert u["total_tokens"] == sum(p["tokens"] for p in u["by_day"]) == 10
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
+    hours = u["by_hour"]["tokens"]
+    assert hours[0] == 7 and hours[-1] == 3, hours
+    assert u["total_tokens"] == sum(hours) == 10
+    assert u["window_hours"] == 168 and u["window_days"] == 7
 
 
-def test_a_transcript_written_early_on_the_oldest_day_is_still_counted(tmp_path):
-    """Files are chosen by mtime, records by calendar day. If the file cutoff is a
-    time of day, a transcript last written early on the oldest valid day is
-    dropped and the stated window silently undercounts."""
+def test_the_week_moves_with_the_hour_not_the_day(tmp_path):
+    """The point of hours: an hour later, the oldest hour has dropped out and
+    the newest is in — no waiting for midnight."""
+    _transcript(tmp_path, "edge.jsonl", [
+        {"timestamp": "2026-09-13T11:30:00Z", "message": {"usage": {"output_tokens": 40}}},
+        {"timestamp": "2026-09-20T11:30:00Z", "message": {"usage": {"output_tokens": 2}}},
+    ])
+    before = agent.usage_summary(tmp_path, now=NOW_TS)
+    after = agent.usage_summary(tmp_path, now=NOW_TS + 3600)
+    assert before["total_tokens"] == 40
+    assert after["total_tokens"] == 2
+    assert after["by_hour"]["start"] == before["by_hour"]["start"] + 3600
+
+
+def test_a_transcript_last_written_in_the_first_hour_is_still_counted(tmp_path):
+    """Files are chosen by mtime, records by their own time. A file cutoff at
+    "now minus a week" rather than the first hour's start would drop a
+    transcript last written early in that hour, and silently undercount."""
     import os
     _transcript(tmp_path, "edge.jsonl", [
-        {"timestamp": "2026-09-07T01:00:00Z", "message": {"usage": {"output_tokens": 42}}},
+        {"timestamp": "2026-09-13T11:05:00Z", "message": {"usage": {"output_tokens": 42}}},
     ])
     f = tmp_path / "projects" / "proj" / "edge.jsonl"
-    # now = 2026-09-20T15:46Z; 14-day window starts 2026-09-07. Touch the file at
-    # 02:00 on that day — earlier in the day than "now", which is the trap.
-    early = 1788742800.0
+    early = WINDOW_START + 600                   # 11:10, before now's 26 minutes past
     os.utime(f, (early, early))
-    u = agent.usage_summary(tmp_path, now=1789900000.0, window_days=14)
-    assert u["total_tokens"] == 42, "the oldest valid day must be included in full"
+    u = agent.usage_summary(tmp_path, now=NOW_TS)
+    assert u["total_tokens"] == 42, "the week's first hour must be included in full"
 
 
 def test_one_enormous_transcript_line_cannot_be_pulled_into_memory(tmp_path, monkeypatch):

@@ -238,3 +238,37 @@ def test_an_error_a_machine_reports_is_bounded_like_every_other_string():
     [slot] = _machine([{"unix_user": "slot01", "wipe_error": "x" * 5000,
                         "provision_error": "y" * 5000}])["slots"]
     assert len(slot["wipe_error"]) == 200 and len(slot["provision_error"]) == 200
+
+
+# -- the hourly week -------------------------------------------------------------
+
+def _usage(section):
+    return validate_heartbeat({"node_id": "n", "usage": section}, "n")["usage"]
+
+
+def test_an_hourly_week_is_kept_whole():
+    usage = _usage({"total_tokens": 42, "window_hours": 168,
+                    "by_hour": {"start": 1_700_000_000.0, "tokens": [0] * 167 + [42]}})
+    assert usage["window_hours"] == 168
+    assert usage["by_hour"]["start"] == 1_700_000_000.0
+    assert len(usage["by_hour"]["tokens"]) == 168 and usage["by_hour"]["tokens"][-1] == 42
+
+
+def test_a_count_that_is_not_a_sane_number_counts_as_nothing():
+    tokens = _usage({"by_hour": {"start": 1.0, "tokens": [5, -3, "x", None, True,
+                                                          10 ** 400, float("nan")]}}
+                    )["by_hour"]["tokens"]
+    assert tokens == [5, 0, 0, 0, 0, 0, 0]
+
+
+@pytest.mark.parametrize("hourly", [
+    {"start": 1.0, "tokens": [1] * (31 * 24 + 1)},   # longer than any window we draw
+    {"start": 1.0, "tokens": []},
+    {"start": None, "tokens": [1, 2]},                # no idea which hour is which
+    {"start": "1", "tokens": [1, 2]},
+    {"start": 1.0, "tokens": "12"},
+    [1, 2, 3],
+])
+def test_a_series_that_cannot_be_placed_is_dropped_whole(hourly):
+    """Cut short or unanchored, every bar would stand in the wrong hour."""
+    assert "by_hour" not in _usage({"by_hour": hourly})

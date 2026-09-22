@@ -681,8 +681,9 @@ def _human_tokens(n: Any) -> str:
     return str(int(n))
 
 
-def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 38) -> str:
-    """Daily tokens as a filled area. No script, no library, sized by viewBox."""
+def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 38,
+               unit: str = "day") -> str:
+    """Tokens over time as a filled area. No script, no library, sized by viewBox."""
     points = [p for p in series if isinstance(p.get("tokens"), (int, float))]
     if not points:
         return '<span class="muted">no activity yet</span>'
@@ -703,7 +704,7 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
     line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
     area = f"0,{height} " + line + f" {coords[-1][0]:.1f},{height}"
     last_x, last_y = coords[-1]
-    label = (f"{len(values)} day(s) of token use, peak {_human_tokens(peak)}, "
+    label = (f"{len(values)} {unit}(s) of token use, peak {_human_tokens(peak)}, "
              f"latest {_human_tokens(values[-1])}")
     return (f'<svg class="spark" viewBox="0 0 {width} {height}" role="img" '
             f'aria-label="{escape(label)}" preserveAspectRatio="none">'
@@ -737,12 +738,19 @@ def _meter(used: Any, label: str, resets: Any) -> str:
 
 
 def _quota_html(row: Mapping[str, Any], now: float) -> str:
-    """The two windows an owner actually asks about: this session, this week."""
+    """The two windows an owner actually asks about: this session, this week.
+
+    These belong to the Claude account, not to the node: every device signed
+    in as that account spends them. Said above the bars, because beside a
+    per-node token count they read as if they were the same thing, and the
+    count then looks stuck while the bars move.
+    """
     quota = row.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     if not session and not week:
         return '<p class="muted small">No window reading yet.</p>'
-    bars = (_meter(session.get("used_pct"), "5-hour session", session.get("resets"))
+    bars = ('<div class="usage-nums muted">Claude account &middot; every device</div>'
+            + _meter(session.get("used_pct"), "5-hour session", session.get("resets"))
             + _meter(week.get("used_pct"), "This week", week.get("resets")))
     checked = quota.get("checked_at")
     if isinstance(checked, (int, float)) and not isinstance(checked, bool):
@@ -771,24 +779,20 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
     for row in live:
         usage = row.get("usage") or {}
         total = usage.get("total_tokens") or 0
-        days = usage.get("window_days") or 0
         cached = usage.get("cache_read_input_tokens") or 0
         share = f"{cached / total * 100:.0f}%" if total else "-"
-        models = ", ".join(str(m) for m in (usage.get("models") or [])[:3]) or "-"
-        window = f"{int(days)}d" if days else "?"
-        spark = _sparkline(usage.get("by_day") or [])
-        # The caption names the axes of a chart. With no chart drawn it sat
-        # under a sentence, captioning nothing.
-        caption = (f'<div class="usage-nums muted">daily tokens, last {escape(window)}</div>'
-                   if "<svg" in spark else "")
+        spark, caption = _usage_chart(usage)
+        # Which model did the work is left out: it is whatever each person
+        # chose in their session, and can change turn by turn.
         items.append(
             f'<div class="usage-row"><div class="usage-name">{escape(row["id"])}'
             f'<span class="muted"> &middot; {escape(row["owner"])}</span>'
             f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
-            f'<span class="muted"> tokens / {escape(window)}</span></div>'
+            f'<span class="muted"> tokens on this node, last '
+            f'{escape(_usage_span(usage))}</span></div>'
             f'<div class="usage-meta muted">'
             f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
-            f'{escape(share)} cached<br>{escape(models)}</div></div>'
+            f'{escape(share)} cached</div></div>'
             f'<div class="usage-quota">{_quota_html(row, now)}</div>'
             f'<div class="usage-spark">{spark}{caption}</div></div>')
     return ('<h2>Usage and quota</h2><div class="card">' + "".join(items) + tail +
@@ -797,6 +801,34 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
             "read on a slow schedule &mdash; Claude Code reporting on itself, not a usage "
             "endpoint. Token counts come from the transcripts it writes there. Conversation "
             "content never leaves the node; only counts do.</p></div>")
+
+
+def _usage_span(usage: Mapping[str, Any]) -> str:
+    """How far back the token count reaches, in days: "7 days"."""
+    hours, days = usage.get("window_hours"), usage.get("window_days")
+    count = int(hours // 24) if hours else int(days) if days else 0
+    return _plural(count, "day") if count else "?"
+
+
+def _usage_chart(usage: Mapping[str, Any]) -> tuple[str, str]:
+    """The chart and its caption. Hourly from agents that report it, daily
+    from older ones, and a plain sentence when the window holds nothing."""
+    hourly = usage.get("by_hour")
+    if isinstance(hourly, Mapping) and hourly.get("tokens"):
+        if not usage.get("total_tokens"):
+            # A flat line along the floor reads as a chart that failed to draw.
+            return ('<span class="muted">nothing on this node in the last '
+                    f'{escape(_usage_span(usage))}</span>'), ""
+        spark = _sparkline([{"tokens": v} for v in hourly["tokens"]], unit="hour")
+        unit = "per hour"
+    else:
+        spark = _sparkline(usage.get("by_day") or [])
+        unit = "per day"
+    # The caption names the axes of a chart. With no chart drawn it sat under a
+    # sentence, captioning nothing.
+    caption = (f'<div class="usage-nums muted">tokens {unit}, last '
+               f'{escape(_usage_span(usage))}</div>' if "<svg" in spark else "")
+    return spark, caption
 
 
 TILES = (("ok", "healthy"), ("warn", "warning"), ("critical", "critical"),

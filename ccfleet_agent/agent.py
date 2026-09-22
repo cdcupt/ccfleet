@@ -12,8 +12,8 @@ takes from each:
 
 Be exact about the last one, because it is the sensitive one. Those transcripts
 are the owner's conversations, and parsing a record decodes the whole of it,
-content included. What leaves the node is token counts, per-day totals and the
-model names in use — nothing else. Conversation content is never copied out of
+content included. What leaves the node is token counts and per-hour totals —
+nothing else. Conversation content is never copied out of
 the parsed record, never stored, never logged and never sent. See usage_summary.
 
 `~/.claude.json` likewise holds an email address, a full name, an account uuid
@@ -44,6 +44,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -420,15 +421,18 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
 #
 # Be precise about the privacy claim. Parsing a record decodes the whole of it,
 # conversation content included, so it IS read into memory here. What is
-# guaranteed is narrower and still worth having: only token counts, per-day
-# totals and model names are retained or reported. The content is never copied
+# guaranteed is narrower and still worth having: only token counts and
+# per-hour totals are retained or reported. The content is never copied
 # out of the parsed record, never stored, never logged and never sent.
 #
 # What this can say: how much this node has consumed. What it cannot say: how
 # much of a subscription window is left. That lives only behind /usage inside a
 # session, and this deliberately does not go looking for it.
 
-USAGE_WINDOW_DAYS = 14
+# A rolling week, counted in whole hours ending with the current one: the same
+# span as the weekly quota window, and it moves through the day rather than
+# jumping at midnight.
+USAGE_WINDOW_HOURS = 7 * 24
 # A busy node accumulates a lot of transcript. These bounds keep a five-minute
 # heartbeat from turning into a filesystem scan.
 USAGE_MAX_FILES = 200
@@ -548,29 +552,22 @@ def _seek_to_tail(fh: Any, path: Path) -> int:
 
 
 def usage_summary(config_dir: Path, now: Optional[float] = None,
-                  window_days: int = USAGE_WINDOW_DAYS) -> dict[str, Any]:
-    """Token counts per day from local transcripts.
+                  window_hours: int = USAGE_WINDOW_HOURS) -> dict[str, Any]:
+    """Token counts per hour, over a rolling window, from local transcripts.
 
     Parsing a record decodes conversation content along with everything else;
     what this guarantees is that nothing but counts is kept or returned.
     """
     now = time.time() if now is None else now
-    # window_days counts calendar days INCLUDING today, so the oldest day is
-    # window_days - 1 back. Using a full window_days made the filter admit 15
-    # distinct dates while the series was trimmed to 14, so the total and the
-    # sparkline disagreed about the oldest one.
-    since = now - (window_days - 1) * 86400
-    # Files are selected by mtime but records by calendar day, so the cutoff has
-    # to be that day's midnight. Using a time of day would drop a transcript last
-    # written early on the oldest valid day, undercounting the stated window.
-    since = since - (since % 86400)
+    # Whole hours, the last of them the current one, so the first bucket and
+    # the file cutoff agree about where the window starts.
+    this_hour = now - (now % 3600)
+    since = this_hour - (window_hours - 1) * 3600
+    until = this_hour + 3600
     root = config_dir / "projects"
-    oldest_day = time.strftime("%Y-%m-%d", time.gmtime(since))
-    newest_day = time.strftime("%Y-%m-%d", time.gmtime(now))
     budget = USAGE_MAX_BYTES_TOTAL
     totals: dict[str, int] = {k: 0 for k in USAGE_TOKEN_KEYS}
-    by_day: dict[str, int] = {}
-    models: set[str] = set()
+    hours = [0] * window_hours
     sessions = 0
 
     for path in _usage_files(root, since):
@@ -600,8 +597,8 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
                     usage = message.get("usage") or record.get("usage")
                     if not isinstance(usage, Mapping):
                         continue
-                    stamp = _usage_day(record.get("timestamp"))
-                    if not _in_window(stamp, oldest_day, newest_day):
+                    stamp = _usage_epoch(record.get("timestamp"))
+                    if stamp is None or not since <= stamp < until:
                         continue
                     counted = True
                     turn = 0
@@ -610,50 +607,44 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
                         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                             totals[key] += value
                             turn += value
-                    if turn:
-                        by_day[stamp] = by_day.get(stamp, 0) + turn
-                    model = message.get("model")
-                    if isinstance(model, str) and model:
-                        models.add(model[:40])
+                    hours[int((stamp - since) // 3600)] += turn
         except OSError:
             continue
         if counted:
             sessions += 1
 
     return {
-        "window_days": window_days,
+        "window_hours": window_hours,
+        # What a console predating the hourly series labels the total with.
+        "window_days": window_hours // 24,
         "sessions": sessions,
         "total_tokens": sum(totals.values()),
-        "models": sorted(models)[:6],
-        # Oldest to newest, so a sparkline can be drawn straight from it.
-        # No trailing trim: the per-record filter already bounds this to the
-        # window, and trimming here is what made the series disagree with the total.
-        "by_day": [{"day": d, "tokens": by_day[d]} for d in sorted(by_day)],
+        # Oldest hour first, so a chart can be drawn straight from it; `start`
+        # is when the first hour began. A compact list rather than one record
+        # per hour: a week of them is 168 numbers on every heartbeat.
+        "by_hour": {"start": since, "tokens": hours},
         **totals,
     }
 
 
-def _usage_day(raw: Any) -> Optional[str]:
-    """The YYYY-MM-DD an ISO timestamp falls on, or None."""
-    if not isinstance(raw, str) or len(raw) < 10:
-        return None
-    day = raw[:10]
-    return day if day[4] == "-" and day[7] == "-" and day[:4].isdigit() else None
-
-
-def _in_window(day: Optional[str], oldest_day: str, newest_day: str) -> bool:
-    """Is this record's own day inside the window?
+def _usage_epoch(raw: Any) -> Optional[float]:
+    """When a transcript record was written, in seconds, or None.
 
     Selecting files by modification time is not enough: one long-lived session
-    transcript touched today carries records from weeks ago, so a "last 14 days"
-    total would quietly include them. Each record is judged on its own date, and
-    a record whose date cannot be read is not counted — an unplaceable number is
-    worse than a missing one in a figure that claims a window.
+    transcript touched today carries records from weeks ago, so a "last week"
+    total would quietly include them. Each record is judged on its own time,
+    and a record whose time cannot be read is not counted — an unplaceable
+    number is worse than a missing one in a figure that claims a window.
     """
-    # Both ends. A record dated in the future — a skewed clock, or a node that
-    # simply wrote a wrong timestamp — would otherwise be counted in a window it
-    # is not in, and would inflate the total it appears in.
-    return day is not None and oldest_day <= day <= newest_day
+    if not isinstance(raw, str) or len(raw) < 19:
+        return None
+    try:
+        stamp = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)   # Claude Code writes UTC
+    return stamp.timestamp()
 
 
 # -- quota windows ---------------------------------------------------------------
