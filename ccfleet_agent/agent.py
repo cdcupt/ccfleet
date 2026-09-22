@@ -1054,10 +1054,17 @@ def end_login(runner: Runner = subprocess.run) -> None:
 # How long the agent will stay resident driving one sign-in. Someone is watching
 # the console, so it polls fast; but an abandoned attempt must not pin a process
 # on the node forever.
-# Shorter than the timer that starts us (5 minutes), so a resident run always
-# finishes before the next one is due. They were exactly equal, which made an
-# overlap not a risk but a certainty.
-LOGIN_WINDOW_S = 240.0
+# Long enough for a person. Someone has to read a link, approve it in a
+# browser, copy a code and paste it back, and four minutes of that is a race
+# they lose while looking at a phone. The server drops an unfinished attempt
+# after fifteen minutes, so the agent stays just inside that and lets the
+# server's expiry be the thing that ends it — one deadline, not two disagreeing.
+#
+# This used to have to be shorter than the five-minute timer to stop two runs
+# overlapping. The lock does that now, so the window is free to be about the
+# person instead. A resident run keeps heartbeating throughout, so nothing is
+# paused by it holding on.
+LOGIN_WINDOW_S = 840.0
 LOGIN_POLL_MIN_S = 1.0
 LOGIN_POLL_MAX_S = 30.0
 

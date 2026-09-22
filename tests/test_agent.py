@@ -1525,15 +1525,28 @@ def test_a_node_that_cannot_lock_still_reports(tmp_path, monkeypatch):
         "unlocked is not the same as refused"
 
 
-def test_the_login_window_closes_before_the_next_run_is_due():
-    """They were exactly equal at 300s, which made an overlap a certainty
-    rather than a risk: a resident run was still going as the timer fired."""
+def test_the_agent_waits_as_long_as_the_server_does_and_no_longer():
+    """Two deadlines that disagree produce the worst of both.
+
+    The agent gave up after four minutes while the server held the attempt for
+    fifteen — so a flow could die on the node while the console still showed it
+    live, with a person part-way through approving it in a browser. The agent
+    now stays just inside the server's own expiry: one deadline decides, and it
+    is long enough for a human.
+    """
     import pathlib
     import re
+
+    from ccfleetd.monitor import LOGIN_MAX_AGE_S
+    assert agent.LOGIN_WINDOW_S < LOGIN_MAX_AGE_S, "the server's expiry is the outer bound"
+    assert agent.LOGIN_WINDOW_S > 10 * 60, "and a person needs longer than a few minutes"
+
+    # It may now outlast the timer that starts it. That used to be the thing
+    # keeping two runs apart; the lock is what does that now.
     timer = pathlib.Path(__file__).resolve().parent.parent / "node/systemd/ccfleet-agent.timer"
     every = re.search(r"OnUnitActiveSec=(\d+)min", timer.read_text())
-    assert every, "the timer still states its interval in minutes"
-    assert agent.LOGIN_WINDOW_S < int(every.group(1)) * 60
+    assert every and agent.LOGIN_WINDOW_S > int(every.group(1)) * 60, \
+        "so the lock, not the clock, is what keeps runs apart"
 
 
 def test_a_run_stands_down_when_another_holds_the_lock(tmp_path, monkeypatch):
