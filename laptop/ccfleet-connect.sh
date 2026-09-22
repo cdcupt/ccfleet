@@ -175,6 +175,10 @@ cmd_connect() {
   ( umask 077; printf '%s\n' "$token" > "$TOKEN_FILE" )
   chmod 600 "$TOKEN_FILE"
 
+  # Only now, with a token that has been accepted and written: nothing lands on
+  # this machine until the credential has proved itself.
+  install_self
+
   note "token stored in $TOKEN_FILE (0600)"
   note "$rc now exports it for new shells"
   note ""
@@ -226,17 +230,38 @@ cmd_remove() {
 SELF_URL="https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh"
 
 install_self() {
-  # Run straight from a pipe there is no file to copy, so fetch a fresh one.
-  # Without this the one-line install leaves nothing behind, and --status and
-  # --remove are commands the person was told about but does not have.
+  # Leave the command behind. Run through `bash -c "$(curl ...)"` there is no
+  # file to copy, so fetch a fresh one; without this the one-line install
+  # leaves nothing on the machine, and --status and --remove are commands the
+  # person was told about but does not have.
+  #
+  # Called only after the token has been accepted, so the promise that nothing
+  # is written before the token is checked covers this too.
   local dest="$HOME/.local/bin/ccfleet-connect"
-  [ -x "$dest" ] && return 0
-  mkdir -p "$(dirname "$dest")" || return 0
-  if [ -f "$0" ] && grep -q ccfleet-connect "$0" 2>/dev/null; then
-    cp "$0" "$dest" 2>/dev/null || return 0
+  if [ -x "$dest" ]; then
+    return 0                       # theirs, possibly edited or newer
+  fi
+  # Failing to install is not failing to connect — the token is already in
+  # place and works. But it is not a success either, and saying nothing would
+  # leave someone typing a command that is not there.
+  local why=""
+  if ! mkdir -p "$(dirname "$dest")" 2>/dev/null; then
+    why="could not create $(dirname "$dest")"
+  elif [ -f "$0" ] && grep -q ccfleet-connect "$0" 2>/dev/null; then
+    cp "$0" "$dest" 2>/dev/null || why="could not copy this script there"
+  elif ! command -v curl >/dev/null 2>&1; then
+    why="curl is not installed"
+  elif curl -fsSL "$SELF_URL" -o "$dest.tmp" 2>/dev/null; then
+    mv "$dest.tmp" "$dest" 2>/dev/null || { rm -f "$dest.tmp"; why="could not move it into place"; }
   else
-    curl -fsSL "$SELF_URL" -o "$dest.tmp" 2>/dev/null || return 0
-    mv "$dest.tmp" "$dest" 2>/dev/null || { rm -f "$dest.tmp"; return 0; }
+    why="could not download it from $SELF_URL"
+  fi
+  if [ -n "$why" ]; then
+    note ""
+    note "NOTE: the token is set up, but ccfleet-connect was not installed:"
+    note "      $why"
+    note "      --status and --remove will not be available until you install it."
+    return 0
   fi
   chmod 755 "$dest" 2>/dev/null || true
   note "installed ccfleet-connect to $dest"
@@ -254,7 +279,6 @@ main() {
       sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
     "")
       # No argument: read the token without it ever reaching a command line.
-      install_self
       cmd_connect "$(read_token)" ;;
     --stdin) cmd_connect "$(read_token)" ;;
     -*) die "unknown option: $1" ;;

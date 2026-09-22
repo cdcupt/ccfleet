@@ -303,18 +303,68 @@ def test_bash_gets_the_file_an_interactive_terminal_reads(tmp_path):
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in (home / ".bash_profile").read_text()
 
 
-def test_the_one_line_install_leaves_the_command_behind(home, tmp_path):
-    """Run from a pipe there is no file to copy, so it installs a fresh one.
+def run_piped(home, tmp_path, stdin, *, claude_output=LOGGED_IN, curl=None):
+    """Run the way the documented one-liner does: through `bash -c`, with the
+    script's text as the command rather than a file.
 
-    Without this the one-line install leaves nothing on the machine, and
-    --status and --remove are commands the person was told about but does not
-    have.
+    This is the path that matters and the one the other tests miss — with no
+    readable `$0`, install_self takes its download branch, which is the branch
+    the published command relies on.
     """
-    result = run(home, tmp_path, token_env=None)
+    env = dict(os.environ)
+    bindir = fake_claude(tmp_path, claude_output)
+    if curl is not None:
+        fake = bindir / "curl"
+        fake.write_text(curl)
+        fake.chmod(0o755)
+    env.update({
+        "HOME": str(home),
+        "SHELL": "/bin/zsh",
+        "CCFLEET_TOKEN_FILE": str(home / ".config" / "ccfleet" / "token"),
+        "PATH": f"{bindir}:{env['PATH']}",
+    })
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    return subprocess.run(["bash", "-c", SCRIPT.read_text()], input=stdin,
+                          capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_the_published_one_liner_leaves_the_command_behind(home, tmp_path):
+    """The install path the one-liner actually uses: no file to copy, so it
+    downloads. Every other test runs the local script and exercises the copy
+    branch instead, which is not the branch people will hit."""
+    downloaded = "#!/usr/bin/env bash\n# ccfleet-connect, freshly downloaded\n"
+    curl = ('#!/bin/sh\n'
+            '# stand in for curl: the last argument after -o is the destination\n'
+            'out=""\n'
+            'while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out="$2"; shift; }; shift; done\n'
+            f'[ -n "$out" ] && printf %s {downloaded!r} > "$out"\n')
+    result = run_piped(home, tmp_path, GOOD_TOKEN + "\n", curl=curl)
     dest = home / ".local" / "bin" / "ccfleet-connect"
-    assert dest.exists(), "the one-liner leaves the command behind"
-    assert dest.stat().st_mode & stat.S_IXUSR, "and it is runnable"
+    assert dest.exists(), "the one-liner must leave the command behind"
+    assert "freshly downloaded" in dest.read_text(), "and it came from the download branch"
+    assert dest.stat().st_mode & stat.S_IXUSR
     assert "installed ccfleet-connect" in result.stdout
+
+
+def test_a_failed_install_says_so_rather_than_claiming_success(home, tmp_path):
+    """Silently carrying on leaves someone typing a command that is not there."""
+    curl = '#!/bin/sh\nexit 22\n'          # as curl does for an HTTP error
+    result = run_piped(home, tmp_path, GOOD_TOKEN + "\n", curl=curl)
+    assert not (home / ".local" / "bin" / "ccfleet-connect").exists()
+    assert "was not installed" in result.stdout
+    assert "could not download" in result.stdout
+    # The token is still set up: a missing convenience is not a failed connect.
+    assert token_path(home).exists()
+    assert result.returncode == 0
+
+
+def test_nothing_is_installed_for_a_token_that_is_refused(home, tmp_path):
+    """The guidebook says it checks the token before writing anything. That has
+    to cover the executable too, or the sentence is not true."""
+    result = run_piped(home, tmp_path, "not-a-token\n")
+    assert result.returncode != 0
+    assert not (home / ".local" / "bin" / "ccfleet-connect").exists()
+    assert not token_path(home).exists()
 
 
 def test_it_does_not_overwrite_a_copy_already_there(home, tmp_path):
@@ -324,13 +374,5 @@ def test_it_does_not_overwrite_a_copy_already_there(home, tmp_path):
     dest.parent.mkdir(parents=True)
     dest.write_text("#!/bin/sh\n# their own copy\n")
     dest.chmod(0o755)
-    run(home, tmp_path, token_env=None)
+    run(home, tmp_path, GOOD_TOKEN)
     assert "their own copy" in dest.read_text(), "left alone"
-
-
-def test_installing_is_separate_from_connecting(home, tmp_path):
-    """A bad token still fails, and fails after the install rather than
-    instead of it: two concerns, neither standing in for the other."""
-    result = run(home, tmp_path, "not-a-token")
-    assert result.returncode != 0 and "does not look like" in result.stderr
-    assert not token_path(home).exists()

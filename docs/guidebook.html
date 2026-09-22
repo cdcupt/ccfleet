@@ -192,10 +192,13 @@ html{scroll-behavior:smooth}
   <p>Then, on each machine you want it on:</p>
   <pre><code>bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
   <p>That is the whole setup on a new machine. It asks for the token, hides what you
-  paste, checks it before writing anything, and installs itself to
-  <code>~/.local/bin</code> so <code>ccfleet-connect --status</code> and
-  <code>--remove</code> work later. Run through <code>bash -c</code> rather than piped
-  into a shell: a pipe takes the keyboard away from the prompt.</p>
+  paste, and checks the token against Anthropic <strong>before writing anything at
+  all</strong> &mdash; a refused token leaves the machine exactly as it was. Once the
+  token is accepted it also installs itself to <code>~/.local/bin</code>, so
+  <code>ccfleet-connect --status</code> and <code>--remove</code> work later; if that
+  part fails it says so rather than leaving you with a command that is not there.
+  Run through <code>bash -c</code> rather than piped into a shell: a pipe takes the
+  keyboard away from the prompt.</p>
   <p>After that <code>claude</code> simply works there, on that machine&rsquo;s own files. Nothing is
   proxied and no base URL is set: Claude Code reads the token from the environment exactly as
   Anthropic documents.</p>
