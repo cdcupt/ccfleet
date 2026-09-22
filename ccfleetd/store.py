@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
+from . import slots as slotstates
 from .desired import is_login_url
 
 log = logging.getLogger("ccfleetd.store")
@@ -93,6 +94,39 @@ CREATE TABLE IF NOT EXISTS alerts (
     closed_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_alerts_node_rule ON alerts(node_id, rule);
+-- A person who rents slots from us, as Google describes them. Deliberately
+-- separate from `users` below, which is the console operator's own basic-auth
+-- login and predates all of this: an operator runs machines, an account rents
+-- a slot on one, and conflating them behind a role column while a password
+-- table also exists helps nobody.
+--
+-- No password column here, on purpose. Identity comes from Google.
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,                  -- ours, not Google's
+    google_sub TEXT NOT NULL UNIQUE,      -- stable even when the email changes
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',    -- 'user' | 'admin'
+    -- How many slots this person may hold. Zero until the operator grants
+    -- some: a bug that grants nobody anything is a support message, and a bug
+    -- that grants everybody a slot is a bill.
+    slot_quota INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    last_seen_at REAL NOT NULL DEFAULT 0
+);
+-- One Linux user on one machine. The unit a person holds.
+CREATE TABLE IF NOT EXISTS slots (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES nodes(id),
+    unix_user TEXT NOT NULL,              -- unique on that machine
+    state TEXT NOT NULL,                  -- see ccfleetd/slots.py
+    held_by TEXT REFERENCES accounts(id), -- NULL only while free
+    claimed_at REAL,
+    released_at REAL,
+    device_token_at REAL NOT NULL DEFAULT 0,
+    UNIQUE (node_id, unix_user)
+);
+CREATE INDEX IF NOT EXISTS ix_slots_state ON slots(state);
+CREATE INDEX IF NOT EXISTS ix_slots_held_by ON slots(held_by);
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
@@ -103,8 +137,20 @@ CREATE TABLE IF NOT EXISTS users (
 """
 
 
+SLOT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+UNIX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
 class StoreError(ValueError):
     """Raised for invalid identifiers or missing rows."""
+
+
+class QuotaExceeded(StoreError):
+    """The account holds as many slots as its allowance permits."""
+
+
+class NoSlotAvailable(StoreError):
+    """Nothing free to hand out right now."""
 
 
 
@@ -191,6 +237,14 @@ class Store:
                 # has no memory of a flow that worked, and looks exactly as it
                 # did before you started.
                 "device_token_at": "REAL NOT NULL DEFAULT 0",
+            })
+            self._add_missing_columns("nodes", {
+                # What a machine needs once it carries more than one person.
+                # capacity is declared by the operator, not guessed from RAM:
+                # they know what they sold. 1 keeps every existing node behaving
+                # exactly as it does now.
+                "capacity": "INTEGER NOT NULL DEFAULT 1",
+                "tier": "TEXT NOT NULL DEFAULT 'dedicated'",
             })
             self._add_missing_columns("logins", {
                 "kind": "TEXT NOT NULL DEFAULT 'login'",
@@ -640,3 +694,278 @@ class Store:
                 "SELECT * FROM alerts ORDER BY opened_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [_row_to_alert(r) for r in rows]
+
+    # -- accounts ----------------------------------------------------------
+
+    def add_account(self, account_id: str, google_sub: str, email: str, *,
+                    role: str = "user", slot_quota: int = 0,
+                    now: float) -> dict[str, Any]:
+        if role not in ("user", "admin"):
+            raise StoreError("role must be 'user' or 'admin'")
+        if int(slot_quota) < 0:
+            raise StoreError("slot quota cannot be negative")
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO accounts (id, google_sub, email, role, "
+                    "slot_quota, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?)",
+                    (account_id, google_sub, email, role, int(slot_quota), now, now))
+            except sqlite3.IntegrityError as exc:
+                raise StoreError(f"account already exists: {exc}") from exc
+            self._conn.commit()
+        return self.get_account(account_id)  # type: ignore[return-value]
+
+    def get_account(self, account_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        return dict(row) if row else None
+
+    def account_by_google_sub(self, google_sub: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM accounts WHERE google_sub = ?", (google_sub,)).fetchone()
+        return dict(row) if row else None
+
+    def account_by_email(self, email: str) -> dict[str, Any] | None:
+        """For the operator, who knows people by address rather than by id.
+
+        Google's subject is what the account is keyed on, because addresses
+        change; this is a convenience for the command line, not an identity.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM accounts WHERE email = ? ORDER BY created_at LIMIT 1",
+                (email,)).fetchone()
+        return dict(row) if row else None
+
+    def set_machine_capacity(self, node_id: str, capacity: int) -> bool:
+        """How many slots this machine may hold. Declared, never guessed.
+
+        Refuses to drop below the slots already declared on it rather than
+        leaving a machine whose own records say it is overfull.
+        """
+        if int(capacity) < 0:
+            raise StoreError("capacity cannot be negative")
+        with self._lock:
+            have = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
+                (node_id,)).fetchone()["n"]
+            if int(capacity) < have:
+                raise StoreError(
+                    f"{node_id} already has {have} slots declared; remove some "
+                    f"before lowering its capacity to {capacity}")
+            cur = self._conn.execute(
+                "UPDATE nodes SET capacity = ? WHERE id = ?", (int(capacity), node_id))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM accounts ORDER BY email").fetchall()
+        return [dict(r) for r in rows]
+
+    def set_slot_quota(self, account_id: str, quota: int) -> bool:
+        """Grant or reduce an allowance.
+
+        Reducing it below what somebody already holds is allowed and does
+        nothing to those slots: taking one back is a release, a deliberate act
+        with a wipe attached, never a side effect of a number changing. All
+        this stops is claiming more.
+        """
+        if int(quota) < 0:
+            raise StoreError("slot quota cannot be negative")
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE accounts SET slot_quota = ? WHERE id = ?",
+                (int(quota), account_id))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def held_slot_count(self, account_id: str) -> int:
+        """Slots this account is holding, counting one being wiped.
+
+        A releasing slot still counts. The wipe has not finished, so handing it
+        to somebody else now would hand over the files with it.
+        """
+        marks = ",".join("?" * len(slotstates.HELD))
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
+                f"AND state IN ({marks})",
+                (account_id, *sorted(slotstates.HELD))).fetchone()
+        return int(row["n"])
+
+    # -- slots ------------------------------------------------------------
+    #
+    # Releasing is written before claiming, and that order is deliberate. The
+    # failure with no recovery is handing somebody a slot that still holds
+    # another person's work; it is far easier to get right when the wipe is the
+    # thing being designed rather than an afterthought bolted on once claiming
+    # already works.
+
+    def add_slot(self, slot_id: str, node_id: str, unix_user: str, *,
+                 now: float) -> dict[str, Any]:
+        """Declare a slot on a machine. It starts free, holding nobody."""
+        if not SLOT_ID_RE.match(slot_id or ""):
+            raise StoreError("slot id must be 2-64 chars of lowercase letters, "
+                             "digits and hyphens, starting with a letter or digit")
+        if not UNIX_USER_RE.match(unix_user or ""):
+            raise StoreError("unix user must be a valid Linux login name")
+        validate_node_id(node_id)
+        with self._lock:
+            node = self._conn.execute(
+                "SELECT capacity FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            if node is None:
+                raise StoreError(f"no machine {node_id!r}")
+            # Capacity is what the operator declared they sold. Refuse to
+            # declare more slots than that rather than discovering it as a
+            # machine that will not hold them.
+            have = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
+                (node_id,)).fetchone()["n"]
+            if have >= int(node["capacity"]):
+                raise StoreError(
+                    f"{node_id} declares capacity {node['capacity']} and already "
+                    f"has {have} slots; raise its capacity first")
+            try:
+                self._conn.execute(
+                    "INSERT INTO slots (id, node_id, unix_user, state, held_by, "
+                    "claimed_at, released_at, device_token_at) "
+                    "VALUES (?,?,?,?,NULL,NULL,NULL,0)",
+                    (slot_id, node_id, unix_user, slotstates.FREE))
+            except sqlite3.IntegrityError as exc:
+                raise StoreError(f"slot already exists: {exc}") from exc
+            self._conn.commit()
+        return self.get_slot(slot_id)  # type: ignore[return-value]
+
+    def get_slot(self, slot_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_slots(self, *, node_id: str | None = None,
+                   held_by: str | None = None,
+                   state: str | None = None) -> list[dict[str, Any]]:
+        where, args = [], []
+        if node_id is not None:
+            where.append("node_id = ?")
+            args.append(node_id)
+        if held_by is not None:
+            where.append("held_by = ?")
+            args.append(held_by)
+        if state is not None:
+            where.append("state = ?")
+            args.append(state)
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM slots" + clause + " ORDER BY node_id, unix_user",  # noqa: S608
+                args).fetchall()
+        return [dict(r) for r in rows]
+
+    def move_slot(self, slot_id: str, to: str) -> bool:
+        """Move a slot to `to`, or raise if the lifecycle forbids it.
+
+        The write is pinned to the state that was read, so a move decided
+        against a stale read writes nothing rather than overwriting whatever
+        happened in between.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT state FROM slots WHERE id = ?", (slot_id,)).fetchone()
+            if row is None:
+                raise StoreError(f"no slot {slot_id!r}")
+            frm = row["state"]
+            slotstates.check_move(frm, to)
+            cur = self._conn.execute(
+                "UPDATE slots SET state = ? WHERE id = ? AND state = ?",
+                (to, slot_id, frm))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def begin_release(self, slot_id: str) -> bool:
+        """Start the wipe. Legal from every state a person can hold."""
+        return self.move_slot(slot_id, slotstates.RELEASING)
+
+    def finish_release(self, slot_id: str, *, now: float) -> bool:
+        """The wipe finished: the slot is empty and may be given to somebody else.
+
+        This is the only way a slot reaches `free`, and it clears everything
+        about the person who held it in the same statement — the holder, when
+        they took it, and when they were last handed a device token. A slot
+        that came back free still carrying the previous holder's id would read
+        as theirs on every page that joins on it.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT state FROM slots WHERE id = ?", (slot_id,)).fetchone()
+            if row is None:
+                raise StoreError(f"no slot {slot_id!r}")
+            slotstates.check_move(row["state"], slotstates.FREE)
+            cur = self._conn.execute(
+                "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
+                "released_at = ?, device_token_at = 0 WHERE id = ? AND state = ?",
+                (slotstates.FREE, now, slot_id, slotstates.RELEASING))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def claim_slot(self, account_id: str, *, now: float,
+                   node_id: str | None = None) -> dict[str, Any]:
+        """Take a free slot for this account, allowance permitting.
+
+        The allowance is checked against what they already hold in the same
+        lock and the same transaction that takes the slot, and the take itself
+        is pinned to `state = 'free'`. There is no window where two browser
+        tabs each see a free slot and both get one.
+
+        Raises QuotaExceeded when they have no allowance left, and
+        NoSlotAvailable when nothing is free — two different answers that the
+        page shows differently, so they are two different exceptions rather
+        than one absent return value.
+        """
+        marks = ",".join("?" * len(slotstates.HELD))
+        held_states = sorted(slotstates.HELD)
+        with self._lock:
+            account = self._conn.execute(
+                "SELECT slot_quota FROM accounts WHERE id = ?",
+                (account_id,)).fetchone()
+            if account is None:
+                raise StoreError(f"no account {account_id!r}")
+            quota = int(account["slot_quota"])
+            held = int(self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
+                f"AND state IN ({marks})",
+                (account_id, *held_states)).fetchone()["n"])
+            if held >= quota:
+                raise QuotaExceeded(
+                    f"account holds {held} of {quota} slots"
+                    if quota else "account has no slot allowance")
+            args: list[Any] = []
+            extra = ""
+            if node_id is not None:
+                extra = " AND s.node_id = ?"
+                args.append(node_id)
+            candidate = self._conn.execute(
+                "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
+                "WHERE s.state = ? AND n.enabled = 1" + extra +
+                " ORDER BY s.node_id, s.unix_user LIMIT 1",
+                (slotstates.FREE, *args)).fetchone()
+            if candidate is None:
+                raise NoSlotAvailable(
+                    f"no free slot on {node_id}" if node_id
+                    else "no free slot on any enabled machine")
+            cur = self._conn.execute(
+                "UPDATE slots SET state = ?, held_by = ?, claimed_at = ?, "
+                "released_at = NULL WHERE id = ? AND state = ?",
+                (slotstates.CLAIMING, account_id, now,
+                 candidate["id"], slotstates.FREE))
+            if cur.rowcount == 0:
+                # Somebody took it between the select and the update. Nothing
+                # was written; the caller can ask again.
+                self._conn.rollback()
+                raise NoSlotAvailable("the free slot was taken; try again")
+            self._conn.commit()
+        return self.get_slot(candidate["id"])  # type: ignore[return-value]
