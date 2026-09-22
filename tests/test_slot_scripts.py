@@ -255,3 +255,33 @@ def test_the_trust_prompt_is_answered_for_the_directory_people_work_in(tmp_path)
     assert "expanduser('~'), {})['hasTrustDialogAccepted']" not in text, \
         "trusting the home is not the same as trusting the workspace"
     assert "remoteDialogSeen" in text, "both prompts, or the step does not do what it says"
+
+
+def test_a_slot_is_given_a_way_in():
+    """Password login is disabled and no SSH key is installed, on purpose. If
+    Remote Control is not installed too, the script provisions an account
+    nobody can reach — which is not a slot, it is a dead user."""
+    text = ADD.read_text()
+    assert "claude-remote-control.service" in text, "the stated access path must be installed"
+    assert "ccfleet-shell.service" in text, "and the work session it lives in"
+    # Enabled rather than started: Remote Control needs an authenticated
+    # session, and there is none until the holder signs in.
+    assert "enable ccfleet-shell.service claude-remote-control.service" in text
+    assert "start ccfleet-shell.service" in text
+    assert "start claude-remote-control" not in text, \
+        "starting it before a sign-in cannot work and will not retry"
+
+
+def test_the_units_it_installs_exist_in_the_repo():
+    """Fetching a unit that is not there would fail on a real machine long after
+    this script said the slot was ready."""
+    for unit in ("ccfleet-shell.service", "claude-remote-control.service"):
+        assert (NODE / "systemd" / unit).exists(), f"{unit} is missing from node/systemd"
+
+
+def test_the_closing_message_does_not_promise_what_is_not_installed():
+    """It told people to reach the slot through the console and Remote Control
+    while installing neither. The message and the script have to agree."""
+    text = ADD.read_text()
+    promises_rc = "Remote Control" in text or "remote-control" in text
+    assert not promises_rc or "claude-remote-control.service" in text

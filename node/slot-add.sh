@@ -76,9 +76,16 @@ HOME_DIR="/home/$SLOT"
 # and a uid over 1000" describes a great many ordinary accounts, and a typo
 # should not be able to delete a colleague's home directory.
 SLOT_GROUP="ccfleet-slots"
+# Prefer the units sitting next to this script; fall back to fetching them.
+LOCAL_UNITS="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/systemd"
 as_slot() { sudo -u "$SLOT" HOME="$HOME_DIR" bash -c "$1"; }
+user_systemctl() {
+  local uid; uid="$(id -u "$SLOT")"
+  sudo -u "$SLOT" XDG_RUNTIME_DIR="/run/user/$uid" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user "$@"
+}
 
-step "1/4  the account"
+step "1/5  the account"
 getent group "$SLOT_GROUP" >/dev/null 2>&1 || addgroup --system "$SLOT_GROUP" >/dev/null
 if id "$SLOT" >/dev/null 2>&1; then
   # An account with this name already exists. If this tool did not create it,
@@ -110,7 +117,7 @@ rm -f "/etc/sudoers.d/90-ccfleet-$SLOT"
 loginctl enable-linger "$SLOT"
 note "lingering on, so services survive logout"
 
-step "2/4  a share of the machine"
+step "2/5  a share of the machine"
 # A soft ceiling below the hard one, so a slot that is growing gets throttled
 # and reclaimed before it is killed outright. Eighty percent, computed in
 # whatever unit the cap was given in rather than by converting between them.
@@ -136,7 +143,7 @@ note "memory capped at $MEMORY_MAX for this slot alone"
 # started through the user manager landed in user-<uid>.slice with memory.max
 # at the cap; the same binary started by sudo landed in user-0.slice.
 
-step "3/4  Claude Code"
+step "3/5  Claude Code"
 as_slot 'mkdir -p ~/.local/bin ~/.config/ccfleet ~/.config/systemd/user ~/workspace'
 as_slot '[ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1'
 as_slot 'grep -q DISABLE_AUTOUPDATER ~/.profile 2>/dev/null || printf "\n# ccfleet: upgrades are staged by the operator\nexport DISABLE_AUTOUPDATER=1\nexport PATH=\"\$HOME/.local/bin:\$PATH\"\n" >> ~/.profile'
@@ -144,7 +151,7 @@ CC_VERSION="$(as_slot '"$HOME"/.local/bin/claude --version 2>/dev/null | head -1
 [ "$CC_VERSION" = unknown ] && die "Claude Code did not install for $SLOT"
 note "installed: $CC_VERSION"
 
-step "4/4  the two setup prompts"
+step "4/5  the two setup prompts"
 # The same two questions install.sh pre-answers, for the same reason: neither is
 # about anybody's account, and leaving them would mean every slot needs an
 # interactive terminal before it can be used.
@@ -164,6 +171,31 @@ json.dump(d, open(tmp, 'w'), indent=2)
 os.replace(tmp, p)
 os.chmod(p, 0o600)
 PY"
+
+step "5/5  a way in"
+# Without this the slot has no access path at all: password login is disabled,
+# no SSH key is installed on purpose, and Remote Control is how somebody is
+# meant to reach it. Provisioning an account nobody can use is not a slot.
+REPO_RAW="${CCFLEET_REPO_RAW:-https://raw.githubusercontent.com/cdcupt/ccfleet/main}"
+for unit in ccfleet-shell.service claude-remote-control.service; do
+  if [ -f "$LOCAL_UNITS/$unit" ]; then
+    install -m 644 -o "$SLOT" -g "$SLOT" "$LOCAL_UNITS/$unit" \
+      "$HOME_DIR/.config/systemd/user/$unit"
+  else
+    as_slot "curl -fsSL '$REPO_RAW/node/systemd/$unit' -o ~/.config/systemd/user/$unit" \
+      || die "could not fetch $unit; the slot would have no way in"
+  fi
+done
+user_systemctl daemon-reload
+# Enabled, not started. Remote Control needs an authenticated session and there
+# is none until whoever holds this slot signs in — and it cannot usefully retry,
+# because Type=forking means systemd sees tmux detach and never learns the
+# session inside failed to authenticate. Enabling it means it returns after a
+# reboot once they have.
+user_systemctl enable ccfleet-shell.service claude-remote-control.service >/dev/null 2>&1 \
+  || die "could not enable the slot's services"
+user_systemctl start ccfleet-shell.service >/dev/null 2>&1 || true
+note "work session started; Remote Control enabled, to be started after they sign in"
 
 printf '\nslot %s is ready. It has no sudo and no SSH key, by design.\n' "$SLOT"
 printf 'Whoever holds it signs into their own Claude account from the console;\n'
