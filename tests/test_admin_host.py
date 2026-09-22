@@ -390,3 +390,34 @@ def test_a_session_belongs_to_one_of_two_sites(store):
     sid = store.create_session(account["id"], now=1.0, ttl_s=3600, site="admin")
     assert store.account_for_session(sid, now=2.0, site="admin")["id"] == account["id"]
     assert store.account_for_session(sid, now=2.0, site="product") is None
+
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8111", "localhost", "alias.fleet.example.com"])
+def test_google_sign_in_starts_only_where_it_can_finish(split, host):
+    """Started on loopback or an alias, Google would send the person back to
+    the product's hostname, whose cookie the browser that started never sees.
+    Refused, with where to go instead."""
+    store, browser, _ = split
+    for path in ("/auth/google/start?next=/", "/auth/google/callback?state=s&code=c"):
+        reply = browser(host).call("GET", path)
+        assert reply.status == 404, (host, path)
+        assert f"https://{PRODUCT}" in reply.body and f"https://{ADMIN}" in reply.body
+    assert store.list_accounts() == []
+
+
+def test_with_one_hostname_sign_in_still_starts_only_on_it(monkeypatch):
+    cfg = Config(bind_host="127.0.0.1", bind_port=0, db_path=":memory:",
+                 admin_token=ADMIN_TOKEN, public_url=f"https://{PRODUCT}",
+                 google_client_id="cid", google_client_secret="secret",
+                 cookie_secret=SECRET, cookie_secure=False)
+    srv, store, thread = _server(cfg, monkeypatch, {"sub": "s", "email": "e@example.com"})
+    try:
+        port = srv.server_address[1]
+        assert Browser(port, "127.0.0.1:8111").call("GET", "/auth/google/start").status == 404
+        assert Browser(port, PRODUCT).call("GET", "/auth/google/start").status == 303
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=5)
+        store.close()

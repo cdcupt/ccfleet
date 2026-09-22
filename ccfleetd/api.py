@@ -218,12 +218,23 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             return not ctx.cfg.admin_host or not self._admin_site()
 
         def _redirect_uri(self) -> str:
-            """Google has to send people back to the hostname they left from:
-            the session is a cookie only that hostname can set."""
-            if (ctx.cfg.admin_host and request_host(self.headers.get("Host"))
-                    == ctx.cfg.admin_host):
+            """Where Google sends a sign-in started here back to, or "" when
+            no sign-in can start on this hostname.
+
+            It has to be the hostname the sign-in left from: the session is a
+            cookie only that hostname can set, and a session is bound to its
+            site. So only the two canonical hostnames sign anybody in — the
+            admin host, and the one the product's callback names. Loopback, or
+            any other alias pointing here, would send the person back to a host
+            whose cookie the browser that started never sees.
+            """
+            host = request_host(self.headers.get("Host"))
+            if ctx.cfg.admin_host and host == ctx.cfg.admin_host:
                 return ctx.cfg.admin_redirect_uri
-            return ctx.cfg.redirect_uri
+            product = ctx.cfg.redirect_uri
+            if product and host == request_host(urllib.parse.urlsplit(product).netloc):
+                return product
+            return ""
 
         def _operator_session(self) -> Optional[Identity]:
             """An operator signed in with Google, on the console's side.
@@ -306,6 +317,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if not ctx.cfg.google_ready:
                 self._json(503, {"error": "sign-in is not configured"})
                 return
+            if not self._redirect_uri():
+                self._not_a_sign_in_host()
+                return
             state, verifier = oauth.new_state(), oauth.new_verifier()
             # Only our own paths, and only paths. An open redirect here would
             # let somebody send a ccfleet sign-in link that lands on their site
@@ -333,6 +347,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _sign_in_callback(self) -> None:
             if not ctx.cfg.google_ready:
                 self._json(503, {"error": "sign-in is not configured"})
+                return
+            if not self._redirect_uri():
+                self._not_a_sign_in_host()
                 return
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             state = query.get("state", [""])[0]
@@ -386,6 +403,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     sessions.sign(session_id, ctx.cfg.cookie_secret),
                     ttl_s=ctx.cfg.session_ttl_s, secure=ctx.cfg.cookie_secure),
                  self._clear_flow_cookie()])
+
+        def _not_a_sign_in_host(self) -> None:
+            """Refused, and pointed at where signing in does work."""
+            where = [u.rsplit("/auth/", 1)[0] for u in (ctx.cfg.redirect_uri,
+                                                        ctx.cfg.admin_redirect_uri) if u]
+            self._json(404, {"error": "sign in at " + " or ".join(where)})
 
         def _sign_out(self) -> None:
             """End this browser's session: only when the request proves it
