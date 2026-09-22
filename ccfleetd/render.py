@@ -112,6 +112,10 @@ border-bottom:1px solid var(--rule-soft)}
 
 /* Controls */
 form.inline{display:inline;margin:0}
+/* A field and its button on one line: the slot and account rows. */
+form.field{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}
+form.field input[type=text]{width:auto;padding:5px 9px;font-size:13px}
+form.field input.count{width:4.5em}
 button,.btn{font:inherit;font-size:12px;padding:5px 11px;border-radius:8px;
 border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer}
 button:hover{border-color:var(--acc);color:var(--acc)}
@@ -852,7 +856,7 @@ def _strip_html(counts: Mapping[str, int]) -> str:
 
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
                      now: float, cfg: Config, csrf: str = "", who: Any = None,
-                     logins: Optional[Mapping[str, Any]] = None) -> str:
+                     logins: Optional[Mapping[str, Any]] = None, extra: str = "") -> str:
     # who is None for callers that predate per-user accounts, which are all
     # operator-side, so the default is the full-privilege view.
     is_admin = who is None or getattr(who, "is_admin", True)
@@ -926,5 +930,6 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
+        + extra
         + "</div></body></html>"
     )
