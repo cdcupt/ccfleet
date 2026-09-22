@@ -882,3 +882,41 @@ def test_a_stream_of_sign_ins_cannot_keep_the_agent_for_ever(cfg):
     state = {"slots": ["slot01"], "slot_logins": {"slot01": LOGIN}}
     assert machine.stay_for_sign_ins(cfg, state, script(0, None), system) == 0
     assert machine.MAX_RESIDENT_S <= clock.now < machine.MAX_RESIDENT_S + 60
+
+
+def test_nobody_is_cut_short_by_the_run_ending(cfg):
+    """slot01 keeps signing in (a fresh attempt every five minutes, so none
+    ever runs out) until well past the hour. slot02 starts just before the
+    hour. slot02 still gets its whole window; slot01's attempts after the hour
+    are never started here and never failed here — the next run takes them."""
+    window, cap = machine.core.LOGIN_WINDOW_S, machine.MAX_RESIDENT_S
+    failed, slot02_at = {}, cap - 100
+
+    def script(now, this_post):
+        for report in (this_post or {}).get("slots", []):
+            if (report.get("login") or {}).get("state") == "failed":
+                failed.setdefault((report["unix_user"], report["login"]["requested_at"]), now)
+        slots = [{"unix_user": "slot01", "state": "active",
+                  "login": {**LOGIN, "requested_at": float(int(now // 300))}}]
+        if now >= slot02_at and not any(u == "slot02" for u, _ in failed):
+            slots.append({"unix_user": "slot02", "state": "active",
+                          "login": {**LOGIN, "requested_at": 99.0}})
+        else:
+            slots.append({"unix_user": "slot02", "state": "active"})
+        return {"slots": slots, "poll_s": 30}
+
+    fake = Fake(users=["slot01", "slot02"])
+    clock = Clock()
+    system = machine.System(**{**_resident(fake, clock).__dict__,
+                               "opener": _server_by_clock(fake, clock, script)})
+    state = {"slots": ["slot01", "slot02"], "slot_logins": {"slot01": {**LOGIN,
+                                                                        "requested_at": 0.0}}}
+    assert machine.stay_for_sign_ins(cfg, state, script(0, None), system) == 0
+
+    assert slot02_at + window <= failed[("slot02", 99.0)] < slot02_at + window + 60, \
+        "slot02 was cut short by the hour"
+    assert not any(user == "slot01" for user, _ in failed), "a post-hour attempt was failed"
+    handed = {json.loads(kw["input_text"])["login"]["requested_at"] for _, kw in fake.spawned
+              if kw["env"]["USER"] == "slot01" and json.loads(kw["input_text"])["login"]}
+    assert max(handed) < cap // 300, "an attempt arriving after the hour was started"
+    assert clock.now < slot02_at + window + 60, "stayed on after its last attempt"

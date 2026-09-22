@@ -91,7 +91,7 @@ MAX_REPLY_BYTES = 1024 * 1024
 # full report of every slot still goes out this often, so provisioning and
 # wiping do not wait out somebody else's sign-in.
 FULL_EVERY_S = 60.0
-# However many sign-ins keep arriving, one run stays no longer than this.
+# After this long a run takes on no new sign-ins; the next run starts them.
 MAX_RESIDENT_S = 60 * 60
 # The slot states a sign-in can run in, and the kinds it can be.
 SIGN_IN_STATES = ("claimed", "active")
@@ -523,10 +523,13 @@ def stay_for_sign_ins(cfg: MachineConfig, state: dict[str, Any], desired: dict[s
     every slot once a minute throughout, so nobody else's claim or release
     waits on somebody's sign-in.
 
-    Bounded twice. Each attempt gets its own window, counted from when this
-    run first saw it — one shared deadline gave a sign-in started late in the
-    run almost none. And the run itself ends within the hour whatever keeps
-    arriving, so a stream of sign-ins cannot pin this machine's agent for ever.
+    Bounded twice, and neither bound cuts anybody short. Each attempt gets its
+    own window, counted from when this run first saw it — one shared deadline
+    gave a sign-in started late in the run almost none. And a run stops taking
+    on new attempts after an hour: one that arrives later is never started
+    here, and so is not failed here either. The next run starts it fresh, with
+    a whole window of its own. The run itself ends once the attempts it did
+    take on are finished or out of time.
     """
     started = last_full = system.monotonic()
     first_seen: dict[tuple[str, Any], float] = {}
@@ -536,15 +539,23 @@ def stay_for_sign_ins(cfg: MachineConfig, state: dict[str, Any], desired: dict[s
     given_up: set[tuple[str, Any]] = set()
     while True:
         now = system.monotonic()
-        current = {user: requested for user, requested in signing_in(desired).items()
-                   if (user, requested) not in given_up}
+        live = signing_in(desired)
+        for attempt in live.items():
+            first_seen.setdefault(attempt, now)
+        # Arrived after this run stopped taking new ones: left, untouched, for
+        # the next run. Never handed to its slot here, so no pane is started
+        # that this run's end would kill halfway through.
+        later = {attempt for attempt in live.items()
+                 if first_seen[attempt] - started >= MAX_RESIDENT_S}
+        state = {**state, "slot_logins": {
+            user: block for user, block in (state.get("slot_logins") or {}).items()
+            if (user, block.get("requested_at")) not in later}}
+        current = {user: requested for user, requested in live.items()
+                   if (user, requested) not in given_up and (user, requested) not in later}
         if not current:
             return 0
-        for attempt in current.items():
-            first_seen.setdefault(attempt, now)
-        out_of_run = now - started >= MAX_RESIDENT_S
         expired = {user: requested for user, requested in current.items()
-                   if out_of_run or now - first_seen[(user, requested)] >= core.LOGIN_WINDOW_S}
+                   if now - first_seen[(user, requested)] >= core.LOGIN_WINDOW_S}
         if expired:
             given_up.update(expired.items())
             status, desired, state = _abandon(cfg, state, expired, system)
