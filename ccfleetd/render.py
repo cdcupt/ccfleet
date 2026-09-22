@@ -587,9 +587,10 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
             '<p class="note">'
             "A device token lets <code>claude</code> run on your own machine, on that "
             "machine's own files, with no login. It is minted on the node from the account "
-            "that node is signed in as, and it is shown here exactly once before this server "
-            "forgets it. One year, inference scope &mdash; Anthropic's limit, not ours, which "
-            "is why it cannot drive Remote Control.</p></div>")
+            "that node is signed in as, and shown here for as long as the request lasts "
+            "&mdash; so a second machine can have the same one &mdash; then forgotten. One "
+            "year, inference scope &mdash; Anthropic's limit, not ours, which is why it "
+            "cannot drive Remote Control.</p></div>")
 
 
 def _signin_html(rows: list[Mapping[str, Any]], csrf: str,

@@ -500,3 +500,24 @@ def test_a_database_written_before_the_column_still_opens(tmp_path):
         assert s.get_node("old-node")["device_token_at"] == 0, "reads as never issued"
     finally:
         s.close()
+
+
+def test_a_later_token_refreshes_when_it_was_last_issued(store):
+    """Recording it only when unset froze the console's answer at whenever the
+    first one happened. "Last issued" that never moves is worse than nothing:
+    it looks like an answer."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 110.0, secret="sk-ant-oat01-first")
+    assert store.read_secret(n, now=120.0) == "sk-ant-oat01-first"
+    assert store.get_node(n)["device_token_at"] == 120.0
+
+    # Reading the same one again is not a new issue.
+    assert store.read_secret(n, now=125.0) == "sk-ant-oat01-first"
+    assert store.get_node(n)["device_token_at"] == 120.0, "same attempt, same answer"
+
+    # A later attempt is.
+    store.request_login(n, "", 200.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 210.0, secret="sk-ant-oat01-second")
+    assert store.read_secret(n, now=220.0) == "sk-ant-oat01-second"
+    assert store.get_node(n)["device_token_at"] == 220.0, "and the console says so"

@@ -423,16 +423,20 @@ class Store:
         """
         with self._lock:
             row = self._conn.execute(
-                "SELECT secret FROM logins WHERE node_id = ? AND state = 'ready'",
-                (node_id,)).fetchone()
+                "SELECT secret, requested_at FROM logins "
+                "WHERE node_id = ? AND state = 'ready'", (node_id,)).fetchone()
             if row is None:
                 return ""
-            # Remember that a token reached somebody. Written on the first read
-            # and left alone after: the question it answers is "did this work",
-            # which does not become more true by looking again.
+            # Remember that a token reached somebody: once per attempt, not once
+            # per read. Reading the same token again does not make it newly
+            # issued — but a later attempt that produces a new one does, and a
+            # guard of "only if this has never been set" would have frozen the
+            # console's answer at whenever the first one was.
             self._conn.execute(
-                "UPDATE nodes SET device_token_at = ? WHERE id = ? AND device_token_at = 0",
-                (now if now is not None else time.time(), node_id))
+                "UPDATE nodes SET device_token_at = ? "
+                "WHERE id = ? AND device_token_at < ?",
+                (now if now is not None else time.time(), node_id,
+                 row["requested_at"]))
             self._conn.commit()
         return str(row["secret"])
 
