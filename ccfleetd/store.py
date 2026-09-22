@@ -144,7 +144,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     id_hash TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id),
     created_at REAL NOT NULL,
-    expires_at REAL NOT NULL
+    expires_at REAL NOT NULL,
+    -- Which site the session was made on: 'product' or 'admin'. Honoured
+    -- only there — two sites, two sessions — so a product session cookie
+    -- carried to the operator's hostname opens nothing.
+    site TEXT NOT NULL DEFAULT 'product'
 );
 CREATE INDEX IF NOT EXISTS ix_sessions_account ON sessions(account_id);
 CREATE INDEX IF NOT EXISTS ix_sessions_expires ON sessions(expires_at);
@@ -317,6 +321,11 @@ class Store:
             self._add_missing_columns("slots", {
                 "present": "INTEGER",
                 "reported_at": "REAL",
+            })
+            # Every session made before two sites existed was made on the only
+            # one there was, which is the product's.
+            self._add_missing_columns("sessions", {
+                "site": "TEXT NOT NULL DEFAULT 'product'",
             })
             self._conn.commit()
 
@@ -970,6 +979,14 @@ class Store:
             self._conn.commit()
         return cur.rowcount > 0
 
+    def set_account_role(self, account_id: str, role: str) -> bool:
+        """Make an account an operator, or not. The server's CLI is the only caller."""
+        if role not in ("user", "admin"):
+            raise StoreError("role must be 'user' or 'admin'")
+        with self._write_txn() as conn:
+            cur = conn.execute("UPDATE accounts SET role = ? WHERE id = ?", (role, account_id))
+        return cur.rowcount > 0
+
     def held_slot_count(self, account_id: str) -> int:
         """Slots this account is holding, counting one being wiped.
 
@@ -1369,38 +1386,45 @@ class Store:
                 "DELETE FROM oauth_flows WHERE expires_at <= ?", (now,))
         return cur.rowcount
 
+    SITES = ("product", "admin")
+
     def create_session(self, account_id: str, *, now: float,
-                       ttl_s: int) -> str:
+                       ttl_s: int, site: str = "product") -> str:
         """Start a session and return its id, which is shown to nobody twice.
 
         Only the hash is kept, so this return value is the only copy. It goes
         straight into the cookie.
         """
+        if site not in self.SITES:
+            raise StoreError(f"no site {site!r}")
         if self.get_account(account_id) is None:
             raise StoreError(f"no account {account_id!r}")
         session_id = sessionlib.new_session_id()
         with self._write_txn() as conn:
             conn.execute(
-                "INSERT INTO sessions (id_hash, account_id, created_at, expires_at) "
-                "VALUES (?,?,?,?)",
+                "INSERT INTO sessions (id_hash, account_id, created_at, expires_at, site) "
+                "VALUES (?,?,?,?,?)",
                 (sessionlib.hash_session_id(session_id), account_id, now,
-                 now + ttl_s))
+                 now + ttl_s, site))
         return session_id
 
-    def account_for_session(self, session_id: str, *,
-                            now: float) -> dict[str, Any] | None:
+    def account_for_session(self, session_id: str, *, now: float,
+                            site: Optional[str] = None) -> dict[str, Any] | None:
         """Who this session belongs to, or None if it is unknown or expired.
 
         An expired row is deleted rather than merely ignored, so a stolen
         cookie stops being useful the first time anybody presents it rather
-        than whenever a sweep happens to run.
+        than whenever a sweep happens to run. `site` names the site asking:
+        a session made on the other one is no session here.
         """
         id_hash = sessionlib.hash_session_id(session_id)
         with self._write_txn() as conn:
             row = conn.execute(
-                "SELECT account_id, expires_at FROM sessions WHERE id_hash = ?",
+                "SELECT account_id, expires_at, site FROM sessions WHERE id_hash = ?",
                 (id_hash,)).fetchone()
             if row is None:
+                return None
+            if site is not None and row["site"] != site:
                 return None
             if now >= row["expires_at"]:
                 conn.execute("DELETE FROM sessions WHERE id_hash = ?", (id_hash,))

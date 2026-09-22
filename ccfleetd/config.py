@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
@@ -11,6 +12,8 @@ from .sessions import MIN_TTL_S as SESSION_MIN_TTL_S
 
 ENV_PREFIX = "CCFLEET_"
 MIN_ADMIN_TOKEN_LEN = 16
+HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)"
+                         r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 
 
 class ConfigError(ValueError):
@@ -97,6 +100,12 @@ class Config:
     # Off only for local development over plain http, where a Secure cookie is
     # dropped and sign-in appears to do nothing at all.
     cookie_secure: bool = True
+    # The operator's own hostname. Unset, one hostname serves both the console
+    # and the user site, exactly as before. Set, the console and its API answer
+    # only here (and on loopback, the operator's way in from the box itself),
+    # and every other hostname is the product: somebody arriving there sees
+    # the user site and never a console, whatever credentials they carry.
+    admin_host: str = ""
 
     @property
     def google_ready(self) -> bool:
@@ -109,6 +118,15 @@ class Config:
         if self.google_redirect_uri:
             return self.google_redirect_uri
         return f"{self.public_url}/auth/google/callback" if self.public_url else ""
+
+    @property
+    def admin_redirect_uri(self) -> str:
+        """Where Google sends an operator back to: the admin host's own
+        callback, because the session is a cookie that host alone can set."""
+        if not self.admin_host:
+            return ""
+        scheme = "http" if self.public_url.startswith("http://") else "https"
+        return f"{scheme}://{self.admin_host}/auth/google/callback"
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> Config:
@@ -141,7 +159,12 @@ class Config:
             session_ttl_s=_env_int(env, "SESSION_TTL_S", 14 * 24 * 3600,
                                    SESSION_MIN_TTL_S),
             cookie_secure=_env_bool(env, "COOKIE_SECURE", True),
+            admin_host=env.get(ENV_PREFIX + "ADMIN_HOST", "").strip().lower(),
         )
+        if cfg.admin_host and not HOSTNAME_RE.match(cfg.admin_host):
+            raise ConfigError(
+                f"{ENV_PREFIX}ADMIN_HOST must be a hostname like admin.fleet.example.com, "
+                f"with no scheme, port or path; got {cfg.admin_host!r}")
         # Half-configured sign-in is worse than none: the button appears and
         # then fails on the callback, which reads as the product being broken.
         google_bits = {
