@@ -841,6 +841,8 @@ def test_a_future_dated_record_is_not_counted(tmp_path):
         {"timestamp": "2027-01-01T00:00:00Z", "message": {"usage": {"output_tokens": 999999}}},
         # The hour after this one hasn't begun; nothing can have happened in it.
         {"timestamp": "2026-09-20T11:00:00Z", "message": {"usage": {"output_tokens": 5000}}},
+        # Nor has the rest of this one: now is 10:26:40.
+        {"timestamp": "2026-09-20T10:50:00Z", "message": {"usage": {"output_tokens": 700}}},
         {"timestamp": "2026-09-19T10:00:00Z", "message": {"usage": {"output_tokens": 8}}},
     ])
     u = agent.usage_summary(tmp_path, now=NOW_TS)
@@ -903,7 +905,7 @@ def test_the_window_is_whole_hours_ending_now_and_the_total_matches_the_chart(tm
     _transcript(tmp_path, "span.jsonl", [
         {"timestamp": "2026-09-13T10:59:59Z", "message": {"usage": {"output_tokens": 111}}},
         {"timestamp": "2026-09-13T11:00:00Z", "message": {"usage": {"output_tokens": 7}}},
-        {"timestamp": "2026-09-20T10:59:00Z", "message": {"usage": {"output_tokens": 3}}},
+        {"timestamp": "2026-09-20T10:26:00Z", "message": {"usage": {"output_tokens": 3}}},
     ])
     u = agent.usage_summary(tmp_path, now=NOW_TS)
     hours = u["by_hour"]["tokens"]
@@ -917,7 +919,7 @@ def test_the_week_moves_with_the_hour_not_the_day(tmp_path):
     the newest is in — no waiting for midnight."""
     _transcript(tmp_path, "edge.jsonl", [
         {"timestamp": "2026-09-13T11:30:00Z", "message": {"usage": {"output_tokens": 40}}},
-        {"timestamp": "2026-09-20T11:30:00Z", "message": {"usage": {"output_tokens": 2}}},
+        {"timestamp": "2026-09-20T11:10:00Z", "message": {"usage": {"output_tokens": 2}}},
     ])
     before = agent.usage_summary(tmp_path, now=NOW_TS)
     after = agent.usage_summary(tmp_path, now=NOW_TS + 3600)

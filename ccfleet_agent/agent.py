@@ -563,7 +563,6 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
     # the file cutoff agree about where the window starts.
     this_hour = now - (now % 3600)
     since = this_hour - (window_hours - 1) * 3600
-    until = this_hour + 3600
     root = config_dir / "projects"
     budget = USAGE_MAX_BYTES_TOTAL
     totals: dict[str, int] = {k: 0 for k in USAGE_TOKEN_KEYS}
@@ -598,7 +597,10 @@ def usage_summary(config_dir: Path, now: Optional[float] = None,
                     if not isinstance(usage, Mapping):
                         continue
                     stamp = _usage_epoch(record.get("timestamp"))
-                    if stamp is None or not since <= stamp < until:
+                    # Bounded by now, not by the end of this hour: the clock
+                    # that wrote the record is this machine's own, so a record
+                    # from even a minute ahead is a wrong one, not an early one.
+                    if stamp is None or not since <= stamp <= now:
                         continue
                     counted = True
                     turn = 0
