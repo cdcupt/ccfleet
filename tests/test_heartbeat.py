@@ -150,3 +150,91 @@ def test_an_absurd_integer_cannot_take_the_dashboard_down():
     fine = validate_heartbeat({"node_id": "n", "usage": {"total_tokens": 40897},
                                "disk": {"used_pct": 12.7}}, "n")
     assert fine["usage"]["total_tokens"] == 40897 and fine["disk"]["used_pct"] == 12.7
+
+
+# -- a shared machine's slots ---------------------------------------------------
+
+def _machine(slots, **extra):
+    return validate_heartbeat({"node_id": "m1", "mode": "machine", "slots": slots,
+                               **extra}, "m1")
+
+
+def test_an_ordinary_node_keeps_exactly_the_shape_it_had():
+    """Every stored heartbeat of every node in the fleet predates slots. A
+    skeleton `slots: []` on them would read as a machine with none."""
+    out = validate_heartbeat({"node_id": "n", "slots": [{"unix_user": "slot01"}]}, "n")
+    assert "slots" not in out and "mode" not in out
+    out = validate_heartbeat({"node_id": "n", "mode": "shared", "slots": []}, "n")
+    assert "slots" not in out and "mode" not in out, "an unknown mode was honoured"
+
+
+def test_a_machine_reports_each_slot_by_its_user():
+    out = _machine([{"unix_user": "slot01", "present": True, "provisioned_for": 12.5,
+                     "claude": {"version": "2.1.278", "path": "/home/slot01/x"},
+                     "credentials": {"logged_in": True, "subscription_type": "max",
+                                     "email": "someone@example.com",
+                                     "accessToken": "sk-ant-oat01-secret"},
+                     "remote_control": {"state": "active"},
+                     "quota": {"session": {"used_pct": 12, "resets": "5pm"}},
+                     "usage": {"total_tokens": 900},
+                     "home": "/home/slot01", "surprise": 1}])
+    assert out["mode"] == "machine"
+    [slot] = out["slots"]
+    assert slot["unix_user"] == "slot01"
+    assert slot["present"] is True and slot["provisioned_for"] == 12.5
+    assert slot["claude"] == {"version": "2.1.278"}
+    assert slot["credentials"]["logged_in"] is True
+    assert slot["credentials"]["subscription_type"] == "max"
+    assert slot["quota"]["session"]["used_pct"] == 12
+    assert slot["usage"]["total_tokens"] == 900
+    # Nothing that names the account, nothing that is a credential, nothing
+    # the schema did not ask for.
+    flat = json.dumps(out)
+    assert "someone@example.com" not in flat
+    assert "sk-ant-oat01" not in flat
+    assert "surprise" not in slot and "home" not in slot and "path" not in slot["claude"]
+
+
+@pytest.mark.parametrize("user", ["", "Slot01", "1slot", "root user", "x" * 33,
+                                  "../etc", None, 7])
+def test_a_slot_with_no_usable_name_is_dropped(user):
+    """The name is what the server matches on. Guessing at a bad one would
+    move whichever slot it happened to resemble."""
+    assert _machine([{"unix_user": user, "present": False}])["slots"] == []
+
+
+def test_a_name_reported_twice_keeps_its_first_word():
+    out = _machine([{"unix_user": "slot01", "present": True},
+                    {"unix_user": "slot01", "present": False}])
+    assert out["slots"] == [out["slots"][0]]
+    assert out["slots"][0]["present"] is True
+
+
+def test_a_machine_cannot_post_an_unbounded_list():
+    from ccfleetd.heartbeat import MAX_SLOT_REPORTS
+    many = [{"unix_user": f"slot{n:03d}", "present": False}
+            for n in range(MAX_SLOT_REPORTS + 10)]
+    assert len(_machine(many)["slots"]) == MAX_SLOT_REPORTS
+
+
+@pytest.mark.parametrize("slots", [None, "slot01", {"unix_user": "slot01"},
+                                   [None, 3, "slot01"]])
+def test_slots_of_the_wrong_shape_are_an_empty_report(slots):
+    assert _machine(slots)["slots"] == []
+
+
+def test_slot_fields_of_the_wrong_type_are_nulled_not_trusted():
+    [slot] = _machine([{"unix_user": "slot01", "present": "yes",
+                        "provisioned_for": True, "provision_failed_for": "12",
+                        "wipe_error": 5, "credentials": "logged in"}])["slots"]
+    assert slot["present"] is None
+    assert slot["provisioned_for"] is None, "True would match a claim made at 1.0"
+    assert slot["provision_failed_for"] is None
+    assert slot["wipe_error"] is None
+    assert slot["credentials"]["logged_in"] is None
+
+
+def test_an_error_a_machine_reports_is_bounded_like_every_other_string():
+    [slot] = _machine([{"unix_user": "slot01", "wipe_error": "x" * 5000,
+                        "provision_error": "y" * 5000}])["slots"]
+    assert len(slot["wipe_error"]) == 200 and len(slot["provision_error"]) == 200

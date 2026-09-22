@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable, Optional
 
 from . import rules
+from . import slots as slotstates
 from .config import Config
 from .notify import Notifier, format_event
 from .store import Store
@@ -51,18 +52,33 @@ class Monitor:
         recent = self._store.recent_heartbeats(node["id"], limit=2)
         latest = recent[0] if recent else None
         previous = recent[1] if len(recent) > 1 else None
-        findings = rules.evaluate(node, latest, previous, now, self._cfg)
+        findings = rules.evaluate(node, latest, previous, now, self._cfg,
+                                  self._store.list_slots(node_id=node["id"]))
         return self._reconcile(node, findings, now)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:
         now = self._clock() if now is None else now
         events: list[dict[str, Any]] = []
+        self._expire_claims(now)
         for node in self._store.list_nodes():
             if node["enabled"]:
                 events.extend(self.check_node(node, now))
         self._expire_logins(now)
         self._maybe_prune(now)
         return events
+
+    def _expire_claims(self, now: float) -> None:
+        """Give up on provisioning that never finished.
+
+        A machine that went quiet mid-claim would otherwise hold that slot, and
+        the claimant's allowance, in `claiming` forever. The slot goes on to be
+        wiped rather than freed: whatever was half-made on the machine has to be
+        cleared before anybody else is handed it.
+        """
+        stalled = self._store.expire_claims(older_than=now - slotstates.CLAIM_TIMEOUT_S)
+        if stalled:
+            log.warning("gave up on %d claim(s) still provisioning after %d min: %s",
+                        len(stalled), slotstates.CLAIM_TIMEOUT_S // 60, ", ".join(stalled))
 
     def _reconcile(self, node: dict[str, Any], findings: tuple[rules.Finding, ...],
                    now: float) -> list[dict[str, Any]]:

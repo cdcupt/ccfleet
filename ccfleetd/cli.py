@@ -125,17 +125,26 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
                               now=time.time())
         print(f"slot {slot['id']} declared on {slot['node_id']} "
               f"as {slot['unix_user']}, state {slot['state']}")
-        print(f"Create it on the machine with: sudo node/slot-add.sh "
-              f"--slot {slot['unix_user']}")
+        # Free means the Linux user does not exist, so the account is made at
+        # claim time by the machine's own agent (slot-add.sh), never ahead of
+        # it by hand: a user already there reads as occupied and is held back.
+        print(f"It is handed out once {slot['node_id']} reports that "
+              f"{slot['unix_user']} does not exist there. The machine creates "
+              f"it with slot-add.sh when somebody claims it; do not create it "
+              f"by hand.")
     elif args.slot_command == "list":
         rows = store.list_slots(node_id=args.machine)
         if not rows:
             print("no slots declared")
             return EXIT_OK
-        print(f"{'slot':<16} {'machine':<14} {'unix user':<12} {'state':<10} held by")
+        print(f"{'slot':<16} {'machine':<14} {'unix user':<12} {'state':<10} "
+              f"{'on machine':<11} held by")
         for r in rows:
+            # What the machine last said, which is the half of "free" the
+            # records cannot vouch for on their own.
+            on_machine = {1: "yes", 0: "no"}.get(r["present"], "not yet seen")
             print(f"{r['id']:<16} {r['node_id']:<14} {r['unix_user']:<12} "
-                  f"{r['state']:<10} {r['held_by'] or '-'}")
+                  f"{r['state']:<10} {on_machine:<11} {r['held_by'] or '-'}")
     elif args.slot_command == "release":
         # Only ever starts the wipe. The slot does not become free here — it
         # becomes free when the machine reports the wipe finished, because only
@@ -143,10 +152,10 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         # already a StoreError, which main() prints; a second check would be
         # unreachable rather than defensive.
         store.begin_release(args.slot_id)
-        print(f"{args.slot_id} is releasing. It stays held until the wipe "
-              f"finishes on the machine.")
-        print(f"Run there: sudo node/slot-remove.sh --slot "
-              f"{store.get_slot(args.slot_id)['unix_user']}")
+        print(f"{args.slot_id} is releasing. It stays held until the machine "
+              f"reports its Linux user gone.")
+        print(f"The machine's agent runs slot-remove.sh --slot "
+              f"{store.get_slot(args.slot_id)['unix_user']} on its next check-in.")
     elif args.slot_command == "remove":
         store.remove_slot(args.slot_id)
         print(f"{args.slot_id} is no longer declared on this fleet")

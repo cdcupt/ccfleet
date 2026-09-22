@@ -457,12 +457,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # credential from travelling further through this process than
                 # the one call that needed it.
                 login.pop("secret", None)
+            # Before the alerts are evaluated and before the reply is built, so
+            # both see the slots as this report left them: a wipe confirmed
+            # here is a free slot in the same reply, not one beat later.
+            if "slots" in payload:
+                ctx.store.apply_slot_report(node["id"], payload["slots"], now=now)
             events = ctx.monitor.record_heartbeat(node, payload, now)
             self._json(200, {
                 "ok": True,
                 # Kept for agents predating the desired block; same value, new home.
                 "pinned_version": node["pinned_version"],
-                "desired": desired_state(node, ctx.store.get_login(node["id"])),
+                "desired": desired_state(node, ctx.store.get_login(node["id"]),
+                                         ctx.store.list_slots(node_id=node["id"])),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
 

@@ -10,6 +10,9 @@ import math
 from collections.abc import Mapping
 from typing import Any, Optional
 
+from .slots import MACHINE_MODE
+from .store import UNIX_USER_RE
+
 MAX_STR = 200
 # Larger than any real measurement, small enough to stay a float.
 MAX_NUMBER = 10 ** 15
@@ -26,6 +29,9 @@ MAX_USAGE_DAYS = 31
 MAX_USAGE_MODELS = 8
 USAGE_COUNTERS = ("total_tokens", "input_tokens", "output_tokens",
                   "cache_read_input_tokens", "cache_creation_input_tokens", "sessions")
+# A shared machine reports each of its slots. Bounded well past any capacity
+# an operator would declare, so one machine cannot post an unbounded list.
+MAX_SLOT_REPORTS = 64
 
 
 class HeartbeatError(ValueError):
@@ -104,6 +110,61 @@ def _usage(section: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
+    """What a slot's login looks like from outside: the same narrow facts a
+    node reports about its own, and nothing that names the account."""
+    return {
+        "present": _bool_or_none(section.get("present")),
+        "logged_in": _bool_or_none(section.get("logged_in")),
+        "auth_method": _str(section.get("auth_method"), 40),
+        "subscription_type": _str(section.get("subscription_type"), 40),
+        "expires_at": _num(section.get("expires_at")),
+        "mtime": _num(section.get("mtime")),
+    }
+
+
+def _slots(value: Any) -> list[dict[str, Any]]:
+    """One entry per slot on a shared machine, each about one Linux user.
+
+    The user name is the key the server matches on, so an entry without a
+    valid one is dropped rather than guessed at, and a name reported twice
+    keeps its first entry: a second one could only be a buggy or hostile
+    agent trying to say two things about the same person's slot.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in value[:MAX_SLOT_REPORTS]:
+        if not isinstance(entry, Mapping):
+            continue
+        user = entry.get("unix_user")
+        if not isinstance(user, str) or not UNIX_USER_RE.match(user) or user in seen:
+            continue
+        seen.add(user)
+        out.append({
+            "unix_user": user,
+            # Whether the Linux user exists. The machine answers this itself,
+            # as root, from the account database — not from anything the slot's
+            # holder can write.
+            "present": _bool_or_none(entry.get("present")),
+            # Which claim the machine finished (or failed) setting up, named by
+            # the claim's own timestamp so news about an old claim cannot
+            # complete a new one.
+            "provisioned_for": _num(entry.get("provisioned_for")),
+            "provision_failed_for": _num(entry.get("provision_failed_for")),
+            "provision_error": _str(entry.get("provision_error")),
+            "wipe_error": _str(entry.get("wipe_error")),
+            "claude": {"version": _str(_section(entry, "claude").get("version"), 40)},
+            "credentials": _slot_credentials(_section(entry, "credentials")),
+            "remote_control": {"state": _str(_section(entry, "remote_control").get("state"),
+                                             40)},
+            "quota": _quota(_section(entry, "quota")),
+            "usage": _usage(_section(entry, "usage")),
+        })
+    return out
+
+
 def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise HeartbeatError("heartbeat body must be a JSON object")
@@ -159,6 +220,11 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         "usage": _usage(usage),
         "quota": _quota(quota),
     }
+    # Only a shared machine carries these, and only when it says it is one, so
+    # every ordinary node's stored heartbeat keeps exactly the shape it had.
+    if payload.get("mode") == MACHINE_MODE:
+        result["mode"] = MACHINE_MODE
+        result["slots"] = _slots(payload.get("slots"))
     if login_state:
         result["reconcile"] = {"login": {
             "state": login_state,

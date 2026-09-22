@@ -19,6 +19,9 @@ it died, and a wipe over a slot that has nothing on it costs nothing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any, Optional
+
 FREE = "free"
 CLAIMING = "claiming"
 CLAIMED = "claimed"
@@ -65,6 +68,65 @@ HELD: frozenset[str] = frozenset({CLAIMING, CLAIMED, ACTIVE, RELEASING})
 #: The states from which a release may be started. A free slot has nothing to
 #: wipe and a releasing slot is already being wiped.
 RELEASABLE: frozenset[str] = frozenset({CLAIMING, CLAIMED, ACTIVE})
+
+#: What a shared machine's heartbeat says it is. Its agent runs as root and
+#: reports its slots rather than an owner login, which it does not have.
+MACHINE_MODE = "machine"
+
+#: How long provisioning may take before the claim is given up. Creating the
+#: account is seconds; installing Claude Code downloads a release, which is a
+#: few minutes on a slow link. Past this the machine is down or stuck, and the
+#: person is better told no than left watching "setting up" for an evening.
+CLAIM_TIMEOUT_S = 30 * 60
+
+def _same_claim(reported: Any, claimed_at: Optional[float]) -> bool:
+    """Is this report about this claim? Compared exactly: the timestamp goes
+    down as JSON, is kept by the machine as JSON and comes back as JSON, and a
+    float survives that unchanged. `True` is not a timestamp, though Python
+    would happily compare it as 1."""
+    if claimed_at is None or isinstance(reported, bool):
+        return False
+    if not isinstance(reported, (int, float)):
+        return False
+    return float(reported) == float(claimed_at)
+
+
+def next_state(state: str, claimed_at: Optional[float],
+               report: Mapping[str, Any]) -> Optional[str]:
+    """Where a machine's report about a slot moves it, or None to leave it.
+
+    Only the moves the system owns are decided here. Claiming a free slot and
+    starting a release are acts by a person, and never follow from a report.
+
+    A report is evidence about one moment on the machine, so each move asks
+    for the evidence that actually proves it:
+
+    - provisioning finished only counts for *this* claim. A slot released and
+      claimed again must not be marked ready by news about the claim before.
+    - releasing ends only on the machine saying the Linux user does not exist.
+      Nothing else — not a timeout, not an absent report — proves the wipe.
+    - signing in is the holder's act, and the machine reporting a working login
+      is how we learn it happened.
+    """
+    present = report.get("present")
+    if state == CLAIMING:
+        # Failure first: a machine that provisioned and then reports the same
+        # claim as failed has told us the second, later thing.
+        if _same_claim(report.get("provision_failed_for"), claimed_at):
+            return RELEASING
+        if present is True and _same_claim(report.get("provisioned_for"), claimed_at):
+            return CLAIMED
+        return None
+    if state == CLAIMED:
+        credentials = report.get("credentials")
+        logged_in = (credentials.get("logged_in")
+                     if isinstance(credentials, Mapping) else None)
+        if present is True and logged_in is True:
+            return ACTIVE
+        return None
+    if state == RELEASING and present is False:
+        return FREE
+    return None
 
 
 class TransitionError(ValueError):

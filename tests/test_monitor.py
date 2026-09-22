@@ -119,3 +119,37 @@ def test_concurrent_checks_never_duplicate_alerts(store, cfg):
     rules_open = [a["rule"] for a in open_alerts]
     assert len(rules_open) == len(set(rules_open))
     assert "no_heartbeat" not in rules_open
+
+
+def test_a_claim_the_machine_never_finished_is_given_up(store, cfg):
+    """The machine went quiet mid-claim. Without this the slot, and the
+    claimant's allowance with it, would sit in `claiming` for good."""
+    from ccfleetd import slots
+    store.add_node("m1", "op", now=NOW - 86400)
+    store.set_machine_capacity("m1", 2)
+    store.add_account("a1", "sub-1", "a@example.com", slot_quota=2, now=NOW)
+    for sid, user in (("s1", "slot01"), ("s2", "slot02")):
+        store.add_slot(sid, "m1", user, now=NOW)
+        store.apply_slot_report("m1", [{"unix_user": user, "present": False}], now=NOW)
+    store.claim_slot("a1", now=NOW - slots.CLAIM_TIMEOUT_S - 1)
+    store.claim_slot("a1", now=NOW - 60)
+
+    monitor, _, _ = make_monitor(store, cfg)
+    monitor.check_all()
+    assert store.get_slot("s1")["state"] == slots.RELEASING
+    assert store.get_slot("s1")["held_by"] == "a1", "freed before the wipe"
+    assert store.get_slot("s2")["state"] == slots.CLAIMING, "gave up on a claim still in time"
+
+
+def test_a_shared_machines_slot_trouble_reaches_the_operator(store, cfg):
+    store.add_node("m1", "op", now=NOW - 86400)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    monitor, notifier, _ = make_monitor(store, cfg)
+    payload = heartbeat(NOW)["payload"]
+    payload.update(mode="machine", slots=[{"unix_user": "slot01", "present": True}])
+    for key in ("claude", "credentials", "remote_control"):
+        payload.pop(key)
+    events = monitor.record_heartbeat(store.get_node("m1"), payload, NOW)
+    assert [(e["event"], e["alert"]["rule"]) for e in events] == [
+        ("opened", "slot_occupied:slot01")]
+    assert "slot_occupied:slot01" in notifier.messages[0]

@@ -115,3 +115,25 @@ def test_a_waiting_token_stops_asking_the_node_for_anything():
     d = desired_state(node, ready)
     assert d["login"] is None
     assert d["poll_s"] == 300, "and the node goes back to its idle rhythm"
+
+
+def test_an_ordinary_node_hears_nothing_about_slots():
+    assert "slots" not in desired_state(_node())
+    assert "slots" not in desired_state(_node(), slots=[])
+
+
+def test_a_shared_machine_is_told_what_each_slot_should_be():
+    """The state is the whole instruction — claiming means set it up, releasing
+    means wipe it — and a claim carries its timestamp, which is how the machine
+    says which claim it finished."""
+    rows = [
+        {"id": "s1", "unix_user": "slot01", "state": "claiming", "claimed_at": 12.5,
+         "held_by": "u-secret-account-id"},
+        {"id": "s2", "unix_user": "slot02", "state": "releasing", "claimed_at": 3.0},
+        {"id": "s3", "unix_user": "slot03", "state": "free", "claimed_at": None},
+    ]
+    assert desired_state(_node(), slots=rows)["slots"] == [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": 12.5},
+        {"unix_user": "slot02", "state": "releasing"},
+        {"unix_user": "slot03", "state": "free"},
+    ]

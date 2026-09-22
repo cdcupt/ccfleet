@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from . import slots as slotstates
 from .config import Config
 from .desired import is_channel
 
@@ -190,18 +191,72 @@ def _remote_control_findings(node: Mapping[str, Any],
     return []
 
 
+def _slot_findings(slot_rows: Sequence[Mapping[str, Any]],
+                   payload: Mapping[str, Any]) -> list[Finding]:
+    """What a shared machine says about its slots that needs the operator.
+
+    Only lifecycle trouble: a wipe that failed, a free slot whose user exists,
+    a held slot whose user vanished, provisioning that failed. A holder's own
+    login and quota are theirs to see on their page, not the operator's to be
+    paged about. Each finding names its slot in the rule, so two slots in
+    trouble are two alerts rather than one that flaps between them.
+    """
+    reports = {r.get("unix_user"): r for r in payload.get("slots") or []
+               if isinstance(r, Mapping)}
+    findings: list[Finding] = []
+    for row in slot_rows:
+        user, state = row.get("unix_user"), row.get("state")
+        # A slot the machine did not mention has simply not been looked at
+        # yet. An empty report says nothing, so every branch below passes it by.
+        report = reports.get(user) or {}
+        present = report.get("present")
+        wipe_error = report.get("wipe_error")
+        if state == slotstates.RELEASING and wipe_error:
+            findings.append(Finding(
+                f"slot_wipe_failed:{user}", LEVEL_CRITICAL,
+                f"wiping {user} failed ({wipe_error}); it stays out of the pool "
+                f"until a wipe succeeds"))
+        elif state == slotstates.FREE and present is True:
+            findings.append(Finding(
+                f"slot_occupied:{user}", LEVEL_CRITICAL,
+                f"{user} is free here but its Linux user exists on the machine, so it "
+                f"is not handed out; remove it there with slot-remove.sh --slot {user}"))
+        elif state in (slotstates.CLAIMED, slotstates.ACTIVE) and present is False:
+            findings.append(Finding(
+                f"slot_missing:{user}", LEVEL_CRITICAL,
+                f"{user} is held but its Linux user is gone from the machine"))
+        provision_error = report.get("provision_error")
+        if provision_error and state in (slotstates.CLAIMING, slotstates.RELEASING):
+            findings.append(Finding(
+                f"slot_provision_failed:{user}", LEVEL_WARN,
+                f"setting up {user} failed ({provision_error}); the claim was "
+                f"given up and the slot is being wiped"))
+    return findings
+
+
 def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
              previous: Optional[Mapping[str, Any]], now: float,
-             cfg: Config) -> tuple[Finding, ...]:
+             cfg: Config,
+             slot_rows: Sequence[Mapping[str, Any]] = ()) -> tuple[Finding, ...]:
     """Return every finding for one node given its latest two heartbeats.
 
     ``latest`` and ``previous`` are heartbeat rows (``{"ts": ..., "payload": {...}}``).
+    ``slot_rows`` are the slots declared on this node, for a shared machine.
     """
     findings = _heartbeat_findings(node, latest, now, cfg)
     if latest is None:
         return tuple(findings)
     payload = latest.get("payload") or {}
     prev_payload = (previous or {}).get("payload") if previous else None
+    if payload.get("mode") == slotstates.MACHINE_MODE:
+        # A shared machine has no owner login of its own — every login on it is
+        # a slot holder's — so the owner-level checks would only ever say
+        # "claude missing" and "not signed in" about an account that does not
+        # exist. It is judged on the machine and on its slots instead.
+        findings += _disk_findings(payload, cfg)
+        findings += _egress_findings(payload, prev_payload)
+        findings += _slot_findings(slot_rows, payload)
+        return tuple(findings)
     findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg)
     findings += _disk_findings(payload, cfg)
