@@ -228,6 +228,15 @@ class Store:
     # progress the other. It never holds the resulting credential.
 
     LOGIN_ACTIVE_STATES = ("requested", "url_ready", "code_sent")
+    # How far along an attempt is. A node's report is one beat late by
+    # construction — it acts after posting — so a report can arrive describing
+    # a step the console has already moved past. Applying it would rewind the
+    # attempt, and the console's own progress is the part that gets lost.
+    # 'ready' belongs here too: it holds a minted token, and a late 'code_sent'
+    # landing on it would overwrite the row and destroy the credential. 'done'
+    # and 'failed' stay out — they are not progress, they end the attempt, and
+    # they must land whatever step it was on.
+    LOGIN_ORDER = {"requested": 0, "url_ready": 1, "code_sent": 2, "ready": 3}
     # 'ready' means the node's work is done and a minted token is waiting for
     # someone to collect it. It is not active — the node has nothing left to do
     # — but the row must survive until it is shown, which 'done' does not.
@@ -316,6 +325,19 @@ class Store:
             # to. It is here so that moving or narrowing that lock later fails
             # loudly rather than silently reopening the window this closed.
             pin = (node_id, current["requested_at"])
+
+            # Forward only. The case that bit: the agent reports url_ready,
+            # someone pastes a code, and then that already-sent report lands and
+            # puts the row back to url_ready — where the desired block no longer
+            # carries a code, so the node never receives the one that was typed
+            # and the card silently asks for it again. Terminal states are not
+            # progress and always apply.
+            here = self.LOGIN_ORDER.get(state)
+            was = self.LOGIN_ORDER.get(str(current["state"]))
+            if here is not None and was is not None and here < was:
+                log.debug("ignoring %s for %s; already at %s", state, node_id,
+                          current["state"])
+                return
 
             if state == "ready":
                 # A minted token. The row has to outlive the node's work, because

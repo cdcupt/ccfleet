@@ -356,3 +356,75 @@ def test_a_late_report_cannot_land_on_the_attempt_that_replaced_it(store):
     # And a late terminal state cannot delete the live attempt either.
     store.record_login_progress(n, "done", "", "", 211.0, stale_at)
     assert store.get_login(n) is not None, "the live attempt survives"
+
+
+def test_a_late_report_cannot_rewind_an_attempt(store):
+    """The bug Erik hit twice: he pasted the code and the card asked again.
+
+    A node's report is one beat late by construction — it acts after posting —
+    so a `url_ready` generated before the paste can land after it. Applying it
+    put the row back to url_ready, and the desired block only carries the code
+    while the state is code_sent. So the node never received the code that was
+    typed, and the console silently returned to asking for it.
+    """
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "url_ready", "https://claude.com/x", "", 110.0)
+
+    # Someone pastes the code.
+    store.submit_login_code(n, "ABC123", 120.0)
+    assert store.get_login(n)["state"] == "code_sent"
+
+    # The stale report, generated before the paste, arrives after it.
+    store.record_login_progress(n, "url_ready", "https://claude.com/x", "", 121.0)
+    row = store.get_login(n)
+    assert row["state"] == "code_sent", "the attempt does not go backwards"
+    assert row["code"] == "ABC123", "and the code is still there to be delivered"
+
+    # A repeat of the state it is already in is harmless.
+    store.record_login_progress(n, "code_sent", "", "", 122.0)
+    assert store.get_login(n)["state"] == "code_sent"
+
+
+def test_forward_progress_still_applies(store):
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "url_ready", "https://claude.com/x", "", 110.0)
+    assert store.get_login(n)["state"] == "url_ready"
+    store.record_login_progress(n, "code_sent", "", "", 120.0)
+    assert store.get_login(n)["state"] == "code_sent"
+    store.record_login_progress(n, "ready", "", "", 130.0, secret="sk-ant-oat01-x")
+    assert store.get_login(n)["state"] == "ready"
+
+
+def test_a_terminal_state_is_not_progress_and_always_lands(store):
+    """A failure or a finish can arrive from any step and must not be refused
+    for arriving 'out of order' — there is no later state to be at."""
+    for state in ("failed", "done"):
+        n = _node(store, f"node-{state}")
+        store.request_login(n, "", 100.0, kind="login")
+        store.record_login_progress(n, "code_sent", "", "", 110.0)
+        store.record_login_progress(n, state, "", "nope", 120.0)
+        assert store.get_login(n) is None, f"{state} ends the attempt"
+
+
+def test_a_late_report_cannot_overwrite_a_minted_token(store):
+    """'ready' holds the credential. A `code_sent` arriving after it would
+    rewrite the row and take the token with it — the one thing the whole flow
+    exists to produce."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-keepme")
+    store.record_login_progress(n, "code_sent", "", "", 121.0)
+    row = store.get_login(n)
+    assert row["state"] == "ready" and row["secret"] == "sk-ant-oat01-keepme"
+    assert store.take_secret(n) == "sk-ant-oat01-keepme", "still collectable"
+
+
+def test_a_failure_still_ends_an_attempt_that_has_a_token_waiting(store):
+    """Terminal states are not progress; they must land from any step."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-x")
+    store.record_login_progress(n, "failed", "", "gave up", 130.0)
+    assert store.get_login(n) is None
