@@ -174,7 +174,7 @@ def test_a_slots_token_is_remembered_on_the_slot_not_the_machine(store):
 
 def test_a_device_token_record_is_only_ever_on_a_node_or_a_slot(store):
     with pytest.raises(StoreError):
-        store._read_secret("x", "accounts", "a1", NOW)
+        store._read_secret(store._conn, "x", "accounts", "a1", NOW)
 
 
 # -- what goes down to the machine ----------------------------------------------
@@ -346,3 +346,51 @@ def test_a_report_about_a_slot_nobody_declared_keeps_no_token(server):
     _post(srv, token, [{"unix_user": "ghost01", "present": True,
                         "login": {"state": "ready", "secret": TOKEN, "requested_at": 1.0}}])
     assert TOKEN not in json.dumps([h["payload"] for h in st.recent_heartbeats("m1", 5)])
+
+
+# -- a slot that changed hands between loading and acting -------------------------
+
+def _changed_hands(store):
+    """s1 was a1's; given back, wiped, and now b1's, mid-flow with a token."""
+    held(store)
+    store.begin_release("s1")
+    store.apply_slot_report("m1", [{"unix_user": "slot01", "present": False}], now=NOW + 5)
+    store.add_account("b1", "sub-b1", "b1@example.com", slot_quota=1, now=NOW)
+    claim = store.claim_slot("b1", now=NOW + 10)["claimed_at"]
+    store.apply_slot_report("m1", [{"unix_user": "slot01", "present": True,
+                                    "provisioned_for": claim}], now=NOW + 20)
+    store.request_slot_login("s1", "", NOW + 30, kind="token", held_by="b1")
+    key = slot_login_key("s1")
+    store.record_login_progress(key, "ready", "", "", NOW + 40,
+                                store.get_login(key)["requested_at"], secret=TOKEN)
+    return key
+
+
+def test_a_stale_request_cannot_give_back_the_next_holders_slot(store):
+    from ccfleetd.store import NotYours
+    _changed_hands(store)
+    with pytest.raises(NotYours):
+        store.begin_release("s1", held_by="a1")
+    assert store.get_slot("s1")["state"] == slots.CLAIMED
+    assert store.get_slot("s1")["held_by"] == "b1"
+
+
+def test_a_stale_request_cannot_read_the_next_holders_token(store):
+    from ccfleetd.store import NotYours
+    _changed_hands(store)
+    with pytest.raises(NotYours):
+        store.read_slot_secret("s1", NOW + 50, held_by="a1")
+    assert store.get_slot("s1")["device_token_at"] == 0, "counted as handed over"
+    assert store.read_slot_secret("s1", NOW + 60, held_by="b1") == TOKEN
+
+
+def test_a_stale_request_cannot_touch_the_next_holders_sign_in(store):
+    from ccfleetd.store import NotYours
+    key = _changed_hands(store)
+    before = store.get_login(key)
+    for act in (lambda: store.clear_slot_login("s1", held_by="a1"),
+                lambda: store.submit_slot_login_code("s1", "c", NOW + 50, held_by="a1"),
+                lambda: store.request_slot_login("s1", "", NOW + 50, held_by="a1")):
+        with pytest.raises(NotYours):
+            act()
+    assert store.get_login(key) == before
