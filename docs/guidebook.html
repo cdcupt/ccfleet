@@ -181,13 +181,17 @@ html{scroll-behavior:smooth}
   <p><strong>From the console, with no terminal.</strong> Open the dashboard, find your node under
   <em>Device tokens</em>, and press <em>Get a device token</em>. Your node mints one from the account
   it is already signed in as: a link appears, you approve it, you paste the code back, and the token
-  is shown <strong>once</strong>. Copy it then; it is deleted from the server before the page draws.</p>
+  is shown. You can show it again while the request lasts, so a second machine can have the same
+  token; press <em>Done with it</em> when you have finished and it goes at once.</p>
   <div class="note ok">
-    <p class="t">Why it is shown only once</p>
-    <p>The token rides up on a single heartbeat and is held only until somebody collects it. Reading
-    it deletes it in the same breath, so a refresh, a back button or a second tab gets nothing. If you
-    lose it, mint another &mdash; that is cheaper than a credential sitting in a database because
-    nobody came back for it. Unfinished attempts expire after fifteen minutes.</p>
+    <p class="t">How long it stays readable</p>
+    <p>Until you press <em>Done with it</em>, or fifteen minutes pass and the attempt expires on its
+    own &mdash; whichever comes first. Show it as often as you need in that window, which is what
+    makes putting the same token on a second machine possible without minting another.</p>
+    <p>It was shown exactly once at first. That was stricter than anything required: the credential
+    sits in the database from the moment the node reports it until the attempt expires either way, so
+    reading it twice adds no exposure the first read did not. The window is what bounds this, not the
+    reading. Press <em>Done with it</em> when you have finished and it goes at once.</p>
   </div>
   <p>Then, on each machine you want it on:</p>
   <pre><code>bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>

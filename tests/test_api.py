@@ -290,7 +290,7 @@ def test_unfinished_sign_ins_do_not_linger(server, cfg):
     assert store.get_login("node-a") is None, "stale sign-in and its code must be gone"
 
 
-def test_a_minted_token_survives_exactly_one_showing(server, cfg):
+def test_a_minted_token_is_readable_until_it_is_finished_with(server, cfg):
     """End to end, over HTTP, on the path a real node takes.
 
     The failure this guards against was not in the flow but beside it: the
@@ -318,20 +318,26 @@ def test_a_minted_token_survives_exactly_one_showing(server, cfg):
     assert secret not in archived, "a credential must not outlive its one showing"
     assert "ready" in archived, "the rest of the report is still kept"
 
-    # Shown once, over HTTP, to the operator.
     admin = basic(cfg.admin_token)
-    status, body, _ = call(srv, "POST", "/actions/node/node-a/token-show",
-                           f"csrf={csrf_for(cfg)}".encode(),
-                           {**admin, "Content-Type": "application/x-www-form-urlencoded"})
-    assert status == 200 and secret.encode() in body
+    form = {**admin, "Content-Type": "application/x-www-form-urlencoded"}
 
-    # A second press, or a refresh, gets a page that says so and no credential.
-    status, body, _ = call(srv, "POST", "/actions/node/node-a/token-show",
-                           f"csrf={csrf_for(cfg)}".encode(),
-                           {**admin, "Content-Type": "application/x-www-form-urlencoded"})
+    def press(action):
+        return call(srv, "POST", f"/actions/node/node-a/{action}",
+                    f"csrf={csrf_for(cfg)}".encode(), form)
+
+    # Shown over HTTP, and shown again: a second machine needs the same token,
+    # and minting another for it is a worse answer than reading this one twice.
+    status, body, _ = press("token-show")
+    assert status == 200 and secret.encode() in body
+    status, body, _ = press("token-show")
+    assert status == 200 and secret.encode() in body, "still there for the second machine"
+
+    # Until somebody says they are finished with it.
+    assert press("token-done")[0] == 303
+    assert store.get_login("node-a") is None
+    status, body, _ = press("token-show")
     assert status == 200 and secret.encode() not in body
     assert b"Nothing to show" in body
-    assert store.get_login("node-a") is None
 
 
 def test_the_secret_stops_travelling_once_it_has_been_handed_over(server, monkeypatch):

@@ -219,22 +219,43 @@ def test_a_minted_token_is_held_until_somebody_takes_it(store):
     assert row["code"] == "", "the verification code has served its purpose"
 
 
-def test_a_token_is_shown_exactly_once(store):
-    """The whole contract. A refresh or a second tab must get nothing."""
+def test_a_token_can_be_read_for_as_long_as_the_attempt_lasts(store):
+    """It was shown exactly once, which was stricter than anything required.
+
+    The credential sits here from the moment the node reports it until the
+    attempt expires either way; reading it twice inside that window adds no
+    exposure the first read did not. Refusing the second only meant somebody
+    who needed it on a second machine had to mint a whole new one.
+    """
     n = _node(store)
     store.request_login(n, "", 100.0, kind="token")
     store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-secret")
-    assert store.take_secret(n) == "sk-ant-oat01-secret"
-    assert store.take_secret(n) == "", "second read gets nothing"
-    assert store.get_login(n) is None, "and the row is gone, not merely blanked"
+    assert store.read_secret(n) == "sk-ant-oat01-secret"
+    assert store.read_secret(n) == "sk-ant-oat01-secret", "a second machine can have it"
+    assert store.get_login(n) is not None, "and the attempt is still alive"
+
+    # Until somebody says they are finished with it.
+    store.clear_login(n)
+    assert store.read_secret(n) == ""
+
+
+def test_the_window_is_what_bounds_it_not_the_reading(store):
+    """Readable many times, but not for longer: the ordinary expiry still ends
+    it, which is the property that actually matters."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 120.0, secret="sk-ant-oat01-x")
+    assert store.read_secret(n)
+    assert store.expire_logins(130.0) == 1
+    assert store.read_secret(n) == "", "gone when the attempt expires"
 
 
 def test_taking_a_secret_that_is_not_ready_yields_nothing(store):
     n = _node(store)
-    assert store.take_secret(n) == "", "no attempt at all"
+    assert store.read_secret(n) == "", "no attempt at all"
     store.request_login(n, "", 100.0, kind="token")
     store.record_login_progress(n, "url_ready", "https://claude.com/x", "", 110.0)
-    assert store.take_secret(n) == "", "mid-flight is not ready"
+    assert store.read_secret(n) == "", "mid-flight is not ready"
     assert store.get_login(n) is not None, "and taking must not destroy it"
 
 
@@ -314,8 +335,7 @@ def test_a_minted_token_never_reaches_the_heartbeat_archive(store):
     # And the caller's own dict is untouched — it is still needed in memory.
     assert secret in json.dumps(payload)
     # The one legitimate copy still works, once.
-    assert store.take_secret(n) == secret
-    assert store.take_secret(n) == ""
+    assert store.read_secret(n) == secret
 
 
 def test_redaction_leaves_an_ordinary_heartbeat_alone(store):
@@ -351,7 +371,7 @@ def test_a_late_report_cannot_land_on_the_attempt_that_replaced_it(store):
     row = store.get_login(n)
     assert row["requested_at"] == 200.0, "the live attempt is untouched"
     assert row["state"] == "requested" and row["secret"] == ""
-    assert store.take_secret(n) == "", "a stale token must not be collectable"
+    assert store.read_secret(n) == "", "a stale token must not be readable"
 
     # And a late terminal state cannot delete the live attempt either.
     store.record_login_progress(n, "done", "", "", 211.0, stale_at)
@@ -418,7 +438,7 @@ def test_a_late_report_cannot_overwrite_a_minted_token(store):
     store.record_login_progress(n, "code_sent", "", "", 121.0)
     row = store.get_login(n)
     assert row["state"] == "ready" and row["secret"] == "sk-ant-oat01-keepme"
-    assert store.take_secret(n) == "sk-ant-oat01-keepme", "still collectable"
+    assert store.read_secret(n) == "sk-ant-oat01-keepme", "still readable"
 
 
 def test_a_failure_still_ends_an_attempt_that_has_a_token_waiting(store):
@@ -441,7 +461,7 @@ def test_collecting_a_token_is_remembered_on_the_node(store):
     store.record_login_progress(n, "ready", "", "", 110.0, secret="sk-ant-oat01-x")
     assert store.get_node(n)["device_token_at"] == 0, "not until it is collected"
 
-    assert store.take_secret(n, now=120.0) == "sk-ant-oat01-x"
+    assert store.read_secret(n, now=120.0) == "sk-ant-oat01-x"
     assert store.get_node(n)["device_token_at"] == 120.0
 
     # And it is a time, not the credential: nothing of the token survives.
@@ -451,11 +471,11 @@ def test_collecting_a_token_is_remembered_on_the_node(store):
 
 def test_a_failed_collection_is_not_remembered_as_a_success(store):
     n = _node(store)
-    store.take_secret(n, now=50.0)              # nothing waiting
+    store.read_secret(n, now=50.0)              # nothing waiting
     assert store.get_node(n)["device_token_at"] == 0
 
     store.request_login(n, "", 100.0, kind="token")
-    store.take_secret(n, now=60.0)              # mid-flight, not ready
+    store.read_secret(n, now=60.0)              # mid-flight, not ready
     assert store.get_node(n)["device_token_at"] == 0
 
 
@@ -480,3 +500,24 @@ def test_a_database_written_before_the_column_still_opens(tmp_path):
         assert s.get_node("old-node")["device_token_at"] == 0, "reads as never issued"
     finally:
         s.close()
+
+
+def test_a_later_token_refreshes_when_it_was_last_issued(store):
+    """Recording it only when unset froze the console's answer at whenever the
+    first one happened. "Last issued" that never moves is worse than nothing:
+    it looks like an answer."""
+    n = _node(store)
+    store.request_login(n, "", 100.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 110.0, secret="sk-ant-oat01-first")
+    assert store.read_secret(n, now=120.0) == "sk-ant-oat01-first"
+    assert store.get_node(n)["device_token_at"] == 120.0
+
+    # Reading the same one again is not a new issue.
+    assert store.read_secret(n, now=125.0) == "sk-ant-oat01-first"
+    assert store.get_node(n)["device_token_at"] == 120.0, "same attempt, same answer"
+
+    # A later attempt is.
+    store.request_login(n, "", 200.0, kind="token")
+    store.record_login_progress(n, "ready", "", "", 210.0, secret="sk-ant-oat01-second")
+    assert store.read_secret(n, now=220.0) == "sk-ant-oat01-second"
+    assert store.get_node(n)["device_token_at"] == 220.0, "and the console says so"
