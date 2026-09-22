@@ -48,9 +48,15 @@ fi
 # Belt and braces below the marker. A slot has no sudo and is not a system
 # account; if either is untrue, something has been edited by hand and this is
 # not the moment to find out by deleting a home directory.
-if id -nG "$SLOT" | tr ' ' '\n' | grep -qx sudo; then
-  die "$SLOT has sudo, so it is not a slot. Refusing to remove it."
-fi
+# The same list slot-add strips, for the same reason: these are the groups that
+# reach root or reach another slot's work. A provisioned slot holds none of
+# them, so finding one means this account was edited by hand and is not the
+# account this script thinks it is. Keep the two lists in step — a test checks.
+for PRIVILEGED in sudo admin wheel root docker lxd libvirt kvm adm disk shadow staff; do
+  if id -nG "$SLOT" | tr ' ' '\n' | grep -qx "$PRIVILEGED"; then
+    die "$SLOT is in the $PRIVILEGED group, so it is not a slot. Refusing to remove it."
+  fi
+done
 # Debian and Ubuntu hand ordinary logins out of FIRST_UID..LAST_UID, 1000..59999
 # — the same range node/install.sh checks. A bare "uid >= 1000" lets `nobody`
 # through at 65534, and every line below this one deletes something.

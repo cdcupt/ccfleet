@@ -32,8 +32,13 @@ SLOT_GROUP = "ccfleet-slots"
 # Every command the scripts reach for after their refusals. Stubbed to do
 # nothing, so a test that gets past a refusal fails on its assertion rather
 # than on whatever the real command would have done.
-INERT = ("loginctl", "systemctl", "pkill", "deluser", "adduser",
+INERT = ("loginctl", "systemctl", "pkill", "adduser",
          "usermod", "addgroup", "rmdir", "install", "chmod", "curl")
+
+# Every group that reaches root, or reaches another slot's work. Both scripts
+# carry this list; the test at the bottom of this file checks they agree.
+PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root", "docker", "lxd",
+                     "libvirt", "kvm", "adm", "disk", "shadow", "staff")
 
 
 def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
@@ -52,6 +57,7 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
     # always says "exists" makes that check look like a bug; one that notices
     # the deletion is what tests it.
     gone = bindir / "gone.marker"
+    groupfile = bindir / "groups.txt"
     (bindir / "id").write_text(textwrap.dedent("""\
         #!/bin/sh
         # `id -u` alone: are we root. Yes, so the script gets past that check.
@@ -59,14 +65,30 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
         if [ -f "__GONE__" ]; then exit 1; fi
         # `id -u NAME`: the account's uid.
         if [ "$1" = "-u" ]; then echo __UID__; exit 0; fi
-        # `id -nG NAME`: its groups.
-        if [ "$1" = "-nG" ]; then echo "__GROUPS__"; exit 0; fi
+        # `id -nG NAME`: its groups, from a file deluser edits. A fixed answer
+        # would make a group the script removed look like one it kept, so the
+        # removal could not be told apart from a no-op.
+        if [ "$1" = "-nG" ]; then cat "__GROUPFILE__"; exit 0; fi
         # `id NAME`: does it exist.
         exit __EXISTS__
         """).replace("__GONE__", str(gone))
              .replace("__UID__", uid)
-             .replace("__GROUPS__", groups)
+             .replace("__GROUPFILE__", str(groupfile))
              .replace("__EXISTS__", "0" if exists else "1"))
+    groupfile.write_text(groups + "\n")
+    # `deluser NAME GROUP` and `gpasswd -d NAME GROUP` take the group away for
+    # real; `deluser NAME` on its own stays inert.
+    for name, argpos in (("deluser", "$2"), ("gpasswd", "$3")):
+        (bindir / name).write_text(textwrap.dedent("""\
+            #!/bin/sh
+            [ $# -lt __MIN__ ] && exit 0
+            g="__ARG__"
+            tr ' ' '\\n' < "__GROUPFILE__" | grep -vx "$g" | tr '\\n' ' ' > "__GROUPFILE__.new"
+            mv "__GROUPFILE__.new" "__GROUPFILE__"
+            exit 0
+            """).replace("__ARG__", argpos)
+                 .replace("__MIN__", "2" if name == "deluser" else "3")
+                 .replace("__GROUPFILE__", str(groupfile)))
     (bindir / "userdel").write_text(f'#!/bin/sh\ntouch "{gone}"\nexit 0\n')
     home = str(slot_home) if slot_home else "/home/$2"
     (bindir / "getent").write_text(textwrap.dedent("""\
@@ -219,12 +241,16 @@ def test_release_refuses_an_account_it_did_not_create(tmp_path):
     assert "Refusing" in result.stderr
 
 
-def test_release_refuses_an_account_with_sudo(tmp_path):
-    """Belt and braces below the marker: if it has sudo something was edited by
-    hand, and that is not discovered by deleting a home directory."""
+@pytest.mark.parametrize("group", PRIVILEGED_GROUPS)
+def test_release_refuses_an_account_with_a_route_to_root(tmp_path, group):
+    """Belt and braces below the marker: a provisioned slot is in none of these,
+    so finding one means the account was edited by hand — and that is not
+    discovered by deleting a home directory. sudo is the obvious one and not
+    the only one: docker mounts the host root, adm reads every slot's logs."""
     result = as_root(REMOVE, tmp_path, "--slot", "erik",
-                     groups=f"erik sudo {SLOT_GROUP}")
-    assert result.returncode != 0 and "has sudo" in result.stderr
+                     groups=f"erik {group} {SLOT_GROUP}")
+    assert result.returncode != 0, f"would have deleted an account in {group}"
+    assert f"is in the {group} group" in result.stderr
 
 
 def test_release_refuses_a_system_account(tmp_path):
@@ -531,3 +557,37 @@ def test_a_system_account_in_the_slot_group_is_refused_by_both_scripts(tmp_path,
         assert "Refusing" in result.stderr
         assert not (bindir / "gone.marker").exists(), f"{script.name} ran userdel on uid {uid}"
         assert slot_home.is_dir(), f"{script.name} removed the home of uid {uid}"
+
+
+def test_provisioning_takes_away_every_route_to_root(tmp_path):
+    """Adopting an existing slot must not leave it holding privileges. docker
+    is the sharp one — a member can start a container that mounts the host root
+    — but each of these reaches either root or another slot's files."""
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    held = " ".join(PRIVILEGED_GROUPS)
+    bindir = fake_system(tmp_path, groups=f"slot01 {held} {SLOT_GROUP}",
+                         slot_home=slot_home)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CCFLEET_SLICE_ROOT"] = str(tmp_path / "slices")
+    result = subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    left = (bindir / "groups.txt").read_text().split()
+    assert not [g for g in left if g in PRIVILEGED_GROUPS], f"still holds {left}"
+    assert SLOT_GROUP in left, "stripped the group that marks it as a slot"
+
+
+def test_both_scripts_agree_on_what_counts_as_privileged(tmp_path):
+    """Two standalone scripts, one list. Drift means slot-add hands out a slot
+    holding a group slot-remove will then refuse to clean up."""
+    lists = {}
+    for script in (ADD, REMOVE):
+        line = [ln for ln in script.read_text().splitlines()
+                if "for PRIVILEGED in " in ln]
+        assert len(line) == 1, f"{script.name} has {len(line)} privileged lists"
+        lists[script.name] = line[0].split("for PRIVILEGED in ", 1)[1].split(";")[0].split()
+    names = list(lists)
+    assert lists[names[0]] == lists[names[1]], lists
+    assert lists[names[0]] == list(PRIVILEGED_GROUPS), "this file has drifted too"

@@ -119,12 +119,24 @@ HOME_DIR="$(getent passwd "$SLOT" | cut -d: -f6)"
 # means every slot can read every other slot's home, including the directory
 # Claude Code writes a credential into.
 chmod 700 "$HOME_DIR"
-# No sudo, and no group that grants it. Said out loud because its absence is
-# the security property, and an absence is easy to add back by accident.
-if id -nG "$SLOT" | tr ' ' '\n' | grep -qx sudo; then
-  deluser "$SLOT" sudo >/dev/null 2>&1 || true
-  note "removed $SLOT from sudo: a slot is a user on somebody else's machine"
-fi
+# No sudo, and no group that grants it by another route. Said out loud because
+# its absence is the security property, and an absence is easy to add back by
+# accident.
+#
+# `sudo` is the obvious one and not the only one. A member of `docker` can
+# start a container that mounts the host root and read or write anything on it,
+# which is root by a longer path; `lxd` and `libvirt` are the same argument,
+# `adm` reads the logs of every other slot, and `disk` reads the block devices
+# under their homes. None of these are things one slot may hold over another.
+for PRIVILEGED in sudo admin wheel root docker lxd libvirt kvm adm disk shadow staff; do
+  if id -nG "$SLOT" | tr ' ' '\n' | grep -qx "$PRIVILEGED"; then
+    deluser "$SLOT" "$PRIVILEGED" >/dev/null 2>&1 || gpasswd -d "$SLOT" "$PRIVILEGED" >/dev/null 2>&1 || true
+    if id -nG "$SLOT" | tr ' ' '\n' | grep -qx "$PRIVILEGED"; then
+      die "could not remove $SLOT from the $PRIVILEGED group; refusing to hand out a slot that keeps it"
+    fi
+    note "removed $SLOT from $PRIVILEGED: a slot is a user on somebody else's machine"
+  fi
+done
 rm -f "/etc/sudoers.d/90-ccfleet-$SLOT"
 # Lingering, so this user's services run when nobody is logged in — which is
 # the normal state for a slot.
