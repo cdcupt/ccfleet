@@ -56,6 +56,33 @@ fi
 UID_NUM="$(id -u "$SLOT")"
 HOME_DIR="$(getent passwd "$SLOT" | cut -d: -f6)"
 
+# Everything below deletes whatever this names — `userdel -r` every bit as much
+# as the rm that backs it up — and it comes from passwd, which is edited by
+# hand. A slot whose home had been pointed at `/`, at `/home`, or at a
+# directory another account also lives in would turn releasing one slot into
+# wiping the machine. So the decision is made here, before anything is stopped
+# or removed: either this is plainly this slot's own directory, or nothing
+# downstream is allowed to delete it.
+[ -n "$HOME_DIR" ] || die "$SLOT has no home directory in passwd. Refusing to guess at one."
+case "$HOME_DIR/" in
+  *//*|*/../*) die "$SLOT's home is '$HOME_DIR', which is not a plain path. Refusing." ;;
+esac
+case "${HOME_DIR%/}" in
+  /*/*) : ;;   # two components at least, so / and /home cannot be spelled here
+  *) die "$SLOT's home is '$HOME_DIR' — the root or a top-level directory, not a slot home. Refusing." ;;
+esac
+if [ -L "$HOME_DIR" ]; then
+  die "$SLOT's home '$HOME_DIR' is a symlink. Refusing to delete through it."
+fi
+HOME_PRESENT=no
+if [ -d "$HOME_DIR" ]; then
+  # Owned by this slot and nobody else. This is the check that catches a home
+  # shared with a second account, which the shape test above cannot see.
+  [ -n "$(find "$HOME_DIR" -maxdepth 0 -uid "$UID_NUM" 2>/dev/null)" ] \
+    || die "$SLOT's home '$HOME_DIR' is not owned by uid $UID_NUM. It is shared or misconfigured; refusing to delete it."
+  HOME_PRESENT=yes
+fi
+
 step "1/4  stop what it is running"
 loginctl disable-linger "$SLOT" 2>/dev/null || true
 # Ask the user manager to go first, so services get their own stop rather than
@@ -87,6 +114,9 @@ if [ "$KEEP_HOME" = yes ]; then
   userdel "$SLOT"
   note "user removed; $HOME_DIR kept because --keep-home was given"
   note "THE CREDENTIAL IS STILL IN THAT DIRECTORY. Do not reuse this slot yet."
+elif [ "$HOME_PRESENT" = no ]; then
+  userdel "$SLOT"
+  note "user removed; $HOME_DIR was already gone"
 else
   userdel -r "$SLOT" 2>/dev/null || { userdel "$SLOT"; rm -rf --one-file-system "$HOME_DIR"; }
   note "user and $HOME_DIR removed"

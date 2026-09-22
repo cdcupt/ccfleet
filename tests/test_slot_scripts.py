@@ -75,6 +75,20 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
         exit 0
         """).replace("__HOME__", home))
     (bindir / "pgrep").write_text("#!/bin/sh\nexit 1\n")   # nothing running
+    # The OS answering "who owns this directory", in the same way `id` above
+    # answers "what groups is this account in". slot-remove's own decision
+    # still runs for real against the answer; only the answer is supplied here,
+    # because a test cannot chown a directory to another user without root.
+    # Set FAKE_DIR_OWNER to a different uid to play a home someone else owns.
+    (bindir / "find").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        if [ "$2" = "-maxdepth" ] && [ "$3" = "0" ] && [ "$4" = "-uid" ]; then
+          [ "${FAKE_DIR_OWNER:-$5}" = "$5" ] && echo "$1"
+          exit 0
+        fi
+        exec /usr/bin/find "$@"
+        """))
+    (bindir / "find").chmod(0o755)
     if slot_home:
         # A working claude in the sandboxed home. Without it every add test ran
         # against exactly the condition the script exists to refuse — and the
@@ -424,3 +438,73 @@ def test_a_slot_without_claude_code_is_not_called_ready(tmp_path):
     assert result.returncode != 0, "a slot with no Claude Code is not a ready slot"
     assert "did not install" in result.stderr
     assert "is ready" not in result.stdout
+
+
+def _remove_env(tmp_path, slot_home, **extra):
+    """A removal run whose passwd entry points at `slot_home`."""
+    bindir = fake_system(tmp_path)
+    (bindir / "getent").write_text(
+        f'#!/bin/sh\n[ "$1" = "passwd" ] && {{ echo "$2:x:1001:1001::{slot_home}:/bin/sh"; exit 0; }}\nexit 0\n')
+    (bindir / "getent").chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CCFLEET_SLICE_ROOT"] = str(tmp_path / "slices")
+    env.update(extra)
+    return bindir, env
+
+
+@pytest.mark.parametrize("home,why", [
+    ("/", "the root directory"),
+    ("/home", "a top-level directory shared by every account"),
+    ("/root", "another account's home"),
+    ("", "no home at all"),
+    ("/home/../..", "the root by another spelling"),
+    ("relative/path", "not absolute"),
+])
+def test_a_home_that_is_not_a_slot_home_is_never_deleted(tmp_path, home, why):
+    """The path comes from passwd, which is edited by hand, and both
+    `userdel -r` and the rm behind it delete whatever it names. Releasing one
+    slot must not be able to wipe the machine, so an implausible home is
+    refused before anything is stopped, let alone removed."""
+    bindir, env = _remove_env(tmp_path, home)
+    result = subprocess.run([str(REMOVE), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode != 0, f"deleted {home!r} — {why}"
+    assert "Refusing" in result.stderr
+    # And refused early: the account is still there, nothing was stopped.
+    assert not (bindir / "gone.marker").exists(), "userdel ran before the path was judged"
+
+
+def test_a_home_shared_with_another_account_is_refused(tmp_path):
+    """Shape alone cannot see this: /home/alice looks exactly like a slot home.
+    Ownership is what separates the slot's own directory from somebody's."""
+    slot_home = tmp_path / "alice"
+    slot_home.mkdir()
+    bindir, env = _remove_env(tmp_path, slot_home, FAKE_DIR_OWNER="2002")
+    result = subprocess.run([str(REMOVE), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode != 0, "deleted a directory belonging to another account"
+    assert "not owned by uid 1001" in result.stderr
+    assert not (bindir / "gone.marker").exists()
+    assert slot_home.is_dir(), "the other account's home was removed"
+
+
+def test_a_symlinked_home_is_not_followed(tmp_path):
+    """`rm -rf` on a symlink takes the link, but `userdel -r` is under no such
+    promise, and a home that is a link to somewhere else is not a slot home."""
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    link = tmp_path / "slothome"
+    link.symlink_to(real)
+    bindir, env = _remove_env(tmp_path, link)
+    result = subprocess.run([str(REMOVE), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode != 0
+    # Not the bare word "symlink": pytest names this test's tmp directory after
+    # the test, so "symlink" appears in any message that quotes the path — and
+    # a script that had deleted the account and only then complained matched it
+    # just as well as the refusal. Assert the sentence the guard actually says,
+    # and the thing that distinguishes refusing from reporting: nothing ran.
+    assert "Refusing to delete through it" in result.stderr
+    assert not (bindir / "gone.marker").exists(), "userdel ran before the path was judged"
+    assert real.is_dir()
