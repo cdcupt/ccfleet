@@ -94,6 +94,64 @@ def test_heartbeat_round_trip(server, cfg):
     assert reply["open_alerts"] == ["disk_high"] and reply["events"] == 1
 
 
+
+def _machine_payload(node_id, slots):
+    """A shared machine's heartbeat: machine facts and its slots, no owner login."""
+    payload = heartbeat(time.time())["payload"]
+    payload["node_id"] = node_id
+    for key in ("claude", "credentials", "remote_control"):
+        payload.pop(key)
+    payload.update(mode="machine", slots=slots)
+    return payload
+
+
+def test_a_machines_heartbeat_moves_its_slots_and_the_reply_says_so(server):
+    """Provisioning reported finished, the slot is claimed; the wipe reported
+    finished, the slot is free — and the reply to that same heartbeat already
+    says so, rather than one beat later."""
+    from ccfleetd import slots
+    srv, store = server
+    token = store.add_node("m1", "op")
+    store.set_machine_capacity("m1", 2)
+    auth = {"Authorization": f"Bearer {token}"}
+    store.add_account("a1", "sub-1", "a@example.com", slot_quota=2, now=1.0)
+    for sid, user in (("s1", "slot01"), ("s2", "slot02")):
+        store.add_slot(sid, "m1", user, now=1.0)
+
+    # First word from the machine: both users absent, so both may be claimed.
+    reply = json.loads(call(srv, "POST", "/api/heartbeat", _machine_payload("m1", [
+        {"unix_user": "slot01", "present": False},
+        {"unix_user": "slot02", "present": False}]), auth)[1])
+    assert reply["desired"]["slots"] == [{"unix_user": "slot01", "state": "free"},
+                                         {"unix_user": "slot02", "state": "free"}]
+    claimed_at = store.claim_slot("a1", now=time.time())["claimed_at"]
+    store.claim_slot("a1", now=time.time())
+    store.begin_release("s2")
+
+    reply = json.loads(call(srv, "POST", "/api/heartbeat", _machine_payload("m1", [
+        {"unix_user": "slot01", "present": True, "provisioned_for": claimed_at},
+        {"unix_user": "slot02", "present": False}]), auth)[1])
+    assert store.get_slot("s1")["state"] == slots.CLAIMED
+    assert store.get_slot("s2")["state"] == slots.FREE
+    assert reply["desired"]["slots"] == [{"unix_user": "slot01", "state": "claimed"},
+                                         {"unix_user": "slot02", "state": "free"}]
+    # And nothing about an owner login was raised against a machine with none.
+    assert reply["open_alerts"] == []
+
+
+def test_an_ordinary_nodes_heartbeat_touches_no_slots(server):
+    """A node reporting as an ordinary node is not heard on slots, even ones
+    declared on it: only a machine agent speaks for them."""
+    srv, store = server
+    token = store.add_node("node-a", "erik")
+    store.add_slot("s1", "node-a", "slot01", now=1.0)
+    payload = heartbeat(time.time())["payload"]
+    payload["slots"] = [{"unix_user": "slot01", "present": False}]
+    reply = json.loads(call(srv, "POST", "/api/heartbeat", payload,
+                            {"Authorization": f"Bearer {token}"})[1])
+    assert store.get_slot("s1")["present"] is None
+    assert reply["desired"]["slots"] == [{"unix_user": "slot01", "state": "free"}]
+
 def csrf_for(cfg):
     from ccfleetd.api import csrf_token
     return csrf_token(cfg)

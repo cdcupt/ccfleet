@@ -127,6 +127,18 @@ def _account(db_path, email, *, quota=0):
         st.close()
 
 
+def _confirm_empty(db, machine, *users):
+    """What the machine agent does on its first check-in: report each slot's
+    Linux user absent, which is what makes a free slot claimable."""
+    from ccfleetd.store import Store
+    st = Store(db)
+    try:
+        st.apply_slot_report(machine, [{"unix_user": u, "present": False} for u in users],
+                             now=1.0)
+    finally:
+        st.close()
+
+
 def test_slot_lifecycle_from_the_command_line(db, capsys):
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
     assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
@@ -134,12 +146,16 @@ def test_slot_lifecycle_from_the_command_line(db, capsys):
                      "--unix-user", "slot01"]) == 0
     out = capsys.readouterr().out
     assert "free" in out
-    # It tells the operator the other half of the job — the slot exists in the
-    # fleet's records, not yet on the machine.
+    # Free means the Linux user does not exist, so the operator is told the
+    # machine makes it at claim time — and warned off making it by hand, which
+    # is what this command used to ask for and which now reads as occupied.
     assert "slot-add.sh" in out
+    assert "do not create it by hand" in out
 
     assert cli.main(["--db", db, "slot", "list"]) == 0
-    assert "slot01" in capsys.readouterr().out
+    listed = capsys.readouterr().out
+    assert "slot01" in listed
+    assert "not yet seen" in listed, "the list hid that no machine has vouched for it"
 
 
 def test_declaring_more_slots_than_the_machine_holds_is_refused(db, capsys):
@@ -169,6 +185,7 @@ def test_releasing_from_the_command_line_only_starts_the_wipe(db, capsys):
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
     assert cli.main(["--db", db, "slot", "add", "s1", "--machine", "m1",
                      "--unix-user", "slot01"]) == 0
+    _confirm_empty(db, "m1", "slot01")
     _account(db, "erik@example.com", quota=1)
     st = Store(db)
     try:
@@ -179,6 +196,7 @@ def test_releasing_from_the_command_line_only_starts_the_wipe(db, capsys):
     assert cli.main(["--db", db, "slot", "release", "s1"]) == 0
     out = capsys.readouterr().out
     assert "slot-remove.sh" in out
+    assert "reports its Linux user gone" in out, "it must not read as done"
     st = Store(db)
     try:
         row = st.get_slot("s1")
@@ -209,6 +227,7 @@ def test_reducing_an_allowance_says_what_it_does_not_do(db, capsys):
     for n in (1, 2):
         assert cli.main(["--db", db, "slot", "add", f"s{n}", "--machine", "m1",
                          "--unix-user", f"slot0{n}"]) == 0
+    _confirm_empty(db, "m1", "slot01", "slot02")
     _account(db, "erik@example.com", quota=2)
     from ccfleetd.store import Store
     st = Store(db)
@@ -252,6 +271,7 @@ def test_removing_a_slot_from_the_command_line(db, capsys):
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
     assert cli.main(["--db", db, "slot", "add", "s1", "--machine", "m1",
                      "--unix-user", "slot01"]) == 0
+    _confirm_empty(db, "m1", "slot01")
     _account(db, "erik@example.com", quota=1)
     st = Store(db)
     try:

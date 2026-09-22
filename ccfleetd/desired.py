@@ -111,13 +111,35 @@ def _login_block(login: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]
     return block
 
 
+def _slot_block(slot: Mapping[str, Any]) -> dict[str, Any]:
+    """What a shared machine should do about one of its slots.
+
+    The state is the whole instruction: `claiming` means provision it,
+    `releasing` means wipe it, and everything else means leave it and report.
+    A claim carries its own timestamp, which is how the machine says which
+    claim it finished — so news about an earlier claim of the same slot can
+    never complete a later one.
+    """
+    block: dict[str, Any] = {"unix_user": slot.get("unix_user"),
+                             "state": slot.get("state")}
+    if slot.get("state") == "claiming":
+        block["claimed_at"] = slot.get("claimed_at")
+    return block
+
+
 def desired_state(node: Mapping[str, Any],
-                  login: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                  login: Optional[Mapping[str, Any]] = None,
+                  slots: Optional[list[Mapping[str, Any]]] = None) -> dict[str, Any]:
     """What this node should look like, derived from its stored row."""
     pending = _login_block(login)
-    return {
+    desired: dict[str, Any] = {
         "claude_version": _version_target(node.get("pinned_version")),
         "remote_control": bool(node.get("rc_expected")),
         "login": pending,
         "poll_s": LOGIN_POLL_S if pending else IDLE_POLL_S,
     }
+    # Only a machine with slots declared on it hears about slots at all; an
+    # ordinary node's reply stays exactly what it was.
+    if slots:
+        desired["slots"] = [_slot_block(s) for s in slots]
+    return desired

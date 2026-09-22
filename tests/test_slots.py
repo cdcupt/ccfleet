@@ -37,6 +37,16 @@ def account(st, account_id="a1", *, quota=0, sub=None):
                           f"{account_id}@example.com", slot_quota=quota, now=NOW)
 
 
+def declare(st, slot_id, node_id, unix_user):
+    """A slot whose machine has reported its Linux user absent.
+
+    The only kind a claim will take: free is a statement about the machine, and
+    a slot nobody on the machine's side has vouched for is not handed out.
+    """
+    st.add_slot(slot_id, node_id, unix_user, now=NOW)
+    st.apply_slot_report(node_id, [{"unix_user": unix_user, "present": False}], now=NOW)
+
+
 # -- the state machine on its own ---------------------------------------------
 
 @pytest.mark.parametrize("frm", [s for s in slots.STATES if s != slots.RELEASING])
@@ -91,7 +101,7 @@ def test_every_state_is_described_and_owned():
 def test_finishing_a_release_leaves_nothing_of_whoever_held_it(store):
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
     store.move_slot("s1", slots.CLAIMED)
     store.move_slot("s1", slots.ACTIVE)
@@ -115,7 +125,7 @@ def test_a_slot_cannot_be_declared_free_without_the_wipe(store):
     """The whole point, at the store level rather than the state machine's."""
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
     store.move_slot("s1", slots.CLAIMED)
     store.move_slot("s1", slots.ACTIVE)
@@ -130,7 +140,7 @@ def test_a_slot_cannot_be_declared_free_without_the_wipe(store):
 
 def test_releasing_a_slot_nobody_holds_is_refused(store):
     machine(store)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     with pytest.raises(slots.TransitionError):
         store.begin_release("s1")
 
@@ -148,7 +158,7 @@ def test_a_new_account_can_claim_nothing(store):
     """Zero by default is the economics. A bug that grants nobody anything is a
     support message; a bug that grants everybody a slot is a bill."""
     machine(store)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     acct = account(store)
     assert acct["slot_quota"] == 0
     with pytest.raises(QuotaExceeded):
@@ -160,7 +170,7 @@ def test_the_allowance_is_a_ceiling_not_a_starting_point(store):
     machine(store)
     account(store, quota=2)
     for n in (1, 2, 3):
-        store.add_slot(f"s{n}", "m1", f"slot0{n}", now=NOW)
+        declare(store, f"s{n}", "m1", f"slot0{n}")
     store.claim_slot("a1", now=NOW)
     store.claim_slot("a1", now=NOW)
     with pytest.raises(QuotaExceeded):
@@ -174,8 +184,8 @@ def test_a_slot_being_wiped_still_spends_the_allowance(store):
     by releasing one and claiming another in the gap."""
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
-    store.add_slot("s2", "m1", "slot02", now=NOW)
+    declare(store, "s1", "m1", "slot01")
+    declare(store, "s2", "m1", "slot02")
     store.claim_slot("a1", now=NOW)
     store.begin_release("s1")
 
@@ -194,8 +204,8 @@ def test_reducing_an_allowance_takes_nothing_away(store):
     effect of a number changing."""
     machine(store)
     account(store, quota=2)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
-    store.add_slot("s2", "m1", "slot02", now=NOW)
+    declare(store, "s1", "m1", "slot01")
+    declare(store, "s2", "m1", "slot02")
     store.claim_slot("a1", now=NOW)
     store.claim_slot("a1", now=NOW)
 
@@ -226,7 +236,7 @@ def test_no_allowance_and_nothing_free_are_different_answers(store):
         store.claim_slot("a1", now=NOW)
 
     store.set_slot_quota("a1", 0)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     with pytest.raises(QuotaExceeded):
         store.claim_slot("a1", now=NOW)
 
@@ -234,7 +244,7 @@ def test_no_allowance_and_nothing_free_are_different_answers(store):
 def test_a_disabled_machine_hands_out_nothing(store):
     machine(store, "m1", enabled=False)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     with pytest.raises(NoSlotAvailable):
         store.claim_slot("a1", now=NOW)
     assert store.get_slot("s1")["state"] == slots.FREE
@@ -244,8 +254,8 @@ def test_a_claim_can_ask_for_one_machine(store):
     machine(store, "m1")
     machine(store, "m2")
     account(store, quota=2)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
-    store.add_slot("s2", "m2", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
+    declare(store, "s2", "m2", "slot01")
     assert store.claim_slot("a1", now=NOW, node_id="m2")["id"] == "s2"
     with pytest.raises(NoSlotAvailable):
         store.claim_slot("a1", now=NOW, node_id="m2")
@@ -253,7 +263,7 @@ def test_a_claim_can_ask_for_one_machine(store):
 
 def test_claiming_for_an_account_that_does_not_exist_says_so(store):
     machine(store)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     with pytest.raises(StoreError):
         store.claim_slot("ghost", now=NOW)
     assert store.get_slot("s1")["state"] == slots.FREE
@@ -266,7 +276,7 @@ def test_two_tabs_cannot_both_get_the_last_slot(store):
     machine(store, capacity=8)
     account(store, quota=1)
     for n in range(8):
-        store.add_slot(f"s{n}", "m1", f"slot0{n}", now=NOW)
+        declare(store, f"s{n}", "m1", f"slot0{n}")
 
     got, refused = [], []
     barrier = threading.Barrier(8)
@@ -293,7 +303,7 @@ def test_two_tabs_cannot_both_get_the_last_slot(store):
 def test_one_free_slot_goes_to_exactly_one_of_many_accounts(store):
     """The other half of the race: plenty of allowance, one slot."""
     machine(store)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     for n in range(6):
         account(store, f"a{n}", quota=5)
 
@@ -323,7 +333,7 @@ def test_a_released_slot_can_be_given_to_somebody_else_clean(store):
     machine(store)
     account(store, "a1", quota=1)
     account(store, "a2", quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
 
     store.claim_slot("a1", now=NOW)
     store.move_slot("s1", slots.CLAIMED)
@@ -345,8 +355,8 @@ def test_a_machine_will_not_hold_more_slots_than_it_declares(store):
     """Capacity is what the operator says they sold. Better refused here than
     discovered as a box that will not hold them."""
     machine(store, capacity=2)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
-    store.add_slot("s2", "m1", "slot02", now=NOW)
+    declare(store, "s1", "m1", "slot01")
+    declare(store, "s2", "m1", "slot02")
     with pytest.raises(StoreError) as exc:
         store.add_slot("s3", "m1", "slot03", now=NOW)
     assert "capacity" in str(exc.value)
@@ -360,7 +370,7 @@ def test_a_slot_needs_a_machine_that_exists(store):
 
 def test_the_same_unix_user_cannot_be_two_slots_on_one_machine(store):
     machine(store)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     with pytest.raises(StoreError):
         store.add_slot("s2", "m1", "slot01", now=NOW)
 
@@ -453,8 +463,8 @@ def test_a_second_connection_cannot_decide_on_a_stale_read(tmp_path):
     try:
         machine(setup, capacity=2)
         account(setup, quota=1)
-        setup.add_slot("s1", "m1", "slot01", now=NOW)
-        setup.add_slot("s2", "m1", "slot02", now=NOW)
+        declare(setup, "s1", "m1", "slot01")
+        declare(setup, "s2", "m1", "slot02")
     finally:
         setup.close()
 
@@ -572,7 +582,7 @@ def test_a_machine_will_not_be_forgotten_while_it_has_slots(store):
     machine registered under that name inherits them."""
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
 
     with pytest.raises(StoreError) as exc:
@@ -585,7 +595,7 @@ def test_a_machine_will_not_be_forgotten_while_it_has_slots(store):
 
 def test_even_free_slots_keep_a_machine_from_being_forgotten(store):
     machine(store)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     with pytest.raises(StoreError) as exc:
         store.remove_node("m1")
     assert "all free" in str(exc.value)
@@ -596,7 +606,7 @@ def test_a_machine_registered_again_inherits_nothing(store):
     slots off properly and the name comes back clean."""
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
     store.begin_release("s1")
     store.finish_release("s1", now=NOW + 1)
@@ -611,7 +621,7 @@ def test_a_machine_registered_again_inherits_nothing(store):
 def test_a_slot_is_only_safe_to_forget_once_it_is_wiped(store):
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
 
     with pytest.raises(StoreError) as exc:
@@ -625,7 +635,7 @@ def test_a_slot_is_only_safe_to_forget_once_it_is_wiped(store):
 def test_no_state_but_free_may_be_forgotten(store, state):
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
     while store.get_slot("s1")["state"] != state:
         nxt = slots.CLAIMED if store.get_slot("s1")["state"] == slots.CLAIMING \
@@ -647,7 +657,7 @@ def test_free_cannot_be_reached_through_the_generic_move(store):
     read as nobody's while still naming the person whose files may be on it."""
     machine(store)
     account(store, quota=1)
-    store.add_slot("s1", "m1", "slot01", now=NOW)
+    declare(store, "s1", "m1", "slot01")
     store.claim_slot("a1", now=NOW)
     store.begin_release("s1")
 
@@ -682,3 +692,298 @@ def test_the_fleet_and_the_provisioning_script_accept_the_same_names():
     found = _re.search(r"grep -qE '\^(\[a-z\]\[a-z0-9_-\]\{1,31\})\$'", script)
     assert found, "slot-add.sh no longer validates --slot the way this test expects"
     assert UNIX_USER_RE.pattern == f"^{found.group(1)}$".replace("\\", "")
+
+
+# -- what the machine says moves the slot ---------------------------------------
+#
+# A shared machine reports each of its slots on every heartbeat. These moves are
+# the system's own — provisioning finished, a login appeared, a wipe completed —
+# and each asks for the evidence that actually proves it.
+
+CLAIM = NOW + 100.0
+
+
+def report(user="slot01", **fields):
+    return {"unix_user": user, **fields}
+
+
+def _reports_for_every_shape():
+    """Enough report shapes to find a move that should not happen."""
+    yield {}
+    for present in (True, False, None):
+        yield {"present": present}
+        for claim in (CLAIM, CLAIM - 50.0, None, True):
+            yield {"present": present, "provisioned_for": claim}
+            yield {"present": present, "provision_failed_for": claim}
+        for logged_in in (True, False, None):
+            yield {"present": present, "credentials": {"logged_in": logged_in}}
+
+
+@pytest.mark.parametrize("state", slots.STATES)
+def test_a_report_only_ever_proposes_a_move_the_lifecycle_allows(state):
+    for shape in _reports_for_every_shape():
+        to = slots.next_state(state, CLAIM, shape)
+        if to is not None:
+            assert slots.can_move(state, to), (state, shape, to)
+
+
+def test_a_report_never_starts_a_claim_or_a_release():
+    """Taking a slot and giving one back are things people do. No report may
+    stand in for either — least of all a report that could be forged by the
+    very machine whose slots are at stake."""
+    for shape in _reports_for_every_shape():
+        assert slots.next_state(slots.FREE, None, shape) is None
+        assert slots.next_state(slots.ACTIVE, CLAIM, shape) is None
+
+
+def test_provisioning_finished_completes_only_the_claim_it_was_for():
+    assert slots.next_state(slots.CLAIMING, CLAIM, {
+        "present": True, "provisioned_for": CLAIM}) == slots.CLAIMED
+    # The same slot, released and claimed again: news about the claim before
+    # must not mark this one ready while it is still being set up.
+    assert slots.next_state(slots.CLAIMING, CLAIM, {
+        "present": True, "provisioned_for": CLAIM - 50.0}) is None
+
+
+def test_provisioning_finished_needs_the_user_to_actually_be_there():
+    for present in (False, None):
+        assert slots.next_state(slots.CLAIMING, CLAIM, {
+            "present": present, "provisioned_for": CLAIM}) is None
+
+
+def test_a_claim_timestamp_survives_the_round_trip_exactly():
+    """It goes down as JSON, is kept by the machine as JSON and comes back as
+    JSON — which is why an exact comparison is enough."""
+    import json
+    import time
+    claimed_at = time.time()
+    echoed = json.loads(json.dumps(json.loads(json.dumps({"t": claimed_at}))))["t"]
+    assert slots.next_state(slots.CLAIMING, claimed_at, {
+        "present": True, "provisioned_for": echoed}) == slots.CLAIMED
+    assert slots.next_state(slots.CLAIMING, claimed_at, {
+        "present": True, "provisioned_for": claimed_at + 1e-3}) is None
+
+
+def test_a_timestamp_that_is_not_a_number_matches_nothing():
+    for reported in (str(CLAIM), [CLAIM], {"t": CLAIM}):
+        assert slots.next_state(slots.CLAIMING, CLAIM, {
+            "present": True, "provisioned_for": reported}) is None
+        assert slots.next_state(slots.CLAIMING, CLAIM, {
+            "provision_failed_for": reported}) is None
+
+
+def test_a_claim_with_no_timestamp_is_completed_by_nothing():
+    """claim_slot always stamps one, so this is a damaged row. It must be left
+    alone rather than crash the heartbeat that happens to mention it."""
+    assert slots.next_state(slots.CLAIMING, None, {
+        "present": True, "provisioned_for": CLAIM}) is None
+    assert slots.next_state(slots.CLAIMING, None, {
+        "provision_failed_for": CLAIM}) is None
+
+
+def test_a_login_report_of_the_wrong_shape_is_not_a_login():
+    for credentials in ("logged in", ["logged_in"], None, 1):
+        assert slots.next_state(slots.CLAIMED, CLAIM, {
+            "present": True, "credentials": credentials}) is None
+
+
+def test_true_is_not_a_timestamp():
+    """bool is an int in Python, so without the check `True` matches a claim
+    made at 1.0 — the sort of thing a buggy agent would send."""
+    assert slots.next_state(slots.CLAIMING, 1.0, {
+        "present": True, "provisioned_for": True}) is None
+    assert slots.next_state(slots.CLAIMING, 1.0, {
+        "provision_failed_for": True}) is None
+
+
+def test_provisioning_that_failed_is_wiped_not_freed():
+    """It may have created the account before it died, so the way out is the
+    wipe — and only for this claim, not one before it."""
+    assert slots.next_state(slots.CLAIMING, CLAIM, {
+        "present": True, "provision_failed_for": CLAIM}) == slots.RELEASING
+    assert slots.next_state(slots.CLAIMING, CLAIM, {
+        "present": True, "provision_failed_for": CLAIM - 50.0}) is None
+
+
+def test_a_working_login_is_what_makes_a_slot_active():
+    assert slots.next_state(slots.CLAIMED, CLAIM, {
+        "present": True, "credentials": {"logged_in": True}}) == slots.ACTIVE
+    for logged_in in (False, None):
+        assert slots.next_state(slots.CLAIMED, CLAIM, {
+            "present": True, "credentials": {"logged_in": logged_in}}) is None
+    # A login reported for a user the machine says is not there is nonsense.
+    assert slots.next_state(slots.CLAIMED, CLAIM, {
+        "present": False, "credentials": {"logged_in": True}}) is None
+
+
+def test_only_the_user_being_gone_ends_a_release():
+    assert slots.next_state(slots.RELEASING, None, {"present": False}) == slots.FREE
+    # "Could not tell" is not "gone". A None here freeing the slot would hand
+    # out whatever the wipe had not got to.
+    for shape in ({}, {"present": None}, {"present": True}):
+        assert slots.next_state(slots.RELEASING, None, shape) is None
+
+
+def test_a_machines_report_records_what_it_saw(store):
+    machine(store)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    assert store.get_slot("s1")["present"] is None, "a new slot was vouched for by nobody"
+
+    store.apply_slot_report("m1", [report(present=True)], now=NOW + 5)
+    assert store.get_slot("s1")["present"] == 1
+    assert store.get_slot("s1")["reported_at"] == NOW + 5
+
+    store.apply_slot_report("m1", [report(present=None)], now=NOW + 9)
+    assert store.get_slot("s1")["present"] is None, "could-not-tell was stored as absent"
+
+
+def test_a_slot_nobody_on_the_machine_has_vouched_for_is_not_handed_out(store):
+    """Declared a minute ago, never reported: the records say free, the machine
+    has said nothing, and the Linux user may well be sitting there."""
+    machine(store)
+    account(store, quota=1)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    with pytest.raises(NoSlotAvailable):
+        store.claim_slot("a1", now=NOW)
+
+    store.apply_slot_report("m1", [report(present=False)], now=NOW)
+    assert store.claim_slot("a1", now=NOW)["id"] == "s1"
+
+
+def test_a_free_slot_whose_user_exists_is_held_back(store):
+    """Somebody created the account by hand, or a wipe went wrong after the
+    fact. Either way free is not true of it, and handing it out would hand
+    over whatever is in that home."""
+    machine(store)
+    account(store, quota=1)
+    declare(store, "s1", "m1", "slot01")
+    store.apply_slot_report("m1", [report(present=True)], now=NOW + 1)
+    with pytest.raises(NoSlotAvailable):
+        store.claim_slot("a1", now=NOW + 2)
+
+
+def test_a_machine_gone_quiet_is_not_handed_a_claim(store):
+    machine(store)
+    account(store, quota=1)
+    declare(store, "s1", "m1", "slot01")  # reported at NOW
+    with pytest.raises(NoSlotAvailable):
+        store.claim_slot("a1", now=NOW + 3600, heard_since=NOW + 3000)
+    assert store.claim_slot("a1", now=NOW + 60, heard_since=NOW - 60)["id"] == "s1"
+
+
+def test_a_machine_cannot_move_another_machines_slots(store):
+    """The unix user is only unique per machine. A report is matched against
+    the slots on the machine that sent it, and nowhere else."""
+    machine(store, "m1")
+    machine(store, "m2")
+    account(store, quota=1)
+    declare(store, "s2", "m2", "slot01")
+    store.claim_slot("a1", now=CLAIM)
+    store.begin_release("s2")
+
+    moved = store.apply_slot_report("m1", [report(present=False)], now=NOW + 9)
+    assert moved == []
+    row = store.get_slot("s2")
+    assert row["state"] == slots.RELEASING, "m1's report freed a slot on m2"
+    assert row["held_by"] == "a1"
+
+
+def test_the_first_word_on_a_slot_is_the_one_taken(store):
+    """A report naming one user twice can only be a broken or hostile agent.
+    Taking the first means a trailing entry cannot overrule it."""
+    machine(store)
+    account(store, quota=1)
+    declare(store, "s1", "m1", "slot01")
+    store.claim_slot("a1", now=CLAIM)
+    store.begin_release("s1")
+    store.apply_slot_report("m1", [report(present=True), report(present=False)],
+                            now=NOW + 9)
+    assert store.get_slot("s1")["state"] == slots.RELEASING
+
+
+@pytest.mark.parametrize("reports", [None, "slot01", {"unix_user": "slot01"},
+                                     [None, 3, {"unix_user": 7}]])
+def test_a_report_that_is_not_a_list_of_slots_changes_nothing(store, reports):
+    machine(store)
+    declare(store, "s1", "m1", "slot01")
+    assert store.apply_slot_report("m1", reports, now=NOW + 9) == []
+    assert store.get_slot("s1")["reported_at"] == NOW
+
+
+def test_one_slot_from_claim_to_wipe_to_somebody_else(store):
+    """The whole loop, driven only by what a machine reports."""
+    machine(store)
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=1)
+    declare(store, "s1", "m1", "slot01")
+
+    claimed_at = store.claim_slot("a1", now=CLAIM)["claimed_at"]
+    assert store.get_slot("s1")["state"] == slots.CLAIMING
+
+    moved = store.apply_slot_report(
+        "m1", [report(present=True, provisioned_for=claimed_at)], now=CLAIM + 60)
+    assert moved == [{"slot": "s1", "from": slots.CLAIMING, "to": slots.CLAIMED}]
+
+    store.apply_slot_report(
+        "m1", [report(present=True, credentials={"logged_in": True})], now=CLAIM + 120)
+    assert store.get_slot("s1")["state"] == slots.ACTIVE
+
+    store.begin_release("s1")
+    # The wipe has not happened yet: the user is still there.
+    store.apply_slot_report("m1", [report(present=True)], now=CLAIM + 180)
+    assert store.get_slot("s1")["state"] == slots.RELEASING
+    assert store.held_slot_count("a1") == 1
+
+    store.apply_slot_report("m1", [report(present=False)], now=CLAIM + 240)
+    row = store.get_slot("s1")
+    assert row["state"] == slots.FREE
+    assert row["held_by"] is None and row["claimed_at"] is None
+    assert row["released_at"] == CLAIM + 240
+    assert store.held_slot_count("a1") == 0
+
+    # And it goes to the next person clean.
+    assert store.claim_slot("a2", now=CLAIM + 300)["held_by"] == "a2"
+
+
+def test_news_about_an_old_claim_does_not_complete_a_new_one(store):
+    machine(store)
+    account(store, quota=1)
+    declare(store, "s1", "m1", "slot01")
+    first = store.claim_slot("a1", now=CLAIM)["claimed_at"]
+    store.begin_release("s1")
+    store.apply_slot_report("m1", [report(present=False)], now=CLAIM + 10)
+
+    second = store.claim_slot("a1", now=CLAIM + 20)["claimed_at"]
+    assert second != first
+    store.apply_slot_report("m1", [report(present=True, provisioned_for=first)],
+                            now=CLAIM + 30)
+    assert store.get_slot("s1")["state"] == slots.CLAIMING
+
+
+def test_a_claim_that_never_finishes_is_given_up_into_a_wipe(store):
+    """Provisioning stalled or the machine went quiet. The claim ends, but into
+    releasing: whatever was half-made on the machine is cleared before anybody
+    else is handed that slot."""
+    machine(store)
+    account(store, "a1", quota=2)
+    declare(store, "s1", "m1", "slot01")
+    declare(store, "s2", "m1", "slot02")
+    store.claim_slot("a1", now=CLAIM)
+    store.claim_slot("a1", now=CLAIM + 600)
+
+    stale = store.expire_claims(older_than=CLAIM + 300)
+    assert stale == ["s1"]
+    assert store.get_slot("s1")["state"] == slots.RELEASING
+    assert store.get_slot("s1")["held_by"] == "a1", "freed before the wipe"
+    assert store.get_slot("s2")["state"] == slots.CLAIMING
+
+
+def test_only_claims_time_out(store):
+    machine(store)
+    account(store, quota=1)
+    declare(store, "s1", "m1", "slot01")
+    store.claim_slot("a1", now=CLAIM)
+    store.apply_slot_report("m1", [report(present=True, provisioned_for=CLAIM)],
+                            now=CLAIM + 5)
+    assert store.expire_claims(older_than=CLAIM + 10 ** 6) == []
+    assert store.get_slot("s1")["state"] == slots.CLAIMED

@@ -212,3 +212,106 @@ def test_quota_thresholds_are_configurable():
     loose = _quota_rules(_quota_payload(week={"used_pct": 60}),
                          CCFLEET_QUOTA_WARN_PCT="50", CCFLEET_QUOTA_CRIT_PCT="95")
     assert loose["quota_high_week"].level == "warn"
+
+
+# -- a shared machine -----------------------------------------------------------
+
+def machine_beat(ts, slots=(), **extra):
+    """What a shared machine's agent sends: machine facts and its slots, and no
+    owner login, because the machine has none."""
+    beat = heartbeat(ts, **extra)
+    for key in ("claude", "credentials", "remote_control", "quota"):
+        beat["payload"].pop(key, None)
+    beat["payload"]["mode"] = "machine"
+    beat["payload"]["slots"] = list(slots)
+    return beat
+
+
+def slot_row(user, state):
+    return {"id": f"s-{user}", "unix_user": user, "state": state}
+
+
+def test_a_shared_machine_is_not_paged_about_a_login_it_does_not_have(cfg):
+    """Judged as an ordinary node, a machine agent's report is "claude missing"
+    and "not signed in", critical, forever — about an owner that does not
+    exist. Every login on it belongs to a slot."""
+    rc_node = {**NODE, "rc_expected": True, "pinned_version": "2.1.90"}
+    assert rules.evaluate(rc_node, machine_beat(NOW), None, NOW, cfg) == ()
+
+
+def test_a_shared_machine_is_still_watched_as_a_machine(cfg):
+    full = rules.evaluate(NODE, machine_beat(NOW, disk={"used_pct": 99.0}), None, NOW, cfg)
+    assert rule_names(full) == ["disk_high"]
+    stale = rules.evaluate(NODE, machine_beat(NOW - 3600), None, NOW, cfg)
+    assert rule_names(stale) == ["no_heartbeat"]
+    moved = rules.evaluate(NODE, machine_beat(NOW, egress={"ip": "203.0.113.99"}),
+                           machine_beat(NOW - 60), NOW, cfg)
+    assert rule_names(moved) == ["egress_changed"]
+
+
+def test_healthy_slots_say_nothing(cfg):
+    beat = machine_beat(NOW, [{"unix_user": "slot01", "present": True},
+                              {"unix_user": "slot02", "present": False}])
+    rows = [slot_row("slot01", "active"), slot_row("slot02", "free")]
+    assert rules.evaluate(NODE, beat, None, NOW, cfg, rows) == ()
+
+
+def test_a_wipe_that_failed_is_critical_and_names_its_slot(cfg):
+    """The one failure with no recovery is handing out a slot that still holds
+    somebody's work, so a wipe that did not happen is the operator's to know."""
+    beat = machine_beat(NOW, [{"unix_user": "slot02", "present": True,
+                               "wipe_error": "processes still running"}])
+    [finding] = rules.evaluate(NODE, beat, None, NOW, cfg, [slot_row("slot02", "releasing")])
+    assert finding.rule == "slot_wipe_failed:slot02"
+    assert finding.level == "critical"
+    assert "processes still running" in finding.message
+
+
+def test_a_free_slot_whose_user_exists_is_critical(cfg):
+    beat = machine_beat(NOW, [{"unix_user": "slot03", "present": True}])
+    [finding] = rules.evaluate(NODE, beat, None, NOW, cfg, [slot_row("slot03", "free")])
+    assert finding.rule == "slot_occupied:slot03" and finding.level == "critical"
+    assert "slot-remove.sh --slot slot03" in finding.message, "says what to do about it"
+
+
+def test_a_held_slot_whose_user_vanished_is_critical(cfg):
+    beat = machine_beat(NOW, [{"unix_user": "slot01", "present": False}])
+    for state in ("claimed", "active"):
+        [finding] = rules.evaluate(NODE, beat, None, NOW, cfg, [slot_row("slot01", state)])
+        assert finding.rule == "slot_missing:slot01" and finding.level == "critical"
+    # A machine that could not tell has not said the user is gone.
+    unsure = machine_beat(NOW, [{"unix_user": "slot01", "present": None}])
+    assert rules.evaluate(NODE, unsure, None, NOW, cfg, [slot_row("slot01", "active")]) == ()
+
+
+def test_provisioning_that_failed_warns_while_the_slot_is_cleared(cfg):
+    beat = machine_beat(NOW, [{"unix_user": "slot01", "present": True,
+                               "provision_error": "installer unreachable"}])
+    for state in ("claiming", "releasing"):
+        found = rules.evaluate(NODE, beat, None, NOW, cfg, [slot_row("slot01", state)])
+        assert [(f.rule, f.level) for f in found] == [("slot_provision_failed:slot01", "warn")]
+        assert "installer unreachable" in found[0].message
+    # Once the slot is free again the claim is over, and so is the alert.
+    assert rules.evaluate(NODE, machine_beat(NOW, [{"unix_user": "slot01", "present": False,
+                                                    "provision_error": "old news"}]),
+                          None, NOW, cfg, [slot_row("slot01", "free")]) == ()
+
+
+def test_two_slots_in_trouble_are_two_alerts(cfg):
+    beat = machine_beat(NOW, [{"unix_user": "slot01", "present": True, "wipe_error": "a"},
+                              {"unix_user": "slot02", "present": True, "wipe_error": "b"}])
+    rows = [slot_row("slot01", "releasing"), slot_row("slot02", "releasing")]
+    assert rule_names(rules.evaluate(NODE, beat, None, NOW, cfg, rows)) == [
+        "slot_wipe_failed:slot01", "slot_wipe_failed:slot02"]
+
+
+def test_a_slot_the_machine_did_not_mention_raises_nothing(cfg):
+    """A slot declared since the machine last looked has simply not been
+    reported yet; that is not a finding."""
+    assert rules.evaluate(NODE, machine_beat(NOW), None, NOW, cfg,
+                          [slot_row("slot01", "free")]) == ()
+
+
+def test_a_wipe_error_on_a_slot_not_being_wiped_is_ignored(cfg):
+    beat = machine_beat(NOW, [{"unix_user": "slot01", "present": True, "wipe_error": "x"}])
+    assert rules.evaluate(NODE, beat, None, NOW, cfg, [slot_row("slot01", "active")]) == ()

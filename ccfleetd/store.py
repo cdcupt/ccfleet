@@ -125,6 +125,12 @@ CREATE TABLE IF NOT EXISTS slots (
     claimed_at REAL,
     released_at REAL,
     device_token_at REAL NOT NULL DEFAULT 0,
+    -- What the machine last said about this slot's Linux user: 1 it exists,
+    -- 0 it does not, NULL never reported. A slot is only handed out on a 0,
+    -- because free is a claim about the machine and only the machine can
+    -- confirm it.
+    present INTEGER,
+    reported_at REAL,
     UNIQUE (node_id, unix_user)
 );
 CREATE INDEX IF NOT EXISTS ix_slots_state ON slots(state);
@@ -280,6 +286,13 @@ class Store:
             self._add_missing_columns("logins", {
                 "kind": "TEXT NOT NULL DEFAULT 'login'",
                 "secret": "TEXT NOT NULL DEFAULT ''",
+            })
+            # NULL on every existing row, which is the point: nothing has
+            # confirmed those slots empty, so none is handed out until the
+            # machine says so.
+            self._add_missing_columns("slots", {
+                "present": "INTEGER",
+                "reported_at": "REAL",
             })
             self._conn.commit()
 
@@ -1015,21 +1028,109 @@ class Store:
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
             slotstates.check_move(row["state"], slotstates.FREE)
-            cur = self._conn.execute(
-                "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
-                "released_at = ?, device_token_at = 0 WHERE id = ? AND state = ?",
-                (slotstates.FREE, now, slot_id, slotstates.RELEASING))
+            freed = self._free_released(self._conn, slot_id, now)
             self._conn.commit()
+        return freed
+
+    @staticmethod
+    def _free_released(conn: sqlite3.Connection, slot_id: str, now: float) -> bool:
+        """The one statement that turns a finished wipe into a free slot.
+
+        Shared by every path that frees a slot, so what "free" clears cannot
+        differ between them: the holder, when they took it, and when they were
+        last handed a device token — all of it in the same statement, pinned
+        to `releasing` so a slot in any other state is left untouched.
+        """
+        cur = conn.execute(
+            "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
+            "released_at = ?, device_token_at = 0 WHERE id = ? AND state = ?",
+            (slotstates.FREE, now, slot_id, slotstates.RELEASING))
         return cur.rowcount > 0
 
+    def apply_slot_report(self, node_id: str, reports: Any, *,
+                          now: float) -> list[dict[str, Any]]:
+        """Take in what a machine says about its slots. Returns the moves made.
+
+        Each report is about one Linux user on this machine, and can only ever
+        touch the slot declared for that user on this machine — a machine
+        cannot move another machine's slots by naming them. What it says is
+        recorded first (whether the user exists, and when we heard), and then
+        the lifecycle decides whether that is evidence for a move; see
+        slots.next_state for what counts as evidence.
+
+        Every move is decided and written inside one write transaction, so a
+        person releasing a slot while this runs waits for it rather than being
+        overwritten by a report about the moment before.
+        """
+        by_user: dict[str, Mapping[str, Any]] = {}
+        for report in reports if isinstance(reports, (list, tuple)) else ():
+            user = report.get("unix_user") if isinstance(report, Mapping) else None
+            if isinstance(user, str):
+                by_user.setdefault(user, report)
+        moved: list[dict[str, Any]] = []
+        if not by_user:
+            return moved
+        with self._write_txn() as conn:
+            rows = conn.execute(
+                "SELECT id, unix_user, state, claimed_at FROM slots WHERE node_id = ?",
+                (node_id,)).fetchall()
+            for row in rows:
+                report = by_user.get(row["unix_user"])
+                if report is None:
+                    continue
+                present = report.get("present")
+                conn.execute(
+                    "UPDATE slots SET present = ?, reported_at = ? WHERE id = ?",
+                    (int(present) if isinstance(present, bool) else None, now, row["id"]))
+                to = slotstates.next_state(row["state"], row["claimed_at"], report)
+                if to is None:
+                    continue
+                # No state pin on these writes: the state was read inside this
+                # write transaction, so nothing can have changed it since.
+                if to == slotstates.FREE:
+                    self._free_released(conn, row["id"], now)
+                else:
+                    conn.execute("UPDATE slots SET state = ? WHERE id = ?",
+                                 (to, row["id"]))
+                moved.append({"slot": row["id"], "from": row["state"], "to": to})
+        for move in moved:
+            log.info("slot %s: %s -> %s on the machine's report",
+                     move["slot"], move["from"], move["to"])
+        return moved
+
+    def expire_claims(self, *, older_than: float) -> list[str]:
+        """Give up on claims whose provisioning never finished.
+
+        They fail sideways into releasing, never back to free: provisioning
+        may have got as far as creating the account before it stalled, and
+        only the wipe that follows can say the slot is empty again.
+        """
+        with self._write_txn() as conn:
+            rows = conn.execute(
+                "SELECT id FROM slots WHERE state = ? AND claimed_at < ?",
+                (slotstates.CLAIMING, older_than)).fetchall()
+            for row in rows:
+                conn.execute("UPDATE slots SET state = ? WHERE id = ?",
+                             (slotstates.RELEASING, row["id"]))
+        return [row["id"] for row in rows]
+
     def claim_slot(self, account_id: str, *, now: float,
-                   node_id: str | None = None) -> dict[str, Any]:
+                   node_id: str | None = None,
+                   heard_since: float | None = None) -> dict[str, Any]:
         """Take a free slot for this account, allowance permitting.
 
         The allowance is checked against what they already hold in the same
         lock and the same transaction that takes the slot, and the take itself
         is pinned to `state = 'free'`. There is no window where two browser
         tabs each see a free slot and both get one.
+
+        Only a slot its machine has reported empty is handed out. Free is a
+        claim about the machine — the Linux user does not exist — and a slot
+        declared a minute ago, or one whose user somebody created by hand, has
+        nothing on the machine's side vouching for it. `heard_since` narrows it
+        further to machines that have reported recently, so a claim is not
+        handed to a machine that has gone quiet and would leave it waiting out
+        the claim timeout.
 
         Raises QuotaExceeded when they have no allowance left, and
         NoSlotAvailable when nothing is free — two different answers that the
@@ -1056,11 +1157,14 @@ class Store:
             args: list[Any] = []
             extra = ""
             if node_id is not None:
-                extra = " AND s.node_id = ?"
+                extra += " AND s.node_id = ?"
                 args.append(node_id)
+            if heard_since is not None:
+                extra += " AND s.reported_at >= ?"
+                args.append(heard_since)
             candidate = conn.execute(
                 "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
-                "WHERE s.state = ? AND n.enabled = 1" + extra +
+                "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1" + extra +
                 " ORDER BY s.node_id, s.unix_user LIMIT 1",
                 (slotstates.FREE, *args)).fetchone()
             if candidate is None:
