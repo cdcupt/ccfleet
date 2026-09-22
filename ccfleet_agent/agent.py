@@ -1353,7 +1353,11 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     }
     state_path = Path(SLOT_STATE_PATH).expanduser()
     state = read_state(state_path)
-    if request.get("refresh_quota") is True:
+    # A slot nobody has signed into yet has no windows to read, and the session
+    # the read opens would start on the login screen — where the keystrokes it
+    # types to reach /usage would land instead. Most slots spend their first
+    # minutes exactly there, between being claimed and being signed into.
+    if request.get("refresh_quota") is True and credentials.get("logged_in") is True:
         quota, remember = quota_summary(state, runner, now)
         if remember is not None:
             write_state(state_path, {**state, "quota": remember})

@@ -295,3 +295,16 @@ def test_removing_a_slot_from_the_command_line(db, capsys):
     assert cli.main(["--db", db, "slot", "remove", "s1"]) == 0
     assert "no longer declared" in capsys.readouterr().out
     assert cli.main(["--db", db, "node", "remove", "m1"]) == 0
+
+
+def test_the_slot_list_lines_up_with_its_longest_value(db, capsys):
+    """"not yet seen" is the widest thing the machine column holds; a column
+    narrower than it pushed the holder out of line on every such row."""
+    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
+    assert cli.main(["--db", db, "slot", "add", "s1", "--machine", "m1",
+                     "--unix-user", "slot01"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "slot", "list"]) == 0
+    header, row = capsys.readouterr().out.splitlines()[:2]
+    assert "not yet seen" in row
+    assert row.rindex(" -") + 1 == header.index("held by")

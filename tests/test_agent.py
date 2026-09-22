@@ -1659,6 +1659,16 @@ def test_a_slot_asked_for_its_quota_reads_and_remembers_it(slot_home, monkeypatc
     assert kept["quota"]["ts"] == 5_000.0
 
 
+def test_a_slot_nobody_has_signed_into_is_not_driven_to_its_usage_screen(slot_home,
+                                                                         monkeypatch):
+    """The session a quota read opens would start on the login screen, and the
+    keys it types to reach /usage would land there instead."""
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("drove the login screen"))
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+    facts = agent.slot_facts({"refresh_quota": True}, slot_runner([]))
+    assert "quota" not in facts
+
+
 def test_slot_facts_will_not_run_as_root(monkeypatch, capsys):
     """As root the collectors would read the slot's files with root's authority
     — a symlink in the slot's home would reach anything on the machine."""

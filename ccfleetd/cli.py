@@ -138,13 +138,13 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
             print("no slots declared")
             return EXIT_OK
         print(f"{'slot':<16} {'machine':<14} {'unix user':<12} {'state':<10} "
-              f"{'on machine':<11} held by")
+              f"{'on machine':<13} held by")
         for r in rows:
             # What the machine last said, which is the half of "free" the
             # records cannot vouch for on their own.
             on_machine = {1: "yes", 0: "no"}.get(r["present"], "not yet seen")
             print(f"{r['id']:<16} {r['node_id']:<14} {r['unix_user']:<12} "
-                  f"{r['state']:<10} {on_machine:<11} {r['held_by'] or '-'}")
+                  f"{r['state']:<10} {on_machine:<13} {r['held_by'] or '-'}")
     elif args.slot_command == "release":
         # Only ever starts the wipe. The slot does not become free here — it
         # becomes free when the machine reports the wipe finished, because only
