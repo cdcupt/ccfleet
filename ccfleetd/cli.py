@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from typing import Optional
 
-from . import __version__
+from . import __version__, payments
 from .api import Context, serve
 from .config import Config, ConfigError
 from .monitor import Monitor
@@ -84,6 +84,21 @@ def _parser() -> argparse.ArgumentParser:
         "role", help="make somebody who has signed in an operator, or not")
     role.add_argument("email")
     role.add_argument("role", choices=("admin", "user"))
+
+    pay = sub.add_parser(
+        "payment", help="the record of who paid, and through when").add_subparsers(
+        dest="payment_command", required=True)
+    pay_add = pay.add_parser("add", help="write down a payment somebody made")
+    pay_add.add_argument("email")
+    pay_add.add_argument("amount", help="e.g. 30 or 30.50")
+    pay_add.add_argument("currency", help="a three-letter code, e.g. USD")
+    pay_add.add_argument("through", help="the last day it covers, YYYY-MM-DD")
+    pay_add.add_argument("--note", default="")
+    pay_list = pay.add_parser("list", help="payments, newest first")
+    pay_list.add_argument("email", nargs="?", default=None)
+    pay_void = pay.add_parser(
+        "void", help="mark a payment written down in error; it stays in the record")
+    pay_void.add_argument("payment_id", type=int)
 
     user = sub.add_parser("user", help="manage console accounts").add_subparsers(
         dest="user_command", required=True)
@@ -171,16 +186,52 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     return EXIT_OK
 
 
+def _payment_command(args: argparse.Namespace, store: Store) -> int:
+    """The ledger, from the server. A record for the operator; it enforces nothing."""
+    if args.payment_command == "void":
+        store.void_payment(args.payment_id, now=time.time())
+        print(f"payment {args.payment_id} voided; it stays in the record")
+        return EXIT_OK
+    account = store.account_by_email(args.email) if args.email else None
+    if args.email and account is None:
+        print(f"error: nobody registered as {args.email!r}", file=sys.stderr)
+        return EXIT_USAGE
+    if args.payment_command == "add":
+        payment_id = store.record_payment(
+            account["id"], amount=args.amount, currency=args.currency,
+            through=args.through, note=args.note, recorded_by="server command line",
+            now=time.time())
+        print(f"payment {payment_id} recorded: {args.email} paid through {args.through}")
+        return EXIT_OK
+    rows = store.list_payments(account["id"] if account else None)
+    if not rows:
+        print("no payments recorded")
+        return EXIT_OK
+    emails = {a["id"]: a["email"] for a in store.list_accounts()}
+    print(f"{'id':<6} {'recorded':<11} {'email':<32} {'amount':<14} {'through':<11} note")
+    for r in rows:
+        amount = payments.format_amount(r["amount_minor"], r["currency"])
+        voided = "  [voided]" if r["voided_at"] is not None else ""
+        print(f"{r['id']:<6} {payments.today(r['recorded_at']).isoformat():<11} "
+              f"{emails.get(r['account_id'], r['account_id']):<32} {amount:<14} "
+              f"{r['paid_through']:<11} {r['note']}{voided}")
+    return EXIT_OK
+
+
 def _account_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     if args.account_command == "list":
         rows = store.list_accounts()
         if not rows:
             print("nobody has registered yet")
             return EXIT_OK
-        print(f"{'email':<32} {'role':<6} {'allowance':<10} holding")
+        print(f"{'email':<32} {'role':<6} {'allowance':<10} {'holding':<8} paid through")
+        now = time.time()
         for a in rows:
             held = store.held_slot_count(a["id"])
-            print(f"{a['email']:<32} {a['role']:<6} {a['slot_quota']:<10} {held}")
+            through = payments.paid_through(store.list_payments(a["id"]))
+            state = payments.standing(through, now)
+            paid = {payments.NONE: "-", payments.PAID: through}.get(state, f"{through} (lapsed)")
+            print(f"{a['email']:<32} {a['role']:<6} {a['slot_quota']:<10} {held:<8} {paid}")
     elif args.account_command == "role":
         # Deliberately only here, on the server's own command line: nothing on
         # either site can make an operator, so a bug in one cannot either.
@@ -298,6 +349,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return _slot_command(args, store, cfg)
             if args.command == "account":
                 return _account_command(args, store, cfg)
+            if args.command == "payment":
+                return _payment_command(args, store)
             monitor = Monitor(store, cfg, build_notifier(cfg))
             if args.command == "check":
                 for event in monitor.check_all():

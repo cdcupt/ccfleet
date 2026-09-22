@@ -1,4 +1,5 @@
-"""The console's half of slots: machines, the slots on them, and who holds them.
+"""The console's half of slots: machines, the slots on them, who holds them,
+and what they paid.
 
 The operator's view, and only the operator's: an owner's console login never
 sees it, and every action here checks the role again rather than trusting
@@ -17,6 +18,7 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
 
+from . import payments
 from . import slots as slotstates
 from .render import _age
 from .store import Store, StoreError
@@ -29,6 +31,8 @@ STUCK_AFTER_S = 10 * 60
 #: which `int` then refuses, and an unbounded count overflows SQLite; either
 #: would be a crash where the operator should get a sentence.
 COUNT_RE = re.compile(r"[0-9]{1,4}")
+#: A payment's id, from the path. Bounded for the same reason as a count.
+PAYMENT_ID_RE = re.compile(r"[0-9]{1,15}")
 
 STATE_TONE = {slotstates.FREE: "disabled", slotstates.CLAIMING: "warn",
               slotstates.CLAIMED: "warn", slotstates.ACTIVE: "ok",
@@ -120,27 +124,84 @@ def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]
 
 def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
                    now: float) -> str:
+    ledger: dict[str, list[dict[str, Any]]] = {}
+    for row in store.list_payments():
+        ledger.setdefault(row["account_id"], []).append(row)
     lines = []
     for account in sorted(accounts.values(), key=lambda a: str(a["email"])):
         held = store.held_slot_count(account["id"])
+        quota = int(account.get("slot_quota") or 0)
+        paid = ledger.get(account["id"], [])
         role = " · operator" if account.get("role") == "admin" else ""
         seen = (f"last here {escape(_age(now, account['last_seen_at']))} ago"
                 if account.get("last_seen_at") else "never back")
         lines.append(
             f'<div class="row-line"><div class="row-name">{escape(str(account["email"]))}'
-            f'<span class="muted">{role} · holds {held} · {seen}</span></div>'
+            f'<span class="muted">{role} · holds {held} · {seen}'
+            f"{_standing(paid, bool(held or quota), now)}</span></div>"
             '<div class="actions">'
             + _form(f"/actions/account/{escape(account['id'])}/allowance", csrf,
                     "Set allowance",
                     '<input type="text" name="count" class="count" inputmode="numeric" '
-                    f'value="{int(account.get("slot_quota") or 0)}" required>')
-            + "</div></div>")
+                    f'value="{quota}" required>')
+            + "</div>" + _ledger(account, paid, csrf) + "</div>")
     body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
     return ('<h2 id="accounts">Accounts</h2><div class="card">' + body +
             '<p class="note">An allowance is how many slots somebody may hold; it starts at '
             "zero. Lowering it takes nothing away: they keep what they hold, and only claiming "
-            "more stops. Operators are made on the server: "
+            "more stops. Payments are a record for you and nothing more: a lapsed one takes no "
+            "slot back and stops no claim. Operators are made on the server: "
             "<code>ccfleetd account role &lt;email&gt; admin</code>.</p></div>")
+
+
+def _standing(paid: list[Mapping[str, Any]], counts: bool, now: float) -> str:
+    """Paid up, lapsed, or nothing written down, in the words the operator scans for.
+
+    Lapsed is only called out while it still matters: somebody who holds slots
+    or may claim them. Somebody who has left has an ended payment, not a debt.
+    """
+    through = payments.paid_through(paid)
+    state = payments.standing(through, now)
+    if state == payments.NONE:
+        return " · no payments"
+    # A date split at its hyphens on a phone reads as two numbers.
+    day = f'<span class="nowrap">{escape(str(through))}</span>'
+    if state == payments.PAID:
+        return f" · paid through {day}"
+    if counts:
+        return f' · <span class="bad-text">lapsed: paid through {day}</span>'
+    return f" · paid through {day}, ended"
+
+
+def _ledger(account: Mapping[str, Any], paid: list[Mapping[str, Any]], csrf: str) -> str:
+    items = "".join(_payment_line(p, csrf) for p in paid)
+    # Whatever they paid in last time is the likeliest this time.
+    currency = paid[0]["currency"] if paid else "USD"
+    record = _form(
+        f"/actions/account/{escape(account['id'])}/payment", csrf, "Record payment",
+        '<input type="text" name="amount" placeholder="amount" inputmode="decimal" '
+        'size="7" required>'
+        f'<input type="text" name="currency" value="{escape(currency)}" size="4" '
+        'maxlength="3" required>'
+        '<input type="date" name="through" title="paid through" required>'
+        '<input type="text" name="note" placeholder="note, seen only here" size="18" '
+        f'maxlength="{payments.NOTE_MAX}">')
+    return (f'<details class="ledger"><summary>Payments ({len(paid)})</summary>'
+            f"{items}{record}</details>")
+
+
+def _payment_line(row: Mapping[str, Any], csrf: str) -> str:
+    text = (f"{payments.today(row['recorded_at']).isoformat()} · "
+            f"{escape(payments.format_amount(row['amount_minor'], row['currency']))} · "
+            f"through {escape(row['paid_through'])}"
+            + (f" · {escape(row['note'])}" if row["note"] else "")
+            + f" · by {escape(row['recorded_by'])}")
+    if row["voided_at"] is not None:
+        return (f'<div class="payment voided"><s>{text}</s> '
+                '<span class="pill disabled">voided</span></div>')
+    return (f'<div class="payment">{text} '
+            + _form(f"/actions/payment/{int(row['id'])}/void", csrf, "Void", cls="danger")
+            + "</div>")
 
 
 def _count(form: Mapping[str, str]) -> int:
@@ -151,9 +212,13 @@ def _count(form: Mapping[str, str]) -> int:
 
 
 def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, str],
-        now: float) -> Optional[str]:
+        now: float, *, by: str) -> Optional[str]:
     """One of the operator's slot actions. Returns where to send them back to,
-    or None when there is no such action. Raises StoreError to refuse."""
+    or None when there is no such action. Raises StoreError to refuse.
+
+    `by` is who is acting, as the console knows them; the ledger writes it
+    beside every payment.
+    """
     if kind == "machine" and action == "capacity":
         if not store.set_machine_capacity(target, _count(form)):
             raise StoreError(f"no machine {target!r}")
@@ -178,5 +243,16 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
     if kind == "account" and action == "allowance":
         if not store.set_slot_quota(target, _count(form)):
             raise StoreError("no such account")
+        return "accounts"
+    if kind == "account" and action == "payment":
+        store.record_payment(target, amount=form.get("amount", ""),
+                             currency=form.get("currency", ""),
+                             through=form.get("through", ""), note=form.get("note", ""),
+                             recorded_by=by, now=now)
+        return "accounts"
+    if kind == "payment" and action == "void":
+        if not PAYMENT_ID_RE.fullmatch(target):
+            raise StoreError("no such payment")
+        store.void_payment(int(target), now=now)
         return "accounts"
     return None

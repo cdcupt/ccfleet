@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
+from . import payments
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -135,6 +136,22 @@ CREATE TABLE IF NOT EXISTS slots (
 );
 CREATE INDEX IF NOT EXISTS ix_slots_state ON slots(state);
 CREATE INDEX IF NOT EXISTS ix_slots_held_by ON slots(held_by);
+-- What somebody paid, as the operator wrote it down. A record, never an
+-- enforcer: nothing about slots or claiming reads this table (see
+-- ccfleetd/payments.py). A mistake is voided, not deleted, so the record
+-- keeps what was written and when.
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    amount_minor INTEGER NOT NULL,        -- hundredths: 3050 is 30.50
+    currency TEXT NOT NULL,               -- a three-letter code, e.g. USD
+    paid_through TEXT NOT NULL,           -- YYYY-MM-DD, the last day covered
+    note TEXT NOT NULL DEFAULT '',
+    recorded_by TEXT NOT NULL,
+    recorded_at REAL NOT NULL,
+    voided_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_payments_account ON payments(account_id);
 -- Browser sessions, which the console has never had.
 --
 -- The primary key is a SHA-256 of the session id, not the id. The cookie
@@ -1003,6 +1020,54 @@ class Store:
                 f"AND state IN ({marks})",
                 (account_id, *sorted(slotstates.HELD))).fetchone()
         return int(row["n"])
+
+    # -- payments ---------------------------------------------------------
+    #
+    # A record, never an enforcer. Nothing that claims or releases a slot calls
+    # anything here, and nothing here touches a slot or an allowance.
+
+    def record_payment(self, account_id: str, *, amount: str, currency: str,
+                       through: str, note: str = "", recorded_by: str,
+                       now: float) -> int:
+        """Write down a payment, as typed. Returns its id."""
+        try:
+            minor = payments.parse_amount(amount)
+            code = payments.parse_currency(currency)
+            day = payments.parse_through(through, payments.today(now))
+            note = payments.check_note(note)
+        except payments.PaymentError as exc:
+            raise StoreError(str(exc)) from exc
+        with self._write_txn() as conn:
+            known = conn.execute("SELECT 1 FROM accounts WHERE id = ?",
+                                 (account_id,)).fetchone()
+            if known is None:
+                raise StoreError("no such account")
+            cur = conn.execute(
+                "INSERT INTO payments (account_id, amount_minor, currency, paid_through, "
+                "note, recorded_by, recorded_at) VALUES (?,?,?,?,?,?,?)",
+                (account_id, minor, code, day, note, recorded_by, now))
+        return int(cur.lastrowid)
+
+    def void_payment(self, payment_id: int, *, now: float) -> None:
+        """Mark a payment written down in error. It stays in the record."""
+        with self._write_txn() as conn:
+            cur = conn.execute(
+                "UPDATE payments SET voided_at = ? WHERE id = ? AND voided_at IS NULL",
+                (now, payment_id))
+            if cur.rowcount == 0:
+                raise StoreError(f"no payment {payment_id} left to void")
+
+    def list_payments(self, account_id: str | None = None) -> list[dict[str, Any]]:
+        """Newest first, voided ones included."""
+        query = "SELECT * FROM payments"
+        args: tuple[Any, ...] = ()
+        if account_id is not None:
+            query += " WHERE account_id = ?"
+            args = (account_id,)
+        with self._lock:
+            rows = self._conn.execute(
+                query + " ORDER BY recorded_at DESC, id DESC", args).fetchall()
+        return [dict(r) for r in rows]
 
     # -- slots ------------------------------------------------------------
     #

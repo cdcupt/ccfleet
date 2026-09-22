@@ -688,7 +688,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             return False
 
         def _console_action(self, path: str) -> None:
-            if self._identity() is None:
+            who = self._identity()
+            if who is None:
                 return
             form = self._form()
             if form is None:
@@ -706,12 +707,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     if not self._may_act_on(parts[2], parts[3]):
                         return
                     self._action_on_node(parts[2], parts[3], form)
-                elif len(parts) == 4 and parts[1] in ("machine", "slot", "account"):
+                elif len(parts) == 4 and parts[1] in ("machine", "slot", "account",
+                                                      "payment"):
                     # Slots and the people who hold them are the operator's alone.
                     if not self._require_admin():
                         return
                     anchor = consoleslots.act(ctx.store, parts[1], parts[2], parts[3],
-                                              form, time.time())
+                                              form, time.time(), by=who.label)
                     if anchor is None:
                         self._json(404, {"error": "not found"})
                     else:

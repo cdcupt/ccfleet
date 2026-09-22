@@ -13,10 +13,11 @@ import re
 import threading
 import time
 import urllib.parse
+from datetime import timedelta
 
 import pytest
 
-from ccfleetd import oauth, sessions, slots, usersite
+from ccfleetd import oauth, payments, sessions, slots, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -545,3 +546,56 @@ def test_a_page_left_open_across_a_hand_over_acts_on_nothing(site):
     after = store.get_slot(slot["id"])
     assert after["held_by"] == ana.account["id"] and after["state"] == slots.CLAIMED
     assert store.get_login(slot_login_key(slot["id"])) is None
+
+
+# -- what they have paid -----------------------------------------------------------
+
+def paid(store, browser, days, **fields):
+    through = (payments.today(time.time()) + timedelta(days=days)).isoformat()
+    store.record_payment(browser.account["id"], amount=fields.get("amount", "30"),
+                         currency="USD", through=through, note=fields.get("note", ""),
+                         recorded_by="op", now=time.time())
+    return through
+
+
+def test_the_page_says_how_long_they_are_paid_for_and_nothing_else(site):
+    """The day, and only the day: amounts and the operator's notes stay on the console."""
+    store, sign_in, _ = site
+    browser = sign_in(quota=1)
+    through = paid(store, browser, 20, amount="47.5", note="cash via Ana's brother")
+    page = browser.page()
+    assert f"Paid through <strong>{through}</strong>." in page
+    assert "47.50" not in page and "Ana" not in page and "USD" not in page
+
+
+def test_nothing_recorded_says_nothing(site):
+    """Plenty of allowances are arranged without a payment; "none" would read as a debt."""
+    store, sign_in, _ = site
+    page = sign_in(quota=1).page()
+    assert "Paid through" not in page and "paid period" not in page
+
+
+def test_a_lapsed_period_is_said_plainly_and_changes_nothing_else(site):
+    store, sign_in, _ = site
+    browser = sign_in(quota=1)
+    ended = paid(store, browser, -2)
+    page = browser.page()
+    assert f"Your paid period ended on {ended}." in page
+    assert 'action="/account/claim"' in page, "the ledger is a record, not a gate"
+
+
+def test_a_voided_payment_is_not_counted(site):
+    store, sign_in, _ = site
+    browser = sign_in(quota=1)
+    kept = paid(store, browser, 10)
+    paid(store, browser, 40)
+    store.void_payment(store.list_payments(browser.account["id"])[0]["id"], now=time.time())
+    assert f"Paid through <strong>{kept}</strong>." in browser.page()
+
+
+def test_somebody_elses_payment_is_not_theirs(site):
+    store, sign_in, _ = site
+    ana = sign_in(sub="google-ana", email="ana@example.com", quota=1)
+    bo = sign_in(sub="google-bo", email="bo@example.com", quota=1)
+    paid(store, ana, 20)
+    assert "Paid through" in ana.page() and "Paid through" not in bo.page()
