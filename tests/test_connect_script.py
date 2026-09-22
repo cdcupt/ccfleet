@@ -279,8 +279,9 @@ def test_the_printed_hint_quotes_the_path(tmp_path):
     home = tmp_path / "spaced home"
     (home / ".config" / "ccfleet").mkdir(parents=True)
     (home / ".zshrc").write_text("# keep\n")
-    out = run(home, tmp_path, GOOD_TOKEN).stdout
-    hint = [ln for ln in out.splitlines() if "export CLAUDE_CODE_OAUTH_TOKEN" in ln][0]
+    run(home, tmp_path, GOOD_TOKEN)
+    hint = [ln for ln in (home / ".zshrc").read_text().splitlines()
+             if "CLAUDE_CODE_OAUTH_TOKEN" in ln][0]
     # Copy-pasteable on a path with a space means the path must be quoted.
     assert "'" in hint and str(home) in hint
 
@@ -376,3 +377,62 @@ def test_it_does_not_overwrite_a_copy_already_there(home, tmp_path):
     dest.chmod(0o755)
     run(home, tmp_path, GOOD_TOKEN)
     assert "their own copy" in dest.read_text(), "left alone"
+
+
+def test_it_hands_over_a_shell_that_already_has_the_token(home, tmp_path):
+    """A process cannot put a variable into the shell that started it — that is
+    what a child process is. So the end of setup is either an export command
+    somebody types by hand, or a fresh shell that has already read the rc line.
+    """
+    bindir = fake_claude(tmp_path)
+    # Stand in for the user's shell: prove what it inherited and exit.
+    shell = bindir / "zsh"
+    # Reports what a real shell would find waiting for it: the export line,
+    # which is how the token reaches every later shell too.
+    shell.write_text('#!/bin/sh\nexec printf "SHELL-STARTED exports=%s\\n" '
+                     '"$(grep -c CLAUDE_CODE_OAUTH_TOKEN "$HOME/.zshrc")"\n')
+    shell.chmod(0o755)
+
+    env = dict(os.environ)
+    env.update({
+        "HOME": str(home), "SHELL": str(shell),
+        "CCFLEET_TOKEN_FILE": str(token_path(home)),
+        "PATH": f"{bindir}:{env['PATH']}",
+    })
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    # A pty so the script sees a terminal on stdout, which is the condition for
+    # handing one over at all.
+    import pty
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve("/bin/bash", ["bash", str(SCRIPT), GOOD_TOKEN], env)
+    out = b""
+    try:
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            out += chunk
+    except OSError:
+        pass
+    os.waitpid(pid, 0)
+    text = out.decode(errors="replace")
+    assert "SHELL-STARTED" in text, "it handed over a shell rather than printing advice"
+    assert "exports=1" in text, "and the export it wrote is there for that shell to read"
+
+
+def test_a_scripted_run_keeps_its_own_shell(home, tmp_path):
+    """Replacing the shell is the right end to an interactive setup and the
+    wrong one inside somebody's provisioning run."""
+    result = run(home, tmp_path, "--no-exec", GOOD_TOKEN)
+    assert result.returncode == 0
+    assert token_path(home).exists(), "still connected"
+    assert 'exec "$SHELL"' in result.stdout, "it says how, rather than doing it"
+
+
+def test_with_no_terminal_it_explains_instead_of_taking_over(home, tmp_path):
+    """run() captures output, so there is no terminal to hand over. Exec-ing a
+    shell into a pipe would hang whatever called it."""
+    result = run(home, tmp_path, GOOD_TOKEN)
+    assert result.returncode == 0
+    assert 'exec "$SHELL"' in result.stdout
