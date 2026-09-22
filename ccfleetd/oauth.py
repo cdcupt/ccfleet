@@ -122,8 +122,11 @@ def _read_json(request: urllib.request.Request, opener: Callable) -> dict[str, A
         detail = ""
         try:
             detail = exc.read().decode("utf-8", "replace")[:400]
-        except Exception:  # noqa: BLE001 - the error matters more than the body
-            pass
+        except (OSError, ValueError) as read_failed:
+            # The status is the finding; the body is extra. Say that the body
+            # could not be read rather than dropping it silently, so a
+            # truncated error is not mistaken for one Google sent empty.
+            detail = f"(error body unreadable: {read_failed})"
         raise OAuthError(f"Google returned {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise OAuthError(f"could not reach Google: {exc.reason}") from exc

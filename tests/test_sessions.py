@@ -420,7 +420,9 @@ def signin(monkeypatch):
                                           timeout=10)
         conn.request(method, path, headers=hdrs)
         reply = conn.getresponse()
-        reply.read()
+        # Kept, not discarded: a test that only reads status codes cannot tell
+        # a page that knows who you are from one that does not.
+        reply.body = reply.read().decode("utf-8", "replace")
         conn.close()
         if browser:
             for header in reply.headers.get_all("Set-Cookie") or []:
@@ -630,3 +632,86 @@ def test_a_refused_sign_in_clears_the_half_finished_flow(signin):
     _state_from(call("GET", "/auth/google/start"))
     call("GET", "/auth/google/callback?state=invented&code=abc")
     assert sessions.FLOW_COOKIE_NAME not in jar
+
+
+# -- what the session is actually for -----------------------------------------
+
+def test_the_session_signs_you_in_to_a_page(signin):
+    """A session that authenticates nothing is a library, not sign-in. This is
+    the page it authenticates — and the check is what the page *says*, because
+    a page that ignores the cookie entirely still answers 200."""
+    store, call, jar = signin
+    stranger = call("GET", "/account")
+    assert stranger.status == 200
+    assert "Continue with Google" in stranger.body
+    assert "Sign out" not in stranger.body
+
+    state = _state_from(call("GET", "/auth/google/start?next=/account"))
+    assert call("GET", f"/auth/google/callback?state={state}&code=abc").status == 303
+    assert sessions.COOKIE_NAME in jar, "no session cookie was kept"
+
+    mine = call("GET", "/account")
+    assert mine.status == 200
+    assert "erik@example.com" in mine.body, "the page does not know who I am"
+    assert "Sign out" in mine.body
+    assert "Continue with Google" not in mine.body
+    assert "no slots yet" in mine.body
+
+    # It follows the allowance the operator grants.
+    account = store.account_by_google_sub("google-9")
+    store.set_slot_quota(account["id"], 2)
+    granted = call("GET", "/account")
+    assert "<strong>2</strong>" in granted.body
+    assert "no slots yet" not in granted.body
+
+    # And signing out takes it away again.
+    assert call("POST", "/auth/signout", {"Content-Length": "0"}).status == 303
+    after = call("GET", "/account")
+    assert "erik@example.com" not in after.body
+    assert "Continue with Google" in after.body
+
+
+def test_the_account_page_says_what_you_hold(store):
+    """Zero is the common case for somebody who has just signed up, and the one
+    worth explaining: an empty page with no reason given reads as broken."""
+    from ccfleetd.config import Config
+    from ccfleetd.render import render_account
+
+    cfg = Config(google_client_id="c", google_client_secret="s",
+                 cookie_secret=SECRET, public_url="http://x")
+    account = store.upsert_account_from_google("g-1", "erik@example.com", now=NOW)
+
+    fresh = render_account(store.get_account(account["id"]), 0, cfg)
+    assert "no slots yet" in fresh
+    assert "erik@example.com" in fresh
+
+    store.set_slot_quota(account["id"], 3)
+    granted = render_account(store.get_account(account["id"]), 1, cfg)
+    assert "<strong>3</strong>" in granted and "<strong>1</strong>" in granted
+    assert "no slots yet" not in granted
+
+
+def test_a_stranger_is_offered_sign_in_and_nothing_else():
+    from ccfleetd.config import Config
+    from ccfleetd.render import render_account
+
+    ready = Config(google_client_id="c", google_client_secret="s",
+                   cookie_secret=SECRET, public_url="http://x")
+    page = render_account(None, 0, ready)
+    assert "/auth/google/start" in page
+    assert "Sign out" not in page
+
+    # And where it cannot work, it says so rather than offering a dead button.
+    page = render_account(None, 0, Config())
+    assert "not set up" in page
+    assert "/auth/google/start" not in page
+
+
+def test_a_signed_in_page_offers_the_way_out():
+    from ccfleetd.config import Config
+    from ccfleetd.render import render_account
+    page = render_account({"email": "a@b.c", "slot_quota": 0}, 0,
+                          Config(google_client_id="c", google_client_secret="s",
+                                 cookie_secret=SECRET, public_url="http://x"))
+    assert 'action="/auth/signout"' in page
+    assert "a@b.c" in page

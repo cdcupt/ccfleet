@@ -23,7 +23,13 @@ from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
-from .render import build_rows, render_add_result, render_dashboard, render_token_result
+from .render import (
+    build_rows,
+    render_account,
+    render_add_result,
+    render_dashboard,
+    render_token_result,
+)
 from .store import Store, StoreError
 
 log = logging.getLogger("ccfleetd.api")
@@ -347,6 +353,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0]
             if path == "/healthz":
                 self._json(200, {"ok": True})
+            elif path == "/account":
+                who = self._signed_in()
+                self._send(200, render_account(
+                    who, ctx.store.held_slot_count(who["id"]) if who else 0,
+                    ctx.cfg).encode("utf-8"), HTML_HEADERS)
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":
