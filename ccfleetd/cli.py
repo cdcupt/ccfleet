@@ -80,6 +80,10 @@ def _parser() -> argparse.ArgumentParser:
         "quota", help="grant or reduce how many slots somebody may claim")
     quota.add_argument("email")
     quota.add_argument("count", type=int)
+    role = acct.add_parser(
+        "role", help="make somebody who has signed in an operator, or not")
+    role.add_argument("email")
+    role.add_argument("role", choices=("admin", "user"))
 
     user = sub.add_parser("user", help="manage console accounts").add_subparsers(
         dest="user_command", required=True)
@@ -177,6 +181,23 @@ def _account_command(args: argparse.Namespace, store: Store, cfg: Config) -> int
         for a in rows:
             held = store.held_slot_count(a["id"])
             print(f"{a['email']:<32} {a['role']:<6} {a['slot_quota']:<10} {held}")
+    elif args.account_command == "role":
+        # Deliberately only here, on the server's own command line: nothing on
+        # either site can make an operator, so a bug in one cannot either.
+        account = store.account_by_email(args.email)
+        if account is None:
+            print(f"error: nobody registered as {args.email!r}; they sign in once first",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        store.set_account_role(account["id"], args.role)
+        if args.role == "admin":
+            print(f"{args.email} is an operator: they sign in to the console with Google")
+        else:
+            print(f"{args.email} is no longer an operator")
+            # Whatever console sessions they had end now, not at expiry.
+            ended = store.end_all_sessions(account["id"])
+            if ended:
+                print(f"ended {ended} session(s)")
     elif args.account_command == "quota":
         account = store.account_by_email(args.email)
         if account is None:

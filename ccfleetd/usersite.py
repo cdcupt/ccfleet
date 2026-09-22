@@ -442,6 +442,29 @@ def _release(slot: Mapping[str, Any], csrf: str) -> str:
             + "</div>")
 
 
+def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config) -> str:
+    """The console's front door for somebody not signed in as an operator.
+
+    Operators sign in the way everybody else does, with Google; an account
+    only reaches the console once the operator has made it an admin from the
+    server's own command line. The admin token stays one link away, for when
+    Google is the thing that is down.
+    """
+    if account is None:
+        body = ("<p>Operators sign in with their Google account.</p>"
+                "<p><a class=\"btn\" href=\"/auth/google/start?next=/\">Continue with "
+                "Google</a></p>")
+    else:
+        body = (f"<p>Signed in as <strong>{escape(str(account.get('email', '')))}</strong>, "
+                "which is not an operator account.</p>"
+                "<p class=\"muted\">An operator makes one on the server with "
+                "<code>ccfleetd account role &lt;email&gt; admin</code>.</p>"
+                + _form("/auth/signout", csrf_for(session_id, cfg.cookie_secret), "Sign out"))
+    return _shell("console", "<h1>ccfleet console</h1><div class=\"card\">" + body
+                  + "<p class=\"note\">Or <a href=\"/auth/basic\">use the admin token</a> "
+                  "&mdash; the way in when Google sign-in is unavailable.</p></div>")
+
+
 def token_page(slot: Mapping[str, Any], token: str) -> str:
     """The minted token, for as long as its request lasts."""
     if not token:

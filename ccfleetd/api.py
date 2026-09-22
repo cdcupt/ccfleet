@@ -34,6 +34,9 @@ from .store import Store, StoreError, slot_login_key
 log = logging.getLogger("ccfleetd.api")
 
 NODE_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
+# The operator's way in from the box itself — the SSH tunnel, or a shell on
+# it — is the console's side whatever the admin hostname is.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 HTML_HEADERS = {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
@@ -142,6 +145,15 @@ def _safe_next(raw: str) -> str:
     return raw
 
 
+def request_host(header: Optional[str]) -> str:
+    """The hostname a request was made to: lowercased, without its port."""
+    host = (header or "").strip().lower()
+    if host.startswith("["):                 # an IPv6 literal, [::1]:8111
+        end = host.find("]")
+        return host[1:end] if end > 0 else ""
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
 def _bearer_token(header: Optional[str]) -> Optional[str]:
     if not header:
         return None
@@ -179,12 +191,81 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _identity(self) -> Optional[Identity]:
             """Any valid account. Returns None and answers 401 when there is none."""
-            who = identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
+            who = (identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
+                   or self._operator_session())
             if who is not None:
                 return who
             self._json(401, {"error": "unauthorized"},
                        {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
             return None
+
+        # -- which site this is --------------------------------------------
+
+        def _admin_site(self) -> bool:
+            """Is this request on the console's side?
+
+            With no admin host configured there is one site and it is both,
+            as it always was. With one, only that hostname and loopback are:
+            every other hostname is the product, and never shows a console,
+            whatever credentials arrive with the request.
+            """
+            if not ctx.cfg.admin_host:
+                return True
+            host = request_host(self.headers.get("Host"))
+            return host == ctx.cfg.admin_host or host in LOOPBACK_HOSTS
+
+        def _product_site(self) -> bool:
+            return not ctx.cfg.admin_host or not self._admin_site()
+
+        def _redirect_uri(self) -> str:
+            """Where Google sends a sign-in started here back to, or "" when
+            no sign-in can start on this hostname.
+
+            It has to be the hostname the sign-in left from: the session is a
+            cookie only that hostname can set, and a session is bound to its
+            site. So only the two canonical hostnames sign anybody in — the
+            admin host, and the one the product's callback names. Loopback, or
+            any other alias pointing here, would send the person back to a host
+            whose cookie the browser that started never sees.
+            """
+            host = request_host(self.headers.get("Host"))
+            if ctx.cfg.admin_host and host == ctx.cfg.admin_host:
+                return ctx.cfg.admin_redirect_uri
+            product = ctx.cfg.redirect_uri
+            if product and host == request_host(urllib.parse.urlsplit(product).netloc):
+                return product
+            return ""
+
+        def _operator_session(self) -> Optional[Identity]:
+            """An operator signed in with Google, on the console's side.
+
+            Only an account the operator made an admin, from the server's own
+            command line: nothing on either site can grant it. The admin token
+            still works beside this, as the way in when Google is the thing
+            that is down. Whether this is the console's side at all is settled
+            before anything asks: the product answers the console's routes
+            with 404 first, and a product session is no session here anyway.
+            """
+            account, _ = self._signed_in()
+            if account is None or account.get("role") != "admin":
+                return None
+            return Identity("admin", "", str(account.get("email") or "operator"))
+
+        def _console_door(self) -> None:
+            """The console's answer to somebody not signed in.
+
+            With Google sign-in configured it is a page, not a password prompt:
+            operators sign in the way everybody else does, and the admin token
+            is one link away for when that is not possible. Without Google it
+            is the prompt it always was.
+            """
+            if not ctx.cfg.google_ready:
+                self._json(401, {"error": "unauthorized"},
+                           {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
+                return
+            account, session_id = self._signed_in()
+            self._send(401, usersite.console_door(account, session_id,
+                                                  ctx.cfg).encode("utf-8"), HTML_HEADERS)
 
         def _require_admin(self) -> bool:
             """For anything that changes the fleet. An owner gets 403, not 401:
@@ -216,8 +297,17 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 session_id = sessions.unsign(raw, ctx.cfg.cookie_secret)
             except sessions.SessionError:
                 return None, ""
-            account = ctx.store.account_for_session(session_id, now=time.time())
+            account = ctx.store.account_for_session(session_id, now=time.time(),
+                                                    site=self._site())
             return (account, session_id) if account is not None else (None, "")
+
+        def _site(self) -> str:
+            """Which site's sessions this request may use. With one hostname
+            there is one site; with two, the operator's hostname is the admin
+            site and everything else is the product."""
+            if ctx.cfg.admin_host and not self._product_site():
+                return "admin"
+            return "product"
 
         def _csrf_ok(self, form: dict[str, str], session_id: str) -> bool:
             return hmac.compare_digest(
@@ -226,6 +316,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _sign_in_start(self) -> None:
             if not ctx.cfg.google_ready:
                 self._json(503, {"error": "sign-in is not configured"})
+                return
+            if not self._redirect_uri():
+                self._not_a_sign_in_host()
                 return
             state, verifier = oauth.new_state(), oauth.new_verifier()
             # Only our own paths, and only paths. An open redirect here would
@@ -244,7 +337,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             # that began the flow can finish it.
             self._redirect_with_cookies(
                 oauth.authorize_url(client_id=ctx.cfg.google_client_id,
-                                    redirect_uri=ctx.cfg.redirect_uri,
+                                    redirect_uri=self._redirect_uri(),
                                     state=state, verifier=verifier),
                 [sessions.cookie_header(
                     sessions.sign(state, ctx.cfg.cookie_secret),
@@ -254,6 +347,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _sign_in_callback(self) -> None:
             if not ctx.cfg.google_ready:
                 self._json(503, {"error": "sign-in is not configured"})
+                return
+            if not self._redirect_uri():
+                self._not_a_sign_in_host()
                 return
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             state = query.get("state", [""])[0]
@@ -287,7 +383,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     code=query.get("code", [""])[0], verifier=flow["verifier"],
                     client_id=ctx.cfg.google_client_id,
                     client_secret=ctx.cfg.google_client_secret,
-                    redirect_uri=ctx.cfg.redirect_uri)
+                    redirect_uri=self._redirect_uri())
                 who = oauth.fetch_identity(token)
             except oauth.OAuthError as exc:
                 # Logged in full, shown as a sentence. The reasons name our
@@ -299,13 +395,20 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             account = ctx.store.upsert_account_from_google(
                 who["sub"], who["email"], now=time.time())
             session_id = ctx.store.create_session(
-                account["id"], now=time.time(), ttl_s=ctx.cfg.session_ttl_s)
+                account["id"], now=time.time(), ttl_s=ctx.cfg.session_ttl_s,
+                site=self._site())
             self._redirect_with_cookies(
                 flow["next_url"] or "/",
                 [sessions.cookie_header(
                     sessions.sign(session_id, ctx.cfg.cookie_secret),
                     ttl_s=ctx.cfg.session_ttl_s, secure=ctx.cfg.cookie_secure),
                  self._clear_flow_cookie()])
+
+        def _not_a_sign_in_host(self) -> None:
+            """Refused, and pointed at where signing in does work."""
+            where = [u.rsplit("/auth/", 1)[0] for u in (ctx.cfg.redirect_uri,
+                                                        ctx.cfg.admin_redirect_uri) if u]
+            self._json(404, {"error": "sign in at " + " or ".join(where)})
 
         def _sign_out(self) -> None:
             """End this browser's session: only when the request proves it
@@ -317,8 +420,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             only with its own form token, and a cookie is cleared only when
             one was actually sent with the request.
             """
+            home = "/account" if self._product_site() else "/"
             if sessions.read_cookie(self.headers.get("Cookie")) is None:
-                self._redirect("/account")
+                self._redirect(home)
                 return
             account, session_id = self._signed_in()
             if account is not None:
@@ -331,7 +435,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 ctx.store.end_session(session_id)
             # A cookie that no longer names a session is cleared as it is.
             self._redirect_with_cookies(
-                "/account", [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
+                home, [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
 
         def _account_action(self, path: str) -> None:
             """A form on the user site. Signed in, with this session's token."""
@@ -390,8 +494,22 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            admin_only = path in ("/api/nodes", "/api/alerts", "/auth/basic")
             if path == "/healthz":
                 self._json(200, {"ok": True})
+            elif (admin_only and not self._admin_site()) or (
+                    path == "/account" and not self._product_site()):
+                # Each site answers only for its own audience: the product
+                # never shows a console, the console never plays product.
+                self._json(404, {"error": "not found"})
+            elif path == "/auth/basic":
+                # The admin token, asked for deliberately: the break-glass way
+                # in beside Google, from the link on the console's door.
+                if identify(self.headers.get("Authorization"), ctx.cfg, ctx.store):
+                    self._redirect("/")
+                else:
+                    self._json(401, {"error": "unauthorized"},
+                               {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
             elif path == "/account":
                 account, session_id = self._signed_in()
                 note = urllib.parse.parse_qs(
@@ -404,8 +522,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             elif path == "/auth/google/callback":
                 self._sign_in_callback()
             elif path == "/":
-                who = self._identity()
-                if who is not None:
+                if not self._admin_site():
+                    self._redirect("/account")          # the product's front door
+                    return
+                who = (identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
+                       or self._operator_session())
+                if who is None:
+                    self._console_door()
+                else:
                     self._send(200, self._dashboard(who).encode("utf-8"), HTML_HEADERS)
             elif path == "/api/nodes":
                 who = self._identity()
@@ -462,9 +586,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._sign_out()
                 return
             if path.startswith("/account/"):
+                if not self._product_site():
+                    self._json(404, {"error": "not found"})
+                    return
                 self._account_action(path)
                 return
             if path.startswith("/actions/"):
+                if not self._admin_site():
+                    self._json(404, {"error": "not found"})
+                    return
                 self._console_action(path)
                 return
             if path != "/api/heartbeat":
