@@ -226,6 +226,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         ACTION_ANCHORS = {
             "token-start": "device-tokens",
             "token-show": "device-tokens",
+            "token-done": "device-tokens",
             "login-start": "sign-in",
             "login-code": "sign-in",
             "login-cancel": "sign-in",
@@ -303,7 +304,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         # minted from the account their node already holds. Needing an operator
         # to press it would move exactly the bottleneck this removes.
         OWNER_ACTIONS = ("login-start", "login-code", "login-cancel",
-                         "token-start", "token-show")
+                         "token-start", "token-show", "token-done")
 
         def _may_act_on(self, node_id: str, action: str) -> bool:
             """Authorisation for one action on one node."""
@@ -378,15 +379,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             elif action == "login-cancel":
                 ctx.store.clear_login(node_id)
             elif action == "token-show":
-                # Read-and-delete: the credential is shown on this response and
-                # is gone from the database before it is rendered, so a refresh
-                # or a second tab gets nothing.
-                secret = ctx.store.take_secret(node_id)
+                # Readable for as long as the attempt lasts, so a second machine
+                # can have it without minting another. The expiry bounds how
+                # long that is; "token-done" ends it sooner.
+                secret = ctx.store.read_secret(node_id)
                 node = ctx.store.get_node(node_id) or {}
                 self._send(200, render_token_result(node_id, secret, ctx.cfg,
                                                     node.get("owner", "")).encode("utf-8"),
                            HTML_HEADERS)
                 return
+            elif action == "token-done":
+                # Finished with it. Nothing makes the server forget a credential
+                # faster than being told it is no longer needed.
+                ctx.store.clear_login(node_id)
             elif action == "rotate-token":
                 token = ctx.store.rotate_token(node_id)
                 node = ctx.store.get_node(node_id) or {}

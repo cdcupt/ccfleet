@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS logins (
     -- carries away. Same dance, different command, so one table drives both.
     kind TEXT NOT NULL DEFAULT 'login',
     -- Only ever set for kind='token', and only between the node reporting it
-    -- and the console showing it once. See take_secret().
+    -- and the console showing it. Readable until the attempt expires or
+    -- somebody says they are done with it. See read_secret().
     secret TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS heartbeats (
@@ -112,7 +113,7 @@ def _without_secret(payload: Mapping[str, Any]) -> dict[str, Any]:
     A heartbeat is archived whole for the retention window. A device token
     riding up inside one would therefore outlive the single showing it is
     promised by thirty days, in a second copy nothing points at and
-    ``take_secret`` cannot reach. Redacting here rather than at the call site
+    ``read_secret`` cannot reach. Redacting here rather than at the call site
     makes it a property of storing a heartbeat, not something each caller has
     to remember.
     """
@@ -358,7 +359,7 @@ class Store:
             if state == "ready":
                 # A minted token. The row has to outlive the node's work, because
                 # nobody has seen the token yet — but only until someone does,
-                # which is what take_secret is for. The code is cleared in the
+                # which is what read_secret is for. The code is cleared in the
                 # same statement; it has served its purpose either way.
                 clean_secret = secret.strip()[:self.MAX_SECRET]
                 if not clean_secret:
@@ -404,17 +405,19 @@ class Store:
                 (state, clean, detail.strip()[:200], now, *pin))
             self._conn.commit()
 
-    def take_secret(self, node_id: str, now: Optional[float] = None) -> str:
-        """Return a minted token once, and delete it in the same breath.
+    def read_secret(self, node_id: str, now: Optional[float] = None) -> str:
+        """Return a minted token, for as long as the attempt it belongs to lasts.
 
-        Read and delete under one lock, so a refresh, a back button or a second
-        tab cannot show a credential that was meant to be seen exactly once.
+        It was shown exactly once and deleted, which turned out to be stricter
+        than anything required it to be. The credential already sits here from
+        the moment the node reports it until the attempt expires; reading it
+        twice inside that window adds no exposure the first read did not.
+        Refusing the second only meant a person who needed it on a second
+        machine had to mint a whole new one.
 
-        Not `DELETE ... RETURNING`, which would say this in one statement: that
-        needs SQLite 3.35 and this project claims Python 3.9, where Debian 11
-        still ships 3.34. The lock is held across both statements and every
-        other caller takes the same one, so the pair is already atomic against
-        anything else in this process.
+        So: readable while the attempt is alive, gone when it expires on the
+        ordinary sweep, and gone at once if somebody says they are finished
+        with it. The window is what bounds this, not the reading.
         """
         with self._lock:
             row = self._conn.execute(
@@ -422,11 +425,12 @@ class Store:
                 (node_id,)).fetchone()
             if row is None:
                 return ""
-            self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
-            # Handed over, so remember that it happened. The time is not a
-            # secret and is the only trace left of a flow that succeeded.
-            self._conn.execute("UPDATE nodes SET device_token_at = ? WHERE id = ?",
-                               (now if now is not None else time.time(), node_id))
+            # Remember that a token reached somebody. Written on the first read
+            # and left alone after: the question it answers is "did this work",
+            # which does not become more true by looking again.
+            self._conn.execute(
+                "UPDATE nodes SET device_token_at = ? WHERE id = ? AND device_token_at = 0",
+                (now if now is not None else time.time(), node_id))
             self._conn.commit()
         return str(row["secret"])
 

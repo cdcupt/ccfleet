@@ -467,10 +467,11 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
         f"<style>{CSS}</style></head><body><div class=\"page\">"
         f"<h1>Device token{who}</h1>"
         "<p class=\"sub\">Minted on <strong>" + escape(node_id) + "</strong>, from the "
-        "account that node is signed in as. Good for one year. "
-        "<strong>Copy it now</strong> \u2014 it is already gone from this server.</p>"
-        "<div class=\"ok-banner\">This is shown once. Closing or refreshing this page "
-        "loses it, and you would mint another.</div>"
+        "account that node is signed in as. Good for one year.</p>"
+        "<div class=\"ok-banner\">You can come back and show this again while the "
+        "request lasts, so a second machine can have the same token. Press "
+        "<strong>Done with it</strong> on the fleet page when you have finished, or "
+        "leave it and it expires on its own.</div>"
         f"<pre>{escape(token)}</pre>"
         "<div class=\"card\">"
         "<h2>Put it on a machine</h2>"
@@ -512,6 +513,8 @@ TOKEN_WORDS = {
     # broken and gets abandoned, which is exactly what happened.
     "requested": "Asking the node\u2026 it checks in every few minutes, so this can "
                  "take a moment. Leave the page open.",
+    "ready_note": "Your token is ready \u2014 show it as often as you need while "
+                  "this lasts.",
     "url_ready": "Open the link, approve, then paste the code below.",
     "code_sent": "Code sent. Minting the token\u2026",
     "ready": "Your token is ready.",
@@ -559,8 +562,12 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
                 label = "Get a device token"
             body = said + form("token-start", "", label)
         elif state == "ready":
+            # Shown as often as you like while the attempt lasts, because a
+            # second machine needs the same token and minting another for it
+            # is a worse answer than reading this one again.
             body = (f'<span class="pill ok">{escape(TOKEN_WORDS["ready"])}</span> '
-                    + form("token-show", "", "Show it once", cls="primary"))
+                    + form("token-show", "", "Show it", cls="primary")
+                    + " " + form("token-done", "", "Done with it"))
         else:
             body = f'<span class="login-say">{escape(TOKEN_WORDS.get(state, state))}</span>'
             url = login.get("url") or ""
