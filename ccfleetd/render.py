@@ -896,3 +896,53 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + "</div></body></html>"
     )
+
+
+def render_account(account: Optional[Mapping[str, Any]], held: int,
+                   cfg: Config) -> str:
+    """The page a person sees after signing in with Google.
+
+    Deliberately small. It exists so a session authenticates something real
+    rather than being a library nothing calls, and so the state that matters
+    most — how many slots you may hold — is the first thing on the page. The
+    slots themselves, claiming and releasing, are the user site.
+    """
+    head = (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>ccfleet · your account</title><style>{CSS}</style></head><body>")
+    if account is None:
+        if not cfg.google_ready:
+            # Said plainly rather than showing a button that cannot work.
+            return (head + "<h1>ccfleet</h1><div class=\"card\">"
+                    "<p>Sign-in is not set up on this server.</p>"
+                    "<p class=\"muted\">An operator configures "
+                    "<code>CCFLEET_GOOGLE_CLIENT_ID</code>, "
+                    "<code>CCFLEET_GOOGLE_CLIENT_SECRET</code> and "
+                    "<code>CCFLEET_COOKIE_SECRET</code> to turn it on.</p>"
+                    "</div></body></html>")
+        return (head + "<h1>ccfleet</h1><div class=\"card\">"
+                "<p>Sign in to see the slots you hold.</p>"
+                "<p><a class=\"btn\" href=\"/auth/google/start?next=/account\">"
+                "Continue with Google</a></p>"
+                "<p class=\"muted\">We ask Google for your email address and "
+                "nothing else.</p></div></body></html>")
+
+    quota = int(account.get("slot_quota") or 0)
+    if quota == 0:
+        # The common case for somebody who has just signed up, and the one
+        # worth explaining: an empty page with no reason given reads as broken.
+        allowance = ("<p><strong>You have no slots yet.</strong></p>"
+                     "<p class=\"muted\">Slots are assigned by the operator. "
+                     "Once one is assigned to you it appears here.</p>")
+    else:
+        allowance = (f"<p>You may hold <strong>{quota}</strong> "
+                     f"{_plural(quota, 'slot')}, and currently hold "
+                     f"<strong>{held}</strong>.</p>")
+    return (head +
+            "<h1>ccfleet</h1><div class=\"card\">"
+            f"<p class=\"muted\">Signed in as {escape(str(account.get('email', '')))}</p>"
+            f"{allowance}"
+            "<form method=\"post\" action=\"/auth/signout\">"
+            "<button class=\"btn\" type=\"submit\">Sign out</button></form>"
+            "</div></body></html>")

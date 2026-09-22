@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
+from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
 
@@ -128,6 +129,30 @@ CREATE TABLE IF NOT EXISTS slots (
 );
 CREATE INDEX IF NOT EXISTS ix_slots_state ON slots(state);
 CREATE INDEX IF NOT EXISTS ix_slots_held_by ON slots(held_by);
+-- Browser sessions, which the console has never had.
+--
+-- The primary key is a SHA-256 of the session id, not the id. The cookie
+-- carries the id; anyone who reads this table gets hashes they cannot present
+-- to us. The node token is stored the same way for the same reason.
+CREATE TABLE IF NOT EXISTS sessions (
+    id_hash TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_sessions_account ON sessions(account_id);
+CREATE INDEX IF NOT EXISTS ix_sessions_expires ON sessions(expires_at);
+-- A sign-in that has left for Google and not come back. Holds the state that
+-- ties the callback to the browser that started it, and the PKCE verifier.
+-- Rows are single use and short lived: taking one deletes it, so a callback
+-- replayed from a browser history or a proxy log finds nothing.
+CREATE TABLE IF NOT EXISTS oauth_flows (
+    state TEXT PRIMARY KEY,
+    verifier TEXT NOT NULL,
+    next_url TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
@@ -138,6 +163,7 @@ CREATE TABLE IF NOT EXISTS users (
 """
 
 
+ACCOUNT_ID_BYTES = 12
 SLOT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 # Exactly what node/slot-add.sh accepts for --slot. It has to be exactly that:
 # the fleet records the name here and the operator provisions it there, so a
@@ -1049,3 +1075,136 @@ class Store:
             if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
                 raise NoSlotAvailable("the free slot was taken; try again")
         return self.get_slot(candidate["id"])  # type: ignore[return-value]
+
+    # -- signing in --------------------------------------------------------
+
+    def upsert_account_from_google(self, google_sub: str, email: str, *,
+                                   now: float) -> dict[str, Any]:
+        """The account for this Google identity, creating it on first sign-in.
+
+        Keyed on the subject, never the address: people change their email and
+        Google keeps the subject stable, so matching on address would either
+        lock somebody out of their own slots or — worse — hand them somebody
+        else's account when an address is reassigned.
+
+        A new account gets no allowance. Registering produces a login and an
+        empty page until the operator grants one; that is the economics, and
+        the default has to be the safe direction.
+        """
+        with self._write_txn() as conn:
+            row = conn.execute(
+                "SELECT * FROM accounts WHERE google_sub = ?",
+                (google_sub,)).fetchone()
+            if row is not None:
+                conn.execute(
+                    "UPDATE accounts SET email = ?, last_seen_at = ? WHERE id = ?",
+                    (email, now, row["id"]))
+                updated = dict(row)
+                updated.update(email=email, last_seen_at=now)
+                return updated
+            account_id = "u" + secrets.token_hex(ACCOUNT_ID_BYTES)
+            conn.execute(
+                "INSERT INTO accounts (id, google_sub, email, role, slot_quota, "
+                "created_at, last_seen_at) VALUES (?,?,?,'user',0,?,?)",
+                (account_id, google_sub, email, now, now))
+            return {"id": account_id, "google_sub": google_sub, "email": email,
+                    "role": "user", "slot_quota": 0, "created_at": now,
+                    "last_seen_at": now}
+
+    def begin_oauth_flow(self, state: str, verifier: str, *, now: float,
+                         ttl_s: int, next_url: str = "") -> None:
+        """Remember a sign-in that is about to leave for Google."""
+        with self._write_txn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO oauth_flows "
+                "(state, verifier, next_url, created_at, expires_at) "
+                "VALUES (?,?,?,?,?)",
+                (state, verifier, next_url, now, now + ttl_s))
+
+    def take_oauth_flow(self, state: str, *, now: float) -> dict[str, Any] | None:
+        """Consume a pending sign-in. Returns it once, then never again.
+
+        Single use on purpose. A callback URL lands in browser history, in
+        referrer headers and in any proxy log on the way; replaying it must not
+        start a second sign-in. Expiry is checked here too, so a state sitting
+        in a tab somebody left open overnight is not still good in the morning.
+        """
+        with self._write_txn() as conn:
+            row = conn.execute(
+                "SELECT * FROM oauth_flows WHERE state = ?", (state,)).fetchone()
+            conn.execute("DELETE FROM oauth_flows WHERE state = ?", (state,))
+            if row is None or now >= row["expires_at"]:
+                return None
+            return dict(row)
+
+    def purge_oauth_flows(self, *, now: float) -> int:
+        with self._write_txn() as conn:
+            cur = conn.execute(
+                "DELETE FROM oauth_flows WHERE expires_at <= ?", (now,))
+        return cur.rowcount
+
+    def create_session(self, account_id: str, *, now: float,
+                       ttl_s: int) -> str:
+        """Start a session and return its id, which is shown to nobody twice.
+
+        Only the hash is kept, so this return value is the only copy. It goes
+        straight into the cookie.
+        """
+        if self.get_account(account_id) is None:
+            raise StoreError(f"no account {account_id!r}")
+        session_id = sessionlib.new_session_id()
+        with self._write_txn() as conn:
+            conn.execute(
+                "INSERT INTO sessions (id_hash, account_id, created_at, expires_at) "
+                "VALUES (?,?,?,?)",
+                (sessionlib.hash_session_id(session_id), account_id, now,
+                 now + ttl_s))
+        return session_id
+
+    def account_for_session(self, session_id: str, *,
+                            now: float) -> dict[str, Any] | None:
+        """Who this session belongs to, or None if it is unknown or expired.
+
+        An expired row is deleted rather than merely ignored, so a stolen
+        cookie stops being useful the first time anybody presents it rather
+        than whenever a sweep happens to run.
+        """
+        id_hash = sessionlib.hash_session_id(session_id)
+        with self._write_txn() as conn:
+            row = conn.execute(
+                "SELECT account_id, expires_at FROM sessions WHERE id_hash = ?",
+                (id_hash,)).fetchone()
+            if row is None:
+                return None
+            if now >= row["expires_at"]:
+                conn.execute("DELETE FROM sessions WHERE id_hash = ?", (id_hash,))
+                return None
+            account = conn.execute(
+                "SELECT * FROM accounts WHERE id = ?", (row["account_id"],)).fetchone()
+            if account is None:
+                # The account went away while the session did not. Nothing to
+                # be signed in as.
+                conn.execute("DELETE FROM sessions WHERE id_hash = ?", (id_hash,))
+                return None
+            conn.execute("UPDATE accounts SET last_seen_at = ? WHERE id = ?",
+                         (now, row["account_id"]))
+        return dict(account)
+
+    def end_session(self, session_id: str) -> bool:
+        with self._write_txn() as conn:
+            cur = conn.execute("DELETE FROM sessions WHERE id_hash = ?",
+                               (sessionlib.hash_session_id(session_id),))
+        return cur.rowcount > 0
+
+    def end_all_sessions(self, account_id: str) -> int:
+        """Sign somebody out everywhere. What an operator reaches for when an
+        account is compromised, and what removing an account must do first."""
+        with self._write_txn() as conn:
+            cur = conn.execute("DELETE FROM sessions WHERE account_id = ?",
+                               (account_id,))
+        return cur.rowcount
+
+    def purge_sessions(self, *, now: float) -> int:
+        with self._write_txn() as conn:
+            cur = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
+        return cur.rowcount

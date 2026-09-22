@@ -17,12 +17,19 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
+from . import oauth, sessions
 from .config import Config
 from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
-from .render import build_rows, render_add_result, render_dashboard, render_token_result
+from .render import (
+    build_rows,
+    render_account,
+    render_add_result,
+    render_dashboard,
+    render_token_result,
+)
 from .store import Store, StoreError
 
 log = logging.getLogger("ccfleetd.api")
@@ -121,6 +128,21 @@ def csrf_token(cfg: Config) -> str:
                     hashlib.sha256).hexdigest()
 
 
+def _safe_next(raw: str) -> str:
+    """Where to land after signing in, if it is somewhere on this site.
+
+    Anything with a scheme or a host is dropped, and so is `//evil.example`,
+    which a browser reads as protocol-relative and follows off-site. An open
+    redirect on a sign-in route is how a link that genuinely starts at our
+    domain ends up somewhere else with the person already authenticated.
+    """
+    if not raw or not raw.startswith("/") or raw.startswith("//"):
+        return ""
+    if "\\" in raw or "\n" in raw or "\r" in raw:
+        return ""
+    return raw
+
+
 def _bearer_token(header: Optional[str]) -> Optional[str]:
     if not header:
         return None
@@ -176,6 +198,144 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             self._json(403, {"error": "this account cannot manage nodes"})
             return False
 
+        # -- signing in with Google ----------------------------------------
+
+        def _signed_in(self) -> Optional[dict[str, Any]]:
+            """The account this browser is signed in as, or None.
+
+            Separate from _identity(): that is the operator's basic auth, which
+            is the console's own door. These are the people who rent slots, and
+            the two must not be able to stand in for one another.
+            """
+            if not ctx.cfg.cookie_secret:
+                return None
+            raw = sessions.read_cookie(self.headers.get("Cookie"))
+            if raw is None:
+                return None
+            try:
+                session_id = sessions.unsign(raw, ctx.cfg.cookie_secret)
+            except sessions.SessionError:
+                return None
+            return ctx.store.account_for_session(session_id, now=time.time())
+
+        def _sign_in_start(self) -> None:
+            if not ctx.cfg.google_ready:
+                self._json(503, {"error": "sign-in is not configured"})
+                return
+            state, verifier = oauth.new_state(), oauth.new_verifier()
+            # Only our own paths, and only paths. An open redirect here would
+            # let somebody send a ccfleet sign-in link that lands on their site
+            # with whatever the browser was carrying.
+            wanted = _safe_next(urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query).get("next", [""])[0])
+            ctx.store.begin_oauth_flow(state, verifier, now=time.time(),
+                                       ttl_s=oauth.FLOW_TTL_S, next_url=wanted)
+            # The state also goes into a cookie, and that is the half that
+            # actually ties the callback to a browser. Held only on the server
+            # it proves the flow was started by *somebody* — so an attacker can
+            # start one, sign in as themselves, and send the victim the
+            # resulting callback URL, which signs the victim into the
+            # attacker's account. Requiring the cookie means only the browser
+            # that began the flow can finish it.
+            self._redirect_with_cookies(
+                oauth.authorize_url(client_id=ctx.cfg.google_client_id,
+                                    redirect_uri=ctx.cfg.redirect_uri,
+                                    state=state, verifier=verifier),
+                [sessions.cookie_header(
+                    sessions.sign(state, ctx.cfg.cookie_secret),
+                    ttl_s=oauth.FLOW_TTL_S, secure=ctx.cfg.cookie_secure,
+                    name=sessions.FLOW_COOKIE_NAME)])
+
+        def _sign_in_callback(self) -> None:
+            if not ctx.cfg.google_ready:
+                self._json(503, {"error": "sign-in is not configured"})
+                return
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            state = query.get("state", [""])[0]
+            # The cookie first: this is the check that makes `state` mean
+            # anything. Without it a callback URL works in any browser.
+            raw_flow = sessions.read_cookie(self.headers.get("Cookie"),
+                                            sessions.FLOW_COOKIE_NAME)
+            try:
+                from_browser = (sessions.unsign(raw_flow, ctx.cfg.cookie_secret)
+                                if raw_flow else "")
+            except sessions.SessionError:
+                from_browser = ""
+            if (not state or not from_browser
+                    or not sessions.matches(state, from_browser)):
+                self._sign_in_failed("that sign-in did not start in this "
+                                     "browser; please start again")
+                return
+            # Taken exactly once. A callback with no matching flow is either a
+            # replay or somebody else's link, and neither may sign anybody in.
+            flow = ctx.store.take_oauth_flow(state, now=time.time())
+            if flow is None:
+                self._sign_in_failed("that sign-in link has expired; start again")
+                return
+            if query.get("error"):
+                # The person pressed cancel on Google's consent screen.
+                self._redirect_with_cookies("/?signin=cancelled",
+                                            [self._clear_flow_cookie()])
+                return
+            try:
+                token = oauth.exchange_code(
+                    code=query.get("code", [""])[0], verifier=flow["verifier"],
+                    client_id=ctx.cfg.google_client_id,
+                    client_secret=ctx.cfg.google_client_secret,
+                    redirect_uri=ctx.cfg.redirect_uri)
+                who = oauth.fetch_identity(token)
+            except oauth.OAuthError as exc:
+                # Logged in full, shown as a sentence. The reasons name our
+                # configuration, which is not the visitor's business.
+                log.warning("google sign-in failed: %s", exc)
+                self._sign_in_failed("Google could not confirm that sign-in. "
+                                     "Please try again.", status=502)
+                return
+            account = ctx.store.upsert_account_from_google(
+                who["sub"], who["email"], now=time.time())
+            session_id = ctx.store.create_session(
+                account["id"], now=time.time(), ttl_s=ctx.cfg.session_ttl_s)
+            self._redirect_with_cookies(
+                flow["next_url"] or "/",
+                [sessions.cookie_header(
+                    sessions.sign(session_id, ctx.cfg.cookie_secret),
+                    ttl_s=ctx.cfg.session_ttl_s, secure=ctx.cfg.cookie_secure),
+                 self._clear_flow_cookie()])
+
+        def _sign_out(self) -> None:
+            raw = sessions.read_cookie(self.headers.get("Cookie"))
+            if raw and ctx.cfg.cookie_secret:
+                try:
+                    ctx.store.end_session(
+                        sessions.unsign(raw, ctx.cfg.cookie_secret))
+                except sessions.SessionError:
+                    pass
+            # Cleared whatever happened, so a cookie we cannot read still goes.
+            self._redirect_with_cookies(
+                "/", [sessions.clearing_header(secure=ctx.cfg.cookie_secure)])
+
+        def _clear_flow_cookie(self) -> str:
+            """The half-finished sign-in is over, however it ended."""
+            return sessions.clearing_header(secure=ctx.cfg.cookie_secure,
+                                            name=sessions.FLOW_COOKIE_NAME)
+
+        def _sign_in_failed(self, message: str, status: int = 400) -> None:
+            """Refuse, and take the flow cookie with it so the next attempt
+            starts clean rather than against a state that is already spent."""
+            body = json.dumps({"error": message}).encode("utf-8")
+            headers = dict(JSON_HEADERS)
+            headers["Set-Cookie"] = self._clear_flow_cookie()
+            self._send(status, body, headers)
+
+        def _redirect_with_cookies(self, location: str,
+                                   cookies: list[str]) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            for cookie in cookies:
+                self.send_header("Set-Cookie", cookie)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def _read_body(self) -> Optional[bytes]:
             raw_len = self.headers.get("Content-Length")
             if raw_len is None or not raw_len.isdigit():
@@ -193,6 +353,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0]
             if path == "/healthz":
                 self._json(200, {"ok": True})
+            elif path == "/account":
+                who = self._signed_in()
+                self._send(200, render_account(
+                    who, ctx.store.held_slot_count(who["id"]) if who else 0,
+                    ctx.cfg).encode("utf-8"), HTML_HEADERS)
+            elif path == "/auth/google/start":
+                self._sign_in_start()
+            elif path == "/auth/google/callback":
+                self._sign_in_callback()
             elif path == "/":
                 who = self._identity()
                 if who is not None:
@@ -248,6 +417,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/auth/signout":
+                self._sign_out()
+                return
             if path.startswith("/actions/"):
                 self._console_action(path)
                 return
