@@ -638,3 +638,47 @@ def test_no_state_but_free_may_be_forgotten(store, state):
 def test_forgetting_a_slot_that_is_not_there(store):
     with pytest.raises(StoreError, match="no slot"):
         store.remove_slot("ghost")
+
+
+def test_free_cannot_be_reached_through_the_generic_move(store):
+    """The lifecycle allows releasing -> free, but not by this door. Only
+    finish_release clears the holder, the claim time and the device-token mark,
+    and it does it in the same statement that sets the state — so a slot cannot
+    read as nobody's while still naming the person whose files may be on it."""
+    machine(store)
+    account(store, quota=1)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.claim_slot("a1", now=NOW)
+    store.begin_release("s1")
+
+    with pytest.raises(slots.TransitionError, match="finish_release"):
+        store.move_slot("s1", slots.FREE)
+
+    row = store.get_slot("s1")
+    assert row["state"] == slots.RELEASING
+    assert row["held_by"] == "a1"
+    assert store.held_slot_count("a1") == 1
+
+
+@pytest.mark.parametrize("name", ["a", "_slot", "1slot", "Slot01", "s" * 33,
+                                  "slot 01", "slot.01"])
+def test_a_slot_name_the_machine_would_refuse_is_refused_here(store, name):
+    """node/slot-add.sh takes 2-32 characters starting with a lowercase letter.
+    A name recorded here that the script rejects is a slot in our records that
+    can never exist on the machine."""
+    machine(store)
+    with pytest.raises(StoreError):
+        store.add_slot("s1", "m1", name, now=NOW)
+
+
+def test_the_fleet_and_the_provisioning_script_accept_the_same_names():
+    """Two files, one rule. Drift means the console records slots the operator
+    cannot create, and the mismatch only shows up on the machine."""
+    import pathlib as _p
+    import re as _re
+
+    from ccfleetd.store import UNIX_USER_RE
+    script = (_p.Path(__file__).resolve().parents[1] / "node" / "slot-add.sh").read_text()
+    found = _re.search(r"grep -qE '\^(\[a-z\]\[a-z0-9_-\]\{1,31\})\$'", script)
+    assert found, "slot-add.sh no longer validates --slot the way this test expects"
+    assert UNIX_USER_RE.pattern == f"^{found.group(1)}$".replace("\\", "")

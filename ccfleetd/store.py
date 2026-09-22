@@ -139,7 +139,11 @@ CREATE TABLE IF NOT EXISTS users (
 
 
 SLOT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
-UNIX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+# Exactly what node/slot-add.sh accepts for --slot. It has to be exactly that:
+# the fleet records the name here and the operator provisions it there, so a
+# name this accepts and the script refuses is a slot that exists in our records
+# and can never exist on the machine.
+UNIX_USER_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 
 
 class StoreError(ValueError):
@@ -950,6 +954,15 @@ class Store:
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
             frm = row["state"]
+            if to == slotstates.FREE:
+                # The lifecycle does allow releasing -> free, but not by this
+                # door. finish_release clears the holder, the claim time and
+                # the device-token mark in the same statement; arriving at free
+                # through here would leave a slot that reads as nobody's while
+                # still naming the person whose files may still be on it.
+                raise slotstates.TransitionError(
+                    "a slot reaches free only through finish_release(), which "
+                    "clears the holder in the same statement")
             slotstates.check_move(frm, to)
             cur = self._conn.execute(
                 "UPDATE slots SET state = ? WHERE id = ? AND state = ?",
