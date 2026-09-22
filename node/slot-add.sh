@@ -98,6 +98,13 @@ if id "$SLOT" >/dev/null 2>&1; then
   if ! id -nG "$SLOT" 2>/dev/null | tr ' ' '\n' | grep -qx "$SLOT_GROUP"; then
     die "$SLOT already exists and is not a ccfleet slot. Refusing to take it over."
   fi
+  # Group membership alone is not enough to say it is a slot: a system account
+  # put in the group by hand would get its home chmod 700 a few lines down.
+  # Ordinary logins live in 1000..59999 on Debian and Ubuntu; `nobody` sits
+  # outside it at 65534 and a bare "uid >= 1000" would wave it through.
+  EXISTING_UID="$(id -u "$SLOT")"
+  { [ "$EXISTING_UID" -ge 1000 ] && [ "$EXISTING_UID" -le 59999 ]; } \
+    || die "$SLOT has uid $EXISTING_UID, outside the ordinary login range 1000-59999. That is a system account, not a slot. Refusing."
   note "slot $SLOT already exists; continuing"
 else
   adduser --disabled-password --gecos "" "$SLOT" >/dev/null

@@ -508,3 +508,26 @@ def test_a_symlinked_home_is_not_followed(tmp_path):
     assert "Refusing to delete through it" in result.stderr
     assert not (bindir / "gone.marker").exists(), "userdel ran before the path was judged"
     assert real.is_dir()
+
+
+@pytest.mark.parametrize("uid", ["65534", "60000", "999"])
+def test_a_system_account_in_the_slot_group_is_refused_by_both_scripts(tmp_path, uid):
+    """`nobody` is uid 65534, which is comfortably >= 1000. Put it in
+    ccfleet-slots by hand and a bare lower-bound check waves it through — to
+    slot-remove, which deletes the account and its home, and to slot-add, which
+    chmods that home to 0700. Ordinary logins are 1000..59999; both ends matter."""
+    for script, verb in ((REMOVE, "delete"), (ADD, "reshape")):
+        slot_home = tmp_path / f"home-{uid}-{verb}"
+        slot_home.mkdir()
+        sysdir = tmp_path / f"sys-{uid}-{verb}"
+        sysdir.mkdir()
+        bindir = fake_system(sysdir, uid=uid, slot_home=slot_home)
+        env = dict(os.environ)
+        env["PATH"] = f"{bindir}:{env['PATH']}"
+        env["CCFLEET_SLICE_ROOT"] = str(tmp_path / f"slices-{uid}-{verb}")
+        result = subprocess.run([str(script), "--slot", "slot01"], capture_output=True,
+                                text=True, env=env, timeout=60)
+        assert result.returncode != 0, f"{script.name} would {verb} uid {uid}"
+        assert "Refusing" in result.stderr
+        assert not (bindir / "gone.marker").exists(), f"{script.name} ran userdel on uid {uid}"
+        assert slot_home.is_dir(), f"{script.name} removed the home of uid {uid}"

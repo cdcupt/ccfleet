@@ -51,9 +51,12 @@ fi
 if id -nG "$SLOT" | tr ' ' '\n' | grep -qx sudo; then
   die "$SLOT has sudo, so it is not a slot. Refusing to remove it."
 fi
-[ "$(id -u "$SLOT")" -ge 1000 ] || die "$SLOT is a system account. Refusing."
-
+# Debian and Ubuntu hand ordinary logins out of FIRST_UID..LAST_UID, 1000..59999
+# — the same range node/install.sh checks. A bare "uid >= 1000" lets `nobody`
+# through at 65534, and every line below this one deletes something.
 UID_NUM="$(id -u "$SLOT")"
+{ [ "$UID_NUM" -ge 1000 ] && [ "$UID_NUM" -le 59999 ]; } \
+  || die "$SLOT has uid $UID_NUM, outside the ordinary login range 1000-59999. That is a system account, not a slot. Refusing."
 HOME_DIR="$(getent passwd "$SLOT" | cut -d: -f6)"
 
 # Everything below deletes whatever this names — `userdel -r` every bit as much
