@@ -11,6 +11,7 @@ dependencies = []
 [project.scripts]
 ccfleetd = "ccfleetd.cli:main"
 ccfleet-agent = "ccfleet_agent.agent:main"
+ccfleet-machine = "ccfleet_agent.machine:main"
 
 [build-system]
 requires = ["setuptools>=68"]

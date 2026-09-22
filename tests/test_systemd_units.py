@@ -87,3 +87,45 @@ def test_every_unit_that_invokes_claude_disables_the_autoupdater():
     for name in ("ccfleet-agent.service", "claude-remote-control.service", "ccfleet-shell.service"):
         text = (UNITS / name).read_text()
         assert "DISABLE_AUTOUPDATER=1" in text, f"{name} may run claude without staging upgrades"
+
+
+MACHINE = UNITS / "ccfleet-machine.service"
+MACHINE_TIMER = UNITS / "ccfleet-machine.timer"
+
+
+def test_the_machine_agent_runs_as_root_and_says_why_not_otherwise():
+    """It creates and removes slot users, and slot-add drops into each new one
+    with sudo -u. NoNewPrivileges would forbid that sudo, so it is absent here
+    on purpose — unlike every owner unit, which sets it."""
+    svc = _service(MACHINE)
+    assert "User" not in svc, "slot users can only be made by root"
+    assert "NoNewPrivileges" not in svc, "slot-add.sh's sudo -u would be refused"
+
+
+def test_the_machine_agent_is_isolated_from_the_environment_it_starts_in():
+    svc = _service(MACHINE)
+    assert svc["ExecStart"].startswith("/usr/bin/python3 -I "), \
+        "without -I a PYTHONPATH in root's environment chooses what root imports"
+    assert "/usr/local/lib/ccfleet/ccfleet_agent/machine.py" in svc["ExecStart"]
+
+
+def test_the_machine_token_is_read_from_its_file_not_carried_by_the_unit():
+    svc = _service(MACHINE)
+    assert "--env-file /etc/ccfleet/agent.env" in svc["ExecStart"]
+    assert "Environment" not in svc and "EnvironmentFile" not in svc
+
+
+def test_the_machine_agent_is_bounded():
+    """Slots' reports and quota reads run inside this unit; a slot must not be
+    able to take the machine's memory down with the agent looking after it."""
+    svc = _service(MACHINE)
+    assert svc.get("MemoryMax") and svc.get("TimeoutStartSec")
+    assert svc.get("Type") == "oneshot"
+
+
+def test_the_machine_timer_runs_it_every_minute():
+    cp = configparser.RawConfigParser(strict=False, comment_prefixes=("#",))
+    cp.optionxform = str
+    cp.read_string(MACHINE_TIMER.read_text())
+    assert cp.get("Timer", "OnUnitActiveSec") == "1min"
+    assert cp.get("Install", "WantedBy") == "timers.target"

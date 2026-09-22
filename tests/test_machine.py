@@ -1,0 +1,597 @@
+"""The machine agent: root on a shared machine, looking after every slot on it.
+
+What it does as root is narrow on purpose — run slot-add, run slot-remove, and
+start the ordinary agent as each slot's own user — so the tests are mostly
+about the edges of that: what it will and will not run, what reaches a slot's
+process, and what a slot's own report is allowed to change.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import pwd
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from ccfleet_agent import machine
+
+NOW = 1_700_000_000.0
+CLAIM = NOW - 30.0
+
+
+def account(name="slot01", uid=1001, home=None):
+    return pwd.struct_passwd((name, "x", uid, uid, "", home or f"/home/{name}", "/bin/bash"))
+
+
+class Reply(io.BytesIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class Fake:
+    """A machine that exists only in memory: users, groups, scripts, server."""
+
+    def __init__(self, users=(), groups=None, desired=None, facts=None, script_codes=None,
+                 status=200):
+        self.users = {u: account(u, 1001 + i) for i, u in enumerate(users)}
+        self.groups = groups if groups is not None else {u: {"ccfleet-slots"} for u in users}
+        self.desired = desired or {}
+        self.facts = facts if facts is not None else {"claude": {"version": "2.1.278"}}
+        self.script_codes = script_codes or {}
+        self.status = status
+        self.spawned = []
+        self.scripts = []
+        self.posted = []
+
+    def lookup(self, name):
+        return self.users.get(name)
+
+    def groups_of(self, acct):
+        return set(self.groups.get(acct.pw_name, set()))
+
+    def spawn(self, argv, **kwargs):
+        self.spawned.append((argv, kwargs))
+        return 0, json.dumps(self.facts)
+
+    def runner(self, argv, **kwargs):
+        self.scripts.append(argv)
+        code, text = self.script_codes.get((Path(argv[0]).name, argv[2]), (0, "done\n"))
+        kwargs["stdout"].write(text.encode())
+        if code == 0 and argv[0].endswith("slot-add.sh"):
+            self.users[argv[2]] = account(argv[2], 2000 + len(self.users))
+            self.groups[argv[2]] = {"ccfleet-slots"}
+        if code == 0 and argv[0].endswith("slot-remove.sh"):
+            self.users.pop(argv[2], None)
+        return subprocess.CompletedProcess(argv, code)
+
+    def opener(self, request, timeout=None):
+        self.posted.append(json.loads(request.data))
+        if self.status != 200:
+            import urllib.error
+            raise urllib.error.HTTPError(request.full_url, self.status, "no", {}, io.BytesIO(b"{}"))
+        return Reply(json.dumps({"ok": True, "desired": self.desired}).encode())
+
+    def system(self):
+        return machine.System(lookup=self.lookup, groups_of=self.groups_of, spawn=self.spawn,
+                              runner=self.runner, opener=self.opener, clock=lambda: NOW)
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    return machine.MachineConfig.from_env({
+        "CCFLEET_URL": "https://fleet.example", "CCFLEET_NODE_ID": "shared-1",
+        "CCFLEET_NODE_TOKEN": "t" * 64, "CCFLEET_LIB_DIR": str(tmp_path / "lib"),
+        "CCFLEET_STATE_FILE": str(tmp_path / "state" / "machine.json"),
+        "CCFLEET_EGRESS_TARGETS": "https://egress.invalid"})
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    monkeypatch.setattr(machine.core, "egress_ip", lambda *a, **k: {"ip": None, "source": None})
+
+
+# -- configuration ---------------------------------------------------------------
+
+def test_the_machine_needs_the_same_three_values_as_an_owner_node():
+    with pytest.raises(machine.core.AgentConfigError):
+        machine.MachineConfig.from_env({"CCFLEET_URL": "https://f", "CCFLEET_NODE_ID": "m"})
+
+
+def test_by_default_everything_lives_where_only_root_can_change_it():
+    cfg = machine.MachineConfig.from_env({"CCFLEET_URL": "https://f", "CCFLEET_NODE_ID": "m",
+                                          "CCFLEET_NODE_TOKEN": "t"})
+    assert cfg.state_path == Path("/var/lib/ccfleet/machine.json")
+    assert cfg.slot_add == Path("/usr/local/lib/ccfleet/slot-add.sh")
+    assert cfg.slot_remove == Path("/usr/local/lib/ccfleet/slot-remove.sh")
+    # A slot is asked by the agent that ships beside this one, never another copy.
+    assert cfg.slot_agent == Path(machine.__file__).resolve().with_name("agent.py")
+
+
+# -- what the server asks for ----------------------------------------------------
+
+def test_the_servers_slots_are_checked_before_anything_runs_as_root():
+    wanted = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
+        {"unix_user": "slot02", "state": "releasing", "claimed_at": CLAIM},
+        {"unix_user": "../etc", "state": "releasing"},
+        {"unix_user": "root user", "state": "releasing"},
+        {"unix_user": "Slot03", "state": "free"},
+        {"unix_user": "slot04", "state": "vanished"},
+        {"unix_user": "slot05", "state": "claiming"},
+        {"unix_user": "slot06", "state": "claiming", "claimed_at": True},
+        {"unix_user": "slot07", "state": "claiming", "claimed_at": "12"},
+        {"unix_user": "slot01", "state": "releasing"},
+        "slot08", None,
+    ]})
+    assert wanted == [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
+        {"unix_user": "slot02", "state": "releasing", "claimed_at": None},
+    ]
+
+
+@pytest.mark.parametrize("desired", [{}, {"slots": None}, {"slots": "slot01"},
+                                     {"slots": {"unix_user": "slot01"}}, {"slots": 5},
+                                     {"slots": True}])
+def test_no_list_of_slots_is_no_slots(desired):
+    assert machine.wanted_slots(desired) == []
+
+
+def test_only_an_account_slot_add_made_is_one_to_act_as():
+    """A slot declared under the operator's own login name must not have the
+    operator's Claude Code driven and reported as though it were a customer's."""
+    assert machine.is_slot_account(account(), {"ccfleet-slots", "slot01"})
+    assert not machine.is_slot_account(account(), {"slot01", "sudo"})
+    assert not machine.is_slot_account(account(uid=999), {"ccfleet-slots"})
+    assert not machine.is_slot_account(account(uid=65534), {"ccfleet-slots"})
+
+
+# -- what reaches a slot's process -----------------------------------------------
+
+def test_a_slots_process_gets_its_own_environment_and_none_of_roots(monkeypatch):
+    """The machine's token is in root's environment. A slot's holder can read
+    their own processes' environments, so nothing of root's may reach one."""
+    monkeypatch.setenv("CCFLEET_NODE_TOKEN", "the-machine-token")
+    monkeypatch.setenv("PYTHONPATH", "/home/slot01/evil")
+    env = machine.slot_env(account("slot01", 1001))
+    assert "the-machine-token" not in json.dumps(env)
+    assert set(env) == {"HOME", "USER", "LOGNAME", "PATH", "LANG", "DISABLE_AUTOUPDATER",
+                        "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"}
+    assert env["HOME"] == "/home/slot01" and env["USER"] == "slot01"
+    assert env["XDG_RUNTIME_DIR"] == "/run/user/1001"
+    assert env["DISABLE_AUTOUPDATER"] == "1"
+    # The slot's own bin directory comes last, so a tmux it drops there is not
+    # the one its own report runs.
+    assert env["PATH"].split(":")[-1] == "/home/slot01/.local/bin"
+
+
+def test_a_slot_is_asked_as_itself_with_no_groups(cfg):
+    fake = Fake(users=["slot01"])
+    machine.ask_slot(fake.lookup("slot01"), cfg, fake.system(), {"refresh_quota": True})
+    [(argv, kwargs)] = fake.spawned
+    assert argv == [sys.executable, "-I", str(cfg.slot_agent), "--slot-facts"]
+    assert kwargs["user"] == 1001 and kwargs["group"] == 1001
+    assert kwargs["extra_groups"] == [], "the account's groups travel with it"
+    assert kwargs["cwd"] == "/", "root would have walked into the slot's home"
+    assert kwargs["env"] == machine.slot_env(fake.lookup("slot01"))
+    assert json.loads(kwargs["input_text"]) == {"refresh_quota": True}
+    assert kwargs["limit"] == machine.MAX_SLOT_REPORT_BYTES
+
+
+@pytest.mark.parametrize("result", [(1, '{"claude": {}}'), (0, None), (None, None),
+                                    (0, "not json"), (0, '["a list"]')])
+def test_a_slot_that_cannot_report_reports_nothing(cfg, result):
+    fake = Fake(users=["slot01"])
+    system = machine.System(lookup=fake.lookup, groups_of=fake.groups_of,
+                            spawn=lambda argv, **kw: result)
+    assert machine.ask_slot(fake.lookup("slot01"), cfg, system, {}) == {}
+
+
+def test_a_slot_cannot_speak_for_what_only_root_knows(cfg):
+    """Whether the user exists and whether it was provisioned are what move a
+    slot between people. The slot's holder can shape its own report, so those
+    come from root's records and nothing the slot says can overwrite them."""
+    fake = Fake(users=["slot01"], facts={
+        "unix_user": "slot02", "present": False, "provisioned_for": 1.0,
+        "wipe_error": None, "claude": {"version": "2.1.278"}, "credentials": {"logged_in": True}})
+    state = {"provisioned": {"slot01": CLAIM}}
+    entry = machine.slot_report("slot01", state, cfg, fake.system(), False)
+    assert entry["unix_user"] == "slot01"
+    assert entry["present"] is True
+    assert entry["provisioned_for"] == CLAIM
+    assert "wipe_error" not in entry
+    assert entry["claude"] == {"version": "2.1.278"}
+    assert entry["credentials"] == {"logged_in": True}
+
+
+def test_an_account_that_is_not_a_slot_is_reported_but_never_asked(cfg):
+    fake = Fake(users=["erik"], groups={"erik": {"sudo"}})
+    entry = machine.slot_report("erik", {}, cfg, fake.system(), True)
+    assert entry == {"unix_user": "erik", "present": True}
+    assert fake.spawned == [], "ran a process as an account slot-add never made"
+
+
+def test_a_missing_user_is_reported_absent_and_not_asked(cfg):
+    fake = Fake(users=[])
+    assert machine.slot_report("slot01", {}, cfg, fake.system(), True) == {
+        "unix_user": "slot01", "present": False}
+    assert fake.spawned == []
+
+
+def test_what_went_wrong_is_reported_with_the_claim_it_was_for(cfg):
+    fake = Fake(users=["slot01"])
+    state = {"provision_failed": {"slot01": {"for": CLAIM, "error": "no network"}},
+             "wipe_failed": {"slot01": {"error": "still running", "ts": NOW}}}
+    entry = machine.slot_report("slot01", state, cfg, fake.system(), False)
+    assert entry["provision_failed_for"] == CLAIM
+    assert entry["provision_error"] == "no network"
+    assert entry["wipe_error"] == "still running"
+
+
+def test_the_machine_reports_as_a_machine(cfg):
+    fake = Fake(users=["slot01", "slot02"])
+    payload = machine.machine_payload(cfg, {"slots": ["slot01", "slot02"]}, fake.system(),
+                                      refresh_for="slot02")
+    assert payload["mode"] == "machine" and payload["node_id"] == "shared-1"
+    # No owner login of its own: those sections would read as a broken node.
+    for key in ("claude", "credentials", "remote_control", "quota", "usage"):
+        assert key not in payload
+    assert [s["unix_user"] for s in payload["slots"]] == ["slot01", "slot02"]
+    asked = [json.loads(kw["input_text"])["refresh_quota"] for _, kw in fake.spawned]
+    assert asked == [False, True], "one quota read per run, for the slot whose turn it is"
+
+
+# -- acting ----------------------------------------------------------------------
+
+def slot(user, state, claimed_at=None):
+    return {"unix_user": user, "state": state, "claimed_at": claimed_at}
+
+
+def test_a_claim_is_provisioned_once(cfg):
+    fake = Fake()
+    state = machine.act_on_slots([slot("slot01", "claiming", CLAIM)], {}, cfg, fake.system())
+    assert fake.scripts == [[str(cfg.slot_add), "--slot", "slot01"]]
+    assert state["provisioned"] == {"slot01": CLAIM}
+    machine.act_on_slots([slot("slot01", "claiming", CLAIM)], state, cfg, fake.system())
+    assert len(fake.scripts) == 1, "provisioned the same claim twice"
+
+
+def test_provisioning_that_failed_is_reported_against_its_claim_and_not_retried(cfg):
+    fake = Fake(script_codes={("slot-add.sh", "slot01"): (1, "step\nerror: no network\n")})
+    state = machine.act_on_slots([slot("slot01", "claiming", CLAIM)], {}, cfg, fake.system())
+    assert state["provision_failed"] == {"slot01": {"for": CLAIM, "error": "error: no network"}}
+    assert "slot01" not in state["provisioned"]
+    machine.act_on_slots([slot("slot01", "claiming", CLAIM)], state, cfg, fake.system())
+    assert len(fake.scripts) == 1, "the server moves a failed claim on; retrying repeats it"
+
+
+def test_a_new_claim_of_the_same_slot_is_provisioned_afresh(cfg):
+    fake = Fake()
+    state = {"provisioned": {"slot01": CLAIM - 999}}
+    state = machine.act_on_slots([slot("slot01", "claiming", CLAIM)], state, cfg, fake.system())
+    assert fake.scripts == [[str(cfg.slot_add), "--slot", "slot01"]]
+    assert state["provisioned"] == {"slot01": CLAIM}
+
+
+def test_a_release_is_wiped(cfg):
+    fake = Fake(users=["slot01"])
+    state = machine.act_on_slots([slot("slot01", "releasing")],
+                                 {"provisioned": {"slot01": CLAIM}}, cfg, fake.system())
+    assert fake.scripts == [[str(cfg.slot_remove), "--slot", "slot01"]]
+    assert state["wipe_failed"] == {}
+    assert state["provisioned"] == {}, "an old claim outlived its release"
+
+
+def test_a_wipe_that_worked_is_not_reported_as_failed(cfg):
+    """The script said it worked, but the account still resolves — a name
+    cache a beat behind, say. An earlier failure must not be reported against
+    a wipe that has since succeeded; the next run simply looks again."""
+    fake = Fake(users=["slot01"])
+    lingering = machine.System(lookup=fake.lookup, groups_of=fake.groups_of,
+                               spawn=fake.spawn, clock=lambda: NOW,
+                               runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 0))
+    earlier = {"wipe_failed": {"slot01": {"error": "still running",
+                                          "ts": NOW - machine.WIPE_RETRY_AFTER_S - 1}}}
+    state = machine.act_on_slots([slot("slot01", "releasing")], earlier, cfg, lingering)
+    assert "wipe_error" not in machine.slot_report("slot01", state, cfg, lingering, False)
+
+
+def test_a_release_with_nothing_left_on_the_machine_runs_nothing(cfg):
+    fake = Fake(users=[])
+    state = machine.act_on_slots([slot("slot01", "releasing")],
+                                 {"wipe_failed": {"slot01": {"error": "x", "ts": NOW}}},
+                                 cfg, fake.system())
+    assert fake.scripts == []
+    assert state["wipe_failed"] == {}, "a wipe that is done still reads as failed"
+
+
+def test_a_failed_wipe_is_remembered_and_retried_later_not_every_minute(cfg):
+    fake = Fake(users=["slot01"],
+                script_codes={("slot-remove.sh", "slot01"): (1, "error: still running\n")})
+    state = machine.act_on_slots([slot("slot01", "releasing")], {}, cfg, fake.system())
+    assert state["wipe_failed"]["slot01"] == {"error": "error: still running", "ts": NOW}
+    machine.act_on_slots([slot("slot01", "releasing")], state, cfg, fake.system())
+    assert len(fake.scripts) == 1, "retried inside the back-off"
+
+    later = {**state, "wipe_failed": {"slot01": {"error": "x",
+                                                 "ts": NOW - machine.WIPE_RETRY_AFTER_S - 1}}}
+    machine.act_on_slots([slot("slot01", "releasing")], later, cfg, fake.system())
+    assert len(fake.scripts) == 2, "never retried at all"
+
+
+def test_wipes_go_before_provisioning(cfg):
+    fake = Fake(users=["slot02"])
+    machine.act_on_slots([slot("slot01", "claiming", CLAIM), slot("slot02", "releasing")],
+                         {}, cfg, fake.system())
+    assert [Path(argv[0]).name for argv in fake.scripts] == ["slot-remove.sh", "slot-add.sh"]
+
+
+def test_a_free_slot_carries_nothing_of_its_last_claim(cfg):
+    fake = Fake()
+    state = {"provisioned": {"slot01": CLAIM},
+             "provision_failed": {"slot01": {"for": CLAIM, "error": "x"}},
+             "wipe_failed": {"slot01": {"error": "y", "ts": NOW}}}
+    state = machine.act_on_slots([slot("slot01", "free")], state, cfg, fake.system())
+    assert state["provisioned"] == {} and state["provision_failed"] == {}
+    assert state["wipe_failed"] == {}
+    assert fake.scripts == []
+
+
+def test_a_failed_claim_stays_reported_through_its_wipe(cfg):
+    """So the operator's warning lasts until the slot is clean again, rather
+    than flashing up for one heartbeat and closing."""
+    fake = Fake(users=["slot01"])
+    state = {"provision_failed": {"slot01": {"for": CLAIM, "error": "x"}}}
+    state = machine.act_on_slots([slot("slot01", "releasing")], state, cfg, fake.system())
+    assert state["provision_failed"] == {"slot01": {"for": CLAIM, "error": "x"}}
+
+
+def test_a_slot_no_longer_declared_is_forgotten(cfg):
+    fake = Fake()
+    state = {"provisioned": {"gone": CLAIM}, "wipe_failed": {"gone": {"error": "x", "ts": NOW}},
+             "slots": ["gone"]}
+    state = machine.act_on_slots([], state, cfg, fake.system())
+    assert state["provisioned"] == {} and state["wipe_failed"] == {}
+    assert state["slots"] == []
+
+
+def test_the_next_report_covers_exactly_what_was_asked_about(cfg):
+    fake = Fake()
+    state = machine.act_on_slots([slot("slot02", "free"), slot("slot01", "active")],
+                                 {"slots": ["old"]}, cfg, fake.system())
+    assert state["slots"] == ["slot02", "slot01"]
+
+
+# -- running the scripts ---------------------------------------------------------
+
+def _script(tmp_path, body):
+    path = tmp_path / "script.sh"
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
+    return path
+
+
+def test_a_script_that_worked(tmp_path):
+    ok, why = machine.run_script(_script(tmp_path, "echo fine\n"), "slot01", 10,
+                                 machine.System())
+    assert (ok, why) == (True, "")
+
+
+def test_a_script_that_failed_says_why_in_its_own_last_words(tmp_path):
+    path = _script(tmp_path, "echo step one\necho 'error: no network' >&2\nexit 3\n")
+    ok, why = machine.run_script(path, "slot01", 10, machine.System())
+    assert not ok and why == "error: no network"
+
+
+def test_a_script_that_hangs_is_given_up_on(tmp_path):
+    ok, why = machine.run_script(_script(tmp_path, "sleep 30\n"), "slot01", 0.5,
+                                 machine.System())
+    assert not ok and "did not finish within" in why
+
+
+def test_a_script_that_cannot_start_says_so(tmp_path):
+    ok, why = machine.run_script(tmp_path / "missing.sh", "slot01", 5, machine.System())
+    assert not ok and "missing.sh could not run" in why
+
+
+def test_something_a_script_leaves_running_does_not_hold_the_agent(tmp_path):
+    """slot-add starts a slot's services; if one of them kept the script's
+    output open, a pipe would keep this run waiting for as long as it lived."""
+    path = _script(tmp_path, "sleep 20 &\necho started\nexit 0\n")
+    started = time.monotonic()
+    ok, _ = machine.run_script(path, "slot01", 30, machine.System())
+    assert ok
+    assert time.monotonic() - started < 10, "waited on a process the script left behind"
+
+
+# -- a child whose output is not trusted -----------------------------------------
+
+PY = sys.executable
+
+
+def test_a_well_behaved_child_is_heard_out():
+    code, out = machine.run_bounded([PY, "-c", "import sys; print(sys.stdin.read().upper())"],
+                                    input_text="hello", limit=1000, timeout=10)
+    assert code == 0 and out.strip() == "HELLO"
+
+
+def test_too_much_output_is_refused_rather_than_cut_short():
+    code, out = machine.run_bounded([PY, "-c", "print('x' * 5000)"], input_text="",
+                                    limit=100, timeout=10)
+    assert out is None
+
+
+def test_a_child_that_hangs_is_abandoned_on_time():
+    started = time.monotonic()
+    code, out = machine.run_bounded([PY, "-c", "import time; time.sleep(30)"],
+                                    input_text="", limit=100, timeout=0.5)
+    assert out is None
+    assert time.monotonic() - started < 10
+
+
+def test_a_pipe_held_open_by_a_leftover_does_not_hold_the_agent():
+    """The child exits, but something it started still holds its output. EOF
+    never comes; the clock is what ends the wait."""
+    started = time.monotonic()
+    code, out = machine.run_bounded(["/bin/sh", "-c", "sleep 30 & echo '{}'"],
+                                    input_text="", limit=100, timeout=1)
+    assert out is None
+    assert time.monotonic() - started < 10
+
+
+def test_a_child_that_ignores_its_input_is_no_trouble():
+    code, out = machine.run_bounded([PY, "-c", "print('ok')"], input_text="x" * 200_000,
+                                    limit=100, timeout=10)
+    assert out is not None and out.strip() == "ok"
+
+
+def test_a_child_that_finishes_talking_but_never_leaves_is_not_believed(monkeypatch):
+    """It closed its output, so everything looks said — but it will not exit,
+    and an exit code is part of the answer. It is killed and not heard."""
+    monkeypatch.setattr(machine, "EXIT_GRACE_S", 0.3)
+    started = time.monotonic()
+    code, out = machine.run_bounded(
+        [PY, "-c", "import os, time; os.write(1, b'{}'); os.close(1); time.sleep(30)"],
+        input_text="", limit=100, timeout=10)
+    assert out is None
+    assert time.monotonic() - started < 8
+
+
+def test_accounts_and_groups_come_from_the_system():
+    import getpass
+    me = machine.lookup_user(getpass.getuser())
+    assert me is not None and me.pw_uid == __import__("os").getuid()
+    assert machine.lookup_user("ccfleet-no-such-user-here") is None
+    import grp
+    assert grp.getgrgid(me.pw_gid).gr_name in machine.group_names(me)
+
+
+def test_a_child_that_cannot_start():
+    assert machine.run_bounded(["/nonexistent/binary"], input_text="", limit=10,
+                               timeout=1) == (None, None)
+
+
+# -- the cycle -------------------------------------------------------------------
+
+def test_one_run_reports_then_acts(cfg):
+    fake = Fake(users=["slot02"], desired={"slots": [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
+        {"unix_user": "slot02", "state": "releasing"}]})
+    status, _desired, state = machine.run_cycle(cfg, {}, fake.system())
+    assert status == 200
+    [posted] = fake.posted
+    assert posted["mode"] == "machine" and posted["slots"] == []
+    assert [Path(a[0]).name for a in fake.scripts] == ["slot-remove.sh", "slot-add.sh"]
+    assert json.loads(cfg.state_path.read_text())["provisioned"] == {"slot01": CLAIM}
+
+    # The next run reports what this one did.
+    machine.run_cycle(cfg, state, fake.system())
+    report = {s["unix_user"]: s for s in fake.posted[1]["slots"]}
+    assert report["slot01"]["present"] is True and report["slot01"]["provisioned_for"] == CLAIM
+    assert report["slot02"]["present"] is False
+
+
+def test_a_reply_naming_many_slots_is_read_whole(cfg):
+    """An owner node's reply fits in 4 KB; a machine's names every slot. Cut
+    short it parses as nothing, and the machine would quietly stop acting."""
+    slots = [{"unix_user": f"slot{n:03d}", "state": "free"} for n in range(120)]
+    slots.append({"unix_user": "last", "state": "claiming", "claimed_at": CLAIM})
+    fake = Fake(desired={"slots": slots})
+    machine.run_cycle(cfg, {}, fake.system())
+    assert fake.scripts == [[str(cfg.slot_add), "--slot", "last"]]
+
+
+def test_a_refused_heartbeat_changes_nothing(cfg, monkeypatch):
+    monkeypatch.setattr(machine.core, "RETRY_DELAYS_S", ())
+    fake = Fake(status=401, desired={"slots": [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM}]})
+    status, desired, state = machine.run_cycle(cfg, {"slots": ["slot01"]}, fake.system())
+    assert status == 401 and desired == {}
+    assert state == {"slots": ["slot01"]}
+    assert fake.scripts == []
+
+
+def test_quota_reads_take_turns_across_runs(cfg):
+    fake = Fake(users=["slot01", "slot02"], desired={"slots": [
+        {"unix_user": "slot01", "state": "active"}, {"unix_user": "slot02", "state": "active"}]})
+    state = {"slots": ["slot01", "slot02"]}
+    turns = []
+    for _ in range(3):
+        fake.spawned.clear()
+        _, _, state = machine.run_cycle(cfg, state, fake.system())
+        turns.append([json.loads(kw["input_text"])["refresh_quota"] for _, kw in fake.spawned])
+    assert turns == [[True, False], [False, True], [True, False]]
+
+
+# -- the command -----------------------------------------------------------------
+
+def _env_file(tmp_path, cfg):
+    path = tmp_path / "agent.env"
+    path.write_text(f"CCFLEET_URL={cfg.url}\nCCFLEET_NODE_ID={cfg.node_id}\n"
+                    f"CCFLEET_NODE_TOKEN={cfg.token}\nCCFLEET_STATE_FILE={cfg.state_path}\n")
+    return path
+
+
+def test_it_will_not_run_as_anyone_but_root(tmp_path, cfg, monkeypatch, capsys):
+    monkeypatch.setattr(machine.os, "geteuid", lambda: 1000)
+    assert machine.main(["--env-file", str(_env_file(tmp_path, cfg))]) == 2
+    assert "runs as root" in capsys.readouterr().err
+
+
+def test_an_incomplete_configuration_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("CCFLEET_NODE_TOKEN", raising=False)
+    empty = tmp_path / "empty.env"
+    empty.write_text("")
+    assert machine.main(["--env-file", str(empty)]) == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_printing_sends_nothing(tmp_path, cfg, monkeypatch, capsys):
+    monkeypatch.setattr(machine.os, "geteuid", lambda: 0)
+    fake = Fake()
+    assert machine.main(["--env-file", str(_env_file(tmp_path, cfg)), "--print"],
+                        fake.system()) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "machine"
+    assert fake.posted == []
+
+
+def test_a_run_posts_and_says_whether_it_was_heard(tmp_path, cfg, monkeypatch):
+    monkeypatch.setattr(machine.os, "geteuid", lambda: 0)
+    fake = Fake()
+    assert machine.main(["--env-file", str(_env_file(tmp_path, cfg))], fake.system()) == 0
+    assert len(fake.posted) == 1
+    monkeypatch.setattr(machine.core, "RETRY_DELAYS_S", ())
+    fake.status = 401
+    assert machine.main(["--env-file", str(_env_file(tmp_path, cfg))], fake.system()) == 1
+
+
+def test_a_second_run_leaves_the_first_to_it(tmp_path, cfg, monkeypatch):
+    monkeypatch.setattr(machine.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(machine.core, "hold_the_only_run", lambda path: None)
+    fake = Fake()
+    assert machine.main(["--env-file", str(_env_file(tmp_path, cfg))], fake.system()) == 0
+    assert fake.posted == [], "two runs acted on the same slots at once"
+
+
+def test_the_installed_layout_imports_without_the_package(tmp_path):
+    """Installed, the two files sit side by side and run with -I, which keeps
+    even the script's own directory off the path."""
+    lib = tmp_path / "ccfleet_agent"
+    lib.mkdir()
+    src = Path(machine.__file__).resolve().parent
+    for name in ("agent.py", "machine.py"):
+        (lib / name).write_text((src / name).read_text())
+    proc = subprocess.run([PY, "-I", str(lib / "machine.py"), "--help"], capture_output=True,
+                          text=True, timeout=30, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "shared machine" in proc.stdout
+

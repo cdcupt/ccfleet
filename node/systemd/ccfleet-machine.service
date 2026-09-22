@@ -1,0 +1,23 @@
+[Unit]
+Description=ccfleet machine agent (one run): provision, wipe and report this machine's slots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root, deliberately, and without NoNewPrivileges: creating and removing slot
+# users is root's work, and slot-add.sh drops into each new slot with sudo -u,
+# which that flag would forbid. The agent itself never reads a slot's files as
+# root; it asks each slot about itself as that slot's own user.
+#
+# -I keeps PYTHONPATH and user site-packages out of a root process. The token
+# is read from /etc/ccfleet/agent.env by the agent rather than set here, so it
+# lives in one root-only file and not in the unit's environment as well.
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ccfleet/ccfleet_agent/machine.py --env-file /etc/ccfleet/agent.env
+# Each slot's report, and its quota reads, run inside this unit. Bounded so a
+# slot cannot take the machine's memory down along with the agent that looks
+# after every other slot on it.
+MemoryMax=1G
+# Every step carries its own time limit; this is the backstop for a run that
+# provisions several claims at once.
+TimeoutStartSec=2h

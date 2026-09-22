@@ -1,6 +1,8 @@
 import io
 import json
+import os
 import subprocess
+import sys
 import urllib.error
 from pathlib import Path
 
@@ -1586,3 +1588,111 @@ def test_a_run_stands_down_when_another_holds_the_lock(tmp_path, monkeypatch):
     # With the lock free it runs as usual.
     assert agent.main(run) == 0
     assert sent, "the heartbeat happens when nothing else is running"
+
+
+# -- one slot on a shared machine, reporting as itself ---------------------------
+
+@pytest.fixture
+def slot_home(tmp_path, monkeypatch):
+    """A slot's home with a signed-in Claude Code in it, secrets and all."""
+    home = tmp_path / "slot01"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "sk-ant-oat01-SECRET-ACCESS", "refreshToken": "sk-ant-ort01-SECRET",
+        "expiresAt": 1_900_000_000_000, "subscriptionType": "max"}}))
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": {
+        "emailAddress": "holder@example.com", "organizationName": "Holder Org",
+        "profileFetchedAt": 1_800_000_000_000}}))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(agent, "find_claude", lambda: str(home / ".local/bin/claude"))
+    monkeypatch.setattr(agent.shutil, "which", lambda name: f"/usr/bin/{name}")
+    return home
+
+
+def slot_runner(calls):
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1:] == ["auth", "status"]:
+            out = json.dumps({"loggedIn": True, "authMethod": "claude.ai",
+                              "subscriptionType": "max", "email": "holder@example.com",
+                              "orgName": "Holder Org"})
+        elif argv[1:] == ["--version"]:
+            out = "2.1.278 (Claude Code)"
+        elif argv[:2] == ["systemctl", "--user"]:
+            out = "active"
+        else:
+            out = ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+    return run
+
+
+def test_a_slot_reports_what_an_owner_node_would_and_nothing_that_names_anyone(slot_home):
+    calls = []
+    facts = agent.slot_facts({}, slot_runner(calls), now=1_700_000_000.0)
+    assert set(facts) <= {"claude", "credentials", "remote_control", "usage", "quota"}
+    assert facts["claude"] == {"version": "2.1.278"}, "the path names the slot's home"
+    assert facts["credentials"]["logged_in"] is True
+    assert facts["credentials"]["subscription_type"] == "max"
+    assert facts["remote_control"] == {"state": "active"}
+    flat = json.dumps(facts)
+    for private in ("sk-ant-oat01", "sk-ant-ort01", "holder@example.com", "Holder Org"):
+        assert private not in flat, f"{private} left the slot"
+
+
+def test_a_slot_does_not_start_a_quota_read_unless_asked(slot_home, monkeypatch):
+    """Each read opens a Claude Code session. The machine agent spreads them
+    across its slots, and a slot that started its own on every run would
+    undo that."""
+    state = slot_home / ".config" / "ccfleet" / "slot-state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"quota": {"session": {"used_pct": 40}, "ts": 1.0}}))
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("read the quota"))
+    facts = agent.slot_facts({"refresh_quota": False}, slot_runner([]))
+    assert facts["quota"] == {"session": {"used_pct": 40}}, "the last reading was dropped"
+
+
+def test_a_slot_asked_for_its_quota_reads_and_remembers_it(slot_home, monkeypatch):
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: {"session": {"used_pct": 12}})
+    facts = agent.slot_facts({"refresh_quota": True}, slot_runner([]), now=5_000.0)
+    assert facts["quota"]["session"] == {"used_pct": 12}
+    kept = json.loads((slot_home / ".config/ccfleet/slot-state.json").read_text())
+    assert kept["quota"]["ts"] == 5_000.0
+
+
+def test_a_slot_nobody_has_signed_into_is_not_driven_to_its_usage_screen(slot_home,
+                                                                         monkeypatch):
+    """The session a quota read opens would start on the login screen, and the
+    keys it types to reach /usage would land there instead."""
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("drove the login screen"))
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+    facts = agent.slot_facts({"refresh_quota": True}, slot_runner([]))
+    assert "quota" not in facts
+
+
+def test_slot_facts_will_not_run_as_root(monkeypatch, capsys):
+    """As root the collectors would read the slot's files with root's authority
+    — a symlink in the slot's home would reach anything on the machine."""
+    monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+    out = io.StringIO()
+    assert agent.slot_facts_main(io.StringIO("{}"), out) == 2
+    assert out.getvalue() == ""
+    assert "never as root" in capsys.readouterr().err
+
+
+def test_slot_facts_needs_no_configuration(slot_home, monkeypatch):
+    """It is started with a clean environment, holding none of the machine's
+    configuration — which is the point. It must work anyway."""
+    monkeypatch.setattr(agent.os, "geteuid", lambda: 1001)
+    for key in [k for k in os.environ if k.startswith("CCFLEET_")]:
+        monkeypatch.delenv(key)
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+    monkeypatch.setattr(agent, "claude_info", lambda runner=None: {"version": "2.1.278"})
+    monkeypatch.setattr(agent, "remote_control_state", lambda *a, **k: {"state": "inactive"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
+    out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.chdir("/")
+    assert agent.main(["--slot-facts"]) == 0
+    facts = json.loads(out.getvalue())
+    assert facts["credentials"]["logged_in"] is False
+    assert os.getcwd() == str(slot_home), "started from wherever it was left"

@@ -377,9 +377,15 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
 # -- transport -------------------------------------------------------------------
 
 
+# The reply to an owner node is a few hundred bytes. A shared machine's names
+# every one of its slots, so it passes its own, larger, bound.
+MAX_REPLY_BYTES = 4096
+
+
 def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
                    opener: Opener = urllib.request.urlopen,
-                   sleep: Callable[[float], None] = time.sleep) -> tuple[int, str]:
+                   sleep: Callable[[float], None] = time.sleep,
+                   max_reply: int = MAX_REPLY_BYTES) -> tuple[int, str]:
     """POST the payload. Retries network errors and 5xx with backoff; never retries 4xx."""
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(f"{cfg.url}/api/heartbeat", data=body, method="POST",
@@ -390,7 +396,8 @@ def send_heartbeat(cfg: AgentConfig, payload: Mapping[str, Any],
     for attempt in range(attempts):
         try:
             with opener(req, timeout=cfg.timeout_s) as resp:
-                return int(getattr(resp, "status", 200)), resp.read(4096).decode("utf-8", "replace")
+                return (int(getattr(resp, "status", 200)),
+                        resp.read(max_reply).decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
             text = exc.read(4096).decode("utf-8", "replace") if hasattr(exc, "read") else ""
             if exc.code < 500:
@@ -1308,6 +1315,82 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
     return status, desired, state, progress
 
 
+# -- one slot on a shared machine -------------------------------------------------
+#
+# On a shared machine the agent that talks to the server runs as root, because
+# creating and removing slot users is root's work. It must not then read a
+# slot's files as root: everything in a slot's home belongs to its holder,
+# symlinks included, and root following one of them reads whatever it points
+# at. So it runs this — the ordinary collectors above — as the slot's own user,
+# and takes back a JSON report whose content the server validates again.
+
+SLOT_STATE_PATH = "~/.config/ccfleet/slot-state.json"
+MAX_SLOT_REQUEST = 64 * 1024
+
+
+def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
+               now: Optional[float] = None) -> dict[str, Any]:
+    """What this slot looks like, collected as its own user.
+
+    The same facts an owner node reports about its owner, and no more: the
+    version, whether the login works and on which plan, Remote Control's
+    state, token counts and the quota windows. The quota read starts a Claude
+    Code session, so it is only refreshed when the machine agent asks —
+    it spreads those across its slots rather than starting six at once.
+    """
+    now = time.time() if now is None else now
+    config_dir = Path.home() / ".claude"
+    credentials = credentials_summary(config_dir)
+    status = auth_status(runner)
+    if status:
+        credentials.update(status)
+        credentials["present"] = status.get("logged_in", credentials.get("present"))
+    facts: dict[str, Any] = {
+        "claude": {"version": claude_info(runner).get("version")},
+        "credentials": credentials,
+        "remote_control": remote_control_state(DEFAULT_RC_SERVICE, runner),
+        "usage": usage_summary(config_dir),
+    }
+    state_path = Path(SLOT_STATE_PATH).expanduser()
+    state = read_state(state_path)
+    # A slot nobody has signed into yet has no windows to read, and the session
+    # the read opens would start on the login screen — where the keystrokes it
+    # types to reach /usage would land instead. Most slots spend their first
+    # minutes exactly there, between being claimed and being signed into.
+    if request.get("refresh_quota") is True and credentials.get("logged_in") is True:
+        quota, remember = quota_summary(state, runner, now)
+        if remember is not None:
+            write_state(state_path, {**state, "quota": remember})
+    else:
+        cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
+        quota = {k: v for k, v in cached.items() if k != "ts"} if cached else None
+    if quota:
+        facts["quota"] = quota
+    return facts
+
+
+def slot_facts_main(stdin: Any, stdout: Any, runner: Runner = subprocess.run) -> int:
+    """`--slot-facts`: read a request on stdin, write this slot's facts to stdout."""
+    if os.geteuid() == 0:
+        # As root the collectors would read the slot's files with root's
+        # authority, which is the one thing this mode exists to avoid.
+        print("error: --slot-facts runs as the slot's own user, never as root",
+              file=sys.stderr)
+        return 2
+    try:
+        request = json.loads(stdin.read(MAX_SLOT_REQUEST) or "{}")
+    except ValueError:
+        request = {}
+    if not isinstance(request, Mapping):
+        request = {}
+    # Everything below resolves paths against the home directory, and so does
+    # the session the quota read opens. Start from there rather than wherever
+    # the caller happened to leave us.
+    os.chdir(Path.home())
+    json.dump(slot_facts(request, runner), stdout, separators=(",", ":"))
+    return 0
+
+
 # Distinct from None, which means "another run holds it". This means "there is
 # no lock to hold", which is not a reason to refuse to run.
 _UNLOCKED = object()
@@ -1348,10 +1431,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="print the payload instead of sending it")
     parser.add_argument("--no-reconcile", action="store_true",
                         help="report facts but never act on the server's desired state")
+    parser.add_argument("--slot-facts", action="store_true",
+                        help="for the machine agent: report this user's slot as JSON")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
+    if args.slot_facts:
+        # Needs no configuration and must not read any: it is started with a
+        # clean environment by the machine agent, which is the one that holds
+        # the machine's token and talks to the server.
+        return slot_facts_main(sys.stdin, sys.stdout)
     env = {**load_env_file(Path(args.env_file).expanduser()), **os.environ}
     try:
         cfg = AgentConfig.from_env(env)
