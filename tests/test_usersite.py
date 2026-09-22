@@ -606,7 +606,8 @@ def test_the_sign_in_page_says_what_google_is_asked_for_and_what_is_kept(site):
     ask Google for more and this fails until the page says so."""
     store, _, cfg = site
     assert oauth.SCOPES == "openid email"
+    # What is kept is pinned by behaviour in test_sessions: extra fields are dropped.
     page = usersite.page(store, cfg, None, "", time.time())
-    assert ("We ask Google for your email address and for the id it gives your account, "
-            "which stays the same if the address changes. We keep those two things and "
-            "nothing else.") in page
+    assert ("We ask Google for your email address, whether Google has verified it, and "
+            "the id it gives your account, which stays the same if the address changes. "
+            "We keep the address and the id, and nothing else.") in page
