@@ -551,13 +551,35 @@ class Store:
             raise StoreError(f"unknown node {node_id!r}")
 
     def remove_node(self, node_id: str) -> None:
-        with self._lock:
-            cur = self._conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
-            self._conn.execute("DELETE FROM heartbeats WHERE node_id = ?", (node_id,))
-            self._conn.execute("DELETE FROM alerts WHERE node_id = ?", (node_id,))
-            self._conn.commit()
-        if cur.rowcount == 0:
-            raise StoreError(f"unknown node {node_id!r}")
+        """Forget a machine. Refuses while it still has slots declared on it.
+
+        SQLite does not enforce the foreign key, so deleting the machine would
+        leave its slot rows behind — and the id is chosen by the operator, so
+        registering a machine under the same name again silently reattaches
+        them, holders and lifecycle states and all. Somebody's released slot
+        comes back held; somebody's held slot comes back on hardware that is
+        not theirs.
+
+        Take the slots off it first, which forces each one through a release
+        and so through a wipe.
+        """
+        with self._write_txn() as conn:
+            slot_rows = conn.execute(
+                "SELECT id, state FROM slots WHERE node_id = ? ORDER BY unix_user",
+                (node_id,)).fetchall()
+            if slot_rows:
+                held = [r["id"] for r in slot_rows
+                        if r["state"] in slotstates.HELD]
+                detail = (f"{len(held)} of them still held ({', '.join(held)})"
+                          if held else "all free")
+                raise StoreError(
+                    f"{node_id} still has {len(slot_rows)} slots declared on it, "
+                    f"{detail}. Remove them first: 'ccfleetd slot remove <id>'.")
+            cur = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+            conn.execute("DELETE FROM heartbeats WHERE node_id = ?", (node_id,))
+            conn.execute("DELETE FROM alerts WHERE node_id = ?", (node_id,))
+            if cur.rowcount == 0:
+                raise StoreError(f"unknown node {node_id!r}")
 
     def get_node(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -861,6 +883,33 @@ class Store:
             except sqlite3.IntegrityError as exc:
                 raise StoreError(f"slot already exists: {exc}") from exc
         return self.get_slot(slot_id)  # type: ignore[return-value]
+
+    def remove_slot(self, slot_id: str) -> None:
+        """Take a slot off a machine. Only a free slot may go.
+
+        Free is the one state that means the Linux user and its files are gone,
+        because only a finished wipe produces it. Deleting the row in any other
+        state would drop our record of somebody's account while the account
+        itself is still sitting on the machine — the slot stops counting
+        against their allowance and nothing is left pointing at the mess.
+        """
+        with self._write_txn() as conn:
+            row = conn.execute(
+                "SELECT state, held_by FROM slots WHERE id = ?",
+                (slot_id,)).fetchone()
+            if row is None:
+                raise StoreError(f"no slot {slot_id!r}")
+            if row["state"] != slotstates.FREE:
+                raise StoreError(
+                    f"{slot_id} is {row['state']}"
+                    + (f", held by {row['held_by']}" if row["held_by"] else "")
+                    + ". Release it first; a slot is only safe to forget once "
+                      "the wipe has finished.")
+            # No `AND state = 'free'` pin here: the state was read inside
+            # this write transaction, so nothing can have changed it. A pin
+            # would read as a safeguard while being unreachable, which is
+            # worse than not having one.
+            conn.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
 
     def get_slot(self, slot_id: str) -> dict[str, Any] | None:
         with self._lock:

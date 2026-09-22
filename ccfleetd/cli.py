@@ -65,6 +65,9 @@ def _parser() -> argparse.ArgumentParser:
     slot_release = slot.add_parser(
         "release", help="start the wipe that frees a slot for somebody else")
     slot_release.add_argument("slot_id")
+    slot_rm = slot.add_parser(
+        "remove", help="take a free slot off a machine (release it first)")
+    slot_rm.add_argument("slot_id")
     cap = slot.add_parser("capacity", help="how many slots a machine may hold")
     cap.add_argument("machine")
     cap.add_argument("count", type=int)
@@ -144,6 +147,9 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
               f"finishes on the machine.")
         print(f"Run there: sudo node/slot-remove.sh --slot "
               f"{store.get_slot(args.slot_id)['unix_user']}")
+    elif args.slot_command == "remove":
+        store.remove_slot(args.slot_id)
+        print(f"{args.slot_id} is no longer declared on this fleet")
     elif args.slot_command == "capacity":
         if not store.set_machine_capacity(args.machine, args.count):
             print(f"error: no such machine {args.machine!r}", file=sys.stderr)

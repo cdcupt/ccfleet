@@ -245,3 +245,33 @@ def test_an_empty_fleet_says_so_rather_than_printing_a_header(db, capsys):
 def test_setting_capacity_on_a_machine_that_is_not_there(db, capsys):
     assert cli.main(["--db", db, "slot", "capacity", "ghost", "4"]) != 0
     assert "no such machine" in capsys.readouterr().err
+
+
+def test_removing_a_slot_from_the_command_line(db, capsys):
+    from ccfleetd.store import Store
+    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
+    assert cli.main(["--db", db, "slot", "add", "s1", "--machine", "m1",
+                     "--unix-user", "slot01"]) == 0
+    _account(db, "erik@example.com", quota=1)
+    st = Store(db)
+    try:
+        st.claim_slot("erik", now=1.0)
+    finally:
+        st.close()
+
+    # Held, so neither the slot nor its machine may be forgotten.
+    assert cli.main(["--db", db, "slot", "remove", "s1"]) != 0
+    assert "Release it first" in capsys.readouterr().err
+    assert cli.main(["--db", db, "node", "remove", "m1"]) != 0
+    assert "still has 1 slots" in capsys.readouterr().err
+
+    assert cli.main(["--db", db, "slot", "release", "s1"]) == 0
+    capsys.readouterr()
+    st = Store(db)
+    try:
+        st.finish_release("s1", now=2.0)
+    finally:
+        st.close()
+    assert cli.main(["--db", db, "slot", "remove", "s1"]) == 0
+    assert "no longer declared" in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "remove", "m1"]) == 0

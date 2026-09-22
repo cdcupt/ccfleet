@@ -562,3 +562,79 @@ def test_a_second_connection_cannot_overfill_a_machine(tmp_path):
         f"capacity 1 took {len(declared)} slots "
         f"({[d['id'] for d in declared]}): {outcomes}")
     assert "refused" in outcomes.values(), outcomes
+
+
+# -- forgetting things --------------------------------------------------------
+
+def test_a_machine_will_not_be_forgotten_while_it_has_slots(store):
+    """SQLite does not enforce the foreign key, so deleting the machine leaves
+    its slot rows behind — and the id is the operator's to choose, so the next
+    machine registered under that name inherits them."""
+    machine(store)
+    account(store, quota=1)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.claim_slot("a1", now=NOW)
+
+    with pytest.raises(StoreError) as exc:
+        store.remove_node("m1")
+    assert "still has 1 slots" in str(exc.value)
+    assert "s1" in str(exc.value), "the message should name what is held"
+    assert store.get_node("m1") is not None
+    assert store.get_slot("s1") is not None
+
+
+def test_even_free_slots_keep_a_machine_from_being_forgotten(store):
+    machine(store)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    with pytest.raises(StoreError) as exc:
+        store.remove_node("m1")
+    assert "all free" in str(exc.value)
+
+
+def test_a_machine_registered_again_inherits_nothing(store):
+    """The failure the refusal exists to prevent, followed through: take the
+    slots off properly and the name comes back clean."""
+    machine(store)
+    account(store, quota=1)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.claim_slot("a1", now=NOW)
+    store.begin_release("s1")
+    store.finish_release("s1", now=NOW + 1)
+    store.remove_slot("s1")
+    store.remove_node("m1")
+
+    machine(store)
+    assert store.list_slots(node_id="m1") == []
+    assert store.held_slot_count("a1") == 0
+
+
+def test_a_slot_is_only_safe_to_forget_once_it_is_wiped(store):
+    machine(store)
+    account(store, quota=1)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.claim_slot("a1", now=NOW)
+
+    with pytest.raises(StoreError) as exc:
+        store.remove_slot("s1")
+    assert "claiming" in str(exc.value) and "a1" in str(exc.value)
+    assert store.get_slot("s1") is not None
+    assert store.held_slot_count("a1") == 1, "stopped counting while still there"
+
+
+@pytest.mark.parametrize("state", sorted(slots.RELEASABLE))
+def test_no_state_but_free_may_be_forgotten(store, state):
+    machine(store)
+    account(store, quota=1)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.claim_slot("a1", now=NOW)
+    while store.get_slot("s1")["state"] != state:
+        nxt = slots.CLAIMED if store.get_slot("s1")["state"] == slots.CLAIMING \
+            else slots.ACTIVE
+        store.move_slot("s1", nxt)
+    with pytest.raises(StoreError):
+        store.remove_slot("s1")
+
+
+def test_forgetting_a_slot_that_is_not_there(store):
+    with pytest.raises(StoreError, match="no slot"):
+        store.remove_slot("ghost")
