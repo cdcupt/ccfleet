@@ -17,6 +17,7 @@ nobody runs.
 """
 
 import os
+import pathlib
 import subprocess
 import textwrap
 from pathlib import Path
@@ -74,6 +75,15 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
         exit 0
         """).replace("__HOME__", home))
     (bindir / "pgrep").write_text("#!/bin/sh\nexit 1\n")   # nothing running
+    if slot_home:
+        # A working claude in the sandboxed home. Without it every add test ran
+        # against exactly the condition the script exists to refuse — and the
+        # tests accepted it, which is how a slot with no Claude Code came to be
+        # reported as ready.
+        cc = pathlib.Path(slot_home) / ".local" / "bin"
+        cc.mkdir(parents=True, exist_ok=True)
+        (cc / "claude").write_text("#!/bin/sh\necho '2.1.278 (Claude Code)'\n")
+        (cc / "claude").chmod(0o755)
     # sudo runs what it is given rather than swallowing it, so anything the
     # script does *as the slot* is still observable. Without this, every
     # `sudo -u slot systemctl --user ...` vanishes and a test watching for it
@@ -393,3 +403,24 @@ def test_the_soft_memory_ceiling_is_four_fifths_of_the_hard_one(tmp_path):
         got = int(written["MemoryHigh"].rstrip("M"))
         assert low <= got <= high, f"{cap} gave MemoryHigh={got}M, want ~80%"
         assert got > 0, "a soft ceiling of zero is not a ceiling"
+
+
+def test_a_slot_without_claude_code_is_not_called_ready(tmp_path):
+    """`claude --version | head -1` exits with head's status, so a missing
+    claude produced an empty version from a pipeline that succeeded — and the
+    guard compared it against the literal "unknown", which it could never be.
+    The script said the slot was ready with nothing installed on it."""
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()          # deliberately no ~/.local/bin/claude in it
+    bindir = fake_system(tmp_path)
+    (bindir / "getent").write_text(
+        f'#!/bin/sh\n[ "$1" = "passwd" ] && {{ echo "$2:x:1001:1001::{slot_home}:/bin/sh"; exit 0; }}\nexit 0\n')
+    (bindir / "getent").chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CCFLEET_SLICE_ROOT"] = str(tmp_path / "slices")
+    result = subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert result.returncode != 0, "a slot with no Claude Code is not a ready slot"
+    assert "did not install" in result.stderr
+    assert "is ready" not in result.stdout

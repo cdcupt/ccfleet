@@ -160,8 +160,15 @@ step "3/5  Claude Code"
 as_slot 'mkdir -p ~/.local/bin ~/.config/ccfleet ~/.config/systemd/user ~/workspace'
 as_slot '[ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1'
 as_slot 'grep -q DISABLE_AUTOUPDATER ~/.profile 2>/dev/null || printf "\n# ccfleet: upgrades are staged by the operator\nexport DISABLE_AUTOUPDATER=1\nexport PATH=\"\$HOME/.local/bin:\$PATH\"\n" >> ~/.profile'
-CC_VERSION="$(as_slot '"$HOME"/.local/bin/claude --version 2>/dev/null | head -1' || echo unknown)"
-[ "$CC_VERSION" = unknown ] && die "Claude Code did not install for $SLOT"
+# Ask whether the binary is there, rather than inferring it from a version
+# string. `claude --version | head -1` exits with head's status, so a missing
+# claude gave an empty version and a pipeline that succeeded — and the check
+# that was supposed to catch it compared against the literal "unknown", which
+# it could never be. A slot with no Claude Code was reported as ready.
+as_slot '[ -x "$HOME/.local/bin/claude" ]' \
+  || die "Claude Code did not install for $SLOT"
+CC_VERSION="$(as_slot '"$HOME"/.local/bin/claude --version 2>/dev/null | head -1')"
+[ -n "$CC_VERSION" ] || die "Claude Code is installed for $SLOT but will not report a version"
 note "installed: $CC_VERSION"
 
 step "4/5  the two setup prompts"
