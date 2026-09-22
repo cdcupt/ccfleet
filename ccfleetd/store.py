@@ -198,6 +198,10 @@ class NoSlotAvailable(StoreError):
     """Nothing free to hand out right now."""
 
 
+class NotYours(StoreError):
+    """The slot is not held by the account acting on it."""
+
+
 
 def _without_secret(payload: Mapping[str, Any]) -> dict[str, Any]:
     """The payload as it should be kept, which is without the minted token.
@@ -439,8 +443,27 @@ class Store:
     # back must not start a login its next holder could inherit.
     SLOT_SIGN_IN_STATES = (slotstates.CLAIMED, slotstates.ACTIVE)
 
+    @staticmethod
+    def _held(conn: sqlite3.Connection, slot_id: str,
+              held_by: Optional[str]) -> sqlite3.Row:
+        """The slot, checked against who is acting on it — inside the caller's
+        transaction, so the answer cannot change before the action lands.
+
+        A check made in one request and an action in the next statement leaves
+        a gap: released, wiped, freed and claimed by somebody else in between,
+        and the stale request acts on the new holder's slot. `held_by` None is
+        the operator's side, which acts on any slot.
+        """
+        row = conn.execute("SELECT state, held_by FROM slots WHERE id = ?",
+                           (slot_id,)).fetchone()
+        if row is None:
+            raise StoreError(f"no slot {slot_id!r}")
+        if held_by is not None and row["held_by"] != held_by:
+            raise NotYours(f"{slot_id} is not held by this account")
+        return row
+
     def request_slot_login(self, slot_id: str, email: str, now: float,
-                           kind: str = "login") -> None:
+                           kind: str = "login", *, held_by: Optional[str] = None) -> None:
         """Start a sign-in, or a device token, on a slot — for its holder.
 
         The same dance as a node's own, run by the machine as the slot's user.
@@ -450,10 +473,7 @@ class Store:
         if kind not in self.LOGIN_KINDS:
             raise StoreError(f"unknown sign-in kind: {kind}")
         with self._write_txn() as conn:
-            row = conn.execute("SELECT state FROM slots WHERE id = ?",
-                               (slot_id,)).fetchone()
-            if row is None:
-                raise StoreError(f"no slot {slot_id!r}")
+            row = self._held(conn, slot_id, held_by)
             if row["state"] not in self.SLOT_SIGN_IN_STATES:
                 raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
                                  f"into once it is set up")
@@ -467,17 +487,27 @@ class Store:
 
     def submit_login_code(self, node_id: str, code: str, now: float) -> None:
         """Hand the node the verification code the owner pasted."""
+        with self._write_txn() as conn:
+            self._submit_code(conn, node_id, code, now)
+
+    def submit_slot_login_code(self, slot_id: str, code: str, now: float, *,
+                               held_by: Optional[str] = None) -> None:
+        """The code a slot's holder pasted, for their slot and nobody else's."""
+        with self._write_txn() as conn:
+            self._held(conn, slot_id, held_by)
+            self._submit_code(conn, slot_login_key(slot_id), code, now)
+
+    def _submit_code(self, conn: sqlite3.Connection, key: str, code: str,
+                     now: float) -> None:
         code = code.strip()[:self.MAX_LOGIN_CODE]
         if not code:
             raise StoreError("the verification code is empty")
-        with self._lock:
-            changed = self._conn.execute(
-                "UPDATE logins SET code = ?, state = 'code_sent', updated_at = ? "
-                "WHERE node_id = ? AND state IN ('requested', 'url_ready')",
-                (code, now, node_id)).rowcount
-            self._conn.commit()
+        changed = conn.execute(
+            "UPDATE logins SET code = ?, state = 'code_sent', updated_at = ? "
+            "WHERE node_id = ? AND state IN ('requested', 'url_ready')",
+            (code, now, key)).rowcount
         if not changed:
-            raise StoreError("no sign-in is waiting for a code on that node")
+            raise StoreError("no sign-in is waiting for a code there")
 
     def record_login_progress(self, node_id: str, state: str, url: str,
                               detail: str, now: float,
@@ -592,39 +622,48 @@ class Store:
         ordinary sweep, and gone at once if somebody says they are finished
         with it. The window is what bounds this, not the reading.
         """
-        return self._read_secret(node_id, "nodes", node_id, now)
+        with self._write_txn() as conn:
+            return self._read_secret(conn, node_id, "nodes", node_id, now)
 
-    def read_slot_secret(self, slot_id: str, now: Optional[float] = None) -> str:
-        """A token minted on a slot, for as long as its attempt lasts."""
-        return self._read_secret(slot_login_key(slot_id), "slots", slot_id, now)
+    def read_slot_secret(self, slot_id: str, now: Optional[float] = None, *,
+                         held_by: Optional[str] = None) -> str:
+        """A token minted on a slot, for as long as its attempt lasts — and
+        only for whoever holds the slot as it is read."""
+        with self._write_txn() as conn:
+            self._held(conn, slot_id, held_by)
+            return self._read_secret(conn, slot_login_key(slot_id), "slots", slot_id, now)
 
-    def _read_secret(self, key: str, table: str, row_id: str,
+    @staticmethod
+    def _read_secret(conn: sqlite3.Connection, key: str, table: str, row_id: str,
                      now: Optional[float]) -> str:
         if table not in ("nodes", "slots"):
             raise StoreError(f"no device-token record on {table!r}")
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT secret, requested_at FROM logins "
-                "WHERE node_id = ? AND state = 'ready'", (key,)).fetchone()
-            if row is None:
-                return ""
-            # Remember that a token reached somebody: once per attempt, not once
-            # per read. Reading the same token again does not make it newly
-            # issued — but a later attempt that produces a new one does, and a
-            # guard of "only if this has never been set" would have frozen the
-            # console's answer at whenever the first one was.
-            self._conn.execute(
-                f"UPDATE {table} SET device_token_at = ? "  # noqa: S608 - two literals
-                "WHERE id = ? AND device_token_at < ?",
-                (now if now is not None else time.time(), row_id,
-                 row["requested_at"]))
-            self._conn.commit()
+        row = conn.execute(
+            "SELECT secret, requested_at FROM logins "
+            "WHERE node_id = ? AND state = 'ready'", (key,)).fetchone()
+        if row is None:
+            return ""
+        # Remember that a token reached somebody: once per attempt, not once
+        # per read. Reading the same token again does not make it newly
+        # issued — but a later attempt that produces a new one does, and a
+        # guard of "only if this has never been set" would have frozen the
+        # console's answer at whenever the first one was.
+        conn.execute(
+            f"UPDATE {table} SET device_token_at = ? "  # noqa: S608 - two literals
+            "WHERE id = ? AND device_token_at < ?",
+            (now if now is not None else time.time(), row_id, row["requested_at"]))
         return str(row["secret"])
 
     def clear_login(self, node_id: str) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
             self._conn.commit()
+
+    def clear_slot_login(self, slot_id: str, *, held_by: Optional[str] = None) -> None:
+        """End whatever flow is in flight on a slot, for its holder."""
+        with self._write_txn() as conn:
+            self._held(conn, slot_id, held_by)
+            conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(slot_id),))
 
     def expire_logins(self, older_than: float) -> int:
         """Drop attempts nobody finished, so a stale code cannot be replayed."""
@@ -1069,7 +1108,7 @@ class Store:
             self._conn.commit()
         return cur.rowcount > 0
 
-    def begin_release(self, slot_id: str) -> bool:
+    def begin_release(self, slot_id: str, *, held_by: Optional[str] = None) -> bool:
         """Start the wipe. Legal from every state a person can hold.
 
         Whatever sign-in was in flight goes with it: its URL, a code typed in,
@@ -1081,10 +1120,7 @@ class Store:
         # slot was wiped, freed and claimed again, the next holder was handed
         # the last one's URL, or read their minted token.
         with self._write_txn() as conn:
-            row = conn.execute("SELECT state FROM slots WHERE id = ?",
-                               (slot_id,)).fetchone()
-            if row is None:
-                raise StoreError(f"no slot {slot_id!r}")
+            row = self._held(conn, slot_id, held_by)
             slotstates.check_move(row["state"], slotstates.RELEASING)
             conn.execute("UPDATE slots SET state = ? WHERE id = ?",
                          (slotstates.RELEASING, slot_id))

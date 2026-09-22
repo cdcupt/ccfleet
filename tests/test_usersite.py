@@ -521,3 +521,25 @@ def test_a_machine_with_nothing_on_record_says_so(site):
     claimed(store, erik)
     store.prune_heartbeats(time.time() + 1)
     assert "not heard from yet" in erik.page()
+
+
+
+def test_a_page_left_open_across_a_hand_over_acts_on_nothing(site):
+    """Erik loads his page; his slot is then given back, wiped, and claimed by
+    Ana. The form he still has open must not reach Ana's slot."""
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    stale_token = erik.token()
+    store.begin_release(slot["id"])
+    report(store, "m1", [{"unix_user": "slot01", "present": False}])
+    ana = sign_in("google-ana", "ana@example.com", quota=1)
+    claimed(store, ana)
+    for action in usersite.SLOT_ACTIONS:
+        reply = erik.call("POST", f"/account/slots/{slot['id']}/{action}",
+                          form={"csrf": stale_token, "confirm": "wipe", "code": "x"})
+        assert reply.status == 404, action
+    after = store.get_slot(slot["id"])
+    assert after["held_by"] == ana.account["id"] and after["state"] == slots.CLAIMED
+    assert store.get_login(slot_login_key(slot["id"])) is None

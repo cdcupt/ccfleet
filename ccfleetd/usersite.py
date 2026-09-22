@@ -34,7 +34,14 @@ from .render import (
     _usage_chart,
     _usage_span,
 )
-from .store import NoSlotAvailable, QuotaExceeded, Store, StoreError, slot_login_key
+from .store import (
+    NoSlotAvailable,
+    NotYours,
+    QuotaExceeded,
+    Store,
+    StoreError,
+    slot_login_key,
+)
 
 # What a page may say after an action. Chosen by a fixed code, never text taken
 # from the request: a message a link could write is a message a stranger could
@@ -117,11 +124,15 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
         return _claim(store, cfg, account, now)
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
-        # Somebody else's slot answers exactly as a missing one: which ids are
-        # held, and by whom, is not this person's to learn.
-        if slot is None or slot.get("held_by") != account["id"]:
+        if slot is None:
             return not_found()
-        return _on_slot(store, slot, parts[3], form, now)
+        try:
+            return _on_slot(store, slot, account["id"], parts[3], form, now)
+        except NotYours:
+            # Somebody else's slot answers exactly as a missing one: which ids
+            # are held, and by whom, is not this person's to learn. The store
+            # decides it, in the same transaction as the action itself.
+            return not_found()
     return not_found()
 
 
@@ -138,32 +149,37 @@ def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float) ->
     return _back("claimed", f"slot-{slot['id']}")
 
 
-def _on_slot(store: Store, slot: Mapping[str, Any], action: str,
+def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
              form: Mapping[str, str], now: float) -> Outcome:
+    """Every store call carries the holder, and the store checks it in the
+    same transaction as the change: a slot given back and claimed by somebody
+    else between loading and acting is refused, not acted on."""
     slot_id, anchor = slot["id"], f"slot-{slot['id']}"
-    key = slot_login_key(slot_id)
     try:
         if action == "release":
             # The box, not merely the button: this deletes somebody's work, and
             # a form resubmitted from history must not do it by accident.
             if form.get("confirm") != "wipe":
                 return _back("confirm", anchor)
-            store.begin_release(slot_id)
+            store.begin_release(slot_id, held_by=holder)
             return _back("released", anchor)
         if action == "signin":
-            store.request_slot_login(slot_id, form.get("email", ""), now)
+            store.request_slot_login(slot_id, form.get("email", ""), now, held_by=holder)
             return _back("signin", anchor)
         if action == "token":
-            store.request_slot_login(slot_id, "", now, kind="token")
+            store.request_slot_login(slot_id, "", now, kind="token", held_by=holder)
             return _back("token", anchor)
         if action == "code":
-            store.submit_login_code(key, form.get("code", ""), now)
+            store.submit_slot_login_code(slot_id, form.get("code", ""), now, held_by=holder)
             return _back("code", anchor)
         if action == "token-show":
-            return Outcome(200, body=token_page(slot, store.read_slot_secret(slot_id, now)))
+            return Outcome(200, body=token_page(
+                slot, store.read_slot_secret(slot_id, now, held_by=holder)))
         # cancel, token-done: whichever flow is in flight on this slot ends here.
-        store.clear_login(key)
+        store.clear_slot_login(slot_id, held_by=holder)
         return _back("done" if action == "token-done" else "cancelled", anchor)
+    except NotYours:
+        raise
     except (StoreError, slotstates.TransitionError):
         return _back("not-now", anchor)
 
