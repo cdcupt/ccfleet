@@ -599,3 +599,14 @@ def test_somebody_elses_payment_is_not_theirs(site):
     bo = sign_in(sub="google-bo", email="bo@example.com", quota=1)
     paid(store, ana, 20)
     assert "Paid through" in ana.page() and "Paid through" not in bo.page()
+
+
+def test_the_sign_in_page_says_what_google_is_asked_for_and_what_is_kept(site):
+    """The privacy line is a promise about the scopes, so the two move together:
+    ask Google for more and this fails until the page says so."""
+    store, _, cfg = site
+    assert oauth.SCOPES == "openid email"
+    page = usersite.page(store, cfg, None, "", time.time())
+    assert "We ask Google only for your email address." in page
+    assert "Google's id for your account" in page
+    assert "nothing else" not in page
