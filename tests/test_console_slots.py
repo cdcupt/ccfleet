@@ -12,10 +12,11 @@ import http.client
 import threading
 import time
 import urllib.parse
+from datetime import timedelta
 
 import pytest
 
-from ccfleetd import slots
+from ccfleetd import payments, slots
 from ccfleetd.api import Context, build_server, csrf_token
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -36,9 +37,11 @@ def console():
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     store.add_user("ana", hash_password("owner-password"), "owner", "ana", time.time())
+    store.add_user("op", hash_password("operator-password"), "admin", "", time.time())
 
     def call(method, path, form=None, who="admin"):
-        creds = {"admin": f"admin:{ADMIN_TOKEN}", "owner": "ana:owner-password"}.get(who)
+        creds = {"admin": f"admin:{ADMIN_TOKEN}", "owner": "ana:owner-password",
+                 "op": "op:operator-password"}.get(who)
         headers = {"Authorization": "Basic " + base64.b64encode(creds.encode()).decode()} \
             if creds else {}
         body = None
@@ -304,12 +307,20 @@ def test_granting_and_reducing_an_allowance(console):
 
 # -- who may do it --------------------------------------------------------------------
 
+def soon(days=30):
+    """A day relative to today as the ledger counts it."""
+    return (payments.today(time.time()) + timedelta(days=days)).isoformat()
+
+
 @pytest.mark.parametrize("path,form", [
     ("/actions/machine/m1/capacity", {"count": "5"}),
     ("/actions/machine/m1/slot-add", {"slot_id": "m1-09", "unix_user": "slot09"}),
     ("/actions/slot/m1-01/reclaim", {"confirm": "m1-01"}),
     ("/actions/slot/m1-02/remove", {}),
     ("/actions/account/ACCOUNT/allowance", {"count": "9"}),
+    ("/actions/account/ACCOUNT/payment", {"amount": "30", "currency": "USD",
+                                          "through": soon()}),
+    ("/actions/payment/PAYMENT/void", {}),
 ])
 def test_an_owner_login_can_do_none_of_it(console, path, form):
     """Their credentials are fine; the action is not theirs. 403, not 401."""
@@ -317,10 +328,16 @@ def test_an_owner_login_can_do_none_of_it(console, path, form):
     shared(store)
     ana = holder(store)
     store.claim_slot(ana["id"], now=time.time())
-    before = (store.list_slots(), store.get_account(ana["id"]), store.get_node("m1"))
-    reply = call("POST", path.replace("ACCOUNT", ana["id"]), form, who="owner")
+    paid = store.record_payment(ana["id"], amount="30", currency="USD", through=soon(),
+                                recorded_by="op", now=time.time())
+    def everything():
+        return (store.list_slots(), store.get_account(ana["id"]), store.get_node("m1"),
+                store.list_payments())
+    before = everything()
+    reply = call("POST", path.replace("ACCOUNT", ana["id"]).replace("PAYMENT", str(paid)),
+                 form, who="owner")
     assert reply.status == 403
-    assert (store.list_slots(), store.get_account(ana["id"]), store.get_node("m1")) == before
+    assert everything() == before
 
 
 def test_nobody_signed_in_can_do_any_of_it(console):
@@ -341,3 +358,129 @@ def test_there_is_no_action_that_acts_as_a_user(console):
 def test_an_unknown_kind_of_thing_is_not_found(console):
     store, call = console
     assert call("POST", "/actions/machine/m1/explode", {}).status == 404
+
+
+# -- payments -------------------------------------------------------------------------
+
+def record(call, account_id, through, amount="30", currency="USD", note="", who="admin"):
+    return call("POST", f"/actions/account/{account_id}/payment",
+                {"amount": amount, "currency": currency, "through": through, "note": note},
+                who=who)
+
+
+def test_recording_a_payment_from_the_console(console):
+    store, call = console
+    ana = holder(store)
+    reply = record(call, ana["id"], soon(), amount="30.5", currency="cny", note="WeChat")
+    assert reply.status == 303 and reply.getheader("Location") == "/#accounts"
+    [written] = store.list_payments(ana["id"])
+    assert (written["amount_minor"], written["currency"], written["paid_through"]) == \
+        (3050, "CNY", soon())
+    card = accounts_card(call("GET", "/").body)
+    assert f'paid through <span class="nowrap">{soon()}</span>' in card
+    assert "30.50 CNY" in card and "WeChat" in card and "by admin token" in card
+
+
+def test_the_ledger_says_which_operator_wrote_it(console):
+    store, call = console
+    ana = holder(store)
+    assert record(call, ana["id"], soon(), who="op").status == 303
+    assert store.list_payments(ana["id"])[0]["recorded_by"] == "op"
+
+
+@pytest.mark.parametrize("field,typed", [
+    ("amount", "thirty"), ("amount", "-5"), ("amount", "\u00b2"),
+    ("currency", "US"), ("currency", "\u00dfd"),
+    ("through", "2026-02-30"), ("through", "soon"), ("through", "2090-01-01"),
+    ("note", "x" * (payments.NOTE_MAX + 1)),
+])
+def test_a_payment_the_ledger_cannot_read_is_refused_in_words(console, field, typed):
+    store, call = console
+    ana = holder(store)
+    form = {"amount": "30", "currency": "USD", "through": soon(), "note": "", field: typed}
+    reply = record(call, ana["id"], **{("through" if k == "through" else k): v
+                                       for k, v in form.items()})
+    assert reply.status == 400 and 'href="/"' in reply.body
+    assert store.list_payments() == []
+
+
+def test_a_payment_for_nobody_is_refused(console):
+    store, call = console
+    assert record(call, "nobody", soon()).status == 400
+    assert store.list_payments() == []
+
+
+def test_somebody_with_no_payments_says_so(console):
+    store, call = console
+    holder(store)
+    assert " · no payments" in accounts_card(call("GET", "/").body)
+
+
+def test_lapsed_is_called_out_only_while_it_still_matters(console):
+    """Somebody who may still claim, or still holds, and has not paid: that is
+    the operator's to act on. Somebody who has left has an ended payment."""
+    store, call = console
+    shared(store)
+    ana = holder(store, quota=1)
+    bo = holder(store, email="bo@example.com", quota=1)
+    store.claim_slot(bo["id"], now=time.time())
+    store.set_slot_quota(bo["id"], 0)                       # holds one, may claim no more
+    gone = holder(store, email="cy@example.com", quota=0)
+    for account in (ana, bo, gone):
+        assert record(call, account["id"], soon(-3)).status == 303
+    card = accounts_card(call("GET", "/").body)
+    day = f'<span class="nowrap">{soon(-3)}</span>'
+    called_out = f'<span class="bad-text">lapsed: paid through {day}</span>'
+    assert card.count(called_out) == 2
+    assert f"paid through {day}, ended" in card
+    assert card.index("cy@example.com") < card.index(f"paid through {day}, ended")
+
+
+def test_paid_up_is_not_lapsed_on_its_last_day(console):
+    store, call = console
+    ana = holder(store)
+    record(call, ana["id"], soon(0))
+    card = accounts_card(call("GET", "/").body)
+    assert f'paid through <span class="nowrap">{soon(0)}</span>' in card
+    assert "lapsed:" not in card
+
+
+def test_voiding_a_payment_from_the_console(console):
+    store, call = console
+    ana = holder(store)
+    record(call, ana["id"], soon(30))
+    record(call, ana["id"], soon(60))
+    newest, older = store.list_payments(ana["id"])
+    reply = call("POST", f"/actions/payment/{newest['id']}/void", {})
+    assert reply.status == 303 and reply.getheader("Location") == "/#accounts"
+    card = accounts_card(call("GET", "/").body)
+    assert f'paid through <span class="nowrap">{soon(30)}</span>' in card, \
+        "a voided payment still counted"
+    assert '<span class="pill disabled">voided</span>' in card
+    assert f'action="/actions/payment/{newest["id"]}/void"' not in card
+    assert f'action="/actions/payment/{older["id"]}/void"' in card
+    assert call("POST", f"/actions/payment/{newest['id']}/void", {}).status == 400
+
+
+@pytest.mark.parametrize("payment_id", ["abc", "\u00b2", "9" * 40, "-1", "404"])
+def test_a_payment_that_cannot_be_is_refused_not_crashed(console, payment_id):
+    """Quoted the way a browser sends it."""
+    store, call = console
+    path = f"/actions/payment/{urllib.parse.quote(payment_id)}/void"
+    assert call("POST", path, {}).status == 400
+
+
+def test_the_note_is_shown_not_run(console):
+    store, call = console
+    ana = holder(store)
+    record(call, ana["id"], soon(), note="<script>alert(1)</script>")
+    card = accounts_card(call("GET", "/").body)
+    assert "<script>alert" not in card and "&lt;script&gt;alert(1)" in card
+
+
+def test_the_form_offers_the_currency_they_paid_in_last(console):
+    store, call = console
+    ana = holder(store)
+    assert 'name="currency" value="USD"' in accounts_card(call("GET", "/").body)
+    record(call, ana["id"], soon(), currency="CNY")
+    assert 'name="currency" value="CNY"' in accounts_card(call("GET", "/").body)

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
+from . import payments
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -197,6 +198,7 @@ USER_CSS = CSS + """
 margin:0 0 18px;font-weight:500}
 .note-banner.ok{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
 .note-banner.warn{border-color:var(--warn);background:var(--warn-bg);color:var(--warn)}
+.lapsed{color:var(--warn);font-weight:600}
 .card.slot{margin:0 0 16px}
 .card.slot h2{text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:15px;
 color:var(--ink)}
@@ -245,6 +247,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                      f"<strong>{counted}</strong>.</p>")
         if counted < quota:
             allowance += _form("/account/claim", csrf, "Claim a slot", cls="primary")
+    allowance += _paid(payments.paid_through(store.list_payments(account["id"])), now)
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now) for s in held)
     body = (
@@ -261,6 +264,19 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
     return _shell("your slots", body, _refresh(held, logins))
+
+
+def _paid(through: Optional[str], now: float) -> str:
+    """Their own paid-through day, and only the day: amounts and the operator's
+    notes stay on the console. Nothing at all when nothing is recorded, since
+    plenty of allowances are arranged without one and "no payment" would read
+    as a debt."""
+    state = payments.standing(through, now)
+    if state == payments.PAID:
+        return f'<p class="muted">Paid through <strong>{escape(str(through))}</strong>.</p>'
+    if state == payments.LAPSED:
+        return f'<p class="lapsed">Your paid period ended on {escape(str(through))}.</p>'
+    return ""
 
 
 def _signed_out(cfg: Config) -> str:

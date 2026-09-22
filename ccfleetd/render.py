@@ -116,6 +116,16 @@ form.inline{display:inline;margin:0}
 form.field{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}
 form.field input[type=text]{width:auto;padding:5px 9px;font-size:13px}
 form.field input.count{width:4.5em}
+form.field input[type=date]{font:inherit;font-size:13px;padding:4px 8px;border-radius:8px;
+border:1px solid var(--rule);background:var(--bg);color:var(--ink)}
+/* An account's payments, folded under its row. */
+details.ledger{flex-basis:100%;font-size:13px}
+details.ledger summary{cursor:pointer;color:var(--muted);font-size:12px;font-weight:600}
+.payment{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;
+overflow-wrap:anywhere}
+.payment.voided{color:var(--muted)}
+.nowrap{white-space:nowrap}
+details.ledger form.field{margin-top:6px}
 button,.btn{font:inherit;font-size:12px;padding:5px 11px;border-radius:8px;
 border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer}
 button:hover{border-color:var(--acc);color:var(--acc)}
