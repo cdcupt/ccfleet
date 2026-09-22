@@ -364,3 +364,40 @@ def test_the_secret_stops_travelling_once_it_has_been_handed_over(server, monkey
     assert secret not in seen[0], "it was already gone before anything downstream saw it"
     assert "ready" in seen[0]
     assert store.get_login("node-a")["secret"] == secret, "and it still reached its one home"
+
+
+def test_an_action_returns_you_to_the_card_you_used(server, cfg):
+    """A 303 to "/" is the top of the page; the cards are two screens down."""
+    srv, store = server
+    store.add_node("node-a", "erik")
+    admin = basic(cfg.admin_token)
+    headers = {**admin, "Content-Type": "application/x-www-form-urlencoded"}
+
+    def press(action, extra=""):
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+        conn.request("POST", f"/actions/node/node-a/{action}",
+                     body=f"csrf={csrf_for(cfg)}{extra}".encode(), headers=headers)
+        resp = conn.getresponse()
+        resp.read()
+        loc = resp.getheader("Location")
+        conn.close()
+        return resp.status, loc
+
+    assert press("token-start") == (303, "/#device-tokens")
+
+    # login-code and login-cancel serve both cards; the row in flight decides
+    # which. A cancel deletes that row, so the answer has to be read before the
+    # action runs — that ordering is the point of these two assertions.
+    store.request_login("node-a", "", time.time(), kind="token")
+    assert press("login-cancel") == (303, "/#device-tokens")
+    assert store.get_login("node-a") is None, "and it really was cancelled"
+
+    store.request_login("node-a", "", time.time(), kind="login")
+    assert press("login-cancel") == (303, "/#sign-in")
+
+    # Nothing in flight: a sign-in action belongs to the sign-in card.
+    assert press("login-start") == (303, "/#sign-in")
+    store.clear_login("node-a")
+
+    # Fleet management has no card of its own to return to.
+    assert press("rc-on") == (303, "/")

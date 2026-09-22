@@ -282,3 +282,41 @@ def test_the_chart_caption_does_not_outlive_the_chart():
     drawn = _usage_html(two_days, NOW)
     assert "<svg" in drawn and "daily tokens, last 14d" in drawn
     assert "2 sessions" in drawn
+
+
+def test_each_button_sends_you_back_to_the_card_you_pressed_it_on():
+    """The cards sit two screens down. A redirect to the top of the page means
+    scrolling back to them after every press, mid-task."""
+    from ccfleetd.render import _add_form, _manage_html, _signin_html, _token_html
+    rows = [{"id": "att3", "owner": "erik", "credentials_present": True,
+             "enabled": True, "rc_expected": False, "claude_version": "2.1.278",
+             "pinned_version": ""}]
+    assert 'id="device-tokens"' in _token_html(rows, "TOK", {})
+    assert 'id="sign-in"' in _signin_html(rows, "TOK", {})
+    assert 'id="manage"' in _manage_html(rows, "TOK")
+    assert 'id="add-node"' in _add_form("TOK")
+
+
+def test_the_page_stops_reloading_while_it_is_asking_you_to_type(cfg):
+    """A 60-second reload landing mid-paste throws away the code. Waiting for a
+    human is the one state where the refresh has nothing to fetch."""
+    rows = [{"id": "att3", "owner": "erik", "region": "", "status": "ok",
+             "enabled": True, "last_seen_ts": NOW, "hostname": "h",
+             "claude_version": "2.1.278", "pinned_version": "", "egress_ip": "1.2.3.4",
+             "disk_used_pct": 10.0, "load1": 0.1, "credentials_present": True,
+             "credentials_mtime": NOW, "token_expires_at": None,
+             "subscription_type": "max", "remote_control": "active",
+             "rc_expected": False, "last_upgrade": None, "open_alerts": [],
+             "usage": {}, "quota": {}}]
+    idle = render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins={})
+    assert 'http-equiv="refresh"' in idle, "normally it keeps itself current"
+
+    waiting = render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins={
+        "att3": {"state": "url_ready", "kind": "token",
+                 "url": "https://claude.com/cai/oauth/authorize?a=1"}})
+    assert 'http-equiv="refresh"' not in waiting, "not while someone is typing"
+
+    # Once the code is sent there is something to wait for again.
+    sent = render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins={
+        "att3": {"state": "code_sent", "kind": "token"}})
+    assert 'http-equiv="refresh"' in sent

@@ -352,7 +352,7 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
         items.append(f'<div class="row-line"><div class="row-name">{node}'
                      f'<span class="muted"> · {escape(row["owner"])}</span></div>'
                      f'<div class="actions">{"".join(buttons)}</div></div>')
-    return ('<h2>Manage nodes</h2><div class="card">' + "".join(items) +
+    return ('<h2 id="manage">Manage nodes</h2><div class="card">' + "".join(items) +
             '<p class="note">'
             "New token replaces the node's credential immediately, so update the node after. "
             "Remove deletes its history and cannot be undone.</p></div>")
@@ -360,7 +360,7 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
 
 def _add_form(csrf: str) -> str:
     return (
-        '<h2>Add a node</h2><div class="card form">'
+        '<h2 id="add-node">Add a node</h2><div class="card form">'
         '<form method="post" action="/actions/node/add">'
         f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
         '<div class="fields">'
@@ -549,7 +549,7 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
         cls = "row-line stacked" if state and state != "ready" else "row-line"
         items.append(f'<div class="{cls}"><div class="row-name">{node}</div>'
                      f'<div class="actions">{body}</div></div>')
-    return ('<h2>Device tokens</h2><div class="card">' + "".join(items) +
+    return ('<h2 id="device-tokens">Device tokens</h2><div class="card">' + "".join(items) +
             '<p class="note">'
             "A device token lets <code>claude</code> run on your own machine, on that "
             "machine's own files, with no login. It is minted on the node from the account "
@@ -622,7 +622,7 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
         cls = "row-line stacked" if state else "row-line"
         items.append(f'<div class="{cls}"><div class="row-name">{node}</div>'
                      f'<div class="actions">{body}</div></div>')
-    return ('<h2>Sign in</h2><div class="card">' + "".join(items) +
+    return ('<h2 id="sign-in">Sign in</h2><div class="card">' + "".join(items) +
             '<p class="note">'
             "Starting a sign-in runs Claude Code's own login on the node. The credential is "
             "written there and never reaches this server; only the verification URL and the "
@@ -810,6 +810,14 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
             "%3Ccircle cx='5' cy='8' r='1.7' fill='white'/%3E"
             "%3Ccircle cx='11' cy='5' r='1.7' fill='white'/%3E"
             "%3Ccircle cx='11' cy='11' r='1.7' fill='white'/%3E%3C/svg%3E")
+    # The page reloads itself so a URL appearing on a node shows up without
+    # anyone pressing anything. While someone is being asked to paste a code,
+    # that same reload lands mid-typing and throws away what they had. Waiting
+    # is the one state where nothing new can arrive anyway, so the refresh has
+    # nothing to fetch and everything to lose.
+    waiting = any((login or {}).get("state") == "url_ready"
+                  for login in (logins or {}).values())
+    auto_refresh = "" if waiting else '<meta http-equiv="refresh" content="60">'
     whoami = ""
     if who is not None:
         whoami = (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
@@ -817,7 +825,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<meta http-equiv="refresh" content="60"><title>ccfleet</title>'
+        f'{auto_refresh}<title>ccfleet</title>'
         f'<link rel="icon" href="{icon}">'
         f"<style>{CSS}</style></head><body><div class=\"page\">"
         '<header class="mast"><div>'

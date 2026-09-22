@@ -219,6 +219,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             parsed = urllib.parse.parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True)
             return {k: v[0] for k, v in parsed.items()}
 
+        # Which part of the page an action belongs to. A POST redirects to the
+        # fleet page, and without a fragment that means the top of it — so every
+        # press of a button two screens down sent you back up to scroll to it
+        # again, mid-task, with a code in your clipboard.
+        ACTION_ANCHORS = {
+            "token-start": "device-tokens",
+            "token-show": "device-tokens",
+            "login-start": "sign-in",
+            "login-code": "sign-in",
+            "login-cancel": "sign-in",
+        }
+
         def _redirect(self, location: str) -> None:
             self.send_response(303)
             self.send_header("Location", location)
@@ -334,6 +346,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             self._send(200, body.encode("utf-8"), HTML_HEADERS)
 
         def _action_on_node(self, node_id: str, action: str, form: dict[str, str]) -> None:
+            # Read before acting. `login-code` and `login-cancel` serve both
+            # cards and the row is what says which — but a cancel deletes that
+            # row, so asking afterwards finds nothing and sends you to the wrong
+            # one. Asked here, it is still there to answer.
+            kind_before = (ctx.store.get_login(node_id) or {}).get("kind")
             if action == "enable":
                 ctx.store.set_enabled(node_id, True)
             elif action == "disable":
@@ -377,7 +394,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             else:
                 self._json(404, {"error": "unknown action"})
                 return
-            self._redirect("/")
+            # A login-code or a cancel can belong to either card, and the row
+            # itself knows which: the flow's own kind decides where it is shown.
+            anchor = self.ACTION_ANCHORS.get(action, "")
+            if anchor == "sign-in" and kind_before == "token":
+                anchor = "device-tokens"
+            self._redirect(f"/#{anchor}" if anchor else "/")
 
         # -- views ---------------------------------------------------------
 
