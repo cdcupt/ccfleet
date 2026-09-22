@@ -53,6 +53,34 @@ def _parser() -> argparse.ArgumentParser:
     rc.add_argument("node_id")
     rc.add_argument("state", choices=("on", "off"))
 
+    slot = sub.add_parser("slot", help="manage slots on a machine").add_subparsers(
+        dest="slot_command", required=True)
+    slot_add = slot.add_parser("add", help="declare a slot on a machine")
+    slot_add.add_argument("slot_id")
+    slot_add.add_argument("--machine", required=True)
+    slot_add.add_argument("--unix-user", required=True,
+                          help="the Linux login on that machine, e.g. slot01")
+    slot_list = slot.add_parser("list", help="list slots and who holds them")
+    slot_list.add_argument("--machine", default=None)
+    slot_release = slot.add_parser(
+        "release", help="start the wipe that frees a slot for somebody else")
+    slot_release.add_argument("slot_id")
+    slot_rm = slot.add_parser(
+        "remove", help="take a free slot off a machine (release it first)")
+    slot_rm.add_argument("slot_id")
+    cap = slot.add_parser("capacity", help="how many slots a machine may hold")
+    cap.add_argument("machine")
+    cap.add_argument("count", type=int)
+
+    acct = sub.add_parser(
+        "account", help="manage the people who rent slots").add_subparsers(
+        dest="account_command", required=True)
+    acct.add_parser("list", help="list accounts and their allowance")
+    quota = acct.add_parser(
+        "quota", help="grant or reduce how many slots somebody may claim")
+    quota.add_argument("email")
+    quota.add_argument("count", type=int)
+
     user = sub.add_parser("user", help="manage console accounts").add_subparsers(
         dest="user_command", required=True)
     user_add = user.add_parser("add", help="create a console login and print its password once")
@@ -89,6 +117,70 @@ def _print_password(username: str, password: str, cfg: Config) -> None:
     print(f"Sign in at {where} with that user name and password.")
     print("It is stored only as a PBKDF2 hash, so it cannot be recovered; use")
     print(f"'ccfleetd user passwd {username}' to set a new one.\n")
+
+
+def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
+    if args.slot_command == "add":
+        slot = store.add_slot(args.slot_id, args.machine, args.unix_user,
+                              now=time.time())
+        print(f"slot {slot['id']} declared on {slot['node_id']} "
+              f"as {slot['unix_user']}, state {slot['state']}")
+        print(f"Create it on the machine with: sudo node/slot-add.sh "
+              f"--slot {slot['unix_user']}")
+    elif args.slot_command == "list":
+        rows = store.list_slots(node_id=args.machine)
+        if not rows:
+            print("no slots declared")
+            return EXIT_OK
+        print(f"{'slot':<16} {'machine':<14} {'unix user':<12} {'state':<10} held by")
+        for r in rows:
+            print(f"{r['id']:<16} {r['node_id']:<14} {r['unix_user']:<12} "
+                  f"{r['state']:<10} {r['held_by'] or '-'}")
+    elif args.slot_command == "release":
+        # Only ever starts the wipe. The slot does not become free here — it
+        # becomes free when the machine reports the wipe finished, because only
+        # that proves the Linux user and its files are gone. A missing slot is
+        # already a StoreError, which main() prints; a second check would be
+        # unreachable rather than defensive.
+        store.begin_release(args.slot_id)
+        print(f"{args.slot_id} is releasing. It stays held until the wipe "
+              f"finishes on the machine.")
+        print(f"Run there: sudo node/slot-remove.sh --slot "
+              f"{store.get_slot(args.slot_id)['unix_user']}")
+    elif args.slot_command == "remove":
+        store.remove_slot(args.slot_id)
+        print(f"{args.slot_id} is no longer declared on this fleet")
+    elif args.slot_command == "capacity":
+        if not store.set_machine_capacity(args.machine, args.count):
+            print(f"error: no such machine {args.machine!r}", file=sys.stderr)
+            return EXIT_USAGE
+        print(f"{args.machine} may hold {args.count} slots")
+    return EXIT_OK
+
+
+def _account_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
+    if args.account_command == "list":
+        rows = store.list_accounts()
+        if not rows:
+            print("nobody has registered yet")
+            return EXIT_OK
+        print(f"{'email':<32} {'role':<6} {'allowance':<10} holding")
+        for a in rows:
+            held = store.held_slot_count(a["id"])
+            print(f"{a['email']:<32} {a['role']:<6} {a['slot_quota']:<10} {held}")
+    elif args.account_command == "quota":
+        account = store.account_by_email(args.email)
+        if account is None:
+            print(f"error: nobody registered as {args.email!r}", file=sys.stderr)
+            return EXIT_USAGE
+        store.set_slot_quota(account["id"], args.count)
+        held = store.held_slot_count(account["id"])
+        print(f"{args.email} may claim {args.count} slots (holding {held})")
+        if held > args.count:
+            # Said out loud because it is the surprising half of the rule.
+            print(f"They keep the {held} they have; this only stops them "
+                  f"claiming more. Taking one back is 'slot release'.")
+    return EXIT_OK
 
 
 def _user_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
@@ -172,6 +264,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return _node_command(args, store, cfg)
             if args.command == "user":
                 return _user_command(args, store, cfg)
+            if args.command == "slot":
+                return _slot_command(args, store, cfg)
+            if args.command == "account":
+                return _account_command(args, store, cfg)
             monitor = Monitor(store, cfg, build_notifier(cfg))
             if args.command == "check":
                 for event in monitor.check_all():
