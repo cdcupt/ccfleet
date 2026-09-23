@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -1792,7 +1793,7 @@ RC_RESTART = ["systemctl", "--user", "restart", "claude-remote-control.service"]
 
 
 def moving_claude(calls, *, before="2.1.278", after="2.1.300", install_rc=0,
-                  session=1, rc="active", pgrep_raises=False):
+                  session=1, rc="active", pgrep_raises=False, procs=None):
     """A slot whose Claude Code really moves: `install` changes what --version says.
 
     `session` is pgrep's exit code: 0 a Remote Control session is open, 1 none,
@@ -1814,6 +1815,13 @@ def moving_claude(calls, *, before="2.1.278", after="2.1.300", install_rc=0,
         if argv[0] == "pgrep":
             if pgrep_raises:
                 raise FileNotFoundError("pgrep")
+            if procs is not None:
+                # The real question, asked of a process table: this user's own
+                # processes, and whether any command line matches the pattern.
+                assert argv[argv.index("-u") + 1] == str(os.getuid()), "asked about another user"
+                pattern = argv[argv.index("-f") + 1]
+                found = any(re.search(pattern, line) for line in procs)
+                return subprocess.CompletedProcess(argv, 0 if found else 1, stdout="", stderr="")
             return subprocess.CompletedProcess(argv, session, stdout="", stderr="")
         if argv[:3] == ["systemctl", "--user", "is-active"]:
             return subprocess.CompletedProcess(argv, 0, stdout=rc, stderr="")
@@ -2006,3 +2014,27 @@ def test_a_pin_taken_away_cancels_a_restart_it_was_owed(slot_home):
                              moving_claude(calls, before="2.1.300", session=1), now=1_060.0)
     assert RC_RESTART not in calls and "upgrade" not in facts
     assert "restart" not in slot_state(slot_home)
+
+
+
+# What runs in a signed-in slot with Remote Control on, as ps shows it.
+IDLE_SLOT = ["/home/slot01/.local/bin/claude remote-control --permission-mode bypassPermissions",
+             "/usr/bin/tmux -L ccfleet-rc new-session -d -s remote-control",
+             "-bash", "/usr/lib/systemd/systemd --user"]
+SESSION_WORKER = ("/home/slot01/.local/share/claude/versions/2.1.278 --print "
+                  "--sdk-url https://api.anthropic.com/v1/code/sessions/cse_01Vx")
+
+
+def test_remote_control_itself_running_is_not_somebody_working(slot_home):
+    """Remote Control is always there once a slot is signed in; only a
+    session opened through it means somebody is using the slot."""
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, procs=IDLE_SLOT), now=1_000.0)
+    assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"
+
+
+def test_a_session_worker_is_somebody_working(slot_home):
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, procs=IDLE_SLOT + [SESSION_WORKER]),
+                             now=1_000.0)
+    assert RC_RESTART not in calls and facts["upgrade"]["restart"] == "waiting"
