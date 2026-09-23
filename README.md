@@ -110,6 +110,17 @@ ccp add personal && ccp use personal          # /login once per profile
 ccp add work --share && ccp list
 ```
 
+With device tokens instead of logins (inference only, so no Remote Control),
+`ccfleet-connect` keeps one token per account under a name and switches between
+them. Adding a token puts it in use; new shells pick up a switch.
+
+```bash
+ccfleet-connect --add personal     # paste the token from `claude setup-token`, run as that account
+ccfleet-connect --add work         # another account's token
+ccfleet-connect --use personal     # switch back
+ccfleet-connect --list             # names, the one in use, whether each still works
+```
+
 ### 4. Shared machines: several people on one box, one account each
 
 A machine can carry several **slots**. Each slot is its own Linux user, with
