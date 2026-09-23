@@ -230,6 +230,11 @@ def test_the_account_in_use_is_judged_by_claude_code_itself(home):
     assert facts["accounts"][0]["signed_in"] is False
 
 
+def test_an_address_too_long_to_be_one_is_not_sent_in_part(home):
+    sign_in(home, "1", "a" * 250 + "@example.com")
+    assert agent.slot_facts({}, Slot(home), now=NOW)["accounts"][0]["email"] == ""
+
+
 def test_a_slot_nobody_has_signed_into_has_no_accounts(home):
     assert agent.slot_facts({}, Slot(home), now=NOW)["accounts"] == []
 
