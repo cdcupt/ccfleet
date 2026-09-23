@@ -257,8 +257,15 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         if counted < quota:
             allowance += _form("/account/claim", csrf, "Claim a slot", cls="primary")
     allowance += _paid(payments.paid_through(store.list_payments(account["id"])), now)
+    # The operator's alerts about the rule, said to the holder without naming
+    # the other place: it may be somebody else's.
+    flagged = {s["id"]: frozenset(
+        rule for rule in ("account_elsewhere", "account_changed")
+        if any(a["rule"] == f"{rule}:{s['unix_user']}" for a in store.open_alerts(s["node_id"])))
+        for s in held}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
-                               logins[s["id"]], csrf, cfg, now) for s in held)
+                               logins[s["id"]], csrf, cfg, now, flagged[s["id"]])
+                    for s in held)
     body = (
         '<header class="mast"><div><h1>ccfleet<span class="dot">.</span></h1>'
         f'<p class="sub">Signed in as <strong>{escape(str(account.get("email", "")))}'
@@ -360,7 +367,12 @@ def privacy_page(cfg: Config) -> str:
         "and whether it was later voided.</li>"
         "<li>What your slot reports about itself: which version of Claude Code is installed, "
         "whether it is signed in, the email address and plan of the one Claude account "
-        "signed in on it, so your page can show which of your accounts it is, that "
+        "signed in on it, so your page can show which of your accounts it is, a "
+        "fingerprint of that account (a one-way digest of Anthropic&#x27;s id for it, which "
+        "cannot be turned back into the id or your address) and of the account the slot "
+        "was first signed in with, so we can tell when one account is signed in on two "
+        "machines, or a slot on another account than its own, which ccfleet does not "
+        "allow, that "
         "plan&#x27;s rate-limit tier, when that sign-in expires, whether Remote Control is "
         "running, how much of your Claude usage limits is used and when they reset, and how "
         "many tokens were used each hour over the last week. The token counts are worked "
@@ -373,8 +385,10 @@ def privacy_page(cfg: Config) -> str:
         "<p>You sign in to Claude yourself, through Anthropic. The credential that creates is "
         "written on the machine, in your slot, and nowhere else: this server never stores "
         f"it. While a sign-in is in progress, its link, the code you paste and its progress "
-        f"are held here for at most {attempt}. A device token you ask for is held here "
-        f"until you say you are done with it, and for at most {attempt}.</p>"
+        f"are held here for at most {attempt}. If one does not go through, why is kept for "
+        f"your page, and nothing else of it, for at most {attempt}. A device token you ask "
+        f"for is held here until you say you are done with it, and for at most "
+        f"{attempt}.</p>"
         "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
         "Anthropic&#x27;s own terms and privacy policy.</p></div>"
         '<div class="card"><h2>What the operator can see</h2>'
@@ -435,10 +449,25 @@ def _report_for(slot: Mapping[str, Any], heartbeat: Optional[Mapping[str, Any]]
     return {}
 
 
+#: Said on the card of a slot whose Claude account is live on another node too.
+ELSEWHERE = ("The Claude account on this slot is also signed in on another machine in "
+             "this fleet. ccfleet keeps one account on one machine: sign it out of one of "
+             "them.")
+#: Said on the card of a slot signed in to another account than the one it keeps.
+CHANGED = ("This slot is signed in to another Claude account than the one it was first "
+           "signed in with. A slot keeps its first account: sign that one in again, or "
+           "give the slot back and claim a new one.")
+
+
 def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                heartbeat: Optional[Mapping[str, Any]], login: Mapping[str, Any],
-               csrf: str, cfg: Config, now: float) -> str:
+               csrf: str, cfg: Config, now: float,
+               flagged: frozenset[str] = frozenset()) -> str:
     report = _report_for(slot, heartbeat)
+    # A sign-in or token that failed is over: it is said once, below, and the
+    # buttons come back as if nothing were in flight.
+    failed = login if login.get("state") == "failed" else {}
+    login = {} if failed else login
     tone, title, detail = STATE_WORDS.get(slot["state"], ("disabled", slot["state"], ""))
     heard = (heartbeat or {}).get("ts")
     if heard is None:
@@ -461,6 +490,15 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         parts.append(f"<p>{escape(detail)}</p>")
     if slot["state"] == slotstates.ACTIVE:
         parts.append(_in_use(report, now))
+    if slot["state"] in CAN_SIGN_IN:
+        for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
+            if rule in flagged:
+                parts.append(f'<p class="lapsed">{escape(words)}</p>')
+    if failed and slot["state"] in CAN_SIGN_IN:
+        what = "The device token was not made" if failed.get("kind") == "token" else \
+            "The sign-in was not kept"
+        parts.append(f'<p class="lapsed">{what}: '
+                     f'{escape(str(failed.get("detail") or "no reason given"))}.</p>')
     if slot["state"] in CAN_SIGN_IN:
         parts.append(_sign_in(slot, report, login, csrf))
         parts.append(_tokens(slot, login, csrf, now))

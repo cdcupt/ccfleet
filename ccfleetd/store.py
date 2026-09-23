@@ -471,6 +471,7 @@ class Store:
     MAX_SECRET = 512
     MAX_LOGIN_CODE = 512
     MAX_LOGIN_URL = 1024
+    MAX_LOGIN_DETAIL = 200
 
     def request_login(self, node_id: str, email: str, now: float,
                       kind: str = "login") -> None:
@@ -646,6 +647,18 @@ class Store:
                 self._conn.commit()
                 return
 
+            if state == "failed" and node_id.startswith(SLOT_LOGIN_PREFIX):
+                # A slot's holder is told why, on their own page: above all
+                # that a slot keeps the account it was first signed in with.
+                # Only the reason stays — code, link and secret go now — and
+                # only until the sweep takes it; the machine is never asked
+                # about a failed row again (see desired._login_block).
+                self._conn.execute(
+                    "UPDATE logins SET state='failed', code='', url='', secret='', "
+                    "detail=?, updated_at=? WHERE node_id = ? AND requested_at = ?",
+                    (str(detail or "").strip()[:self.MAX_LOGIN_DETAIL], now, *pin))
+                self._conn.commit()
+                return
             if state in ("done", "failed"):
                 # Nothing useful survives a finished login, and the code must not
                 # linger in the database once it has been used.

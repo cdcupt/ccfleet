@@ -7,6 +7,7 @@ compromised or buggy agent cannot smuggle large or odd data into the store.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -37,6 +38,9 @@ MAX_SLOT_REPORTS = 64
 # The longest address SMTP allows. A longer one is not an address, and cutting
 # it short would show the holder somebody else's.
 MAX_EMAIL = 254
+# A Claude account's fingerprint: the first 16 hex digits of a digest of its id,
+# the same on every node it is on. Nothing else is one.
+ACCOUNT_FP_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 class HeartbeatError(ValueError):
@@ -126,6 +130,11 @@ def _usage(section: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def account_fp(value: Any) -> Optional[str]:
+    """An account's fingerprint, exactly as the agent makes it, or None."""
+    return value if isinstance(value, str) and ACCOUNT_FP_RE.match(value) else None
+
+
 def _email(value: Any) -> str:
     """An address, whole, or nothing. Never a truncated one."""
     if (isinstance(value, str) and len(value) <= MAX_EMAIL and value.isprintable()
@@ -152,6 +161,9 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "mtime": _num(section.get("mtime")),
         "email": _email(section.get("email")),
         "refresh_expires_at": _num(section.get("refresh_expires_at")),
+        "account_fp": account_fp(section.get("account_fp")),
+        # The account the slot keeps (its first), to compare with the one above.
+        "bound_fp": account_fp(section.get("bound_fp")),
     }
 
 
@@ -282,6 +294,9 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
             "logged_in": _bool_or_none(creds.get("logged_in")),
             "auth_method": _str(creds.get("auth_method")),
             "api_provider": _str(creds.get("api_provider")),
+            # A digest of the account's id, never the id: how the server tells
+            # one account signed in on two nodes, and nothing more.
+            "account_fp": account_fp(creds.get("account_fp")),
         },
         "disk": {"used_pct": _num(disk.get("used_pct")), "free_gb": _num(disk.get("free_gb"))},
         "mem": {"used_pct": _num(mem.get("used_pct"))},
