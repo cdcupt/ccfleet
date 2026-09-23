@@ -445,6 +445,21 @@ def test_the_same_account_signed_in_twice_keeps_only_the_new_sign_in(home):
     assert listed(facts) == [("2", True)]
 
 
+def test_the_other_copy_stays_until_remote_control_has_moved_off_it(home):
+    """Remote Control would not restart, so it may still be running as the old
+    copy: that copy's sign-in is kept until a restart has actually happened."""
+    sign_in(home, "1", "me@example.com", uuid="U")
+    slot = Slot(home, restart_code=1)
+    facts = finish(home, slot, "2", "me@example.com", uuid="U", account="new")
+    assert facts["login"]["state"] == "done"
+    assert (home / ".claude" / ".credentials.json").exists(), \
+        "deleted the sign-in Remote Control may still be running as"
+    slot.restart_code = 0
+    facts = agent.slot_facts({}, slot, now=NOW)
+    assert not (home / ".claude" / ".credentials.json").exists()
+    assert listed(facts) == [("2", True)]
+
+
 def test_a_second_copy_in_a_place_of_its_own_is_removed_whole(home):
     sign_in(home, "1", "work@example.com")
     sign_in(home, "2", "me@example.com", uuid="U")

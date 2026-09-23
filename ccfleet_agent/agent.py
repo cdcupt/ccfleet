@@ -1906,23 +1906,37 @@ def after_sign_in(account: SlotAccount, state: Mapping[str, Any],
     new sign-in under a running one left the slot serving the old account.
 
     The same account signed in twice keeps only what was just signed in; the
-    other copy's sign-in is deleted, after Remote Control has moved off it.
+    other copy's sign-in is deleted once Remote Control has moved off it (see
+    drop_other_copies).
     """
     if account.id is not None and not use_account(account):
         log.warning("signed into account %s but could not switch to it", account.id)
         return dict(state)
     state = _moved_on(state)
-    if not restart_remote_control(runner):
+    if restart_remote_control(runner):
+        drop_other_copies(account)
+    else:
         state["account_restart"] = "owed"   # tried again on the next run
+    return state
+
+
+def drop_other_copies(account: SlotAccount) -> None:
+    """Delete any other sign-in of the same account, keeping `account`'s.
+
+    Only once Remote Control has restarted onto `account`: until then it may
+    still be running as the other copy, and deleting that sign-in under it
+    would leave it serving from a credential nothing on the slot holds.
+    """
     uuid = account_facts(account)["uuid"]
+    if uuid is None:
+        return
     for account_id in SLOT_ACCOUNT_IDS:
         other = slot_account(account_id)
-        if other.id == account.id or uuid is None:
+        if other.id == account.id:
             continue
         facts = account_facts(other)
         if facts["present"] and facts["uuid"] == uuid:
             remove_sign_in(other)
-    return state
 
 
 def account_intent(raw: Any) -> Optional[dict[str, Any]]:
@@ -2052,6 +2066,7 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
         state = after_sign_in(signed_into, state, runner)
     elif state.get("account_restart") == "owed" and restart_remote_control(runner):
         state.pop("account_restart")
+        drop_other_copies(account_in_use())     # held back until this restart
     in_use = account_in_use()
     as_in_use = account_runner(in_use, runner)
     credentials = credentials_summary(in_use.config_dir, in_use.global_config)
