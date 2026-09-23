@@ -1863,10 +1863,12 @@ def test_a_session_in_use_is_never_cut_short(slot_home):
                              now=1_060.0)
     assert installs(calls) == [], "installed again what was already there"
     assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"
-    # And once done, it is not done again.
+    # And once done, it is not done again, nor reported again.
     calls = []
-    agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300", session=1), now=1_120.0)
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300", session=1),
+                             now=1_120.0)
     assert RC_RESTART not in calls
+    assert "upgrade" not in facts, "kept announcing a restart that already happened"
 
 
 @pytest.mark.parametrize("session,raises", [(2, False), (3, False), (1, True)])
@@ -1961,3 +1963,46 @@ def test_by_default_it_looks_where_debian_and_ubuntu_write_it(monkeypatch):
     monkeypatch.setattr(agent.Path, "exists", lambda self: looked.append(str(self)) or False)
     agent.reboot_required()
     assert looked == ["/var/run/reboot-required"]
+
+
+
+def test_a_channel_is_followed_without_reinstalling_every_minute(slot_home):
+    """A channel has no number to compare, so it is re-checked on a schedule."""
+    pin = {"claude_version": "stable", "may_upgrade": True}
+    calls = []
+    agent.slot_facts(pin, moving_claude(calls), now=1_000.0)
+    assert [c[2] for c in installs(calls)] == ["stable"]
+    calls = []
+    agent.slot_facts(pin, moving_claude(calls, before="2.1.300"), now=1_060.0)
+    assert installs(calls) == [], "reinstalled a channel that was just resolved"
+
+
+def test_an_install_that_changed_nothing_restarts_nothing(slot_home):
+    """The channel already pointed at what was installed: no new version, so
+    Remote Control is not running an old one."""
+    calls = []
+    facts = agent.slot_facts({"claude_version": "stable", "may_upgrade": True},
+                             moving_claude(calls, before="2.1.300", after="2.1.300"),
+                             now=1_000.0)
+    assert len(installs(calls)) == 1 and RC_RESTART not in calls
+    assert facts["upgrade"]["restart"] is None
+
+
+def test_a_restart_owed_waits_while_its_holder_signs_in(slot_home):
+    agent.slot_facts(FOLLOW, moving_claude([], session=0), now=1_000.0)
+    assert slot_state(slot_home)["restart"] == "waiting"
+    calls = []
+    agent.slot_facts({"claude_version": "2.1.300", "may_upgrade": False},
+                     moving_claude(calls, before="2.1.300", session=1), now=1_060.0)
+    assert RC_RESTART not in calls, "restarted Remote Control in the middle of a sign-in"
+    assert slot_state(slot_home)["restart"] == "waiting"
+
+
+def test_a_pin_taken_away_cancels_a_restart_it_was_owed(slot_home):
+    agent.slot_facts(FOLLOW, moving_claude([], session=0), now=1_000.0)
+    assert slot_state(slot_home)["restart"] == "waiting"
+    calls = []
+    facts = agent.slot_facts({"claude_version": "", "may_upgrade": True},
+                             moving_claude(calls, before="2.1.300", session=1), now=1_060.0)
+    assert RC_RESTART not in calls and "upgrade" not in facts
+    assert "restart" not in slot_state(slot_home)

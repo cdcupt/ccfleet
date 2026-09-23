@@ -1376,8 +1376,6 @@ def reconcile_slot_version(request: Mapping[str, Any], state: Mapping[str, Any],
     What is still running the old one is Remote Control, which is restarted
     later, at a quiet moment (see finish_restart).
     """
-    if "claude_version" not in request:
-        return dict(state), installed
     pin = {"claude_version": request.get("claude_version")}
     # prune_state drops a success once it is satisfied, which is right for the
     # record and wrong for the restart it may still owe: that is kept until
