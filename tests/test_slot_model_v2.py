@@ -666,3 +666,57 @@ def test_a_node_cannot_be_renamed_onto_another_machines_slot_id(store):
     store.rename_slot("pool-3", "pool-7")      # a slot called pool-7, on pool-3
     with pytest.raises(StoreError):
         store.rename_node("erik-1", "pool-7")
+
+
+# -- one account, one node, with an owner's node counted as their slot -----------------------
+
+FP, OTHER_FP = "0123456789abcdef", "fedcba9876543210"
+
+
+def erik_on_both(st, *, slot_fp):
+    """Erik's own node erik-1, held as his slot, signed in with FP; and his slot
+    on the shared machine erik-2, in use, signed in with `slot_fp`."""
+    from ccfleetd.config import Config
+    owner_node(st)
+    account(st, "e1", "cdcupt@gmail.com", quota=2)
+    st.hold_owner_node("erik-1", "e1", now=NOW)
+    machine(st, "erik-2")
+    claim = st.claim_slot("e1", now=NOW)["claimed_at"]
+    st.apply_slot_report("erik-2", [{"unix_user": "slot01", "present": True,
+                                     "provisioned_for": claim}], now=NOW)
+    signed = {"unix_user": "slot01", "present": True,
+              "credentials": {"logged_in": True, "account_fp": slot_fp}}
+    st.apply_slot_report("erik-2", [signed], now=NOW)
+    st.insert_heartbeat("erik-1", NOW, {"node_id": "erik-1",
+                                        "credentials": {"logged_in": True, "account_fp": FP}})
+    st.insert_heartbeat("erik-2", NOW, {"node_id": "erik-2", "mode": "machine",
+                                        "slots": [signed]})
+    return Config()
+
+
+def test_an_owner_slot_is_one_place_not_two(store):
+    """The owner slot is a record over the node: the node is the one place its
+    account is live, under the node's id, and the record adds no second."""
+    from ccfleetd import rules
+    cfg = erik_on_both(store, slot_fp=OTHER_FP)
+    places = rules.account_places(store.list_nodes(), store.latest_heartbeats(),
+                                  store.list_slots(), NOW, cfg)
+    assert places == {FP: ["erik-1"], OTHER_FP: ["erik-2"]}
+
+
+def test_two_different_accounts_on_ones_own_slots_raise_nothing(store):
+    from ccfleetd.monitor import Monitor
+    from ccfleetd.notify import LogNotifier
+    cfg = erik_on_both(store, slot_fp=OTHER_FP)
+    Monitor(store, cfg, LogNotifier(), clock=lambda: NOW).check_all()
+    assert not [a for a in store.open_alerts() if a["rule"].startswith("account_")]
+
+
+def test_one_account_on_ones_own_node_and_slot_is_flagged_on_both(store):
+    from ccfleetd.monitor import Monitor
+    from ccfleetd.notify import LogNotifier
+    cfg = erik_on_both(store, slot_fp=FP)
+    Monitor(store, cfg, LogNotifier(), clock=lambda: NOW).check_all()
+    flagged = sorted((a["node_id"], a["rule"]) for a in store.open_alerts()
+                     if a["rule"].startswith("account_"))
+    assert flagged == [("erik-1", "account_elsewhere"), ("erik-2", "account_elsewhere:slot01")]

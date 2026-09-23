@@ -260,10 +260,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     allowance += _paid(payments.paid_through(store.list_payments(account["id"])), now)
     # The operator's alerts about the rule, said to the holder without naming
     # the other place: it may be somebody else's.
-    flagged = {s["id"]: frozenset(
-        rule for rule in ("account_elsewhere", "account_changed")
-        if any(a["rule"] == f"{rule}:{s['unix_user']}" for a in store.open_alerts(s["node_id"])))
-        for s in held}
+    flagged = {s["id"]: _flags(s, store.open_alerts(s["node_id"])) for s in held}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]])
                     for s in held)
@@ -461,6 +458,20 @@ ELSEWHERE = ("The Claude account on this slot is also signed in on another machi
 CHANGED = ("This slot is signed in to another Claude account than the one it was first "
            "signed in with. A slot keeps its first account: sign that one in again, or "
            "give the slot back and claim a new one.")
+
+
+def _flags(slot: Mapping[str, Any], alerts: list[Mapping[str, Any]]) -> frozenset[str]:
+    """Which of the one-account rules the operator's alerts say this slot breaks.
+
+    A machine names each slot's alert by its Linux user; an owner's own node,
+    counted as their slot, has the node's own alert, with nothing after it —
+    and no binding to break, which only a machine's slots keep.
+    """
+    rules = {a["rule"] for a in alerts}
+    if slot.get("kind") == slotstates.OWNER_SLOT:
+        return frozenset(r for r in ("account_elsewhere",) if r in rules)
+    return frozenset(r for r in ("account_elsewhere", "account_changed")
+                     if f"{r}:{slot['unix_user']}" in rules)
 
 
 def _own_report(heartbeat: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:

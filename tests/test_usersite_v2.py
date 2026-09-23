@@ -152,6 +152,30 @@ def test_a_token_handed_over_for_an_owners_node_is_remembered_on_its_card(site):
     assert "last issued" in whole_card(erik.page(), "erik-1")
 
 
+def test_an_owners_node_signed_in_elsewhere_too_says_so_on_its_card(site):  # noqa: F811
+    """An owner node's alert is its own — `account_elsewhere`, no user after
+    it — and the holder's card for that node says it, as a slot's card does."""
+    from ccfleetd.usersite import ELSEWHERE
+    store, sign_in, _ = site
+    erik = held_own_node(store, sign_in)
+    owner_said(store, logged_in=True)
+    assert ELSEWHERE not in whole_card(erik.page(), "erik-1")
+    store.open_alert("erik-1", "account_elsewhere", "critical", "also on erik-2", time.time())
+    assert ELSEWHERE in whole_card(erik.page(), "erik-1").replace("&#x27;", "'")
+
+
+def test_another_nodes_alert_is_not_this_owner_slots(site):  # noqa: F811
+    from ccfleetd.usersite import ELSEWHERE
+    store, sign_in, _ = site
+    erik = held_own_node(store, sign_in)
+    owner_said(store, logged_in=True)
+    store.add_node("erik-9", "erik", now=time.time())
+    store.open_alert("erik-9", "account_elsewhere", "critical", "also on erik-1", time.time())
+    store.open_alert("erik-1", "account_elsewhere:erik", "critical", "not an owner rule",
+                     time.time())
+    assert ELSEWHERE not in whole_card(erik.page(), "erik-1").replace("&#x27;", "'")
+
+
 # -- what the page says it keeps ---------------------------------------------------------
 
 def test_the_privacy_page_says_a_slot_is_named_after_you(site):  # noqa: F811
