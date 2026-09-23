@@ -76,7 +76,7 @@ def test_an_owner_sees_only_their_own_node(fleet):
 def test_an_owners_dashboard_does_not_mention_the_other_node(fleet):
     """Filtering the API but leaking the name into the HTML would still be a leak."""
     srv, _, _ = fleet
-    status, raw = call(srv, "GET", "/", headers=creds("alice", "alice-pw"))
+    status, raw = call(srv, "GET", "/admin", headers=creds("alice", "alice-pw"))
     assert status == 200
     page = raw.decode()
     assert "node-a" in page and "node-b" not in page
@@ -91,7 +91,7 @@ def test_an_owner_gets_their_own_credentials_and_nothing_else(fleet):
     manages the fleet stays with the operator.
     """
     srv, _, _ = fleet
-    _, raw = call(srv, "GET", "/", headers=creds("alice", "alice-pw"))
+    _, raw = call(srv, "GET", "/admin", headers=creds("alice", "alice-pw"))
     page = raw.decode()
     assert "Add a node" not in page and "Manage nodes" not in page
     actions = set(re.findall(r'action="/actions/node/([^/]+)/([^"]+)"', page))

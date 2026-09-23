@@ -574,7 +574,7 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
     """
     if account is None:
         body = ("<p>Operators sign in with their Google account.</p>"
-                "<p><a class=\"btn\" href=\"/auth/google/start?next=/\">Continue with "
+                "<p><a class=\"btn\" href=\"/auth/google/start?next=/admin\">Continue with "
                 "Google</a></p>")
     else:
         body = (f"<p>Signed in as <strong>{escape(str(account.get('email', '')))}</strong>, "
