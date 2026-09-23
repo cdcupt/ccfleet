@@ -60,7 +60,8 @@ docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd user add alic
 
 `node add` prints the node's token once, plus the three lines to put in the
 node's `agent.env`. Put a TLS proxy in front of `127.0.0.1:8110`
-(`deploy/Caddyfile.example`) and open it with user `admin` and the admin token. To give an owner a read-only view of their own nodes, add a named account with `ccfleetd user add NAME --owner OWNER`.
+(`deploy/Caddyfile.example`) and open `/admin` on it with user `admin` and the admin
+token; the bare address belongs to the people who use the product. To give an owner a read-only view of their own nodes, add a named account with `ccfleetd user add NAME --owner OWNER`.
 If you would rather not expose a public endpoint at all, nodes can report over an
 SSH tunnel instead: see [docs/tunnel.md](docs/tunnel.md).
 
@@ -158,10 +159,12 @@ The rules the rest depends on:
 - **Payments are a record, not a gate.** The console shows who is paid through
   when, and marks a lapse in red while that person still holds or may claim
   slots. A lapse takes no slot and stops no claim; what to do about it is yours.
-- **Two sites, if you want them.** `CCFLEET_ADMIN_HOST=admin.fleet.example.com`
-  puts the console on its own hostname, with its own Google redirect URI and its
-  own sessions; every other hostname is then the product. Left unset, one host
-  serves both, as before.
+- **The console is at `/admin`; the bare address is the product's.** It takes
+  everybody to their own page: an operator to the console, a signed-in customer
+  to their slots, anybody else to what ccfleet is and how to start.
+  `CCFLEET_ADMIN_HOST=admin.fleet.example.com` moves the console to its own
+  hostname instead, with its own Google redirect URI and its own sessions;
+  every other hostname is then only the product.
 
 What to send the people who buy slots: the product site serves public pages
 for them — `/docs` (what it is, what they need, how to buy), `/docs/guide`,
