@@ -159,10 +159,15 @@ def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
 
 # -- the way in ----------------------------------------------------------------------
 
-def test_the_bare_address_points_a_customer_home(one_site):
-    """Somebody typing the bare address lands on the console's door; it tells
-    them where their slots are and where to start."""
-    status, body = one_site("/")
+def test_the_bare_address_is_the_customers(one_site):
+    status, _ = one_site("/")
+    assert status == 303
+
+
+def test_the_consoles_door_points_a_customer_home(one_site):
+    """A customer who finds /admin anyway is told where their slots are and
+    where to start."""
+    status, body = one_site("/admin")
     assert status == 401
     # Said in the page itself, not left to the footer every page carries.
     card = body[body.index("Looking for your slots?"):]

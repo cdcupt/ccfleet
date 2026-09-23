@@ -145,6 +145,12 @@ def _safe_next(raw: str) -> str:
     return raw
 
 
+#: The operator's console. The bare address belongs to the people who use the
+#: product; the console sits under its own path on the same host (or at the
+#: root of a dedicated CCFLEET_ADMIN_HOST, which forwards / here).
+CONSOLE_PATH = "/admin"
+
+
 def request_host(header: Optional[str]) -> str:
     """The hostname a request was made to: lowercased, without its port."""
     host = (header or "").strip().lower()
@@ -420,7 +426,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             only with its own form token, and a cookie is cleared only when
             one was actually sent with the request.
             """
-            home = "/account" if self._product_site() else "/"
+            home = "/account" if self._product_site() else CONSOLE_PATH
             if sessions.read_cookie(self.headers.get("Cookie")) is None:
                 self._redirect(home)
                 return
@@ -494,7 +500,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            admin_only = path in ("/api/nodes", "/api/alerts", "/auth/basic")
+            admin_only = (path in ("/api/nodes", "/api/alerts", "/auth/basic")
+                          or path.rstrip("/") == CONSOLE_PATH)
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
@@ -507,7 +514,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # The admin token, asked for deliberately: the break-glass way
                 # in beside Google, from the link on the console's door.
                 if identify(self.headers.get("Authorization"), ctx.cfg, ctx.store):
-                    self._redirect("/")
+                    self._redirect(CONSOLE_PATH)
                 else:
                     self._json(401, {"error": "unauthorized"},
                                {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
@@ -530,9 +537,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             elif path == "/auth/google/callback":
                 self._sign_in_callback()
             elif path == "/":
-                if not self._admin_site():
-                    self._redirect("/account")          # the product's front door
+                # The bare address takes everybody to their own page, never to a
+                # page that changes with who is looking: the console for somebody
+                # the console already knows, your slots when you are signed in,
+                # and otherwise what ccfleet is and how to start.
+                # Only where the console exists: on a separate product
+                # hostname an operator is a customer like anybody else, and
+                # /admin there is a 404, not a destination.
+                if not self._product_site() or (self._admin_site() and (
+                        identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
+                        or self._operator_session())):
+                    self._redirect(CONSOLE_PATH)
                     return
+                account, _ = self._signed_in()
+                self._redirect("/account" if account else "/docs")
+            elif path.rstrip("/") == CONSOLE_PATH:
                 who = (identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
                        or self._operator_session())
                 if who is None:
@@ -725,11 +744,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     if anchor is None:
                         self._json(404, {"error": "not found"})
                     else:
-                        self._redirect(f"/#{anchor}")
+                        self._redirect(f"{CONSOLE_PATH}#{anchor}")
                 else:
                     self._json(404, {"error": "not found"})
             except StoreError as exc:
-                page = f'<!doctype html><p>{html_escape(str(exc))}</p><p><a href="/">back</a></p>'
+                page = (f'<!doctype html><p>{html_escape(str(exc))}</p>'
+                        f'<p><a href="{CONSOLE_PATH}">back</a></p>')
                 self._send(400, page.encode("utf-8"), HTML_HEADERS)
 
         def _action_add(self, form: dict[str, str]) -> None:
@@ -799,7 +819,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             anchor = self.ACTION_ANCHORS.get(action, "")
             if anchor == "sign-in" and kind_before == "token":
                 anchor = "device-tokens"
-            self._redirect(f"/#{anchor}" if anchor else "/")
+            self._redirect(f"{CONSOLE_PATH}#{anchor}" if anchor else CONSOLE_PATH)
 
         # -- views ---------------------------------------------------------
 

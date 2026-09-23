@@ -137,10 +137,19 @@ def test_the_admin_callback_is_on_the_admin_host():
 
 # -- the product never shows a console ---------------------------------------------
 
-def test_the_products_front_door_is_the_user_site(split):
-    _, browser, _ = split
+def test_the_products_front_door_sends_each_person_to_their_own_page(split):
+    """A visitor to what ccfleet is; somebody signed in to their slots; and an
+    operator signed in here too, because on the product an operator is a
+    customer like anybody else and there is no console to send them to."""
+    store, browser, _ = split
     reply = browser(PRODUCT).call("GET", "/")
-    assert reply.status == 303 and reply.getheader("Location") == "/account"
+    assert reply.status == 303 and reply.getheader("Location") == "/docs"
+    person = browser(PRODUCT)
+    person.sign_in_with_google()
+    assert person.call("GET", "/").getheader("Location") == "/account"
+    store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
+    assert person.call("GET", "/").getheader("Location") == "/account"
+    assert person.call("GET", "/admin").status == 404
     assert browser(PRODUCT).call("GET", "/account").status == 200
 
 
@@ -174,7 +183,9 @@ def test_the_console_side_has_no_user_site(split):
 
 def test_the_console_answers_the_operator_on_its_own_hostname(split):
     _, browser, _ = split
-    reply = browser(ADMIN).call("GET", "/", headers=_basic())
+    root = browser(ADMIN).call("GET", "/", headers=_basic())
+    assert root.status == 303 and root.getheader("Location") == "/admin"
+    reply = browser(ADMIN).call("GET", "/admin", headers=_basic())
     assert reply.status == 200 and "ccfleet" in reply.body
     assert browser(ADMIN).call("GET", "/api/nodes", headers=_basic()).status == 200
 
@@ -184,15 +195,15 @@ def test_the_tunnel_still_reaches_the_console(split):
     an SSH tunnel to loopback, whatever the public hostnames are."""
     _, browser, _ = split
     for host in ("127.0.0.1:8111", "localhost", "[::1]:8111"):
-        assert browser(host).call("GET", "/", headers=_basic()).status == 200, host
+        assert browser(host).call("GET", "/admin", headers=_basic()).status == 200, host
 
 
 def test_the_console_door_offers_google_not_a_password_prompt(split):
     _, browser, _ = split
-    door = browser(ADMIN).call("GET", "/")
+    door = browser(ADMIN).call("GET", "/admin")
     assert door.status == 401
     assert door.getheader("WWW-Authenticate") is None, "the browser would ask for a password"
-    assert 'href="/auth/google/start?next=/"' in door.body
+    assert 'href="/auth/google/start?next=/admin"' in door.body
     assert 'href="/auth/basic"' in door.body
 
 
@@ -201,7 +212,7 @@ def test_the_admin_token_is_asked_for_only_when_asked(split):
     challenge = browser(ADMIN).call("GET", "/auth/basic")
     assert challenge.status == 401 and challenge.getheader("WWW-Authenticate")
     through = browser(ADMIN).call("GET", "/auth/basic", headers=_basic())
-    assert through.status == 303 and through.getheader("Location") == "/"
+    assert through.status == 303 and through.getheader("Location") == "/admin"
     assert browser(ADMIN).call("GET", "/auth/basic", headers=_basic("wrong")).status == 401
 
 
@@ -235,7 +246,7 @@ def test_an_operator_signs_in_with_google(split):
     admin = browser(ADMIN)
     admin.sign_in_with_google()
     store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
-    console = admin.call("GET", "/")
+    console = admin.call("GET", "/admin")
     assert console.status == 200 and "erik@example.com" in console.body
     assert admin.call("GET", "/api/nodes").status == 200
 
@@ -255,7 +266,7 @@ def test_a_signed_in_account_that_is_not_an_operator_gets_no_console(split):
     store, browser, _ = split
     admin = browser(ADMIN)
     admin.sign_in_with_google()
-    door = admin.call("GET", "/")
+    door = admin.call("GET", "/admin")
     assert door.status == 401 and "not an operator account" in door.body
     assert admin.call("GET", "/api/nodes").status == 401
     reply = admin.call("POST", "/actions/node/add",
@@ -277,7 +288,7 @@ def test_a_session_from_one_site_opens_nothing_on_the_other(split):
     carried = browser(ADMIN)
     carried.jar = dict(product.jar)
     assert carried.call("GET", "/api/nodes").status == 401
-    door = carried.call("GET", "/")
+    door = carried.call("GET", "/admin")
     assert door.status == 401 and "not an operator" not in door.body, \
         "the product session was read as a signed-in account here"
 
@@ -293,10 +304,10 @@ def test_signing_out_lands_on_each_sites_own_front_door(split):
     store, browser, _ = split
     admin = browser(ADMIN)
     admin.sign_in_with_google()
-    door = admin.call("GET", "/")
+    door = admin.call("GET", "/admin")
     token = re.search(r'name="csrf" value="([0-9a-f]{64})"', door.body).group(1)
     out = admin.call("POST", "/auth/signout", form={"csrf": token})
-    assert out.status == 303 and out.getheader("Location") == "/"
+    assert out.status == 303 and out.getheader("Location") == "/admin"
 
 
 # -- one hostname, as before ------------------------------------------------------------
@@ -310,11 +321,20 @@ def test_with_no_admin_host_one_site_is_both_as_it_always_was(monkeypatch):
     srv, store, thread = _server(cfg, monkeypatch, who)
     try:
         one = Browser(srv.server_address[1], PRODUCT)
-        assert one.call("GET", "/", headers=_basic()).status == 200
+        assert one.call("GET", "/").getheader("Location") == "/docs"
+        assert one.call("GET", "/", headers=_basic()).getheader("Location") == "/admin"
+        assert one.call("GET", "/admin", headers=_basic()).status == 200
+        assert one.call("GET", "/admin/", headers=_basic()).status == 200
         assert one.call("GET", "/account").status == 200
         one.sign_in_with_google()
+        assert one.call("GET", "/").getheader("Location") == "/account", \
+            "a customer's bare address is their own page"
+        assert one.call("GET", "/admin").status == 401
         store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
-        assert one.call("GET", "/").status == 200, "an operator's session opens the console"
+        assert one.call("GET", "/").getheader("Location") == "/admin", \
+            "an operator's bare address is the console"
+        assert one.call("GET", "/admin").status == 200, "an operator's session opens the console"
+        assert one.call("GET", "/account").status == 200, "and their own slots are still theirs"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -327,7 +347,7 @@ def test_without_google_the_console_asks_for_the_token_as_before(monkeypatch):
                  admin_token=ADMIN_TOKEN, admin_host=ADMIN)
     srv, store, thread = _server(cfg, monkeypatch, {})
     try:
-        door = Browser(srv.server_address[1], ADMIN).call("GET", "/")
+        door = Browser(srv.server_address[1], ADMIN).call("GET", "/admin")
         assert door.status == 401 and door.getheader("WWW-Authenticate")
     finally:
         srv.shutdown()

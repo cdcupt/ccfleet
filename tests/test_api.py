@@ -51,10 +51,10 @@ def test_healthz_and_unknown_paths(server):
 
 def test_admin_endpoints_require_auth(server, cfg):
     srv, _ = server
-    assert call(srv, "GET", "/")[0] == 401
+    assert call(srv, "GET", "/admin")[0] == 401
     assert call(srv, "GET", "/api/nodes", headers=basic("wrong"))[0] == 401
     assert call(srv, "GET", "/api/nodes", headers={"Authorization": "Basic !!!"})[0] == 401
-    status, body, ctype = call(srv, "GET", "/", headers=basic(cfg.admin_token))
+    status, body, ctype = call(srv, "GET", "/admin", headers=basic(cfg.admin_token))
     assert status == 200 and ctype.startswith("text/html") and b"ccfleet" in body
     status, body, _ = call(srv, "GET", "/api/alerts",
                            headers={"Authorization": f"Bearer {cfg.admin_token}"})
@@ -220,7 +220,7 @@ def test_console_node_actions(server, cfg):
                           ("rc-on", lambda n: n["rc_expected"] is True),
                           ("rc-off", lambda n: n["rc_expected"] is False)):
         status, _, loc = form_post(srv, f"/actions/node/node-a/{action}", {"csrf": csrf}, auth)
-        assert status == 303 and loc == "/#manage", \
+        assert status == 303 and loc == "/admin#manage", \
             "back to the card the button is on, not the top of the page"
         assert check(store.get_node("node-a"))
 
@@ -254,7 +254,7 @@ def test_console_unknown_action_and_unknown_node(server, cfg):
 def test_dashboard_carries_the_forms(server, cfg):
     srv, store = server
     store.add_node("node-a", "erik", now=1.0)
-    status, body, _ = call(srv, "GET", "/", headers=basic(cfg.admin_token))
+    status, body, _ = call(srv, "GET", "/admin", headers=basic(cfg.admin_token))
     page = body.decode()
     assert status == 200
     assert "Add a node" in page
@@ -448,25 +448,25 @@ def test_an_action_returns_you_to_the_card_you_used(server, cfg):
         conn.close()
         return resp.status, loc
 
-    assert press("token-start") == (303, "/#device-tokens")
+    assert press("token-start") == (303, "/admin#device-tokens")
 
     # login-code and login-cancel serve both cards; the row in flight decides
     # which. A cancel deletes that row, so the answer has to be read before the
     # action runs — that ordering is the point of these two assertions.
     store.request_login("node-a", "", time.time(), kind="token")
-    assert press("login-cancel") == (303, "/#device-tokens")
+    assert press("login-cancel") == (303, "/admin#device-tokens")
     assert store.get_login("node-a") is None, "and it really was cancelled"
 
     store.request_login("node-a", "", time.time(), kind="login")
-    assert press("login-cancel") == (303, "/#sign-in")
+    assert press("login-cancel") == (303, "/admin#sign-in")
 
     # Nothing in flight: a sign-in action belongs to the sign-in card.
-    assert press("login-start") == (303, "/#sign-in")
+    assert press("login-start") == (303, "/admin#sign-in")
     store.clear_login("node-a")
 
     # Management actions have a card too, and it is the furthest down of all
     # of them — these are the buttons pressed several times in a row.
-    assert press("rc-on") == (303, "/#manage")
-    assert press("disable") == (303, "/#manage")
-    assert press("enable") == (303, "/#manage")
-    assert press("pin", "&version=2.1.278") == (303, "/#manage")
+    assert press("rc-on") == (303, "/admin#manage")
+    assert press("disable") == (303, "/admin#manage")
+    assert press("enable") == (303, "/admin#manage")
+    assert press("pin", "&version=2.1.278") == (303, "/admin#manage")

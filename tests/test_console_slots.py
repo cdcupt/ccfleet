@@ -94,7 +94,7 @@ def test_the_operator_sees_every_slot_and_who_holds_it(console):
     shared(store)
     ana = holder(store)
     store.claim_slot(ana["id"], now=time.time())
-    card = slots_card(call("GET", "/").body)
+    card = slots_card(call("GET", "/admin").body)
     assert "m1-01" in card and "m1-02" in card
     assert "ana@example.com" in card
     assert ">claiming<" in card and ">free<" in card
@@ -109,7 +109,7 @@ def test_what_people_and_machines_wrote_is_shown_not_run(console):
     store.claim_slot(odd["id"], now=time.time())
     store.open_alert("m1", "slot_wipe_failed:slot02", "critical",
                      "wipe failed: <img src=x onerror=alert(1)>", time.time())
-    page = call("GET", "/").body
+    page = call("GET", "/admin").body
     for card in (slots_card(page), accounts_card(page)):
         assert "<b>x</b>" not in card and "o&#x27;neil&amp;&lt;b&gt;x" in card
     assert "<img src=x" not in slots_card(page)
@@ -120,7 +120,7 @@ def test_an_owner_login_sees_no_slots_and_nobody(console):
     store, call = console
     shared(store)
     holder(store)
-    page = call("GET", "/", who="owner").body
+    page = call("GET", "/admin", who="owner").body
     assert 'id="slots"' not in page and 'id="accounts"' not in page
     assert "ana@example.com" not in page and "m1-01" not in page
 
@@ -128,7 +128,7 @@ def test_an_owner_login_sees_no_slots_and_nobody(console):
 def test_an_ordinary_owner_node_is_not_listed_as_a_machine(console):
     store, call = console
     store.add_node("laptop", "erik", now=time.time())
-    page = call("GET", "/").body
+    page = call("GET", "/admin").body
     assert "No shared machines yet" in page and "ccfleetd slot capacity" in page
 
 
@@ -138,7 +138,7 @@ def test_a_one_slot_machine_is_listed(console):
     store, call = console
     shared(store, node="solo", users=("slot01",))
     assert store.get_node("solo")["capacity"] == 1
-    assert 'action="/actions/slot/solo-01/remove"' in slots_card(call("GET", "/").body)
+    assert 'action="/actions/slot/solo-01/remove"' in slots_card(call("GET", "/admin").body)
 
 
 def test_a_stuck_slot_says_why(console):
@@ -148,7 +148,7 @@ def test_a_stuck_slot_says_why(console):
     store.claim_slot(ana["id"], now=time.time() - 3600)
     store.open_alert("m1", "slot_occupied:slot02", "critical",
                      "slot02 is free here but its Linux user exists", time.time())
-    page = call("GET", "/").body
+    page = call("GET", "/admin").body
     assert "setting up for" in slots_card(page)
     assert "slot02 is free here but its Linux user exists" in slots_card(page)
 
@@ -159,14 +159,14 @@ def test_only_a_slot_still_setting_up_is_called_stuck(console):
     store, call = console
     shared(store)
     store.claim_slot(holder(store)["id"], now=time.time())
-    assert "setting up for" not in slots_card(call("GET", "/").body)
+    assert "setting up for" not in slots_card(call("GET", "/admin").body)
     ready = store.claim_slot(holder(store, email="bo@example.com")["id"],
                              now=time.time() - 3600)
     store.apply_slot_report("m1", [{"unix_user": ready["unix_user"], "present": True,
                                     "provisioned_for": ready["claimed_at"]}],
                             now=time.time())
     assert store.get_slot(ready["id"])["state"] == slots.CLAIMED
-    assert "setting up for" not in slots_card(call("GET", "/").body)
+    assert "setting up for" not in slots_card(call("GET", "/admin").body)
 
 
 def test_trouble_shows_on_the_slot_it_is_about_and_no_other(console):
@@ -177,7 +177,7 @@ def test_trouble_shows_on_the_slot_it_is_about_and_no_other(console):
     shared(store, node="m2")
     store.open_alert("m2", "slot_wipe_failed:slot01", "critical",
                      "wiping slot01 failed: userdel exited 8", time.time())
-    assert slots_card(call("GET", "/").body).count("wiping slot01 failed") == 1
+    assert slots_card(call("GET", "/admin").body).count("wiping slot01 failed") == 1
 
 
 # -- what the operator can do ------------------------------------------------------
@@ -186,9 +186,9 @@ def test_setting_a_machines_capacity(console):
     store, call = console
     shared(store)
     reply = call("POST", "/actions/machine/m1/capacity", {"count": "5"})
-    assert reply.status == 303 and reply.getheader("Location") == "/#slots"
+    assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
     assert store.get_node("m1")["capacity"] == 5
-    assert "2 of 5 declared" in call("GET", "/").body
+    assert "2 of 5 declared" in call("GET", "/admin").body
 
 
 @pytest.mark.parametrize("count", ["1", "-1", "two", "", "3.5", " 5", "\u00b2", "99999",
@@ -199,7 +199,7 @@ def test_a_capacity_that_cannot_be_is_refused_in_words(console, count):
     store, call = console
     shared(store)
     reply = call("POST", "/actions/machine/m1/capacity", {"count": count})
-    assert reply.status == 400 and 'href="/"' in reply.body
+    assert reply.status == 400 and 'href="/admin"' in reply.body
     assert store.get_node("m1")["capacity"] == 2
 
 
@@ -281,7 +281,7 @@ def test_the_page_offers_take_back_on_a_held_slot_and_remove_on_a_free_one(conso
     store, call = console
     shared(store)
     slot = store.claim_slot(holder(store)["id"], now=time.time())
-    page = call("GET", "/").body
+    page = call("GET", "/admin").body
     assert f'action="/actions/slot/{slot["id"]}/reclaim"' in page
     assert f'action="/actions/slot/{slot["id"]}/remove"' not in page
     free = "m1-02" if slot["id"] == "m1-01" else "m1-01"
@@ -289,7 +289,7 @@ def test_the_page_offers_take_back_on_a_held_slot_and_remove_on_a_free_one(conso
     assert f'action="/actions/slot/{free}/reclaim"' not in page
     # Being wiped: nothing to take back and not yet safe to forget.
     store.begin_release(slot["id"])
-    page = call("GET", "/").body
+    page = call("GET", "/admin").body
     assert f'/actions/slot/{slot["id"]}/' not in page
 
 
@@ -297,7 +297,7 @@ def test_granting_and_reducing_an_allowance(console):
     store, call = console
     ana = holder(store, quota=0)
     reply = call("POST", f"/actions/account/{ana['id']}/allowance", {"count": "3"})
-    assert reply.status == 303 and reply.getheader("Location") == "/#accounts"
+    assert reply.status == 303 and reply.getheader("Location") == "/admin#accounts"
     assert store.get_account(ana["id"])["slot_quota"] == 3
     assert call("POST", f"/actions/account/{ana['id']}/allowance",
                 {"count": "-1"}).status == 400
@@ -372,11 +372,11 @@ def test_recording_a_payment_from_the_console(console):
     store, call = console
     ana = holder(store)
     reply = record(call, ana["id"], soon(), amount="30.5", currency="cny", note="WeChat")
-    assert reply.status == 303 and reply.getheader("Location") == "/#accounts"
+    assert reply.status == 303 and reply.getheader("Location") == "/admin#accounts"
     [written] = store.list_payments(ana["id"])
     assert (written["amount_minor"], written["currency"], written["paid_through"]) == \
         (3050, "CNY", soon())
-    card = accounts_card(call("GET", "/").body)
+    card = accounts_card(call("GET", "/admin").body)
     assert f'paid through <span class="nowrap">{soon()}</span>' in card
     assert "30.50 CNY" in card and "WeChat" in card and "by admin token" in card
 
@@ -400,7 +400,7 @@ def test_a_payment_the_ledger_cannot_read_is_refused_in_words(console, field, ty
     form = {"amount": "30", "currency": "USD", "through": soon(), "note": "", field: typed}
     reply = record(call, ana["id"], **{("through" if k == "through" else k): v
                                        for k, v in form.items()})
-    assert reply.status == 400 and 'href="/"' in reply.body
+    assert reply.status == 400 and 'href="/admin"' in reply.body
     assert store.list_payments() == []
 
 
@@ -413,7 +413,7 @@ def test_a_payment_for_nobody_is_refused(console):
 def test_somebody_with_no_payments_says_so(console):
     store, call = console
     holder(store)
-    assert " · no payments" in accounts_card(call("GET", "/").body)
+    assert " · no payments" in accounts_card(call("GET", "/admin").body)
 
 
 def test_lapsed_is_called_out_only_while_it_still_matters(console):
@@ -428,7 +428,7 @@ def test_lapsed_is_called_out_only_while_it_still_matters(console):
     gone = holder(store, email="cy@example.com", quota=0)
     for account in (ana, bo, gone):
         assert record(call, account["id"], soon(-3)).status == 303
-    card = accounts_card(call("GET", "/").body)
+    card = accounts_card(call("GET", "/admin").body)
     day = f'<span class="nowrap">{soon(-3)}</span>'
     called_out = f'<span class="bad-text">lapsed: paid through {day}</span>'
     assert card.count(called_out) == 2
@@ -440,7 +440,7 @@ def test_paid_up_is_not_lapsed_on_its_last_day(console):
     store, call = console
     ana = holder(store)
     record(call, ana["id"], soon(0))
-    card = accounts_card(call("GET", "/").body)
+    card = accounts_card(call("GET", "/admin").body)
     assert f'paid through <span class="nowrap">{soon(0)}</span>' in card
     assert "lapsed:" not in card
 
@@ -452,8 +452,8 @@ def test_voiding_a_payment_from_the_console(console):
     record(call, ana["id"], soon(60))
     newest, older = store.list_payments(ana["id"])
     reply = call("POST", f"/actions/payment/{newest['id']}/void", {})
-    assert reply.status == 303 and reply.getheader("Location") == "/#accounts"
-    card = accounts_card(call("GET", "/").body)
+    assert reply.status == 303 and reply.getheader("Location") == "/admin#accounts"
+    card = accounts_card(call("GET", "/admin").body)
     assert f'paid through <span class="nowrap">{soon(30)}</span>' in card, \
         "a voided payment still counted"
     assert '<span class="pill disabled">voided</span>' in card
@@ -474,16 +474,16 @@ def test_the_note_is_shown_not_run(console):
     store, call = console
     ana = holder(store)
     record(call, ana["id"], soon(), note="<script>alert(1)</script>")
-    card = accounts_card(call("GET", "/").body)
+    card = accounts_card(call("GET", "/admin").body)
     assert "<script>alert" not in card and "&lt;script&gt;alert(1)" in card
 
 
 def test_the_form_offers_the_currency_they_paid_in_last(console):
     store, call = console
     ana = holder(store)
-    assert 'name="currency" value="USD"' in accounts_card(call("GET", "/").body)
+    assert 'name="currency" value="USD"' in accounts_card(call("GET", "/admin").body)
     record(call, ana["id"], soon(), currency="CNY")
-    assert 'name="currency" value="CNY"' in accounts_card(call("GET", "/").body)
+    assert 'name="currency" value="CNY"' in accounts_card(call("GET", "/admin").body)
 
 
 
@@ -511,14 +511,14 @@ def test_each_slot_shows_the_claude_code_it_runs(console):
     store, call = console
     held_slot(store)
     machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
-    assert "Claude Code 2.1.278" in slots_card(call("GET", "/").body)
+    assert "Claude Code 2.1.278" in slots_card(call("GET", "/admin").body)
 
 
 def test_a_slot_behind_an_exact_pin_is_pending(console):
     store, call = console
     held_slot(store, pin="2.1.300")
     machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
-    assert "update pending" in slots_card(call("GET", "/").body)
+    assert "update pending" in slots_card(call("GET", "/admin").body)
 
 
 @pytest.mark.parametrize("pin,running", [("2.1.300", "2.1.300"), ("stable", "2.1.278"),
@@ -528,7 +528,7 @@ def test_nothing_is_pending_when_nothing_can_be_behind(console, pin, running):
     store, call = console
     held_slot(store, pin=pin)
     machine_said(store, {"unix_user": "slot01", "claude": {"version": running}})
-    assert "update pending" not in slots_card(call("GET", "/").body)
+    assert "update pending" not in slots_card(call("GET", "/admin").body)
 
 
 def test_a_free_slot_is_never_pending(console):
@@ -537,7 +537,7 @@ def test_a_free_slot_is_never_pending(console):
     shared(store, users=("slot01",))
     store.set_pinned_version("m1", "2.1.300")
     machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
-    assert "update pending" not in slots_card(call("GET", "/").body)
+    assert "update pending" not in slots_card(call("GET", "/admin").body)
 
 
 def test_an_update_that_failed_says_why(console):
@@ -546,7 +546,7 @@ def test_an_update_that_failed_says_why(console):
     machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"},
                          "upgrade": {"to": "2.1.300", "ok": False,
                                      "error": "<b>network</b> down"}})
-    card = slots_card(call("GET", "/").body)
+    card = slots_card(call("GET", "/admin").body)
     assert "Claude Code update to 2.1.300 failed" in card
     assert "&lt;b&gt;network&lt;/b&gt; down" in card and "<b>network</b>" not in card
 
@@ -555,6 +555,6 @@ def test_a_machine_whose_os_wants_a_reboot_says_so(console):
     store, call = console
     held_slot(store)
     machine_said(store, reboot_required=True)
-    assert "reboot needed" in slots_card(call("GET", "/").body)
+    assert "reboot needed" in slots_card(call("GET", "/admin").body)
     machine_said(store, reboot_required=False)
-    assert "reboot needed" not in slots_card(call("GET", "/").body)
+    assert "reboot needed" not in slots_card(call("GET", "/admin").body)
