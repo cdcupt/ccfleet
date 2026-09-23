@@ -498,7 +498,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    path == "/account" and not self._product_site()):
+                    path in ("/account", "/privacy") and not self._product_site()):
                 # Each site answers only for its own audience: the product
                 # never shows a console, the console never plays product.
                 self._json(404, {"error": "not found"})
@@ -517,6 +517,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._send(200, usersite.page(ctx.store, ctx.cfg, account, session_id,
                                               time.time(), note).encode("utf-8"),
                            HTML_HEADERS)
+            elif path == "/privacy":
+                # Public: Google links here from its sign-in screen.
+                self._send(200, usersite.privacy_page(ctx.cfg).encode("utf-8"), HTML_HEADERS)
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":

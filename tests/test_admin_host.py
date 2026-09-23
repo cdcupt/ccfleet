@@ -158,6 +158,12 @@ def test_the_product_has_no_console_even_for_the_operator(split, method, path):
     assert store.list_nodes() == []
 
 
+def test_the_privacy_page_is_the_products(split):
+    _, browser, _ = split
+    assert browser(PRODUCT).call("GET", "/privacy").status == 200
+    assert browser(ADMIN).call("GET", "/privacy").status == 404
+
+
 def test_the_console_side_has_no_user_site(split):
     _, browser, _ = split
     assert browser(ADMIN).call("GET", "/account").status == 404

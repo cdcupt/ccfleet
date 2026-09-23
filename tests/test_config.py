@@ -90,3 +90,20 @@ def test_every_config_option_is_documented_where_operators_look():
     # The security-relevant one must also reach the guidebook's reference table.
     assert ENV_PREFIX + "BYPASS_BY_DEFAULT" in guidebook
     assert re.search(r"passwordless sudo", guidebook)
+
+
+def test_a_contact_address_is_optional_and_kept_as_given():
+    assert Config.from_env({}).contact_email == ""
+    assert Config.from_env({"CCFLEET_CONTACT_EMAIL": " help@example.com "}).contact_email \
+        == "help@example.com"
+
+
+@pytest.mark.parametrize("raw", [
+    "not-an-address", "a@b", "a b@example.com", 'x"y@example.com', "x<y@example.com",
+    "a@example.com, b@example.com", "a@b@example.com",
+    "a@" + "b" * 250 + ".com",            # the shape is right, the length is not
+])
+def test_a_contact_address_that_is_not_one_address_is_refused(raw):
+    """It goes on a public page, so it is checked rather than trusted."""
+    with pytest.raises(ConfigError, match="CONTACT_EMAIL"):
+        Config.from_env({"CCFLEET_CONTACT_EMAIL": raw})
