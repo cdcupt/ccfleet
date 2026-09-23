@@ -107,19 +107,27 @@ as_owner() { sudo -u "$OWNER" HOME="$HOME_DIR" bash -c "$1"; }
 
 # Key-only SSH, on sshd's own word. A drop-in is read where the main config
 # Includes sshd_config.d, and sshd keeps the FIRST value it meets for each
-# keyword. So the drop-in says both halves, and before anything is reloaded
-# `sshd -T` must report keys on and passwords off. Some provider images end
-# sshd_config with `PubkeyAuthentication no`: passwords off there, keys left
-# off, is a machine nobody can log in to. And an image that never Includes the
-# directory would ignore the drop-in while this claimed the box hardened.
-# Either way the drop-in goes and sshd is left exactly as it was.
+# keyword, so a line read earlier can overrule it. Before anything is reloaded,
+# `sshd -T` must therefore report the result: key login on; password and
+# keyboard-interactive login off; and AuthenticationMethods letting a key in on
+# its own (`publickey,password` would demand the very password being turned
+# off). Some provider images end sshd_config with `PubkeyAuthentication no`,
+# where passwords off and keys left off is a machine nobody can log in to; an
+# image that never Includes the directory would ignore the drop-in while this
+# claimed the box hardened. On any refusal SSH's files go back exactly as they
+# were, an earlier run's drop-in included, and nothing is reloaded.
 # Kept byte-identical in bootstrap.sh and install.sh (a test compares them):
 # each is fetched on its own through curl | bash and cannot source the other.
 # shellcheck disable=SC2120  # bootstrap.sh passes no extra lines; install.sh passes one
 harden_sshd() {  # harden_sshd [extra sshd_config line...]
   local dir="${CCFLEET_SSHD_DROPIN_DIR:-/etc/ssh/sshd_config.d}"
   local config="${CCFLEET_SSHD_CONFIG:-/etc/ssh/sshd_config}"
-  local dropin="$dir/60-ccfleet.conf" effective
+  local dropin="$dir/60-ccfleet.conf" had=no previous="" effective ok=yes
+  if [ -f "$dropin" ]; then
+    had=yes
+    previous="$(cat "$dropin"; printf x)"   # the x carries trailing newlines through $( )
+    previous="${previous%x}"
+  fi
   mkdir -p "$dir"
   {
     printf '%s\n' "PubkeyAuthentication yes" "PasswordAuthentication no" \
@@ -127,17 +135,24 @@ harden_sshd() {  # harden_sshd [extra sshd_config line...]
     [ "$#" -eq 0 ] || printf '%s\n' "$@"
   } > "$dropin"
   if ! sshd -t -f "$config"; then
-    rm -f "$dropin"
-    echo "sshd rejected the hardening config; it was removed and nothing was reloaded" >&2
+    if [ "$had" = yes ]; then printf '%s' "$previous" > "$dropin"; else rm -f "$dropin"; fi
+    echo "sshd rejected the hardening config; SSH's files are as they were and nothing was reloaded" >&2
     return 1
   fi
   effective="$(sshd -T -f "$config" 2>/dev/null)" || effective=""
-  if ! grep -qx "pubkeyauthentication yes" <<<"$effective" \
-      || ! grep -qx "passwordauthentication no" <<<"$effective"; then
-    rm -f "$dropin"
-    echo "sshd would not run with key login on and password login off: $config either" \
-      "does not Include $dir, or a setting sshd reads first overrides it (cloud-init's" \
-      "50-cloud-init.conf is a common one). The drop-in was removed and nothing was reloaded." >&2
+  grep -qx "pubkeyauthentication yes" <<<"$effective" || ok=no
+  grep -qx "passwordauthentication no" <<<"$effective" || ok=no
+  if grep -qxE "(kbdinteractive|challengeresponse)authentication yes" <<<"$effective"; then ok=no; fi
+  case " $(sed -n 's/^authenticationmethods //p' <<<"$effective") " in
+    *" any "* | *" publickey "*) ;;
+    *) ok=no ;;
+  esac
+  if [ "$ok" != yes ]; then
+    if [ "$had" = yes ]; then printf '%s' "$previous" > "$dropin"; else rm -f "$dropin"; fi
+    echo "sshd would not run key-only (keys on; password and keyboard-interactive login off;" \
+      "AuthenticationMethods letting a key in alone): $config either does not Include $dir," \
+      "or a setting sshd reads first overrides it (cloud-init's 50-cloud-init.conf is a common" \
+      "one). SSH's files are as they were and nothing was reloaded." >&2
     return 1
   fi
   systemctl reload ssh 2>/dev/null || systemctl reload sshd

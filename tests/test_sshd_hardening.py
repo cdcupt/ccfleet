@@ -4,11 +4,13 @@ bootstrap.sh and install.sh turn password login off. Done blindly, that locks a
 machine whose image turned key login off too (seen on a real provider image:
 `PubkeyAuthentication no` at the end of sshd_config), and on an image that never
 reads sshd_config.d it reports hardening that sshd never applied. harden_sshd()
-asks sshd itself before reloading anything.
+asks sshd itself before reloading anything, and puts SSH's files back as they
+were whenever it refuses.
 
 These run the real function, cut out of each script, in a sandbox: a fake `sshd`
 that reads config the way sshd does (Include expanded where it stands, the first
-value for each keyword wins) and a fake `systemctl` that records what it was asked.
+value for each keyword wins, a malformed line refused) and a fake `systemctl`
+that records what it was asked.
 """
 
 from __future__ import annotations
@@ -25,30 +27,62 @@ SCRIPTS = {"bootstrap": NODE / "bootstrap.sh", "install": NODE / "install.sh"}
 DEFAULT_LINES = ["PubkeyAuthentication yes", "PasswordAuthentication no",
                  "KbdInteractiveAuthentication no", "PermitRootLogin prohibit-password",
                  "X11Forwarding no"]
+EARLIER_RUN = "PubkeyAuthentication yes\nPasswordAuthentication no\n# from an earlier run\n\n"
 
 FAKE_SSHD = textwrap.dedent('''\
     #!/usr/bin/env python3
-    """sshd, as far as -t and -T go: Include expands in place, first value wins."""
+    """sshd, as far as -t and -T go.
+
+    Include expands where it stands; the first value for each keyword wins; an
+    unknown keyword, a missing argument or a bad value is refused by -T as well
+    as -t, the way sshd refuses them; keywords never set print sshd's defaults.
+    """
     import glob, os, sys
-    args = sys.argv[1:]
-    config = args[args.index("-f") + 1] if "-f" in args else "/etc/ssh/sshd_config"
-    if os.environ.get("FAKE_SSHD_REJECT"):
-        print("fake sshd: bad configuration option", file=sys.stderr)
+    YES_NO = {"pubkeyauthentication", "passwordauthentication", "kbdinteractiveauthentication",
+              "challengeresponseauthentication", "x11forwarding", "usepam"}
+    ROOT = {"yes", "no", "prohibit-password", "without-password", "forced-commands-only"}
+    METHODS = {"any", "publickey", "password", "keyboard-interactive", "hostbased",
+               "gssapi-with-mic"}
+    DEFAULTS = {"pubkeyauthentication": "yes", "passwordauthentication": "yes",
+                "kbdinteractiveauthentication": "yes", "permitrootlogin": "prohibit-password",
+                "authenticationmethods": "any"}
+
+    def refuse(path, number, why):
+        print(f"{path} line {number}: {why}", file=sys.stderr)
         sys.exit(255)
-    if "-T" in args and os.environ.get("FAKE_SSHD_T_FAILS"):
-        sys.exit(255)
+
     def settings(path):
-        for raw in open(path):
+        for number, raw in enumerate(open(path), 1):
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
             key, _, value = line.partition(" ")
-            if key.lower() == "include":
-                for included in sorted(glob.glob(value.strip())):
+            key, value = key.lower(), value.strip().lower()
+            if not value:
+                refuse(path, number, f"{key}: missing argument")
+            if key == "include":
+                for included in sorted(glob.glob(value)):
                     yield from settings(included)
+                continue
+            if key in YES_NO:
+                ok = value in ("yes", "no")
+            elif key == "permitrootlogin":
+                ok = value in ROOT
+            elif key in ("maxauthtries", "port"):
+                ok = value.isdigit()
+            elif key == "authenticationmethods":
+                ok = all(m in METHODS for group in value.split() for m in group.split(","))
             else:
-                yield key.lower(), value.strip().lower()
-    effective = {"pubkeyauthentication": "yes", "passwordauthentication": "yes"}
+                refuse(path, number, f"Bad configuration option: {key}")
+            if not ok:
+                refuse(path, number, f"bad value for {key}: {value}")
+            yield key, value
+
+    args = sys.argv[1:]
+    config = args[args.index("-f") + 1] if "-f" in args else "/etc/ssh/sshd_config"
+    if "-T" in args and os.environ.get("FAKE_SSHD_T_FAILS"):
+        sys.exit(255)
+    effective = dict(DEFAULTS)
     seen = set()
     for key, value in settings(config):
         if key not in seen:
@@ -147,6 +181,8 @@ def test_both_scripts_harden_through_it_and_stop_when_it_refuses():
         assert "\n".join(lines).count("60-ccfleet.conf") == 1, "the drop-in is written in one place"
 
 
+# -- hardened --------------------------------------------------------------------
+
 @both
 def test_a_provider_image_that_turns_keys_off_is_hardened_not_locked(box, script):
     box.config.write_text(f"{box.include}\nPasswordAuthentication yes\nPubkeyAuthentication no\n")
@@ -154,6 +190,7 @@ def test_a_provider_image_that_turns_keys_off_is_hardened_not_locked(box, script
     assert result.returncode == 0, result.stderr
     assert box.effective()["pubkeyauthentication"] == "yes"
     assert box.effective()["passwordauthentication"] == "no"
+    assert box.effective()["kbdinteractiveauthentication"] == "no"
     assert box.reloads() == ["reload ssh"]
 
 
@@ -168,58 +205,12 @@ def test_an_ordinary_image_is_hardened(box, script):
 
 
 @both
-def test_an_image_that_never_reads_the_drop_in_dir_is_left_as_it_was(box, script):
-    """The drop-in would be ignored while the script called the box hardened."""
-    box.config.write_text("PubkeyAuthentication yes\nPasswordAuthentication yes\n")
+@pytest.mark.parametrize("methods", ["publickey", "publickey,password publickey", "any"])
+def test_authentication_methods_that_let_a_key_in_alone_are_accepted(box, script, methods):
+    box.config.write_text(f"AuthenticationMethods {methods}\n{box.include}\n")
     result = box.harden(script)
-    assert result.returncode != 0
-    assert "does not Include" in result.stderr and "nothing was reloaded" in result.stderr
-    assert not box.dropin.exists()
-    assert box.reloads() == []
-
-
-@both
-def test_keys_turned_off_before_the_drop_in_is_read_is_refused(box, script):
-    """The lockout itself: passwords would go off and keys stay off."""
-    box.config.write_text(f"PubkeyAuthentication no\n{box.include}\n")
-    result = box.harden(script)
-    assert result.returncode != 0
-    assert not box.dropin.exists()
-    assert box.reloads() == []
-
-
-@both
-def test_passwords_kept_on_by_a_file_read_first_is_refused(box, script):
-    """cloud-init's 50-cloud-init.conf sorts before 60-ccfleet.conf, so its
-    `PasswordAuthentication yes` wins. Better a loud stop than a false claim."""
-    box.config.write_text(f"{box.include}\n")
-    cloud = box.dropins / "50-cloud-init.conf"
-    cloud.write_text("PasswordAuthentication yes\n")
-    result = box.harden(script)
-    assert result.returncode != 0 and "50-cloud-init.conf" in result.stderr
-    assert not box.dropin.exists()
-    assert cloud.read_text() == "PasswordAuthentication yes\n", "somebody else's file is left alone"
-    assert box.reloads() == []
-
-
-@both
-def test_a_config_sshd_rejects_is_removed_and_nothing_is_reloaded(box, script):
-    """Left in place, a drop-in sshd cannot parse stops sshd at the next restart."""
-    box.config.write_text(f"{box.include}\n")
-    result = box.harden(script, FAKE_SSHD_REJECT="1")
-    assert result.returncode != 0 and "rejected" in result.stderr
-    assert not box.dropin.exists()
-    assert box.reloads() == []
-
-
-@both
-def test_an_sshd_that_cannot_report_its_config_is_not_trusted(box, script):
-    """No answer is not a yes. Under `set -e` a failed -T must still clean up."""
-    box.config.write_text(f"{box.include}\n")
-    result = box.harden(script, FAKE_SSHD_T_FAILS="1")
-    assert result.returncode != 0
-    assert not box.dropin.exists()
-    assert box.reloads() == []
+    assert result.returncode == 0, result.stderr
+    assert box.reloads() == ["reload ssh"]
 
 
 @both
@@ -237,3 +228,92 @@ def test_the_drop_in_says_both_halves_and_any_extra_line(box, script):
     assert box.dropin.read_text().splitlines() == DEFAULT_LINES
     assert box.harden(script, "MaxAuthTries 3").returncode == 0
     assert box.dropin.read_text().splitlines() == [*DEFAULT_LINES, "MaxAuthTries 3"]
+
+
+# -- refused, and left as it was --------------------------------------------------
+
+def refused(box, result):
+    assert result.returncode != 0
+    assert "nothing was reloaded" in result.stderr
+    assert box.reloads() == []
+
+
+@both
+def test_an_image_that_never_reads_the_drop_in_dir_is_left_as_it_was(box, script):
+    """The drop-in would be ignored while the script called the box hardened."""
+    box.config.write_text("PubkeyAuthentication yes\nPasswordAuthentication yes\n")
+    result = box.harden(script)
+    refused(box, result)
+    assert "does not Include" in result.stderr
+    assert not box.dropin.exists()
+
+
+@both
+def test_keys_turned_off_before_the_drop_in_is_read_is_refused(box, script):
+    """The lockout itself: passwords would go off and keys stay off."""
+    box.config.write_text(f"PubkeyAuthentication no\n{box.include}\n")
+    refused(box, box.harden(script))
+    assert not box.dropin.exists()
+
+
+@both
+def test_passwords_kept_on_by_a_file_read_first_is_refused(box, script):
+    """cloud-init's 50-cloud-init.conf sorts before 60-ccfleet.conf, so its
+    `PasswordAuthentication yes` wins. Better a loud stop than a false claim."""
+    box.config.write_text(f"{box.include}\n")
+    cloud = box.dropins / "50-cloud-init.conf"
+    cloud.write_text("PasswordAuthentication yes\n")
+    result = box.harden(script)
+    refused(box, result)
+    assert "50-cloud-init.conf" in result.stderr
+    assert not box.dropin.exists()
+    assert cloud.read_text() == "PasswordAuthentication yes\n", "somebody else's file is left alone"
+
+
+@both
+@pytest.mark.parametrize("keyword", ["KbdInteractiveAuthentication",
+                                     "ChallengeResponseAuthentication"])
+def test_keyboard_interactive_kept_on_by_a_line_read_first_is_refused(box, script, keyword):
+    """Keyboard-interactive is a password prompt by another name: not key-only."""
+    box.config.write_text(f"{keyword} yes\n{box.include}\n")
+    refused(box, box.harden(script))
+    assert not box.dropin.exists()
+
+
+@both
+def test_authentication_methods_that_need_a_password_are_refused(box, script):
+    """`publickey,password` demands the password this is turning off: a lockout."""
+    box.config.write_text(f"AuthenticationMethods publickey,password\n{box.include}\n")
+    refused(box, box.harden(script))
+    assert not box.dropin.exists()
+
+
+@both
+def test_a_line_sshd_rejects_is_taken_back_and_nothing_is_reloaded(box, script):
+    """Left in place, a drop-in sshd cannot parse stops sshd at the next restart."""
+    box.config.write_text(f"{box.include}\n")
+    result = box.harden(script, "MaxAuthTries")
+    refused(box, result)
+    assert "rejected" in result.stderr
+    assert not box.dropin.exists()
+
+
+@both
+def test_an_sshd_that_cannot_report_its_config_is_not_trusted(box, script):
+    """No answer is not a yes. Under `set -e` a failed -T must still clean up."""
+    box.config.write_text(f"{box.include}\n")
+    refused(box, box.harden(script, FAKE_SSHD_T_FAILS="1"))
+    assert not box.dropin.exists()
+
+
+@both
+@pytest.mark.parametrize("how", ["rejected", "overruled"])
+def test_a_failed_rerun_puts_the_earlier_hardening_back(box, script, how):
+    """A re-run that refuses must not take away hardening an earlier run put in
+    place: on disk it would come back off at the next restart of sshd."""
+    box.config.write_text(("KbdInteractiveAuthentication yes\n" if how == "overruled" else "")
+                          + f"{box.include}\n")
+    box.dropin.write_text(EARLIER_RUN)
+    result = box.harden(script, *(["MaxAuthTries"] if how == "rejected" else []))
+    refused(box, result)
+    assert box.dropin.read_text() == EARLIER_RUN, "byte for byte, trailing blank line included"
