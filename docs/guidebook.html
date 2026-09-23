@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.5.0 · 2026-09-21 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.6.0 · 2026-09-23 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -146,6 +146,7 @@ html{scroll-behavior:smooth}
     <li><a href="#gateway"><span class="n">08</span>Optional gateway</a></li>
     <li><a href="#reference"><span class="n">09</span>Reference</a></li>
     <li><a href="#trouble"><span class="n">10</span>Troubleshooting</a></li>
+    <li><a href="#shared"><span class="n">11</span>Shared machines</a></li>
   </ol>
 </nav>
 
@@ -785,6 +786,77 @@ claude
     </tbody>
   </table></div>
   <p class="small">ccfleet is an independent open-source project (MIT), not affiliated with or endorsed by Anthropic. Terms change; the repo's <code>docs/compliance.md</code> quotes the passages this design rests on so you can re-check them.</p>
+</section>
+
+<section id="shared">
+  <h2><span class="n">11</span>Shared machines</h2>
+  <p>A shared machine carries several <strong>slots</strong>: one Linux user per person, each
+  with its own Claude Code signed in to that person's own Claude account, so no credential is
+  ever shared. People sign in to the product with Google, you set how many slots each may
+  hold, and they do everything else themselves at <code>/account</code>.</p>
+  <div class="two">
+    <div>
+      <h3>Selling a slot</h3>
+      <ol>
+        <li>The person signs in once at <code>/account</code>. That creates the account you
+        switch on; an address that has never signed in cannot be given anything.</li>
+        <li>They pay you, however you arrange it.</li>
+        <li>You record the payment and set their allowance in the console's Accounts card.
+        That is all you do.</li>
+        <li>They claim a slot, sign in to Claude with their own account, and use it from
+        claude.ai/code or the Claude app.</li>
+      </ol>
+      <p>Send them <code>/docs</code>. It says what ccfleet is, what they must bring (their own
+      Pro, Max, Team or Enterprise plan; API keys do not work) and how to start, and links
+      <code>/docs/guide</code>, <code>/docs/how-it-works</code>, <code>/docs/terms</code> and
+      <code>/privacy</code>. Set <code>CCFLEET_CONTACT_EMAIL</code> to publish an address on
+      them.</p>
+      <h3>Sizing</h3>
+      <p>Measured on a real slot: signed in with Remote Control, about 420 MiB idle and 665 MiB
+      in use, plus 225 MB of disk. The OS and the agent take about 400 MiB. So slots &asymp;
+      (RAM in MiB &minus; 400) &divide; 700: a 2 GiB machine carries 2, a 4 GiB machine 5. Under
+      4 GiB, add a 2 GiB swap file as a cushion, not as capacity.</p>
+    </div>
+    <div>
+      <h3>Adding a machine</h3>
+      <p>A KVM VPS running Debian or Ubuntu; LXC and OpenVZ cannot run per-user systemd
+      reliably. <code>docs/runbooks.md</code> has every step and check; in short:</p>
+      <pre><code><span class="c"># your key first — and prove key login works before anything turns passwords off</span>
+sudo ./bootstrap.sh you "ssh-ed25519 AAAA&hellip; you"
+<span class="c"># on the server</span>
+ccfleetd node add shared-1 --owner you --region us-west
+ccfleetd node pin shared-1 stable
+ccfleetd slot capacity shared-1 2
+ccfleetd slot add shared-1-01 --machine shared-1 --unix-user slot01
+ccfleetd slot add shared-1-02 --machine shared-1 --unix-user slot02
+<span class="c"># on the machine, as root</span>
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
+  | sudo bash -s -- --server https://fleet.example.com --node shared-1 --token &lt;64-hex&gt;
+<span class="c"># back on the server: every slot free, and "on machine: no"</span>
+ccfleetd slot list --machine shared-1</code></pre>
+      <p>Set the machine's hostname to its id first: it is the name each slot shows in the
+      claude.ai machine picker.</p>
+      <h3>Keeping it current</h3>
+      <ul>
+        <li><strong>Claude Code in slots</strong> follows the machine's pin: <code>stable</code>
+        tracks Anthropic's stable channel, an exact version holds the machine back. The machine
+        agent installs it at a quiet moment and never interrupts a running session.</li>
+        <li><strong>The agents</strong>: after a release that changes them, update one node
+        first, then the rest. Owner nodes re-fetch the agent; machines re-run
+        <code>machine-setup.sh</code> pointed at that commit with
+        <code>CCFLEET_REPO_RAW</code>.</li>
+        <li><strong>The OS</strong> installs security updates daily; a machine that needs a
+        reboot says so in the console.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note warn">
+    <p class="t">Key login before hardening</p>
+    <p>Some provider images ship with <code>PubkeyAuthentication no</code>. Turning passwords
+    off on such a machine leaves nothing but the provider's console. <code>bootstrap.sh</code>
+    and <code>install.sh</code> refuse to turn passwords off unless key login is in force, but
+    prove it yourself before you close the session you are in.</p>
+  </div>
 </section>
 
 </main>
