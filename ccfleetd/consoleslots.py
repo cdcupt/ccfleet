@@ -18,9 +18,9 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
 
-from . import payments
+from . import names, payments
 from . import slots as slotstates
-from .desired import is_channel
+from .desired import is_channel, machine_hostname
 from .render import _age
 from .store import Store, StoreError
 
@@ -79,19 +79,27 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
     latest = store.latest_heartbeats()
     blocks = []
     for node in store.list_nodes():
-        rows = store.list_slots(node_id=node["id"])
+        all_rows = store.list_slots(node_id=node["id"])
+        rows = [r for r in all_rows if r["kind"] == slotstates.MACHINE_SLOT]
         capacity = int(node["capacity"])
-        if not rows and capacity <= 1:
-            continue          # an ordinary owner node: nothing about slots to show
         # What the machine last said: each slot's own report, and its own state.
         said = (latest.get(node["id"]) or {}).get("payload") or {}
-        reports = {r.get("unix_user"): r for r in said.get("slots") or []
-                   if isinstance(r, Mapping)}
         reboot = (' <span class="pill warn">reboot needed</span>'
                   if said.get("reboot_required") is True else "")
+        owned = [r for r in all_rows if r["kind"] == slotstates.OWNER_SLOT]
+        if owned and not rows:
+            blocks.append(_own_machine_line(owned[0], accounts, reboot))
+            continue
+        # A machine is one with its slot declared, or one whose agent says it
+        # is one — with one slot per machine, capacity no longer tells.
+        if not rows and capacity <= 1 and said.get("mode") != slotstates.MACHINE_MODE:
+            continue          # an ordinary owner node: nothing about slots to show
+        reports = {r.get("unix_user"): r for r in said.get("slots") or []
+                   if isinstance(r, Mapping)}
         base = f"/actions/machine/{escape(node['id'])}"
         head = (f'<div class="row-line"><div class="row-name">{escape(node["id"])}'
                 f'<span class="muted"> · {len(rows)} of {capacity} declared</span>{reboot}'
+                f"{_hostname_pending(node['id'], rows, said)}"
                 f"{_kept_for(node, accounts)}</div>"
                 '<div class="actions">'
                 + _form(f"{base}/capacity", csrf, "Set capacity",
@@ -112,13 +120,44 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                                      reports.get(s["unix_user"]) or {}, pin) for s in rows]
         blocks.append("".join(lines))
     body = "".join(blocks) or ('<p class="quiet">No shared machines yet. A machine joins '
-                               "once its capacity is raised on the server, where it is "
-                               "set up: <code>ccfleetd slot capacity &lt;machine&gt; "
-                               "&lt;count&gt;</code>.</p>")
+                               "with its one slot, declared on the server: "
+                               "<code>ccfleetd slot add &lt;machine&gt; --machine "
+                               "&lt;machine&gt; --unix-user slot01</code>.</p>")
     return ('<h2 id="slots">Slots</h2><div class="card">' + body +
             '<p class="note">Taking a slot back is a release: the machine wipes it, and it is '
             "free again once the machine confirms the Linux user is gone. There is no way here "
             "to sign in as anybody or to finish anybody's Claude sign-in, by design.</p></div>")
+
+
+def _hostname_pending(node_id: str, rows: list[Mapping[str, Any]],
+                      said: Mapping[str, Any]) -> str:
+    """The name the machine still answers to, when it is not its slot's yet.
+
+    It takes the new one on its next run; until then claude.ai/code shows the
+    old one, which is worth the operator knowing. Nothing reported, nothing
+    said: that is a machine that has not checked in, not one that is behind.
+    """
+    reported = said.get("hostname")
+    wanted = machine_hostname(node_id, list(rows))
+    if not reported or reported == wanted:
+        return ""
+    return (f' <span class="pill warn">hostname pending: answers to {escape(str(reported))}, '
+            f"becoming {escape(wanted)}</span>")
+
+
+def _own_machine_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
+                      reboot: str) -> str:
+    """Somebody's own node, counted as their slot. Nothing here acts on it:
+    ccfleet never wipes, hands out or provisions anything on an owner's node."""
+    holder = accounts.get(slot.get("held_by") or "")
+    who = escape(str(holder["email"])) if holder else "&mdash;"
+    return (f'<div class="row-line"><div class="row-name">{escape(names.display(slot))}'
+            f'<span class="muted"> · own machine · {escape(slot["unix_user"])}</span>'
+            f'{reboot} <span class="pill ok">{escape(slot["state"])}</span>'
+            f' <span class="small">{who}</span></div>'
+            '<div class="actions"><span class="muted small">counted as their slot; '
+            "let go with <code>ccfleetd node hold "
+            f'{escape(slot["node_id"])} --none</code></span></div></div>')
 
 
 def _kept_for(node: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]) -> str:
@@ -159,8 +198,11 @@ def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]
     elif slot["state"] == slotstates.FREE:
         buttons = _form(f"{base}/remove", csrf, "Remove")
     tone = STATE_TONE.get(slot["state"], "disabled")
-    return (f'<div class="row-line"><div class="row-name">{escape(slot["id"])}'
-            f'<span class="muted"> · {escape(slot["unix_user"])} · {escape(seen)}{claimed}'
+    # The name its holder and claude.ai know it by; the id, which every
+    # command takes, beside it whenever the two differ.
+    also = f" · {escape(slot['id'])}" if names.display(slot) != slot["id"] else ""
+    return (f'<div class="row-line"><div class="row-name">{escape(names.display(slot))}'
+            f'<span class="muted">{also} · {escape(slot["unix_user"])} · {escape(seen)}{claimed}'
             f"{running}</span> <span class=\"pill {tone}\">{escape(slot['state'])}</span>"
             f"{pending}"
             f" <span class=\"small\">{who}</span>{trouble}</div>"
@@ -265,10 +307,17 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
     beside every payment.
     """
     if kind == "machine" and action == "capacity":
-        if not store.set_machine_capacity(target, _count(form)):
+        count = _count(form)
+        if count > slotstates.MAX_SLOTS_PER_MACHINE:
+            raise StoreError(f"{slotstates.ONE_SLOT_WHY}; a machine's capacity is 0 or 1")
+        if not store.set_machine_capacity(target, count):
             raise StoreError(f"no machine {target!r}")
         return "slots"
     if kind == "machine" and action == "slot-add":
+        already = store.list_slots(node_id=target, kind=slotstates.MACHINE_SLOT)
+        if len(already) >= slotstates.MAX_SLOTS_PER_MACHINE:
+            raise StoreError(f"{target} already has its slot ({already[0]['id']}): "
+                             f"{slotstates.ONE_SLOT_WHY}")
         store.add_slot(form.get("slot_id", "").strip(), target,
                        form.get("unix_user", "").strip(), now=now)
         return "slots"

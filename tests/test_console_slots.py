@@ -129,7 +129,7 @@ def test_an_ordinary_owner_node_is_not_listed_as_a_machine(console):
     store, call = console
     store.add_node("laptop", "erik", now=time.time())
     page = call("GET", "/admin").body
-    assert "No shared machines yet" in page and "ccfleetd slot capacity" in page
+    assert "No shared machines yet" in page and "ccfleetd slot add" in page
 
 
 def test_a_one_slot_machine_is_listed(console):
@@ -184,11 +184,22 @@ def test_trouble_shows_on_the_slot_it_is_about_and_no_other(console):
 
 def test_setting_a_machines_capacity(console):
     store, call = console
-    shared(store)
-    reply = call("POST", "/actions/machine/m1/capacity", {"count": "5"})
+    shared(store, users=())
+    machine_said(store)          # a machine by its own word, before any slot is declared
+    reply = call("POST", "/actions/machine/m1/capacity", {"count": "1"})
     assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
-    assert store.get_node("m1")["capacity"] == 5
-    assert "2 of 5 declared" in call("GET", "/admin").body
+    assert store.get_node("m1")["capacity"] == 1
+    assert "0 of 1 declared" in call("GET", "/admin").body
+
+
+@pytest.mark.parametrize("count", ["2", "5"])
+def test_capacity_above_one_is_refused_for_the_reason(console, count):
+    """One machine is one slot: claude.ai/code shows a machine by its hostname."""
+    store, call = console
+    shared(store, users=())
+    reply = call("POST", "/actions/machine/m1/capacity", {"count": count})
+    assert reply.status == 400 and "one machine is one slot" in reply.body
+    assert store.get_node("m1")["capacity"] == 0
 
 
 @pytest.mark.parametrize("count", ["1", "-1", "two", "", "3.5", " 5", "\u00b2", "99999",
@@ -210,20 +221,29 @@ def test_capacity_for_a_machine_that_is_not_there(console):
 
 def test_declaring_a_slot(console):
     store, call = console
-    shared(store, capacity=3)
+    shared(store, users=(), capacity=1)
+    bad = call("POST", "/actions/machine/m1/slot-add",
+               {"slot_id": "m1-04", "unix_user": "Root User"})
+    assert bad.status == 400 and store.get_slot("m1-04") is None
     reply = call("POST", "/actions/machine/m1/slot-add",
                  {"slot_id": "m1-03", "unix_user": "slot03"})
     assert reply.status == 303
     assert store.get_slot("m1-03")["state"] == slots.FREE
-    bad = call("POST", "/actions/machine/m1/slot-add",
-               {"slot_id": "m1-04", "unix_user": "Root User"})
-    assert bad.status == 400 and store.get_slot("m1-04") is None
+
+
+def test_a_second_slot_on_a_machine_is_refused_for_the_reason(console):
+    store, call = console
+    shared(store, users=("slot01",))
+    reply = call("POST", "/actions/machine/m1/slot-add",
+                 {"slot_id": "m1-02", "unix_user": "slot02"})
+    assert reply.status == 400 and "one machine is one slot" in reply.body
+    assert store.get_slot("m1-02") is None
 
 
 def test_a_slot_declared_with_stray_spaces_is_still_declared(console):
     """Pasted names carry spaces; the console's other add form forgives them too."""
     store, call = console
-    shared(store, capacity=3)
+    shared(store, users=(), capacity=1)
     reply = call("POST", "/actions/machine/m1/slot-add",
                  {"slot_id": " m1-03 ", "unix_user": " slot03\t"})
     assert reply.status == 303 and store.get_slot("m1-03")["unix_user"] == "slot03"
@@ -646,3 +666,55 @@ def test_a_machine_kept_for_an_account_that_is_gone_still_says_so(console):
     reply = call("GET", "/admin")
     assert reply.status == 200
     assert "Reserved for an account that no longer exists" in slots_card(reply.body)
+
+
+# -- slot model v2: names, own machines, one slot each --------------------------------------
+
+def test_a_held_slot_is_shown_by_its_holders_name(console):
+    store, call = console
+    held_slot(store)
+    card = slots_card(call("GET", "/admin").body)
+    assert "ana-1" in card, "the name the holder and claude.ai know it by"
+    assert "m1-01" in card, "and the id every command takes"
+
+
+def test_a_machine_says_when_its_hostname_is_not_its_slots_name_yet(console):
+    """The machine renames itself on its next run; until then the console says
+    the name it still answers to."""
+    store, call = console
+    held_slot(store)
+    machine_said(store, hostname="m1")
+    card = slots_card(call("GET", "/admin").body)
+    assert "hostname pending" in card and "ana-1" in card
+    machine_said(store, hostname="ana-1")
+    assert "hostname pending" not in slots_card(call("GET", "/admin").body)
+
+
+def test_a_machine_that_never_said_its_hostname_is_not_called_pending(console):
+    store, call = console
+    held_slot(store)
+    assert "hostname pending" not in slots_card(call("GET", "/admin").body)
+
+
+def test_an_owner_node_counted_as_a_slot_is_listed_as_their_own_machine(console):
+    store, call = console
+    store.add_node("erik-1", "erik", now=time.time())
+    erik = holder(store, email="cdcupt@gmail.com")
+    store.hold_owner_node("erik-1", erik["id"], now=time.time())
+    card = slots_card(call("GET", "/admin").body)
+    assert "erik-1" in card and "own machine" in card and "cdcupt@gmail.com" in card
+    # Nothing that would act on somebody's own node: no wipe, no forms for slots.
+    for action in ("/actions/slot/erik-1/reclaim", "/actions/slot/erik-1/remove",
+                   "/actions/machine/erik-1/capacity", "/actions/machine/erik-1/slot-add",
+                   "/actions/machine/erik-1/reserve"):
+        assert f'action="{action}"' not in card
+
+
+def test_taking_back_an_owners_node_is_refused_even_by_a_hand_made_form(console):
+    store, call = console
+    store.add_node("erik-1", "erik", now=time.time())
+    erik = holder(store, email="cdcupt@gmail.com")
+    store.hold_owner_node("erik-1", erik["id"], now=time.time())
+    reply = call("POST", "/actions/slot/erik-1/reclaim", {"confirm": "erik-1"})
+    assert reply.status == 400 and "own machine" in reply.body
+    assert store.get_slot("erik-1")["state"] == slots.ACTIVE
