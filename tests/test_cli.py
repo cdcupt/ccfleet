@@ -371,3 +371,48 @@ def test_reserve_takes_an_address_or_none_but_not_both(db, capsys, args):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--db", db, "node", "reserve", *args])
     assert exc.value.code == 2
+
+
+def test_renaming_a_node_from_the_command_line(db, capsys):
+    """The id moves, the token does not — and the operator is told the one
+    thing the box itself still needs, because until then it is refused."""
+    assert cli.main(["--db", db, "node", "add", "att3", "--owner", "erik"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "rename", "att3", "erik-1"]) == 0
+    out = capsys.readouterr().out
+    assert "CCFLEET_NODE_ID=erik-1" in out
+    assert "/etc/ccfleet/agent.env" in out and "~/.config/ccfleet/agent.env" in out
+    assert "token is unchanged" in out
+    assert cli.main(["--db", db, "node", "list"]) == 0
+    listing = capsys.readouterr().out
+    assert re.search(r"^erik-1 ", listing, re.M) and "att3" not in listing
+
+    assert cli.main(["--db", db, "node", "rename", "att3", "erik-9"]) == 2      # gone
+    assert "unknown node" in capsys.readouterr().err
+    assert cli.main(["--db", db, "node", "rename", "erik-1", "Erik_1"]) == 2    # bad name
+    assert "node id must be" in capsys.readouterr().err
+    assert cli.main(["--db", db, "node", "add", "erik-2", "--owner", "erik"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "rename", "erik-1", "erik-2"]) == 2    # taken
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_renaming_a_slot_from_the_command_line(db, capsys):
+    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "op"]) == 0
+    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
+    for sid, user in (("m1-01", "slot01"), ("m1-02", "slot02")):
+        assert cli.main(["--db", db, "slot", "add", sid, "--machine", "m1",
+                         "--unix-user", user]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "slot", "rename", "m1-01", "m1-a"]) == 0
+    assert "Linux user" in capsys.readouterr().out
+    assert cli.main(["--db", db, "slot", "list"]) == 0
+    listing = capsys.readouterr().out
+    assert re.search(r"^m1-a +m1 +slot01 ", listing, re.M) and "m1-01" not in listing
+
+    assert cli.main(["--db", db, "slot", "rename", "m1-a", "m1-02"]) == 2       # taken
+    assert "already exists" in capsys.readouterr().err
+    assert cli.main(["--db", db, "slot", "rename", "m1-a", "M1-A"]) == 2        # bad name
+    assert "slot id must be" in capsys.readouterr().err
+    assert cli.main(["--db", db, "slot", "rename", "nope", "m1-z"]) == 2        # unknown
+    assert "no slot" in capsys.readouterr().err

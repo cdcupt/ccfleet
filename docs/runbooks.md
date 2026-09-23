@@ -4,6 +4,24 @@ Short procedures for the situations the dashboard will put in front of you.
 Commands marked *node* run as the owner on the node; *server* runs where
 `ccfleetd` lives.
 
+## Naming machines and slots
+
+One name per machine, used everywhere: its node id, its hostname, and so the
+name Remote Control shows in the claude.ai/code machine picker. Named by role:
+
+- `<operator>-N` for the operator's own machines, owner nodes and shared
+  machines kept for their own account alike: `erik-1`, `erik-2`;
+- `pool-N` for shared machines whose slots are offered to customers: `pool-1`,
+  `pool-2`.
+
+A slot is its machine's name and a letter: `pool-1-a`, `pool-1-b`. The Linux
+user behind each stays `slot01`, `slot02`, in the same order.
+
+Set the hostname when the machine is added, the way step 4 of
+[Rename a machine](#rename-a-machine) does, so a provider's serial-number
+hostname never reaches the picker. A fleet already running under other names
+moves onto these with [Rename a machine](#rename-a-machine), held slots included.
+
 ## Add an owner
 
 1. *server*: `ccfleetd node add <node-id> --owner <name> --region <region> [--rc-expected]`
@@ -55,8 +73,8 @@ a cushion for spikes, not as extra capacity.
 6. *server*: `ccfleetd node pin <machine> stable`, the Claude Code channel the
    machine's slots are meant to follow.
 7. *server*: `ccfleetd slot capacity <machine> <slots>`, then once per slot
-   `ccfleetd slot add <machine>-01 --machine <machine> --unix-user slot01`
-   (`-02`/`slot02`, and so on). Do not create those Linux users yourself: the
+   `ccfleetd slot add <machine>-a --machine <machine> --unix-user slot01`
+   (`-b`/`slot02`, and so on). Do not create those Linux users yourself: the
    machine makes each one when somebody claims it and wipes it when they give it back.
 8. *root*:
    `curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh | bash -s -- --server <fleet url> --node <machine> --token <token>`.
@@ -212,6 +230,44 @@ machine. Disk space and a failed Claude Code install are the usual causes.
 2. Owner runs `claude` and `/login`.
 3. *server*: `ccfleetd node rotate-token <node-id>` and put the new token in
    `agent.env`; the old token is revoked immediately.
+
+## Rename a machine
+
+The server's records move first, then the box. Do the two within a few
+minutes: in between, the box's heartbeats are refused, because a heartbeat
+names the node its token belongs to and that name has just changed. A refused
+heartbeat changes nothing on the box (a shared machine provisions, wipes and
+restarts nothing on one), so the gap costs a report or two, not a slot.
+
+1. *server*: `ccfleetd node rename <old> <new>`. Its slots, heartbeats, alerts
+   and its own sign-in move with it, in one transaction; its token does not
+   change.
+2. *server*, shared machine only: rename each slot, whatever its state, held
+   and in use included: `ccfleetd slot rename <old>-01 <new>-a`, and so on. The
+   holder, the claim, the sign-in and any request about its accounts move with
+   it. The machine knows its slots by their Linux user and each claim by its
+   time, never by the slot's id, so the box needs nothing for this.
+3. The box's own record of its id: *root*, on a shared machine, set
+   `CCFLEET_NODE_ID=<new>` in `/etc/ccfleet/agent.env`; *node*, on an owner's
+   node, the same line in `~/.config/ccfleet/agent.env`. The next heartbeat is
+   accepted.
+4. *root*: the host. Put the new name in `/etc/hosts` before the hostname
+   changes, so `sudo` never runs on a name it cannot resolve: the line
+   `127.0.1.1 <new> <old>` (on some images the old name sits on the public
+   address's line instead; replace it there). Then `hostnamectl set-hostname <new>`,
+   and keep cloud-init from putting the provider's name back at the next boot:
+   `printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' > /etc/cloud/cloud.cfg.d/99-ccfleet.cfg`.
+5. Remote Control takes its name from the hostname (`--name %H`), which systemd
+   fills in when it loads the unit. So, as each user running it (the owner on
+   an owner's node, each signed-in slot on a shared machine):
+   `systemctl --user daemon-reload && systemctl --user restart claude-remote-control`,
+   or reboot the box, which does both. It keeps its environment and registers
+   again under the new hostname, so claude.ai/code shows the machine by its new
+   name. The session it created on its very first start keeps its old title
+   until it is archived in claude.ai; sessions started since are unaffected.
+   Restarting ends whatever is running in Remote Control, so pick a quiet moment.
+6. *server*: `ccfleetd node list` shows the new id with a fresh `last seen`, and
+   `ccfleetd slot list --machine <new>` the renamed slots in their old states.
 
 ## Remove an owner
 

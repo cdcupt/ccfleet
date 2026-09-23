@@ -824,18 +824,21 @@ claude
       <pre><code><span class="c"># your key first — and prove key login works before anything turns passwords off</span>
 sudo ./bootstrap.sh you "ssh-ed25519 AAAA&hellip; you"
 <span class="c"># on the server</span>
-ccfleetd node add shared-1 --owner you --region us-west
-ccfleetd node pin shared-1 stable
-ccfleetd slot capacity shared-1 2
-ccfleetd slot add shared-1-01 --machine shared-1 --unix-user slot01
-ccfleetd slot add shared-1-02 --machine shared-1 --unix-user slot02
+ccfleetd node add pool-1 --owner you --region us-west
+ccfleetd node pin pool-1 stable
+ccfleetd slot capacity pool-1 2
+ccfleetd slot add pool-1-a --machine pool-1 --unix-user slot01
+ccfleetd slot add pool-1-b --machine pool-1 --unix-user slot02
 <span class="c"># on the machine, as root</span>
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
-  | sudo bash -s -- --server https://fleet.example.com --node shared-1 --token &lt;64-hex&gt;
+  | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token &lt;64-hex&gt;
 <span class="c"># back on the server: every slot free, and "on machine: no"</span>
-ccfleetd slot list --machine shared-1</code></pre>
+ccfleetd slot list --machine pool-1</code></pre>
       <p>Set the machine's hostname to its id first: it is the name each slot shows in the
-      claude.ai machine picker.</p>
+      claude.ai machine picker. Machines are named by role, <code>&lt;you&gt;-N</code> for your
+      own and <code>pool-N</code> for the ones offered to customers, and slots by letter;
+      <code>ccfleetd node rename</code> and <code>ccfleetd slot rename</code> move a running
+      fleet onto that, held slots included.</p>
       <h3>Keeping it current</h3>
       <ul>
         <li><strong>Claude Code in slots</strong> follows the machine's pin: <code>stable</code>
