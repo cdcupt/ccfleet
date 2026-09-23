@@ -1556,6 +1556,12 @@ def _credentials_stamp(config_dir: Path) -> Optional[list[int]]:
 # and the sign-in the slot already had is never touched.
 
 SIGNIN_SCRATCH = "~/.config/ccfleet/signin-scratch"
+# Where Claude Code keeps its global config when CLAUDE_CONFIG_DIR names a
+# directory: INSIDE it. Measured on 2.1.267 — `CLAUDE_CONFIG_DIR=$d claude auth
+# status` creates $d/.claude.json (with $d/.claude.json.lock and $d/backups).
+# Only the default ~/.claude keeps it beside, as ~/.claude.json, which is what
+# global_config_of is for; it does not apply to the scratch directory.
+SCRATCH_GLOBAL_CONFIG = ".claude.json"
 OTHER_ACCOUNT = ("this slot stays with the Claude account it was first signed in with; "
                  "to use another account, hold another slot")
 UNKNOWN_ACCOUNT = "could not tell which Claude account signed in; nothing was changed"
@@ -1613,7 +1619,7 @@ def prepare_scratch() -> bool:
     except OSError as exc:
         log.warning("could not make the sign-in scratch: %s", exc.__class__.__name__)
         return False
-    return _atomic_write(scratch / ".claude.json",
+    return _atomic_write(scratch / SCRATCH_GLOBAL_CONFIG,
                          json.dumps({"hasCompletedOnboarding": True}) + "\n")
 
 
@@ -1630,14 +1636,22 @@ def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
 
     Both files are read once, and what is written into ~/.claude is exactly the
     credential read beside the account that was checked — never the file again,
-    which could have changed in between. The scratch directory is the slot
-    user's own, as ~/.claude is; a holder set on another account could sign it
-    in from their own session, so this guards the page's sign-in, and the
-    account a bound slot is signed in to is also checked on every run and
-    flagged when it is not its own (see account_changed in the server's rules).
+    which could have changed in between.
+
+    What this is, and is not. It keeps the page's "Sign in again" from putting
+    another account on the slot: somebody signing in, honestly, as the wrong
+    account is refused. It is not a wall against the slot's holder. This agent
+    runs as their Unix user, the scratch directory and ~/.claude are theirs,
+    and nothing in those files ties a token to an account: a holder can put any
+    credential beside any profile in ~/.claude directly, without this path, and
+    no check running as them can stop it. What a deliberate change leaves is
+    detection: a bound slot reports the account it keeps beside the one its
+    profile names, the server raises account_changed when they differ — which
+    Claude Code's own profile refresh brings about once another account's token
+    is used — and using another account on a slot breaks the terms.
     """
     scratch = Path(SIGNIN_SCRATCH).expanduser()
-    profile = _read_once(scratch / ".claude.json")
+    profile = _read_once(scratch / SCRATCH_GLOBAL_CONFIG)
     credential = _read_once(scratch / ".credentials.json")
     fp = fingerprint_of(profile)
     why = ""

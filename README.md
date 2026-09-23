@@ -137,9 +137,10 @@ per slot: somebody with two accounts holds two slots. Their page shows which
 account each slot is signed in to, so the slot reports that account's email
 address; the console never shows it. A slot keeps the account it was first
 signed in with: signing in again happens in a scratch directory and is kept only
-if it is that same account. That guards the page; the slot's home is its
-holder's, so a slot found signed in to another account some other way raises
-`account_changed`. And an account signed in on two live places at once (two
+if it is that same account. That keeps a sign-in with the wrong account from
+landing by accident; it is not a wall against the holder, whose home the slot
+is and who can change its files. So a slot found signed in to another account
+some other way raises `account_changed` once Claude Code's profile says so. And an account signed in on two live places at once (two
 slots, or a slot and a node) raises `account_elsewhere` on both. The holder's
 card says so either way. The guidebook predates shared machines; this
 section is their reference until it catches up.

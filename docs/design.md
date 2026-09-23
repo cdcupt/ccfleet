@@ -297,9 +297,14 @@ same on every node the account is on, so the server can raise
 `account_elsewhere` when one account is signed in on two live nodes or slots.
 A slot also reports the fingerprint of the account it was first signed in with,
 which it keeps: its page signs in again only as that account, and a slot found
-on another one anyway (its home is its holder's) raises `account_changed`. That
-is the rule this project keeps, one account on one node, checked rather than
-trusted.
+on another one anyway raises `account_changed`. Know the limit: the agent runs
+as the slot's own Unix user and the files are the holder's, and nothing in them
+ties a token to an account, so a holder can pair another account's credential
+with the kept account's profile directly. No check running as them can stop
+that; it shows once Claude Code refreshes the profile with the token in use,
+and it breaks the terms. The binding keeps the page from switching accounts by
+accident; the fingerprints make a deliberate switch visible. That is the rule
+this project keeps, one account on one node, checked rather than trusted.
 
 `token_stale` falls back to that timestamp when there is no file to stat, so a
 laptop whose login has gone cold raises the same alert a node does. Version
