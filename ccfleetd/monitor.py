@@ -115,6 +115,11 @@ class Monitor:
         dropped = self._store.expire_logins(now - LOGIN_MAX_AGE_S)
         if dropped:
             log.info("expired %d unfinished sign-in(s)", dropped)
+        # The same window for a switch of accounts nobody's machine answered,
+        # and for a failure the holder has had time to read.
+        dropped = self._store.expire_account_intents(now - LOGIN_MAX_AGE_S)
+        if dropped:
+            log.info("expired %d account request(s)", dropped)
 
     def _maybe_prune(self, now: float) -> None:
         if now - self._last_prune < PRUNE_EVERY_S:

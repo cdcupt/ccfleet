@@ -102,6 +102,8 @@ def overview(cfg: Config) -> str:
         "<li>Your own Linux account: a home directory only you can read, and room for your "
         "projects and tools.</li>"
         "<li>Claude Code installed, with Remote Control on, kept up to date for you.</li>"
+        "<li>Up to three of your own Claude accounts signed in on it, and one click to "
+        "switch between them.</li>"
         "<li>Your own page, showing your slot and how much of your Claude usage limits is "
         "used.</li></ul></div>"
         '<div class="card"><h2>What you need</h2><ul>'
@@ -167,14 +169,28 @@ def guide(cfg: Config) -> str:
         "counted across every device you use, and the tokens used on this slot over the last "
         "week.</li>"
         '<li><strong>Device tokens.</strong> <span class="btnlabel">Get a device token</span> '
-        "makes a one-year token from your own Claude account, for running Claude Code on "
-        "your own computer. It is shown until you press "
+        "makes a one-year token from the Claude account in use on your slot, for running "
+        "Claude Code on your own computer. It is shown until you press "
         '<span class="btnlabel">Done with it</span>, for at most '
         f"{_span(LOGIN_MAX_AGE_S)}, and never kept after that.</li>"
         '<li><strong>Giving it back.</strong> Tick the box and press '
         '<span class="btnlabel">Give this slot back</span>. Your Linux account and every file '
-        "in it are deleted; your Claude account is not touched. Push your work somewhere "
+        "in it are deleted; your Claude accounts are not touched. Push your work somewhere "
         "first.</li></ul></div>"
+        '<div class="card"><h2>Switch accounts</h2>'
+        "<p>Have more than one Claude account of your own? Your slot keeps up to three "
+        "signed in, one of them in use. Press "
+        '<span class="btnlabel">Add another account</span> and sign in the usual way: the '
+        "new one becomes the account in use. To go back, press "
+        '<span class="btnlabel">Use this one</span> beside another: no link and no code. '
+        "Within a couple of minutes Remote Control moves over, and your slot shows up in that "
+        "account&#x27;s claude.ai/code. Switching ends anything running in Remote Control at "
+        "that moment.</p>"
+        "<p>A saved sign-in lasts until Anthropic asks for a fresh one; your page shows how "
+        'long each has left, and <span class="btnlabel">Sign in again</span> brings one back. '
+        '<span class="btnlabel">Remove</span> signs an account out of your slot.</p>'
+        "<p>Every account on your slot must be your own. Switching is always your choice: "
+        "your slot never switches by itself, not even when a usage limit runs out.</p></div>"
         '<div class="card"><h2>Good to know</h2><ul>'
         "<li>Your slot is <strong>not backed up</strong>. Keep your work in git, or anywhere "
         "else that is yours.</li>"
@@ -248,8 +264,9 @@ def how_it_works(cfg: Config) -> str:
         "Claude account is ever shared between people.</p></div>"
         '<div class="card"><h2>What we can and cannot see</h2>'
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
-        "signed in, your plan, how much of your usage limits is used, and token counts per "
-        "hour. Never your prompts, conversations, files or credential. "
+        "signed in, the email address and plan of each Claude account signed in on it, how "
+        "much of your usage limits is used, and token counts per hour. Never your prompts, "
+        "conversations, files or credentials. "
         '<a href="/privacy">The privacy page</a> lists everything, and for how long.</p>'
         "<p>One limit is worth saying plainly: the machines are ours, and their "
         "administrators have root, so they can technically read any slot. No feature does "
@@ -288,7 +305,7 @@ def terms(cfg: Config) -> str:
         "Claude Code installed. You bring your own Claude plan and sign in to it yourself; "
         "ccfleet does not provide access to Claude.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
-        "<p>Use your own Claude account in your slot, and only yours. You are responsible for "
+        "<p>Use your own Claude accounts in your slot, and only yours. You are responsible for "
         "following Anthropic&#x27;s terms and usage policy, as you would on your own "
         "computer. Do not share your slot, or your sign-in, with anybody else.</p></div>"
         '<div class="card"><h2>Paying</h2>'
