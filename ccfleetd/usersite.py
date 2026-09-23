@@ -306,6 +306,7 @@ margin:0 0 4px;font-weight:680}
 .slot-head{padding:16px 22px 14px;border-bottom:1px solid var(--rule-soft)}
 .slot-head h2{margin:0;display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;
 font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:-.01em}
+.slot-head h2 .tag{font-family:var(--sans);font-size:12px;font-weight:650;letter-spacing:.01em}
 .slot-meta{margin:6px 0 0;font-size:13px;color:var(--muted)}
 .slot-body{padding:4px 22px 6px}
 .slot-body>p{margin:14px 0}
@@ -711,15 +712,17 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                if slot.get("claimed_at") else "")
     # The name claude.ai/code shows them; the machine only when it is not that.
     name = names.display(slot)
-    where = ("your own machine" if own
+    where = ("" if own
              else f"on {escape(slot['node_id'])}" if slot["node_id"] != name else "")
     about = f"{where}{region}{claimed}".lstrip(" ·")
-    # Somebody's own node, styled as theirs rather than as one of ours.
-    kind = ' data-kind="own"' if own else ""
+    # Somebody's own node, said beside its name rather than lost in the small
+    # print: it is theirs outright, not one of ours they hold.
+    kind, mine = (' data-kind="own"', ' <span class="tag">your own machine</span>') if own \
+        else ("", "")
     parts = [
         f'<div class="card slot" id="slot-{escape(slot["id"])}" '
         f'data-state="{escape(str(slot["state"]))}"{kind}><div class="slot-head">'
-        f'<h2>{escape(name)} <span class="pill {tone}">{escape(title)}</span></h2>',
+        f'<h2>{escape(name)} <span class="pill {tone}">{escape(title)}</span>{mine}</h2>',
         f'<p class="slot-meta">{about + " · " if about else ""}machine {machine}</p>'
         '</div><div class="slot-body">',
     ]

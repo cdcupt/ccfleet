@@ -215,10 +215,12 @@ td.wrap{white-space:normal;min-width:130px}
 .node-id{font-family:var(--mono);font-weight:650;font-size:14px}
 
 /* A state, said the same way everywhere: a coloured dot and a word. */
+/* A pill may wrap: a few carry a whole sentence ("hostname pending: …"), and
+   those must fit a phone. A short one never has a reason to. */
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.25;
-padding:3px 10px 3px 8px;border-radius:999px;font-weight:650;white-space:nowrap;
-vertical-align:middle;border:1px solid var(--rule);color:var(--off);background:var(--off-bg);
-font-family:var(--sans);letter-spacing:0}
+padding:3px 10px 3px 8px;border-radius:999px;font-weight:650;max-width:100%;
+overflow-wrap:break-word;vertical-align:middle;border:1px solid var(--rule);
+color:var(--off);background:var(--off-bg);font-family:var(--sans);letter-spacing:0}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;
 flex:none}
 .pill.ok{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
