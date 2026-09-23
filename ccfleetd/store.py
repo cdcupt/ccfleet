@@ -1893,6 +1893,28 @@ class Store:
                          (now, row["account_id"]))
         return dict(account)
 
+    def peek_session(self, session_id: str, *, now: float,
+                     site: Optional[str] = None) -> dict[str, Any] | None:
+        """Who this session belongs to, touching nothing.
+
+        For pages anybody may read, which only want to say who is looking: the
+        same answer account_for_session gives, but no visit is recorded and no
+        expired row is swept. Reading a public page must not write, and the
+        sweep still happens the next time the session is used for anything.
+        """
+        id_hash = sessionlib.hash_session_id(session_id)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT s.site AS session_site, s.expires_at AS session_expires_at, a.* "
+                "FROM sessions s JOIN accounts a ON a.id = s.account_id "
+                "WHERE s.id_hash = ?", (id_hash,)).fetchone()
+        if row is None or now >= row["session_expires_at"]:
+            return None
+        if site is not None and row["session_site"] != site:
+            return None
+        return {k: row[k] for k in row.keys()
+                if k not in ("session_site", "session_expires_at")}
+
     def end_session(self, session_id: str) -> bool:
         with self._write_txn() as conn:
             cur = conn.execute("DELETE FROM sessions WHERE id_hash = ?",

@@ -27,16 +27,21 @@ from .config import Config
 from .desired import is_login_url
 from .monitor import LOGIN_MAX_AGE_S
 from .render import (
+    CONSOLE_PATH,
     CSS,
     FAVICON,
     LOGIN_WORDS,
     MARK,
+    SIGN_IN_LINK,
     TOKEN_WORDS,
     _age,
     _human_tokens,
     _meter,
     _usage_chart,
     _usage_span,
+    console_href,
+    product_href,
+    user_menu,
 )
 from .store import (
     NoSlotAvailable,
@@ -89,6 +94,47 @@ ACTIVE_REFRESH_S = 4
 
 
 @dataclass(frozen=True)
+class Viewer:
+    """Somebody signed in to us, as the corner of every page shows them.
+
+    Built only from a session this request carried, so the page shows the
+    person looking at it and nobody else. The token is that session's, which
+    is all the menu's sign-out form needs.
+    """
+
+    account: Mapping[str, Any]
+    csrf: str
+    slots_href: str = "/account"
+    console_href: str = CONSOLE_PATH
+
+    @property
+    def operator(self) -> bool:
+        """Whether the menu offers the console. Operators are made only from
+        the server's command line; the console checks the role again itself."""
+        return self.account.get("role") == "admin"
+
+    def menu(self) -> str:
+        return user_menu(self.account, self.csrf, operator=self.operator,
+                         slots_href=self.slots_href, console_href=self.console_href)
+
+
+def viewer_for(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config, *,
+               on_console: bool = False) -> Optional[Viewer]:
+    """The viewer for a page, or None when nobody is signed in.
+
+    On the console the menu's links point back at the product. With two
+    hostnames the console's host has no slots page and the product's has no
+    console, so each side names the other in full.
+    """
+    if account is None or not session_id:
+        return None
+    csrf = csrf_for(session_id, cfg.cookie_secret)
+    if on_console:
+        return Viewer(account, csrf, slots_href=product_href(cfg, "/account"))
+    return Viewer(account, csrf, console_href=console_href(cfg))
+
+
+@dataclass(frozen=True)
 class Outcome:
     """What the handler should send: a redirect when `location` is set."""
 
@@ -113,34 +159,35 @@ def _back(note: str, anchor: str = "") -> Outcome:
     return Outcome(303, location=f"/account?note={note}" + (f"#{anchor}" if anchor else ""))
 
 
-def not_found() -> Outcome:
+def not_found(viewer: Optional[Viewer] = None) -> Outcome:
     return Outcome(404, body=_shell("Not found", f'<div class="card door">{MARK}'
                                     "<h1>Not found</h1>"
                                     "<p>There is nothing here.</p>"
                                     "<p><a class=\"back\" href=\"/account\">&larr; your slots</a>"
-                                    "</p></div>"))
+                                    "</p></div>", viewer=viewer))
 
 
 # -- actions ---------------------------------------------------------------------
 
 def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
-        form: Mapping[str, str], now: float) -> Outcome:
+        form: Mapping[str, str], now: float, session_id: str = "") -> Outcome:
     """Do what a form on this page asked, for this account and nobody else."""
+    viewer = viewer_for(account, session_id, cfg)
     parts = path.strip("/").split("/")
     if parts == ["account", "claim"]:
         return _claim(store, cfg, account, now)
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
         if slot is None:
-            return not_found()
+            return not_found(viewer)
         try:
-            return _on_slot(store, slot, account["id"], parts[3], form, now)
+            return _on_slot(store, slot, account["id"], parts[3], form, now, viewer)
         except NotYours:
             # Somebody else's slot answers exactly as a missing one: which ids
             # are held, and by whom, is not this person's to learn. The store
             # decides it, in the same transaction as the action itself.
-            return not_found()
-    return not_found()
+            return not_found(viewer)
+    return not_found(viewer)
 
 
 def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float) -> Outcome:
@@ -157,7 +204,8 @@ def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float) ->
 
 
 def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
-             form: Mapping[str, str], now: float) -> Outcome:
+             form: Mapping[str, str], now: float,
+             viewer: Optional[Viewer] = None) -> Outcome:
     """Every store call carries the holder, and the store checks it in the
     same transaction as the change: a slot given back and claimed by somebody
     else between loading and acting is refused, not acted on."""
@@ -185,7 +233,7 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
             return _back("code", anchor)
         if action == "token-show":
             return Outcome(200, body=token_page(
-                slot, store.read_slot_secret(slot_id, now, held_by=holder)))
+                slot, store.read_slot_secret(slot_id, now, held_by=holder), viewer))
         # cancel, token-done: whichever flow is in flight on this slot ends here.
         store.clear_slot_login(slot_id, held_by=holder)
         return _back("done" if action == "token-done" else "cancelled", anchor)
@@ -207,12 +255,7 @@ body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
 .site .page.narrow{max-width:880px}
 .site .page.doc{max-width:840px}
 
-/* The bar on top of every page. */
-.topbar{background:var(--panel);border-bottom:1px solid var(--rule);position:sticky;top:0;
-z-index:10}
-.topbar-in{max-width:1120px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;
-gap:8px 22px;flex-wrap:wrap}
-.topbar .brand{font-size:18px}
+/* The bar's links to the pages anybody can read. */
 .doc-nav{display:flex;align-items:center;gap:2px;font-size:14px;min-width:0;
 overflow-x:auto;scrollbar-width:none}
 .doc-nav::-webkit-scrollbar{display:none}
@@ -220,8 +263,6 @@ overflow-x:auto;scrollbar-width:none}
 white-space:nowrap;font-weight:560}
 .doc-nav a:hover{color:var(--ink);background:var(--inset)}
 .doc-nav a.here{color:var(--acc);background:var(--acc-soft)}
-.topbar-end{margin-left:auto;display:flex;align-items:center;gap:10px}
-.topbar-end .btn,.topbar-end button{padding:7px 13px}
 
 /* The footer: the same ways out, from every page. */
 .sitefoot{border-top:1px solid var(--rule);background:var(--panel)}
@@ -326,20 +367,19 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 NAV = (("/docs", "Overview"), ("/docs/guide", "Guide"),
        ("/docs/how-it-works", "How it works"), ("/privacy", "Privacy"),
        ("/docs/terms", "Terms"))
-#: What the right end of the bar offers when a page has nothing of its own there.
-YOUR_SLOTS = '<a class="btn primary" href="/account">Your slots</a>'
-
-
 def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
-           here: str = "", end: str = YOUR_SLOTS, width: str = "narrow") -> str:
+           here: str = "", viewer: Optional[Viewer] = None, door: bool = False,
+           width: str = "narrow") -> str:
     """A page of the user site, in its frame: the bar on top, the page, the footer.
 
     ``here`` marks the bar's link to this page, and nothing else is marked, so
-    somebody can always tell where they are. ``end`` fills the right end of the
-    bar: the way to your slots, or signing out once you are on them.
+    somebody can always tell where they are. The bar's corner says who is
+    looking: their menu when they are signed in, a way to sign in when not,
+    and nothing on a page that is itself the way in (``door``).
     """
     links = "".join(f'<a href="{path}"{_HERE if path == here else ""}>{escape(name)}</a>'
                     for path, name in NAV)
+    corner = viewer.menu() if viewer is not None else "" if door else SIGN_IN_LINK
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"{refresh}<title>ccfleet · {escape(title)}</title>"
@@ -348,7 +388,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             '<body class="site"><header class="topbar"><div class="topbar-in">'
             f'<a class="brand" href="/docs">{MARK}<span>ccfleet</span></a>'
             f'<nav class="doc-nav">{links}</nav>'
-            f'<div class="topbar-end">{end}</div></div></header>'
+            f'<div class="topbar-end">{corner}</div></div></header>'
             f'<main class="page {escape(width)}">{body}</main>'
             '<footer class="sitefoot"><div class="sitefoot-in"><div>'
             f'<a class="brand" href="/docs">{MARK}<span>ccfleet</span></a>'
@@ -421,7 +461,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
     return _shell("your slots", body, _refresh(held, logins),
-                  end=_form("/auth/signout", csrf, "Sign out"))
+                  viewer=viewer_for(account, session_id, cfg))
 
 
 def _paid(through: Optional[str], now: float) -> str:
@@ -445,7 +485,7 @@ def _signed_out(cfg: Config) -> str:
                       "<p class=\"muted\">An operator configures "
                       "<code>CCFLEET_GOOGLE_CLIENT_ID</code>, "
                       "<code>CCFLEET_GOOGLE_CLIENT_SECRET</code> and "
-                      "<code>CCFLEET_COOKIE_SECRET</code> to turn it on.</p></div>", end="")
+                      "<code>CCFLEET_COOKIE_SECRET</code> to turn it on.</p></div>", door=True)
     return _shell("sign in", f'<div class="card door">{MARK}<h1>Sign in to your slots</h1>'
                   "<p>ccfleet gives you a slot on a machine we operate: your own Linux "
                   "account there, with Claude Code, signed in to your own Claude account. "
@@ -460,7 +500,7 @@ def _signed_out(cfg: Config) -> str:
                   "id. <a href=\"/privacy\">What else we keep, and why</a>.</p></div>"
                   '<div class="door-alt"><p class="muted">New to ccfleet? Start with '
                   '<a href="/docs">what it is</a> and <a href="/docs/guide">how to begin</a>.'
-                  "</p></div>", end="")
+                  "</p></div>", door=True)
 
 
 #: When the privacy page last changed in substance. Change it with the words.
@@ -476,7 +516,7 @@ def _span(seconds: int) -> str:
     return f"{seconds} seconds"
 
 
-def privacy_page(cfg: Config) -> str:
+def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     """What ccfleet keeps about the people who use it, in plain words.
 
     Every length of time on it is read from the settings in force, so the page
@@ -563,7 +603,7 @@ def privacy_page(cfg: Config) -> str:
         "has been given back and wiped.</p>"
         "<p>If any of this changes, this page changes, and the date at the top says when.</p>"
         "</div>")
-    return _shell("privacy", body, here="/privacy", width="doc")
+    return _shell("privacy", body, here="/privacy", width="doc", viewer=viewer)
 
 
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
@@ -867,16 +907,18 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
                  "</p></div>")
     return _shell("console", f'<div class="card door">{MARK}<h1>ccfleet console</h1>' + body
                   + "<p class=\"note\">Or <a href=\"/auth/basic\">use the admin token</a> "
-                  "&mdash; the way in when Google sign-in is unavailable.</p></div>" + elsewhere)
+                  "&mdash; the way in when Google sign-in is unavailable.</p></div>" + elsewhere,
+                  viewer=viewer_for(account, session_id, cfg, on_console=True), door=True)
 
 
-def token_page(slot: Mapping[str, Any], token: str) -> str:
+def token_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = None) -> str:
     """The minted token, for as long as its request lasts."""
     if not token:
         return _shell("device token", f'<div class="card door">{MARK}<h1>Nothing to show</h1>'
                       "<p>No token is waiting on this slot. Either you were done with it, or "
                       "the request expired. Start a new one from your slots.</p>"
-                      "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p></div>")
+                      "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p></div>",
+                      viewer=viewer)
     return _shell("device token", (
         "<div class=\"pagehead\"><h1>Device token</h1><p class=\"sub\">Minted on <strong>"
         f"{escape(slot['id'])}</strong>, for the Claude account you approved. Good for one "
@@ -893,4 +935,4 @@ def token_page(slot: Mapping[str, Any], token: str) -> str:
         "Anthropic's limit on long-lived tokens; revoke it from your Claude account.</p>"
         "<p class=\"muted\">A computer uses one Claude account: running it again with "
         "another token replaces the one it had.</p></div>"
-        "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"))
+        "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"), viewer=viewer)

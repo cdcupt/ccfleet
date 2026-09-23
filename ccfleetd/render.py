@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from html import escape
 from shlex import quote as shq
@@ -56,6 +57,10 @@ CSS = """
 --warn:#98580a;--warn-bg:#fcf0da;--warn-line:#f0cf95;
 --bad:#b42318;--bad-bg:#fde7e4;--bad-line:#f4b8b0;
 --off:#667085;--off-bg:#edeff4;--led:#22c55e;
+/* Avatar grounds: the accent's family, each dark enough for a white initial,
+   and the same in both themes because the initial on them does not change. */
+--av0:#4338ca;--av1:#3730a3;--av2:#5b21b6;--av3:#6d28d9;--av4:#1d4ed8;--av5:#1e40af;
+--av-ink:#fff;
 --shadow:0 1px 2px rgba(12,17,28,.05),0 8px 24px -14px rgba(12,17,28,.16);
 --radius:14px;
 --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -107,6 +112,46 @@ font-weight:760;letter-spacing:-.022em;line-height:1}
 .tag{font-size:12px;font-weight:650;letter-spacing:.01em;color:var(--acc);
 background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;
 padding:3px 9px}
+
+/* The bar on top of every page: the mark, where you are, and who you are. */
+.topbar{background:var(--panel);border-bottom:1px solid var(--rule);position:sticky;top:0;
+z-index:10}
+.topbar-in{max-width:1120px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;
+gap:8px 22px;flex-wrap:wrap}
+.console .topbar-in{max-width:1200px;gap:8px 12px}
+.topbar .brand{font-size:18px}
+.topbar-end{margin-left:auto;display:flex;align-items:center;gap:10px}
+.topbar-end .btn,.topbar-end button{padding:7px 13px}
+
+/* Who is signed in: an initial that opens a menu. A details element is the
+   popover, so it needs no script and its summary takes the keyboard. */
+.usermenu{position:relative}
+.usermenu>summary{list-style:none;cursor:pointer;border-radius:50%;display:block}
+.usermenu>summary::-webkit-details-marker{display:none}
+.usermenu>summary::marker{content:""}
+.usermenu>summary:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+.avatar{display:flex;align-items:center;justify-content:center;width:34px;height:34px;
+border-radius:50%;color:var(--av-ink);background:var(--av0);font-weight:700;font-size:15px;
+line-height:1;user-select:none;box-shadow:0 0 0 2px var(--panel),0 0 0 3px var(--rule)}
+.usermenu>summary:hover .avatar,.usermenu[open]>summary .avatar{
+box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--acc)}
+.avatar.t1{background:var(--av1)}.avatar.t2{background:var(--av2)}
+.avatar.t3{background:var(--av3)}.avatar.t4{background:var(--av4)}
+.avatar.t5{background:var(--av5)}
+.menu{position:absolute;right:0;top:calc(100% + 10px);z-index:30;width:260px;
+max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--rule);
+border-radius:12px;padding:6px;box-shadow:0 1px 2px rgba(12,17,28,.06),
+0 18px 40px -18px rgba(12,17,28,.35)}
+.menu-who{margin:0;padding:8px 10px 10px;display:grid;gap:1px;font-size:14px;
+overflow-wrap:anywhere;border-bottom:1px solid var(--rule-soft)}
+.menu-links{display:grid;padding:4px 0;border-bottom:1px solid var(--rule-soft)}
+.menu-links a{display:block;padding:8px 10px;border-radius:8px;color:var(--ink);
+text-decoration:none;font-size:14px;font-weight:560}
+.menu-links a:hover{background:var(--inset);color:var(--acc)}
+.menu form{display:block;padding:4px 0 0}
+.usermenu .menu button{width:100%;justify-content:flex-start;border:0;box-shadow:none;
+background:none;padding:8px 10px;border-radius:8px;font-size:14px;font-weight:560}
+.usermenu .menu button:hover{background:var(--bad-bg);color:var(--bad)}
 
 /* Console masthead: what this is, then the fleet in one glance. */
 .mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;
@@ -284,7 +329,8 @@ box-shadow:inset 0 0 0 1px var(--rule-soft)}
 .meter-foot{font-size:12px;color:var(--muted);margin-top:5px}
 
 @media (max-width:820px){.usage-row{grid-template-columns:1fr;gap:10px}
-.strip{max-width:none}h1{font-size:25px}.page{padding-block:20px 36px}}
+.strip{max-width:none}h1{font-size:25px}.page{padding-block:20px 36px}
+.topbar-in{padding:10px 16px}}
 """
 
 
@@ -488,7 +534,8 @@ def _add_form(csrf: str) -> str:
         '</form></div>')
 
 
-def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
+def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "",
+                      corner: str = "") -> str:
     """Shown once, right after a node is created. This is the only time the token exists."""
     url = cfg.public_url or f"http://127.0.0.1:{cfg.bind_port}"
     steps = (f"CCFLEET_URL={url}\n"
@@ -513,7 +560,7 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "root. Drop the flag for a node where that is not wanted.</p>"
         if cfg.bypass_by_default else "")
     return (
-        _console_open(f"{node_id} added")
+        _console_open(f"{node_id} added", corner)
         + f"<h1>{escape(node_id)} added</h1>"
         "<div class=\"ok-banner\">Copy the three lines below now. The token is shown once "
         "and is not stored in readable form.</div>"
@@ -541,18 +588,100 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "</div></body></html>")
 
 
-def _console_open(title: str) -> str:
-    """The head and the first line of a console page that is not the dashboard."""
+def _console_bar(corner: str = "") -> str:
+    """The console's bar: the mark, which side this is, and who is signed in."""
+    return ('<header class="topbar"><div class="topbar-in">'
+            f'<a class="brand" href="{CONSOLE_PATH}">{MARK}<span>ccfleet</span></a>'
+            '<span class="tag">console</span>'
+            f'<div class="topbar-end">{corner}</div></div></header>')
+
+
+def _console_open(title: str, corner: str = "") -> str:
+    """The head and the bar of a console page that is not the dashboard."""
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>ccfleet · {escape(title)}</title>"
             f'<link rel="icon" href="{FAVICON}">'
-            f"<style>{CSS}</style></head><body class=\"console\"><div class=\"page\">"
-            f'<p><a class="brand" href="/">{MARK}<span>ccfleet</span></a> '
-            '<span class="tag">console</span></p>')
+            f"<style>{CSS}</style></head><body class=\"console\">"
+            + _console_bar(corner) + "<div class=\"page\">")
 
 
-def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
+# -- who is looking -------------------------------------------------------------------
+
+#: The bar's corner for somebody not signed in: the way to their slots, which
+#: begins by signing in.
+SIGN_IN_LINK = '<a class="btn primary" href="/account">Sign in</a>'
+#: How many avatar grounds there are (--av0 to --av5 in the stylesheet).
+AVATAR_TONES = 6
+
+
+def _initial(account: Mapping[str, Any]) -> str:
+    """One character for an avatar: the handle's first, else the email's.
+
+    The first letter or digit, so "_ops@" still gets one; a question mark when
+    there is nothing to take one from.
+    """
+    source = str(account.get("handle") or str(account.get("email") or "").split("@", 1)[0])
+    for char in source:
+        if char.isalnum():
+            return char.upper()[:1]
+    return "?"
+
+
+def _tone(account: Mapping[str, Any]) -> int:
+    """Which avatar ground: fixed by the account, so it is the same on every
+    page and every visit, and two people side by side are told apart."""
+    key = str(account.get("id") or account.get("email") or "")
+    return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16) % AVATAR_TONES
+
+
+def user_menu(account: Mapping[str, Any], csrf: str, *, operator: bool,
+              slots_href: str = "/account", console_href: str = CONSOLE_PATH) -> str:
+    """The signed-in person's corner of the bar: an initial that opens a menu.
+
+    No script: a details element is the popover, and its summary is a real
+    control, so the keyboard opens it the way it opens anything else. Signing
+    out stays a POST carrying this session's token. A link would let any page
+    that can make a browser fetch a URL sign people out. The console is
+    offered only to an operator, and the console checks again anyway: a link
+    is not a permission.
+    """
+    email = escape(str(account.get("email") or ""))
+    links = f'<a href="{escape(slots_href)}">Your slots</a>'
+    if operator:
+        links += f'<a href="{escape(console_href)}">Console</a>'
+    return ('<details class="usermenu">'
+            f'<summary aria-label="Account menu for {email}" title="{email}">'
+            f'<span class="avatar t{_tone(account)}" aria-hidden="true">'
+            f"{escape(_initial(account))}</span></summary>"
+            '<div class="menu">'
+            '<p class="menu-who"><span class="muted small">Signed in as</span>'
+            f"<strong>{email}</strong></p>"
+            f'<nav class="menu-links" aria-label="Your account">{links}</nav>'
+            '<form method="post" action="/auth/signout">'
+            f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+            '<button type="submit">Sign out</button></form></div></details>')
+
+
+def console_href(cfg: Config) -> str:
+    """The console, as a link from the product: its own path with one site,
+    the admin host's with two, since there the product has no console."""
+    if not cfg.admin_host:
+        return CONSOLE_PATH
+    scheme = "http" if cfg.public_url.startswith("http://") else "https"
+    return f"{scheme}://{cfg.admin_host}{CONSOLE_PATH}"
+
+
+def product_href(cfg: Config, path: str) -> str:
+    """A product page, as a link from the console: the same site with one, the
+    product's own address with two, since the console's host has no such page."""
+    if not cfg.admin_host or not cfg.public_url:
+        return path
+    return cfg.public_url.rstrip("/") + path
+
+
+def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "",
+                        corner: str = "") -> str:
     """The minted credential, for as long as the request it belongs to lasts.
 
     It was minted on the node from the account that node is signed in as and
@@ -563,7 +692,7 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
     """
     if not token:
         return (
-            _console_open("device token")
+            _console_open("device token", corner)
             + "<h1>Nothing to show</h1>"
             "<p class=\"sub\">No token is waiting for this node. Either it was finished "
             "with, or the request expired. Start a new one from the fleet page.</p>"
@@ -571,7 +700,7 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
             "</div></body></html>")
     who = f" for {escape(owner)}" if owner else ""
     return (
-        _console_open("device token")
+        _console_open("device token", corner)
         + f"<h1>Device token{who}</h1>"
         "<p class=\"sub\">Minted on <strong>" + escape(node_id) + "</strong>, from the "
         "account that node is signed in as. Good for one year.</p>"
@@ -958,7 +1087,8 @@ def _strip_html(counts: Mapping[str, int]) -> str:
 
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
                      now: float, cfg: Config, csrf: str = "", who: Any = None,
-                     logins: Optional[Mapping[str, Any]] = None, extra: str = "") -> str:
+                     logins: Optional[Mapping[str, Any]] = None, extra: str = "",
+                     corner: str = "") -> str:
     # who is None for callers that predate per-user accounts, which are all
     # operator-side, so the default is the full-privilege view.
     is_admin = who is None or getattr(who, "is_admin", True)
@@ -1011,9 +1141,10 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'{auto_refresh}<title>ccfleet console</title>'
         f'<link rel="icon" href="{FAVICON}">'
-        f"<style>{CSS}</style></head><body class=\"console\"><div class=\"page\">"
+        f"<style>{CSS}</style></head><body class=\"console\">"
+        + _console_bar(corner) + "<div class=\"page\">"
         '<header class="mast"><div>'
-        f'<h1 class="brand">{MARK}<span>ccfleet</span> <span class="tag">console</span></h1>'
+        "<h1>Fleet</h1>"
         '<p class="sub">One owner, one account, one node · heartbeat max age '
         f"{cfg.heartbeat_max_age_s // 60} min · {cadence}{whoami}</p></div>"
         + _strip_html(counts) +

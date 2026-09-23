@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from .config import Config
 from .monitor import LOGIN_MAX_AGE_S
 from .render import _meter
-from .usersite import NAV, _shell, _span
+from .usersite import NAV, Viewer, _shell, _span
 
 #: When these pages last changed in substance. Change it with the words.
 DOCS_UPDATED = "2026-09-23"
@@ -146,9 +146,10 @@ def contact(cfg: Config) -> str:
     return "the person who sent you this page"
 
 
-def _page(here: str, title: str, body: str, width: str = "doc") -> str:
+def _page(here: str, title: str, body: str, width: str = "doc",
+          viewer: Optional[Viewer] = None) -> str:
     """A docs page in the site's frame, with its own link in the bar marked."""
-    return _shell(title, body, extra_css=DOCS_CSS, here=here, width=width)
+    return _shell(title, body, extra_css=DOCS_CSS, here=here, width=width, viewer=viewer)
 
 
 # -- the overview -------------------------------------------------------------------
@@ -191,7 +192,7 @@ def _demo() -> str:
         "much of your usage limits is left.</figcaption></figure>")
 
 
-def overview(cfg: Config) -> str:
+def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     # Straight into Google's sign-in when it is set up; otherwise the page that
     # says it is not, rather than a button that goes nowhere.
     sign_in = "/auth/google/start?next=/account" if cfg.google_ready else "/account"
@@ -243,12 +244,12 @@ def overview(cfg: Config) -> str:
         '<a href="/privacy"><b>Privacy</b><span>What we keep about you, why, and for how '
         "long.</span></a>"
         "</div></section>")
-    return _page("/docs", "about", body, width="")
+    return _page("/docs", "about", body, width="", viewer=viewer)
 
 
 # -- getting started ----------------------------------------------------------------
 
-def guide(cfg: Config) -> str:
+def guide(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     body = (
         '<div class="dochead"><h1>Getting started</h1>'
         '<p class="lead">From buying a slot to your first Claude Code session. It takes a few '
@@ -316,7 +317,7 @@ def guide(cfg: Config) -> str:
         "signing in, check you are signed in to the same Claude account there, then "
         "reload.</li>"
         f"<li>Anything else: ask {contact(cfg)}.</li></ul></div>")
-    return _page("/docs/guide", "getting started", body)
+    return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
 # -- how it works -----------------------------------------------------------------------
@@ -356,7 +357,7 @@ orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></ma
 </svg>"""
 
 
-def how_it_works(cfg: Config) -> str:
+def how_it_works(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     body = (
         '<div class="dochead"><h1>How it works</h1>'
         '<p class="lead">Your work runs in your slot, on our machine. Your conversations go '
@@ -408,12 +409,12 @@ def how_it_works(cfg: Config) -> str:
         '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
         'rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>.</p></div>'
         "</div></div>")
-    return _page("/docs/how-it-works", "how it works", body, width="")
+    return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
 # -- terms ------------------------------------------------------------------------------
 
-def terms(cfg: Config) -> str:
+def terms(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     body = (
         '<div class="dochead"><h1>Terms</h1>'
         f'<p class="sub">Last updated {escape(DOCS_UPDATED)}</p></div>'
@@ -445,15 +446,15 @@ def terms(cfg: Config) -> str:
         "<p>If these terms change, this page changes and the date at the top says when. "
         f"Questions go to {contact(cfg)}. How your information is handled is on the "
         '<a href="/privacy">privacy page</a>.</p></div>')
-    return _page("/docs/terms", "terms", body)
+    return _page("/docs/terms", "terms", body, viewer=viewer)
 
 
-PAGES: dict[str, Callable[[Config], str]] = {
+PAGES: dict[str, Callable[..., str]] = {
     "/docs": overview, "/docs/guide": guide,
     "/docs/how-it-works": how_it_works, "/docs/terms": terms,
 }
 
 
-def page_for(path: str) -> Optional[Callable[[Config], str]]:
+def page_for(path: str) -> Optional[Callable[..., str]]:
     """The page at this path, trailing slash or not; None when there is none."""
     return PAGES.get(path.rstrip("/") or "/")
