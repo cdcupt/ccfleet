@@ -142,16 +142,27 @@ box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--acc)}
 max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--rule);
 border-radius:12px;padding:6px;box-shadow:0 1px 2px rgba(12,17,28,.06),
 0 18px 40px -18px rgba(12,17,28,.35)}
-.menu-who{margin:0;padding:8px 10px 10px;display:grid;gap:1px;font-size:14px;
-overflow-wrap:anywhere;border-bottom:1px solid var(--rule-soft)}
-.menu-links{display:grid;padding:4px 0;border-bottom:1px solid var(--rule-soft)}
-.menu-links a{display:block;padding:8px 10px;border-radius:8px;color:var(--ink);
-text-decoration:none;font-size:14px;font-weight:560}
-.menu-links a:hover{background:var(--inset);color:var(--acc)}
-.menu form{display:block;padding:4px 0 0}
-.usermenu .menu button{width:100%;justify-content:flex-start;border:0;box-shadow:none;
-background:none;padding:8px 10px;border-radius:8px;font-size:14px;font-weight:560}
-.usermenu .menu button:hover{background:var(--bad-bg);color:var(--bad)}
+/* The menu's head: the same face, larger, beside who it is. */
+.menu-who{display:flex;align-items:center;gap:12px;padding:10px 10px 12px;
+border-bottom:1px solid var(--rule-soft)}
+.avatar.big{width:40px;height:40px;font-size:17px;flex:none;box-shadow:none}
+.menu-who p{margin:0;display:grid;gap:1px;min-width:0;line-height:1.35}
+.menu-who p span{color:var(--muted);font-size:14px}
+.menu-who strong{font-size:15.5px;font-weight:700;overflow-wrap:anywhere}
+.menu-links{display:grid;gap:2px;padding:6px 0;border-bottom:1px solid var(--rule-soft)}
+.menu-links a{display:flex;align-items:center;justify-content:space-between;gap:10px;
+padding:9px 10px;border-radius:8px;color:var(--ink);text-decoration:none;font-size:15px;
+font-weight:450}
+.menu-links a:hover,.menu-links a:focus-visible{background:var(--acc-soft);color:var(--acc)}
+.menu-pill{font-size:12px;line-height:1;padding:3px 8px;border-radius:999px;
+border:1px solid var(--rule);color:var(--muted);background:var(--panel);font-weight:500;
+white-space:nowrap}
+.menu form{display:block;padding:6px 0 0}
+.usermenu .menu button.signout{width:100%;justify-content:flex-start;border:0;
+box-shadow:none;background:none;padding:9px 10px;border-radius:8px;font-size:15px;
+font-weight:450;color:var(--bad)}
+.usermenu .menu button.signout:hover,.usermenu .menu button.signout:focus-visible{
+background:var(--bad-bg);color:var(--bad)}
 
 /* Console masthead: what this is, then the fleet in one glance. */
 .mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;
@@ -637,7 +648,8 @@ def _tone(account: Mapping[str, Any]) -> int:
 
 
 def user_menu(account: Mapping[str, Any], csrf: str, *, operator: bool,
-              slots_href: str = "/account", console_href: str = CONSOLE_PATH) -> str:
+              slots_href: str = "/account", console_href: str = CONSOLE_PATH,
+              slots_held: int = 0) -> str:
     """The signed-in person's corner of the bar: an initial that opens a menu.
 
     No script: a details element is the popover, and its summary is a real
@@ -645,23 +657,33 @@ def user_menu(account: Mapping[str, Any], csrf: str, *, operator: bool,
     out stays a POST carrying this session's token. A link would let any page
     that can make a browser fetch a URL sign people out. The console is
     offered only to an operator, and the console checks again anyway: a link
-    is not a permission.
+    is not a permission. ``slots_held`` is this account's own count, shown on
+    Your slots, and not shown at all when it is none.
     """
     email = escape(str(account.get("email") or ""))
-    links = f'<a href="{escape(slots_href)}">Your slots</a>'
+    tone, initial = _tone(account), escape(_initial(account))
+
+    def face(size: str = "") -> str:
+        return f'<span class="avatar t{tone}{size}" aria-hidden="true">{initial}</span>'
+
+    held = f'<span class="menu-pill">{int(slots_held)}</span>' if slots_held > 0 else ""
+    links = f'<a href="{escape(slots_href)}"><span>Your slots</span>{held}</a>'
     if operator:
-        links += f'<a href="{escape(console_href)}">Console</a>'
+        links += (f'<a href="{escape(console_href)}"><span>Console</span>'
+                  '<span class="menu-pill">operator</span></a>')
+    # Shown with a break allowed after the @, so a long address wraps there on a
+    # phone rather than mid-word; each part is escaped on its own.
+    local, at, domain = str(account.get("email") or "").partition("@")
+    shown = escape(local) + (f"@<wbr>{escape(domain)}" if at else "")
     return ('<details class="usermenu">'
             f'<summary aria-label="Account menu for {email}" title="{email}">'
-            f'<span class="avatar t{_tone(account)}" aria-hidden="true">'
-            f"{escape(_initial(account))}</span></summary>"
-            '<div class="menu">'
-            '<p class="menu-who"><span class="muted small">Signed in as</span>'
-            f"<strong>{email}</strong></p>"
+            + face() + "</summary>"
+            '<div class="menu"><div class="menu-who">' + face(" big")
+            + f"<p><span>Signed in as</span><strong>{shown}</strong></p></div>"
             f'<nav class="menu-links" aria-label="Your account">{links}</nav>'
             '<form method="post" action="/auth/signout">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
-            '<button type="submit">Sign out</button></form></div></details>')
+            '<button type="submit" class="signout">Sign out</button></form></div></details>')
 
 
 def console_href(cfg: Config) -> str:

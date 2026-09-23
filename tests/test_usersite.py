@@ -778,7 +778,10 @@ def test_public_pages_show_who_is_looking(site):
     for path in PUBLIC:
         mine = corner(erik.call("GET", path).body)
         assert '<details class="usermenu">' in mine, path
-        assert "<strong>erik@example.com</strong>" in mine and ">E</span>" in mine, path
+        assert "<strong>erik@<wbr>example.com</strong>" in mine and ">E</span>" in mine, path
+        # The menu's head repeats the face beside the address, as the mockup has it.
+        assert re.search(r'<div class="menu-who"><span class="avatar t\d big" '
+                         r'aria-hidden="true">E</span>', mine), path
         assert SIGN_IN not in mine, path
         theirs = corner(anybody.call("GET", path).body)
         assert SIGN_IN in theirs and "usermenu" not in theirs, path
@@ -846,19 +849,41 @@ def test_only_an_operator_is_offered_the_console(site):
     store, sign_in, _ = site
     erik = sign_in()
     for path in (*PUBLIC, "/account"):
-        assert ">Console</a>" not in erik.call("GET", path).body, path
+        mine = corner(erik.call("GET", path).body)
+        assert "<span>Console</span>" not in mine, path
+        assert '"menu-pill">operator<' not in mine, "the operator pill without the console"
     store.set_account_role(erik.account["id"], "admin")
     for path in (*PUBLIC, "/account"):
-        assert 'href="/admin">Console</a>' in corner(erik.call("GET", path).body), path
+        assert ('<a href="/admin"><span>Console</span><span class="menu-pill">operator</span>'
+                in corner(erik.call("GET", path).body)), path
     # The console's own corner is the same menu, for the operator it signed in.
     console = erik.call("GET", "/admin")
     assert console.status == 200
-    assert "<strong>erik@example.com</strong>" in corner(console.body)
+    assert "<strong>erik@<wbr>example.com</strong>" in corner(console.body)
     # The admin token is basic auth: no session, so nothing to show or sign out.
     basic = "Basic " + base64.b64encode(b"admin:admin-token").decode()
     token_only = Browser(erik.port).call("GET", "/admin", headers={"Authorization": basic})
     assert token_only.status == 200
     assert '<details class="usermenu">' not in token_only.body
+
+
+def test_your_slots_carries_this_accounts_own_count(site):
+    """How many slots you hold, beside Your slots: your own count, never anybody
+    else's, and nothing at all when it is none."""
+    store, sign_in, _ = site
+    for node in ("m1", "m2", "m3"):
+        machine(store, node, users=("slot01",))
+    erik = sign_in(quota=2)
+    ana = sign_in("google-ana", "ana@example.com", quota=1)
+    bo = sign_in("google-bo", "bo@example.com", quota=0)
+    for browser in (erik, erik, ana):
+        assert browser.press("/account/claim").status == 303
+    for browser, count in ((erik, 2), (ana, 1)):
+        for path in ("/docs", "/account"):
+            mine = corner(browser.call("GET", path).body)
+            assert f'<span>Your slots</span><span class="menu-pill">{count}</span>' in mine, path
+    empty = corner(bo.call("GET", "/docs").body)
+    assert "<span>Your slots</span></a>" in empty and "menu-pill" not in empty
 
 
 def test_signing_out_from_the_menu_is_this_sessions_post(site):
@@ -884,7 +909,7 @@ def test_the_menu_escapes_the_address():
                       operator=False)
     assert "<img" not in shown
     assert 'aria-label="Account menu for x&quot;&gt;&lt;img src=y&gt;@e.com"' in shown
-    assert "<strong>x&quot;&gt;&lt;img src=y&gt;@e.com</strong>" in shown
+    assert "<strong>x&quot;&gt;&lt;img src=y&gt;@<wbr>e.com</strong>" in shown
 
 
 def test_an_avatar_is_the_same_every_time_and_says_whose_it_is():

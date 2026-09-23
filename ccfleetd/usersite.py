@@ -106,6 +106,7 @@ class Viewer:
     csrf: str
     slots_href: str = "/account"
     console_href: str = CONSOLE_PATH
+    slots_held: int = 0
 
     @property
     def operator(self) -> bool:
@@ -115,23 +116,27 @@ class Viewer:
 
     def menu(self) -> str:
         return user_menu(self.account, self.csrf, operator=self.operator,
-                         slots_href=self.slots_href, console_href=self.console_href)
+                         slots_href=self.slots_href, console_href=self.console_href,
+                         slots_held=self.slots_held)
 
 
-def viewer_for(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config, *,
-               on_console: bool = False) -> Optional[Viewer]:
+def viewer_for(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config,
+               store: Optional[Store] = None, *, on_console: bool = False
+               ) -> Optional[Viewer]:
     """The viewer for a page, or None when nobody is signed in.
 
-    On the console the menu's links point back at the product. With two
-    hostnames the console's host has no slots page and the product's has no
-    console, so each side names the other in full.
+    The count on Your slots is read here, for this account and no other, so no
+    page can show one person another's. On the console the menu's links point
+    back at the product: with two hostnames the console's host has no slots
+    page and the product's has no console, so each side names the other in full.
     """
     if account is None or not session_id:
         return None
     csrf = csrf_for(session_id, cfg.cookie_secret)
+    held = store.held_slot_count(account["id"]) if store is not None else 0
     if on_console:
-        return Viewer(account, csrf, slots_href=product_href(cfg, "/account"))
-    return Viewer(account, csrf, console_href=console_href(cfg))
+        return Viewer(account, csrf, slots_href=product_href(cfg, "/account"), slots_held=held)
+    return Viewer(account, csrf, console_href=console_href(cfg), slots_held=held)
 
 
 @dataclass(frozen=True)
@@ -172,7 +177,7 @@ def not_found(viewer: Optional[Viewer] = None) -> Outcome:
 def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
         form: Mapping[str, str], now: float, session_id: str = "") -> Outcome:
     """Do what a form on this page asked, for this account and nobody else."""
-    viewer = viewer_for(account, session_id, cfg)
+    viewer = viewer_for(account, session_id, cfg, store)
     parts = path.strip("/").split("/")
     if parts == ["account", "claim"]:
         return _claim(store, cfg, account, now)
@@ -461,7 +466,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
     return _shell("your slots", body, _refresh(held, logins),
-                  viewer=viewer_for(account, session_id, cfg))
+                  viewer=viewer_for(account, session_id, cfg, store))
 
 
 def _paid(through: Optional[str], now: float) -> str:
@@ -882,7 +887,8 @@ def _release(slot: Mapping[str, Any], csrf: str) -> str:
             + "</div>")
 
 
-def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config) -> str:
+def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config,
+                 store: Optional[Store] = None) -> str:
     """The console's front door for somebody not signed in as an operator.
 
     Operators sign in the way everybody else does, with Google; an account
@@ -908,7 +914,8 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
     return _shell("console", f'<div class="card door">{MARK}<h1>ccfleet console</h1>' + body
                   + "<p class=\"note\">Or <a href=\"/auth/basic\">use the admin token</a> "
                   "&mdash; the way in when Google sign-in is unavailable.</p></div>" + elsewhere,
-                  viewer=viewer_for(account, session_id, cfg, on_console=True), door=True)
+                  viewer=viewer_for(account, session_id, cfg, store, on_console=True),
+                  door=True)
 
 
 def token_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = None) -> str:

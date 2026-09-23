@@ -266,8 +266,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
                 return
             account, session_id = self._signed_in()
-            self._send(401, usersite.console_door(account, session_id,
-                                                  ctx.cfg).encode("utf-8"), HTML_HEADERS)
+            self._send(401, usersite.console_door(account, session_id, ctx.cfg,
+                                                  ctx.store).encode("utf-8"), HTML_HEADERS)
 
         def _require_admin(self) -> bool:
             """For anything that changes the fleet. An owner gets 403, not 401:
@@ -325,7 +325,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _viewer(self) -> Optional[usersite.Viewer]:
             """Who is looking at a public page, as its corner shows them."""
             account, session_id = self._peek_signed_in()
-            return usersite.viewer_for(account, session_id, ctx.cfg)
+            return usersite.viewer_for(account, session_id, ctx.cfg, ctx.store)
 
         def _console_corner(self) -> str:
             """The console's corner: whoever is signed in with Google on this
@@ -333,7 +333,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             auth, with no session to show or end: the line under the console's
             title already says who they are."""
             account, session_id = self._peek_signed_in()
-            viewer = usersite.viewer_for(account, session_id, ctx.cfg, on_console=True)
+            viewer = usersite.viewer_for(account, session_id, ctx.cfg, ctx.store,
+                                         on_console=True)
             return viewer.menu() if viewer is not None else ""
 
         def _site(self) -> str:
