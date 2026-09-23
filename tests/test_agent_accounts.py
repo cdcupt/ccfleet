@@ -646,6 +646,51 @@ def test_the_account_in_use_is_not_removed_while_remote_control_may_still_run_as
     assert env_file(home).read_text() == f"CLAUDE_CONFIG_DIR={place(home, '2')[0]}\n"
 
 
+def test_the_next_account_is_one_claude_code_itself_still_accepts(home):
+    """Its files say it is signed in, but the CLI says it no longer works:
+    the one after it is taken instead."""
+    sign_in(home, "1", "revoked@example.com")
+    sign_in(home, "2", "b@example.com")
+    sign_in(home, "3", "c@example.com")
+    use(home, "2")
+    facts = agent.slot_facts(intent("forget", "2"), Slot(home, broken=[home / ".claude"]),
+                             now=NOW)
+    assert env_file(home).read_text() == f"CLAUDE_CONFIG_DIR={place(home, '3')[0]}\n"
+    assert listed(facts) == [("1", False), ("3", True)]
+
+
+def test_nothing_is_removed_when_the_move_off_it_cannot_be_recorded(home):
+    """The line is written before anything is deleted: failing there leaves the
+    account, its sign-in and Remote Control as they were."""
+    sign_in(home, "1", "a@example.com")
+    sign_in(home, "2", "b@example.com")
+    use(home, "2")
+    slot = Slot(home)
+    config = home / ".config" / "ccfleet"
+    config.chmod(0o500)
+    try:
+        facts = agent.slot_facts(intent("forget", "2"), slot, now=NOW)
+    finally:
+        config.chmod(0o700)
+    assert facts["account_switch"] == {"requested_at": 7.0, "state": "failed",
+                                       "detail": "could not record the switch; nothing was "
+                                                 "removed"}
+    assert (place(home, "2")[0] / ".credentials.json").exists()
+    assert slot.claude("auth", "logout") == []
+    assert env_file(home).read_text() == f"CLAUDE_CONFIG_DIR={place(home, '2')[0]}\n"
+    assert slot.rc == "active", "left Remote Control stopped"
+
+
+def test_the_removed_accounts_windows_go_with_it(home):
+    sign_in(home, "1", "a@example.com")
+    sign_in(home, "2", "b@example.com")
+    use(home, "2")
+    (home / ".config" / "ccfleet" / "slot-state.json").write_text(json.dumps(
+        {"quota": {"week": {"used_pct": 97}, "ts": NOW - 5}}))
+    facts = agent.slot_facts(intent("forget", "2"), Slot(home), now=NOW)
+    assert "quota" not in facts, "showed the removed account's windows as the next one's"
+
+
 def test_the_next_account_is_one_that_still_works(home):
     sign_in(home, "1", "old@example.com", refresh_ms=GONE_MS)
     sign_in(home, "2", "b@example.com")

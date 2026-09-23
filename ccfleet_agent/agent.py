@@ -1985,36 +1985,46 @@ def switch_account(account: SlotAccount, state: Mapping[str, Any], runner: Runne
     return {"state": "done", "detail": ""}, _moved_on(state)
 
 
+def _next_account(leaving: SlotAccount, runner: Runner, now: float) -> SlotAccount:
+    """Where the slot goes when the account in use is removed: the first other
+    account Claude Code itself still accepts, asked as that account. With none,
+    account 1 — which, once `leaving` is gone, has nobody signed in."""
+    for account_id in SLOT_ACCOUNT_IDS:
+        candidate = slot_account(account_id)
+        if (account_id != leaving.id and _usable(account_facts(candidate), now)
+                and auth_status(account_runner(candidate, runner)).get("logged_in") is True):
+            return candidate
+    return slot_account("1")
+
+
 def forget_account(account: SlotAccount, state: Mapping[str, Any], runner: Runner,
                    now: float) -> tuple[dict[str, Any], dict[str, Any]]:
     """Sign an account out of this slot and delete its sign-in.
 
     Removing the account in use stops Remote Control first — nothing may go
-    on running as an account its holder has just removed — and moves to the
-    first other account still signed in. With none left, nothing is in use
-    and Remote Control stays stopped until somebody signs in.
+    on running as an account its holder has just removed — and records the
+    move to the next account before anything is deleted, so a step that fails
+    leaves everything as it was. The ordinary path then starts Remote Control
+    as that account; with none signed in, it stays stopped until somebody is.
     """
     state = dict(state)
-    was_in_use = account_in_use().id == account.id
-    if was_in_use and not stop_remote_control(runner):
-        return {"state": "failed",
-                "detail": "Remote Control did not stop; nothing was removed"}, state
+    if account_in_use().id == account.id:
+        if not stop_remote_control(runner):
+            return {"state": "failed",
+                    "detail": "Remote Control did not stop; nothing was removed"}, state
+        if not use_account(_next_account(account, runner, now)):
+            # Still recorded as the account in use, and still signed in: the
+            # ordinary path starts Remote Control again as it.
+            return {"state": "failed",
+                    "detail": "could not record the switch; nothing was removed"}, state
+        state = _moved_on(state)
     path = find_claude()
     if path and account_facts(account)["present"]:
         # Claude Code's own sign-out, for whatever it does beyond this machine.
         # Best effort: the deletion below is what this slot relies on.
         _run(account_runner(account, runner), [path, "auth", "logout"], timeout=30.0)
     if not remove_sign_in(account):
-        if was_in_use:
-            start_remote_control(runner)    # still signed in, so still of use
         return {"state": "failed", "detail": "could not remove that account"}, state
-    if was_in_use:
-        after = next((slot_account(i) for i in SLOT_ACCOUNT_IDS
-                      if i != account.id and _usable(account_facts(slot_account(i)), now)),
-                     slot_account("1"))
-        use_account(after)
-        # Started again below, by the ordinary path, once it reads as signed in.
-        state = _moved_on(state)
     return {"state": "done", "detail": ""}, state
 
 
