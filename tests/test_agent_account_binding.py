@@ -180,6 +180,24 @@ def test_a_slot_nobody_has_signed_into_is_bound_to_nobody(home):
     assert "bound_fp" not in state(home)
 
 
+def test_an_account_block_with_no_credential_binds_nobody(home):
+    """~/.claude.json can name an account whose sign-in is long gone. Only a
+    credential says the slot was signed in as it."""
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": {"accountUuid": MINE}}))
+    agent.slot_facts({}, Slot(home), now=NOW)
+    assert "bound_fp" not in state(home)
+
+
+def test_a_slot_asked_to_sign_in_on_its_first_run_is_already_held_to_its_account(home):
+    """Signed in before slots kept their account, and asked to sign in again on
+    the very first run of this agent: that sign-in is already held to it."""
+    signed_in_as(home, MINE)
+    fake = Slot(home)
+    agent.slot_facts({"login": {"requested_at": 5.0}}, fake, now=NOW)
+    [command] = fake.started()
+    assert f"{agent.CONFIG_DIR_VAR}={scratch(home)}" in command
+
+
 def test_the_first_sign_in_goes_straight_in_and_binds(home):
     fake = Slot(home, signs_in_as=MINE)
     said = sign_in(fake)
@@ -258,6 +276,14 @@ def test_the_scratch_is_private_and_past_its_one_prompt(home):
     seeded = scratch(home) / ".claude.json"
     assert json.loads(seeded.read_text()) == {"hasCompletedOnboarding": True}
     assert stat.S_IMODE(seeded.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("whose", [MINE, THEIRS])
+def test_adopting_or_refusing_leaves_no_scratch_behind(home, whose):
+    signed_in_as(home, MINE)
+    write_account(scratch(home), scratch(home) / ".claude.json", whose, "sk-ant-oat01-NEW")
+    agent.adopt_sign_in(fp_of(MINE), Slot(home))
+    assert not scratch(home).exists()
 
 
 def test_a_leftover_scratch_is_cleared_when_nothing_is_signing_in(home):
