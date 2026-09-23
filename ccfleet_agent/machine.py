@@ -531,6 +531,10 @@ def converge_name(name: str, cfg: MachineConfig, system: System) -> bool:
     if current != name:
         _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id, current]))
         if not system.set_hostname(name):
+            # Not taken: back to what the machine answers to now, so the name
+            # it could not take — somebody's — is not left in a file every slot
+            # can read. The next run tries again.
+            _ensure_file(system.hosts_path, hosts_with(text, [current, cfg.node_id]))
             log.error("could not take its slot's name: hostnamectl failed")
             return False
         renamed = True

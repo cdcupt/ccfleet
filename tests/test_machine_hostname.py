@@ -135,14 +135,32 @@ def test_the_last_holders_name_is_not_left_behind(cfg, tmp_path):
     assert "127.0.1.1\tbob-1 pool-1" in host.hosts.read_text().splitlines()
 
 
-def test_while_a_rename_fails_the_running_name_still_resolves(cfg, tmp_path):
-    """So sudo never meets a hostname /etc/hosts does not know."""
+def test_a_rename_that_failed_leaves_the_name_it_still_answers_to_and_no_other(cfg, tmp_path):
+    """sudo still resolves the name the machine goes by, and the name it could
+    not take — somebody's — is not left in a file every slot can read."""
     host = Host(tmp_path, hostname="bob-1", hostnamectl_works=False,
                 desired={"hostname": "alice-2", "slots": []})
     cycle(cfg, host)
     assert host.name == "bob-1"
-    assert "127.0.1.1\talice-2 pool-1 bob-1" in host.hosts.read_text().splitlines()
+    ours = [ln.split() for ln in host.hosts.read_text().splitlines()
+            if ln.split()[:1] == ["127.0.1.1"]]
+    assert ours == [["127.0.1.1", "bob-1", "pool-1"]]
+    assert "alice-2" not in host.hosts.read_text()
     assert not (host.cloud / "99-ccfleet.cfg").exists()
+
+
+def test_while_renaming_the_running_name_resolves(cfg, tmp_path):
+    """At the moment hostnamectl runs, /etc/hosts already names both."""
+    host = Host(tmp_path, hostname="bob-1", desired={"hostname": "alice-2", "slots": []})
+    seen = []
+    real = host.set_hostname
+
+    def checking(name):
+        seen.append(host.hosts.read_text())
+        return real(name)
+    host.set_hostname = checking
+    cycle(cfg, host)
+    assert "127.0.1.1\talice-2 pool-1 bob-1" in seen[0].splitlines()
 
 
 def test_the_machine_reports_the_name_it_answers_to(cfg, tmp_path):
