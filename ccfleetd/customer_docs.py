@@ -261,8 +261,9 @@ def how_it_works(cfg: Config) -> str:
         "session that is running is never interrupted; the new version is used from the "
         "next one.</li>"
         "<li><strong>Security updates</strong> for the machine install every day.</li>"
-        "<li><strong>Reboots</strong> happen in a monthly quiet window, when an update needs "
-        "one. Your slot and its services come back by themselves.</li></ul></div>"
+        "<li><strong>Reboots</strong>: when an update needs one, the machine says so and the "
+        "operator reboots it at a quiet time. Your slot and its services come back by "
+        "themselves.</li></ul></div>"
         '<div class="card"><h2>Giving a slot back</h2>'
         "<p>When you give a slot back, the machine stops everything running in it and deletes "
         "your Linux account and every file in it. The slot is offered to anybody else only "
