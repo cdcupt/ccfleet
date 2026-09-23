@@ -200,6 +200,10 @@ def test_the_tunnel_still_reaches_the_console(split):
 
 def test_the_console_door_offers_google_not_a_password_prompt(split):
     _, browser, _ = split
+    # Anybody at the root of the console's own hostname is sent to its door,
+    # never to the product's pages, which do not exist here.
+    root = browser(ADMIN).call("GET", "/")
+    assert root.status == 303 and root.getheader("Location") == "/admin"
     door = browser(ADMIN).call("GET", "/admin")
     assert door.status == 401
     assert door.getheader("WWW-Authenticate") is None, "the browser would ask for a password"
