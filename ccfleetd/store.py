@@ -285,6 +285,13 @@ def validate_node_id(node_id: str) -> str:
     return node_id
 
 
+def validate_slot_id(slot_id: str) -> str:
+    if not isinstance(slot_id, str) or not SLOT_ID_RE.match(slot_id):
+        raise StoreError("slot id must be 2-64 chars of lowercase letters, "
+                         "digits and hyphens, starting with a letter or digit")
+    return slot_id
+
+
 def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -869,6 +876,50 @@ class Store:
             if cur.rowcount == 0:
                 raise StoreError(f"unknown node {node_id!r}")
 
+    # Every column that holds a node's id. A rename moves these and nothing
+    # else, so the schema test that guards this list fails on any column added
+    # later that names a node until it is listed here. `logins.node_id` is the
+    # node's own sign-in row; a slot's shares the column as "slot:<id>", which
+    # no node id can equal (a node id has no colon), so moving one never
+    # touches the other.
+    NODE_ID_COLUMNS = (("nodes", "id"), ("slots", "node_id"), ("heartbeats", "node_id"),
+                       ("alerts", "node_id"), ("logins", "node_id"))
+
+    def rename_node(self, old: str, new: str) -> None:
+        """Give a node — an owner's node or a shared machine — a new id.
+
+        Everything that names it moves in one transaction: its slots, its
+        history, its alerts and its own sign-in row. The token hash stays with
+        the row, so the box keeps its token and only its CCFLEET_NODE_ID has to
+        change. Until the box says the new id its heartbeats are refused — the
+        body must name the node the token belongs to — and a refused heartbeat
+        changes nothing on a machine, so the gap costs a report or two.
+
+        The new id must be free. What a removed node left behind under it — a
+        sign-in row, which can hold a minted token, or history and alerts from
+        a hand-edited database — belongs to no node, and is dropped rather than
+        adopted. Slots are the exception: they are somebody's, so one still
+        naming the new id stops the rename instead of moving onto a machine
+        that is not the one it was sold on.
+        """
+        validate_node_id(new)
+        with self._write_txn() as conn:
+            if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (old,)).fetchone() is None:
+                raise StoreError(f"unknown node {old!r}")
+            if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (new,)).fetchone() is not None:
+                raise StoreError(f"a node called {new!r} already exists")
+            stray = [r["id"] for r in conn.execute(
+                "SELECT id FROM slots WHERE node_id = ? ORDER BY id", (new,))]
+            if stray:
+                raise StoreError(
+                    f"slots still name {new!r} though no node by that name exists "
+                    f"({', '.join(stray)}); they are somebody's, so settle them first")
+            for table in ("logins", "heartbeats", "alerts"):
+                conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
+            for table, column in self.NODE_ID_COLUMNS:
+                conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
+                             (new, old))
+
     def get_node(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
             row = self._conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
@@ -1227,9 +1278,7 @@ class Store:
     def add_slot(self, slot_id: str, node_id: str, unix_user: str, *,
                  now: float) -> dict[str, Any]:
         """Declare a slot on a machine. It starts free, holding nobody."""
-        if not SLOT_ID_RE.match(slot_id or ""):
-            raise StoreError("slot id must be 2-64 chars of lowercase letters, "
-                             "digits and hyphens, starting with a letter or digit")
+        validate_slot_id(slot_id)
         if not UNIX_USER_RE.match(unix_user or ""):
             raise StoreError("unix user must be a valid Linux login name")
         validate_node_id(node_id)
@@ -1284,6 +1333,37 @@ class Store:
             # would read as a safeguard while being unreachable, which is
             # worse than not having one.
             conn.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
+
+    # Every column that holds a slot's id, beside its sign-in row, which
+    # `logins` keeps under "slot:<id>" and which moves with it. Guarded by the
+    # same schema test as NODE_ID_COLUMNS.
+    SLOT_ID_COLUMNS = (("slots", "id"), ("account_intents", "slot_id"))
+
+    def rename_slot(self, old: str, new: str) -> None:
+        """Give a slot a new id, in any state — held and in use included.
+
+        The machine never hears a slot's id: it knows each slot by its Linux
+        user and each claim by its time, so there is nothing to do on the box.
+        The holder, state, claim, sign-in and request about accounts all move
+        with it, in one transaction.
+
+        A sign-in or request still filed under the new id belongs to no slot —
+        releasing clears both — and is dropped rather than adopted: a sign-in
+        row can hold somebody's minted token.
+        """
+        validate_slot_id(new)
+        with self._write_txn() as conn:
+            if conn.execute("SELECT 1 FROM slots WHERE id = ?", (old,)).fetchone() is None:
+                raise StoreError(f"no slot {old!r}")
+            if conn.execute("SELECT 1 FROM slots WHERE id = ?", (new,)).fetchone() is not None:
+                raise StoreError(f"a slot called {new!r} already exists")
+            conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(new),))
+            conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (new,))
+            for table, column in self.SLOT_ID_COLUMNS:
+                conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
+                             (new, old))
+            conn.execute("UPDATE logins SET node_id = ? WHERE node_id = ?",
+                         (slot_login_key(new), slot_login_key(old)))
 
     def get_slot(self, slot_id: str) -> dict[str, Any] | None:
         with self._lock:

@@ -45,6 +45,10 @@ def _parser() -> argparse.ArgumentParser:
     node.add_parser("list", help="list nodes")
     for name in ("remove", "rotate-token", "enable", "disable"):
         node.add_parser(name).add_argument("node_id")
+    node_rename = node.add_parser(
+        "rename", help="give a node a new id; its token, slots and history come along")
+    node_rename.add_argument("node_id")
+    node_rename.add_argument("new_id")
     pin = node.add_parser("pin", help="set the pinned Claude Code version")
     pin.add_argument("node_id")
     pin.add_argument("version")
@@ -74,6 +78,10 @@ def _parser() -> argparse.ArgumentParser:
     slot_rm = slot.add_parser(
         "remove", help="take a free slot off a machine (release it first)")
     slot_rm.add_argument("slot_id")
+    slot_rename = slot.add_parser(
+        "rename", help="give a slot a new id, in any state; the machine never sees it")
+    slot_rename.add_argument("slot_id")
+    slot_rename.add_argument("new_id")
     cap = slot.add_parser("capacity", help="how many slots a machine may hold")
     cap.add_argument("machine")
     cap.add_argument("count", type=int)
@@ -184,6 +192,11 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     elif args.slot_command == "remove":
         store.remove_slot(args.slot_id)
         print(f"{args.slot_id} is no longer declared on this fleet")
+    elif args.slot_command == "rename":
+        store.rename_slot(args.slot_id, args.new_id)
+        print(f"renamed {args.slot_id} to {args.new_id}; its holder, state, sign-in and "
+              f"requests came along. The machine knows its slots by their Linux user, "
+              f"so nothing changes there.")
     elif args.slot_command == "capacity":
         if not store.set_machine_capacity(args.machine, args.count):
             print(f"error: no such machine {args.machine!r}", file=sys.stderr)
@@ -322,6 +335,18 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     elif args.node_command == "remove":
         store.remove_node(args.node_id)
         print(f"removed {args.node_id}")
+    elif args.node_command == "rename":
+        store.rename_node(args.node_id, args.new_id)
+        print(f"renamed {args.node_id} to {args.new_id}: its slots, history, alerts and "
+              f"sign-in came along, and its token is unchanged.")
+        # Said now, because until it is done the box is refused: its heartbeat
+        # names the node its token belongs to, and that name just changed.
+        print("Its heartbeats are refused until the box says the new name. On it, set\n")
+        print(f"  CCFLEET_NODE_ID={args.new_id}\n")
+        print("in /etc/ccfleet/agent.env on a shared machine, or ~/.config/ccfleet/agent.env "
+              "on an owner's node,")
+        print("then rename the host itself: docs/runbooks.md, 'Rename a machine'. Its slots "
+              "keep their ids; 'ccfleetd slot rename' renames them.")
     elif args.node_command == "rotate-token":
         _print_token(args.node_id, store.rotate_token(args.node_id), cfg)
     elif args.node_command == "enable":
