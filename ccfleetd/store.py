@@ -609,9 +609,15 @@ class Store:
                          "updated_at = ? WHERE slot_id = ?", (detail, now, slot_id))
 
     def expire_account_intents(self, older_than: float) -> int:
-        """Drop requests the machine never answered, and failures long since read."""
+        """Drop requests made before `older_than`, answered or not.
+
+        Counted from the request, never from its last change: a failure written
+        late in the window must not buy the row a second one. The privacy page
+        promises a request is kept for at most the window, and this is the
+        clock that promise is about.
+        """
         with self._write_txn() as conn:
-            return conn.execute("DELETE FROM account_intents WHERE updated_at < ?",
+            return conn.execute("DELETE FROM account_intents WHERE requested_at < ?",
                                 (older_than,)).rowcount
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:

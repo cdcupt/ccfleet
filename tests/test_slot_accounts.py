@@ -513,12 +513,16 @@ def test_a_request_nobody_finished_expires_with_the_sign_ins(store):
     assert store.get_account_intent("s1") is None
 
 
-def test_a_failure_is_said_for_a_while_and_then_goes(store):
+def test_a_late_failure_does_not_keep_the_request_past_its_window(store):
+    """The window runs from the request, not from its last change: the
+    privacy page promises a request is kept for at most that long, and a
+    failure written near the end of it must not start the clock again."""
     held(store)
     store.request_account_action("s1", "use", "2", NOW, held_by="a1")
-    store.record_account_progress("s1", {"state": "failed", "requested_at": NOW}, NOW + 600)
-    assert store.expire_account_intents(NOW + 599) == 0
-    assert store.expire_account_intents(NOW + 601) == 1
+    store.record_account_progress("s1", {"state": "failed", "requested_at": NOW},
+                                  NOW + LOGIN_MAX_AGE_S - 1)
+    assert store.expire_account_intents(NOW) == 0, "gone before its window closed"
+    assert store.expire_account_intents(NOW + 1) == 1, "a late failure bought a second window"
     assert store.get_account_intent("s1") is None
 
 
