@@ -82,6 +82,13 @@ MACHINE_SLOT = "machine"
 OWNER_SLOT = "owner"
 SLOT_KINDS: tuple[str, ...] = (MACHINE_SLOT, OWNER_SLOT)
 
+#: One machine is one slot (Erik, 2026-09-23). Enforced where the operator
+#: declares slots — the command line and the console — so the store keeps
+#: the general shape, and said in the operator's refusal in these words.
+MAX_SLOTS_PER_MACHINE = 1
+ONE_SLOT_WHY = ("one machine is one slot: claude.ai/code shows a machine by its "
+                "hostname, so a second slot on it would share its holder's name there")
+
 #: How long provisioning may take before the claim is given up. Creating the
 #: account is seconds; installing Claude Code downloads a release, which is a
 #: few minutes on a slow link. Past this the machine is down or stuck, and the
