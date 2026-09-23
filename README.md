@@ -21,8 +21,6 @@ they control, with someone keeping an eye on the whole fleet. It gives you:
 - **A fleet server** with a dashboard and Telegram alerts: missing heartbeat,
   Claude Code missing or drifted from the pinned version, login missing, stale
   or expired, disk high, egress IP changed, Remote Control service down.
-- **Profiles** (`ccp`) so one laptop can hold several accounts, each in its own
-  `CLAUDE_CONFIG_DIR`, switched explicitly and never pooled.
 
 What it deliberately does **not** do: proxy model traffic, store anyone's
 credentials, substitute a credential, alter the client's identity, pool or share accounts, or
@@ -102,15 +100,12 @@ Nobody else can do that step: a subscription login must complete through
 Anthropic's own flow. After it, they work from a terminal (`ssh` lands them in a
 live session) or from claude.ai/code and the phone app with nothing installed.
 
-### 3. Laptop (optional): several accounts, explicit switching
+### 3. Laptop (optional): one Claude account per computer
 
-```bash
-install -m 755 profiles/ccp ~/.local/bin/ccp
-ccp add personal && ccp use personal          # /login once per profile
-ccp add work --share && ccp list
-```
+A computer uses one Claude account, connected with that account's token through
+`ccfleet-connect`; several accounts means several slots, one for each.
 
-With a device token instead of a login (inference only, so no Remote Control),
+With a device token (inference only, so no Remote Control),
 `ccfleet-connect` wires a computer to one Claude account: the one on your slot,
 which you can use from as many of your own computers as you like. A computer
 holds one account; connecting it again with another token replaces the one it
@@ -217,7 +212,6 @@ Adding another machine is the runbook [Add a shared machine](docs/runbooks.md).
 | `ccfleet_agent/agent.py` | single-file heartbeat agent for nodes |
 | `ccfleet_agent/machine.py` | the shared machine's agent: runs as root, adds and wipes slot users, reports every slot |
 | `node/` | bootstrap, owner setup, backup, egress probe, staged upgrade, systemd user units; `machine-setup.sh`, `slot-add.sh`, `slot-remove.sh` for shared machines |
-| `profiles/ccp` | per-account profile switcher for laptops |
 | `gateway/` | optional pass-through gateway (Caddy), for owners who must keep files local |
 | `docs/tunnel.md` | reporting over an SSH tunnel when the server has no public endpoint |
 | `deploy/` | Dockerfile, compose, systemd unit, Caddy TLS example, CI workflow |
@@ -246,7 +240,7 @@ Each transition is logged and, when configured, sent to Telegram.
 ```bash
 uv run --python 3.12 --with pytest --with pytest-cov --with ruff --no-project -- ruff check .
 uv run --python 3.12 --with pytest --with pytest-cov --no-project -- pytest --cov
-uvx --from shellcheck-py shellcheck -S warning node/*.sh node/attach.sh profiles/ccp
+uvx --from shellcheck-py shellcheck -S warning node/*.sh node/attach.sh
 ```
 
 Python 3.9+, no runtime dependencies. CI runs on every push and pull request

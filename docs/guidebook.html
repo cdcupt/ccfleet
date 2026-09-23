@@ -140,7 +140,7 @@ html{scroll-behavior:smooth}
     <li><a href="#before"><span class="n">02</span>Before you start</a></li>
     <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
     <li><a href="#node"><span class="n">04</span>A node per owner</a></li>
-    <li><a href="#laptop"><span class="n">05</span>Laptop profiles</a></li>
+    <li><a href="#laptop"><span class="n">05</span>One account per computer</a></li>
     <li><a href="#accounts"><span class="n">06</span>Daily use &amp; accounts</a></li>
     <li><a href="#ops"><span class="n">07</span>Operations</a></li>
     <li><a href="#gateway"><span class="n">08</span>Optional gateway</a></li>
@@ -293,7 +293,6 @@ claude            # logging in already attached you to the persistent session</c
         <li><strong>Node upkeep</strong>: staged upgrades and backups that exclude credentials.</li>
         <li><strong>Agent</strong>: one Python file, standard library only, systemd timer every five minutes.</li>
         <li><strong>Fleet server</strong>: dashboard, JSON API, alert rules, Telegram, node token management.</li>
-        <li><strong><code>ccp</code></strong>: several accounts on one laptop, each in its own profile, switched by hand.</li>
       </ul>
     </div>
     <div>
@@ -533,17 +532,8 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 </section>
 
 <section id="laptop">
-  <h2><span class="n">05</span>Laptop profiles with ccp</h2>
-  <p>If you hold more than one account, keep each in its own Claude Code profile and switch explicitly. A profile is a separate <code>CLAUDE_CONFIG_DIR</code>: its own login, settings and history. Nothing is pooled and no session ever hops between accounts.</p>
-  <pre><code>install -m 755 profiles/ccp ~/.local/bin/ccp
-ccp add personal            <span class="c"># empty profile</span>
-ccp add work --share        <span class="c"># links your existing skills, agents, commands, settings.json and CLAUDE.md</span>
-ccp use personal            <span class="c"># runs claude under that profile; /login once</span>
-ccp list</code></pre>
-  <pre><code>PROFILE              ACCOUNT                      LOGIN      DIR
-personal             e***@example.com             keychain?  /Users/alice/.claude-profiles/personal
-work                 e***@example.org             keychain?  /Users/alice/.claude-profiles/work</code></pre>
-  <p>On macOS the login lives in the Keychain (per profile), so <code>ccp list</code> can only say "keychain?"; on Linux it reports whether the credentials file exists. <code>ccp env work</code> prints an export line for scripts that need the variable set in the current shell.</p>
+  <h2><span class="n">05</span>One account per computer</h2>
+  <p>A computer uses one Claude account, connected with that account's token through <code>ccfleet-connect</code>; several accounts means several slots, one for each.</p>
 </section>
 
 <section id="daily">
@@ -749,7 +739,6 @@ claude
       <tr><td>node</td><td><code>ccfleet-upgrade-claude [version]</code></td><td>Staged upgrade via the official installer</td></tr>
       <tr><td>node</td><td><code>exitip</code></td><td>Print the public egress IP</td></tr>
       <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use an account on this device with no login. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--status</code>, <code>--remove</code></td></tr>
-      <tr><td>laptop</td><td><code>ccp add|use|list|env|path|rm</code></td><td>Per-account profiles</td></tr>
     </tbody>
   </table></div>
 
@@ -764,7 +753,7 @@ claude
       <tr><td><code>~/backups/ccfleet/</code></td><td>node</td><td>Nightly archives</td></tr>
       <tr><td><code>deploy/ccfleetd.env</code></td><td>server</td><td>Server settings, mode 0600</td></tr>
       <tr><td><code>/data/ccfleet.db</code> (Docker) or <code>data/ccfleet.db</code></td><td>server</td><td>SQLite database</td></tr>
-      <tr><td><code>~/.claude-profiles/&lt;name&gt;/</code></td><td>laptop</td><td>One profile per account</td></tr>
+      <tr><td><code>~/.config/ccfleet/token</code></td><td>any device</td><td>The one account's device token, from <code>ccfleet-connect</code>, mode 0600</td></tr>
     </tbody>
   </table></div>
 </section>

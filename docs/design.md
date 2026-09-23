@@ -17,7 +17,6 @@ and switch by hand, but only one is ever in use, and nothing switches by itself.
 flowchart LR
   subgraph laptop [Owner's devices]
     T[terminal / VS Code / phone]
-    P[ccp profiles<br/>one CLAUDE_CONFIG_DIR per account]
   end
   subgraph node [Node, one per owner]
     C[unmodified claude<br/>own /login]
