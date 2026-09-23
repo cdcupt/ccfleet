@@ -126,6 +126,17 @@ def test_the_landing_page_signs_in_with_google_only_where_that_works():
     assert "/auth/google/start" not in unset
 
 
+def test_the_landing_page_offers_somebody_signed_in_their_slots():
+    """Not a sign-in they have already done."""
+    viewer = usersite.Viewer({"id": "u1", "email": "erik@example.com", "role": "user"},
+                             "t" * 64)
+    shown = customer_docs.page_for("/docs")(Config(), viewer=viewer)
+    hero = shown[shown.index('<div class="cta-row">'):]
+    hero = hero[:hero.index("</div>")]
+    assert 'href="/account">Your slots</a>' in hero
+    assert "Sign in with Google" not in shown and "Already have a slot?" not in shown
+
+
 def test_signing_in_comes_before_buying():
     """The operator can only switch on an account that exists, and an account
     exists once its owner has signed in."""

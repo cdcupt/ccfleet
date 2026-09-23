@@ -331,6 +331,7 @@ box-shadow:inset 0 0 0 1px var(--rule-soft)}
 @media (max-width:820px){.usage-row{grid-template-columns:1fr;gap:10px}
 .strip{max-width:none}h1{font-size:25px}.page{padding-block:20px 36px}
 .topbar-in{padding:10px 16px}}
+@media (max-width:420px){.strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
 """
 
 

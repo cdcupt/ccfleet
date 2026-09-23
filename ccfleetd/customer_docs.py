@@ -194,8 +194,18 @@ def _demo() -> str:
 
 def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     # Straight into Google's sign-in when it is set up; otherwise the page that
-    # says it is not, rather than a button that goes nowhere.
-    sign_in = "/auth/google/start?next=/account" if cfg.google_ready else "/account"
+    # says it is not, rather than a button that goes nowhere. Somebody already
+    # signed in is offered their slots instead of a sign-in they have done.
+    how = '<a class="btn big" href="/docs/how-it-works">How it works</a>'
+    if viewer is not None:
+        way_in = ('<div class="cta-row"><a class="btn primary big" href="/account">'
+                  f"Your slots</a>{how}</div>")
+    else:
+        sign_in = "/auth/google/start?next=/account" if cfg.google_ready else "/account"
+        way_in = (f'<div class="cta-row"><a class="btn primary big" href="{sign_in}">Sign in '
+                  f"with Google</a>{how}</div>"
+                  '<p class="muted small">Already have a slot? '
+                  '<a href="/account">Go to your slots</a>.</p>')
     body = (
         '<section class="hero"><div class="hero-copy">'
         '<p class="eyebrow">Bring your own Claude plan</p>'
@@ -205,10 +215,7 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "account. Your slot is a whole machine, named after you. Open claude.ai/code or the "
         "Claude app on any device, pick it by that name, and Claude works there, on your "
         "files and with your tools, while your laptop is closed.</p>"
-        f'<div class="cta-row"><a class="btn primary big" href="{sign_in}">Sign in with '
-        'Google</a><a class="btn big" href="/docs/how-it-works">How it works</a></div>'
-        '<p class="muted small">Already have a slot? <a href="/account">Go to your slots</a>.'
-        "</p></div>" + _demo() + "</section>"
+        + way_in + "</div>" + _demo() + "</section>"
         '<section class="band"><h2>What you get</h2>'
         '<p class="band-lead">For anybody with a Claude plan that includes Claude Code who '
         "wants it running somewhere that stays on.</p>"
