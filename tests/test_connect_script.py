@@ -441,25 +441,24 @@ def test_with_no_terminal_it_explains_instead_of_taking_over(home, tmp_path):
     assert 'exec "$SHELL"' in result.stdout
 
 
-# -- several accounts: tokens saved under names ----------------------------------------
+# -- one computer, one Claude account -------------------------------------------------
 
 WORK = "sk-ant-oat01-" + "W" * 80
 PERSONAL = "sk-ant-oat01-PRO" + "P" * 77
 REVOKED = "sk-ant-oat01-REVOKED" + "R" * 70
 ALL_TOKENS = (GOOD_TOKEN, WORK, PERSONAL, REVOKED)
 
-# A claude that judges each token on its own: one containing REVOKED is refused,
-# one containing PRO is on the Pro plan, and the rest are on Max.
+# A claude that judges each token on its own: one containing REVOKED is refused.
 PER_TOKEN = """#!/bin/sh
 case "$CLAUDE_CODE_OAUTH_TOKEN" in
   *REVOKED*) printf '{"loggedIn": false}\\n' ;;
-  *PRO*) printf '{"loggedIn": true, "authMethod": "oauth_token", "subscriptionType": "pro"}\\n' ;;
-  *) printf '{"loggedIn": true, "authMethod": "oauth_token", "subscriptionType": "max"}\\n' ;;
+  *) printf '{"loggedIn": true, "authMethod": "oauth_token"}\\n' ;;
 esac
 """
 
 
 def tokens_dir(home):
+    """Where the version that kept several accounts saved them under names."""
     return home / ".config" / "ccfleet" / "tokens"
 
 
@@ -467,292 +466,235 @@ def mode(path):
     return stat.S_IMODE(path.stat().st_mode)
 
 
-def add(home, tmp_path, name, token, **kw):
-    kw.setdefault("claude_script", PER_TOKEN)
-    return run(home, tmp_path, "--add", name, stdin=token + "\n", **kw)
-
-
 def in_use(home):
     return token_path(home).read_text().strip()
 
 
-def list_rows(stdout):
-    """--list's rows by name. A row is '  * name  verdict' for the token in
-    use and '    name  verdict' for the rest; notes start with a word."""
-    rows = {}
-    for line in stdout.splitlines():
-        if len(line) > 4 and line[:2] == "  " and line[2] in "* " and line[3] == " ":
-            rows[line[4:].split()[0]] = line
-    return rows
+def private(path, text):
+    path.write_text(text)
+    path.chmod(0o600)
 
 
-def test_add_saves_the_token_under_its_name_and_puts_it_in_use(home, tmp_path):
-    result = add(home, tmp_path, "work", WORK)
+def legacy_device(home, *, in_use_token=PERSONAL,
+                  saved=(("default", GOOD_TOKEN), ("work", WORK), ("personal", PERSONAL)),
+                  interrupted=True):
+    """A computer set up by the version that saved a token per account: a 0700
+    tokens directory, a 0600 file per name, and the one in use copied over the
+    token file. `interrupted` adds the temp file a write cut short left behind."""
+    tokens_dir(home).mkdir()
+    tokens_dir(home).chmod(0o700)
+    for name, token in saved:
+        private(tokens_dir(home) / name, token + "\n")
+    if interrupted:
+        private(tokens_dir(home) / ".ccfleet-token.abc123", WORK + "\n")
+    if in_use_token is not None:
+        private(token_path(home), in_use_token + "\n")
+
+
+def leaked(result):
+    blob = result.stdout + result.stderr
+    return [t for t in ALL_TOKENS if t in blob]
+
+
+def snapshot(home):
+    """Everything a refused command must leave exactly as it was."""
+    files = {}
+    for path in [token_path(home), *sorted(tokens_dir(home).glob("*")),
+                 *sorted(tokens_dir(home).glob(".*"))]:
+        if path.exists():
+            files[path.name] = (path.read_text(), mode(path), path.stat().st_ino)
+    return files, (home / ".zshrc").read_text()
+
+
+@pytest.mark.parametrize("args", [["--add", "work"], ["--use", "work"], ["--list"], ["-l"],
+                                  ["--no-exec", "--use", "work"], ["--add", "work", "--stdin"]])
+def test_switching_between_accounts_is_refused_and_changes_nothing(home, tmp_path, args):
+    """A computer uses one Claude account. What used to keep several and switch
+    between them says so, and says what to do instead, before touching a thing:
+    not even the saved tokens it would otherwise retire."""
+    legacy_device(home)
+    before = snapshot(home)
+    result = run(home, tmp_path, *args, stdin=WORK + "\n", claude_script=PER_TOKEN)
+    assert result.returncode != 0
+    assert "one Claude account" in result.stderr
+    assert "replaces the one in use" in result.stderr, "and it says what to do instead"
+    assert snapshot(home) == before
+    assert not leaked(result)
+
+
+def test_remove_with_a_name_is_refused_and_changes_nothing(home, tmp_path):
+    legacy_device(home)
+    before = snapshot(home)
+    result = run(home, tmp_path, "--remove", "work")
+    assert result.returncode != 0
+    assert "takes no name" in result.stderr and "one Claude account" in result.stderr
+    assert snapshot(home) == before
+    assert not leaked(result)
+
+
+def test_saved_tokens_are_retired_keeping_the_one_in_use(home, tmp_path):
+    """The first run of this version on a computer that kept several accounts:
+    the token in use stays exactly as it was, and the others go."""
+    legacy_device(home)                     # personal is in use
+    kept = token_path(home)
+    ino = kept.stat().st_ino
+    result = run(home, tmp_path, "--status", claude_script=PER_TOKEN)
     assert result.returncode == 0, result.stderr
-    saved = tokens_dir(home) / "work"
-    assert saved.read_text().strip() == WORK
-    assert in_use(home) == WORK
-    assert mode(tokens_dir(home)) == 0o700
-    assert mode(saved) == 0o600 and mode(token_path(home)) == 0o600
-    rc = (home / ".zshrc").read_text()
-    assert rc.count(">>> ccfleet connect >>>") == 1 and WORK not in rc
-    assert WORK not in result.stdout + result.stderr
+    assert in_use(home) == PERSONAL
+    assert mode(kept) == 0o600 and kept.stat().st_ino == ino, "not rewritten, not widened"
+    assert not tokens_dir(home).exists(), "the saved tokens are gone, temp file and all"
+    # default and work were other accounts; personal was the one in use, and the
+    # interrupted write was a copy, not an account.
+    assert "removed 2 other saved token(s)" in result.stdout
+    assert "one Claude account" in result.stdout and "Revoke them" in result.stdout
+    assert not leaked(result)
 
 
-def test_add_reads_the_token_from_stdin_with_or_without_the_flag(home, tmp_path):
-    flagged = run(home, tmp_path, "--add", "work", "--stdin", stdin=WORK + "\n",
-                  claude_script=PER_TOKEN)
-    assert flagged.returncode == 0, flagged.stderr
-    assert add(home, tmp_path, "personal", PERSONAL).returncode == 0
-    assert (tokens_dir(home) / "work").read_text().strip() == WORK
-    assert (tokens_dir(home) / "personal").read_text().strip() == PERSONAL
-
-
-def test_a_token_without_a_name_is_saved_as_default(home, tmp_path):
-    assert run(home, tmp_path, GOOD_TOKEN).returncode == 0
-    assert (tokens_dir(home) / "default").read_text().strip() == GOOD_TOKEN
+def test_a_computer_that_saved_only_the_token_in_use_loses_nothing_it_would_miss(home,
+                                                                                tmp_path):
+    legacy_device(home, in_use_token=GOOD_TOKEN, saved=(("default", GOOD_TOKEN),),
+                  interrupted=False)
+    result = run(home, tmp_path, "--status", claude_script=PER_TOKEN)
+    assert result.returncode == 0, result.stderr
     assert in_use(home) == GOOD_TOKEN
+    assert not tokens_dir(home).exists()
+    assert "removed" not in result.stdout, "nothing but a copy of the token in use went"
 
 
-def test_use_switches_the_device_to_another_account(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
-    assert in_use(home) == PERSONAL, "adding an account switches to it"
-    rc = home / ".zshrc"
-    # A line of theirs after the block: a switch that rewrote the rc would move
-    # the block below it.
-    rc.write_text(rc.read_text() + "# a later line of theirs\n")
-    before = rc.read_text()
+def test_with_no_token_in_use_every_saved_one_is_retired(home, tmp_path):
+    """The earlier version could leave a computer with saved tokens and none in
+    use. There is no account to keep, so none is kept."""
+    legacy_device(home, in_use_token=None)
+    result = run(home, tmp_path, "--status", claude_script=PER_TOKEN)
+    assert result.returncode == 0, result.stderr
+    assert not tokens_dir(home).exists() and not token_path(home).exists()
+    assert "removed 3 other saved token(s)" in result.stdout
+    assert "not connected" in result.stdout
+    assert not leaked(result)
 
-    result = run(home, tmp_path, "--use", "work", claude_script=PER_TOKEN)
+
+def test_retiring_leaves_anything_that_is_not_a_saved_token_alone(tmp_path):
+    """The directory is found next to the token file, whose place can be moved.
+    Moved into a home directory, "tokens" may be somebody's own folder: only
+    what the earlier version wrote there is removed."""
+    home = tmp_path / "home"
+    (home / ".config" / "ccfleet").mkdir(parents=True)
+    (home / ".zshrc").write_text("# the user's own line\n")
+    theirs = home / "tokens"
+    theirs.mkdir()
+    keep = {
+        "notes.txt": "my own notes\n",
+        # A capital: not a name the script used. Not "Work": on a filesystem
+        # that ignores case, that is the same file as the "work" below.
+        "Personal": PERSONAL + "\n",
+        "report": "quarterly figures\n",      # a valid name, but not a token
+        "x" * 33: WORK + "\n",                # longer than a name could be
+    }
+    for name, text in keep.items():
+        (theirs / name).write_text(text)
+    elsewhere = tmp_path / "their-token"
+    elsewhere.write_text(WORK + "\n")
+    (theirs / "link").symlink_to(elsewhere)   # never follow a link into someone's file
+    private(theirs / "work", WORK + "\n")     # this one does look like ours
+    token = home / "token"
+    private(token, PERSONAL + "\n")
+
+    env = dict(os.environ)
+    env.update({"HOME": str(home), "SHELL": "/bin/zsh", "CCFLEET_TOKEN_FILE": str(token),
+                "PATH": f"{fake_claude(tmp_path, script=PER_TOKEN)}:{env['PATH']}"})
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    result = subprocess.run([str(SCRIPT), "--status"], capture_output=True, text=True,
+                            env=env, timeout=60)
+    assert result.returncode == 0, result.stderr
+    for name, text in keep.items():
+        assert (theirs / name).read_text() == text, name
+    assert (theirs / "link").is_symlink() and elsewhere.read_text() == WORK + "\n"
+    assert not (theirs / "work").exists()
+    assert token.read_text().strip() == PERSONAL
+    assert not leaked(result)
+
+
+def test_a_refused_token_does_not_retire_anything(home, tmp_path):
+    """Connecting refuses before it writes, and retiring is a write."""
+    legacy_device(home)
+    before = snapshot(home)
+    result = run(home, tmp_path, REVOKED, claude_script=PER_TOKEN)
+    assert result.returncode != 0 and "refused" in result.stderr
+    assert snapshot(home) == before
+
+
+def test_connecting_on_a_computer_that_saved_several_keeps_only_the_new_one(home, tmp_path):
+    legacy_device(home)
+    result = run(home, tmp_path, "--no-exec", WORK, claude_script=PER_TOKEN)
+    assert result.returncode == 0, result.stderr
+    assert in_use(home) == WORK and mode(token_path(home)) == 0o600
+    assert not tokens_dir(home).exists()
+    assert "removed 2 other saved token(s)" in result.stdout
+    assert "replaces the token this computer had" in result.stdout
+    assert not leaked(result)
+
+
+def test_connecting_again_replaces_the_token_and_says_so(home, tmp_path):
+    assert run(home, tmp_path, GOOD_TOKEN, claude_script=PER_TOKEN).returncode == 0
+    result = run(home, tmp_path, WORK, claude_script=PER_TOKEN)
     assert result.returncode == 0, result.stderr
     assert in_use(home) == WORK
-    assert mode(token_path(home)) == 0o600
-    assert rc.read_text() == before, "switching must leave the rc exactly as it was"
-    assert 'exec "$SHELL"' in result.stdout, "and it says how to get it in this shell"
-    for token in ALL_TOKENS:
-        assert token not in result.stdout + result.stderr
+    assert "replaces the token this computer had" in result.stdout
+    assert not tokens_dir(home).exists(), "nothing is kept on the side to switch back to"
+    assert not leaked(result)
+    same = run(home, tmp_path, WORK, claude_script=PER_TOKEN)
+    assert "replaces the token this computer had" not in same.stdout, \
+        "the same token again replaces nothing"
 
 
-def test_a_switch_replaces_the_file_rather_than_writing_into_it(home, tmp_path):
-    """A shell starting mid-switch must read one whole token or the other. A
-    rename gives that and shows as a new inode; writing into the file in place
-    keeps the inode, and has a moment where the file holds half a token."""
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
+def test_replacing_the_token_is_a_rename_not_a_rewrite(home, tmp_path):
+    """A shell starting while the token is replaced must read one whole token or
+    the other. A rename gives that and shows as a new inode; writing into the
+    file in place keeps the inode, and has a moment where it holds half a token."""
+    run(home, tmp_path, GOOD_TOKEN, claude_script=PER_TOKEN)
     before = token_path(home).stat().st_ino
-    assert run(home, tmp_path, "--use", "work", claude_script=PER_TOKEN).returncode == 0
+    assert run(home, tmp_path, WORK, claude_script=PER_TOKEN).returncode == 0
     assert token_path(home).stat().st_ino != before
 
 
-def test_a_switch_leaves_the_file_in_use_private(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
+def test_a_widened_token_file_is_made_private_again(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN, claude_script=PER_TOKEN)
     token_path(home).chmod(0o644)           # widened by something else
-    assert run(home, tmp_path, "--use", "work", claude_script=PER_TOKEN).returncode == 0
+    assert run(home, tmp_path, WORK, claude_script=PER_TOKEN).returncode == 0
     assert mode(token_path(home)) == 0o600
 
 
-def test_a_token_that_no_longer_works_is_not_switched_to(home, tmp_path):
-    """The CLI judges a token before it goes into use, on a switch as on the
-    first connect: a revoked one leaves the device on the account it was on."""
-    add(home, tmp_path, "work", WORK)
-    old = tokens_dir(home) / "old"
-    old.write_text(REVOKED + "\n")
-    old.chmod(0o600)
-    result = run(home, tmp_path, "--use", "old", claude_script=PER_TOKEN)
-    assert result.returncode != 0
-    assert "refused" in result.stderr and "Still using 'work'" in result.stderr
-    assert in_use(home) == WORK
-
-
-def test_switching_to_a_name_never_saved_changes_nothing(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    result = run(home, tmp_path, "--use", "nope", claude_script=PER_TOKEN)
-    assert result.returncode != 0
-    assert "no token saved as 'nope'" in result.stderr
-    assert in_use(home) == WORK
-
-
-def test_a_switch_puts_back_an_rc_line_that_was_taken_out(home, tmp_path):
-    """Switching only works if new shells read the file in use."""
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
-    (home / ".zshrc").write_text("# the user's own line\n")
-    assert run(home, tmp_path, "--use", "work", claude_script=PER_TOKEN).returncode == 0
-    rc = (home / ".zshrc").read_text()
-    assert rc.count(">>> ccfleet connect >>>") == 1
-    assert "# the user's own line" in rc
-
-
-@pytest.mark.parametrize("name", ["Work", "../evil", "a/b", "-x", "a_b", "a.b", "..",
-                                  "café", "a b", "x" * 33, ""])
-def test_a_bad_name_is_refused_before_anything_happens(home, tmp_path, name):
-    """A name becomes a path. Nothing is asked for and nothing is written."""
-    result = run(home, tmp_path, "--add", name, stdin=WORK + "\n", claude_script=PER_TOKEN)
-    assert result.returncode != 0
-    assert "token name" in result.stderr
-    assert not token_path(home).exists()
-    assert not tokens_dir(home).exists()
-    assert not (home / ".config" / "evil").exists()
-    assert not (home / ".config" / "ccfleet" / "evil").exists()
-    assert "ccfleet connect" not in (home / ".zshrc").read_text()
-
-
-def test_names_at_the_edges_of_the_rule_are_fine(home, tmp_path):
-    for name in ("x" * 32, "0", "work-2"):
-        assert add(home, tmp_path, name, WORK).returncode == 0, name
-        assert (tokens_dir(home) / name).read_text().strip() == WORK
-
-
-def test_a_bad_name_is_refused_by_every_command_that_takes_one(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    for args in (["--use", "../work"], ["--remove", "../tokens/work"], ["--use", "Work"]):
-        result = run(home, tmp_path, *args, claude_script=PER_TOKEN)
-        assert result.returncode != 0 and "token name" in result.stderr, args
-    assert in_use(home) == WORK and (tokens_dir(home) / "work").exists()
-
-
-def test_list_marks_the_one_in_use_and_never_prints_a_token(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)          # in use
-    old = tokens_dir(home) / "old"
-    old.write_text(REVOKED + "\n")
-    old.chmod(0o600)
-    for env_token in (None, WORK):
-        result = run(home, tmp_path, "--list", token_env=env_token, claude_script=PER_TOKEN)
-        assert result.returncode == 0, result.stderr
-        for token in ALL_TOKENS:
-            assert token not in result.stdout + result.stderr
-    rows = list_rows(result.stdout)
-    assert set(rows) == {"work", "personal", "old"}
-    assert rows["personal"][2] == "*", "the one in use is marked"
-    assert rows["work"][2] == " " and rows["old"][2] == " "
-    assert "pro plan" in rows["personal"] and "max plan" in rows["work"]
-    assert "REFUSED" in rows["old"]
-
-
-def test_list_says_when_nothing_is_saved(home, tmp_path):
-    result = run(home, tmp_path, "--list")
-    assert result.returncode == 0
-    assert "no saved tokens" in result.stdout
-
-
-def test_status_names_the_token_in_use_and_spots_a_stale_shell(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
-    run(home, tmp_path, "--use", "work", claude_script=PER_TOKEN)
-    said = run(home, tmp_path, "--status", token_env=WORK, claude_script=PER_TOKEN)
-    assert "token name : work" in said.stdout
-    assert "in shell   : yes" in said.stdout
-    # A terminal opened before the switch still holds the other account.
-    stale = run(home, tmp_path, "--status", token_env=PERSONAL, claude_script=PER_TOKEN)
-    assert "open a new terminal" in stale.stdout
+def test_status_spots_a_shell_that_still_holds_the_older_token(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN, claude_script=PER_TOKEN)
+    run(home, tmp_path, WORK, claude_script=PER_TOKEN)
+    current = run(home, tmp_path, "--status", token_env=WORK, claude_script=PER_TOKEN)
+    assert "in shell   : yes" in current.stdout
+    stale = run(home, tmp_path, "--status", token_env=GOOD_TOKEN, claude_script=PER_TOKEN)
+    assert "older token" in stale.stdout and "open a new terminal" in stale.stdout
     assert "in shell   : yes" not in stale.stdout
-    for result in (said, stale):
-        for token in ALL_TOKENS:
-            assert token not in result.stdout + result.stderr
+    assert not leaked(current) and not leaked(stale)
 
 
-def test_removing_the_token_in_use_takes_it_out_of_use(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)          # in use
-    result = run(home, tmp_path, "--remove", "personal")
-    assert result.returncode == 0, result.stderr
-    assert not (tokens_dir(home) / "personal").exists()
-    assert not token_path(home).exists(), "a removed token must not stay in use"
-    assert (tokens_dir(home) / "work").read_text().strip() == WORK
-    assert "--use NAME" in result.stdout
-    status = run(home, tmp_path, "--status", claude_script=PER_TOKEN).stdout
-    assert "not connected" in status and "saved tokens: work." in status
-
-
-def test_removing_one_not_in_use_leaves_the_device_as_it_was(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)          # in use
-    assert run(home, tmp_path, "--remove", "work").returncode == 0
-    assert not (tokens_dir(home) / "work").exists()
-    assert in_use(home) == PERSONAL
-
-
-def test_removing_a_name_that_shares_the_token_in_use_keeps_it_in_use(home, tmp_path):
-    """The same token under two names: removing one leaves it saved, and in use."""
-    add(home, tmp_path, "a", WORK)
-    add(home, tmp_path, "b", WORK)
-    assert run(home, tmp_path, "--remove", "a").returncode == 0
-    assert in_use(home) == WORK
-
-
-def test_remove_with_no_name_undoes_everything(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
-    leftover = tokens_dir(home) / ".ccfleet-token.abc123"   # an interrupted write
-    leftover.write_text(WORK + "\n")
+def test_remove_undoes_it_all_saved_tokens_included(home, tmp_path):
+    legacy_device(home)
+    stray = token_path(home).parent / ".ccfleet-token.def456"   # an interrupted write
+    private(stray, WORK + "\n")
     result = run(home, tmp_path, "--remove")
     assert result.returncode == 0, result.stderr
-    assert not token_path(home).exists()
+    assert not token_path(home).exists() and not stray.exists()
     assert not tokens_dir(home).exists(), "saved tokens must not outlive an undo"
+    assert "removed 2 other saved token(s)" in result.stdout
     assert "ccfleet connect" not in (home / ".zshrc").read_text()
+    assert not leaked(result)
 
 
-def test_a_token_from_before_names_is_kept_as_default(home, tmp_path):
-    """A device connected by the previous version has one token and no saved
-    ones. The first run of this one keeps it as default, so switching away from
-    it cannot be how it is lost."""
-    token_path(home).write_text(GOOD_TOKEN + "\n")
-    token_path(home).chmod(0o600)
-    result = run(home, tmp_path, "--list", claude_script=PER_TOKEN)
-    assert result.returncode == 0, result.stderr
-    kept = tokens_dir(home) / "default"
-    assert kept.read_text().strip() == GOOD_TOKEN
-    assert mode(tokens_dir(home)) == 0o700 and mode(kept) == 0o600
-    assert list_rows(result.stdout)["default"][2] == "*"
-    add(home, tmp_path, "work", WORK)
-    assert run(home, tmp_path, "--use", "default", claude_script=PER_TOKEN).returncode == 0
-    assert in_use(home) == GOOD_TOKEN
+def test_nothing_makes_a_tokens_directory_any_more(home, tmp_path):
+    for args in ([GOOD_TOKEN], ["--status"], [WORK], ["--remove"], [GOOD_TOKEN]):
+        assert run(home, tmp_path, *args, claude_script=PER_TOKEN).returncode == 0, args
+        assert not tokens_dir(home).exists(), args
 
 
-def test_a_refused_token_leaves_a_device_with_an_old_token_exactly_as_it_was(home, tmp_path):
-    """Keeping the old token as default is a write. It must not happen for a
-    token that is then refused."""
-    token_path(home).write_text(GOOD_TOKEN + "\n")
-    result = add(home, tmp_path, "work", REVOKED)
-    assert result.returncode != 0
-    assert not tokens_dir(home).exists()
-    assert in_use(home) == GOOD_TOKEN
-
-
-def test_the_tokens_directory_is_made_private_even_if_it_was_not(home, tmp_path):
-    tokens_dir(home).mkdir()
-    tokens_dir(home).chmod(0o755)
-    assert add(home, tmp_path, "work", WORK).returncode == 0
-    assert mode(tokens_dir(home)) == 0o700
-
-
-def test_extra_arguments_are_refused(home, tmp_path):
-    add(home, tmp_path, "work", WORK)
-    for args in (["--use", "work", "extra"], ["--use"], ["--remove", "a", "b"]):
-        result = run(home, tmp_path, *args, claude_script=PER_TOKEN, stdin="")
-        assert result.returncode != 0 and "usage" in result.stderr, args
-    assert in_use(home) == WORK
-
-
-def test_a_token_on_the_add_command_line_is_refused_not_ignored(home, tmp_path):
-    """On a command line a credential lands in shell history and in `ps`. The
-    new commands never take one there, and say so rather than quietly reading
-    another token from stdin."""
-    result = run(home, tmp_path, "--add", "personal", PERSONAL, stdin=PERSONAL + "\n",
-                 claude_script=PER_TOKEN)
-    assert result.returncode != 0
-    assert "usage" in result.stderr
-    assert not tokens_dir(home).exists() and not token_path(home).exists()
-
-
-def test_removing_a_saved_token_leaves_an_unsaved_one_in_use_alone(home, tmp_path):
-    """The token in use need not be one of the saved ones: somebody may have put
-    it there by hand. Removing a saved token must not take out a different one."""
-    add(home, tmp_path, "work", WORK)
-    add(home, tmp_path, "personal", PERSONAL)
-    token_path(home).write_text(GOOD_TOKEN + "\n")
-    assert run(home, tmp_path, "--remove", "work").returncode == 0
-    assert in_use(home) == GOOD_TOKEN
+def test_help_says_a_computer_uses_one_account(home, tmp_path):
+    out = run(home, tmp_path, "--help").stdout
+    assert "One computer, one Claude account" in out
+    assert "--add" not in out and "--use" not in out and "--list" not in out

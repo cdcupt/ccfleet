@@ -166,17 +166,22 @@ def test_switching_accounts_is_explained_and_never_automatic():
     assert "the email address and plan of each Claude account" in render("/docs/how-it-works")
 
 
-def test_the_commands_quoted_for_several_tokens_are_ones_the_script_has():
-    """Like a button, a flag the guide names has to exist: the script's own
-    usage lines say so, and the guide and the token page quote them."""
+def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
+    """Like a button, a flag a page names has to exist: the script's own usage
+    lines say so. And a computer uses one Claude account, so no page tells
+    anybody to keep several on one and switch between them."""
     from pathlib import Path
 
     script = (Path(__file__).parents[1] / "laptop" / "ccfleet-connect.sh").read_text()
-    guide = render("/docs/guide")
-    shown = usersite.token_page({"id": "s1"}, "sk-ant-oat01-" + "x" * 20)
-    for command in ("ccfleet-connect --add NAME", "ccfleet-connect --use NAME"):
-        assert f"#   {command}" in script, f"the script has no {command!r}"
-        assert f"<code>{command}</code>" in guide and f"<code>{command}</code>" in shown
+    usage = [line for line in script.splitlines() if line.startswith("#   ccfleet-connect")]
+    pages = {"guide": render("/docs/guide"),
+             "token page": usersite.token_page({"id": "s1"}, "sk-ant-oat01-" + "x" * 20)}
+    for where, page in pages.items():
+        for flag in re.findall(r"ccfleet-connect (--[a-z-]+)", page):
+            assert any(f"ccfleet-connect {flag}" in line for line in usage), (where, flag)
+        for gone in ("--add", "--use", "--list"):
+            assert f"ccfleet-connect {gone}" not in page, (where, gone)
+        assert "one Claude account" in page, where
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
