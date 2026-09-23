@@ -1,7 +1,7 @@
 [project]
 name = "ccfleet"
 version = "0.1.0"
-description = "Own-account Claude Code fleet manager: one owner, one account at a time, one node."
+description = "Own-account Claude Code fleet manager: one owner, one account, one node."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}

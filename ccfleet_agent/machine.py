@@ -97,19 +97,11 @@ MAX_RESIDENT_S = 60 * 60
 SIGN_IN_STATES = ("claimed", "active")
 LOGIN_KINDS = ("login", "token")
 MAX_LOGIN_FIELD = 512
-# Which of a slot's accounts a sign-in goes into, and what may be done to one.
-# A switch or a removal decides what gets deleted in a slot's home, so the
-# words are the slot agent's own and nothing else is handed on.
-LOGIN_ACCOUNTS = ("new", *core.SLOT_ACCOUNT_IDS)
 # How long a child that has closed its output gets to exit before it is killed.
 EXIT_GRACE_S = 5.0
 # Only these reach the server from a slot's own report. Everything else in the
 # entry — presence, provisioning, wipes — is root's own knowledge.
 SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "upgrade")
-# The one fact that is a list: the holder's accounts, one entry each at most.
-SLOT_ACCOUNTS_KEY = "accounts"
-# News once, like a sign-in's progress: carried up, never kept for a fast poll.
-SLOT_NEWS_KEYS = ("login", "account_switch")
 # The states in which a slot's Linux user exists and belongs to somebody: the
 # only ones whose Claude Code follows the machine's pin. A claiming slot is
 # still being made, and a releasing one is about to be deleted.
@@ -262,13 +254,9 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
         seen.add(user)
         item: dict[str, Any] = {"unix_user": user, "state": state,
                                 "claimed_at": claimed_at if state == "claiming" else None}
-        if state in SIGN_IN_STATES:
-            login = _login_request(entry.get("login"))
-            if login is not None:
-                item["login"] = login
-            intent = _account_request(entry.get("account"))
-            if intent is not None:
-                item["account"] = intent
+        login = _login_request(entry.get("login")) if state in SIGN_IN_STATES else None
+        if login is not None:
+            item["login"] = login
         out.append(item)
     return out
 
@@ -291,26 +279,7 @@ def _login_request(raw: Any) -> Optional[dict[str, Any]]:
         value = raw.get(key)
         if isinstance(value, str) and value and len(value) <= MAX_LOGIN_FIELD:
             out[key] = value
-    if raw.get("account") in LOGIN_ACCOUNTS:
-        out["account"] = raw["account"]
     return out
-
-
-def _account_request(raw: Any) -> Optional[dict[str, Any]]:
-    """A switch to, or a removal of, one of a slot's accounts. Copied the same way.
-
-    The slot's agent checks it again before acting; a removal deletes a
-    directory in the slot's home, so neither side takes the other's word.
-    """
-    if not isinstance(raw, Mapping):
-        return None
-    requested_at = raw.get("requested_at")
-    if isinstance(requested_at, bool) or not isinstance(requested_at, (int, float)):
-        return None
-    action, account_id = raw.get("action"), raw.get("id")
-    if action not in core.ACCOUNT_ACTIONS or account_id not in core.SLOT_ACCOUNT_IDS:
-        return None
-    return {"action": action, "id": account_id, "requested_at": requested_at}
 
 
 def is_slot_account(account: pwd.struct_passwd, groups: set[str]) -> bool:
@@ -365,15 +334,8 @@ def ask_slot(account: pwd.struct_passwd, cfg: MachineConfig, system: System,
         return {}
     # Sign-in progress rides along too: its URL and any minted token are for
     # this slot's holder, and the server checks the URL and bounds the token.
-    heard = {k: facts[k] for k in (*SLOT_FACT_KEYS, *SLOT_NEWS_KEYS)
-             if isinstance(facts.get(k), Mapping)}
-    accounts = facts.get(SLOT_ACCOUNTS_KEY)
-    # Shape only: a list of at most one entry per account. What is in each
-    # entry is the server's to check, as it checks everything a slot says.
-    if (isinstance(accounts, list) and len(accounts) <= len(core.SLOT_ACCOUNT_IDS)
-            and all(isinstance(entry, Mapping) for entry in accounts)):
-        heard[SLOT_ACCOUNTS_KEY] = accounts
-    return heard
+    return {k: facts[k] for k in (*SLOT_FACT_KEYS, "login")
+            if isinstance(facts.get(k), Mapping)}
 
 
 # -- reporting -------------------------------------------------------------------
@@ -407,8 +369,7 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
     # only the named fact keys are taken from what the slot said.
     if ask:
         login = (state.get("slot_logins") or {}).get(user)
-        request: dict[str, Any] = {"refresh_quota": refresh_quota, "login": login,
-                                   "account": (state.get("slot_accounts") or {}).get(user)}
+        request: dict[str, Any] = {"refresh_quota": refresh_quota, "login": login}
         timeout = SLOT_FACTS_TIMEOUT_S
         if (state.get("slot_states") or {}).get(user) in UPGRADE_STATES:
             # The machine's pin, and whether this slot may move to it now: not
@@ -528,8 +489,7 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
     return {**state, "provisioned": provisioned, "provision_failed": failed,
             "wipe_failed": wipes, "slots": [s["unix_user"] for s in slots],
             "slot_states": {s["unix_user"]: s["state"] for s in slots},
-            "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s},
-            "slot_accounts": {s["unix_user"]: s["account"] for s in slots if "account" in s}}
+            "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s}}
 
 
 def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
@@ -546,7 +506,7 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     # progress: that is news once, and a device token must not sit on disk.
     heard = dict(state.get("heard") or {})
     for entry in payload["slots"]:
-        facts = {k: entry[k] for k in (*SLOT_FACT_KEYS, SLOT_ACCOUNTS_KEY) if k in entry}
+        facts = {k: entry[k] for k in SLOT_FACT_KEYS if k in entry}
         if facts:
             heard[entry["unix_user"]] = facts
     status, text = core.send_heartbeat(cfg, payload, system.opener,  # type: ignore[arg-type]

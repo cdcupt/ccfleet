@@ -1663,25 +1663,21 @@ def slot_runner(calls):
     return run
 
 
-def test_a_slot_reports_what_an_owner_node_would_and_names_only_its_own_accounts(slot_home):
-    """One thing more than an owner node says: the address of each Claude
-    account signed in on the slot, so its holder's page can tell two of their
-    accounts apart. It is said there and nowhere else, and nothing else of
-    theirs goes with it — no organisation, no token."""
+def test_a_slot_reports_what_an_owner_node_would_and_names_only_its_one_account(slot_home):
+    """One thing more than a node: the address of the account the slot is
+    signed in to, for its holder's page. Nothing else that names anybody."""
     calls = []
     facts = agent.slot_facts({}, slot_runner(calls), now=1_700_000_000.0)
-    assert set(facts) <= {"claude", "credentials", "remote_control", "usage", "quota",
-                          "accounts"}
+    assert set(facts) <= {"claude", "credentials", "remote_control", "usage", "quota"}
     assert facts["claude"] == {"version": "2.1.278"}, "the path names the slot's home"
     assert facts["credentials"]["logged_in"] is True
     assert facts["credentials"]["subscription_type"] == "max"
+    assert facts["credentials"]["email"] == "holder@example.com"
     assert facts["remote_control"] == {"state": "active"}
-    assert [a["email"] for a in facts["accounts"]] == ["holder@example.com"]
-    elsewhere = json.dumps({k: v for k, v in facts.items() if k != "accounts"})
-    assert "holder@example.com" not in elsewhere
-    flat = json.dumps(facts)
-    for private in ("sk-ant-oat01", "sk-ant-ort01", "Holder Org"):
-        assert private not in flat, f"{private} left the slot"
+    elsewhere = json.dumps({**facts, "credentials": {
+        k: v for k, v in facts["credentials"].items() if k != "email"}})
+    for private in ("sk-ant-oat01", "sk-ant-ort01", "holder@example.com", "Holder Org"):
+        assert private not in elsewhere, f"{private} left the slot"
 
 
 def test_a_slot_does_not_start_a_quota_read_unless_asked(slot_home, monkeypatch):

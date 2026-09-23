@@ -11,7 +11,6 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 from .config import CONTACT_EMAIL_RE
-from .desired import SLOT_ACCOUNT_IDS
 from .slots import MACHINE_MODE
 from .store import UNIX_USER_RE
 
@@ -38,8 +37,6 @@ MAX_SLOT_REPORTS = 64
 # The longest address SMTP allows. A longer one is not an address, and cutting
 # it short would show the holder somebody else's.
 MAX_EMAIL = 254
-#: What a machine may say became of a request about a slot's accounts.
-ACCOUNT_SWITCH_STATES = ("done", "failed")
 
 
 class HeartbeatError(ValueError):
@@ -129,19 +126,6 @@ def _usage(section: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
-    """What a slot's login looks like from outside: the same narrow facts a
-    node reports about its own, and nothing that names the account."""
-    return {
-        "present": _bool_or_none(section.get("present")),
-        "logged_in": _bool_or_none(section.get("logged_in")),
-        "auth_method": _str(section.get("auth_method"), 40),
-        "subscription_type": _str(section.get("subscription_type"), 40),
-        "expires_at": _num(section.get("expires_at")),
-        "mtime": _num(section.get("mtime")),
-    }
-
-
 def _email(value: Any) -> str:
     """An address, whole, or nothing. Never a truncated one."""
     if (isinstance(value, str) and len(value) <= MAX_EMAIL and value.isprintable()
@@ -150,50 +134,25 @@ def _email(value: Any) -> str:
     return ""
 
 
-def _accounts(value: list[Any]) -> list[dict[str, Any]]:
-    """The Claude accounts signed in on one slot, as the slot reports them.
+def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
+    """What a slot's login looks like from outside: the same narrow facts a
+    node reports about its own, plus two its holder's page shows them.
 
-    These are what the holder's page tells apart and switches between, so an
-    entry has to name its place on the slot — "1", "2" or "3" — and a place
-    named twice keeps its first entry. That also caps the list at three. At
-    most one is active: a second claim to be the one in use can only be a
-    confused agent, and a page showing two would be worse than one.
-
-    The address is shown to the holder and nobody else. Unlike every other
-    string here it is not cut short: truncated, it would name somebody else.
+    A slot is signed in to one Claude account, its holder's own. The page says
+    which — the address, whole, or nothing — and how long its sign-in lasts
+    before Anthropic asks for a fresh one. An owner node never sends either
+    (see validate_heartbeat), and the console shows neither.
     """
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    active_seen = False
-    for entry in value:
-        if not isinstance(entry, Mapping):
-            continue
-        place = entry.get("id")
-        if place not in SLOT_ACCOUNT_IDS or place in seen:
-            continue
-        seen.add(place)
-        active = entry.get("active") is True and not active_seen
-        active_seen = active_seen or active
-        out.append({"id": place,
-                    "email": _email(entry.get("email")),
-                    "plan": _str(entry.get("plan"), 40),
-                    "active": active,
-                    "signed_in": _bool_or_none(entry.get("signed_in")),
-                    "refresh_expires_at": _num(entry.get("refresh_expires_at"))})
-    return out
-
-
-def _account_switch(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
-    """What became of the last request about a slot's accounts, or None.
-
-    Only an answer the server can match to a request is kept: without the
-    request's own timestamp, news about an earlier one could end a later one.
-    """
-    state, requested_at = section.get("state"), _num(section.get("requested_at"))
-    if state not in ACCOUNT_SWITCH_STATES or requested_at is None:
-        return None
-    return {"state": state, "requested_at": requested_at,
-            "detail": _str(section.get("detail")) or ""}
+    return {
+        "present": _bool_or_none(section.get("present")),
+        "logged_in": _bool_or_none(section.get("logged_in")),
+        "auth_method": _str(section.get("auth_method"), 40),
+        "subscription_type": _str(section.get("subscription_type"), 40),
+        "expires_at": _num(section.get("expires_at")),
+        "mtime": _num(section.get("mtime")),
+        "email": _email(section.get("email")),
+        "refresh_expires_at": _num(section.get("refresh_expires_at")),
+    }
 
 
 #: What a slot says about restarting Remote Control onto a new version.
@@ -255,13 +214,6 @@ def _slots(value: Any) -> list[dict[str, Any]]:
         progress = _login_progress(_section(entry, "login"))
         if progress:
             out[-1]["login"] = progress
-        # Only from a slot that reports accounts at all, so a machine from
-        # before them keeps the shape its heartbeats always had.
-        if isinstance(entry.get("accounts"), list):
-            out[-1]["accounts"] = _accounts(entry["accounts"])
-        switch = _account_switch(_section(entry, "account_switch"))
-        if switch:
-            out[-1]["account_switch"] = switch
         said = _section(entry, "upgrade")
         upgrade = _upgrade(said)
         restart = said.get("restart") if said.get("restart") in RESTART_STATES else None

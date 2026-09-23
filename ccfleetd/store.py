@@ -23,7 +23,7 @@ from typing import Any, Optional
 from . import payments
 from . import sessions as sessionlib
 from . import slots as slotstates
-from .desired import ACCOUNT_ACTIONS, SIGN_IN_TARGETS, SLOT_ACCOUNT_IDS, is_login_url
+from .desired import is_login_url
 
 log = logging.getLogger("ccfleetd.store")
 
@@ -79,16 +79,15 @@ CREATE TABLE IF NOT EXISTS logins (
     -- and the console showing it. Readable until the attempt expires or
     -- somebody says they are done with it. See read_secret().
     secret TEXT NOT NULL DEFAULT '',
-    -- A slot's sign-in only: which of its Claude accounts this is for — 'new'
-    -- or '1'..'3' — or '' for the active one, which is what every sign-in
-    -- meant before a slot could hold more than one.
+    -- Unused, always ''. Left from a short-lived feature that let a slot hold
+    -- several Claude accounts; it broke the one rule this project keeps (one
+    -- account, one node) and came out. The column stays so no live database
+    -- needs a migration to shed it.
     account TEXT NOT NULL DEFAULT ''
 );
--- What a slot's holder asked the machine to do about a Claude account already
--- on it: use it, or forget it. One row per slot at most. Like `logins`, a row
--- exists only while the machine has not done it yet, or has just said why it
--- could not; an absent row is the normal state. The account is named by its
--- place on the slot, never by anything that identifies it.
+-- Unused, and empty, for the same reason as logins.account: it carried
+-- switches between a slot's several accounts, which no longer exist. Kept, not
+-- dropped, so the schema does not churn; renaming a slot still renames it.
 CREATE TABLE IF NOT EXISTS account_intents (
     slot_id TEXT PRIMARY KEY REFERENCES slots(id),
     action TEXT NOT NULL,                     -- 'use' | 'forget'
@@ -365,8 +364,8 @@ class Store:
                 "kind": "TEXT NOT NULL DEFAULT 'login'",
                 "secret": "TEXT NOT NULL DEFAULT ''",
             })
-            # '' on every existing row: each was a sign-in for the active
-            # account, which is exactly what '' means.
+            # Unused (see the table): added once, and kept so a database that
+            # has it and one that does not look the same from here on.
             self._add_missing_columns("logins", {
                 "account": "TEXT NOT NULL DEFAULT ''",
             })
@@ -492,16 +491,17 @@ class Store:
 
     @staticmethod
     def _begin_login(conn: sqlite3.Connection, key: str, email: str, now: float,
-                     kind: str, account: str = "") -> None:
+                     kind: str) -> None:
+        # account='' on the update too: a row left from when a sign-in could
+        # name one of several accounts must not carry that word forward.
         conn.execute(
             "INSERT INTO logins (node_id, requested_at, email, state, url, code, "
-            "detail, updated_at, kind, secret, account) "
-            "VALUES (?, ?, ?, 'requested', '', '', '', ?, ?, '', ?) "
+            "detail, updated_at, kind, secret) "
+            "VALUES (?, ?, ?, 'requested', '', '', '', ?, ?, '') "
             "ON CONFLICT(node_id) DO UPDATE SET requested_at=excluded.requested_at, "
             "email=excluded.email, state='requested', url='', code='', detail='', "
-            "updated_at=excluded.updated_at, kind=excluded.kind, secret='', "
-            "account=excluded.account",
-            (key, now, email.strip()[:200], now, kind, account))
+            "updated_at=excluded.updated_at, kind=excluded.kind, secret='', account=''",
+            (key, now, email.strip()[:200], now, kind))
 
     # Only a slot that is set up and held can be signed into: claimed or
     # active. Claiming has no user to sign in as yet, and a slot being given
@@ -528,109 +528,21 @@ class Store:
         return row
 
     def request_slot_login(self, slot_id: str, email: str, now: float,
-                           kind: str = "login", *, held_by: Optional[str] = None,
-                           account: str = "") -> None:
+                           kind: str = "login", *, held_by: Optional[str] = None) -> None:
         """Start a sign-in, or a device token, on a slot — for its holder.
 
         The same dance as a node's own, run by the machine as the slot's user.
         The check and the write are one transaction, so a release landing in
         between cannot leave a sign-in hanging off a slot being wiped.
-
-        ``account`` says where a sign-in lands: ``"new"`` for another account,
-        an account's place on the slot to sign that one in again, or ``""`` for
-        the active one. A device token is minted from the active account, so
-        it names none.
         """
         if kind not in self.LOGIN_KINDS:
             raise StoreError(f"unknown sign-in kind: {kind}")
-        if not isinstance(account, str) or (
-                account and (kind != "login" or account not in SIGN_IN_TARGETS)):
-            raise StoreError(f"a {kind} cannot be aimed at {account!r}")
         with self._write_txn() as conn:
             row = self._held(conn, slot_id, held_by)
             if row["state"] not in self.SLOT_SIGN_IN_STATES:
                 raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
                                  f"into once it is set up")
-            self._begin_login(conn, slot_login_key(slot_id), email, now, kind, account)
-
-    # -- the Claude accounts on a slot ------------------------------------------
-    #
-    # The machine keeps the sign-ins, one per account, and which one is in use.
-    # The server only carries what the holder asked — use this one, forget that
-    # one — down to it, and the answer back. Nothing here names an account by
-    # anything but its place on the slot.
-
-    MAX_ACCOUNT_DETAIL = 200
-
-    def request_account_action(self, slot_id: str, action: str, account: str, now: float,
-                               *, held_by: Optional[str] = None) -> None:
-        """Ask the machine to use, or forget, one of the accounts on a slot.
-
-        One request per slot: a new one replaces whatever was there, answered
-        or not, because it is the one the holder is now waiting for. The check
-        and the write are one transaction, for the same reason as a sign-in's.
-        """
-        if action not in ACCOUNT_ACTIONS or account not in SLOT_ACCOUNT_IDS:
-            raise StoreError(f"cannot {action!r} account {account!r}")
-        with self._write_txn() as conn:
-            row = self._held(conn, slot_id, held_by)
-            if row["state"] not in self.SLOT_SIGN_IN_STATES:
-                raise StoreError(f"{slot_id} is {row['state']}; its accounts can be "
-                                 f"changed once it is set up")
-            conn.execute(
-                "INSERT INTO account_intents (slot_id, action, account, requested_at, "
-                "state, detail, updated_at) VALUES (?, ?, ?, ?, 'requested', '', ?) "
-                "ON CONFLICT(slot_id) DO UPDATE SET action=excluded.action, "
-                "account=excluded.account, requested_at=excluded.requested_at, "
-                "state='requested', detail='', updated_at=excluded.updated_at",
-                (slot_id, action, account, now, now))
-
-    def get_account_intent(self, slot_id: str) -> Optional[dict[str, Any]]:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM account_intents WHERE slot_id = ?",
-                                     (slot_id,)).fetchone()
-        return dict(row) if row else None
-
-    def record_account_progress(self, slot_id: str, progress: Any, now: float) -> None:
-        """What the machine says became of the last request about a slot's accounts.
-
-        Matched on the request's own timestamp. The machine acts a beat late by
-        construction, so news about the request before this one is normal —
-        and applying it would end the one the holder is still waiting for.
-        Done deletes the row. Failed keeps it, no longer asked of the machine,
-        so the holder's page can say why; the sweep takes it later.
-        """
-        if not isinstance(progress, Mapping):
-            return
-        state, requested_at = progress.get("state"), progress.get("requested_at")
-        if state not in ("done", "failed") or not isinstance(requested_at, (int, float)):
-            return
-        with self._write_txn() as conn:
-            row = conn.execute(
-                "SELECT requested_at FROM account_intents "
-                "WHERE slot_id = ? AND state = 'requested'", (slot_id,)).fetchone()
-            if row is None or abs(float(row["requested_at"]) - float(requested_at)) > 1e-6:
-                return
-            # No pin on these writes: the row was read inside this write
-            # transaction, so nothing can have replaced it since.
-            if state == "done":
-                conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (slot_id,))
-                return
-            detail = str(progress.get("detail") or "").strip()[:self.MAX_ACCOUNT_DETAIL]
-            conn.execute("UPDATE account_intents SET state = 'failed', detail = ?, "
-                         "updated_at = ? WHERE slot_id = ?", (detail, now, slot_id))
-
-    def expire_account_intents(self, older_than: float) -> int:
-        """Drop requests made before `older_than`, answered or not.
-
-        Counted from the request, never from its last change: a failure written
-        late in the window must not buy the row a second one. The privacy page
-        promises a request is kept for at most the window, and this is the
-        clock that promise is about.
-        """
-        with self._write_txn() as conn:
-            return conn.execute("DELETE FROM account_intents WHERE requested_at < ?",
-                                (older_than,)).rowcount
+            self._begin_login(conn, slot_login_key(slot_id), email, now, kind)
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -1438,9 +1350,6 @@ class Store:
                          (slotstates.RELEASING, slot_id))
             conn.execute("DELETE FROM logins WHERE node_id = ?",
                          (slot_login_key(slot_id),))
-            # A switch or a removal asked for by the person leaving is not a
-            # thing the next holder's machine should ever be told to do.
-            conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (slot_id,))
         return True
 
     def slot_on_machine(self, node_id: str, unix_user: str) -> dict[str, Any] | None:

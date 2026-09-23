@@ -29,15 +29,6 @@ MAX_VERSION_LEN = 40
 # which command the agent runs.
 LOGIN_KINDS = ("login", "token")
 
-# The Claude accounts a slot can keep signed in, named by their place on the
-# slot. The machine keeps the sign-ins; these names are all that crosses the
-# wire about which one is meant, and nothing about them identifies anybody.
-SLOT_ACCOUNT_IDS = ("1", "2", "3")
-# Where a sign-in on a slot lands: a new account, or one already there.
-SIGN_IN_TARGETS = ("new",) + SLOT_ACCOUNT_IDS
-# What a slot's holder can ask about an account already on it.
-ACCOUNT_ACTIONS = ("use", "forget")
-
 
 # The verification URL is supplied by a node and then shown to an operator as a
 # link. Escaping makes it safe as *text*; it does nothing about the scheme, and
@@ -117,27 +108,7 @@ def _login_block(login: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]
     code = login.get("code") or ""
     if code and login.get("state") == "code_sent":
         block["code"] = code
-    # Which of a slot's accounts the sign-in is for. Absent means the active
-    # one, which is what every sign-in meant before a slot could hold more:
-    # a machine that predates accounts gets exactly the block it always did.
-    if login.get("account") in SIGN_IN_TARGETS:
-        block["account"] = login["account"]
     return block
-
-
-def _account_block(intent: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
-    """What the holder asked about an account on the slot, while it waits.
-
-    A request that failed has been answered; asking the machine again would
-    undo the answer the holder is reading. Anything not in the vocabulary is
-    dropped rather than forwarded, like a sign-in's kind.
-    """
-    if (not intent or intent.get("state") != "requested"
-            or intent.get("action") not in ACCOUNT_ACTIONS
-            or intent.get("account") not in SLOT_ACCOUNT_IDS):
-        return None
-    return {"action": intent["action"], "id": intent["account"],
-            "requested_at": intent.get("requested_at")}
 
 
 # The slot states a sign-in can run in: set up and held. Anything else is
@@ -146,8 +117,7 @@ SLOT_SIGN_IN_STATES = ("claimed", "active")
 
 
 def _slot_block(slot: Mapping[str, Any],
-                login: Optional[Mapping[str, Any]] = None,
-                intent: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                login: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """What a shared machine should do about one of its slots.
 
     The state is the whole instruction: `claiming` means provision it,
@@ -155,34 +125,26 @@ def _slot_block(slot: Mapping[str, Any],
     A claim carries its own timestamp, which is how the machine says which
     claim it finished — so news about an earlier claim of the same slot can
     never complete a later one. A sign-in its holder has started rides along,
-    in exactly the shape a node's own does, and so does a request about the
-    accounts already on it. Both only for a slot that is set up and held.
+    in exactly the shape a node's own does.
     """
     block: dict[str, Any] = {"unix_user": slot.get("unix_user"),
                              "state": slot.get("state")}
     if slot.get("state") == "claiming":
         block["claimed_at"] = slot.get("claimed_at")
-    if slot.get("state") not in SLOT_SIGN_IN_STATES:
-        return block
-    pending = _login_block(login)
+    pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None
     if pending:
         block["login"] = pending
-    asked = _account_block(intent)
-    if asked:
-        block["account"] = asked
     return block
 
 
 def desired_state(node: Mapping[str, Any],
                   login: Optional[Mapping[str, Any]] = None,
                   slots: Optional[list[Mapping[str, Any]]] = None,
-                  slot_logins: Optional[Mapping[str, Mapping[str, Any]]] = None,
-                  slot_intents: Optional[Mapping[str, Mapping[str, Any]]] = None
+                  slot_logins: Optional[Mapping[str, Mapping[str, Any]]] = None
                   ) -> dict[str, Any]:
     """What this node should look like, derived from its stored row.
 
-    `slot_logins` maps a slot's id to its sign-in row, and `slot_intents` to
-    what its holder asked about its accounts, for a shared machine.
+    `slot_logins` maps a slot's id to its sign-in row, for a shared machine.
     """
     pending = _login_block(login)
     desired: dict[str, Any] = {
@@ -193,12 +155,9 @@ def desired_state(node: Mapping[str, Any],
     # Only a machine with slots declared on it hears about slots at all; an
     # ordinary node's reply stays exactly what it was.
     if slots:
-        logins, intents = slot_logins or {}, slot_intents or {}
-        desired["slots"] = [_slot_block(s, logins.get(s.get("id")), intents.get(s.get("id")))
-                            for s in slots]
-    # Somebody is watching a page: for a URL, on the node or on any slot, or
-    # for a switch of accounts to land.
-    waiting = pending or any("login" in b or "account" in b
-                             for b in desired.get("slots", ()))
+        logins = slot_logins or {}
+        desired["slots"] = [_slot_block(s, logins.get(s.get("id"))) for s in slots]
+    # Somebody is watching a page for a URL, on the node or on any slot.
+    waiting = pending or any("login" in b for b in desired.get("slots", ()))
     desired["poll_s"] = LOGIN_POLL_S if waiting else IDLE_POLL_S
     return desired
