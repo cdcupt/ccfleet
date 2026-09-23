@@ -10,6 +10,8 @@ Remote Control, by restarting it so the new name takes.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ccfleet_agent import machine
@@ -40,8 +42,10 @@ class Host(Fake):
     a temporary directory, and slot users whose Remote Control is running or not."""
 
     def __init__(self, tmp_path, hostname="pool-1", cloud=True, hostnamectl_works=True,
-                 rc_active=(), **kwargs):
+                 rc_active=(), scripted=None, **kwargs):
         super().__init__(**kwargs)
+        # What `systemctl --user <verb>` answers, in turn, before the defaults.
+        self.scripted = {verb: list(codes) for verb, codes in (scripted or {}).items()}
         self.name = hostname
         self.hosts = tmp_path / "hosts"
         self.hosts.write_text(HOSTS)
@@ -67,6 +71,8 @@ class Host(Fake):
         if argv[:2] == ["systemctl", "--user"]:
             user = next(u for u, a in self.users.items() if a.pw_uid == kwargs["user"])
             self.systemctl.append((user, tuple(argv[2:])))
+            if self.scripted.get(argv[2]):
+                return self.scripted[argv[2]].pop(0), ""
             if argv[2] == "is-active":
                 return (0 if user in self.rc_active else 3), ""
             return 0, ""
@@ -115,7 +121,10 @@ def test_a_hosts_file_with_no_127_0_1_1_line_gets_one(cfg, tmp_path):
 def test_the_node_id_is_not_repeated_when_it_is_the_name(cfg, tmp_path):
     host = Host(tmp_path, hostname="alice-1", desired={"hostname": "pool-1", "slots": []})
     cycle(cfg, host)
-    assert "127.0.1.1\tpool-1" in host.hosts.read_text().splitlines()
+    ours = [ln.split() for ln in host.hosts.read_text().splitlines()
+            if ln.split()[:1] == ["127.0.1.1"]]
+    assert ours == [["127.0.1.1", "pool-1"]]
+    assert "alice-1" not in host.hosts.read_text()
 
 
 def test_the_last_holders_name_is_not_left_behind(cfg, tmp_path):
@@ -163,17 +172,147 @@ def test_a_name_that_took_is_followed_even_when_tidying_up_after_it_fails(cfg, t
     assert ("slot01", ("restart", "claude-remote-control.service")) in host.systemctl
 
 
-def test_a_name_it_already_answers_to_changes_nothing(cfg, tmp_path):
+def test_a_name_it_already_answers_to_is_not_taken_again(cfg, tmp_path):
+    """No hostnamectl and no rewrite of a /etc/hosts that already says it —
+    but the cloud-init drop-in that keeps the name across a reboot is made
+    sure of, on every run, not only the one that renamed."""
     host = Host(tmp_path, desired={"hostname": "pool-1", "slots": []})
     cycle(cfg, host)
     assert host.order == [] and host.hosts.read_text() == HOSTS
-    assert not (host.cloud / "99-ccfleet.cfg").exists()
+    assert (host.cloud / "99-ccfleet.cfg").read_text() == (
+        "preserve_hostname: true\nmanage_etc_hosts: false\n")
 
 
 def test_no_name_asked_for_changes_nothing(cfg, tmp_path):
     host = Host(tmp_path, desired={"slots": []})
     cycle(cfg, host)
     assert host.order == [] and host.hosts.read_text() == HOSTS
+    assert not (host.cloud / "99-ccfleet.cfg").exists()
+
+
+# -- anything left undone is done on a later run ----------------------------------------------
+
+def test_a_restart_that_failed_is_tried_again_until_it_works(cfg, tmp_path):
+    host = Host(tmp_path, users=("slot01",), rc_active=("slot01",), scripted={"restart": [1]},
+                desired={"hostname": "alice-2", "slots": [
+                    {"unix_user": "slot01", "state": "active"}]})
+    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
+    restarts = [c for c in host.systemctl if c[1][0] == "restart"]
+    assert len(restarts) == 1 and state.get(machine.RC_OWED_KEY) is True
+    _, _, state = cycle(cfg, host, state)          # already on the name: only the restart
+    assert len([c for c in host.systemctl if c[1][0] == "restart"]) == 2
+    assert machine.RC_OWED_KEY not in state
+    before = len(host.systemctl)
+    cycle(cfg, host, state)                         # done: nothing more
+    assert len(host.systemctl) == before
+
+
+def slot_host(tmp_path, **kwargs):
+    return Host(tmp_path, users=("slot01",), rc_active=("slot01",),
+                desired={"hostname": "alice-2", "slots": [
+                    {"unix_user": "slot01", "state": "active"}]}, **kwargs)
+
+
+def restarts(host):
+    return [c for c in host.systemctl if c[1][0] == "restart"]
+
+
+def test_a_reload_that_failed_is_tried_again(cfg, tmp_path):
+    host = slot_host(tmp_path, scripted={"daemon-reload": [1]})
+    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
+    assert restarts(host) == [] and state.get(machine.RC_OWED_KEY) is True
+    _, _, state = cycle(cfg, host, state)
+    assert len(restarts(host)) == 1 and machine.RC_OWED_KEY not in state
+
+
+def test_a_remote_control_in_an_unknown_state_is_asked_again(cfg, tmp_path):
+    host = slot_host(tmp_path, scripted={"is-active": [None]})
+    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
+    assert restarts(host) == [] and state.get(machine.RC_OWED_KEY) is True
+    _, _, state = cycle(cfg, host, state)
+    assert len(restarts(host)) == 1 and machine.RC_OWED_KEY not in state
+
+
+def test_a_restart_owed_waits_out_a_reply_without_a_name(cfg, tmp_path):
+    host = slot_host(tmp_path, scripted={"restart": [1]})
+    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
+    host.desired = {"slots": [{"unix_user": "slot01", "state": "active"}]}
+    _, _, state = cycle(cfg, host, state)
+    assert state.get(machine.RC_OWED_KEY) is True, "kept while the server names nothing"
+    host.desired = {"hostname": "alice-2", "slots": [{"unix_user": "slot01", "state": "active"}]}
+    _, _, state = cycle(cfg, host, state)
+    assert len(restarts(host)) == 2 and machine.RC_OWED_KEY not in state
+
+
+def test_an_owed_restart_waits_for_the_machine_to_be_on_its_name(cfg, tmp_path):
+    """Owed for a name the machine could not take after all: restarting now
+    would register the old one again, and would wrongly call the debt paid."""
+    host = slot_host(tmp_path, scripted={"restart": [1]})
+    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
+    host.desired = {"hostname": "carol-1", "slots": [{"unix_user": "slot01", "state": "active"}]}
+    host.hostnamectl_works = False
+    _, _, state = cycle(cfg, host, state)
+    assert len(restarts(host)) == 1 and state.get(machine.RC_OWED_KEY) is True
+
+
+def test_every_slot_is_followed_even_after_one_fails(cfg, tmp_path):
+    """A machine from before one slot per machine: one slot's failed restart
+    does not leave the next one on the old name."""
+    host = Host(tmp_path, users=("slot01", "slot02"), rc_active=("slot01", "slot02"),
+                scripted={"restart": [1]},
+                desired={"hostname": "alice-2", "slots": [
+                    {"unix_user": "slot01", "state": "active"},
+                    {"unix_user": "slot02", "state": "active"}]})
+    _, _, state = cycle(cfg, host, {"slots": ["slot01", "slot02"]})
+    assert {user for user, call in restarts(host)} == {"slot01", "slot02"}
+    assert state.get(machine.RC_OWED_KEY) is True
+
+
+def test_a_run_with_nothing_to_change_writes_nothing(cfg, tmp_path):
+    host = Host(tmp_path, desired={"hostname": "alice-1", "slots": []})
+    cycle(cfg, host)
+    cloud = host.cloud / "99-ccfleet.cfg"
+    before = (host.hosts.stat().st_ino, cloud.stat().st_ino)
+    cycle(cfg, host)
+    assert (host.hosts.stat().st_ino, cloud.stat().st_ino) == before
+
+
+def test_a_last_holders_name_left_in_hosts_is_dropped_on_a_later_run(cfg, tmp_path):
+    """As if the run that renamed could not tidy up: the next one does."""
+    host = Host(tmp_path, hostname="alice-2", desired={"hostname": "alice-2", "slots": []})
+    host.hosts.write_text("127.0.0.1 localhost\n127.0.1.1\talice-2 pool-1 bob-1\n")
+    cycle(cfg, host)
+    assert host.hosts.read_text() == "127.0.0.1 localhost\n127.0.1.1\talice-2 pool-1\n"
+    assert host.order == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file whatever its mode")
+def test_a_hosts_file_that_cannot_be_read_is_left_alone_and_nothing_renamed(cfg, tmp_path):
+    """Rewriting what could not be read could drop entries the machine needs."""
+    host = Host(tmp_path, desired={"hostname": "alice-1", "slots": []})
+    host.hosts.chmod(0)                             # there, writable around, unreadable
+    try:
+        cycle(cfg, host)
+    finally:
+        host.hosts.chmod(0o644)
+    assert host.name == "pool-1" and host.order == [] and host.hosts.read_text() == HOSTS
+
+
+def test_the_log_never_names_a_holder(cfg, tmp_path, caplog):
+    """The names come from people's addresses. Renamed or failed, the log
+    says what happened without saying who."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    renamed = Host(tmp_path / "a", hostname="bob-1", users=("slot01",), rc_active=("slot01",),
+                   scripted={"restart": [1]}, desired={"hostname": "alice-2", "slots": [
+                       {"unix_user": "slot01", "state": "active"}]})
+    refused = Host(tmp_path / "b", hostname="bob-1", hostnamectl_works=False,
+                   desired={"hostname": "alice-2", "slots": []})
+    with caplog.at_level("DEBUG", logger="ccfleet-machine"):
+        cycle(cfg, renamed, {"slots": ["slot01"]})
+        cycle(cfg, refused)
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert said and "alice" not in said and "bob" not in said
 
 
 @pytest.mark.parametrize("bad", ["Alice-1", "-alice", "alice-", "alice_1", "a.b", "a" * 64,

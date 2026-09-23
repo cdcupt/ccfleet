@@ -236,6 +236,9 @@ CLOUD_CFG = "preserve_hostname: true\nmanage_etc_hosts: false\n"
 RC_UNIT = "claude-remote-control.service"
 SYSTEMCTL_TIMEOUT_S = 60
 HOSTNAMECTL_TIMEOUT_S = 30
+# A Remote Control restart the machine still owes its slots after a rename,
+# kept in its state until every running one has restarted onto the name.
+RC_OWED_KEY = "remote_control_owes_the_name"
 
 
 def set_hostname_now(name: str) -> bool:
@@ -462,12 +465,19 @@ def wanted_hostname(desired: Mapping[str, Any]) -> Optional[str]:
 
 def hosts_with(text: str, names: Sequence[str]) -> str:
     """/etc/hosts with one 127.0.1.1 line naming `names`, each once, in order.
-    Every other line stays as it was."""
+
+    Every other line stays as it was, and a file that already says exactly
+    that comes back untouched, so a run with nothing to change writes nothing.
+    """
     unique = list(dict.fromkeys(n for n in names if n))
+    lines = text.splitlines()
+    ours = [ln for ln in lines if ln.split()[:1] == ["127.0.1.1"]]
+    if len(ours) == 1 and ours[0].split()[1:] == unique:
+        return text
     line = "127.0.1.1\t" + " ".join(unique)
     out: list[str] = []
     placed = False
-    for existing in text.splitlines():
+    for existing in lines:
         if existing.split()[:1] == ["127.0.1.1"]:
             if not placed:
                 out.append(line)
@@ -487,37 +497,54 @@ def _write_file(path: Path, text: str) -> None:
     os.replace(temp, path)
 
 
-def apply_hostname(name: str, cfg: MachineConfig, system: System) -> bool:
-    """Make the machine answer to `name`. True when it changed.
+def _ensure_file(path: Path, text: str) -> None:
+    """`path` says exactly `text` afterwards; written only when it did not."""
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    _write_file(path, text)
 
-    /etc/hosts first, naming the new name, the node's id and the name it
-    answers to now, so sudo resolves whichever the machine goes by at every
-    moment. Once the name has taken, the old one is dropped: it may be the last
-    holder's, which is theirs, and /etc/hosts is readable by the next holder.
-    Then cloud-init is told to leave both alone at the next boot.
+
+def converge_name(name: str, cfg: MachineConfig, system: System) -> bool:
+    """Make the machine answer to `name`, and keep what goes with it true.
+    True when this call renamed it.
+
+    Convergent: every run checks /etc/hosts and the cloud-init drop-in again,
+    not only the run that renamed, so anything left undone is done later.
+    /etc/hosts first, naming the new name, the node's id and the name the
+    machine answers to now, so sudo resolves whichever it goes by at every
+    moment; once the name has taken, the old one is dropped — it may be the
+    last holder's, and /etc/hosts is readable by the next. A /etc/hosts that
+    cannot be read is left alone, and the name with it: rewriting a file we
+    could not read could drop entries the machine needs.
     """
-    current = system.hostname()
-    if current == name:
-        return False
     try:
         text = system.hosts_path.read_text(encoding="utf-8")
-    except OSError:
-        text = ""
-    _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id, current]))
-    if not system.set_hostname(name):
-        log.error("could not take the name %s; still answering to %s", name, current)
-        return False
-    # The name has taken. What follows is tidying: a failure in it is said,
-    # and never hides the rename from Remote Control, which must follow it.
-    try:
-        _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id]))
-        if system.cloud_cfg_dir.is_dir():
-            _write_file(system.cloud_cfg_dir / CLOUD_CFG_NAME, CLOUD_CFG)
     except OSError as exc:
-        log.warning("now answering to %s, but could not tidy up after it: %s",
-                    name, exc.__class__.__name__)
-    log.info("this machine now answers to %s", name)
-    return True
+        log.warning("could not read the hosts file (%s); the machine's name is left as it is",
+                    exc.__class__.__name__)
+        return False
+    renamed = False
+    current = system.hostname()
+    if current != name:
+        _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id, current]))
+        if not system.set_hostname(name):
+            log.error("could not take its slot's name: hostnamectl failed")
+            return False
+        renamed = True
+        log.info("this machine now answers to its slot's name")
+    # The name has taken. What follows is tidying: a failure in it is said,
+    # never hides the rename from Remote Control, and is tried again next run.
+    try:
+        _ensure_file(system.hosts_path, hosts_with(text, [name, cfg.node_id]))
+        if system.cloud_cfg_dir.is_dir():
+            _ensure_file(system.cloud_cfg_dir / CLOUD_CFG_NAME, CLOUD_CFG)
+    except OSError as exc:
+        log.warning("could not tidy up after the machine's name (%s); tried again next run",
+                    exc.__class__.__name__)
+    return renamed
 
 
 def _systemctl(account: pwd.struct_passwd, system: System, *args: str) -> Optional[int]:
@@ -529,38 +556,50 @@ def _systemctl(account: pwd.struct_passwd, system: System, *args: str) -> Option
     return code
 
 
-def _follow_the_name(account: pwd.struct_passwd, system: System) -> None:
+def _follow_the_name(account: pwd.struct_passwd, system: System) -> bool:
     """One slot, after a rename: its manager re-reads its units — Remote
     Control's `--name %H` is fixed when a unit loads — and a Remote Control
     already running restarts, so claude.ai/code shows the machine's new name.
-    One that is not running is left stopped; it starts under the new name."""
-    _systemctl(account, system, "daemon-reload")
-    if _systemctl(account, system, "is-active", "--quiet", RC_UNIT) == 0:
-        if _systemctl(account, system, "restart", RC_UNIT) == 0:
-            log.info("%s: Remote Control restarted under the new name", account.pw_name)
-        else:
-            log.warning("%s: Remote Control did not restart", account.pw_name)
+    One that is not running is left stopped; it starts under the new name.
+    True when nothing more is owed."""
+    if _systemctl(account, system, "daemon-reload") != 0:
+        log.warning("%s: could not reload its units; tried again next run", account.pw_name)
+        return False
+    running = _systemctl(account, system, "is-active", "--quiet", RC_UNIT)
+    if running == 0:
+        if _systemctl(account, system, "restart", RC_UNIT) != 0:
+            log.warning("%s: Remote Control did not restart; tried again next run",
+                        account.pw_name)
+            return False
+        log.info("%s: Remote Control restarted under the machine's new name", account.pw_name)
+    # Not running starts under the new name by itself; not known is asked again.
+    return running is not None
 
 
 def _take_name(desired: Mapping[str, Any], cfg: MachineConfig, state: Mapping[str, Any],
-               system: System) -> bool:
+               system: System) -> dict[str, Any]:
     """Answer to the name the server gives, and have every slot's Remote
-    Control follow it. True when the machine was renamed."""
+    Control follow it. Returns the state, carrying a restart still owed, so a
+    Remote Control that did not restart this run is tried again the next."""
+    owed = bool(state.get(RC_OWED_KEY))
+    rest = {k: v for k, v in state.items() if k != RC_OWED_KEY}
+    still = {**rest, RC_OWED_KEY: True}
     name = wanted_hostname(desired)
-    if name is None:
-        return False
-    try:
-        renamed = apply_hostname(name, cfg, system)
-    except OSError as exc:
-        log.error("could not rename this machine: %s", exc.__class__.__name__)
-        return False
-    if renamed:
-        for user in [u for u in state.get("slots") or [] if isinstance(u, str)]:
-            account = system.lookup(user)
-            if account is None or not is_slot_account(account, system.groups_of(account)):
-                continue
-            _follow_the_name(account, system)
-    return renamed
+    renamed = False
+    if name is not None:
+        try:
+            renamed = converge_name(name, cfg, system)
+        except OSError as exc:
+            log.error("could not rename this machine (%s)", exc.__class__.__name__)
+    if name is None or not (renamed or owed) or system.hostname() != name:
+        return still if owed else rest
+    followed = True
+    for user in [u for u in state.get("slots") or [] if isinstance(u, str)]:
+        account = system.lookup(user)
+        if account is None or not is_slot_account(account, system.groups_of(account)):
+            continue
+        followed = _follow_the_name(account, system) and followed
+    return rest if followed else still
 
 
 # -- acting ----------------------------------------------------------------------
@@ -675,7 +714,7 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     state = {**state, "heard": {u: f for u, f in heard.items() if u in users}}
     # Before provisioning, so a claim's Remote Control first registers under
     # its holder's name.
-    _take_name(desired, cfg, state, system)
+    state = _take_name(desired, cfg, state, system)
     new_state = act_on_slots(wanted_slots(desired), state, cfg, system)
     # The version this machine's slots should run, checked the way the owner
     # agent checks its own before it reaches an installer. Empty: leave them be.
