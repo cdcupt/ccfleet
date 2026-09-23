@@ -22,6 +22,10 @@ an organisation; none of them are collected. It is also what makes a Mac
 reportable at all, since the credential there lives in the Keychain and this
 agent will not read it. Token values never reach the payload. Tests assert each
 of these, including with a secret written into a fixture transcript.
+
+One exception, on a shared machine only: a slot reports the email address of
+each Claude account its holder has signed in on it, so their own page can tell
+two of their accounts apart (see accounts_report). An owner node never does.
 """
 
 from __future__ import annotations
@@ -138,6 +142,16 @@ def _run(runner: Runner, argv: Sequence[str], timeout: float = 20.0) -> Optional
     return (proc.stdout or "").strip()
 
 
+def _naming(env_prefix: Sequence[str]) -> dict[str, Any]:
+    """Keyword arguments naming a Claude Code directory, only when there is one.
+
+    A slot's second and third accounts start Claude Code under their own
+    directory (see account_prefix). Everything else — every owner node, and a
+    slot's first account — makes exactly the call it always made.
+    """
+    return {"env_prefix": tuple(env_prefix)} if env_prefix else {}
+
+
 # Where the official installer puts the CLI. systemd's default PATH does not
 # include ~/.local/bin, so a timer-run agent would report claude as missing on a
 # node where it is installed and working.
@@ -201,7 +215,8 @@ def claude_info(runner: Runner = subprocess.run) -> dict[str, Any]:
     return {"version": match.group(0) if match else None, "path": path}
 
 
-def oauth_account_facts(config_dir: Path) -> dict[str, Any]:
+def oauth_account_facts(config_dir: Path,
+                        global_config: Optional[Path] = None) -> dict[str, Any]:
     """Non-secret facts from ~/.claude.json, which exists on every platform.
 
     This is the only way to say anything about a login on macOS, where Claude Code
@@ -212,10 +227,13 @@ def oauth_account_facts(config_dir: Path) -> dict[str, Any]:
     Deliberately narrow: whether an account is signed in, when its profile was
     last fetched (which only succeeds while the login works, so it doubles as a
     liveness signal), and the rate-limit tier. No email, no name, no identifiers.
+
+    `global_config` names the file when it is not beside the directory: a
+    directory chosen with CLAUDE_CONFIG_DIR keeps its own inside itself.
     """
     # Append, never with_suffix: that REPLACES an existing suffix, so a config dir
     # named "claude.work" would silently read "claude.json" instead.
-    path = config_dir.parent / (config_dir.name + ".json")   # ~/.claude -> ~/.claude.json
+    path = global_config or config_dir.parent / (config_dir.name + ".json")
     facts: dict[str, Any] = {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -234,10 +252,11 @@ def oauth_account_facts(config_dir: Path) -> dict[str, Any]:
     return facts
 
 
-def credentials_summary(config_dir: Path) -> dict[str, Any]:
+def credentials_summary(config_dir: Path,
+                        global_config: Optional[Path] = None) -> dict[str, Any]:
     """Facts about the credentials file that contain no secret material."""
     path = config_dir / ".credentials.json"
-    account = oauth_account_facts(config_dir)
+    account = oauth_account_facts(config_dir, global_config)
     if not path.exists():
         if platform.system() == "Darwin":
             # No file to stat, so presence and freshness come from the account block.
@@ -740,9 +759,12 @@ def parse_quota(pane: str) -> dict[str, Any]:
     return out
 
 
-def read_quota(runner: Runner = subprocess.run,
-               now: Optional[float] = None) -> Optional[dict[str, Any]]:
-    """Drive `claude` to its /usage screen once and read the windows off it."""
+def read_quota(runner: Runner = subprocess.run, now: Optional[float] = None,
+               env_prefix: Sequence[str] = ()) -> Optional[dict[str, Any]]:
+    """Drive `claude` to its /usage screen once and read the windows off it.
+
+    `env_prefix` starts it as one of a slot's other accounts (see account_prefix).
+    """
     path = find_claude()
     if not path:
         return None
@@ -755,8 +777,9 @@ def read_quota(runner: Runner = subprocess.run,
     if home is None:
         return None
     _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
+    command = " ".join(shlex.quote(a) for a in (*env_prefix, path))
     started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
-                          "-c", home, "-x", "180", "-y", "45", shlex.quote(path))
+                          "-c", home, "-x", "180", "-y", "45", command)
     if not started:
         return None
     deadline = (time.time() if now is None else now) + QUOTA_TIMEOUT_S
@@ -798,8 +821,9 @@ def read_quota(runner: Runner = subprocess.run,
 
 
 def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
-                  now: Optional[float] = None) -> tuple[Optional[dict[str, Any]],
-                                                        Optional[dict[str, Any]]]:
+                  now: Optional[float] = None,
+                  env_prefix: Sequence[str] = ()) -> tuple[Optional[dict[str, Any]],
+                                                           Optional[dict[str, Any]]]:
     """Cached windows, refreshed on the slow schedule. Returns (report, to_store)."""
     now = time.time() if now is None else now
     cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
@@ -807,7 +831,7 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
         age = now - (cached.get("ts") or 0)
         if age < QUOTA_REFRESH_S:
             return {k: v for k, v in cached.items() if k != "ts"}, None
-    fresh = read_quota(runner, now)
+    fresh = read_quota(runner, now, **_naming(env_prefix))
     if fresh is None:
         # Keep showing the last known answer rather than blanking the card; it is
         # stamped, so the console can say how old it is.
@@ -961,13 +985,14 @@ def find_token(pane: str) -> Optional[str]:
 
 
 def start_login(email: Optional[str], runner: Runner = subprocess.run,
-                kind: str = "login") -> bool:
+                kind: str = "login", env_prefix: Sequence[str] = ()) -> bool:
     """Open a fresh pane running the flow the console asked for. True if started.
 
     Both flows are the same shape — a URL to approve and a code to type back —
     so they share the pane, the reader and the code path. They differ in the
     command and in what comes out at the end: a sign-in leaves a credential on
-    the node, a token prints one for the owner to carry away.
+    the node, a token prints one for the owner to carry away. `env_prefix`
+    runs it as one of a slot's other accounts (see account_prefix).
     """
     path = find_claude()
     if not path:
@@ -976,10 +1001,10 @@ def start_login(email: Optional[str], runner: Runner = subprocess.run,
     if kind == "token":
         # No --email: setup-token does not take one, and the account is decided
         # by the login this node already has.
-        argv = [path, "setup-token"]
+        argv = [*env_prefix, path, "setup-token"]
         email = None
     else:
-        argv = [path, "auth", "login", "--claudeai"]
+        argv = [*env_prefix, path, "auth", "login", "--claudeai"]
     if email:
         argv += ["--email", email]
     # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
@@ -1095,12 +1120,18 @@ LOGIN_POLL_MAX_S = 30.0
 
 
 def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
-                    runner: Runner = subprocess.run) -> tuple[Optional[dict[str, Any]],
-                                                              dict[str, Any]]:
+                    runner: Runner = subprocess.run, *, env_prefix: Sequence[str] = (),
+                    signed_in: Optional[Callable[[], bool]] = None
+                    ) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """Drive one step of a console-requested sign-in.
 
     Returns (progress to report, new state). Progress is None when there is
     nothing new to say, which keeps a fast poll from restating the same thing.
+
+    A slot signing into one of its accounts passes that account's
+    `env_prefix`, and its own `signed_in` test: the CLI's answer for that
+    account, and proof the sign-in actually wrote something (see
+    reconcile_slot_login). Left out, it is a node signing itself in.
     """
     new_state = dict(state)
     wanted = desired.get("login")
@@ -1119,7 +1150,8 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
     kind = "token" if wanted.get("kind") == "token" else "login"
     if mine.get("requested_at") != requested_at:
         # A new request supersedes anything in flight, including a stuck one.
-        if not start_login(login_email(wanted.get("email")), runner, kind):
+        if not start_login(login_email(wanted.get("email")), runner, kind,
+                           **_naming(env_prefix)):
             new_state["login"] = {"requested_at": requested_at, "phase": "failed"}
             return {"state": "failed", "detail": "claude not found on this node",
                     "requested_at": requested_at}, new_state
@@ -1188,7 +1220,9 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
 
     if phase == "code_sent":
         # The CLI is the judge of whether the sign-in worked, not the pane text.
-        if auth_status(runner).get("logged_in") is True:
+        worked = (signed_in() if signed_in is not None
+                  else auth_status(runner).get("logged_in") is True)
+        if worked:
             end_login(runner)
             new_state.pop("login", None)
             return {"state": "done", "requested_at": requested_at}, new_state
@@ -1342,8 +1376,7 @@ def start_remote_control(runner: Runner = subprocess.run) -> None:
     signs in — so the first report after they do starts it. The unit runs
     under the slot's own systemd manager, not under whoever asked.
     """
-    if _run(runner, ["systemctl", "--user", "is-enabled", DEFAULT_RC_SERVICE],
-            timeout=10) != "enabled":
+    if not _rc_enabled(runner):
         return
     _run(runner, ["systemctl", "--user", "start", DEFAULT_RC_SERVICE], timeout=60)
 
@@ -1425,6 +1458,608 @@ def finish_restart(state: Mapping[str, Any], remote: Mapping[str, Any],
     return state
 
 
+# -- several Claude accounts on one slot --------------------------------------------
+#
+# A slot's holder may keep up to three of their own Claude accounts signed in
+# and move between them with one click. Each account is its own Claude Code
+# directory, chosen with CLAUDE_CONFIG_DIR — Claude Code's own documented
+# setting. Measured on 2.1.267: with it set, `.claude.json` and
+# `.credentials.json` both live inside that directory, and `claude auth status`
+# answers for it alone. So nothing here writes Claude Code's files: it chooses
+# which directory Claude Code starts in, and deletes a sign-in whole when its
+# holder removes one.
+#
+#   "1"  ~/.claude and ~/.claude.json            the variable unset; every slot has it
+#   "2"  ~/.config/ccfleet/claude-accounts/2     the variable set to that directory
+#   "3"  ~/.config/ccfleet/claude-accounts/3
+#
+# Which one is in use is written in exactly one place, the env file the Remote
+# Control unit already reads. Remote Control and this agent read the same
+# line, so they cannot disagree about whom the slot is running as.
+
+SLOT_ACCOUNT_IDS = ("1", "2", "3")
+SLOT_ACCOUNTS_DIR = "~/.config/ccfleet/claude-accounts"
+RC_ENV_FILE = "~/.config/ccfleet/remote-control.env"
+CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
+ACCOUNT_ACTIONS = ("use", "forget")
+# An address longer than this is not one the server would show; say nothing
+# rather than send half of it.
+MAX_ACCOUNT_EMAIL = 254
+# Where people work, and the directory slot-add.sh trusts in ~/.claude.json.
+# A new account's directory is given the same answers, or it would start on
+# the onboarding screen and Remote Control would wait on a prompt nobody sees.
+SLOT_WORKSPACE = "~/workspace"
+
+
+@dataclass(frozen=True)
+class SlotAccount:
+    """One Claude account's place on a slot.
+
+    `id` is None for a directory somebody pointed Remote Control at by hand:
+    it is what Claude Code runs as, so it is what this reports on, but it is
+    none of the three this looks after.
+    """
+
+    id: Optional[str]
+    config_dir: Path
+    global_config: Path
+
+    @property
+    def env_value(self) -> Optional[str]:
+        """What CLAUDE_CONFIG_DIR must say for Claude Code to be this account."""
+        return None if self.id == "1" else str(self.config_dir)
+
+
+def slot_account(account_id: str) -> SlotAccount:
+    home = Path.home()
+    if account_id == "1":
+        return SlotAccount("1", home / ".claude", home / ".claude.json")
+    place = Path(SLOT_ACCOUNTS_DIR).expanduser() / account_id
+    return SlotAccount(account_id, place, place / ".claude.json")
+
+
+def _env_key(line: str) -> Optional[str]:
+    """The variable a line of an env file sets, read as load_env_file reads it."""
+    text = line.strip()
+    if not text or text.startswith("#") or "=" not in text:
+        return None
+    key = text.partition("=")[0].strip()
+    return key[len("export "):].strip() if key.startswith("export ") else key
+
+
+def account_in_use() -> SlotAccount:
+    """The account Remote Control runs as, from the one line that says so."""
+    try:
+        value = load_env_file(Path(RC_ENV_FILE).expanduser()).get(CONFIG_DIR_VAR, "").strip()
+    except OSError:
+        value = ""
+    if not value:
+        return slot_account("1")
+    chosen = Path(value).expanduser()
+    for account_id in SLOT_ACCOUNT_IDS[1:]:
+        if chosen == slot_account(account_id).config_dir:
+            return slot_account(account_id)
+    return SlotAccount(None, chosen, chosen / ".claude.json")
+
+
+def account_runner(account: SlotAccount, runner: Runner) -> Runner:
+    """`runner`, starting Claude Code as `account`.
+
+    The first account needs nothing: this process never has the variable in
+    its own environment (slot_facts_main drops it), so Claude Code's default
+    directory is the first account's, and its calls stay exactly as they were.
+    """
+    value = account.env_value
+    if value is None:
+        return runner
+
+    def run(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        env = dict(kwargs.pop("env", None) or os.environ)
+        env[CONFIG_DIR_VAR] = value
+        return runner(argv, env=env, **kwargs)
+    return run
+
+
+def account_prefix(account: SlotAccount) -> tuple[str, ...]:
+    """The same, for a command tmux starts.
+
+    A tmux server keeps the environment it was started with and hands that to
+    every later session, so a variable passed to one tmux call does not
+    reliably reach the command. It is named on the command itself instead.
+    """
+    value = account.env_value
+    return () if value is None else ("env", f"{CONFIG_DIR_VAR}={value}")
+
+
+def _json_object(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _epoch_s(raw: Any) -> Optional[float]:
+    """A time Claude Code wrote, in seconds. It writes milliseconds."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+        return None
+    return raw / 1000 if raw > 1e11 else float(raw)
+
+
+def account_facts(account: SlotAccount) -> dict[str, Any]:
+    """What an account's directory says about its sign-in.
+
+    From two small files and nothing else — no Claude Code is started — so
+    asking about an account that is not in use costs two reads, not a
+    process. The tokens beside these fields are never copied out.
+    """
+    credentials = account.config_dir / ".credentials.json"
+    present = credentials.is_file()
+    oauth = _json_object(credentials).get("claudeAiOauth") if present else None
+    oauth = oauth if isinstance(oauth, dict) else {}
+    profile = _json_object(account.global_config).get("oauthAccount")
+    profile = profile if isinstance(profile, dict) else {}
+    plan, email, uuid = (oauth.get("subscriptionType"), profile.get("emailAddress"),
+                         profile.get("accountUuid"))
+    email = email.strip() if isinstance(email, str) else ""
+    return {"present": present,
+            "plan": plan[:40] if isinstance(plan, str) and plan else None,
+            "refresh_expires_at": _epoch_s(oauth.get("refreshTokenExpiresAt")),
+            "email": email if len(email) <= MAX_ACCOUNT_EMAIL else "",
+            # Only ever compared, to find the same account signed in twice.
+            "uuid": uuid if isinstance(uuid, str) and uuid else None}
+
+
+def _usable(facts: Mapping[str, Any], now: float) -> bool:
+    """Signed in, as far as its files can say: a sign-in whose refresh token is
+    still good. Claude Code renews the eight-hour access token by itself."""
+    expires = facts["refresh_expires_at"]
+    return bool(facts["present"]) and (expires is None or expires > now)
+
+
+def accounts_report(in_use: SlotAccount, in_use_signed_in: Optional[bool],
+                    now: float) -> list[dict[str, Any]]:
+    """Every account with a sign-in on this slot, for its holder's page.
+
+    The one exception to what the rest of this agent reports: each account's
+    email address, so a holder with two accounts can tell them apart. Their
+    own page shows it to them; nothing else of theirs goes with it.
+    """
+    out = []
+    for account_id in SLOT_ACCOUNT_IDS:
+        facts = account_facts(slot_account(account_id))
+        if not facts["present"]:
+            continue
+        active = in_use.id == account_id
+        # The account in use has the CLI's own answer, already asked for.
+        signed_in = (in_use_signed_in if active and in_use_signed_in is not None
+                     else _usable(facts, now))
+        out.append({"id": account_id, "email": facts["email"], "plan": facts["plan"],
+                    "active": active, "signed_in": bool(signed_in),
+                    "refresh_expires_at": facts["refresh_expires_at"]})
+    return out
+
+
+def _add_usage(a: Mapping[str, Any], b: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(a)
+    for key in ("sessions", "total_tokens", *USAGE_TOKEN_KEYS):
+        out[key] = a[key] + b[key]
+    out["by_hour"] = {"start": a["by_hour"]["start"],
+                      "tokens": [x + y for x, y in zip(a["by_hour"]["tokens"],
+                                                       b["by_hour"]["tokens"])]}
+    return out
+
+
+def slot_usage(now: float) -> dict[str, Any]:
+    """Tokens this slot has used, whichever of its accounts they went to.
+
+    One window for all of them, ending now, so the hours line up and add.
+    """
+    places = [slot_account(i).config_dir for i in SLOT_ACCOUNT_IDS]
+    parts = [usage_summary(place, now) for place in places if place.is_dir()]
+    if not parts:
+        return usage_summary(places[0], now)
+    total = parts[0]
+    for part in parts[1:]:
+        total = _add_usage(total, part)
+    return total
+
+
+def _atomic_write(path: Path, text: str, mode: int = 0o600) -> bool:
+    """Write a file whole or not at all, readable by this user alone.
+
+    Written beside itself and renamed over, so a unit starting at the wrong
+    moment reads the old file or the new one, never half of either.
+    """
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+    except OSError as exc:
+        log.warning("could not write %s: %s", path.name, exc.__class__.__name__)
+        try:
+            temp.unlink()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def _read_or_none(path: Path) -> Optional[str]:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def use_account(account: SlotAccount) -> bool:
+    """Record `account` as the one in use, keeping every other line of the file."""
+    path = Path(RC_ENV_FILE).expanduser()
+    text = _read_or_none(path)
+    if text is None and path.exists():
+        return False                # there, and unreadable: never write over it blind
+    lines = [line for line in (text or "").splitlines() if _env_key(line) != CONFIG_DIR_VAR]
+    if account.env_value is not None:
+        lines.append(f"{CONFIG_DIR_VAR}={account.env_value}")
+    return _atomic_write(path, "".join(f"{line}\n" for line in lines))
+
+
+def _put_back(path: Path, previous: Optional[str]) -> bool:
+    """Restore the env file to what it said before a switch that failed.
+    True once it says that again."""
+    if previous is not None:
+        return _atomic_write(path, previous)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("could not remove %s: %s", path.name, exc.__class__.__name__)
+        return False
+    return True
+
+
+def prepare_account(account: SlotAccount) -> bool:
+    """A place for a new account: private, and past the prompts nobody can answer."""
+    if account.id == "1":
+        return True                 # slot-add.sh made it, and answered them there
+    try:
+        account.config_dir.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(account.config_dir.parent, 0o700)
+        account.config_dir.mkdir(exist_ok=True)
+        os.chmod(account.config_dir, 0o700)
+    except OSError as exc:
+        log.warning("could not make a place for account %s: %s", account.id,
+                    exc.__class__.__name__)
+        return False
+    if account.global_config.exists():
+        return True
+    seed = {"hasCompletedOnboarding": True, "remoteDialogSeen": True,
+            "projects": {str(Path(SLOT_WORKSPACE).expanduser()): {
+                "hasTrustDialogAccepted": True}}}
+    return _atomic_write(account.global_config, json.dumps(seed, indent=2) + "\n")
+
+
+def remove_sign_in(account: SlotAccount) -> bool:
+    """Delete one account's sign-in from this slot. True once it is gone.
+
+    The first account's directory also holds the slot's settings and history,
+    and every slot has one, so it is never deleted: only its credential goes.
+    The others are removed whole.
+    """
+    credentials = account.config_dir / ".credentials.json"
+    try:
+        if account.id == "1":
+            credentials.unlink(missing_ok=True)
+        elif account.config_dir.is_symlink():
+            account.config_dir.unlink()
+        elif account.config_dir.exists():
+            shutil.rmtree(account.config_dir)
+    except OSError as exc:
+        log.warning("could not remove account %s: %s", account.id, exc.__class__.__name__)
+        return False
+    return not credentials.exists()
+
+
+def _rc_enabled(runner: Runner) -> bool:
+    return _run(runner, ["systemctl", "--user", "is-enabled", DEFAULT_RC_SERVICE],
+                timeout=10) == "enabled"
+
+
+def restart_remote_control(runner: Runner = subprocess.run) -> bool:
+    """Move Remote Control onto the account in use now, whatever it is doing.
+
+    Only ever at the holder's word — a switch, a sign-in — so a session open
+    in it does not hold this back the way it holds back an upgrade. True when
+    it restarted, or when it is switched off on purpose and not running: it
+    starts as the right account whenever it is turned back on. Disabling a
+    unit does not stop it, so one still running is restarted all the same.
+    """
+    if (not _rc_enabled(runner)
+            and remote_control_state(DEFAULT_RC_SERVICE, runner).get("state") != "active"):
+        return True
+    try:
+        proc = runner(["systemctl", "--user", "restart", DEFAULT_RC_SERVICE],
+                      capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def stop_remote_control(runner: Runner = subprocess.run) -> bool:
+    """Stop Remote Control. True only on systemctl's own clean exit: anything
+    else means it may still be running, and as whom is then unknown."""
+    try:
+        proc = runner(["systemctl", "--user", "stop", DEFAULT_RC_SERVICE],
+                      capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _moved_on(state: Mapping[str, Any]) -> dict[str, Any]:
+    """What a change of account makes stale: the windows read for the last one,
+    and any restart still owed to Remote Control, which has just had one."""
+    state = {k: v for k, v in state.items() if k not in ("quota", "account_restart")}
+    if state.get("restart") == "waiting":
+        state["restart"] = "done"
+    return state
+
+
+def _stamp(account: SlotAccount) -> Optional[list[int]]:
+    """Which credential file is there now, to tell a new sign-in from the old one."""
+    try:
+        info = (account.config_dir / ".credentials.json").stat()
+    except OSError:
+        return None
+    return [info.st_mtime_ns, info.st_size, info.st_ino]
+
+
+def sign_in_target(wanted: Any, in_use: SlotAccount) -> Optional[SlotAccount]:
+    """The account a sign-in goes into. None when every place is taken.
+
+    "new" is the first place with no sign-in in it. A named account is signed
+    in again where it is. Anything else — including no word at all, from a
+    server that predates accounts — is the account in use.
+    """
+    if wanted == "new":
+        for account_id in SLOT_ACCOUNT_IDS:
+            account = slot_account(account_id)
+            if not account_facts(account)["present"]:
+                return account
+        return None
+    if wanted in SLOT_ACCOUNT_IDS:
+        return slot_account(wanted)
+    return in_use if in_use.id is not None else slot_account("1")
+
+
+def _recorded_target(mine: Mapping[str, Any], in_use: SlotAccount) -> SlotAccount:
+    account_id, place = mine.get("target"), mine.get("target_dir")
+    if account_id in SLOT_ACCOUNT_IDS:
+        return slot_account(account_id)
+    if isinstance(place, str) and place:
+        return SlotAccount(None, Path(place), Path(place) / ".claude.json")
+    return in_use
+
+
+def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
+                         ) -> tuple[Optional[dict[str, Any]], dict[str, Any],
+                                    Optional[SlotAccount]]:
+    """A sign-in, into the account the holder named. Returns (progress, state,
+    the account signed into by this step, or None).
+
+    While it runs, the account in use goes on working: the new sign-in has its
+    own directory, and nothing moves over to it until it is done.
+
+    Done means the CLI says that account is signed in AND its credential file
+    changed since the attempt began. The first alone is already true of an
+    account signed in again while its old sign-in still works, which would
+    call it done — and close the pane — before the new one was written.
+    """
+    mine = state.get("login") if isinstance(state.get("login"), Mapping) else {}
+    in_use = account_in_use()
+    if not isinstance(wanted, Mapping):
+        progress, new_state = reconcile_login({"login": wanted}, state, runner)
+        return progress, new_state, None
+    requested_at = wanted.get("requested_at")
+    token = wanted.get("kind") == "token"
+    fresh = mine.get("requested_at") != requested_at
+    if fresh:
+        # A device token belongs to the account in use, as it is: only a
+        # sign-in picks an account, or needs a place made for one.
+        target = in_use if token else sign_in_target(wanted.get("account"), in_use)
+        if target is None:
+            why = "this slot already has 3 accounts"
+        elif not token and not prepare_account(target):
+            why = "could not make a place for that account"
+        else:
+            why = ""
+        if why:
+            if mine:
+                end_login(runner)           # the attempt this one replaces
+            return ({"state": "failed", "detail": why, "requested_at": requested_at},
+                    {**state, "login": {"requested_at": requested_at, "phase": "failed"}},
+                    None)
+        before = _stamp(target)
+    else:
+        target, before = _recorded_target(mine, in_use), mine.get("before")
+
+    def signed_in() -> bool:
+        return (auth_status(account_runner(target, runner)).get("logged_in") is True
+                and _stamp(target) != before)
+
+    progress, new_state = reconcile_login({"login": wanted}, state, runner,
+                                          env_prefix=account_prefix(target),
+                                          signed_in=None if token else signed_in)
+    if fresh and isinstance(new_state.get("login"), Mapping):
+        new_state["login"] = {**new_state["login"], "target": target.id,
+                              "target_dir": str(target.config_dir), "before": before}
+    done = not token and (progress or {}).get("state") == "done"
+    return progress, new_state, (target if done else None)
+
+
+def after_sign_in(account: SlotAccount, state: Mapping[str, Any],
+                  runner: Runner) -> dict[str, Any]:
+    """A sign-in finished: that account is now the one in use, and Remote
+    Control follows it straight away.
+
+    This is also what makes "Sign in again" with a different account work.
+    Remote Control used to be started only when it was not running, so a
+    new sign-in under a running one left the slot serving the old account.
+
+    The same account signed in twice keeps only what was just signed in; the
+    other copy's sign-in is deleted once Remote Control has moved off it (see
+    drop_other_copies).
+    """
+    if account.id is not None and not use_account(account):
+        log.warning("signed into account %s but could not switch to it", account.id)
+        return dict(state)
+    state = _moved_on(state)
+    if restart_remote_control(runner):
+        drop_other_copies(account)
+    else:
+        state["account_restart"] = "owed"   # tried again on the next run
+    return state
+
+
+def drop_other_copies(account: SlotAccount) -> None:
+    """Delete any other sign-in of the same account, keeping `account`'s.
+
+    Only once Remote Control has restarted onto `account`: until then it may
+    still be running as the other copy, and deleting that sign-in under it
+    would leave it serving from a credential nothing on the slot holds.
+    """
+    uuid = account_facts(account)["uuid"]
+    if uuid is None:
+        return
+    for account_id in SLOT_ACCOUNT_IDS:
+        other = slot_account(account_id)
+        if other.id == account.id:
+            continue
+        facts = account_facts(other)
+        if facts["present"] and facts["uuid"] == uuid:
+            remove_sign_in(other)
+
+
+def account_intent(raw: Any) -> Optional[dict[str, Any]]:
+    """A switch or a removal the holder asked for, checked again here.
+
+    The machine has checked it already; this is the process that acts on it,
+    and it picks what gets deleted, so it does not take that on trust.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    requested_at = raw.get("requested_at")
+    if isinstance(requested_at, bool) or not isinstance(requested_at, (int, float)):
+        return None
+    action, account_id = raw.get("action"), raw.get("id")
+    if action not in ACCOUNT_ACTIONS or account_id not in SLOT_ACCOUNT_IDS:
+        return None
+    return {"action": action, "id": account_id, "requested_at": requested_at}
+
+
+def switch_account(account: SlotAccount, state: Mapping[str, Any], runner: Runner,
+                   now: float) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Make another signed-in account the one in use: one click, no link, no code.
+
+    Asked first, as that account: a sign-in that stopped working is refused
+    before anything moves, with Remote Control still on the account that
+    works. Then the line, then Remote Control; if Remote Control will not
+    restart, the line goes back to what it said and Remote Control is
+    restarted onto it. A failure says only what is known to be true of where
+    that left the slot; the accounts in the same report say which is recorded.
+    """
+    state = dict(state)
+    if not _usable(account_facts(account), now):
+        return {"state": "failed", "detail": "that account is not signed in on this slot"}, state
+    if account_in_use().id == account.id:
+        return {"state": "done", "detail": "already in use"}, state
+    if auth_status(account_runner(account, runner)).get("logged_in") is not True:
+        return {"state": "failed",
+                "detail": "that account's sign-in no longer works; sign in again"}, state
+    path = Path(RC_ENV_FILE).expanduser()
+    previous = _read_or_none(path)
+    if not use_account(account):
+        return {"state": "failed", "detail": "could not record the switch"}, state
+    if not restart_remote_control(runner):
+        if not _put_back(path, previous):
+            why = "Remote Control did not restart, and the switch could not be undone"
+        elif not restart_remote_control(runner):   # back onto the account that was in use
+            why = "Remote Control would not restart as either account"
+        else:
+            why = "Remote Control did not restart; still on the previous account"
+        return {"state": "failed", "detail": why}, state
+    return {"state": "done", "detail": ""}, _moved_on(state)
+
+
+def _next_account(leaving: SlotAccount, runner: Runner, now: float) -> SlotAccount:
+    """Where the slot goes when the account in use is removed: the first other
+    account Claude Code itself still accepts, asked as that account. With none,
+    account 1 — which, once `leaving` is gone, has nobody signed in."""
+    for account_id in SLOT_ACCOUNT_IDS:
+        candidate = slot_account(account_id)
+        if (account_id != leaving.id and _usable(account_facts(candidate), now)
+                and auth_status(account_runner(candidate, runner)).get("logged_in") is True):
+            return candidate
+    return slot_account("1")
+
+
+def forget_account(account: SlotAccount, state: Mapping[str, Any], runner: Runner,
+                   now: float) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Sign an account out of this slot and delete its sign-in.
+
+    Removing the account in use stops Remote Control first — nothing may go
+    on running as an account its holder has just removed — and records the
+    move to the next account before anything is deleted, so a step that fails
+    leaves everything as it was. The ordinary path then starts Remote Control
+    as that account; with none signed in, it stays stopped until somebody is.
+    """
+    state = dict(state)
+    if account_in_use().id == account.id:
+        if not stop_remote_control(runner):
+            return {"state": "failed",
+                    "detail": "Remote Control did not stop; nothing was removed"}, state
+        if not use_account(_next_account(account, runner, now)):
+            # Still recorded as the account in use, and still signed in: the
+            # ordinary path starts Remote Control again as it.
+            return {"state": "failed",
+                    "detail": "could not record the switch; nothing was removed"}, state
+        state = _moved_on(state)
+    path = find_claude()
+    if path and account_facts(account)["present"]:
+        # Claude Code's own sign-out, for whatever it does beyond this machine.
+        # Best effort: the deletion below is what this slot relies on.
+        _run(account_runner(account, runner), [path, "auth", "logout"], timeout=30.0)
+    if not remove_sign_in(account):
+        return {"state": "failed", "detail": "could not remove that account"}, state
+    return {"state": "done", "detail": ""}, state
+
+
+def reconcile_account(raw: Any, state: Mapping[str, Any], runner: Runner,
+                      now: float) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
+    """Carry out a switch or a removal once, and keep saying how it went until
+    the server stops asking — the same one-report-late shape as a sign-in."""
+    state = dict(state)
+    intent = account_intent(raw)
+    if intent is None:
+        state.pop("account_intent", None)
+        return None, state
+    last = state.get("account_intent")
+    if isinstance(last, Mapping) and last.get("requested_at") == intent["requested_at"]:
+        return dict(last), state            # done already: say so again, never redo it
+    act = switch_account if intent["action"] == "use" else forget_account
+    outcome, state = act(slot_account(intent["id"]), state, runner, now)
+    report = {"requested_at": intent["requested_at"], **outcome}
+    state["account_intent"] = report
+    return report, state
+
+
 def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
                now: Optional[float] = None) -> dict[str, Any]:
     """What this slot looks like, collected as its own user.
@@ -1437,22 +2072,34 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
 
     A sign-in its holder started from their page is carried one step further
     here, by the same code that signs an owner node in — the URL out, the code
-    back — and its progress goes back with the facts.
+    back — and its progress goes back with the facts. So does a switch between
+    the holder's accounts, or a removal of one; and every fact below is about
+    the account in use, after either.
     """
     now = time.time() if now is None else now
     state_path = Path(SLOT_STATE_PATH).expanduser()
     state = read_state(state_path)
-    # First, so a sign-in that completes in this step already reads as signed
-    # in below — and the slot is active in the same heartbeat, not the next.
-    progress, state = reconcile_login({"login": request.get("login")}, state, runner)
-    config_dir = Path.home() / ".claude"
-    credentials = credentials_summary(config_dir)
-    status = auth_status(runner)
+    # First, so everything below describes the account the holder moved to, in
+    # this report rather than the next.
+    switched, state = reconcile_account(request.get("account"), state, runner, now)
+    # Then a sign-in, so one that completes in this step already reads as
+    # signed in below — and the slot is active in the same heartbeat.
+    progress, state, signed_into = reconcile_slot_login(request.get("login"), state, runner)
+    if signed_into is not None:
+        state = after_sign_in(signed_into, state, runner)
+    elif state.get("account_restart") == "owed" and restart_remote_control(runner):
+        state.pop("account_restart")
+        drop_other_copies(account_in_use())     # held back until this restart
+    in_use = account_in_use()
+    as_in_use = account_runner(in_use, runner)
+    credentials = credentials_summary(in_use.config_dir, in_use.global_config)
+    status = auth_status(as_in_use)
     if status:
         credentials.update(status)
         credentials["present"] = status.get("logged_in", credentials.get("present"))
     state, installed = reconcile_slot_version(request, state,
-                                              claude_info(runner).get("version"), runner, now)
+                                              claude_info(as_in_use).get("version"),
+                                              as_in_use, now)
     remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
     if credentials.get("logged_in") is True and remote.get("state") != "active":
         start_remote_control(runner)
@@ -1465,14 +2112,15 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
         "claude": {"version": installed},
         "credentials": credentials,
         "remote_control": remote,
-        "usage": usage_summary(config_dir),
+        "usage": slot_usage(now),
+        "accounts": accounts_report(in_use, status.get("logged_in") if status else None, now),
     }
     # A slot nobody has signed into yet has no windows to read, and the session
     # the read opens would start on the login screen — where the keystrokes it
     # types to reach /usage would land instead. Most slots spend their first
     # minutes exactly there, between being claimed and being signed into.
     if request.get("refresh_quota") is True and credentials.get("logged_in") is True:
-        quota, remember = quota_summary(state, runner, now)
+        quota, remember = quota_summary(state, runner, now, account_prefix(in_use))
         if remember is not None:
             state = {**state, "quota": remember}
     else:
@@ -1488,6 +2136,8 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
         facts["quota"] = quota
     if progress:
         facts["login"] = progress
+    if switched:
+        facts["account_switch"] = switched
     return facts
 
 
@@ -1509,6 +2159,10 @@ def slot_facts_main(stdin: Any, stdout: Any, runner: Runner = subprocess.run) ->
     # the session the quota read opens. Start from there rather than wherever
     # the caller happened to leave us.
     os.chdir(Path.home())
+    # Which account Claude Code runs as is the slot's own choice, recorded in
+    # one file (see account_in_use). A directory inherited from whoever started
+    # this would quietly make every call about some other account.
+    os.environ.pop(CONFIG_DIR_VAR, None)
     json.dump(slot_facts(request, runner), stdout, separators=(",", ":"))
     return 0
 

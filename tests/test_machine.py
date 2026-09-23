@@ -676,6 +676,101 @@ def test_a_sign_in_the_server_still_wants_is_handed_on_to_the_next_run(cfg):
     assert state["slot_logins"] == {}, "a finished sign-in kept being run"
 
 
+# -- a holder's several accounts ---------------------------------------------------
+
+SWITCH = {"action": "use", "id": "2", "requested_at": 7.0}
+ACCOUNTS = [{"id": "1", "email": "work@example.com", "active": False},
+            {"id": "2", "email": "home@example.com", "active": True}]
+
+
+def test_a_switch_goes_down_only_to_a_slot_set_up_and_held():
+    wanted = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "active", "account": SWITCH},
+        {"unix_user": "slot02", "state": "claimed", "account": {**SWITCH, "action": "forget"}},
+        {"unix_user": "slot03", "state": "releasing", "account": SWITCH},
+        {"unix_user": "slot04", "state": "free", "account": SWITCH},
+        {"unix_user": "slot05", "state": "claiming", "claimed_at": CLAIM, "account": SWITCH},
+    ]})
+    assert wanted[0]["account"] == SWITCH
+    assert wanted[1]["account"] == {**SWITCH, "action": "forget"}
+    assert all("account" not in slot for slot in wanted[2:])
+
+
+@pytest.mark.parametrize("raw", [
+    {**SWITCH, "id": "4"}, {**SWITCH, "id": "../2"}, {**SWITCH, "id": 2},
+    {**SWITCH, "id": ["2"]}, {**SWITCH, "action": "wipe"}, {**SWITCH, "action": "USE"},
+    {**SWITCH, "requested_at": True}, {**SWITCH, "requested_at": "7"},
+    {"action": "use", "id": "2"}, "use 2", None,
+])
+def test_a_switch_the_slot_would_not_recognise_never_reaches_it(raw):
+    """A removal deletes a directory in the slot's home: only the slot agent's
+    own words go down, and anything else stops here."""
+    [slot] = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "active", "account": raw}]})
+    assert "account" not in slot
+
+
+def test_a_switch_is_copied_field_by_field():
+    [slot] = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "active",
+         "account": {**SWITCH, "argv": ["rm", "-rf", "/"]}}]})
+    assert slot["account"] == SWITCH
+
+
+@pytest.mark.parametrize("account,kept", [
+    ("new", True), ("1", True), ("2", True), ("3", True),
+    ("4", False), ("../1", False), (1, False), (["1"], False), ("", False),
+])
+def test_which_account_a_sign_in_goes_into_is_one_of_four_words(account, kept):
+    [slot] = machine.wanted_slots({"slots": [
+        {"unix_user": "slot01", "state": "active", "login": {**LOGIN, "account": account}}]})
+    assert slot["login"].get("account") == (account if kept else None)
+
+
+def test_a_slot_is_handed_its_own_switch_and_its_accounts_come_back(cfg):
+    fake = Fake(users=["slot01", "slot02"],
+                facts={"claude": {"version": "2.1.280"}, "accounts": ACCOUNTS,
+                       "account_switch": {"requested_at": 7.0, "state": "done", "detail": ""}})
+    state = {"slots": ["slot01", "slot02"], "slot_accounts": {"slot01": SWITCH}}
+    payload = machine.machine_payload(cfg, state, fake.system())
+    asked = {kw["env"]["USER"]: json.loads(kw["input_text"])["account"]
+             for _, kw in fake.spawned}
+    assert asked == {"slot01": SWITCH, "slot02": None}, "a switch went to the wrong slot"
+    assert payload["slots"][0]["accounts"] == ACCOUNTS
+    assert payload["slots"][0]["account_switch"]["state"] == "done"
+
+
+@pytest.mark.parametrize("accounts", [
+    [{"id": "1"}] * 4, [{"id": "1"}, "2"], {"id": "1"}, "1,2", [None],
+])
+def test_an_account_list_of_the_wrong_shape_is_not_carried(cfg, accounts):
+    fake = Fake(users=["slot01"], facts={"claude": {"version": "2.1.280"},
+                                         "accounts": accounts})
+    assert "accounts" not in machine.ask_slot(fake.lookup("slot01"), cfg, fake.system(), {})
+
+
+def test_the_accounts_are_kept_for_fast_polls_but_a_switch_is_news_once(cfg):
+    fake = Fake(users=["slot01"],
+                desired={"slots": [{"unix_user": "slot01", "state": "active",
+                                    "account": SWITCH}]},
+                facts={"claude": {"version": "2.1.280"}, "accounts": ACCOUNTS,
+                       "account_switch": {"requested_at": 7.0, "state": "done", "detail": ""}})
+    _, _, state = machine.run_cycle(cfg, {"slots": ["slot01"],
+                                          "slot_accounts": {"slot01": SWITCH}}, fake.system())
+    assert state["heard"]["slot01"]["accounts"] == ACCOUNTS
+    assert "account_switch" not in state["heard"]["slot01"]
+
+
+def test_a_switch_the_server_still_wants_is_handed_on_to_the_next_run(cfg):
+    fake = Fake(users=["slot01"], desired={"slots": [
+        {"unix_user": "slot01", "state": "active", "account": SWITCH}]})
+    _, _, state = machine.run_cycle(cfg, {}, fake.system())
+    assert state["slot_accounts"] == {"slot01": SWITCH}
+    fake.desired = {"slots": [{"unix_user": "slot01", "state": "active"}]}
+    _, _, state = machine.run_cycle(cfg, state, fake.system())
+    assert state["slot_accounts"] == {}, "a finished switch kept being made"
+
+
 class Clock:
     def __init__(self):
         self.now = 0.0
