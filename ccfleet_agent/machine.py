@@ -101,7 +101,11 @@ MAX_LOGIN_FIELD = 512
 EXIT_GRACE_S = 5.0
 # Only these reach the server from a slot's own report. Everything else in the
 # entry — presence, provisioning, wipes — is root's own knowledge.
-SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage")
+SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "upgrade")
+# The states in which a slot's Linux user exists and belongs to somebody: the
+# only ones whose Claude Code follows the machine's pin. A claiming slot is
+# still being made, and a releasing one is about to be deleted.
+UPGRADE_STATES = SIGN_IN_STATES
 
 
 @dataclass(frozen=True)
@@ -309,12 +313,13 @@ def slot_env(account: pwd.struct_passwd) -> dict[str, str]:
 
 
 def ask_slot(account: pwd.struct_passwd, cfg: MachineConfig, system: System,
-             request: Mapping[str, Any]) -> dict[str, Any]:
+             request: Mapping[str, Any],
+             timeout: float = SLOT_FACTS_TIMEOUT_S) -> dict[str, Any]:
     """The slot's own report on itself, collected as its own user."""
     code, output = system.spawn(
         [sys.executable, "-I", str(cfg.slot_agent), "--slot-facts"],
         input_text=json.dumps(dict(request)), limit=MAX_SLOT_REPORT_BYTES,
-        timeout=SLOT_FACTS_TIMEOUT_S,
+        timeout=timeout,
         user=account.pw_uid, group=account.pw_gid, extra_groups=[],
         env=slot_env(account), cwd="/")
     if code != 0 or output is None:
@@ -364,8 +369,17 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
     # only the named fact keys are taken from what the slot said.
     if ask:
         login = (state.get("slot_logins") or {}).get(user)
-        heard = ask_slot(account, cfg, system,
-                         {"refresh_quota": refresh_quota, "login": login})
+        request: dict[str, Any] = {"refresh_quota": refresh_quota, "login": login}
+        timeout = SLOT_FACTS_TIMEOUT_S
+        if (state.get("slot_states") or {}).get(user) in UPGRADE_STATES:
+            # The machine's pin, and whether this slot may move to it now: not
+            # while its holder is signing in, which a restart would cut short.
+            request["claude_version"] = state.get("claude_version") or ""
+            request["may_upgrade"] = login is None
+            if request["may_upgrade"] and request["claude_version"]:
+                # Room for the installer too: a download, not a probe.
+                timeout = SLOT_FACTS_TIMEOUT_S + core.INSTALL_TIMEOUT_S
+        heard = ask_slot(account, cfg, system, request, timeout)
     else:
         heard = dict((state.get("heard") or {}).get(user) or {})
     entry.update(heard)
@@ -474,6 +488,7 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
             table.pop(user)
     return {**state, "provisioned": provisioned, "provision_failed": failed,
             "wipe_failed": wipes, "slots": [s["unix_user"] for s in slots],
+            "slot_states": {s["unix_user"]: s["state"] for s in slots},
             "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s}}
 
 
@@ -502,6 +517,9 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     desired = core.parse_desired(text)
     state = {**state, "heard": {u: f for u, f in heard.items() if u in users}}
     new_state = act_on_slots(wanted_slots(desired), state, cfg, system)
+    # The version this machine's slots should run, checked the way the owner
+    # agent checks its own before it reaches an installer. Empty: leave them be.
+    new_state["claude_version"] = core.installable_version(desired.get("claude_version")) or ""
     new_state["quota_turn"] = (turn + (0 if fast else 1)) if users else 0
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state

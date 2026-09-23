@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from . import payments
 from . import slots as slotstates
+from .desired import is_channel
 from .render import _age
 from .store import Store, StoreError
 
@@ -57,6 +58,15 @@ def _trouble(slot: Mapping[str, Any], alerts: list[Mapping[str, Any]], now: floa
     return said
 
 
+def _upgrade_trouble(report: Mapping[str, Any]) -> list[str]:
+    """A Claude Code update the machine tried for this slot and could not make."""
+    upgrade = report.get("upgrade") or {}
+    if upgrade.get("ok") is not False:
+        return []
+    return [f"Claude Code update to {upgrade.get('to') or '?'} failed: "
+            f"{upgrade.get('error') or 'no reason given'}"]
+
+
 def section(store: Store, csrf: str, now: float) -> str:
     """The slots card and the accounts card, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
@@ -66,15 +76,22 @@ def section(store: Store, csrf: str, now: float) -> str:
 def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
                 now: float) -> str:
     alerts = store.open_alerts()
+    latest = store.latest_heartbeats()
     blocks = []
     for node in store.list_nodes():
         rows = store.list_slots(node_id=node["id"])
         capacity = int(node["capacity"])
         if not rows and capacity <= 1:
             continue          # an ordinary owner node: nothing about slots to show
+        # What the machine last said: each slot's own report, and its own state.
+        said = (latest.get(node["id"]) or {}).get("payload") or {}
+        reports = {r.get("unix_user"): r for r in said.get("slots") or []
+                   if isinstance(r, Mapping)}
+        reboot = (' <span class="pill warn">reboot needed</span>'
+                  if said.get("reboot_required") is True else "")
         base = f"/actions/machine/{escape(node['id'])}"
         head = (f'<div class="row-line"><div class="row-name">{escape(node["id"])}'
-                f'<span class="muted"> · {len(rows)} of {capacity} declared</span></div>'
+                f'<span class="muted"> · {len(rows)} of {capacity} declared</span>{reboot}</div>'
                 '<div class="actions">'
                 + _form(f"{base}/capacity", csrf, "Set capacity",
                         '<input type="text" name="count" class="count" inputmode="numeric" '
@@ -84,7 +101,9 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                         'required><input type="text" name="unix_user" placeholder="unix user" '
                         'size="10" required>')
                 + "</div></div>")
-        lines = [head] + [_slot_line(s, accounts, alerts, csrf, now) for s in rows]
+        pin = str(node.get("pinned_version") or "")
+        lines = [head] + [_slot_line(s, accounts, alerts, csrf, now,
+                                     reports.get(s["unix_user"]) or {}, pin) for s in rows]
         blocks.append("".join(lines))
     body = "".join(blocks) or ('<p class="quiet">No shared machines yet. A machine joins '
                                "once its capacity is raised on the server, where it is "
@@ -97,14 +116,23 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
 
 
 def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
-               alerts: list[Mapping[str, Any]], csrf: str, now: float) -> str:
+               alerts: list[Mapping[str, Any]], csrf: str, now: float,
+               report: Optional[Mapping[str, Any]] = None, pin: str = "") -> str:
+    report = report or {}
     holder = accounts.get(slot.get("held_by") or "")
     who = escape(str(holder["email"])) if holder else "&mdash;"
     seen = {1: "on machine", 0: "not on machine"}.get(slot.get("present"), "not yet seen")
     claimed = (f" · claimed {escape(_age(now, slot['claimed_at']))} ago"
                if slot.get("claimed_at") else "")
+    version = (report.get("claude") or {}).get("version")
+    running = f" · Claude Code {escape(str(version))}" if version else ""
+    # Only an exact pin can be behind; a channel has no number to compare. And
+    # only for a slot somebody holds: a free one has no Claude Code to update.
+    pending = (' <span class="pill warn">update pending</span>'
+               if version and pin and not is_channel(pin) and version != pin
+               and slot["state"] in (slotstates.CLAIMED, slotstates.ACTIVE) else "")
     trouble = "".join(f'<br><span class="bad-text">{escape(t)}</span>'
-                      for t in _trouble(slot, alerts, now))
+                      for t in _trouble(slot, alerts, now) + _upgrade_trouble(report))
     base = f"/actions/slot/{escape(slot['id'])}"
     buttons = ""
     if slot["state"] in slotstates.RELEASABLE:
@@ -117,7 +145,8 @@ def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]
     tone = STATE_TONE.get(slot["state"], "disabled")
     return (f'<div class="row-line"><div class="row-name">{escape(slot["id"])}'
             f'<span class="muted"> · {escape(slot["unix_user"])} · {escape(seen)}{claimed}'
-            f"</span> <span class=\"pill {tone}\">{escape(slot['state'])}</span>"
+            f"{running}</span> <span class=\"pill {tone}\">{escape(slot['state'])}</span>"
+            f"{pending}"
             f" <span class=\"small\">{who}</span>{trouble}</div>"
             f'<div class="actions">{buttons}</div></div>')
 

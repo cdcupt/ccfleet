@@ -272,3 +272,61 @@ def test_a_count_that_is_not_a_sane_number_counts_as_nothing():
 def test_a_series_that_cannot_be_placed_is_dropped_whole(hourly):
     """Cut short or unanchored, every bar would stand in the wrong hour."""
     assert "by_hour" not in _usage({"by_hour": hourly})
+
+
+
+# -- upgrades a slot reports, and a reboot the OS asks for ----------------------------
+
+def test_a_slots_upgrade_is_kept_bounded():
+    out = _machine([{"unix_user": "slot01", "upgrade": {
+        "from": "2.1.278", "to": "2.1.300", "ok": True, "ts": 5.0, "error": None,
+        "restart": "waiting", "surprise": 1}}])
+    assert out["slots"][0]["upgrade"] == {"from": "2.1.278", "to": "2.1.300", "ok": True,
+                                          "ts": 5.0, "error": None, "restart": "waiting"}
+    long = _machine([{"unix_user": "slot01", "upgrade": {"ok": False, "error": "x" * 5000}}])
+    assert len(long["slots"][0]["upgrade"]["error"]) <= 200
+
+
+@pytest.mark.parametrize("restart", ["restarted", "", 1, True, None, ["done"]])
+def test_a_restart_the_agent_did_not_name_properly_is_nothing(restart):
+    out = _machine([{"unix_user": "slot01", "upgrade": {"to": "2.1.300", "ok": True,
+                                                        "restart": restart}}])
+    assert out["slots"][0]["upgrade"]["restart"] is None
+
+
+def test_a_restart_still_owed_is_reported_without_its_record():
+    """The record is dropped once the pin is met; the restart it caused may not
+    have happened yet, and is still news."""
+    out = _machine([{"unix_user": "slot01", "upgrade": {"restart": "waiting"}}])
+    assert out["slots"][0]["upgrade"] == {"restart": "waiting"}
+
+
+@pytest.mark.parametrize("upgrade", [None, {}, {"surprise": 1}, "done", []])
+def test_a_slot_with_no_upgrade_to_speak_of_says_nothing(upgrade):
+    entry = {"unix_user": "slot01"}
+    if upgrade is not None:
+        entry["upgrade"] = upgrade
+    assert "upgrade" not in _machine([entry])["slots"][0]
+
+
+@pytest.mark.parametrize("sent,kept", [(True, True), (False, False)])
+def test_a_reboot_the_os_asked_for_is_kept(sent, kept):
+    out = validate_heartbeat({"node_id": "n", "reboot_required": sent}, "n")
+    assert out["reboot_required"] is kept
+    assert _machine([], reboot_required=sent)["reboot_required"] is kept
+
+
+@pytest.mark.parametrize("sent", ["yes", "true", 1, 0, None, {}, [True]])
+def test_anything_but_a_plain_yes_or_no_about_rebooting_is_dropped(sent):
+    out = validate_heartbeat({"node_id": "n", "reboot_required": sent}, "n")
+    assert "reboot_required" not in out
+
+
+def test_the_owners_upgrade_record_keeps_its_shape():
+    """Refactored onto the slots' reader: an owner node's record must not gain
+    the slot-only restart field."""
+    out = validate_heartbeat({"node_id": "n", "reconcile": {"upgrade": {
+        "from": "2.1.90", "to": "2.1.99", "ok": True, "ts": 1.0, "error": None,
+        "restart": "done"}}}, "n")
+    assert out["reconcile"]["upgrade"] == {"from": "2.1.90", "to": "2.1.99", "ok": True,
+                                           "error": None, "ts": 1.0}

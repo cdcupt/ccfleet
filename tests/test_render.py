@@ -417,3 +417,19 @@ def test_the_card_remembers_that_a_token_was_issued():
         html = _token_html([{"id": "n", "owner": "e", "device_token_at": missing}],
                            "TOK", {}, NOW)
         assert "last issued" not in html
+
+
+
+def _row_with(**payload):
+    nodes = [{"id": "node-a", "owner": "erik", "region": "us", "pinned_version": "",
+              "rc_expected": False, "enabled": True, "created_at": 0}]
+    hb = heartbeat(NOW - 30)
+    hb["payload"].update(payload)
+    return build_rows(nodes, {"node-a": hb}, [], NOW)[0]
+
+
+def test_a_node_whose_os_wants_a_reboot_says_so():
+    from ccfleetd.render import _row_html
+    assert "reboot needed" in _row_html(_row_with(reboot_required=True), NOW)
+    for quiet in ({"reboot_required": False}, {}, {"reboot_required": "yes"}):
+        assert "reboot needed" not in _row_html(_row_with(**quiet), NOW), quiet

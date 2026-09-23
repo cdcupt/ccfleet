@@ -260,6 +260,9 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # What the node did about its pin last time it was asked. A silent
             # reconcile is indistinguishable from one that never ran.
             "last_upgrade": ((payload.get("reconcile") or {}).get("upgrade") or None),
+            # The OS asked for a reboot (a kernel, a libc). A badge, not an alert:
+            # it is the operator's to schedule, and nothing is broken meanwhile.
+            "reboot_required": payload.get("reboot_required") is True,
             "usage": payload.get("usage") or {},
             "quota": payload.get("quota") or {},
             "open_alerts": [a["rule"] for a in node_alerts],
@@ -333,7 +336,8 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         f'<tr class="r-{escape(row["status"])}">'
         f"<td>{_pill(row['status'])}</td>"
         f'<td><span class="node-id">{escape(row["id"])}</span>'
-        f"<br><span class=\"muted\">{escape(row['owner'])}"
+        + (' <span class="pill warn">reboot needed</span>' if row.get("reboot_required") else "")
+        + f"<br><span class=\"muted\">{escape(row['owner'])}"
         f" · {escape(row['region'] or '-')}</span></td>"
         f"<td class=\"num\">{escape(_age(now, row['last_seen_ts']))}</td>"
         f'<td class="v">{version}</td>'

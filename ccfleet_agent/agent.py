@@ -287,6 +287,18 @@ def _meminfo_used_pct() -> Optional[float]:
     return round((1 - available / total) * 100, 1) if total else None
 
 
+# Debian's and Ubuntu's own flag that an installed update needs a reboot to take
+# effect (a new kernel, a new libc). Written by the packaging system; this only
+# looks. Overridable so a test can point it at a file it controls.
+REBOOT_REQUIRED_FILE = "/var/run/reboot-required"
+
+
+def reboot_required() -> bool:
+    """Whether the operating system has asked for a reboot."""
+    return Path(os.environ.get("CCFLEET_REBOOT_REQUIRED_FILE",
+                               REBOOT_REQUIRED_FILE)).exists()
+
+
 def system_info() -> dict[str, Any]:
     uptime_line = _read_first_line("/proc/uptime")
     uptime = None
@@ -301,7 +313,7 @@ def system_info() -> dict[str, Any]:
     except (OSError, AttributeError):
         load = {"1": None, "5": None, "15": None}
     return {"hostname": socket.gethostname()[:100], "uptime_s": uptime, "load": load,
-            "mem": {"used_pct": _meminfo_used_pct()}}
+            "mem": {"used_pct": _meminfo_used_pct()}, "reboot_required": reboot_required()}
 
 
 def disk_info(path: Path) -> dict[str, Any]:
@@ -1336,6 +1348,78 @@ def start_remote_control(runner: Runner = subprocess.run) -> None:
     _run(runner, ["systemctl", "--user", "start", DEFAULT_RC_SERVICE], timeout=60)
 
 
+def rc_session_running(runner: Runner = subprocess.run) -> Optional[bool]:
+    """Whether this user has a Remote Control session open right now.
+
+    A session somebody opened from claude.ai runs as a Claude Code worker
+    started with `--sdk-url`. None when it cannot be told — and that is treated
+    like a session in progress: a restart is only ever made on a clear "no".
+    """
+    try:
+        proc = runner(["pgrep", "-u", str(os.getuid()), "-f", "claude.*--sdk-url"],
+                      capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(proc.returncode)
+
+
+def reconcile_slot_version(request: Mapping[str, Any], state: Mapping[str, Any],
+                           installed: Optional[str], runner: Runner = subprocess.run,
+                           now: Optional[float] = None) -> tuple[dict[str, Any], Optional[str]]:
+    """Bring a held slot to its machine's pin. Returns (state, version now installed).
+
+    The machine agent names the pin for every slot somebody holds, and says
+    whether this slot may change right now — not while its holder is signing
+    in. The installing is the owner agent's own, back-off and channels
+    included: this only decides whether to ask. Installing never touches a
+    session that is already running; it leaves the old version where it is.
+    What is still running the old one is Remote Control, which is restarted
+    later, at a quiet moment (see finish_restart).
+    """
+    if "claude_version" not in request:
+        return dict(state), installed
+    pin = {"claude_version": request.get("claude_version")}
+    # prune_state drops a success once it is satisfied, which is right for the
+    # record and wrong for the restart it may still owe: that is kept until
+    # done, and only forgotten when there is no pin left at all.
+    state = prune_state(state, pin, installed)
+    if installable_version(pin["claude_version"]) is None:
+        state.pop("restart", None)
+    if request.get("may_upgrade") is not True:
+        return state, installed
+    result = reconcile_version(pin, installed, state, runner, now)
+    if result is None:
+        return state, installed
+    channel = result.pop("channel", None)
+    state["upgrade"] = result
+    if channel is not None:
+        state["channel"] = channel
+    if result["ok"] and result["to"] != installed:
+        state["restart"] = "waiting"
+        return state, result["to"]
+    return state, installed
+
+
+def finish_restart(state: Mapping[str, Any], remote: Mapping[str, Any],
+                   runner: Runner = subprocess.run) -> dict[str, Any]:
+    """Restart Remote Control onto a new version once nobody is using it.
+
+    Only when it is running (a start picks up the new version by itself) and
+    only on a clear "no session open"; otherwise it waits for a later run.
+    """
+    state = dict(state)
+    if state.get("restart") != "waiting":
+        return state
+    if remote.get("state") != "active":
+        state.pop("restart", None)
+        return state
+    if rc_session_running(runner) is not False:
+        return state
+    _run(runner, ["systemctl", "--user", "restart", DEFAULT_RC_SERVICE], timeout=60)
+    state["restart"] = "done"
+    return state
+
+
 def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
                now: Optional[float] = None) -> dict[str, Any]:
     """What this slot looks like, collected as its own user.
@@ -1362,12 +1446,18 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     if status:
         credentials.update(status)
         credentials["present"] = status.get("logged_in", credentials.get("present"))
+    state, installed = reconcile_slot_version(request, state,
+                                              claude_info(runner).get("version"), runner, now)
     remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
     if credentials.get("logged_in") is True and remote.get("state") != "active":
         start_remote_control(runner)
         remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
+        # Whatever starts now runs the version installed now: nothing to restart.
+        state.pop("restart", None)
+    elif request.get("may_upgrade") is True:
+        state = finish_restart(state, remote, runner)
     facts: dict[str, Any] = {
-        "claude": {"version": claude_info(runner).get("version")},
+        "claude": {"version": installed},
         "credentials": credentials,
         "remote_control": remote,
         "usage": usage_summary(config_dir),
@@ -1383,6 +1473,11 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     else:
         cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
         quota = {k: v for k, v in cached.items() if k != "ts"} if cached else None
+    upgrade = state.get("upgrade") if isinstance(state.get("upgrade"), Mapping) else {}
+    if upgrade or state.get("restart"):
+        facts["upgrade"] = {**upgrade, "restart": state.get("restart")}
+    if state.get("restart") == "done":
+        state.pop("restart")                # said once; there is nothing left to do
     write_state(state_path, state)
     if quota:
         facts["quota"] = quota

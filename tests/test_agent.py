@@ -1783,3 +1783,181 @@ def test_remote_control_is_left_alone_otherwise(slot_home, monkeypatch, rc, enab
     calls = []
     agent.slot_facts({}, rc_runner(calls, rc=rc, enabled=enabled))
     assert ["systemctl", "--user", "start", "claude-remote-control.service"] not in calls
+
+
+
+# -- a slot following its machine's pin --------------------------------------------
+
+RC_RESTART = ["systemctl", "--user", "restart", "claude-remote-control.service"]
+
+
+def moving_claude(calls, *, before="2.1.278", after="2.1.300", install_rc=0,
+                  session=1, rc="active", pgrep_raises=False):
+    """A slot whose Claude Code really moves: `install` changes what --version says.
+
+    `session` is pgrep's exit code: 0 a Remote Control session is open, 1 none,
+    anything else pgrep could not tell.
+    """
+    now_running = {"v": before}
+    base = slot_runner([])
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1:2] == ["install"]:
+            if install_rc == 0:
+                now_running["v"] = after
+            return subprocess.CompletedProcess(
+                argv, install_rc, stdout="", stderr="" if install_rc == 0 else "network down")
+        if argv[1:] == ["--version"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{now_running['v']} (Claude Code)",
+                                               stderr="")
+        if argv[0] == "pgrep":
+            if pgrep_raises:
+                raise FileNotFoundError("pgrep")
+            return subprocess.CompletedProcess(argv, session, stdout="", stderr="")
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=rc, stderr="")
+        if argv[:3] == ["systemctl", "--user", "is-enabled"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="enabled", stderr="")
+        return base(argv, **kwargs)
+    return run
+
+
+def installs(calls):
+    return [c for c in calls if c[1:2] == ["install"]]
+
+
+def slot_state(home):
+    return json.loads((home / ".config/ccfleet/slot-state.json").read_text())
+
+
+FOLLOW = {"claude_version": "2.1.300", "may_upgrade": True}
+
+
+def test_a_held_slot_moves_to_its_machines_pin_and_says_so(slot_home):
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls), now=1_000.0)
+    assert [c[2] for c in installs(calls)] == ["2.1.300"]
+    assert facts["claude"] == {"version": "2.1.300"}, "reported the version it replaced"
+    assert facts["upgrade"]["from"] == "2.1.278" and facts["upgrade"]["to"] == "2.1.300"
+    assert facts["upgrade"]["ok"] is True
+
+
+def test_remote_control_moves_to_the_new_version_when_nobody_is_using_it(slot_home):
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, session=1), now=1_000.0)
+    assert RC_RESTART in calls
+    assert facts["upgrade"]["restart"] == "done"
+
+
+def test_a_session_in_use_is_never_cut_short(slot_home):
+    """Somebody is working through Remote Control: the new version waits for
+    the next quiet run rather than restarting the session under them."""
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, session=0), now=1_000.0)
+    assert RC_RESTART not in calls
+    assert facts["upgrade"]["restart"] == "waiting"
+    # Later, the session is over.
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300", session=1),
+                             now=1_060.0)
+    assert installs(calls) == [], "installed again what was already there"
+    assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"
+    # And once done, it is not done again.
+    calls = []
+    agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300", session=1), now=1_120.0)
+    assert RC_RESTART not in calls
+
+
+@pytest.mark.parametrize("session,raises", [(2, False), (3, False), (1, True)])
+def test_when_it_cannot_tell_it_waits(slot_home, session, raises):
+    """pgrep failing is not a quiet moment. Only a clear "no session" restarts."""
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, session=session, pgrep_raises=raises),
+                             now=1_000.0)
+    assert RC_RESTART not in calls
+    assert facts["upgrade"]["restart"] == "waiting"
+
+
+def test_remote_control_started_now_already_runs_the_new_version(slot_home):
+    """Not running, and the holder is signed in: it is started, from the
+    version just installed, and then it needs no restart at all."""
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, rc="inactive"), now=1_000.0)
+    assert ["systemctl", "--user", "start", "claude-remote-control.service"] in calls
+    assert RC_RESTART not in calls
+    assert facts["upgrade"]["restart"] is None
+    assert "restart" not in slot_state(slot_home)
+
+
+def test_remote_control_stopped_needs_no_restart(slot_home, monkeypatch):
+    """Nobody signed in, so nothing runs the old version to be restarted."""
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, rc="inactive"), now=1_000.0)
+    assert RC_RESTART not in calls
+    assert facts["upgrade"]["restart"] is None
+
+
+def test_a_slot_being_signed_into_is_not_moved(slot_home):
+    calls = []
+    facts = agent.slot_facts({"claude_version": "2.1.300", "may_upgrade": False},
+                             moving_claude(calls), now=1_000.0)
+    assert installs(calls) == [] and RC_RESTART not in calls
+    assert facts["claude"] == {"version": "2.1.278"}
+    assert "upgrade" not in facts
+
+
+@pytest.mark.parametrize("request_", [{}, {"claude_version": "", "may_upgrade": True},
+                                      {"claude_version": "--force", "may_upgrade": True},
+                                      {"claude_version": "2.1.300", "may_upgrade": "yes"}])
+def test_nothing_to_follow_is_nothing_done(slot_home, request_):
+    """No pin, an empty one, one the installer must never see, or a
+    permission that is not a plain yes."""
+    calls = []
+    facts = agent.slot_facts(request_, moving_claude(calls), now=1_000.0)
+    assert installs(calls) == []
+    assert "upgrade" not in facts
+
+
+def test_a_failed_install_is_reported_and_not_retried_every_minute(slot_home):
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, install_rc=1), now=1_000.0)
+    assert facts["upgrade"]["ok"] is False and "network down" in facts["upgrade"]["error"]
+    assert RC_RESTART not in calls, "restarted onto a version that never arrived"
+    # The back-off lives in the slot's own state, so the next run holds off.
+    calls = []
+    agent.slot_facts(FOLLOW, moving_claude(calls, install_rc=1), now=1_060.0)
+    assert installs(calls) == []
+    calls = []
+    agent.slot_facts(FOLLOW, moving_claude(calls, install_rc=1),
+                     now=1_000.0 + agent.INSTALL_RETRY_AFTER_S + 1)
+    assert len(installs(calls)) == 1
+
+
+def test_a_pin_taken_away_takes_its_record_with_it(slot_home):
+    """A failure about a pin that no longer exists is not news to report."""
+    agent.slot_facts(FOLLOW, moving_claude([], install_rc=1, session=0), now=1_000.0)
+    facts = agent.slot_facts({"claude_version": "", "may_upgrade": True},
+                             moving_claude([]), now=1_060.0)
+    assert "upgrade" not in facts
+    kept = slot_state(slot_home)
+    assert "upgrade" not in kept and "restart" not in kept
+
+
+# -- the OS asking for a reboot -----------------------------------------------------
+
+def test_the_os_asking_for_a_reboot_is_reported(tmp_path, monkeypatch):
+    flag = tmp_path / "reboot-required"
+    monkeypatch.setenv("CCFLEET_REBOOT_REQUIRED_FILE", str(flag))
+    assert agent.system_info()["reboot_required"] is False
+    flag.write_text("*** System restart required ***\n")
+    assert agent.system_info()["reboot_required"] is True
+
+
+def test_by_default_it_looks_where_debian_and_ubuntu_write_it(monkeypatch):
+    monkeypatch.delenv("CCFLEET_REBOOT_REQUIRED_FILE", raising=False)
+    looked = []
+    monkeypatch.setattr(agent.Path, "exists", lambda self: looked.append(str(self)) or False)
+    agent.reboot_required()
+    assert looked == ["/var/run/reboot-required"]
