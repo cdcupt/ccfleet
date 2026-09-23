@@ -458,9 +458,14 @@ class Store:
                 "lowercase letters, digits, underscore or hyphen, max 32 characters"
             )
         token = secrets.token_hex(TOKEN_BYTES)
-        with self._lock:
+        with self._write_txn() as conn:
+            # A machine answers to its id while its slot is free: no slot may
+            # already be called that, by id or by its holder's name.
+            if conn.execute("SELECT 1 FROM slots WHERE id = ? OR name = ?",
+                            (node_id, node_id)).fetchone() is not None:
+                raise StoreError(f"a slot already answers to {node_id!r}")
             try:
-                self._conn.execute(
+                conn.execute(
                     "INSERT INTO nodes (id, owner, region, token_hash, pinned_version, "
                     "rc_expected, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
                     (node_id, owner.strip(), region.strip(), hash_token(token),
@@ -468,7 +473,6 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise StoreError(f"node {node_id!r} already exists") from exc
-            self._conn.commit()
         return token
 
     def rotate_token(self, node_id: str) -> str:
@@ -885,6 +889,11 @@ class Store:
                 raise StoreError(f"unknown node {old!r}")
             if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a node called {new!r} already exists")
+            # A machine answers to its id when its slot is free: no slot on
+            # another machine may already be called that, by id or by name.
+            if conn.execute("SELECT 1 FROM slots WHERE (id = ? OR name = ?) AND node_id != ?",
+                            (new, new, old)).fetchone() is not None:
+                raise StoreError(f"a slot on another machine already answers to {new!r}")
             stray = [r["id"] for r in conn.execute(
                 "SELECT id FROM slots WHERE node_id = ? ORDER BY id", (new,))]
             if stray:
@@ -892,14 +901,11 @@ class Store:
                     f"slots still name {new!r} though no node by that name exists "
                     f"({', '.join(stray)}); they are somebody's, so settle them first")
             # An owner's node counted as their slot is called by the node's id,
-            # so the slot is renamed with it — refused up front rather than
-            # half-done if a slot already answers to the new id.
+            # so the slot is renamed with it. A slot elsewhere already called
+            # the new id was refused just above, so nothing is half-done.
             carries = conn.execute(
                 "SELECT 1 FROM slots WHERE id = ? AND node_id = ? AND kind = ?",
                 (old, old, slotstates.OWNER_SLOT)).fetchone() is not None
-            if carries and conn.execute("SELECT 1 FROM slots WHERE id = ?",
-                                        (new,)).fetchone() is not None:
-                raise StoreError(f"a slot called {new!r} already exists")
             for table in ("logins", "heartbeats", "alerts"):
                 conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
             for table, column in self.NODE_ID_COLUMNS:
@@ -1281,6 +1287,13 @@ class Store:
                 "SELECT capacity FROM nodes WHERE id = ?", (node_id,)).fetchone()
             if node is None:
                 raise StoreError(f"no machine {node_id!r}")
+            # The slot's id is its machine's name while it is free: it may be
+            # its own machine's id — the rule, pool-1 on pool-1 — and nothing
+            # else that already answers to a name.
+            if conn.execute("SELECT 1 FROM slots WHERE name = ?", (slot_id,)).fetchone() or \
+                    conn.execute("SELECT 1 FROM nodes WHERE id = ? AND id != ?",
+                                 (slot_id, node_id)).fetchone():
+                raise StoreError(f"something already answers to {slot_id!r}")
             # Capacity is what the operator declared they sold. Refuse to
             # declare more slots than that rather than discovering it as a
             # machine that will not hold them.
@@ -1361,6 +1374,16 @@ class Store:
                 raise StoreError(f"no slot {old!r}")
             if conn.execute("SELECT 1 FROM slots WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a slot called {new!r} already exists")
+            # A slot's id is its machine's name while it is free, so nothing
+            # else may already answer to it: another slot's holder, or another
+            # machine. Its own machine's id, and its own holder's name, may.
+            if conn.execute("SELECT 1 FROM slots WHERE name = ? AND id != ?",
+                            (new, old)).fetchone() is not None:
+                raise StoreError(f"a slot already answers to {new!r}")
+            if conn.execute("SELECT 1 FROM nodes WHERE id = ? AND id != "
+                            "(SELECT node_id FROM slots WHERE id = ?)",
+                            (new, old)).fetchone() is not None:
+                raise StoreError(f"another machine already answers to {new!r}")
             conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(new),))
             conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (new,))
             for table, column in self.SLOT_ID_COLUMNS:
@@ -1644,6 +1667,12 @@ class Store:
                     f"{account['email']} has an allowance of {quota} and already holds "
                     f"{held}; raise their allowance first: "
                     f"ccfleetd account quota {account['email']} {held + 1}")
+            if not existing or existing["held_by"] != account_id:
+                # The node's own sign-in row is what an owner slot's page reads:
+                # a link, a code or a minted token in it belongs to whoever
+                # started it — the last holder, or the console — and never to
+                # the account the record now goes to.
+                conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
             if existing:
                 conn.execute("UPDATE slots SET held_by = ?, unix_user = ?, state = ? "
                              "WHERE id = ?",

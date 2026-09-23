@@ -339,7 +339,7 @@ def test_renaming_an_owner_node_onto_a_slots_id_is_refused_whole(store):
     store.hold_owner_node("erik-1", "e1", now=NOW)
     with pytest.raises(StoreError) as exc:
         store.rename_node("erik-1", "erik-9")
-    assert "a slot called 'erik-9' already exists" in str(exc.value)
+    assert "already answers to 'erik-9'" in str(exc.value)
     assert store.get_slot("erik-1")["node_id"] == "erik-1", "nothing half-renamed"
     assert store.get_node("erik-1") is not None
 
@@ -560,3 +560,109 @@ def test_a_token_minted_on_an_owner_slot_is_read_from_the_node(store):
     from ccfleetd.store import NotYours
     with pytest.raises(NotYours):
         store.read_slot_secret("erik-1", NOW + 7, held_by="x1")
+
+
+def test_handing_an_owner_node_to_somebody_else_drops_what_is_in_flight(store):
+    """A token the last holder minted, or a sign-in they started, is theirs:
+    the next holder of the record never inherits the node's row."""
+    held_owner(store)
+    store.set_slot_quota("x1", 1)
+    store.request_slot_login("erik-1", "", NOW, kind="token", held_by="e1")
+    requested_at = store.get_login("erik-1")["requested_at"]
+    store.record_login_progress("erik-1", "ready", "", "", NOW + 5, requested_at,
+                                secret="sk-ant-oat01-" + "y" * 90)
+    store.hold_owner_node("erik-1", "x1", now=NOW + 10)
+    assert store.get_login("erik-1") is None
+    assert store.read_slot_secret("erik-1", NOW + 11, held_by="x1") == ""
+
+
+def test_holding_again_for_the_same_person_keeps_what_is_in_flight(store):
+    held_owner(store)
+    store.request_slot_login("erik-1", "", NOW, held_by="e1")
+    store.hold_owner_node("erik-1", "e1", unix_user="dev", now=NOW + 10)
+    assert store.get_login("erik-1")["state"] == "requested"
+
+
+def test_a_first_hold_drops_a_sign_in_nobody_on_the_page_started(store):
+    """Whatever the console had in flight on the node is not the new holder's."""
+    owner_node(store)
+    account(store, "e1")
+    store.request_login("erik-1", "", NOW)
+    store.hold_owner_node("erik-1", "e1", now=NOW + 1)
+    assert store.get_login("erik-1") is None
+
+
+# -- no two things answer to one name ------------------------------------------------------
+
+def held_as_alice(store):
+    machine(store, "pool-1")
+    account(store, "a1", "alice@example.com")
+    store.claim_slot("a1", now=NOW)          # pool-1's slot now answers to alice-1
+
+
+def test_a_slot_cannot_be_renamed_onto_a_name_in_use(store):
+    held_as_alice(store)
+    machine(store, "pool-2")
+    with pytest.raises(StoreError) as exc:
+        store.rename_slot("pool-2", "alice-1")
+    assert "alice-1" in str(exc.value)
+    assert store.get_slot("pool-2") is not None
+
+
+def test_a_slot_cannot_be_renamed_onto_another_machines_id(store):
+    """No slot is called pool-1 any more, but a machine is: a slot on pool-2
+    answering to pool-1 would be a second machine under that name."""
+    machine(store, "pool-1")
+    store.rename_slot("pool-1", "p1-slot")
+    machine(store, "pool-2")
+    with pytest.raises(StoreError):
+        store.rename_slot("pool-2", "pool-1")
+    assert store.get_slot("pool-2") is not None
+
+
+def test_a_slot_can_take_its_own_holders_name_as_its_id(store):
+    held_as_alice(store)
+    store.rename_slot("pool-1", "alice-1")
+    assert store.get_slot("alice-1")["name"] == "alice-1"
+
+
+def test_a_slot_cannot_be_declared_under_a_name_in_use(store):
+    held_as_alice(store)
+    store.add_node("pool-2", "op", now=NOW)
+    with pytest.raises(StoreError):
+        store.add_slot("alice-1", "pool-2", "slot01", now=NOW)
+
+
+def test_a_slot_cannot_be_declared_under_another_machines_id(store):
+    store.add_node("pool-1", "op", now=NOW)
+    store.add_node("pool-2", "op", now=NOW)
+    with pytest.raises(StoreError):
+        store.add_slot("pool-1", "pool-2", "slot01", now=NOW)
+    store.add_slot("pool-2", "pool-2", "slot01", now=NOW)      # its own machine's: the rule
+    assert store.get_slot("pool-2")["node_id"] == "pool-2"
+
+
+def test_a_node_cannot_be_added_under_a_name_in_use(store):
+    held_as_alice(store)
+    with pytest.raises(StoreError) as exc:
+        store.add_node("alice-1", "op", now=NOW)
+    assert "alice-1" in str(exc.value)
+    assert store.get_node("alice-1") is None
+
+
+def test_a_node_cannot_be_renamed_onto_a_name_in_use(store):
+    held_as_alice(store)
+    store.add_node("erik-1", "erik", now=NOW)
+    with pytest.raises(StoreError):
+        store.rename_node("erik-1", "alice-1")
+    assert store.get_node("erik-1") is not None
+
+
+def test_a_node_cannot_be_renamed_onto_another_machines_slot_id(store):
+    machine(store, "pool-1")
+    store.add_node("erik-1", "erik", now=NOW)
+    store.remove_slot("pool-1")
+    machine(store, "pool-3")
+    store.rename_slot("pool-3", "pool-7")      # a slot called pool-7, on pool-3
+    with pytest.raises(StoreError):
+        store.rename_node("erik-1", "pool-7")
