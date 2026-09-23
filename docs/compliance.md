@@ -25,9 +25,6 @@ on Pro, Max, Team and Enterprise; the session keeps running on the machine
 where it was started and is continued from claude.ai/code or the Claude app.
 That is how an owner drives their node from a phone or a browser.
 
-From [Authentication](https://code.claude.com/docs/en/authentication): a
-different `CLAUDE_CONFIG_DIR` reads a different credential. That is `ccp`.
-
 ## What ccfleet avoids
 
 Same legal page:
