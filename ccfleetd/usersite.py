@@ -213,12 +213,15 @@ label.check{font-weight:400;color:var(--muted);align-items:flex-start;margin-top
 """
 
 
-def _shell(title: str, body: str, refresh: str = "") -> str:
+def _shell(title: str, body: str, refresh: str = "", extra_css: str = "") -> str:
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"{refresh}<title>ccfleet · {escape(title)}</title><style>{USER_CSS}</style></head>"
+            f"{refresh}<title>ccfleet · {escape(title)}</title>"
+            f"<style>{USER_CSS}{extra_css}</style></head>"
             f"<body><div class=\"page\">{body}"
-            '<p class="foot"><a href="/account">ccfleet</a> · <a href="/privacy">Privacy</a></p>'
+            '<p class="foot"><a href="/account">Your slots</a> · <a href="/docs">About</a> · '
+            '<a href="/docs/guide">Guide</a> · <a href="/privacy">Privacy</a> · '
+            '<a href="/docs/terms">Terms</a></p>'
             "</div></body></html>")
 
 
@@ -579,9 +582,14 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
                 "<p class=\"muted\">An operator makes one on the server with "
                 "<code>ccfleetd account role &lt;email&gt; admin</code>.</p>"
                 + _form("/auth/signout", csrf_for(session_id, cfg.cookie_secret), "Sign out"))
+    # Customers land here too, by typing the bare address: point them home.
+    elsewhere = ('<div class="card"><p><strong>Looking for your slots?</strong> They are on '
+                 '<a href="/account">your page</a>. New to ccfleet? Start with '
+                 '<a href="/docs">what it is</a> and <a href="/docs/guide">how to begin</a>.'
+                 "</p></div>")
     return _shell("console", "<h1>ccfleet console</h1><div class=\"card\">" + body
                   + "<p class=\"note\">Or <a href=\"/auth/basic\">use the admin token</a> "
-                  "&mdash; the way in when Google sign-in is unavailable.</p></div>")
+                  "&mdash; the way in when Google sign-in is unavailable.</p></div>" + elsewhere)
 
 
 def token_page(slot: Mapping[str, Any], token: str) -> str:

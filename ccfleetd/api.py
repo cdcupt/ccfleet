@@ -17,7 +17,7 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
-from . import consoleslots, oauth, sessions, usersite
+from . import consoleslots, customer_docs, oauth, sessions, usersite
 from .config import Config
 from .desired import desired_state
 from .heartbeat import HeartbeatError, validate_heartbeat
@@ -498,7 +498,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    path in ("/account", "/privacy") and not self._product_site()):
+                    (path in ("/account", "/privacy") or customer_docs.page_for(path))
+                    and not self._product_site()):
                 # Each site answers only for its own audience: the product
                 # never shows a console, the console never plays product.
                 self._json(404, {"error": "not found"})
@@ -520,6 +521,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             elif path == "/privacy":
                 # Public: Google links here from its sign-in screen.
                 self._send(200, usersite.privacy_page(ctx.cfg).encode("utf-8"), HTML_HEADERS)
+            elif customer_docs.page_for(path):
+                # Public, for people deciding whether to buy a slot and then using one.
+                self._send(200, customer_docs.page_for(path)(ctx.cfg).encode("utf-8"),
+                           HTML_HEADERS)
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":
