@@ -1788,6 +1788,17 @@ def restart_remote_control(runner: Runner = subprocess.run) -> bool:
     return proc.returncode == 0
 
 
+def stop_remote_control(runner: Runner = subprocess.run) -> bool:
+    """Stop Remote Control. True only on systemctl's own clean exit: anything
+    else means it may still be running, and as whom is then unknown."""
+    try:
+        proc = runner(["systemctl", "--user", "stop", DEFAULT_RC_SERVICE],
+                      capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
 def _moved_on(state: Mapping[str, Any]) -> dict[str, Any]:
     """What a change of account makes stale: the windows read for the last one,
     and any restart still owed to Remote Control, which has just had one."""
@@ -1971,8 +1982,9 @@ def forget_account(account: SlotAccount, state: Mapping[str, Any], runner: Runne
     """
     state = dict(state)
     was_in_use = account_in_use().id == account.id
-    if was_in_use:
-        _run(runner, ["systemctl", "--user", "stop", DEFAULT_RC_SERVICE], timeout=60)
+    if was_in_use and not stop_remote_control(runner):
+        return {"state": "failed",
+                "detail": "Remote Control did not stop; nothing was removed"}, state
     path = find_claude()
     if path and account_facts(account)["present"]:
         # Claude Code's own sign-out, for whatever it does beyond this machine.

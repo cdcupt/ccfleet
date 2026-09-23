@@ -83,12 +83,13 @@ class Slot:
     as; systemd for Remote Control; tmux for the sign-in pane."""
 
     def __init__(self, home, *, rc="active", enabled="enabled", restart_code=0,
-                 broken=(), logout_deletes=True):
+                 stop_code=0, broken=(), logout_deletes=True):
         self.home = home
         self.calls = []                 # (argv, the directory Claude Code ran in)
         self.rc = rc
         self.enabled = enabled
         self.restart_code = restart_code
+        self.stop_code = stop_code      # None: systemctl hangs and is killed
         self.broken = {str(d) for d in broken}   # sign-ins the CLI itself rejects
         self.logout_deletes = logout_deletes
         self.pane = ""
@@ -131,8 +132,11 @@ class Slot:
             self.rc = "active"
             return done()
         if argv[:3] == ["systemctl", "--user", "stop"]:
-            self.rc = "inactive"
-            return done()
+            if self.stop_code is None:
+                raise subprocess.TimeoutExpired(argv, 60)
+            if self.stop_code == 0:
+                self.rc = "inactive"
+            return done(code=self.stop_code)
         if argv[:1] == ["tmux"]:
             if "new-session" in argv:
                 self.started.append(argv[-1])
@@ -607,6 +611,24 @@ def test_removing_the_account_in_use_moves_to_the_next_one_still_signed_in(home)
     assert "CLAUDE_CONFIG_DIR" not in env_file(home).read_text()
     assert slot.systemctl("start"), "Remote Control was left stopped"
     assert listed(facts) == [("1", True), ("3", False)]
+
+
+@pytest.mark.parametrize("stop_code", [1, None])      # refused; hung and killed
+def test_the_account_in_use_is_not_removed_while_remote_control_may_still_run_as_it(
+        home, stop_code):
+    """Deleting the sign-in under a Remote Control that did not stop would
+    leave it serving an account its holder has just removed."""
+    sign_in(home, "1", "work@example.com")
+    sign_in(home, "2", "home@example.com")
+    use(home, "2")
+    slot = Slot(home, stop_code=stop_code)
+    facts = agent.slot_facts(intent("forget", "2"), slot, now=NOW)
+    assert facts["account_switch"] == {"requested_at": 7.0, "state": "failed",
+                                       "detail": "Remote Control did not stop; nothing was "
+                                                 "removed"}
+    assert slot.claude("auth", "logout") == []
+    assert (place(home, "2")[0] / ".credentials.json").exists()
+    assert env_file(home).read_text() == f"CLAUDE_CONFIG_DIR={place(home, '2')[0]}\n"
 
 
 def test_the_next_account_is_one_that_still_works(home):
