@@ -201,6 +201,7 @@ margin:0 0 18px;font-weight:500}
 .note-banner.warn{border-color:var(--warn);background:var(--warn-bg);color:var(--warn)}
 .lapsed{color:var(--warn);font-weight:600}
 .foot{margin:28px 0 0;font-size:12px;color:var(--muted)}
+.card+.card{margin-top:14px}
 .card ul{margin:8px 0;padding-left:20px}.card li{margin:6px 0;line-height:1.5}
 .card.slot{margin:0 0 16px}
 .card.slot h2{text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:15px;
