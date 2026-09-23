@@ -321,6 +321,8 @@ def soon(days=30):
     ("/actions/account/ACCOUNT/payment", {"amount": "30", "currency": "USD",
                                           "through": soon()}),
     ("/actions/payment/PAYMENT/void", {}),
+    ("/actions/machine/m1/reserve", {"email": "ana@example.com"}),
+    ("/actions/machine/m1/unreserve", {}),
 ])
 def test_an_owner_login_can_do_none_of_it(console, path, form):
     """Their credentials are fine; the action is not theirs. 403, not 401."""
@@ -587,3 +589,75 @@ def test_one_account_is_counted_in_the_singular_and_none_says_nothing(console):
     assert "1 Claude account" in card and "1 Claude accounts" not in card
     machine_said(store, {"unix_user": "slot01", "accounts": []})
     assert "Claude account" not in slots_card(call("GET", "/admin").body)
+
+
+# -- keeping a machine for one account ----------------------------------------------
+
+def test_keeping_a_machine_for_somebody_from_the_console(console):
+    store, call = console
+    shared(store)
+    ana = holder(store)
+    assert "Reserved for" not in slots_card(call("GET", "/admin").body)
+    reply = call("POST", "/actions/machine/m1/reserve", {"email": " ana@example.com "})
+    assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
+    assert store.get_node("m1")["reserved_for"] == ana["id"]
+    assert "Reserved for ana@example.com" in slots_card(call("GET", "/admin").body)
+
+
+@pytest.mark.parametrize("email", ["ana@exmaple.com", "", "   "])
+def test_an_address_nobody_signed_in_with_is_refused_in_words(console, email):
+    """A typo keeps the machine for nobody at all — or, worse, for somebody
+    else. Refused with a sentence and a way back, and nothing changes."""
+    store, call = console
+    shared(store)
+    holder(store)
+    reply = call("POST", "/actions/machine/m1/reserve", {"email": email})
+    assert reply.status == 400 and 'href="/admin"' in reply.body
+    assert ("ana@exmaple.com" in reply.body) if email.strip() else ("email" in reply.body)
+    assert store.get_node("m1")["reserved_for"] is None
+
+
+def test_opening_a_kept_machine_again_from_the_console(console):
+    store, call = console
+    shared(store)
+    ana = holder(store)
+    store.reserve_machine("m1", ana["id"])
+    card = slots_card(call("GET", "/admin").body)
+    assert 'action="/actions/machine/m1/unreserve"' in card
+    reply = call("POST", "/actions/machine/m1/unreserve", {})
+    assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
+    assert store.get_node("m1")["reserved_for"] is None
+    card = slots_card(call("GET", "/admin").body)
+    assert "Reserved for" not in card and "/unreserve" not in card
+
+
+def test_an_owner_node_cannot_be_kept_from_the_console(console):
+    store, call = console
+    store.add_node("laptop", "erik", now=time.time())
+    holder(store)
+    reply = call("POST", "/actions/machine/laptop/reserve", {"email": "ana@example.com"})
+    assert reply.status == 400 and "not a shared machine" in reply.body
+    assert store.get_node("laptop")["reserved_for"] is None
+
+
+def test_who_a_machine_is_kept_for_is_shown_not_run(console):
+    store, call = console
+    shared(store)
+    odd = holder(store, email="o'neil&<b>x</b>@example.com")
+    store.reserve_machine("m1", odd["id"])
+    card = slots_card(call("GET", "/admin").body)
+    assert "<b>x</b>" not in card
+    assert "Reserved for o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;@example.com" in card
+
+
+def test_a_machine_kept_for_an_account_that_is_gone_still_says_so(console):
+    """Accounts are not deleted today, but the page must not fall over, or go
+    quiet about a machine nobody can claim, if one ever is."""
+    store, call = console
+    shared(store)
+    with store._lock:
+        store._conn.execute("UPDATE nodes SET reserved_for = 'u-gone' WHERE id = 'm1'")
+        store._conn.commit()
+    reply = call("GET", "/admin")
+    assert reply.status == 200
+    assert "Reserved for an account that no longer exists" in slots_card(reply.body)

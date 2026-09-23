@@ -302,6 +302,8 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
         # How many slots the operator declared this machine may hold; one for
         # an ordinary owner node.
         "capacity": row["capacity"],
+        # The account this machine's free slots are kept for; None for anybody.
+        "reserved_for": row["reserved_for"],
     }
 
 
@@ -349,6 +351,9 @@ class Store:
                 "capacity": "INTEGER NOT NULL DEFAULT 1",
                 "tier": "TEXT NOT NULL DEFAULT 'dedicated'",
             })
+            # The account a shared machine is kept for, or NULL for anybody —
+            # which every machine written before this column is.
+            self._add_missing_columns("nodes", {"reserved_for": "TEXT"})
             self._add_missing_columns("logins", {
                 "kind": "TEXT NOT NULL DEFAULT 'login'",
                 "secret": "TEXT NOT NULL DEFAULT ''",
@@ -1088,6 +1093,36 @@ class Store:
                 "UPDATE nodes SET capacity = ? WHERE id = ?", (int(capacity), node_id))
         return cur.rowcount > 0
 
+    def reserve_machine(self, node_id: str, account_id: Optional[str]) -> None:
+        """Keep a shared machine's free slots for one account, or, with None,
+        open them to anybody again.
+
+        Only the next claim is affected: a slot somebody already holds stays
+        theirs, because taking one back is a release, with the wipe it
+        implies, and never a side effect of this. A machine is what the
+        console lists as one — capacity for more than one slot, or a slot
+        declared on it; keeping somebody's own node is refused rather than
+        stored as a promise that means nothing.
+        """
+        with self._write_txn() as conn:
+            node = conn.execute(
+                "SELECT capacity FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            if node is None:
+                raise StoreError(f"no machine {node_id!r}")
+            if account_id is not None:
+                declared = conn.execute(
+                    "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
+                    (node_id,)).fetchone()["n"]
+                if int(node["capacity"]) <= 1 and not declared:
+                    raise StoreError(
+                        f"{node_id} is not a shared machine: it has no slots and room "
+                        "for one, so there is nothing on it to keep for anybody")
+                if conn.execute("SELECT 1 FROM accounts WHERE id = ?",
+                                (account_id,)).fetchone() is None:
+                    raise StoreError(f"no account {account_id!r}")
+            conn.execute("UPDATE nodes SET reserved_for = ? WHERE id = ?",
+                         (account_id, node_id))
+
     def list_accounts(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
@@ -1454,6 +1489,11 @@ class Store:
         handed to a machine that has gone quiet and would leave it waiting out
         the claim timeout.
 
+        A machine kept for somebody hands its free slots to them alone, and
+        they are given it before any open machine. Both are read here, in the
+        transaction that takes the slot: a reservation read any earlier can be
+        stale by the time the slot is taken.
+
         Raises QuotaExceeded when they have no allowance left, and
         NoSlotAvailable when nothing is free — two different answers that the
         page shows differently, so they are two different exceptions rather
@@ -1486,9 +1526,10 @@ class Store:
                 args.append(heard_since)
             candidate = conn.execute(
                 "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
-                "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1" + extra +
-                " ORDER BY s.node_id, s.unix_user LIMIT 1",
-                (slotstates.FREE, *args)).fetchone()
+                "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1"
+                " AND (n.reserved_for IS NULL OR n.reserved_for = ?)" + extra +
+                " ORDER BY n.reserved_for IS NULL, s.node_id, s.unix_user LIMIT 1",
+                (slotstates.FREE, account_id, *args)).fetchone()
             if candidate is None:
                 raise NoSlotAvailable(
                     f"no free slot on {node_id}" if node_id

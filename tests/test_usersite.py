@@ -228,6 +228,25 @@ def test_the_page_shows_their_slots_and_nobody_elses(site):
     assert "m1-01" not in shown and "ana@example.com" not in shown
 
 
+def test_a_kept_machine_is_never_mentioned_on_anybodys_page(site):
+    """Who a machine is kept for is the operator's business. Somebody turned
+    away hears that nothing is free, as at any other time; the person it is kept
+    for sees their slot, not the arrangement, and nobody sees anybody's address."""
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    ana = sign_in("google-ana", "ana@example.com", quota=1)
+    erik = sign_in(quota=1)
+    store.reserve_machine("m1", erik.account["id"])
+    assert ana.press("/account/claim").getheader("Location").startswith(
+        "/account?note=no-slot")
+    claimed(store, erik)
+    for browser, other in ((ana, "erik@example.com"), (erik, "ana@example.com")):
+        shown = browser.page()
+        assert "reserved" not in shown.lower() and "kept for" not in shown.lower()
+        assert other not in shown
+    assert "m1-01" in erik.page()
+
+
 @pytest.mark.parametrize("action", usersite.SLOT_ACTIONS)
 @pytest.mark.parametrize("fields", [{"confirm": "wipe", "code": "x"}, {}, {"confirm": "no"},
                                     {"code": ""}, {"account": "1", "confirm": "remove"},

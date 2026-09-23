@@ -52,6 +52,12 @@ def _parser() -> argparse.ArgumentParser:
                          help="turn the remote_control_down alert on or off for a node")
     rc.add_argument("node_id")
     rc.add_argument("state", choices=("on", "off"))
+    reserve = node.add_parser("reserve",
+                              help="keep a shared machine's free slots for one account")
+    reserve.add_argument("node_id")
+    keep_for = reserve.add_mutually_exclusive_group(required=True)
+    keep_for.add_argument("email", nargs="?", help="the account's address, as it signed in")
+    keep_for.add_argument("--none", action="store_true", help="open it to anybody again")
 
     slot = sub.add_parser("slot", help="manage slots on a machine").add_subparsers(
         dest="slot_command", required=True)
@@ -301,14 +307,18 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         _print_token(args.node_id, token, cfg)
     elif args.node_command == "list":
         latest = store.latest_heartbeats()
+        emails = {a["id"]: a["email"] for a in store.list_accounts()}
+        # Reserved goes last: scripts read the id off the front of each row.
         print(f"{'id':<20} {'owner':<14} {'region':<12} {'pinned':<10} {'enabled':<8} "
-              f"{'rc':<4} last seen")
+              f"{'rc':<4} {'last seen':<16} reserved")
         for node in store.list_nodes():
             hb = latest.get(node["id"])
             seen = time.strftime("%Y-%m-%d %H:%M", time.localtime(hb["ts"])) if hb else "never"
+            kept = node["reserved_for"]
+            kept_for = emails.get(kept, "(account gone)") if kept else "-"
             print(f"{node['id']:<20} {node['owner']:<14} {node['region'] or '-':<12} "
                   f"{node['pinned_version'] or '-':<10} {'yes' if node['enabled'] else 'no':<8} "
-                  f"{'on' if node['rc_expected'] else 'off':<4} {seen}")
+                  f"{'on' if node['rc_expected'] else 'off':<4} {seen:<16} {kept_for}")
     elif args.node_command == "remove":
         store.remove_node(args.node_id)
         print(f"removed {args.node_id}")
@@ -328,6 +338,19 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         store.set_rc_expected(args.node_id, expected)
         verb = "will alert" if expected else "will not alert"
         print(f"{args.node_id}: {verb} when the Remote Control service is not active")
+    elif args.node_command == "reserve":
+        if args.none:
+            store.reserve_machine(args.node_id, None)
+            print(f"{args.node_id}: open to anybody with an allowance")
+            return EXIT_OK
+        email = args.email.strip()
+        keeper = store.account_by_email(email)
+        if keeper is None:
+            print(f"error: nobody has signed in as {email!r}; they sign in once, then the "
+                  "machine can be kept for them", file=sys.stderr)
+            return EXIT_USAGE
+        store.reserve_machine(args.node_id, keeper["id"])
+        print(f"{args.node_id}: kept for {keeper['email']}")
     return EXIT_OK
 
 
