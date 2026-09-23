@@ -318,6 +318,38 @@ def test_an_owner_node_with_its_slot_is_still_not_a_machine_to_reserve(store):
         store.reserve_machine("erik-1", "e1")
 
 
+def test_removing_a_held_owner_node_points_at_letting_go(store):
+    owner_node(store)
+    account(store, "e1")
+    store.hold_owner_node("erik-1", "e1", now=NOW)
+    with pytest.raises(StoreError) as exc:
+        store.remove_node("erik-1")
+    assert "node hold erik-1 --none" in str(exc.value)
+
+
+def test_renaming_an_owner_node_onto_a_slots_id_is_refused_whole(store):
+    owner_node(store)
+    machine(store, "erik-9")                 # a slot already answers to erik-9
+    store.remove_slot("erik-9")
+    machine(store, "pool-9")
+    store.rename_slot("pool-9", "erik-9")    # now pool-9's slot is called erik-9
+    account(store, "e1")
+    store.hold_owner_node("erik-1", "e1", now=NOW)
+    with pytest.raises(StoreError) as exc:
+        store.rename_node("erik-1", "erik-9")
+    assert "already exists" in str(exc.value)
+    assert store.get_slot("erik-1")["node_id"] == "erik-1", "nothing half-renamed"
+
+
+@pytest.mark.parametrize("login", ["Bad User", "root;rm", "9lives"])
+def test_holding_with_a_login_that_is_no_linux_login_is_refused(store, login):
+    owner_node(store)
+    account(store, "e1")
+    with pytest.raises(StoreError):
+        store.hold_owner_node("erik-1", "e1", unix_user=login, now=NOW)
+    assert store.get_slot("erik-1") is None
+
+
 # -- the live database, as it stood on 2026-09-23 ---------------------------------------------
 
 def live_shaped(path):

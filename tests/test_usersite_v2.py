@@ -104,6 +104,15 @@ def test_an_owners_node_has_no_give_it_back(site):  # noqa: F811
     assert store.get_slot("erik-1")["state"] == slots.ACTIVE
 
 
+def test_an_owners_node_not_heard_from_claims_nothing(site):  # noqa: F811
+    """No report yet: not signed in as far as anybody can say, and no usage."""
+    store, sign_in, _ = site
+    erik = held_own_node(store, sign_in)
+    body = whole_card(erik.page(), "erik-1")
+    assert "not heard from yet" in body and "Not signed in" in body
+    assert "Signed in" not in body and "Remote Control is on" not in body
+
+
 def test_an_owners_node_that_is_signed_out_says_so(site):  # noqa: F811
     store, sign_in, _ = site
     erik = held_own_node(store, sign_in)
