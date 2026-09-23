@@ -125,6 +125,13 @@ def report(store, node, entries, ts=None):
     store.insert_heartbeat(node, now, {"node_id": node, "mode": "machine", "slots": entries})
 
 
+def refresh_of(page):
+    """The page's own refresh: after how many seconds, and to where — "" being
+    this same address, note and all. None when the page stays put."""
+    found = re.search(r'<meta http-equiv="refresh" content="(\d+)(?:;url=([^"]*))?">', page)
+    return (int(found.group(1)), found.group(2) or "") if found else None
+
+
 def claimed(store, browser, node="m1"):
     """Claim through the page and let the machine finish setting it up."""
     assert browser.press("/account/claim").status == 303
@@ -423,9 +430,37 @@ def test_the_page_comes_back_soon_only_while_something_moves(site):
     store, sign_in, _ = site
     machine(store)
     erik = sign_in(quota=1)
-    assert 'content="60"' in erik.page()
+    assert refresh_of(erik.page()) == (60, "/account")
     erik.press("/account/claim")
-    assert 'content="4"' in erik.page(), "setting up, and nobody would see it finish"
+    assert refresh_of(erik.page()) == (4, "/account"), "setting up, and nobody would see it finish"
+
+
+def test_a_note_is_said_once_not_on_every_refresh(site):
+    """The note after an action rides in the address, so a refresh that reloads
+    the address says it again every few seconds: "Starting the sign-in on your
+    slot…" stood for minutes above a card that already showed the link."""
+    store, sign_in, _ = site
+    machine(store)
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    key = slot_login_key(slot["id"])
+    starting = usersite.NOTES["signin"][1]
+
+    here = erik.press(f"/account/slots/{slot['id']}/signin").getheader("Location")
+    here = here.split("#")[0]                  # a browser never sends the fragment
+    landed = erik.call("GET", here).body
+    assert starting in landed, "said right after the action"
+    assert refresh_of(landed) == (4, "/account"), "back soon, and to the bare page"
+
+    store.record_login_progress(key, "url_ready", URL, "", time.time(),
+                                store.get_login(key)["requested_at"])
+    later = erik.call("GET", urllib.parse.urljoin(here, refresh_of(landed)[1])).body
+    assert 'name="code"' in later, "the card moved on to the link"
+    assert starting not in later, "and the note stayed behind"
+
+    sent = erik.press(f"/account/slots/{slot['id']}/code", code="the-code")
+    assert refresh_of(erik.call("GET", sent.getheader("Location").split("#")[0]).body) \
+        == (4, "/account"), "a code on its way is something moving"
 
 
 def test_a_machine_nobody_has_heard_from_says_so(site):

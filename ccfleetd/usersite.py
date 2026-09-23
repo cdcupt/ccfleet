@@ -403,14 +403,21 @@ def privacy_page(cfg: Config) -> str:
 
 
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
-    """Come back soon while something is moving; never while a code is being typed."""
+    """Come back soon while something is moving; never while a code is being typed.
+
+    Always to the bare page. The note after an action rides in the address,
+    and a refresh that reloads the address says it again every few seconds:
+    "Starting the sign-in on your slot…" stood for minutes above a card that
+    had long since moved on to the link. A note is said once, right after the
+    action; from then on the cards say how things stand.
+    """
     states = {(login or {}).get("state") for login in logins.values()}
     if "url_ready" in states:
         return ""
     moving = any(s["state"] in (slotstates.CLAIMING, slotstates.RELEASING) for s in held)
-    if moving or states & {"requested", "code_sent"}:
-        return f'<meta http-equiv="refresh" content="{ACTIVE_REFRESH_S}">'
-    return f'<meta http-equiv="refresh" content="{IDLE_REFRESH_S}">'
+    soon = moving or bool(states & {"requested", "code_sent"})
+    seconds = ACTIVE_REFRESH_S if soon else IDLE_REFRESH_S
+    return f'<meta http-equiv="refresh" content="{seconds};url=/account">'
 
 
 def _report_for(slot: Mapping[str, Any], heartbeat: Optional[Mapping[str, Any]]
