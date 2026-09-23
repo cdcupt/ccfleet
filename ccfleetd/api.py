@@ -18,8 +18,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
 from . import consoleslots, customer_docs, oauth, sessions, usersite
+from . import slots as slotstates
 from .config import Config
-from .desired import desired_state
+from .desired import desired_state, machine_hostname
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
@@ -654,14 +655,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         self._record_login(report.get("login"),
                                            slot_login_key(slot["id"]), now)
             events = ctx.monitor.record_heartbeat(node, payload, now)
-            slots = ctx.store.list_slots(node_id=node["id"])
+            # A machine's own slots only. An owner's node counted as their slot
+            # is a record of ours: its agent is never told to provision it.
+            slots = ctx.store.list_slots(node_id=node["id"], kind=slotstates.MACHINE_SLOT)
+            # A shared machine answers to its slot's name; an owner's node is
+            # never told what to call itself.
+            hostname = (machine_hostname(node["id"], slots)
+                        if payload.get("mode") == slotstates.MACHINE_MODE else None)
             self._json(200, {
                 "ok": True,
                 # Kept for agents predating the desired block; same value, new home.
                 "pinned_version": node["pinned_version"],
                 "desired": desired_state(
                     node, ctx.store.get_login(node["id"]), slots,
-                    {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots}),
+                    {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots},
+                    hostname=hostname),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
 
