@@ -265,7 +265,7 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
    `printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' > /etc/cloud/cloud.cfg.d/99-ccfleet.cfg`.
 5. Remote Control takes its name from the hostname (`--name %H`), which systemd
    fills in when it loads the unit. So, as each user running it (the owner on
-   an owner's node, each signed-in slot on a shared machine):
+   an owner's node, the signed-in slot on a shared machine):
    `systemctl --user daemon-reload && systemctl --user restart claude-remote-control`,
    or reboot the box, which does both. It keeps its environment and registers
    again under the new hostname, so claude.ai/code shows the machine by its new

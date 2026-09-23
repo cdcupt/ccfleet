@@ -241,3 +241,12 @@ def test_a_loose_umask_does_not_leave_roots_code_writable(tmp_path, sandbox):
         assert mode(lib / script) == 0o755
     assert mode(lib / "ccfleet_agent" / "machine.py") == 0o644
     assert mode(sandbox / "etc") == 0o700 and mode(sandbox / "state") == 0o700
+
+
+def test_the_last_words_declare_its_one_slot_the_way_the_server_takes_it(tmp_path):
+    """One machine is one slot, named after the machine: the command it prints
+    is one the server accepts, and there is no capacity to raise."""
+    bindir, _ = fakebin(tmp_path)
+    out = run(GOOD, bindir).stdout
+    assert "ccfleetd slot add shared-1 --machine shared-1 --unix-user slot01" in out
+    assert "slot capacity" not in out and "shared-1-01" not in out
