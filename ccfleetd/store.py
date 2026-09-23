@@ -336,7 +336,12 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
 class Store:
     """Thread-safe wrapper around one SQLite connection."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str,
+                 max_slots_per_machine: int = slotstates.MAX_SLOTS_PER_MACHINE) -> None:
+        # One machine is one slot, held here as well as at the operator's
+        # commands, so no way in can declare a second. Raised only by tests
+        # of the lifecycle, which is per slot and exercised several at once.
+        self._max_slots = int(max_slots_per_machine)
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
@@ -1116,6 +1121,9 @@ class Store:
         """
         if int(capacity) < 0:
             raise StoreError("capacity cannot be negative")
+        if int(capacity) > self._max_slots:
+            raise StoreError(f"{slotstates.ONE_SLOT_WHY}; a machine's capacity is at most "
+                             f"{self._max_slots}")
         with self._write_txn() as conn:
             have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
@@ -1276,6 +1284,12 @@ class Store:
             # Capacity is what the operator declared they sold. Refuse to
             # declare more slots than that rather than discovering it as a
             # machine that will not hold them.
+            placed = [r["id"] for r in conn.execute(
+                "SELECT id FROM slots WHERE node_id = ? AND kind = ? ORDER BY id",
+                (node_id, slotstates.MACHINE_SLOT))]
+            if len(placed) >= self._max_slots:
+                raise StoreError(f"{node_id} already has its slot ({', '.join(placed)}): "
+                                 f"{slotstates.ONE_SLOT_WHY}")
             have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
                 (node_id,)).fetchone()["n"]

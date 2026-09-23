@@ -97,9 +97,14 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
         reports = {r.get("unix_user"): r for r in said.get("slots") or []
                    if isinstance(r, Mapping)}
         base = f"/actions/machine/{escape(node['id'])}"
+        # From before one slot per machine: it answers to its own id, never to
+        # one holder's name, until the extra slots are taken off.
+        crowded = (' <span class="pill warn">more than one slot: claude.ai shows every '
+                   f"holder here as {escape(node['id'])}; take the extra off</span>"
+                   if len(rows) > slotstates.MAX_SLOTS_PER_MACHINE else "")
         head = (f'<div class="row-line"><div class="row-name">{escape(node["id"])}'
                 f'<span class="muted"> · {len(rows)} of {capacity} declared</span>{reboot}'
-                f"{_hostname_pending(node['id'], rows, said)}"
+                f"{crowded}{_hostname_pending(node['id'], rows, said)}"
                 f"{_kept_for(node, accounts)}</div>"
                 '<div class="actions">'
                 + _form(f"{base}/capacity", csrf, "Set capacity",

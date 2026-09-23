@@ -18,7 +18,7 @@ NOW = 1_700_000_000.0
 
 @pytest.fixture
 def store():
-    st = Store(":memory:")
+    st = Store(":memory:", max_slots_per_machine=8)
     yield st
     st.close()
 
@@ -459,7 +459,7 @@ def test_a_second_connection_cannot_decide_on_a_stale_read(tmp_path):
     first is still deciding, and both take a slot.
     """
     db = str(tmp_path / "fleet.db")
-    setup = Store(db)
+    setup = Store(db, max_slots_per_machine=8)
     try:
         machine(setup, capacity=2)
         account(setup, quota=1)
@@ -473,7 +473,7 @@ def test_a_second_connection_cannot_decide_on_a_stale_read(tmp_path):
     outcomes: dict[str, str] = {}
 
     def slow_claim():
-        own = Store(db)
+        own = Store(db, max_slots_per_machine=8)
         own._conn = _PauseAfter(own._conn, gate,
                                 "COUNT(*) AS n FROM slots WHERE held_by")
         own._conn.reached = reached
@@ -485,7 +485,7 @@ def test_a_second_connection_cannot_decide_on_a_stale_read(tmp_path):
             own.close()
 
     def plain_claim():
-        own = Store(db)
+        own = Store(db, max_slots_per_machine=8)
         try:
             outcomes["plain"] = own.claim_slot("a1", now=NOW + 1)["id"]
         except (QuotaExceeded, NoSlotAvailable) as exc:
@@ -505,7 +505,7 @@ def test_a_second_connection_cannot_decide_on_a_stale_read(tmp_path):
     slow.join(timeout=30)
     plain.join(timeout=30)
 
-    after = Store(db)
+    after = Store(db, max_slots_per_machine=8)
     try:
         held = after.held_slot_count("a1")
         taken = [s["id"] for s in after.list_slots(held_by="a1")]
@@ -520,7 +520,7 @@ def test_a_second_connection_cannot_overfill_a_machine(tmp_path):
     slots on a machine, then insert one. Two connections each counting before
     either inserts declare a machine past the capacity its operator sold."""
     db = str(tmp_path / "fleet.db")
-    setup = Store(db)
+    setup = Store(db, max_slots_per_machine=8)
     try:
         machine(setup, capacity=1)
     finally:
@@ -531,7 +531,7 @@ def test_a_second_connection_cannot_overfill_a_machine(tmp_path):
     outcomes: dict[str, str] = {}
 
     def slow_add():
-        own = Store(db)
+        own = Store(db, max_slots_per_machine=8)
         own._conn = _PauseAfter(own._conn, gate,
                                 "COUNT(*) AS n FROM slots WHERE node_id")
         own._conn.reached = reached
@@ -544,7 +544,7 @@ def test_a_second_connection_cannot_overfill_a_machine(tmp_path):
             own.close()
 
     def plain_add():
-        own = Store(db)
+        own = Store(db, max_slots_per_machine=8)
         try:
             own.add_slot("s2", "m1", "slot02", now=NOW)
             outcomes["plain"] = "declared"
@@ -563,7 +563,7 @@ def test_a_second_connection_cannot_overfill_a_machine(tmp_path):
     slow.join(timeout=30)
     plain.join(timeout=30)
 
-    after = Store(db)
+    after = Store(db, max_slots_per_machine=8)
     try:
         declared = after.list_slots(node_id="m1")
     finally:
@@ -1134,7 +1134,7 @@ def test_a_machine_kept_while_a_claim_waits_for_the_lock_is_not_handed_out(tmp_p
     open", read before it, can be stale by the time the slot is taken — and the
     slot goes to somebody the machine is no longer for."""
     db = str(tmp_path / "fleet.db")
-    setup = Store(db)
+    setup = Store(db, max_slots_per_machine=8)
     try:
         machine(setup, capacity=1)
         declare(setup, "s1", "m1", "slot01")
@@ -1145,7 +1145,7 @@ def test_a_machine_kept_while_a_claim_waits_for_the_lock_is_not_handed_out(tmp_p
 
     gate = threading.Event()
     outcome: dict[str, str] = {}
-    claimer = Store(db)
+    claimer = Store(db, max_slots_per_machine=8)
     claimer._conn = _PauseBefore(claimer._conn, gate, "BEGIN IMMEDIATE")
 
     def claim():
@@ -1158,7 +1158,7 @@ def test_a_machine_kept_while_a_claim_waits_for_the_lock_is_not_handed_out(tmp_p
     thread.start()
     try:
         assert claimer._conn.reached.wait(10), "the claim never reached its transaction"
-        operator = Store(db)
+        operator = Store(db, max_slots_per_machine=8)
         try:
             operator.reserve_machine("m1", "a1")
         finally:

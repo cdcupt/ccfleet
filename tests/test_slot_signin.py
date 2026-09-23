@@ -27,7 +27,7 @@ TOKEN = "sk-ant-oat01-" + "A" * 40
 
 @pytest.fixture
 def store():
-    st = Store(":memory:")
+    st = Store(":memory:", max_slots_per_machine=8)
     yield st
     st.close()
 
@@ -256,7 +256,7 @@ def server():
     from ccfleetd.monitor import Monitor
     from ccfleetd.notify import LogNotifier
     cfg = Config.from_env({"CCFLEET_ADMIN_TOKEN": "x" * 32, "CCFLEET_DB": ":memory:"})
-    st = Store(":memory:")
+    st = Store(":memory:", max_slots_per_machine=8)
     srv = build_server(Context(st, cfg, Monitor(st, cfg, LogNotifier())),
                        host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)

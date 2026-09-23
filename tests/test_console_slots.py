@@ -31,7 +31,7 @@ ADMIN_TOKEN = "admin-token-long-enough-to-pass"
 def console():
     cfg = Config(bind_host="127.0.0.1", bind_port=0, db_path=":memory:",
                  admin_token=ADMIN_TOKEN)
-    store = Store(":memory:")
+    store = Store(":memory:", max_slots_per_machine=8)
     srv = build_server(Context(store, cfg, Monitor(store, cfg, LogNotifier())),
                        host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -688,6 +688,20 @@ def test_a_machine_says_when_its_hostname_is_not_its_slots_name_yet(console):
     assert "hostname pending" in card and "ana-1" in card
     machine_said(store, hostname="ana-1")
     assert "hostname pending" not in slots_card(call("GET", "/admin").body)
+
+
+def test_a_machine_from_before_one_slot_each_is_flagged(console):
+    """A database from before may still carry a machine with several slots.
+    It answers to its own id, never one holder's name; the operator is told
+    to take the extra slots off."""
+    store, call = console
+    shared(store)                                      # m1 with two slots
+    card = slots_card(call("GET", "/admin").body)
+    assert "more than one slot" in card
+    shared(store, node="m2", users=("slot01",))
+    one = slots_card(call("GET", "/admin").body)
+    m2 = one[one.index('row-name">m2<'):]
+    assert "more than one slot" not in m2[:m2.index("</div>")]
 
 
 def test_a_machine_that_never_said_its_hostname_is_not_called_pending(console):

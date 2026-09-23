@@ -32,7 +32,7 @@ NOW = 1_700_000_000.0
 
 @pytest.fixture
 def st():
-    s = Store(":memory:")
+    s = Store(":memory:", max_slots_per_machine=8)
     yield s
     s.close()
 
@@ -397,7 +397,7 @@ def test_the_box_is_heard_under_its_new_name_with_its_old_token(cfg):
     from ccfleetd.notify import LogNotifier
     from tests.conftest import heartbeat
 
-    store = Store(":memory:")
+    store = Store(":memory:", max_slots_per_machine=8)
     srv = build_server(Context(store, cfg, Monitor(store, cfg, LogNotifier())),
                        host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)

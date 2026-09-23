@@ -147,7 +147,9 @@ def machine_hostname(node_id: str, slots: list[Mapping[str, Any]]) -> str:
     holder's name while held, its id while free. With no slot, or a slot id
     that is no hostname, the machine keeps its own id, which always is one.
     """
-    if slots:
+    # Exactly one: a machine from before one slot per machine may still carry
+    # several, and giving it one holder's name would show the others under it.
+    if len(slots) == 1:
         name = names.display(slots[0])
         if names.valid_hostname(name):
             return name

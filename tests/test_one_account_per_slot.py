@@ -41,7 +41,7 @@ ADDRESS = "holder.one@example.org"
 
 @pytest.fixture
 def store():
-    st = Store(":memory:")
+    st = Store(":memory:", max_slots_per_machine=8)
     yield st
     st.close()
 

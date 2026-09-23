@@ -39,7 +39,7 @@ def cfg() -> Config:
 
 @pytest.fixture
 def store() -> Store:
-    s = Store(":memory:")
+    s = Store(":memory:", max_slots_per_machine=8)
     yield s
     s.close()
 

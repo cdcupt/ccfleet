@@ -17,7 +17,7 @@ from tests.conftest import heartbeat, next_load
 
 @pytest.fixture
 def server(cfg):
-    store = Store(":memory:")
+    store = Store(":memory:", max_slots_per_machine=8)
     ctx = Context(store, cfg, Monitor(store, cfg, LogNotifier()))
     srv = build_server(ctx, host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)

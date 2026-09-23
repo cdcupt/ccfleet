@@ -328,17 +328,30 @@ def test_removing_a_held_owner_node_points_at_letting_go(store):
 
 
 def test_renaming_an_owner_node_onto_a_slots_id_is_refused_whole(store):
+    """No node is called erik-9, but a slot is: the owner slot, which is
+    renamed with its node, would collide with it. Refused before anything
+    moves, rather than failing halfway inside the database."""
     owner_node(store)
-    machine(store, "erik-9")                 # a slot already answers to erik-9
-    store.remove_slot("erik-9")
     machine(store, "pool-9")
-    store.rename_slot("pool-9", "erik-9")    # now pool-9's slot is called erik-9
+    store.rename_slot("pool-9", "erik-9")    # pool-9's slot is now called erik-9
+    assert store.get_node("erik-9") is None
     account(store, "e1")
     store.hold_owner_node("erik-1", "e1", now=NOW)
     with pytest.raises(StoreError) as exc:
         store.rename_node("erik-1", "erik-9")
-    assert "already exists" in str(exc.value)
+    assert "a slot called 'erik-9' already exists" in str(exc.value)
     assert store.get_slot("erik-1")["node_id"] == "erik-1", "nothing half-renamed"
+    assert store.get_node("erik-1") is not None
+
+
+def test_the_number_skips_a_slot_id_that_is_no_machines_id(store):
+    """A slot renamed to alice-1 on machine pool-7: nothing else answers to
+    alice-1, but a new name must still not be that slot's id."""
+    machine(store, "pool-7")
+    store.rename_slot("pool-7", "alice-1")
+    machine(store, "pool-1")
+    account(store, "a1", "alice@example.com")
+    assert store.claim_slot("a1", now=NOW, node_id="pool-1")["name"] == "alice-2"
 
 
 @pytest.mark.parametrize("login", ["Bad User", "root;rm", "9lives"])
@@ -348,6 +361,56 @@ def test_holding_with_a_login_that_is_no_linux_login_is_refused(store, login):
     with pytest.raises(StoreError):
         store.hold_owner_node("erik-1", "e1", unix_user=login, now=NOW)
     assert store.get_slot("erik-1") is None
+
+
+# -- one slot per machine, in the store itself ------------------------------------------
+
+def test_the_store_refuses_a_second_slot_on_a_machine(store):
+    """Not only the operator's commands: every way in goes through here."""
+    machine(store, "pool-1")
+    with pytest.raises(StoreError) as exc:
+        store.add_slot("pool-1-b", "pool-1", "slot02", now=NOW)
+    assert "one machine is one slot" in str(exc.value) and "pool-1" in str(exc.value)
+    assert [s["id"] for s in store.list_slots(node_id="pool-1")] == ["pool-1"]
+
+
+@pytest.mark.parametrize("capacity", [2, 8])
+def test_the_store_refuses_a_capacity_above_one(store, capacity):
+    store.add_node("pool-1", "op", now=NOW)
+    with pytest.raises(StoreError) as exc:
+        store.set_machine_capacity("pool-1", capacity)
+    assert "one machine is one slot" in str(exc.value)
+    assert store.get_node("pool-1")["capacity"] == 1
+
+
+def test_an_owner_slot_does_not_count_as_the_machines_slot(store):
+    """Holding an owner's node is a record; it does not fill a slot place."""
+    owner_node(store)
+    account(store, "e1")
+    store.hold_owner_node("erik-1", "e1", now=NOW)
+    with pytest.raises(StoreError):          # it is still capacity 1 with a row on it
+        store.add_slot("erik-1-x", "erik-1", "slot01", now=NOW)
+
+
+def test_a_machine_with_two_slots_from_before_answers_to_its_own_id():
+    """A database from before one slot per machine may still hold one. Its
+    hostname is never one holder's name, which the other would be shown under."""
+    from ccfleetd.desired import machine_hostname
+    st = Store(":memory:", max_slots_per_machine=2)
+    try:
+        st.add_node("old-m", "op", now=NOW)
+        st.set_machine_capacity("old-m", 2)
+        for sid, user in (("old-m-01", "slot01"), ("old-m-02", "slot02")):
+            st.add_slot(sid, "old-m", user, now=NOW)
+        st.apply_slot_report("old-m", [{"unix_user": u, "present": False}
+                                       for u in ("slot01", "slot02")], now=NOW)
+        st.add_account("a1", "sub-a1", "alice@example.com", slot_quota=1, now=NOW)
+        assert st.claim_slot("a1", now=NOW)["name"] == "alice-1"
+        rows = st.list_slots(node_id="old-m", kind=slots.MACHINE_SLOT)
+        assert machine_hostname("old-m", rows) == "old-m"
+        assert machine_hostname("old-m", rows[:1]) == "alice-1"
+    finally:
+        st.close()
 
 
 # -- the live database, as it stood on 2026-09-23 ---------------------------------------------
