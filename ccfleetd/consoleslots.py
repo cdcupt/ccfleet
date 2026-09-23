@@ -126,6 +126,11 @@ def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]
                if slot.get("claimed_at") else "")
     version = (report.get("claude") or {}).get("version")
     running = f" · Claude Code {escape(str(version))}" if version else ""
+    # How many Claude accounts the holder keeps on it, and never which: the
+    # holder's own page names them, and nothing here needs to.
+    kept = [a for a in report.get("accounts") or [] if isinstance(a, Mapping)]
+    running += (f" · {len(kept)} Claude account{'' if len(kept) == 1 else 's'}"
+                if kept else "")
     # Only an exact pin can be behind; a channel has no number to compare. And
     # only for a slot somebody holds: a free one has no Claude Code to update.
     pending = (' <span class="pill warn">update pending</span>'

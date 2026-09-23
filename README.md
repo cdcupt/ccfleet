@@ -1,6 +1,6 @@
 # ccfleet
 
-**Own-account Claude Code fleet manager: one owner, one account, one node.**
+**Own-account Claude Code fleet manager: one owner, one account at a time, one node.**
 
 ccfleet is for a small group of people who each pay for their own Claude
 subscription and want to run the unmodified Claude Code CLI on a hosted node
@@ -121,16 +121,19 @@ ccfleet-connect --use personal     # switch back
 ccfleet-connect --list             # names, the one in use, whether each still works
 ```
 
-### 4. Shared machines: several people on one box, one account each
+### 4. Shared machines: several people on one box, each on their own accounts
 
 A machine can carry several **slots**. Each slot is its own Linux user, with
-its own home, its own Claude Code and its own Claude sign-in, made by the person
-who holds it with their own Claude account, so no credential is ever shared
-between people. People sign in to ccfleet with Google, which is asked only for
+its own home, its own Claude Code and its own Claude sign-ins, made by the person
+who holds it with their own Claude accounts, so no credential is ever shared
+between people. A slot keeps up to three of its holder's accounts signed in and
+uses one at a time; the holder switches between them from their page with one
+click, and nothing ever switches by itself. People sign in to ccfleet with Google, which is asked only for
 the `openid email` scopes: ccfleet keeps the address and Google's stable account
 id, which is what an account is keyed on because addresses change. The operator
 grants each person an allowance of slots, and they claim one, sign it in to
-their own Claude account and give it back from `/account`. The guidebook predates shared machines; this
+their own Claude account (or several, switched with one click) and give it back
+from `/account`. The guidebook predates shared machines; this
 section is their reference until it catches up.
 
 ```bash

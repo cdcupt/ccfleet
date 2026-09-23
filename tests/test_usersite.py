@@ -230,7 +230,8 @@ def test_the_page_shows_their_slots_and_nobody_elses(site):
 
 @pytest.mark.parametrize("action", usersite.SLOT_ACTIONS)
 @pytest.mark.parametrize("fields", [{"confirm": "wipe", "code": "x"}, {}, {"confirm": "no"},
-                                    {"code": ""}])
+                                    {"code": ""}, {"account": "1", "confirm": "remove"},
+                                    {"account": "2"}])
 def test_somebody_elses_slot_answers_like_one_that_is_not_there(site, action, fields):
     """Not 403: which slots exist, and who holds them, is not theirs to learn —
     in every shape of request, including the ones a form would refuse."""
@@ -246,6 +247,7 @@ def test_somebody_elses_slot_answers_like_one_that_is_not_there(site, action, fi
     after = store.get_slot(held_by_ana["id"])
     assert after["state"] == slots.CLAIMED and after["held_by"] == ana.account["id"]
     assert store.get_login(slot_login_key(held_by_ana["id"])) is None
+    assert store.get_account_intent(held_by_ana["id"]) is None
 
 
 def test_an_action_that_does_not_exist_is_not_found(site):
@@ -718,5 +720,20 @@ def test_the_policy_lists_every_field_kept_about_a_person():
                  "when and by whom it was recorded",          # payments.recorded_at/_by
                  "whether it was later voided",               # payments.voided_at
                  "the code you paste",                        # logins.code
-                 "the server keeps a matching record"):       # oauth_flows
+                 "the server keeps a matching record",        # oauth_flows
+                 # heartbeats: slots[].accounts
+                 "the email address and plan of each Claude account signed in on it",
+                 "what you asked for is held here"):          # account_intents
         assert kept in page, kept
+
+
+def test_the_policy_no_longer_says_the_account_address_stays_on_the_machine():
+    """It did say so, and with several accounts on a slot it stopped being
+    true: the page has to tell them apart. A promise the code has outgrown is
+    the worst kind of line on this page."""
+    page = usersite.privacy_page(Config())
+    assert "name and email on your Claude account" not in page
+    assert "or the name on your Claude accounts" in page
+    assert "how many Claude accounts each one has signed in" in page
+    assert f"Last updated {usersite.PRIVACY_UPDATED}" in page and \
+        usersite.PRIVACY_UPDATED >= "2026-09-23"

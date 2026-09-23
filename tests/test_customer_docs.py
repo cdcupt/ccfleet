@@ -146,9 +146,37 @@ def test_the_guide_quotes_labels_the_user_site_really_shows():
         assert label in states and f">{label}</span>" in guide
     source = inspect.getsource(usersite)
     for label in ("Claim a slot", "Sign in to Claude", "Send code", "Get a device token",
-                  "Done with it", "Give this slot back", "Sign in again"):
+                  "Done with it", "Give this slot back", "Sign in again",
+                  "Add another account", "Use this one", "Remove"):
         assert f'"{label}"' in source, f"the user site has no button {label!r}"
         assert f">{label}</span>" in guide
+
+
+def test_switching_accounts_is_explained_and_never_automatic():
+    """Several of your own accounts, switched by you. The guide says what a
+    switch costs, and that nothing switches by itself when a limit runs out."""
+    guide = render("/docs/guide")
+    section = guide[guide.index("<h2>Switch accounts</h2>"):]
+    section = section[:section.index("</div>")]
+    assert "up to three" in section
+    assert "ends anything running in Remote Control" in section
+    assert "never switches by itself" in section
+    assert "your own" in section
+    # Where the server's knowledge is described, the new fact is said too.
+    assert "the email address and plan of each Claude account" in render("/docs/how-it-works")
+
+
+def test_the_commands_quoted_for_several_tokens_are_ones_the_script_has():
+    """Like a button, a flag the guide names has to exist: the script's own
+    usage lines say so, and the guide and the token page quote them."""
+    from pathlib import Path
+
+    script = (Path(__file__).parents[1] / "laptop" / "ccfleet-connect.sh").read_text()
+    guide = render("/docs/guide")
+    shown = usersite.token_page({"id": "s1"}, "sk-ant-oat01-" + "x" * 20)
+    for command in ("ccfleet-connect --add NAME", "ccfleet-connect --use NAME"):
+        assert f"#   {command}" in script, f"the script has no {command!r}"
+        assert f"<code>{command}</code>" in guide and f"<code>{command}</code>" in shown
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
