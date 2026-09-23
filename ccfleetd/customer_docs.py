@@ -172,7 +172,10 @@ def guide(cfg: Config) -> str:
         "makes a one-year token from the Claude account in use on your slot, for running "
         "Claude Code on your own computer. It is shown until you press "
         '<span class="btnlabel">Done with it</span>, for at most '
-        f"{_span(LOGIN_MAX_AGE_S)}, and never kept after that.</li>"
+        f"{_span(LOGIN_MAX_AGE_S)}, and never kept after that. Tokens for several of "
+        "your accounts can live on one computer: save each with "
+        "<code>ccfleet-connect --add NAME</code>, and switch with "
+        "<code>ccfleet-connect --use NAME</code>.</li>"
         '<li><strong>Giving it back.</strong> Tick the box and press '
         '<span class="btnlabel">Give this slot back</span>. Your Linux account and every file '
         "in it are deleted; your Claude accounts are not touched. Push your work somewhere "
