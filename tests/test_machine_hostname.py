@@ -142,10 +142,25 @@ def test_the_machine_reports_the_name_it_answers_to(cfg, tmp_path):
     assert host.posted[-1]["hostname"] == "alice-1"
 
 
-def test_without_cloud_init_there_is_no_cloud_file(cfg, tmp_path):
+def test_without_cloud_init_there_is_no_cloud_file_and_nothing_to_warn_about(
+        cfg, tmp_path, caplog):
     host = Host(tmp_path, cloud=False, desired={"hostname": "alice-1", "slots": []})
-    cycle(cfg, host)
+    with caplog.at_level("WARNING", logger="ccfleet-machine"):
+        cycle(cfg, host)
     assert host.name == "alice-1" and not host.cloud.exists()
+    assert not [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+
+
+def test_a_name_that_took_is_followed_even_when_tidying_up_after_it_fails(cfg, tmp_path):
+    """The rename has happened once hostnamectl says so: Remote Control must
+    follow it whatever goes wrong after, or claude.ai keeps the old name."""
+    host = Host(tmp_path, users=("slot01",), rc_active=("slot01",),
+                desired={"hostname": "alice-2", "slots": [
+                    {"unix_user": "slot01", "state": "active"}]})
+    (host.cloud / ".99-ccfleet.cfg.ccfleet-tmp").mkdir()      # the write there will fail
+    cycle(cfg, host, {"slots": ["slot01"]})
+    assert host.name == "alice-2"
+    assert ("slot01", ("restart", "claude-remote-control.service")) in host.systemctl
 
 
 def test_a_name_it_already_answers_to_changes_nothing(cfg, tmp_path):

@@ -507,9 +507,15 @@ def apply_hostname(name: str, cfg: MachineConfig, system: System) -> bool:
     if not system.set_hostname(name):
         log.error("could not take the name %s; still answering to %s", name, current)
         return False
-    _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id]))
-    if system.cloud_cfg_dir.is_dir():
-        _write_file(system.cloud_cfg_dir / CLOUD_CFG_NAME, CLOUD_CFG)
+    # The name has taken. What follows is tidying: a failure in it is said,
+    # and never hides the rename from Remote Control, which must follow it.
+    try:
+        _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id]))
+        if system.cloud_cfg_dir.is_dir():
+            _write_file(system.cloud_cfg_dir / CLOUD_CFG_NAME, CLOUD_CFG)
+    except OSError as exc:
+        log.warning("now answering to %s, but could not tidy up after it: %s",
+                    name, exc.__class__.__name__)
     log.info("this machine now answers to %s", name)
     return True
 
