@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import oauth, payments
+from . import names, oauth, payments
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -42,7 +42,6 @@ from .store import (
     QuotaExceeded,
     Store,
     StoreError,
-    slot_login_key,
 )
 
 # What a page may say after an action. Chosen by a fixed code, never text taken
@@ -239,7 +238,9 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     held = store.list_slots(held_by=account["id"])
     latest = store.latest_heartbeats()
     nodes = {n["id"]: n for n in store.list_nodes()}
-    logins = {s["id"]: store.get_login(slot_login_key(s["id"])) or {} for s in held}
+    # From wherever each slot keeps it: an owner's node counted as their slot
+    # signs in through the node's own row.
+    logins = {s["id"]: store.login_for_slot(s) or {} for s in held}
     csrf = csrf_for(session_id, cfg.cookie_secret)
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for s in held if s["state"] in slotstates.HELD)
@@ -358,7 +359,10 @@ def privacy_page(cfg: Config) -> str:
         "<li>Your account: the address and id above, whether you are an operator, how many "
         "slots you may hold, when you first signed in, and when you last visited.</li>"
         "<li>The slots you hold, when you claimed each one, and when a device token was last "
-        "handed out for it.</li>"
+        "handed out for it. Each slot you hold is named after you, from the part of your "
+        "address before the @ (or a name the operator chose for you) and a number: that "
+        "name is also the one its machine answers to in claude.ai/code, and it goes when "
+        "you give the slot back.</li>"
         "<li>Your sign-in here: a random value in a cookie, of which we store only a hash, "
         "with when it began and when it ends. "
         f"It lasts {_span(cfg.session_ttl_s)}, or until you sign out.</li>"
@@ -459,16 +463,38 @@ CHANGED = ("This slot is signed in to another Claude account than the one it was
            "give the slot back and claim a new one.")
 
 
+def _own_report(heartbeat: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
+    """What an owner's own node says about itself, in a slot report's shape:
+    it reports these at the top of its heartbeat rather than per slot."""
+    payload = (heartbeat or {}).get("payload") or {}
+    return {key: payload.get(key) or {}
+            for key in ("credentials", "remote_control", "quota", "usage")}
+
+
+def _own_state(report: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Signed in or not, from the node's own word: its slot never goes
+    through the lifecycle, so its state says nothing about that."""
+    if (report.get("credentials") or {}).get("logged_in") is True:
+        return STATE_WORDS[slotstates.ACTIVE]
+    return ("warn", "Not signed in", "Sign in to your own Claude account below.")
+
+
 def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                heartbeat: Optional[Mapping[str, Any]], login: Mapping[str, Any],
                csrf: str, cfg: Config, now: float,
                flagged: frozenset[str] = frozenset()) -> str:
-    report = _report_for(slot, heartbeat)
+    own = slot.get("kind") == slotstates.OWNER_SLOT
+    report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
     # A sign-in or token that failed is over: it is said once, below, and the
     # buttons come back as if nothing were in flight.
     failed = login if login.get("state") == "failed" else {}
     login = {} if failed else login
-    tone, title, detail = STATE_WORDS.get(slot["state"], ("disabled", slot["state"], ""))
+    if own:
+        tone, title, detail = _own_state(report)
+        # A token handed over for their own node is noted on the node.
+        slot = {**slot, "device_token_at": node.get("device_token_at") or 0}
+    else:
+        tone, title, detail = STATE_WORDS.get(slot["state"], ("disabled", slot["state"], ""))
     heard = (heartbeat or {}).get("ts")
     if heard is None:
         machine = '<span class="bad-text">not heard from yet</span>'
@@ -480,15 +506,20 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     region = f" · {escape(node['region'])}" if node.get("region") else ""
     claimed = (f" · claimed {escape(_age(now, slot['claimed_at']))} ago"
                if slot.get("claimed_at") else "")
+    # The name claude.ai/code shows them; the machine only when it is not that.
+    name = names.display(slot)
+    where = ("your own machine" if own
+             else f"on {escape(slot['node_id'])}" if slot["node_id"] != name else "")
+    about = f"{where}{region}{claimed}".lstrip(" ·")
     parts = [
         f'<div class="card slot" id="slot-{escape(slot["id"])}">'
-        f'<h2>{escape(slot["id"])} <span class="pill {tone}">{escape(title)}</span></h2>',
-        f'<p class="muted small">on {escape(slot["node_id"])}{region}{claimed} · machine '
-        f"{machine}</p>",
+        f'<h2>{escape(name)} <span class="pill {tone}">{escape(title)}</span></h2>',
+        f'<p class="muted small">{about + " · " if about else ""}machine {machine}</p>',
     ]
     if detail:
         parts.append(f"<p>{escape(detail)}</p>")
-    if slot["state"] == slotstates.ACTIVE:
+    signed_in = (report.get("credentials") or {}).get("logged_in") is True
+    if (signed_in if own else slot["state"] == slotstates.ACTIVE):
         parts.append(_in_use(report, now))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
@@ -502,7 +533,9 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     if slot["state"] in CAN_SIGN_IN:
         parts.append(_sign_in(slot, report, login, csrf))
         parts.append(_tokens(slot, login, csrf, now))
-    if slot["state"] in slotstates.RELEASABLE:
+    # Never on somebody's own node: giving back means wiping, and nothing
+    # there is ours to wipe.
+    if slot["state"] in slotstates.RELEASABLE and not own:
         parts.append(_release(slot, csrf))
     parts.append("</div>")
     return "".join(parts)

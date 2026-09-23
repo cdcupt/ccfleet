@@ -95,8 +95,9 @@ def overview(cfg: Config) -> str:
         "<h1>Claude Code on a machine that is always on</h1>"
         '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux account on a '
         "machine we run, with Claude Code installed and signed in to <em>your own</em> Claude "
-        "account. Open claude.ai/code or the Claude app on any device, pick your slot, and "
-        "Claude works there, on your files and with your tools, while your laptop is closed.</p>"
+        "account. Your slot is a whole machine, named after you. Open claude.ai/code or the "
+        "Claude app on any device, pick it by that name, and Claude works there, on your "
+        "files and with your tools, while your laptop is closed.</p>"
         '<div class="grid3">'
         '<div class="card"><h2>What you get</h2><ul>'
         "<li>Your own Linux account: a home directory only you can read, and room for your "
@@ -158,9 +159,9 @@ def guide(cfg: Config) -> str:
         "<p>Remote Control comes on within a minute. Open "
         '<a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">'
         "claude.ai/code</a> in any browser, or the Claude app on iOS or Android, signed in to "
-        "the same Claude account. Your slot appears under the machine&#x27;s name, the one "
-        "your slot card shows; start a session there. Everything runs on the machine, in "
-        "your slot, with your files.</p></li>"
+        "the same Claude account. Your slot appears there under its name, the one at the "
+        "top of your slot card: named after you, like alice-1. Start a session there. "
+        "Everything runs on the machine, in your slot, with your files.</p></li>"
         "</ol>"
         '<div class="card"><h2>Also on your page</h2><ul>'
         "<li><strong>Your usage.</strong> Your Claude account&#x27;s 5-hour and weekly limits, "
@@ -183,7 +184,10 @@ def guide(cfg: Config) -> str:
         "another account, hold another slot. In claude.ai/code each account sees only its "
         "own machine.</p>"
         "<p>One account also stays on one machine: signed in on two at once, it is flagged "
-        "to you and to the operator.</p></div>"
+        "to you and to the operator.</p>"
+        "<p>Your slot is a whole machine, named after you: the part of your address before "
+        "the @ and a number, like alice-1. claude.ai/code shows it by that name. When you "
+        "give it back, the name goes with it.</p></div>"
         '<div class="card"><h2>Good to know</h2><ul>'
         "<li>Your slot is <strong>not backed up</strong>. Keep your work in git, or anywhere "
         "else that is yours.</li>"
@@ -243,11 +247,12 @@ def how_it_works(cfg: Config) -> str:
         "path.</p>"
         f'<div class="card">{PICTURE}</div>'
         '<div class="card"><h2>Your slot</h2>'
-        "<p>A slot is a Linux account of its own on a shared machine: a home directory only "
-        "you can read, your own Claude Code, and two services that run while nobody is "
-        "logged in: a work session, and Remote Control, which is what claude.ai/code and "
-        "the Claude app connect to. There is no administrator access in a slot, and other "
-        "slots on the machine cannot read yours.</p></div>"
+        "<p>Your slot is a whole machine, named after you, and claude.ai/code shows it by "
+        "that name. On it you have a Linux account of your own: a home directory only you "
+        "can read, your own Claude Code, and two services that run while nobody is logged "
+        "in: a work session, and Remote Control, which is what claude.ai/code and the "
+        "Claude app connect to. There is no administrator access in a slot, and it is the "
+        "only slot on its machine.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
         "<p>You sign in to Claude yourself, through Anthropic&#x27;s own sign-in. The "
         "credential that creates is written on the machine, in your slot, and nowhere else: "
@@ -280,8 +285,8 @@ def how_it_works(cfg: Config) -> str:
         "after the machine itself confirms your account is gone, so nobody is ever handed "
         "your files.</p></div>"
         '<div class="card"><h2>Where</h2>'
-        "<p>The machines are in California. Several slots share a machine, and its internet "
-        "address. ccfleet&#x27;s code is open source: "
+        "<p>The machines are in California. Each slot is a machine of its own, with its own "
+        "internet address. ccfleet&#x27;s code is open source: "
         '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
         'rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>.</p></div>')
     return _page("/docs/how-it-works", "how it works", body)
