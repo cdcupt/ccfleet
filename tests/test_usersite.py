@@ -638,7 +638,7 @@ def test_the_privacy_page_quotes_the_settings_in_force():
     default = usersite.privacy_page(Config())
     assert "It lasts 14 days, or until you sign out" in default
     assert "We keep these reports for 30 days" in default
-    assert "held here for at most 15 minutes" in default
+    assert "are held here for at most 15 minutes" in default
     assert "which lasts 10 minutes" in default
     tuned = usersite.privacy_page(Config(session_ttl_s=36 * 3600, retention_days=45))
     assert "It lasts 36 hours, or until you sign out" in tuned
@@ -652,7 +652,7 @@ def test_the_privacy_page_follows_the_codes_own_windows(monkeypatch):
     monkeypatch.setattr(usersite, "LOGIN_MAX_AGE_S", 20 * 60)
     monkeypatch.setattr(oauth, "FLOW_TTL_S", 5 * 60)
     page = usersite.privacy_page(Config())
-    assert "held here for at most 20 minutes" in page and "for at most 20 minutes." in page
+    assert "are held here for at most 20 minutes" in page and "for at most 20 minutes." in page
     assert "which lasts 5 minutes" in page
 
 
@@ -671,3 +671,19 @@ def test_the_privacy_page_says_what_the_operator_can_see():
     page = usersite.privacy_page(Config())
     assert "their administrators have root" in page
     assert "technically read any slot&#x27;s files, and its Claude credential" in page
+
+
+def test_the_policy_lists_every_field_kept_about_a_person():
+    """A privacy policy that leaves a stored field out is wrong, however kind its
+    words. Each phrase stands for a column that holds something about you."""
+    page = usersite.privacy_page(Config())
+    for kept in ("whether you are an operator",               # accounts.role
+                 "when you first signed in",                  # accounts.created_at
+                 "when you last visited",                     # accounts.last_seen_at
+                 "when a device token was last handed out",   # slots.device_token_at
+                 "with when it began and when it ends",       # sessions.created_at/expires_at
+                 "when and by whom it was recorded",          # payments.recorded_at/_by
+                 "whether it was later voided",               # payments.voided_at
+                 "the code you paste",                        # logins.code
+                 "the server keeps a matching record"):       # oauth_flows
+        assert kept in page, kept
