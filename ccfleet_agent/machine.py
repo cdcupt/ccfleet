@@ -5,15 +5,18 @@ A shared machine carries one slot: a Linux user with its own home, its own
 Claude Code and its own login. (It looks after a list of them all the same: a
 machine from before one slot per machine may still carry several.) The
 single-owner agent cannot look after them: it runs as its owner, creating and
-removing Linux users is root's work,
-and its unit sets NoNewPrivileges so it could not borrow root if it tried. So a
-shared machine runs this instead, once a minute, under a system timer.
+removing Linux users is root's work, and its unit sets NoNewPrivileges so it
+could not borrow root if it tried. So a shared machine runs this instead, once
+a minute, under a system timer.
 
 What it does as root, and nothing else:
 
   provision a slot somebody has claimed        node/slot-add.sh --slot <user>
   wipe a slot somebody has released            node/slot-remove.sh --slot <user>
   ask each slot about itself                   agent.py --slot-facts, as <user>
+  answer to the name the server gives it       hostnamectl, /etc/hosts; then, as
+                                               each slot's user, restart its
+                                               Remote Control to take the name
 
 The third is the one to be careful with. Everything under a slot's home belongs
 to whoever holds it — every file and every symlink — so root never opens
@@ -39,6 +42,7 @@ import pwd
 import re
 import selectors
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -214,6 +218,41 @@ def run_bounded(argv: Sequence[str], *, input_text: str, limit: int, timeout: fl
     return code, None
 
 
+# -- the machine's name ---------------------------------------------------------------
+#
+# One machine is one slot (Erik, 2026-09-23), and claude.ai/code shows a machine
+# by its hostname: the server says what this one should answer to — its holder's
+# name while the slot is held, its own id while it is free — and root makes it so.
+
+#: One hostname label, as the server sends it and hostnamectl takes it. Checked
+#: here as well as there: this string reaches hostnamectl and /etc/hosts as root.
+HOSTNAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+HOSTS_FILE = Path("/etc/hosts")
+CLOUD_CFG_DIR = Path("/etc/cloud/cloud.cfg.d")
+CLOUD_CFG_NAME = "99-ccfleet.cfg"
+# cloud-init puts the provider's name back at boot unless told to leave the
+# hostname, and /etc/hosts, alone.
+CLOUD_CFG = "preserve_hostname: true\nmanage_etc_hosts: false\n"
+RC_UNIT = "claude-remote-control.service"
+SYSTEMCTL_TIMEOUT_S = 60
+HOSTNAMECTL_TIMEOUT_S = 30
+# A Remote Control restart the machine still owes its slots after a rename,
+# kept in its state until every running one has restarted onto the name.
+RC_OWED_KEY = "remote_control_owes_the_name"
+
+
+def set_hostname_now(name: str) -> bool:
+    """hostnamectl, which also writes /etc/hostname. True when it worked."""
+    try:
+        proc = subprocess.run(["hostnamectl", "set-hostname", name], capture_output=True,
+                              text=True, timeout=HOSTNAMECTL_TIMEOUT_S, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+
+
 @dataclass(frozen=True)
 class System:
     """Everything this agent reaches outside itself, so a test can stand in."""
@@ -226,6 +265,11 @@ class System:
     clock: Callable[[], float] = time.time
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    # The machine's own name, and where it is kept.
+    hostname: Callable[[], str] = socket.gethostname
+    set_hostname: Callable[[str], bool] = set_hostname_now
+    hosts_path: Path = HOSTS_FILE
+    cloud_cfg_dir: Path = CLOUD_CFG_DIR
 
 
 # -- what the server asks for ----------------------------------------------------
@@ -398,6 +442,9 @@ def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System
     payload: dict[str, Any] = {"node_id": cfg.node_id, "ts": system.clock(),
                                "agent_version": core.AGENT_VERSION, "mode": "machine"}
     payload.update(core.system_info())
+    # The name the machine answers to, which the console compares with the
+    # one it should: its slot's.
+    payload["hostname"] = system.hostname()[:100]
     payload["disk"] = core.disk_info(Path(SLOT_HOMES))
     payload["egress"] = core.egress_ip(cfg.egress_targets, system.opener,
                                        min(cfg.timeout_s, 5.0))
@@ -406,6 +453,157 @@ def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System
                                     ask=not fast or user in signing_in, abandoned=abandoned)
                         for user in state.get("slots") or []]
     return payload
+
+
+def wanted_hostname(desired: Mapping[str, Any]) -> Optional[str]:
+    """The name the server says this machine should answer to, if it is one."""
+    raw = desired.get("hostname")
+    if isinstance(raw, str) and HOSTNAME_RE.fullmatch(raw):
+        return raw
+    return None
+
+
+def hosts_with(text: str, names: Sequence[str]) -> str:
+    """/etc/hosts with one 127.0.1.1 line naming `names`, each once, in order.
+
+    Every other line stays as it was, and a file that already says exactly
+    that comes back untouched, so a run with nothing to change writes nothing.
+    """
+    unique = list(dict.fromkeys(n for n in names if n))
+    lines = text.splitlines()
+    ours = [ln for ln in lines if ln.split()[:1] == ["127.0.1.1"]]
+    if len(ours) == 1 and ours[0].split()[1:] == unique:
+        return text
+    line = "127.0.1.1\t" + " ".join(unique)
+    out: list[str] = []
+    placed = False
+    for existing in lines:
+        if existing.split()[:1] == ["127.0.1.1"]:
+            if not placed:
+                out.append(line)
+                placed = True
+            continue
+        out.append(existing)
+    if not placed:
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _write_file(path: Path, text: str) -> None:
+    """Replaced whole, never half-written: a torn /etc/hosts breaks sudo."""
+    temp = path.with_name(f".{path.name}.ccfleet-tmp")
+    temp.write_text(text, encoding="utf-8")
+    os.chmod(temp, 0o644)
+    os.replace(temp, path)
+
+
+def _ensure_file(path: Path, text: str) -> None:
+    """`path` says exactly `text` afterwards; written only when it did not."""
+    try:
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    _write_file(path, text)
+
+
+def converge_name(name: str, cfg: MachineConfig, system: System) -> bool:
+    """Make the machine answer to `name`, and keep what goes with it true.
+    True when this call renamed it.
+
+    Convergent: every run checks /etc/hosts and the cloud-init drop-in again,
+    not only the run that renamed, so anything left undone is done later.
+    /etc/hosts first, naming the new name, the node's id and the name the
+    machine answers to now, so sudo resolves whichever it goes by at every
+    moment; once the name has taken, the old one is dropped — it may be the
+    last holder's, and /etc/hosts is readable by the next. A /etc/hosts that
+    cannot be read is left alone, and the name with it: rewriting a file we
+    could not read could drop entries the machine needs.
+    """
+    try:
+        text = system.hosts_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not read the hosts file (%s); the machine's name is left as it is",
+                    exc.__class__.__name__)
+        return False
+    renamed = False
+    current = system.hostname()
+    if current != name:
+        _write_file(system.hosts_path, hosts_with(text, [name, cfg.node_id, current]))
+        if not system.set_hostname(name):
+            # Not taken: back to what the machine answers to now, so the name
+            # it could not take — somebody's — is not left in a file every slot
+            # can read. The next run tries again.
+            _ensure_file(system.hosts_path, hosts_with(text, [current, cfg.node_id]))
+            log.error("could not take its slot's name: hostnamectl failed")
+            return False
+        renamed = True
+        log.info("this machine now answers to its slot's name")
+    # The name has taken. What follows is tidying: a failure in it is said,
+    # never hides the rename from Remote Control, and is tried again next run.
+    try:
+        _ensure_file(system.hosts_path, hosts_with(text, [name, cfg.node_id]))
+        if system.cloud_cfg_dir.is_dir():
+            _ensure_file(system.cloud_cfg_dir / CLOUD_CFG_NAME, CLOUD_CFG)
+    except OSError as exc:
+        log.warning("could not tidy up after the machine's name (%s); tried again next run",
+                    exc.__class__.__name__)
+    return renamed
+
+
+def _systemctl(account: pwd.struct_passwd, system: System, *args: str) -> Optional[int]:
+    """`systemctl --user` as the slot's own user, in its own environment."""
+    code, _ = system.spawn(["systemctl", "--user", *args], input_text="", limit=4096,
+                           timeout=SYSTEMCTL_TIMEOUT_S, user=account.pw_uid,
+                           group=account.pw_gid, extra_groups=[],
+                           env=slot_env(account), cwd="/")
+    return code
+
+
+def _follow_the_name(account: pwd.struct_passwd, system: System) -> bool:
+    """One slot, after a rename: its manager re-reads its units — Remote
+    Control's `--name %H` is fixed when a unit loads — and a Remote Control
+    already running restarts, so claude.ai/code shows the machine's new name.
+    One that is not running is left stopped; it starts under the new name.
+    True when nothing more is owed."""
+    if _systemctl(account, system, "daemon-reload") != 0:
+        log.warning("%s: could not reload its units; tried again next run", account.pw_name)
+        return False
+    running = _systemctl(account, system, "is-active", "--quiet", RC_UNIT)
+    if running == 0:
+        if _systemctl(account, system, "restart", RC_UNIT) != 0:
+            log.warning("%s: Remote Control did not restart; tried again next run",
+                        account.pw_name)
+            return False
+        log.info("%s: Remote Control restarted under the machine's new name", account.pw_name)
+    # Not running starts under the new name by itself; not known is asked again.
+    return running is not None
+
+
+def _take_name(desired: Mapping[str, Any], cfg: MachineConfig, state: Mapping[str, Any],
+               system: System) -> dict[str, Any]:
+    """Answer to the name the server gives, and have every slot's Remote
+    Control follow it. Returns the state, carrying a restart still owed, so a
+    Remote Control that did not restart this run is tried again the next."""
+    owed = bool(state.get(RC_OWED_KEY))
+    rest = {k: v for k, v in state.items() if k != RC_OWED_KEY}
+    still = {**rest, RC_OWED_KEY: True}
+    name = wanted_hostname(desired)
+    renamed = False
+    if name is not None:
+        try:
+            renamed = converge_name(name, cfg, system)
+        except OSError as exc:
+            log.error("could not rename this machine (%s)", exc.__class__.__name__)
+    if name is None or not (renamed or owed) or system.hostname() != name:
+        return still if owed else rest
+    followed = True
+    for user in [u for u in state.get("slots") or [] if isinstance(u, str)]:
+        account = system.lookup(user)
+        if account is None or not is_slot_account(account, system.groups_of(account)):
+            continue
+        followed = _follow_the_name(account, system) and followed
+    return rest if followed else still
 
 
 # -- acting ----------------------------------------------------------------------
@@ -518,6 +716,9 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
         return status, {}, dict(state)
     desired = core.parse_desired(text)
     state = {**state, "heard": {u: f for u, f in heard.items() if u in users}}
+    # Before provisioning, so a claim's Remote Control first registers under
+    # its holder's name.
+    state = _take_name(desired, cfg, state, system)
     new_state = act_on_slots(wanted_slots(desired), state, cfg, system)
     # The version this machine's slots should run, checked the way the owner
     # agent checks its own before it reaches an installer. Empty: leave them be.

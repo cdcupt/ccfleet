@@ -257,6 +257,12 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
    `CCFLEET_NODE_ID=<new>` in `/etc/ccfleet/agent.env`; *node*, on an owner's
    node, the same line in `~/.config/ccfleet/agent.env`. The next heartbeat is
    accepted.
+   On a shared machine, stop here: steps 4 and 5 happen by themselves. The
+   machine agent answers to its slot's name (its holder's while held, its own
+   id while free): on its next run it rewrites `/etc/hosts`, runs `hostnamectl`,
+   writes the cloud-init drop-in, and restarts the slot's Remote Control if it
+   is running. The console says "hostname pending" until it has. An owner's
+   node is never renamed for you; go on with step 4 there.
 4. *root*: the host. Put the new name in `/etc/hosts` before the hostname
    changes, so `sudo` never runs on a name it cannot resolve: the line
    `127.0.1.1 <new> <old>` (on some images the old name sits on the public
