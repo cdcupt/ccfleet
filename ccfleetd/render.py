@@ -189,7 +189,8 @@ form.inline input[type=text],form.inline input[type=email]{width:230px;flex:0 1 
 min-width:0;max-width:100%}
 /* A field and its button on one line: the slot and account rows. */
 form.field{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}
-form.field input[type=text]{width:auto;padding:6px 10px;font-size:13px;min-height:32px}
+form.field input[type=text],form.field input[type=email]{width:auto;padding:6px 10px;
+font-size:13px;min-height:32px}
 form.field input.count{width:4.8em}
 form.field input[type=date]{font-size:13px;padding:5px 8px;min-height:32px;width:auto}
 /* An account's payments, folded under its row. */
