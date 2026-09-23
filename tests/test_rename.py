@@ -7,8 +7,8 @@ held and in use. So a rename is judged by what it must not disturb:
 
 - every row that names the old id names the new one, and nothing still names
   the old one — a half-renamed node is two nodes, one of them a ghost;
-- a slot keeps its holder, its state, its claim, its sign-in and its request
-  about accounts;
+- a slot keeps its holder, its state, its claim, its sign-in, and any row
+  left in the unused account_intents table;
 - the machine hears exactly what it heard before: it knows its slots by their
   Linux user and each claim by its time, never by the slot's id;
 - the box keeps its token, and is refused until it uses the new id;
@@ -58,6 +58,24 @@ def rows_naming(st, value):
     return hits
 
 
+def put_intent(st, slot_id):
+    """A row in account_intents, the table left unused when slots went back to
+    one Claude account each. A live database may still hold one, so renaming a
+    slot has to carry it along like any other row that names the slot."""
+    with st._lock:
+        st._conn.execute(
+            "INSERT INTO account_intents (slot_id, action, account, requested_at, updated_at) "
+            "VALUES (?, 'use', '2', ?, ?)", (slot_id, NOW, NOW))
+        st._conn.commit()
+
+
+def intent_row(st, slot_id):
+    with st._lock:
+        row = st._conn.execute("SELECT * FROM account_intents WHERE slot_id = ?",
+                               (slot_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def make_active(st, slot_id, account_id):
     """Claimed by `account_id`, provisioned, signed in: a slot somebody is using."""
     slot = st.claim_slot(account_id, now=NOW)
@@ -76,8 +94,8 @@ def make_active(st, slot_id, account_id):
 def fleet(st):
     """A shared machine with one slot in use and one free, and everything that
     can name either: heartbeats, an alert, the machine's own sign-in row, the
-    slot's sign-in, and a request about the slot's accounts. Plus a bystander
-    node whose rows must not move."""
+    slot's sign-in, and a leftover account_intents row. Plus a bystander node
+    whose rows must not move."""
     token = st.add_node("old-m", "erik", region="us-west-residential", now=NOW)
     st.set_machine_capacity("old-m", 2)
     st.add_account("a1", "sub-a1", "a1@example.com", slot_quota=2, now=NOW)
@@ -88,8 +106,8 @@ def fleet(st):
                                    {"unix_user": "slot02", "present": False}], now=NOW)
     make_active(st, "old-m-01", "a1")
     st.request_login("old-m", "", NOW)
-    st.request_slot_login("old-m-01", "", NOW, kind="login", held_by="a1", account="new")
-    st.request_account_action("old-m-01", "use", "2", NOW, held_by="a1")
+    st.request_slot_login("old-m-01", "", NOW, kind="login", held_by="a1")
+    put_intent(st, "old-m-01")
     for ts in (NOW, NOW + 60):
         st.insert_heartbeat("old-m", ts, {"node_id": "old-m", "mode": "machine"})
     st.open_alert("old-m", "slot_missing:slot02", "critical", "slot02 gone on old-m", NOW)
@@ -106,8 +124,7 @@ def machine_hears(st, node_id):
     node = st.get_node(node_id)
     slots = st.list_slots(node_id=node_id)
     return desired_state(node, st.get_login(node_id), slots,
-                         {s["id"]: st.get_login(slot_login_key(s["id"])) for s in slots},
-                         {s["id"]: st.get_account_intent(s["id"]) for s in slots})
+                         {s["id"]: st.get_login(slot_login_key(s["id"])) for s in slots})
 
 
 # -- renaming a node ---------------------------------------------------------------
@@ -252,7 +269,7 @@ def test_a_renamed_slot_in_use_keeps_its_holder_its_claim_its_sign_in_and_its_re
     fleet(st)
     slot = st.get_slot("old-m-01")
     login = st.get_login(slot_login_key("old-m-01"))
-    intent = st.get_account_intent("old-m-01")
+    intent = intent_row(st, "old-m-01")
     assert slot["state"] == slotstates.ACTIVE and slot["held_by"] == "a1"
 
     st.rename_slot("old-m-01", "erik-2-a")
@@ -261,7 +278,7 @@ def test_a_renamed_slot_in_use_keeps_its_holder_its_claim_its_sign_in_and_its_re
     assert st.get_slot("erik-2-a") == {**slot, "id": "erik-2-a"}
     assert st.get_login(slot_login_key("erik-2-a")) == {
         **login, "node_id": slot_login_key("erik-2-a")}
-    assert st.get_account_intent("erik-2-a") == {**intent, "slot_id": "erik-2-a"}
+    assert intent_row(st, "erik-2-a") == {**intent, "slot_id": "erik-2-a"}
     assert [s["id"] for s in st.list_slots(held_by="a1")] == ["erik-2-a"]
 
 
@@ -337,13 +354,13 @@ def test_a_sign_in_or_request_left_under_the_new_name_is_dropped_not_adopted(st)
         st._conn.execute("DELETE FROM slots WHERE id = 'old-m-02'")
         st._conn.commit()
     mine = st.get_login(slot_login_key("old-m-01"))
-    my_intent = st.get_account_intent("old-m-01")
+    my_intent = intent_row(st, "old-m-01")
 
     st.rename_slot("old-m-01", "old-m-02")
 
     assert st.get_login(slot_login_key("old-m-02")) == {
         **mine, "node_id": slot_login_key("old-m-02")}
-    assert st.get_account_intent("old-m-02") == {**my_intent, "slot_id": "old-m-02"}
+    assert intent_row(st, "old-m-02") == {**my_intent, "slot_id": "old-m-02"}
     assert rows_naming(st, "sk-ant-oat01-somebody-elses") == []
 
 

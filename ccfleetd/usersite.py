@@ -24,7 +24,7 @@ from typing import Any, Optional
 from . import oauth, payments
 from . import slots as slotstates
 from .config import Config
-from .desired import SLOT_ACCOUNT_IDS, is_login_url
+from .desired import is_login_url
 from .monitor import LOGIN_MAX_AGE_S
 from .render import (
     CSS,
@@ -62,12 +62,6 @@ NOTES = {
     "done": ("ok", "Done. The token is no longer kept here."),
     "not-now": ("warn", "Your slot cannot do that right now. It may still be setting up, "
                         "or being given back."),
-    "adding": ("ok", "Starting a sign-in for another account on your slot…"),
-    "switching": ("ok", "Switching accounts. Your slot moves over within a couple of "
-                        "minutes."),
-    "removing": ("ok", "Removing that account from your slot."),
-    "confirm-remove": ("warn", "Tick the box first: removing an account signs it out on "
-                               "your slot."),
 }
 
 STATE_WORDS = {
@@ -82,11 +76,7 @@ STATE_WORDS = {
                            "allowance once the machine confirms it is gone."),
 }
 
-# The buttons about the Claude accounts on a slot: sign another one in, switch
-# to one, or take one off.
-ACCOUNT_BUTTONS = ("add-account", "use", "forget")
-SLOT_ACTIONS = ("release", "signin", "code", "cancel", "token", "token-show",
-                "token-done") + ACCOUNT_BUTTONS
+SLOT_ACTIONS = ("release", "signin", "code", "cancel", "token", "token-show", "token-done")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
@@ -168,8 +158,6 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
     else between loading and acting is refused, not acted on."""
     slot_id, anchor = slot["id"], f"slot-{slot['id']}"
     try:
-        if action in ACCOUNT_BUTTONS or (action == "signin" and form.get("account")):
-            return _on_accounts(store, slot, holder, action, form, now)
         if action == "release":
             # The box, not merely the button: this deletes somebody's work, and
             # a form resubmitted from history must not do it by accident. Said
@@ -202,56 +190,6 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
         return _back("not-now", anchor)
 
 
-def _on_accounts(store: Store, slot: Mapping[str, Any], holder: str, action: str,
-                 form: Mapping[str, str], now: float) -> Outcome:
-    """Adding, switching, signing in again to and removing a slot's accounts.
-
-    The holder is checked first, so a stranger learns nothing from the answer.
-    Then the request is checked against what the machine last said is on the
-    slot: the holder is never told a switch is under way that the machine
-    could only refuse. The store checks the holder again, in the same
-    transaction as the write.
-    """
-    slot_id, anchor = slot["id"], f"slot-{slot['id']}"
-    if slot.get("held_by") != holder:
-        raise NotYours(f"{slot_id} is not held by this account")
-    on_slot = {a["id"]: a for a in _accounts_of(_latest_report(store, slot))}
-    if action == "add-account":
-        if len(on_slot) >= len(SLOT_ACCOUNT_IDS):
-            return _back("not-now", anchor)
-        store.request_slot_login(slot_id, form.get("email", ""), now, held_by=holder,
-                                 account="new")
-        return _back("adding", anchor)
-    if action == "forget" and form.get("confirm") != "remove":
-        return _back("confirm-remove", anchor)
-    which = form.get("account", "")
-    target = on_slot.get(which)
-    if target is None:
-        return _back("not-now", anchor)
-    if action == "signin":
-        # Its own address pre-fills Anthropic's page, so the sign-in lands on
-        # the account this row is about and not whichever the browser has open.
-        store.request_slot_login(slot_id, str(target.get("email") or ""), now,
-                                 held_by=holder, account=which)
-        return _back("signin", anchor)
-    if action == "use" and (target.get("active") is True or target.get("signed_in") is not True):
-        return _back("not-now", anchor)
-    store.request_account_action(slot_id, action, which, now, held_by=holder)
-    return _back("switching" if action == "use" else "removing", anchor)
-
-
-def _latest_report(store: Store, slot: Mapping[str, Any]) -> Mapping[str, Any]:
-    recent = store.recent_heartbeats(slot["node_id"], limit=1)
-    return _report_for(slot, recent[0] if recent else None)
-
-
-def _accounts_of(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """The accounts a slot reported, in their places, and nothing that is not one."""
-    found = [a for a in report.get("accounts") or []
-             if isinstance(a, Mapping) and a.get("id") in SLOT_ACCOUNT_IDS]
-    return sorted(found, key=lambda a: a["id"])
-
-
 # -- the page --------------------------------------------------------------------
 
 # What this page adds to the console's styles: the note after an action, and
@@ -272,18 +210,6 @@ color:var(--ink)}
 .card .usage{margin:8px 0 4px}
 .card .usage svg.spark{max-width:520px}
 label.check{font-weight:400;color:var(--muted);align-items:flex-start;margin-top:0}
-.accounts{margin:2px 0 6px}
-.acct{display:flex;align-items:center;justify-content:space-between;gap:8px 14px;
-flex-wrap:wrap;padding:9px 0;border-bottom:1px solid var(--rule-soft)}
-.acct:last-child{border-bottom:0}
-.acct-who{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;min-width:0}
-.acct-name{font-family:var(--mono);font-size:13.5px;font-weight:600;overflow-wrap:anywhere}
-details.remove summary{cursor:pointer;font-size:12px;color:var(--muted);padding:4px 2px}
-details.remove[open]{flex-basis:100%}
-details.remove form{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-top:6px}
-.actions.add{margin-top:8px}
-.actions.add input[type=email]{width:230px;max-width:100%;padding:5px 9px;font-size:13px;
-margin-right:6px}
 """
 
 
@@ -314,7 +240,6 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     latest = store.latest_heartbeats()
     nodes = {n["id"]: n for n in store.list_nodes()}
     logins = {s["id"]: store.get_login(slot_login_key(s["id"])) or {} for s in held}
-    intents = {s["id"]: store.get_account_intent(s["id"]) or {} for s in held}
     csrf = csrf_for(session_id, cfg.cookie_secret)
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for s in held if s["state"] in slotstates.HELD)
@@ -333,8 +258,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             allowance += _form("/account/claim", csrf, "Claim a slot", cls="primary")
     allowance += _paid(payments.paid_through(store.list_payments(account["id"])), now)
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
-                               logins[s["id"]], csrf, cfg, now, intents[s["id"]])
-                    for s in held)
+                               logins[s["id"]], csrf, cfg, now) for s in held)
     body = (
         '<header class="mast"><div><h1>ccfleet<span class="dot">.</span></h1>'
         f'<p class="sub">Signed in as <strong>{escape(str(account.get("email", "")))}'
@@ -348,7 +272,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         "machine cannot read yours; the machine's administrators technically can. This page "
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
-    return _shell("your slots", body, _refresh(held, logins, intents))
+    return _shell("your slots", body, _refresh(held, logins))
 
 
 def _paid(through: Optional[str], now: float) -> str:
@@ -435,23 +359,22 @@ def privacy_page(cfg: Config) -> str:
         "it covers you to, the operator&#x27;s own note, when and by whom it was recorded, "
         "and whether it was later voided.</li>"
         "<li>What your slot reports about itself: which version of Claude Code is installed, "
-        "whether it is signed in, the email address and plan of each Claude account signed in "
-        "on it, so your page can tell them apart, the rate-limit tier of the one in use, when "
-        "each sign-in expires, whether Remote Control is running, how much of your Claude "
-        "usage limits is used and when they reset, and how many tokens were used each hour "
-        "over the last week. The token counts are worked out on the machine, from Claude "
-        "Code&#x27;s own records in your slot; only the numbers leave it. We keep these "
-        f"reports for {_span(cfg.retention_days * 86400)}.</li></ul>"
+        "whether it is signed in, the email address and plan of the one Claude account "
+        "signed in on it, so your page can show which of your accounts it is, that "
+        "plan&#x27;s rate-limit tier, when that sign-in expires, whether Remote Control is "
+        "running, how much of your Claude usage limits is used and when they reset, and how "
+        "many tokens were used each hour over the last week. The token counts are worked "
+        "out on the machine, from Claude Code&#x27;s own records in your slot; only the "
+        "numbers leave it. We keep these reports for "
+        f"{_span(cfg.retention_days * 86400)}.</li></ul>"
         "<p>Your slot never reports your prompts, your conversations, your files, your Claude "
-        "credentials, or the name on your Claude accounts.</p></div>"
+        "credential, or the name on your Claude account.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
         "<p>You sign in to Claude yourself, through Anthropic. The credential that creates is "
         "written on the machine, in your slot, and nowhere else: this server never stores "
         f"it. While a sign-in is in progress, its link, the code you paste and its progress "
         f"are held here for at most {attempt}. A device token you ask for is held here "
-        f"until you say you are done with it, and for at most {attempt}. When you switch "
-        "to another of your accounts or remove one, what you asked for is held here until "
-        f"the machine has done it, and for at most {attempt}.</p>"
+        f"until you say you are done with it, and for at most {attempt}.</p>"
         "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
         "Anthropic&#x27;s own terms and privacy policy.</p></div>"
         '<div class="card"><h2>What the operator can see</h2>'
@@ -461,8 +384,7 @@ def privacy_page(cfg: Config) -> str:
         "please keep nothing on a slot that you could not accept an administrator being "
         "able to read.</p>"
         "<p>In the console, the operator sees your email address, your allowance, the slots "
-        "you hold and how many Claude accounts each one has signed in, when you last "
-        "visited, and the payments recorded for you.</p></div>"
+        "you hold, when you last visited, and the payments recorded for you.</p></div>"
         '<div class="card"><h2>Cookies</h2>'
         "<p>Two, both needed to sign you in: your session cookie, and one that ties "
         "Google&#x27;s answer to the browser that asked for it, which lasts "
@@ -482,8 +404,7 @@ def privacy_page(cfg: Config) -> str:
     return _shell("privacy", body)
 
 
-def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]],
-             intents: Optional[Mapping[str, Mapping[str, Any]]] = None) -> str:
+def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
     """Come back soon while something is moving; never while a code is being typed.
 
     Always to the bare page, never the address the page was opened at. After an
@@ -494,16 +415,12 @@ def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, An
     there for anybody who reloaded by hand. The bare page also leaves the note
     behind: said once, right after the action, and from then on the cards say
     how things stand. The target never carries a fragment, for the same reason.
-
-    A switch of accounts on its way counts as moving: somebody is watching for
-    it to land.
     """
     states = {(login or {}).get("state") for login in logins.values()}
     if "url_ready" in states:
         return ""
     moving = any(s["state"] in (slotstates.CLAIMING, slotstates.RELEASING) for s in held)
-    switching = any((i or {}).get("state") == "requested" for i in (intents or {}).values())
-    soon = moving or switching or bool(states & {"requested", "code_sent"})
+    soon = moving or bool(states & {"requested", "code_sent"})
     seconds = ACTIVE_REFRESH_S if soon else IDLE_REFRESH_S
     return f'<meta http-equiv="refresh" content="{seconds};url=/account">'
 
@@ -520,8 +437,7 @@ def _report_for(slot: Mapping[str, Any], heartbeat: Optional[Mapping[str, Any]]
 
 def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                heartbeat: Optional[Mapping[str, Any]], login: Mapping[str, Any],
-               csrf: str, cfg: Config, now: float,
-               intent: Optional[Mapping[str, Any]] = None) -> str:
+               csrf: str, cfg: Config, now: float) -> str:
     report = _report_for(slot, heartbeat)
     tone, title, detail = STATE_WORDS.get(slot["state"], ("disabled", slot["state"], ""))
     heard = (heartbeat or {}).get("ts")
@@ -544,9 +460,9 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     if detail:
         parts.append(f"<p>{escape(detail)}</p>")
     if slot["state"] == slotstates.ACTIVE:
-        parts.append(_in_use(report))
+        parts.append(_in_use(report, now))
     if slot["state"] in CAN_SIGN_IN:
-        parts.append(_sign_in(slot, report, login, csrf, intent or {}, now))
+        parts.append(_sign_in(slot, report, login, csrf))
         parts.append(_tokens(slot, login, csrf, now))
     if slot["state"] in slotstates.RELEASABLE:
         parts.append(_release(slot, csrf))
@@ -554,21 +470,23 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     return "".join(parts)
 
 
-def _in_use(report: Mapping[str, Any]) -> str:
+def _in_use(report: Mapping[str, Any], now: float) -> str:
     """Signed in: as whom, the plan, a way in, and how much of each window is left.
 
-    A slot stays in use when the last account on it is signed out, so this
-    says that plainly rather than going on about a sign-in that is gone.
+    One Claude account per slot, so this names it: the holder can see which of
+    their accounts this slot is, and how long before Anthropic asks for a
+    fresh sign-in. A slot stays in use when that sign-in is gone, so this says
+    so plainly rather than going on about one that is not there.
     """
     creds = report.get("credentials") or {}
     if creds.get("logged_in") is False:
         return "<p>Not signed in to Claude right now. Sign in below to use your slot.</p>"
     remote = (report.get("remote_control") or {}).get("state")
     plan = creds.get("subscription_type")
-    accounts = _accounts_of(report)
-    active = next((a for a in accounts if a.get("active") is True), {})
-    who = f" as {escape(str(active['email']))}" if active.get("email") else ""
-    lines = [f"<p>Signed in{who}{(' · ' + escape(str(plan)) + ' plan') if plan else ''}.</p>"]
+    who = f" as {escape(str(creds['email']))}" if creds.get("email") else ""
+    left = _sign_in_left(creds.get("refresh_expires_at"), now)
+    lines = [f"<p>Signed in{who}{(' · ' + escape(str(plan)) + ' plan') if plan else ''}"
+             f"{' · sign-in ' + left if left else ''}.</p>"]
     if remote == "active":
         lines.append('<p>Remote Control is on: open <a href="https://claude.ai/code" '
                      'target="_blank" rel="noopener noreferrer">claude.ai/code</a> or the '
@@ -591,18 +509,25 @@ def _in_use(report: Mapping[str, Any]) -> str:
                  f"</b> tokens on this slot, last {escape(_usage_span(usage))}</p>"
                  f"{chart}{caption}")
     if bars:
-        # With several accounts on the slot, these windows are the active one's.
-        whose = "your active Claude account" if len(accounts) > 1 else "your Claude account"
-        bars = (f'<div class="usage-nums muted">{whose} &middot; every device'
+        bars = ('<div class="usage-nums muted">your Claude account &middot; every device'
                 "</div>" + bars)
     if bars or spent:
         lines.append(f'<div class="usage">{bars}{spent}</div>')
     return "".join(lines)
 
 
+def _sign_in_left(expires: Any, now: float) -> str:
+    """How long a sign-in has before Anthropic asks for a fresh one, or ""."""
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)) or expires <= now:
+        return ""
+    days = int((expires - now) // 86400)
+    if days >= 2:
+        return f"good for {days} more days"
+    return "good for 1 more day" if days == 1 else "ends within a day"
+
+
 def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
-             login: Mapping[str, Any], csrf: str,
-             intent: Optional[Mapping[str, Any]] = None, now: float = 0.0) -> str:
+             login: Mapping[str, Any], csrf: str) -> str:
     base = f"/account/slots/{escape(slot['id'])}"
     state = login.get("state") if login.get("kind") != "token" else None
     if not state:
@@ -610,9 +535,6 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
         if login.get("state"):
             return ('<p class="muted small">Finish or cancel the device token below before '
                     "signing in again.</p>")
-        accounts = _accounts_of(report)
-        if accounts:
-            return _accounts_row(slot, accounts, intent or {}, csrf, now)
         field = ("" if signed_in else
                  '<input type="email" name="email" placeholder="your Claude email (optional)">')
         return ('<div class="row-line"><div class="row-name">Claude</div>'
@@ -632,90 +554,7 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
                       '<input type="text" name="code" placeholder="paste the code" '
                       'autocomplete="off" required>')
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
-    name = "Another Claude account" if login.get("account") == "new" else "Claude"
-    return f'<div class="row-line stacked"><div class="row-name">{name}</div>{body}</div>'
-
-
-def _accounts_row(slot: Mapping[str, Any], accounts: list[Mapping[str, Any]],
-                  intent: Mapping[str, Any], csrf: str, now: float) -> str:
-    """Every Claude account on the slot: which is in use, and one click to switch.
-
-    While a switch or a removal is under way nothing else is offered, so the
-    holder cannot queue a second one behind a first they are still watching.
-    """
-    base = f"/account/slots/{escape(slot['id'])}"
-    waiting = intent.get("state") == "requested"
-    target = next((a for a in accounts if a["id"] == intent.get("account")), None)
-    name = _account_name(target) if target else "that account"
-    said = ""
-    if waiting:
-        verb = "Switching to" if intent.get("action") == "use" else "Removing"
-        said = f'<p class="login-say">{verb} {name}…</p>'
-    elif intent.get("state") == "failed":
-        verb = "switch to" if intent.get("action") == "use" else "remove"
-        said = (f'<p class="lapsed">Could not {verb} {name}: '
-                f'{escape(str(intent.get("detail") or "no reason given"))}</p>')
-    lines = "".join(_account_line(base, a, csrf, now, waiting) for a in accounts)
-    switchable = any(a.get("active") is not True and a.get("signed_in") is True
-                     for a in accounts)
-    note = ('<p class="muted small">Switching ends anything running in Remote Control '
-            "right now.</p>" if switchable and not waiting else "")
-    add = ""
-    if not waiting and len(accounts) < len(SLOT_ACCOUNT_IDS):
-        add = ('<div class="actions add">'
-               + _form(f"{base}/add-account", csrf, "Add another account",
-                       '<input type="email" name="email" placeholder="its email (optional)">')
-               + "</div>")
-    return ('<div class="row-line stacked"><div class="row-name">Claude accounts</div>'
-            f'{said}<div class="accounts">{lines}</div>{note}{add}</div>')
-
-
-def _account_name(account: Mapping[str, Any]) -> str:
-    email = account.get("email")
-    return escape(str(email)) if email else f"account {escape(str(account['id']))}"
-
-
-def _account_line(base: str, account: Mapping[str, Any], csrf: str, now: float,
-                  waiting: bool) -> str:
-    signed_in = account.get("signed_in") is True
-    plan = account.get("plan")
-    who = [f'<span class="acct-name">{_account_name(account)}</span>']
-    if plan:
-        who.append(f'<span class="muted small">{escape(str(plan))} plan</span>')
-    if account.get("active") is True:
-        who.append('<span class="pill ok">Active</span>')
-    if not signed_in:
-        who.append('<span class="lapsed">Signed out</span>')
-    left = _sign_in_left(account.get("refresh_expires_at"), now) if signed_in else ""
-    if left:
-        who.append(f'<span class="muted small">{left}</span>')
-    buttons = ""
-    if not waiting:
-        which = f'<input type="hidden" name="account" value="{escape(str(account["id"]))}">'
-        if signed_in and account.get("active") is not True:
-            buttons += _form(f"{base}/use", csrf, "Use this one", which, "primary")
-        if not signed_in:
-            buttons += _form(f"{base}/signin", csrf, "Sign in again", which)
-        loses = ("Sign it out of your slot" if account["id"] == "1" else
-                 "Sign it out and delete its Claude Code history on your slot")
-        buttons += ('<details class="remove"><summary>Remove…</summary>'
-                    + _form(f"{base}/forget", csrf, "Remove",
-                            which + '<label class="check"><input type="checkbox" '
-                            f'name="confirm" value="remove" required> {loses}. Your files '
-                            "stay.</label>", "danger")
-                    + "</details>")
-    return (f'<div class="acct"><div class="acct-who">{" ".join(who)}</div>'
-            f'<div class="actions">{buttons}</div></div>')
-
-
-def _sign_in_left(expires: Any, now: float) -> str:
-    """How long a saved sign-in has before Anthropic asks for a fresh one."""
-    if isinstance(expires, bool) or not isinstance(expires, (int, float)) or expires <= now:
-        return ""
-    days = int((expires - now) // 86400)
-    if days >= 2:
-        return f"good for {days} more days"
-    return "good for 1 more day" if days == 1 else "ends within a day"
+    return f'<div class="row-line stacked"><div class="row-name">Claude</div>{body}</div>'
 
 
 def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: float) -> str:
@@ -753,9 +592,8 @@ def _release(slot: Mapping[str, Any], csrf: str) -> str:
     return ('<div class="row-line"><div class="row-name">Give it back</div>'
             + _form(f"/account/slots/{escape(slot['id'])}/release", csrf, "Give this slot back",
                     '<label class="check"><input type="checkbox" name="confirm" value="wipe" '
-                    'required> Delete everything on it: files, sessions and every Claude '
-                    "sign-in on it. Your Claude accounts themselves are untouched.</label>",
-                    "danger")
+                    'required> Delete everything on it: files, sessions and the Claude '
+                    "sign-in. Your Claude account itself is untouched.</label>", "danger")
             + "</div>")
 
 

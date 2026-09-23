@@ -1,6 +1,6 @@
 # ccfleet
 
-**Own-account Claude Code fleet manager: one owner, one account at a time, one node.**
+**Own-account Claude Code fleet manager: one owner, one account, one node.**
 
 ccfleet is for a small group of people who each pay for their own Claude
 subscription and want to run the unmodified Claude Code CLI on a hosted node
@@ -17,7 +17,9 @@ they control, with someone keeping an eye on the whole fleet. It gives you:
   latter is the only way to report a login on macOS, where the credential lives
   in the Keychain and this agent will not read it. Token values are dropped in
   memory and never sent, logged or stored, and neither are the email address,
-  name, account uuid or organisation name that sit in the same file.
+  name, account uuid or organisation name that sit in the same file. (A slot on
+  a shared machine reports one thing more, for its holder's own page: the email
+  address of the one Claude account signed in on it. See section 4.)
 - **A fleet server** with a dashboard and Telegram alerts: missing heartbeat,
   Claude Code missing or drifted from the pinned version, login missing, stale
   or expired, disk high, egress IP changed, Remote Control service down.
@@ -123,19 +125,19 @@ ccfleet-connect --status    # which token, and whether it still works
 ccfleet-connect --remove    # undo it
 ```
 
-### 4. Shared machines: several people on one box, each on their own accounts
+### 4. Shared machines: several people on one box, one account each
 
 A machine can carry several **slots**. Each slot is its own Linux user, with
-its own home, its own Claude Code and its own Claude sign-ins, made by the person
-who holds it with their own Claude accounts, so no credential is ever shared
-between people. A slot keeps up to three of its holder's accounts signed in and
-uses one at a time; the holder switches between them from their page with one
-click, and nothing ever switches by itself. People sign in to ccfleet with Google, which is asked only for
+its own home, its own Claude Code and its own Claude sign-in, made by the person
+who holds it with their own Claude account, so no credential is ever shared
+between people. People sign in to ccfleet with Google, which is asked only for
 the `openid email` scopes: ccfleet keeps the address and Google's stable account
 id, which is what an account is keyed on because addresses change. The operator
 grants each person an allowance of slots, and they claim one, sign it in to
-their own Claude account (or several, switched with one click) and give it back
-from `/account`. The guidebook predates shared machines; this
+their own Claude account and give it back from `/account`. One Claude account
+per slot: somebody with two accounts holds two slots. Their page shows which
+account each slot is signed in to, so the slot reports that account's email
+address; the console never shows it. The guidebook predates shared machines; this
 section is their reference until it catches up.
 
 ```bash

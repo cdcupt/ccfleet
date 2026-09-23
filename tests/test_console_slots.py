@@ -562,33 +562,18 @@ def test_a_machine_whose_os_wants_a_reboot_says_so(console):
     assert "reboot needed" not in slots_card(call("GET", "/admin").body)
 
 
-# -- the Claude accounts on a slot ------------------------------------------------------
+# -- the Claude account on a slot -------------------------------------------------------
 
-def test_the_console_counts_a_slots_accounts_and_never_names_them(console):
-    """The holder's own page names them; the operator's view says how many.
-    Which Claude accounts a person uses is theirs to see."""
+def test_the_console_never_names_a_slots_claude_account(console):
+    """The holder's own page says which of their accounts a slot is signed in
+    to. Which Claude account a person uses is theirs to see, not the operator's."""
     store, call = console
     held_slot(store)
-    machine_said(store, {"unix_user": "slot01", "accounts": [
-        {"id": "1", "email": "first.person@example.com", "plan": "max", "active": True,
-         "signed_in": True},
-        {"id": "2", "email": "second.person@example.org", "plan": "pro", "active": False,
-         "signed_in": True}]})
+    machine_said(store, {"unix_user": "slot01", "credentials": {
+        "logged_in": True, "subscription_type": "max",
+        "email": "first.person@example.org", "refresh_expires_at": 1_800_000_000}})
     page = call("GET", "/admin").body
-    assert "2 Claude accounts" in slots_card(page)
-    assert "first.person" not in page and "second.person" not in page
-    assert "example.org" not in page
-
-
-def test_one_account_is_counted_in_the_singular_and_none_says_nothing(console):
-    store, call = console
-    held_slot(store)
-    machine_said(store, {"unix_user": "slot01", "accounts": [
-        {"id": "1", "email": "me@example.com", "active": True, "signed_in": True}]})
-    card = slots_card(call("GET", "/admin").body)
-    assert "1 Claude account" in card and "1 Claude accounts" not in card
-    machine_said(store, {"unix_user": "slot01", "accounts": []})
-    assert "Claude account" not in slots_card(call("GET", "/admin").body)
+    assert "first.person" not in page and "example.org" not in page
 
 
 # -- keeping a machine for one account ----------------------------------------------

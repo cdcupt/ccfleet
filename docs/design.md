@@ -7,9 +7,7 @@ hosted node, and give one operator visibility over the whole fleet, while
 staying inside the shapes Anthropic documents as permitted: the unmodified
 Claude Code binary, signed in by its owner, talking to Anthropic directly.
 
-The one-line rule everything derives from: **one owner, one account at a time, one node.**
-The accounts are the owner's own; an owner with several may keep them signed in
-and switch by hand, but only one is ever in use, and nothing switches by itself.
+The one-line rule everything derives from: **one owner, one account, one node.**
 
 ## Components
 
@@ -96,10 +94,7 @@ about before you reach for it.
 A small VPS in a supported region with its own public address, one Linux user
 per owner, one owner per machine. Several nodes may belong to one person, each
 with its own subscription; what never happens is two people on one account, or
-several accounts behind one endpoint. A slot on a shared machine may keep up to
-three of its holder's own accounts signed in, but only one is in use at a time:
-switching is the holder's click. It is not failover, and nothing does it for
-them.
+several accounts behind one endpoint.
 
 `node/install.sh` is the supported path. The console prints it, filled in, when
 you add a node, and it takes a blank server to ready-for-sign-in in one command:
@@ -418,8 +413,8 @@ several people each using their own subscription.
 | What the management plane can see | the traffic | facts about nodes, never a request |
 | Failover between accounts | a feature | absent on purpose |
 
-The honest summary: the hosting idea is the same, one account at a time on an
-isolated machine with its own address. Everything about what sits in front of it is
+The honest summary: the hosting idea is the same, one account per isolated
+machine with its own address. Everything about what sits in front of it is
 opposite. A pooled endpoint is the shape this project exists not to be.
 
 ## What was left out on purpose

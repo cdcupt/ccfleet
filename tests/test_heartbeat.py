@@ -187,9 +187,12 @@ def test_a_machine_reports_each_slot_by_its_user():
     assert slot["credentials"]["subscription_type"] == "max"
     assert slot["quota"]["session"]["used_pct"] == 12
     assert slot["usage"]["total_tokens"] == 900
-    # Nothing that names the account, nothing that is a credential, nothing
-    # the schema did not ask for.
-    flat = json.dumps(out)
+    # The one account's address, for its holder's page, and in that one place.
+    # Nothing else that names it, nothing that is a credential, nothing the
+    # schema did not ask for.
+    assert slot["credentials"]["email"] == "someone@example.com"
+    flat = json.dumps({**out, "slots": [{**slot, "credentials": {
+        k: v for k, v in slot["credentials"].items() if k != "email"}}]})
     assert "someone@example.com" not in flat
     assert "sk-ant-oat01" not in flat
     assert "surprise" not in slot and "home" not in slot and "path" not in slot["claude"]

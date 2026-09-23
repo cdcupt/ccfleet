@@ -653,8 +653,6 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     if slot is not None:
                         self._record_login(report.get("login"),
                                            slot_login_key(slot["id"]), now)
-                        ctx.store.record_account_progress(
-                            slot["id"], report.get("account_switch"), now)
             events = ctx.monitor.record_heartbeat(node, payload, now)
             slots = ctx.store.list_slots(node_id=node["id"])
             self._json(200, {
@@ -663,8 +661,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 "pinned_version": node["pinned_version"],
                 "desired": desired_state(
                     node, ctx.store.get_login(node["id"]), slots,
-                    {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots},
-                    {s["id"]: ctx.store.get_account_intent(s["id"]) for s in slots}),
+                    {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots}),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
 
