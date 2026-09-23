@@ -163,6 +163,28 @@ The rules the rest depends on:
   own sessions; every other hostname is then the product. Left unset, one host
   serves both, as before.
 
+What to send the people who buy slots: the product site serves public pages
+for them — `/docs` (what it is, what they need, how to buy), `/docs/guide`,
+`/docs/how-it-works`, `/docs/terms` and `/privacy`. Set `CCFLEET_CONTACT_EMAIL`
+to publish an address on them; without it they say to ask whoever sent the link.
+
+Keeping it up to date:
+
+- **Claude Code in slots** follows the machine's pin, which the server sends
+  with every reply: `ccfleetd node pin <machine> stable` tracks Anthropic's
+  stable channel, and an exact version holds the whole machine back. The
+  machine agent installs it in each slot at a quiet moment and never interrupts
+  a running session.
+- **The agents** change only when ccfleet does. Roll them out after deploying
+  the server: owner nodes re-fetch `ccfleet_agent/agent.py`, shared machines
+  re-run `machine-setup.sh` pointed at the same commit
+  (`CCFLEET_REPO_RAW=https://raw.githubusercontent.com/cdcupt/ccfleet/<commit>`).
+  One node first, then the rest.
+- **The OS** installs security updates daily; a machine that needs a reboot says
+  so in the console.
+
+Adding another machine is the runbook [Add a shared machine](docs/runbooks.md).
+
 ## Layout
 
 
@@ -172,7 +194,7 @@ The rules the rest depends on:
 
 | Path | What |
 | --- | --- |
-| `ccfleetd/` | fleet server (standard library only): API, store, rules, monitor, notifier, dashboard, user site, payments ledger, CLI |
+| `ccfleetd/` | fleet server (standard library only): API, store, rules, monitor, notifier, dashboard, user site, customer docs, payments ledger, CLI |
 | `ccfleet_agent/agent.py` | single-file heartbeat agent for nodes |
 | `ccfleet_agent/machine.py` | the shared machine's agent: runs as root, adds and wipes slot users, reports every slot |
 | `node/` | bootstrap, owner setup, backup, egress probe, staged upgrade, systemd user units; `machine-setup.sh`, `slot-add.sh`, `slot-remove.sh` for shared machines |
