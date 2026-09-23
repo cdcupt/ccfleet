@@ -83,14 +83,15 @@ def state_file(home):
     return home / ".config" / "ccfleet" / "slot-state.json"
 
 
-def walk_to_code_sent(fake, requested_at=100.0):
+def walk_to_code_sent(fake, requested_at=100.0, **request):
     """A sign-in from the holder's page, taken to the point where their code
-    has been typed. Returns what each step reported."""
+    has been typed. `request` rides along in every report asked for, as the
+    machine's pin does. Returns what each step reported."""
     wanted = {"requested_at": requested_at, "email": "holder@example.com"}
-    said = [agent.slot_facts({"login": wanted}, fake, now=NOW).get("login")]
+    said = [agent.slot_facts({**request, "login": wanted}, fake, now=NOW).get("login")]
     fake.pane = "Visit https://claude.com/cai/oauth/authorize?code=true&x=1 to continue"
-    said.append(agent.slot_facts({"login": wanted}, fake, now=NOW).get("login"))
-    said.append(agent.slot_facts({"login": {**wanted, "code": "the-code"}}, fake,
+    said.append(agent.slot_facts({**request, "login": wanted}, fake, now=NOW).get("login"))
+    said.append(agent.slot_facts({**request, "login": {**wanted, "code": "the-code"}}, fake,
                                  now=NOW).get("login"))
     return wanted, said
 
@@ -161,14 +162,19 @@ def test_remote_control_moves_onto_a_finished_sign_in_even_while_running(slot_ho
 
 
 def test_a_finished_sign_in_drops_the_old_windows_and_counts_as_the_owed_restart(slot_home):
+    """A restart owed to a new Claude Code version stays owed only while there
+    is a pin (see reconcile_slot_version), so the pin rides along here."""
     state_file(slot_home).parent.mkdir(parents=True)
     state_file(slot_home).write_text(json.dumps({
         "quota": {"session": {"used_pct": 90}, "ts": NOW}, "restart": "waiting"}))
     fake = SlotFake(slot_home)
-    wanted, _ = walk_to_code_sent(fake)
-    agent.slot_facts({"login": {**wanted, "code": "the-code"}}, fake, now=NOW)
+    pin = {"claude_version": "2.1.278"}
+    wanted, _ = walk_to_code_sent(fake, **pin)
+    assert json.loads(state_file(slot_home).read_text())["restart"] == "waiting"
+    facts = agent.slot_facts({**pin, "login": {**wanted, "code": "the-code"}}, fake, now=NOW)
     kept = json.loads(state_file(slot_home).read_text())
     assert "quota" not in kept, "windows read before the sign-in were kept"
+    assert facts["upgrade"]["restart"] == "done", "the sign-in's restart was not counted"
     assert "restart" not in kept, "a version restart stayed owed after one happened"
 
 
