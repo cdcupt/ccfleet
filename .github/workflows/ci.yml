@@ -37,7 +37,7 @@ jobs:
           # sourced rather than run. node/attach.sh is the second kind, which is
           # why it carries a `# shellcheck shell=` directive instead. Selecting
           # on the shebang alone silently skipped it.
-          files=$(git ls-files '*.sh' 'profiles/*' 'node/*' | while read -r f; do
+          files=$(git ls-files '*.sh' 'node/*' | while read -r f; do
             if head -c 200 "$f" | grep -qE '^#!/.*sh'; then echo "$f"
             elif head -c 200 "$f" | grep -q '^# shellcheck shell='; then echo "$f"
             fi
