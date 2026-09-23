@@ -299,18 +299,27 @@ def _account_findings(node: Mapping[str, Any], payload: Mapping[str, Any],
 
 def _slot_account_findings(slot_rows: Sequence[Mapping[str, Any]],
                            payload: Mapping[str, Any], places: Places) -> list[Finding]:
-    """Each slot whose account is live somewhere else too, named by its user."""
+    """Each slot whose account is live somewhere else too, and each held slot
+    signed in to another account than the one it keeps, named by its user."""
     reports = {r.get("unix_user"): r for r in payload.get("slots") or []
                if isinstance(r, Mapping)}
     findings: list[Finding] = []
     for row in slot_rows:
-        creds = (reports.get(row.get("unix_user")) or {}).get("credentials") or {}
+        user = row.get("unix_user")
+        creds = (reports.get(user) or {}).get("credentials") or {}
         others = _elsewhere(creds.get("account_fp"), row["id"], places)
         if others:
             findings.append(Finding(
-                f"account_elsewhere:{row.get('unix_user')}", LEVEL_CRITICAL,
+                f"account_elsewhere:{user}", LEVEL_CRITICAL,
                 f"the Claude account on {row['id']} is also signed in on "
                 f"{', '.join(others)}: one account, one node"))
+        now_fp, kept_fp = creds.get("account_fp"), creds.get("bound_fp")
+        if (row.get("state") in HELD and creds.get("logged_in") is True
+                and now_fp and kept_fp and now_fp != kept_fp):
+            findings.append(Finding(
+                f"account_changed:{user}", LEVEL_CRITICAL,
+                f"{row['id']} is signed in to another Claude account than the one it was "
+                f"first signed in with: a slot keeps its account"))
     return findings
 
 

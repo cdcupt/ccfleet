@@ -203,6 +203,47 @@ def test_the_alert_opens_on_both_and_closes_when_it_stops(store, cfg):
     assert not [a for a in store.open_alerts() if a["rule"].startswith("account_elsewhere")]
 
 
+def test_a_bound_fingerprint_is_kept_exactly_as_the_other_is():
+    good = validate_heartbeat({"node_id": "m", "mode": "machine", "slots": [
+        {"unix_user": "slot01", "credentials": {"bound_fp": FP}}]}, "m")
+    assert good["slots"][0]["credentials"]["bound_fp"] == FP
+    bad = validate_heartbeat({"node_id": "m", "mode": "machine", "slots": [
+        {"unix_user": "slot01", "credentials": {"bound_fp": FP.upper()}}]}, "m")
+    assert bad["slots"][0]["credentials"]["bound_fp"] is None
+
+
+# -- a slot on another account than its own ------------------------------------------------
+
+def changed_findings(state=slots.ACTIVE, **credentials):
+    nodes, rows = fleet()
+    rows[0]["state"] = state
+    entry = {"unix_user": "slot01", "credentials": {"logged_in": True, **credentials}}
+    latest = {"pool-1": machine_beat(NOW, entry)}
+    return evaluate(nodes[1], latest["pool-1"], places_of(latest, slot_rows=rows), rows)
+
+
+def test_a_slot_on_another_account_than_its_own_is_flagged():
+    found = changed_findings(account_fp=OTHER_FP, bound_fp=FP)
+    assert "pool-1-a" in found["account_changed:slot01"].message
+    assert found["account_changed:slot01"].level == rules.LEVEL_CRITICAL
+
+
+@pytest.mark.parametrize("credentials", [
+    {"account_fp": FP, "bound_fp": FP},                           # its own
+    {"account_fp": OTHER_FP, "bound_fp": None},                   # not bound yet
+    {"account_fp": None, "bound_fp": FP},                         # cannot say
+    {"account_fp": OTHER_FP, "bound_fp": FP, "logged_in": False},  # not signed in
+])
+def test_a_slot_on_its_own_account_or_that_cannot_tell_is_not_flagged(credentials):
+    assert "account_changed:slot01" not in changed_findings(**credentials)
+
+
+@pytest.mark.parametrize("state", [slots.FREE, slots.CLAIMING, slots.RELEASING])
+def test_a_slot_nobody_holds_is_not_flagged_for_its_account(state):
+    assert "account_changed:slot01" not in changed_findings(state, account_fp=OTHER_FP,
+                                                            bound_fp=FP)
+
+
 # -- a refused sign-in, told to its holder -----------------------------------------------
 
 REFUSED = ("this slot stays with the Claude account it was first signed in with; to use "
@@ -327,6 +368,17 @@ def test_the_holder_is_told_their_account_is_live_elsewhere_but_not_where(site):
     page = erik.page()
     assert usersite.ELSEWHERE in page
     assert "someone-else-1" not in page
+
+
+def test_the_holder_is_told_their_slot_is_on_another_account_than_its_own(site):
+    store, sign_in, _ = site
+    machine(store)
+    erik = sign_in(quota=1)
+    slot = in_use(store, erik)
+    assert usersite.CHANGED not in erik.page()
+    store.open_alert("m1", f"account_changed:{slot['unix_user']}", "critical", "x", NOW)
+    page = erik.page()
+    assert usersite.CHANGED in page and usersite.ELSEWHERE not in page
 
 
 def test_another_slots_alert_is_not_this_slots(site):

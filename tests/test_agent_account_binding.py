@@ -278,6 +278,42 @@ def test_the_scratch_is_private_and_past_its_one_prompt(home):
     assert stat.S_IMODE(seeded.stat().st_mode) == 0o600
 
 
+def test_what_is_kept_is_the_credential_that_was_checked_not_the_file_again(home, monkeypatch):
+    """Something swaps the scratch credential after the account was checked and
+    before it is written: what lands in ~/.claude is still the one checked."""
+    signed_in_as(home, MINE)
+    write_account(scratch(home), scratch(home) / ".claude.json", MINE, "sk-ant-oat01-CHECKED")
+    real = agent.fingerprint_of
+
+    def checked_then_swapped(raw):
+        answer = real(raw)
+        (scratch(home) / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "sk-ant-oat01-SWAPPED"}}))
+        return answer
+
+    monkeypatch.setattr(agent, "fingerprint_of", checked_then_swapped)
+    assert agent.adopt_sign_in(fp_of(MINE), Slot(home)) == ""
+    kept = (home / ".claude" / ".credentials.json").read_text()
+    assert "sk-ant-oat01-CHECKED" in kept and "SWAPPED" not in kept
+
+
+def test_a_credential_that_cannot_be_read_is_not_adopted(home):
+    signed_in_as(home, MINE)
+    before = (home / ".claude" / ".credentials.json").read_bytes()
+    write_account(scratch(home), scratch(home) / ".claude.json", MINE, "x")
+    (scratch(home) / ".credentials.json").unlink()
+    assert agent.adopt_sign_in(fp_of(MINE), Slot(home)) == agent.NOT_ADOPTED
+    assert (home / ".claude" / ".credentials.json").read_bytes() == before
+
+
+def test_a_bound_slot_reports_the_account_it_keeps_beside_the_one_it_has(home):
+    signed_in_as(home, MINE)
+    agent.slot_facts({}, Slot(home), now=NOW)
+    signed_in_as(home, THEIRS)                  # changed some other way than the page
+    creds = agent.slot_facts({}, Slot(home), now=NOW)["credentials"]
+    assert creds["account_fp"] == fp_of(THEIRS) and creds["bound_fp"] == fp_of(MINE)
+
+
 @pytest.mark.parametrize("whose", [MINE, THEIRS])
 def test_adopting_or_refusing_leaves_no_scratch_behind(home, whose):
     signed_in_as(home, MINE)

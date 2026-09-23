@@ -137,9 +137,11 @@ per slot: somebody with two accounts holds two slots. Their page shows which
 account each slot is signed in to, so the slot reports that account's email
 address; the console never shows it. A slot keeps the account it was first
 signed in with: signing in again happens in a scratch directory and is kept only
-if it is that same account. And an account signed in on two live places at once
-(two slots, or a slot and a node) raises `account_elsewhere` on both, and the
-holder's card says so. The guidebook predates shared machines; this
+if it is that same account. That guards the page; the slot's home is its
+holder's, so a slot found signed in to another account some other way raises
+`account_changed`. And an account signed in on two live places at once (two
+slots, or a slot and a node) raises `account_elsewhere` on both. The holder's
+card says so either way. The guidebook predates shared machines; this
 section is their reference until it catches up.
 
 ```bash

@@ -256,8 +256,16 @@ def account_fingerprint(global_config: Path) -> Optional[str]:
     email, name or organisation goes with it.
     """
     try:
-        data = json.loads(global_config.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
+        return fingerprint_of(global_config.read_bytes())
+    except OSError:
+        return None
+
+
+def fingerprint_of(raw: Optional[bytes]) -> Optional[str]:
+    """The same fingerprint, from a Claude Code config already read into memory."""
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (ValueError, UnicodeDecodeError):
         return None
     account = data.get("oauthAccount") if isinstance(data, dict) else None
     uuid = account.get("accountUuid") if isinstance(account, dict) else None
@@ -1609,11 +1617,29 @@ def prepare_scratch() -> bool:
                          json.dumps({"hasCompletedOnboarding": True}) + "\n")
 
 
+def _read_once(path: Path) -> Optional[bytes]:
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
 def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
     """Keep the scratch sign-in if it is the slot's own account. "" when kept,
-    else why not. The scratch directory is gone either way."""
+    else why not. The scratch directory is gone either way.
+
+    Both files are read once, and what is written into ~/.claude is exactly the
+    credential read beside the account that was checked — never the file again,
+    which could have changed in between. The scratch directory is the slot
+    user's own, as ~/.claude is; a holder set on another account could sign it
+    in from their own session, so this guards the page's sign-in, and the
+    account a bound slot is signed in to is also checked on every run and
+    flagged when it is not its own (see account_changed in the server's rules).
+    """
     scratch = Path(SIGNIN_SCRATCH).expanduser()
-    fp = account_fingerprint(scratch / ".claude.json")
+    profile = _read_once(scratch / ".claude.json")
+    credential = _read_once(scratch / ".credentials.json")
+    fp = fingerprint_of(profile)
     why = ""
     if fp is None:
         why = UNKNOWN_ACCOUNT
@@ -1625,12 +1651,12 @@ def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
             # machine. Best effort: deleting the directory is what counts here.
             _run(_in_config_dir(runner, scratch), [path, "auth", "logout"], timeout=30.0)
     else:
-        target = Path.home() / ".claude" / ".credentials.json"
         try:
-            os.chmod(scratch / ".credentials.json", 0o600)
-            os.replace(scratch / ".credentials.json", target)
-        except OSError as exc:
-            log.warning("could not keep the new sign-in: %s", exc.__class__.__name__)
+            text = credential.decode("utf-8") if credential is not None else None
+        except UnicodeDecodeError:
+            text = None
+        target = Path.home() / ".claude" / ".credentials.json"
+        if text is None or not _atomic_write(target, text):
             why = NOT_ADOPTED
     discard_scratch()
     return why
@@ -1820,6 +1846,10 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     credentials = credentials_summary(config_dir)
     credentials.update(slot_account_labels(config_dir))
     credentials["account_fp"] = account_fingerprint(global_config_of(config_dir))
+    # And the account it keeps. Two fingerprints that differ are a slot signed
+    # in to another account by some way other than its page, which the server
+    # flags: the binding guards the page, and this says when it was gone round.
+    credentials["bound_fp"] = state.get("bound_fp")
     status = auth_status(runner)
     if status:
         credentials.update(status)

@@ -162,6 +162,8 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "email": _email(section.get("email")),
         "refresh_expires_at": _num(section.get("refresh_expires_at")),
         "account_fp": account_fp(section.get("account_fp")),
+        # The account the slot keeps (its first), to compare with the one above.
+        "bound_fp": account_fp(section.get("bound_fp")),
     }
 
 
