@@ -18,6 +18,12 @@ LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 IDLE_REFRESH_S = 60
 ACTIVE_REFRESH_S = 4
 
+#: The operator's console. The bare address belongs to the people who use the
+#: product; the console sits under its own path on the same host (or at the
+#: root of a dedicated CCFLEET_ADMIN_HOST, which forwards / here). Kept here,
+#: beside the page, because the page's own refresh has to name it.
+CONSOLE_PATH = "/admin"
+
 CSS = """
 /* Tokens. Light is the bare :root; dark redefines only the tokens, guarded so an
    explicit light choice still wins. Nothing below hard-codes a colour. */
@@ -903,18 +909,24 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     # reload at all lands mid-typing and throws away what they had — that is the
     # one state where nothing can arrive anyway, so there is nothing to fetch
     # and everything to lose.
-    states = {(login or {}).get("state") for login in (logins or {}).values()}
-    if "url_ready" in states:
-        auto_refresh = ""
-    elif states & {"requested", "code_sent"}:
-        auto_refresh = f'<meta http-equiv="refresh" content="{ACTIVE_REFRESH_S}">'
-    else:
-        auto_refresh = f'<meta http-equiv="refresh" content="{IDLE_REFRESH_S}">'
+    #
     # Say which of the three the page is doing, so a reload that does not come
     # is a stated choice rather than something that looks broken.
-    cadence = ("waiting for you to paste a code" if not auto_refresh else
-               "keeping up with a sign-in" if str(ACTIVE_REFRESH_S) in auto_refresh else
-               "refreshing itself every minute")
+    states = {(login or {}).get("state") for login in (logins or {}).values()}
+    if "url_ready" in states:
+        every, cadence = None, "waiting for you to paste a code"
+    elif states & {"requested", "code_sent"}:
+        every, cadence = ACTIVE_REFRESH_S, "keeping up with a sign-in"
+    else:
+        every, cadence = IDLE_REFRESH_S, "refreshing itself every minute"
+    # Always to the console's own address, never the one the page was opened at.
+    # After an action that address ends in #<card>, and a refresh naming no
+    # address on a page whose address has a fragment is a fragment navigation:
+    # the browser scrolls and reloads nothing, so the page never refreshed after
+    # a press at all. The target never carries a fragment either, for the same
+    # reason: from /admin#x a refresh to /admin#x would stick the same way.
+    auto_refresh = ("" if every is None else
+                    f'<meta http-equiv="refresh" content="{every};url={CONSOLE_PATH}">')
     whoami = ""
     if who is not None:
         whoami = (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"

@@ -23,6 +23,7 @@ from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.store import Store, slot_login_key
+from tests.conftest import next_load, refresh_of
 
 SECRET = "0123456789abcdef0123456789abcdef"
 URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y"
@@ -423,9 +424,41 @@ def test_the_page_comes_back_soon_only_while_something_moves(site):
     store, sign_in, _ = site
     machine(store)
     erik = sign_in(quota=1)
-    assert 'content="60"' in erik.page()
+    assert refresh_of(erik.page()) == (60, "/account")
     erik.press("/account/claim")
-    assert 'content="4"' in erik.page(), "setting up, and nobody would see it finish"
+    assert refresh_of(erik.page()) == (4, "/account"), "setting up, and nobody would see it finish"
+
+
+def test_after_an_action_the_page_really_comes_back(site):
+    """Every action lands on /account?note=…#slot-…. A refresh naming no address
+    there is a fragment navigation — the browser scrolls and loads nothing — so
+    "Starting the sign-in on your slot…" stood for minutes, the link it was
+    waiting for already there for anybody who reloaded by hand."""
+    store, sign_in, _ = site
+    machine(store)
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    key = slot_login_key(slot["id"])
+    starting = usersite.NOTES["signin"][1]
+
+    at = erik.press(f"/account/slots/{slot['id']}/signin").getheader("Location")
+    assert "#" in at, "an action lands on its own card"
+    landed = erik.call("GET", urllib.parse.urldefrag(at)[0]).body
+    assert starting in landed, "said right after the action"
+    assert refresh_of(landed)[0] == usersite.ACTIVE_REFRESH_S, "back soon to see it happen"
+
+    store.record_login_progress(key, "url_ready", URL, "", time.time(),
+                                store.get_login(key)["requested_at"])
+    then = next_load(at, landed)
+    assert then == "/account", "the page came back by itself, to the bare page"
+    later = erik.call("GET", then).body
+    assert 'name="code"' in later, "showing the link"
+    assert starting not in later, "and leaving the note behind"
+
+    at = erik.press(f"/account/slots/{slot['id']}/code", code="the-code").getheader("Location")
+    sent = erik.call("GET", urllib.parse.urldefrag(at)[0]).body
+    assert refresh_of(sent)[0] == usersite.ACTIVE_REFRESH_S, "a code on its way is moving"
+    assert next_load(at, sent) == "/account"
 
 
 def test_a_machine_nobody_has_heard_from_says_so(site):

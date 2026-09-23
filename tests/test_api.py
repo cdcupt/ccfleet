@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+import urllib.parse
 
 import pytest
 
@@ -11,7 +12,7 @@ from ccfleetd.api import Context, build_server
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.store import Store
-from tests.conftest import heartbeat
+from tests.conftest import heartbeat, next_load
 
 
 @pytest.fixture
@@ -470,3 +471,17 @@ def test_an_action_returns_you_to_the_card_you_used(server, cfg):
     assert press("disable") == (303, "/admin#manage")
     assert press("enable") == (303, "/admin#manage")
     assert press("pin", "&version=2.1.278") == (303, "/admin#manage")
+
+
+def test_after_an_action_the_console_really_comes_back(server, cfg):
+    """An action lands on /admin#<card>. A refresh naming no address there is a
+    fragment navigation — the browser scrolls and loads nothing — so after any
+    press the console stopped keeping itself current until reloaded by hand."""
+    srv, store = server
+    store.add_node("node-a", "erik")
+    admin = basic(cfg.admin_token)
+    status, _, at = form_post(srv, "/actions/node/node-a/rc-on", {"csrf": csrf_for(cfg)}, admin)
+    assert status == 303 and "#" in at, "an action lands on its own card"
+    status, page, _ = call(srv, "GET", urllib.parse.urldefrag(at)[0], headers=admin)
+    assert status == 200
+    assert next_load(at, page.decode()) == "/admin"

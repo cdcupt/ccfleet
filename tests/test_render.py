@@ -1,5 +1,5 @@
 from ccfleetd.render import build_rows, render_dashboard
-from tests.conftest import heartbeat
+from tests.conftest import heartbeat, refresh_of
 
 NOW = 3_000_000.0
 
@@ -364,7 +364,7 @@ def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
     of the minute, which reads as nothing happening. So the page comes back
     quickly while a flow is moving, and at its usual pace the rest of the time.
     """
-    from ccfleetd.render import ACTIVE_REFRESH_S, IDLE_REFRESH_S
+    from ccfleetd.render import ACTIVE_REFRESH_S, CONSOLE_PATH, IDLE_REFRESH_S
     rows = [{"id": "att3", "owner": "erik", "region": "", "status": "ok",
              "enabled": True, "last_seen_ts": NOW, "hostname": "h",
              "claude_version": "2.1.278", "pinned_version": "", "egress_ip": "1.2.3.4",
@@ -379,13 +379,15 @@ def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
 
     assert ACTIVE_REFRESH_S < IDLE_REFRESH_S, "keeping up means sooner than usual"
 
+    # Always to the console's own address: never "" (the address the page was
+    # opened at, which after an action ends in #<card>) and never a fragment.
     idle = page({})
-    assert f'content="{IDLE_REFRESH_S}"' in idle
+    assert refresh_of(idle) == (IDLE_REFRESH_S, CONSOLE_PATH)
     assert "refreshing itself every minute" in idle
 
     for state in ("requested", "code_sent"):
         active = page({"att3": {"state": state, "kind": "token"}})
-        assert f'content="{ACTIVE_REFRESH_S}"' in active, f"{state} is worth watching"
+        assert refresh_of(active) == (ACTIVE_REFRESH_S, CONSOLE_PATH), f"{state} is worth watching"
         assert "keeping up with a sign-in" in active
 
     # Except while someone is typing, where any reload throws away the code.
@@ -393,6 +395,20 @@ def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
                             "url": "https://claude.com/x"}})
     assert 'http-equiv="refresh"' not in typing
     assert "waiting for you to paste a code" in typing
+
+
+def test_what_the_page_says_it_is_doing_is_not_read_back_out_of_its_markup(cfg, monkeypatch):
+    """The words were once chosen by looking for the fast interval's digits in
+    the refresh tag. A tag that names an address can hold those digits
+    anywhere, and an idle page would then claim to be keeping up with a sign-in.
+    """
+    from ccfleetd import render
+    path = f"/ops-{render.ACTIVE_REFRESH_S}"
+    monkeypatch.setattr(render, "CONSOLE_PATH", path)
+    idle = render_dashboard([], [], NOW, cfg, csrf="TOK", logins={})
+    assert refresh_of(idle) == (render.IDLE_REFRESH_S, path), "the target is the console's"
+    assert "refreshing itself every minute" in idle
+    assert "keeping up with a sign-in" not in idle
 
 
 def test_the_card_remembers_that_a_token_was_issued():
