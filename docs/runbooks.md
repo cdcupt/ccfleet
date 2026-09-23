@@ -15,6 +15,66 @@ Commands marked *node* run as the owner on the node; *server* runs where
 5. *node*: `ccfleet-agent --print`, then `systemctl --user start ccfleet-agent.service`.
 6. *server*: `ccfleetd node pin <node-id> <version>` with the version from `/status`.
 
+## Add a shared machine
+
+A shared machine carries several slots, each its own Linux user with its own
+Claude sign-in. *root* here means root on the new machine; *laptop* is wherever
+your SSH key lives.
+
+**Pick the box.** A KVM VPS running Debian or Ubuntu with at least 2 GiB of RAM.
+LXC and OpenVZ containers are unsuitable: every slot needs its own systemd user
+manager. Size it from what a slot really uses (measured 2026-09-23 on a
+signed-in slot with Remote Control on): about 420 MiB idle, about 665 MiB while
+a session runs, and about 225 MB of disk for Claude Code; the OS and the machine
+agent take about 400 MiB. So
+
+    slots ≈ (RAM in MiB − 400) / 700
+
+which is 2 on a 2 GiB box and 5 on 4 GiB. Below 4 GiB, add a 2 GiB swap file as
+a cushion for spikes, not as extra capacity.
+
+1. *laptop*: make a key for this machine and install it for root, e.g.
+   `ssh-copy-id -i <key> root@<machine>` while password login still works.
+2. **Prove key login before anything turns passwords off.** Some provider images
+   ship with key login disabled (`PubkeyAuthentication no` at the end of
+   `/etc/ssh/sshd_config`). *root*: `sshd -T | grep -E '^(pubkeyauthentication|passwordauthentication) '`;
+   if key login is off, set `PubkeyAuthentication yes` there, `sshd -t`, reload
+   `ssh`, and log in again with the key before going on.
+3. *root*: harden with `bootstrap.sh`, not `install.sh` (that one turns the box
+   into a single owner's node, whose agent `machine-setup.sh` refuses to run
+   beside): `git clone https://github.com/cdcupt/ccfleet.git && ccfleet/node/bootstrap.sh <your-login> "<your public key>"`.
+   It gives you a login with sudo, key-only SSH, a firewall and unattended
+   security upgrades, and it stops, leaving SSH as it was, if sshd would not
+   end up with keys on and passwords off.
+4. *root*, only below 4 GiB of RAM:
+   `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`,
+   then `echo '/swapfile none swap sw 0 0' >> /etc/fstab` and
+   `echo vm.swappiness=10 > /etc/sysctl.d/99-ccfleet-swap.conf && sysctl -p /etc/sysctl.d/99-ccfleet-swap.conf`.
+5. *server*: `ccfleetd node add <machine> --owner <your-login> --region <region>`. The
+   token it prints is shown once; keep it for step 8 and nowhere else.
+6. *server*: `ccfleetd node pin <machine> stable`, the Claude Code channel the
+   machine's slots are meant to follow.
+7. *server*: `ccfleetd slot capacity <machine> <slots>`, then once per slot
+   `ccfleetd slot add <machine>-01 --machine <machine> --unix-user slot01`
+   (`-02`/`slot02`, and so on). Do not create those Linux users yourself: the
+   machine makes each one when somebody claims it and wipes it when they give it back.
+8. *root*:
+   `curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh | bash -s -- --server <fleet url> --node <machine> --token <token>`.
+9. *server*: within a couple of minutes `ccfleetd slot list --machine <machine>`
+   shows every slot `free` and `on machine` `no`: the machine itself has
+   confirmed they are empty, which is what makes them claimable.
+
+Prove the machine is closed before anyone is given a slot on it:
+
+- *laptop*: `ssh -o PubkeyAuthentication=no root@<machine>` is refused with
+  `Permission denied (publickey)`.
+- *root*: `sshd -T` reports `pubkeyauthentication yes` and `passwordauthentication no`.
+- *root*: `ufw status` reports `Status: active`, and `systemctl is-active ccfleet-machine.timer` says `active`.
+
+These steps are deliberately mechanical. An operator can put exactly them in a
+private script that takes an address and a name, reads the root password once
+from a prompt, and re-runs safely, so the next machine is one command.
+
 ## Timers never run after setup
 
 `setup-owner.sh` now refuses to continue when the owner has no working per-user

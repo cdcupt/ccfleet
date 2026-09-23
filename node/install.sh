@@ -104,6 +104,45 @@ else
   HOME_DIR="/home/$OWNER"
 fi
 as_owner() { sudo -u "$OWNER" HOME="$HOME_DIR" bash -c "$1"; }
+
+# Key-only SSH, on sshd's own word. A drop-in is read where the main config
+# Includes sshd_config.d, and sshd keeps the FIRST value it meets for each
+# keyword. So the drop-in says both halves, and before anything is reloaded
+# `sshd -T` must report keys on and passwords off. Some provider images end
+# sshd_config with `PubkeyAuthentication no`: passwords off there, keys left
+# off, is a machine nobody can log in to. And an image that never Includes the
+# directory would ignore the drop-in while this claimed the box hardened.
+# Either way the drop-in goes and sshd is left exactly as it was.
+# Kept byte-identical in bootstrap.sh and install.sh (a test compares them):
+# each is fetched on its own through curl | bash and cannot source the other.
+# shellcheck disable=SC2120  # bootstrap.sh passes no extra lines; install.sh passes one
+harden_sshd() {  # harden_sshd [extra sshd_config line...]
+  local dir="${CCFLEET_SSHD_DROPIN_DIR:-/etc/ssh/sshd_config.d}"
+  local config="${CCFLEET_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+  local dropin="$dir/60-ccfleet.conf" effective
+  mkdir -p "$dir"
+  {
+    printf '%s\n' "PubkeyAuthentication yes" "PasswordAuthentication no" \
+      "KbdInteractiveAuthentication no" "PermitRootLogin prohibit-password" "X11Forwarding no"
+    [ "$#" -eq 0 ] || printf '%s\n' "$@"
+  } > "$dropin"
+  if ! sshd -t -f "$config"; then
+    rm -f "$dropin"
+    echo "sshd rejected the hardening config; it was removed and nothing was reloaded" >&2
+    return 1
+  fi
+  effective="$(sshd -T -f "$config" 2>/dev/null)" || effective=""
+  if ! grep -qx "pubkeyauthentication yes" <<<"$effective" \
+      || ! grep -qx "passwordauthentication no" <<<"$effective"; then
+    rm -f "$dropin"
+    echo "sshd would not run with key login on and password login off: $config either" \
+      "does not Include $dir, or a setting sshd reads first overrides it (cloud-init's" \
+      "50-cloud-init.conf is a common one). The drop-in was removed and nothing was reloaded." >&2
+    return 1
+  fi
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd
+}
+
 user_systemctl() {
   local uid; uid="$(id -u "$OWNER")"
   sudo -u "$OWNER" XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -158,10 +197,8 @@ else
   # APT::Install-Recommends "false" will not have it -- and the jail below asks for
   # the systemd backend, which needs it. Name it explicitly rather than hope.
   apt-get install -y -q ufw fail2ban python3-systemd unattended-upgrades >/dev/null
-  printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nX11Forwarding no\nMaxAuthTries 3\n' \
-    > /etc/ssh/sshd_config.d/60-ccfleet.conf
-  sshd -t || die "sshd rejected the hardening config; nothing was reloaded"
-  systemctl reload ssh 2>/dev/null || systemctl reload sshd
+  harden_sshd "MaxAuthTries 3" \
+    || die "SSH was not hardened, and password login is as it was. Fix the cause above, or re-run with --skip-harden if you accept the risk"
   ufw default deny incoming >/dev/null; ufw default allow outgoing >/dev/null
   ufw allow OpenSSH >/dev/null; ufw allow 60000:61000/udp comment mosh >/dev/null
   ufw --force enable >/dev/null
