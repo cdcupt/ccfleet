@@ -12,6 +12,9 @@ from .sessions import MIN_TTL_S as SESSION_MIN_TTL_S
 
 ENV_PREFIX = "CCFLEET_"
 MIN_ADMIN_TOKEN_LEN = 16
+#: An address to publish, loosely: one @, no spaces, nothing that could leave
+#: an attribute. It is shown on a public page, so it is checked, not trusted.
+CONTACT_EMAIL_RE = re.compile(r'^[^@\s<>"\']{1,64}@[^@\s<>"\']+\.[^@\s<>"\']{2,}$')
 HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)"
                          r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 
@@ -106,6 +109,10 @@ class Config:
     # and every other hostname is the product: somebody arriving there sees
     # the user site and never a console, whatever credentials they carry.
     admin_host: str = ""
+    # Shown on the public privacy page as the way to reach the operator. Empty,
+    # the page says to use the support address on Google's sign-in screen, so
+    # nobody's address is published unless the operator chose to publish it.
+    contact_email: str = ""
 
     @property
     def google_ready(self) -> bool:
@@ -160,7 +167,13 @@ class Config:
                                    SESSION_MIN_TTL_S),
             cookie_secure=_env_bool(env, "COOKIE_SECURE", True),
             admin_host=env.get(ENV_PREFIX + "ADMIN_HOST", "").strip().lower(),
+            contact_email=env.get(ENV_PREFIX + "CONTACT_EMAIL", "").strip(),
         )
+        if cfg.contact_email and (len(cfg.contact_email) > 254
+                                  or not CONTACT_EMAIL_RE.match(cfg.contact_email)):
+            raise ConfigError(
+                f"{ENV_PREFIX}CONTACT_EMAIL must be one email address, like "
+                f"help@example.com; got {cfg.contact_email!r}")
         if cfg.admin_host and not HOSTNAME_RE.match(cfg.admin_host):
             raise ConfigError(
                 f"{ENV_PREFIX}ADMIN_HOST must be a hostname like admin.fleet.example.com, "

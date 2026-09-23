@@ -610,4 +610,64 @@ def test_the_sign_in_page_says_what_google_is_asked_for_and_what_is_kept(site):
     page = usersite.page(store, cfg, None, "", time.time())
     assert ("We ask Google for your email address, whether Google has verified it, and "
             "the id it gives your account, which stays the same if the address changes. "
-            "We keep the address and the id, and nothing else.") in page
+            "From Google we keep only the address and the id.") in page
+    assert '<a href="/privacy">What else we keep, and why</a>' in page
+
+
+# -- the privacy page ----------------------------------------------------------------
+
+def test_the_privacy_page_is_public(site):
+    """Google links to it from the sign-in screen; nobody needs an account to read it."""
+    _, sign_in, _ = site
+    anybody = Browser(sign_in().port)
+    anybody.jar.clear()
+    reply = anybody.call("GET", "/privacy")
+    assert reply.status == 200 and "<h1>Privacy</h1>" in reply.body
+    assert "What the operator can see" in reply.body
+
+
+def test_every_page_of_the_user_site_links_the_policy(site):
+    store, sign_in, cfg = site
+    assert 'href="/privacy"' in sign_in(quota=1).page()
+    assert 'href="/privacy">Privacy</a>' in usersite.page(store, cfg, None, "", time.time())
+
+
+def test_the_privacy_page_quotes_the_settings_in_force():
+    """Every length of time on it comes from the running configuration, so the
+    page cannot promise one thing while the server does another."""
+    default = usersite.privacy_page(Config())
+    assert "It lasts 14 days, or until you sign out" in default
+    assert "We keep these reports for 30 days" in default
+    assert "held here for at most 15 minutes" in default
+    assert "which lasts 10 minutes" in default
+    tuned = usersite.privacy_page(Config(session_ttl_s=36 * 3600, retention_days=45))
+    assert "It lasts 36 hours, or until you sign out" in tuned
+    assert "We keep these reports for 45 days" in tuned
+    assert "We keep these reports for 1 day." in usersite.privacy_page(Config(retention_days=1))
+
+
+def test_the_privacy_page_follows_the_codes_own_windows(monkeypatch):
+    """The sign-in window and the Google cookie are constants in code, not
+    settings; the page still reads them rather than repeating the numbers."""
+    monkeypatch.setattr(usersite, "LOGIN_MAX_AGE_S", 20 * 60)
+    monkeypatch.setattr(oauth, "FLOW_TTL_S", 5 * 60)
+    page = usersite.privacy_page(Config())
+    assert "held here for at most 20 minutes" in page and "for at most 20 minutes." in page
+    assert "which lasts 5 minutes" in page
+
+
+def test_the_operators_address_is_published_only_when_they_chose_one():
+    unset = usersite.privacy_page(Config())
+    assert "mailto:" not in unset and "support address Google shows" in unset
+    chosen = usersite.privacy_page(Config(contact_email="help&desk@example.com"))
+    assert 'href="mailto:help&amp;desk@example.com"' in chosen
+    assert "help&desk@example.com" not in chosen
+    assert "support address Google shows" not in chosen
+
+
+def test_the_privacy_page_says_what_the_operator_can_see():
+    """The admission the design insists on: root can read a slot. Softening it
+    later is the likeliest way this page goes wrong, so it is pinned."""
+    page = usersite.privacy_page(Config())
+    assert "their administrators have root" in page
+    assert "technically read any slot&#x27;s files, and its Claude credential" in page

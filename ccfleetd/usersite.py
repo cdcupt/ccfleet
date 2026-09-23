@@ -21,10 +21,11 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import payments
+from . import oauth, payments
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
+from .monitor import LOGIN_MAX_AGE_S
 from .render import (
     CSS,
     LOGIN_WORDS,
@@ -199,6 +200,8 @@ margin:0 0 18px;font-weight:500}
 .note-banner.ok{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
 .note-banner.warn{border-color:var(--warn);background:var(--warn-bg);color:var(--warn)}
 .lapsed{color:var(--warn);font-weight:600}
+.foot{margin:28px 0 0;font-size:12px;color:var(--muted)}
+.card ul{margin:8px 0;padding-left:20px}.card li{margin:6px 0;line-height:1.5}
 .card.slot{margin:0 0 16px}
 .card.slot h2{text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:15px;
 color:var(--ink)}
@@ -213,7 +216,9 @@ def _shell(title: str, body: str, refresh: str = "") -> str:
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"{refresh}<title>ccfleet · {escape(title)}</title><style>{USER_CSS}</style></head>"
-            f"<body><div class=\"page\">{body}</div></body></html>")
+            f"<body><div class=\"page\">{body}"
+            '<p class="foot"><a href="/account">ccfleet</a> · <a href="/privacy">Privacy</a></p>'
+            "</div></body></html>")
 
 
 def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") -> str:
@@ -289,14 +294,104 @@ def _signed_out(cfg: Config) -> str:
                       "<code>CCFLEET_GOOGLE_CLIENT_SECRET</code> and "
                       "<code>CCFLEET_COOKIE_SECRET</code> to turn it on.</p></div>")
     return _shell("sign in", "<h1>ccfleet</h1><div class=\"card\">"
+                  "<p>ccfleet gives you a slot on a machine we operate: your own Linux "
+                  "account there, with Claude Code, signed in to your own Claude account. "
+                  "The operator decides who gets slots.</p>"
                   "<p>Sign in to see the slots you hold.</p>"
                   "<p><a class=\"btn\" href=\"/auth/google/start?next=/account\">"
                   "Continue with Google</a></p>"
                   # A promise about oauth.SCOPES; a test keeps the two together.
                   "<p class=\"muted\">We ask Google for your email address, whether Google "
                   "has verified it, and the id it gives your account, which stays the same "
-                  "if the address changes. We keep the address and the id, and nothing "
-                  "else.</p></div>")
+                  "if the address changes. From Google we keep only the address and the "
+                  "id. <a href=\"/privacy\">What else we keep, and why</a>.</p></div>")
+
+
+#: When the privacy page last changed in substance. Change it with the words.
+PRIVACY_UPDATED = "2026-09-22"
+
+
+def _span(seconds: int) -> str:
+    """"14 days", "36 hours", "15 minutes": the privacy page quotes the settings in force."""
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds >= size and seconds % size == 0:
+            count = seconds // size
+            return f"{count} {unit}{'' if count == 1 else 's'}"
+    return f"{seconds} seconds"
+
+
+def privacy_page(cfg: Config) -> str:
+    """What ccfleet keeps about the people who use it, in plain words.
+
+    Every length of time on it is read from the settings in force, so the page
+    cannot drift from what the server does. Public: Google links to it from the
+    sign-in screen, and nobody should need an account to read it.
+    """
+    contact = (f'<a href="mailto:{escape(cfg.contact_email)}">{escape(cfg.contact_email)}</a>'
+               if cfg.contact_email else
+               "the support address Google shows on ccfleet&#x27;s sign-in screen")
+    attempt = _span(LOGIN_MAX_AGE_S)
+    body = (
+        "<h1>Privacy</h1>"
+        f'<p class="sub">Last updated {escape(PRIVACY_UPDATED)}</p>'
+        '<div class="card"><h2>What ccfleet is</h2>'
+        "<p>ccfleet gives you a slot on a machine we operate: your own Linux account there, "
+        "with Claude Code, signed in to your own Claude account. The operator decides who "
+        f"gets slots. To reach the operator, write to {contact}.</p></div>"
+        '<div class="card"><h2>What we get from Google</h2>'
+        "<p>When you sign in with Google we ask for your email address, whether Google has "
+        "verified it, and the id Google gives your account. We keep the address and the id. "
+        "We do not ask for your name, your photo, your contacts, or access to your Gmail, "
+        "Drive or anything else in your Google account.</p></div>"
+        '<div class="card"><h2>What we keep because you use ccfleet</h2><ul>'
+        "<li>Your account: the address and id above, how many slots you may hold, and when "
+        "you last visited.</li>"
+        "<li>The slots you hold, and when you claimed each one.</li>"
+        "<li>Your sign-in here: a random value in a cookie, of which we store only a hash. "
+        f"It lasts {_span(cfg.session_ttl_s)}, or until you sign out.</li>"
+        "<li>Payments the operator has recorded for you: the amount, the currency, the day "
+        "it covers you to, and the operator&#x27;s own note.</li>"
+        "<li>What your slot reports about itself: which version of Claude Code is installed, "
+        "whether it is signed in, your Claude plan and its rate-limit tier, when that sign-in "
+        "expires, whether Remote Control is running, how much of your Claude usage limits is "
+        "used and when they reset, and how many tokens were used each hour over the last "
+        "week. The token counts are worked out on the machine, from Claude Code&#x27;s own "
+        "records in your slot; only the numbers leave it. We keep these reports for "
+        f"{_span(cfg.retention_days * 86400)}.</li></ul>"
+        "<p>Your slot never reports your prompts, your conversations, your files, your Claude "
+        "credential, or the name and email on your Claude account.</p></div>"
+        '<div class="card"><h2>Your Claude account</h2>'
+        "<p>You sign in to Claude yourself, through Anthropic. The credential that creates is "
+        "written on the machine, in your slot, and nowhere else: this server never stores "
+        f"it. While a sign-in is in progress, its link and progress are held here for at "
+        f"most {attempt}. A device token you ask for is held here until you say you are done "
+        f"with it, and for at most {attempt}.</p>"
+        "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
+        "Anthropic&#x27;s own terms and privacy policy.</p></div>"
+        '<div class="card"><h2>What the operator can see</h2>'
+        "<p>The machines are ours, and their administrators have root. That means they can "
+        "technically read any slot&#x27;s files, and its Claude credential. No feature of "
+        "ccfleet does this and we do not look, but no setting can make it impossible, so "
+        "please keep nothing on a slot that you could not accept an administrator being "
+        "able to read.</p>"
+        "<p>In the console, the operator sees your email address, your allowance, the slots "
+        "you hold, when you last visited, and the payments recorded for you.</p></div>"
+        '<div class="card"><h2>Cookies</h2>'
+        "<p>Two, both needed to sign you in: your session cookie, and one that ties "
+        "Google&#x27;s answer to the browser that asked for it, which lasts "
+        f"{_span(oauth.FLOW_TTL_S)}. There is no analytics, no advertising and no "
+        "third-party script on any page.</p></div>"
+        '<div class="card"><h2>Sharing, keeping and deleting</h2>'
+        "<p>We do not sell what we keep, and we do not give it to anyone. The servers run at "
+        "hosting companies we rent them from, and Google and Anthropic see what you do with "
+        "their own services: signing in, and using Claude.</p>"
+        "<p>Giving a slot back deletes its Linux account and every file in it. Your account "
+        "and the payments recorded for you stay while your account exists. To have your "
+        "account deleted, write to the operator: it is done by hand, once any slot you hold "
+        "has been given back and wiped.</p>"
+        "<p>If any of this changes, this page changes, and the date at the top says when.</p>"
+        "</div>")
+    return _shell("privacy", body)
 
 
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
