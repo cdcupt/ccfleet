@@ -18,7 +18,9 @@ the parsed record, never stored, never logged and never sent. See usage_summary.
 
 `~/.claude.json` likewise holds an email address, a full name, an account uuid
 and an organisation name, and `claude auth status` returns an email address and
-an organisation; none of them are collected. It is also what makes a Mac
+an organisation; none of them are collected. One thing is derived from the
+uuid: a one-way fingerprint, so the fleet server can tell when one Claude
+account is signed in on two nodes (see account_fingerprint). It is also what makes a Mac
 reportable at all, since the credential there lives in the Keychain and this
 agent will not read it. Token values never reach the payload. Tests assert each
 of these, including with a secret written into a fixture transcript.
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import ipaddress
 import json
 import logging
@@ -238,6 +241,36 @@ def oauth_account_facts(config_dir: Path) -> dict[str, Any]:
     return facts
 
 
+# How much of the digest is sent: enough that two accounts in one small fleet
+# never collide, short enough that it is plainly a label and not the id.
+ACCOUNT_FP_HEX = 16
+
+
+def account_fingerprint(global_config: Path) -> Optional[str]:
+    """An opaque name for the Claude account a Claude Code config belongs to.
+
+    The one rule ccfleet keeps is one Claude account, one node, and a server
+    can only notice the same account on two nodes if both say which account
+    they have. The account's id is not sent: this is a one-way digest of it —
+    the same on every node the account is on, and no use for anything else. No
+    email, name or organisation goes with it.
+    """
+    try:
+        data = json.loads(global_config.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    account = data.get("oauthAccount") if isinstance(data, dict) else None
+    uuid = account.get("accountUuid") if isinstance(account, dict) else None
+    if not isinstance(uuid, str) or not uuid.strip():
+        return None
+    return hashlib.sha256(uuid.strip().encode("utf-8")).hexdigest()[:ACCOUNT_FP_HEX]
+
+
+def global_config_of(config_dir: Path) -> Path:
+    """~/.claude -> ~/.claude.json. Appended, never with_suffix (see above)."""
+    return config_dir.parent / (config_dir.name + ".json")
+
+
 def credentials_summary(config_dir: Path) -> dict[str, Any]:
     """Facts about the credentials file that contain no secret material."""
     path = config_dir / ".credentials.json"
@@ -377,6 +410,7 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
     if status:
         credentials.update(status)
         credentials["present"] = status.get("logged_in", credentials.get("present"))
+    credentials["account_fp"] = account_fingerprint(global_config_of(cfg.claude_config_dir))
     payload["credentials"] = credentials
     payload["disk"] = disk_info(cfg.claude_config_dir)
     payload["egress"] = egress_ip(cfg.egress_targets, opener, min(cfg.timeout_s, 5.0))
@@ -965,13 +999,19 @@ def find_token(pane: str) -> Optional[str]:
 
 
 def start_login(email: Optional[str], runner: Runner = subprocess.run,
-                kind: str = "login") -> bool:
+                kind: str = "login", env_prefix: Sequence[str] = ()) -> bool:
     """Open a fresh pane running the flow the console asked for. True if started.
 
     Both flows are the same shape — a URL to approve and a code to type back —
     so they share the pane, the reader and the code path. They differ in the
     command and in what comes out at the end: a sign-in leaves a credential on
     the node, a token prints one for the owner to carry away.
+
+    `env_prefix` starts the command under `env`, which is how a slot signs in
+    again somewhere to one side before deciding to keep it (see
+    reconcile_slot_login). A tmux server keeps the environment it started with
+    and hands that to every later session, so a variable given to one tmux call
+    does not reliably reach the command; it is named on the command instead.
     """
     path = find_claude()
     if not path:
@@ -980,10 +1020,10 @@ def start_login(email: Optional[str], runner: Runner = subprocess.run,
     if kind == "token":
         # No --email: setup-token does not take one, and the account is decided
         # by the login this node already has.
-        argv = [path, "setup-token"]
+        argv = [*env_prefix, path, "setup-token"]
         email = None
     else:
-        argv = [path, "auth", "login", "--claudeai"]
+        argv = [*env_prefix, path, "auth", "login", "--claudeai"]
     if email:
         argv += ["--email", email]
     # -d so nothing needs a terminal; the pane is driven and read by tmux alone.
@@ -1099,7 +1139,7 @@ LOGIN_POLL_MAX_S = 30.0
 
 
 def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
-                    runner: Runner = subprocess.run, *,
+                    runner: Runner = subprocess.run, *, env_prefix: Sequence[str] = (),
                     signed_in: Optional[Callable[[], bool]] = None
                     ) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """Drive one step of a console-requested sign-in.
@@ -1128,7 +1168,7 @@ def reconcile_login(desired: Mapping[str, Any], state: Mapping[str, Any],
     kind = "token" if wanted.get("kind") == "token" else "login"
     if mine.get("requested_at") != requested_at:
         # A new request supersedes anything in flight, including a stuck one.
-        if not start_login(login_email(wanted.get("email")), runner, kind):
+        if not start_login(login_email(wanted.get("email")), runner, kind, env_prefix):
             new_state["login"] = {"requested_at": requested_at, "phase": "failed"}
             return {"state": "failed", "detail": "claude not found on this node",
                     "requested_at": requested_at}, new_state
@@ -1498,31 +1538,147 @@ def _credentials_stamp(config_dir: Path) -> Optional[list[int]]:
     return [info.st_mtime_ns, info.st_size, info.st_ino]
 
 
+# -- a slot keeps its account ----------------------------------------------------------
+#
+# A slot keeps the Claude account it was first signed in with. The binding is
+# that account's fingerprint, kept in the slot's own state file, so it goes with
+# the slot's home when the slot is wiped. Signing in again happens to one side,
+# in a scratch Claude Code directory: the same account's fresh credential then
+# replaces the old one in ~/.claude, whole; any other account's is thrown away,
+# and the sign-in the slot already had is never touched.
+
+SIGNIN_SCRATCH = "~/.config/ccfleet/signin-scratch"
+OTHER_ACCOUNT = ("this slot stays with the Claude account it was first signed in with; "
+                 "to use another account, hold another slot")
+UNKNOWN_ACCOUNT = "could not tell which Claude account signed in; nothing was changed"
+NOT_ADOPTED = "could not put the new sign-in in place; nothing was changed"
+NO_SCRATCH = "could not make a place for the sign-in; nothing was changed"
+
+
+def bind_first_account(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Bind the slot to the account signed in on it, once and for good.
+
+    Whichever account has a credential in ~/.claude when nothing is bound yet
+    is the slot's: its first sign-in, or — on a slot signed in before slots
+    kept their account — the one it already had.
+    """
+    state = dict(state)
+    if state.get("bound_fp"):
+        return state
+    home = Path.home()
+    fp = account_fingerprint(global_config_of(home / ".claude"))
+    if fp and (home / ".claude" / ".credentials.json").is_file():
+        state["bound_fp"] = fp
+    return state
+
+
+def _in_config_dir(runner: Runner, place: Path) -> Runner:
+    """`runner`, with Claude Code pointed at `place` for this one call."""
+    def run(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        env = dict(kwargs.pop("env", None) or os.environ)
+        env[CONFIG_DIR_VAR] = str(place)
+        return runner(argv, env=env, **kwargs)
+    return run
+
+
+def discard_scratch() -> None:
+    """Delete the scratch directory, and whatever sign-in is in it."""
+    scratch = Path(SIGNIN_SCRATCH).expanduser()
+    try:
+        if scratch.is_symlink():
+            scratch.unlink()
+        elif scratch.exists():
+            shutil.rmtree(scratch)
+    except OSError as exc:
+        log.warning("could not clear the sign-in scratch: %s", exc.__class__.__name__)
+
+
+def prepare_scratch() -> bool:
+    """An empty, private place for a sign-in to land, past the one prompt that
+    would otherwise wait for an answer nobody can give."""
+    discard_scratch()
+    scratch = Path(SIGNIN_SCRATCH).expanduser()
+    try:
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        scratch.mkdir(mode=0o700)
+        os.chmod(scratch, 0o700)
+    except OSError as exc:
+        log.warning("could not make the sign-in scratch: %s", exc.__class__.__name__)
+        return False
+    return _atomic_write(scratch / ".claude.json",
+                         json.dumps({"hasCompletedOnboarding": True}) + "\n")
+
+
+def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
+    """Keep the scratch sign-in if it is the slot's own account. "" when kept,
+    else why not. The scratch directory is gone either way."""
+    scratch = Path(SIGNIN_SCRATCH).expanduser()
+    fp = account_fingerprint(scratch / ".claude.json")
+    why = ""
+    if fp is None:
+        why = UNKNOWN_ACCOUNT
+    elif fp != bound_fp:
+        why = OTHER_ACCOUNT
+        path = find_claude()
+        if path:
+            # Claude Code's own sign-out, for whatever it does beyond this
+            # machine. Best effort: deleting the directory is what counts here.
+            _run(_in_config_dir(runner, scratch), [path, "auth", "logout"], timeout=30.0)
+    else:
+        target = Path.home() / ".claude" / ".credentials.json"
+        try:
+            os.chmod(scratch / ".credentials.json", 0o600)
+            os.replace(scratch / ".credentials.json", target)
+        except OSError as exc:
+            log.warning("could not keep the new sign-in: %s", exc.__class__.__name__)
+            why = NOT_ADOPTED
+    discard_scratch()
+    return why
+
+
 def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
                          ) -> tuple[Optional[dict[str, Any]], dict[str, Any], bool]:
     """A sign-in on a slot. Returns (progress, state, whether it finished now).
 
-    Finished means the CLI says the slot is signed in AND the credential file
-    changed since the attempt began. The first alone is already true of a slot
-    signed in again while its old sign-in still works: it would call the
-    attempt done — and close the pane — before the new one was written.
+    Finished means the CLI says the place signed into is signed in AND its
+    credential file changed since the attempt began. The first alone is already
+    true of a slot signed in again while its old sign-in still works: it would
+    call the attempt done — and close the pane — before the new one was written.
+
+    The first sign-in goes straight into ~/.claude. Once the slot is bound (see
+    bind_first_account), every sign-in goes to scratch and is kept only if it
+    is the bound account (see adopt_sign_in). A device token is not a sign-in:
+    it is minted from ~/.claude as it is.
     """
     mine = state.get("login") if isinstance(state.get("login"), Mapping) else {}
-    config_dir = Path.home() / ".claude"
     asked = isinstance(wanted, Mapping)
     fresh = asked and mine.get("requested_at") != wanted.get("requested_at")
-    before = _credentials_stamp(config_dir) if fresh else mine.get("before")
     token = asked and wanted.get("kind") == "token"
+    bound = state.get("bound_fp")
+    scratch = (not token and bool(bound)) if fresh else bool(mine.get("scratch"))
+    place = Path(SIGNIN_SCRATCH).expanduser() if scratch else Path.home() / ".claude"
+    if fresh and scratch and not prepare_scratch():
+        requested_at = wanted.get("requested_at")
+        return ({"state": "failed", "detail": NO_SCRATCH, "requested_at": requested_at},
+                {**state, "login": {"requested_at": requested_at, "phase": "failed"}}, False)
+    before = _credentials_stamp(place) if fresh else mine.get("before")
+    asks = _in_config_dir(runner, place) if scratch else runner
 
     def signed_in() -> bool:
-        return (auth_status(runner).get("logged_in") is True
-                and _credentials_stamp(config_dir) != before)
+        return (auth_status(asks).get("logged_in") is True
+                and _credentials_stamp(place) != before)
 
-    progress, new_state = reconcile_login({"login": wanted}, state, runner,
-                                          signed_in=None if token else signed_in)
+    progress, new_state = reconcile_login(
+        {"login": wanted}, state, runner,
+        env_prefix=("env", f"{CONFIG_DIR_VAR}={place}") if scratch else (),
+        signed_in=None if token else signed_in)
     if fresh and isinstance(new_state.get("login"), Mapping):
-        new_state["login"] = {**new_state["login"], "before": before}
+        new_state["login"] = {**new_state["login"], "before": before, "scratch": scratch}
     done = not token and (progress or {}).get("state") == "done"
+    if done and scratch:
+        why = adopt_sign_in(str(bound), runner)
+        if why:
+            return {**progress, "state": "failed", "detail": why}, new_state, False
     return progress, new_state, done
 
 
@@ -1648,7 +1804,14 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # First, so a sign-in that completes in this step already reads as signed
     # in below — and the slot is active in the same heartbeat, not the next.
     moved = drop_config_dir_line()
+    # Bound before the sign-in step, so a slot signed in before it kept its
+    # account is held to that account from its very next sign-in; and after,
+    # so a first sign-in that finishes in this step binds in this step too.
+    state = bind_first_account(state)
     progress, state, finished = reconcile_slot_login(request.get("login"), state, runner)
+    state = bind_first_account(state)
+    if "login" not in state:
+        discard_scratch()                   # a sign-in cancelled, abandoned or over
     if moved or finished:
         state = follow_sign_in(state, runner)
     elif state.get("account_restart") == "owed" and restart_remote_control(runner):
@@ -1656,6 +1819,7 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     config_dir = Path.home() / ".claude"
     credentials = credentials_summary(config_dir)
     credentials.update(slot_account_labels(config_dir))
+    credentials["account_fp"] = account_fingerprint(global_config_of(config_dir))
     status = auth_status(runner)
     if status:
         credentials.update(status)

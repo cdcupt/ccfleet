@@ -17,9 +17,12 @@ they control, with someone keeping an eye on the whole fleet. It gives you:
   latter is the only way to report a login on macOS, where the credential lives
   in the Keychain and this agent will not read it. Token values are dropped in
   memory and never sent, logged or stored, and neither are the email address,
-  name, account uuid or organisation name that sit in the same file. (A slot on
-  a shared machine reports one thing more, for its holder's own page: the email
-  address of the one Claude account signed in on it. See section 4.)
+  name, account uuid or organisation name that sit in the same file. From the
+  uuid it derives one thing: a fingerprint (the first 16 hex digits of its
+  SHA-256), the same on every node the account is on, so the server can flag one
+  account signed in on two nodes. (A slot on a shared machine reports one thing
+  more, for its holder's own page: the email address of the one Claude account
+  signed in on it. See section 4.)
 - **A fleet server** with a dashboard and Telegram alerts: missing heartbeat,
   Claude Code missing or drifted from the pinned version, login missing, stale
   or expired, disk high, egress IP changed, Remote Control service down.
@@ -132,7 +135,11 @@ grants each person an allowance of slots, and they claim one, sign it in to
 their own Claude account and give it back from `/account`. One Claude account
 per slot: somebody with two accounts holds two slots. Their page shows which
 account each slot is signed in to, so the slot reports that account's email
-address; the console never shows it. The guidebook predates shared machines; this
+address; the console never shows it. A slot keeps the account it was first
+signed in with: signing in again happens in a scratch directory and is kept only
+if it is that same account. And an account signed in on two live places at once
+(two slots, or a slot and a node) raises `account_elsewhere` on both, and the
+holder's card says so. The guidebook predates shared machines; this
 section is their reference until it catches up.
 
 ```bash

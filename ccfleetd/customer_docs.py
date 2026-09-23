@@ -178,9 +178,12 @@ def guide(cfg: Config) -> str:
         "in it are deleted; your Claude account is not touched. Push your work somewhere "
         "first.</li></ul></div>"
         '<div class="card"><h2>One Claude account per slot</h2>'
-        "<p>A slot is signed in to one Claude account, your own. To use another account, "
-        "hold another slot. In claude.ai/code each account sees only its own machine.</p>"
-        "</div>"
+        "<p>A slot is signed in to one Claude account, your own, and keeps it: "
+        '<span class="btnlabel">Sign in again</span> works with that account only. To use '
+        "another account, hold another slot. In claude.ai/code each account sees only its "
+        "own machine.</p>"
+        "<p>One account also stays on one machine: signed in on two at once, it is flagged "
+        "to you and to the operator.</p></div>"
         '<div class="card"><h2>Good to know</h2><ul>'
         "<li>Your slot is <strong>not backed up</strong>. Keep your work in git, or anywhere "
         "else that is yours.</li>"

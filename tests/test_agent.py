@@ -1743,7 +1743,8 @@ def test_a_slot_carries_its_holders_sign_in_one_step_further(slot_home, monkeypa
     """The same code that signs an owner node in, run as the slot's user."""
     started = []
     monkeypatch.setattr(agent, "start_login",
-                        lambda email, runner=None, kind="login": started.append((email, kind))
+                        lambda email, runner=None, kind="login", env_prefix=():
+                        started.append((email, kind))
                         or True)
     login = {"requested_at": 42.0, "kind": "token", "email": "me@example.com"}
     facts = agent.slot_facts({"login": login}, slot_runner([]))

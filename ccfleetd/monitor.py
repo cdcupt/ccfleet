@@ -52,8 +52,13 @@ class Monitor:
         recent = self._store.recent_heartbeats(node["id"], limit=2)
         latest = recent[0] if recent else None
         previous = recent[1] if len(recent) > 1 else None
+        # One account, one node is a fleet-wide rule, so each node is judged
+        # against where every account is live: its own alert opens as soon as
+        # it reports, and the other place's at that place's next check.
+        places = rules.account_places(self._store.list_nodes(), self._store.latest_heartbeats(),
+                                      self._store.list_slots(), now, self._cfg)
         findings = rules.evaluate(node, latest, previous, now, self._cfg,
-                                  self._store.list_slots(node_id=node["id"]))
+                                  self._store.list_slots(node_id=node["id"]), places)
         return self._reconcile(node, findings, now)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:

@@ -291,7 +291,12 @@ platform, and `profileFetchedAt` inside it only advances when a profile fetch
 succeeded against the live login, so it reports liveness rather than merely a
 time. The agent reads presence, that timestamp and the rate-limit tier, and
 nothing else; the email address, full name, account uuid and organisation name in
-the same file are never collected.
+the same file are never collected. The one thing derived from them is a
+fingerprint of the account uuid (the first 16 hex digits of its SHA-256): the
+same on every node the account is on, so the server can raise
+`account_elsewhere` when one account is signed in on two live nodes or slots.
+That is the rule this project keeps, one account on one node, checked rather
+than trusted.
 
 `token_stale` falls back to that timestamp when there is no file to stat, so a
 laptop whose login has gone cold raises the same alert a node does. Version

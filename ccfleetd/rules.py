@@ -234,15 +234,98 @@ def _slot_findings(slot_rows: Sequence[Mapping[str, Any]],
     return findings
 
 
+# -- one Claude account, one node ------------------------------------------------------
+#
+# The rule ccfleet keeps. A node, or a slot on a shared machine, says which
+# account it is signed in to only as a fingerprint (a digest of the account's
+# id); two live places with one fingerprint are the same account on two nodes.
+
+#: Where each Claude account is signed in right now: fingerprint -> places,
+#: each an owner node's id or a slot's id.
+Places = Mapping[str, Sequence[str]]
+HELD = (slotstates.CLAIMED, slotstates.ACTIVE)
+
+
+def account_places(nodes: Sequence[Mapping[str, Any]],
+                   latest: Mapping[str, Mapping[str, Any]],
+                   slot_rows: Sequence[Mapping[str, Any]],
+                   now: float, cfg: Config) -> dict[str, list[str]]:
+    """Every live sign-in in the fleet, by account fingerprint.
+
+    Live means: an enabled node heard from inside the heartbeat window, whose
+    sign-in says it works — and for a slot, one somebody holds. A node gone
+    quiet says nothing about where its account is now, so it is left out rather
+    than counted twice with wherever that account went.
+    """
+    by_user = {(r.get("node_id"), r.get("unix_user")): r for r in slot_rows}
+    places: dict[str, list[str]] = {}
+    for node in nodes:
+        beat = latest.get(node["id"]) or {}
+        if not node.get("enabled") or now - (beat.get("ts") or 0) > cfg.heartbeat_max_age_s:
+            continue
+        payload = beat.get("payload") or {}
+        if payload.get("mode") == slotstates.MACHINE_MODE:
+            for entry in payload.get("slots") or []:
+                row = by_user.get((node["id"], entry.get("unix_user"))) \
+                    if isinstance(entry, Mapping) else None
+                creds = (entry.get("credentials") or {}) if row else {}
+                if row and row.get("state") in HELD and creds.get("logged_in") is True \
+                        and creds.get("account_fp"):
+                    places.setdefault(creds["account_fp"], []).append(row["id"])
+            continue
+        creds = payload.get("credentials") or {}
+        if creds.get("logged_in") is True and creds.get("account_fp"):
+            places.setdefault(creds["account_fp"], []).append(node["id"])
+    return places
+
+
+def _elsewhere(fp: Any, here: str, places: Places) -> list[str]:
+    """The other places `fp` is live at, if `here` is one of its places at all."""
+    found = places.get(fp, ()) if isinstance(fp, str) else ()
+    return sorted(p for p in found if p != here) if here in found else []
+
+
+def _account_findings(node: Mapping[str, Any], payload: Mapping[str, Any],
+                      places: Places) -> list[Finding]:
+    """An owner node whose account is live on another node too."""
+    others = _elsewhere((payload.get("credentials") or {}).get("account_fp"), node["id"],
+                        places)
+    if not others:
+        return []
+    return [Finding("account_elsewhere", LEVEL_CRITICAL,
+                    f"the Claude account signed in here is also signed in on "
+                    f"{', '.join(others)}: one account, one node")]
+
+
+def _slot_account_findings(slot_rows: Sequence[Mapping[str, Any]],
+                           payload: Mapping[str, Any], places: Places) -> list[Finding]:
+    """Each slot whose account is live somewhere else too, named by its user."""
+    reports = {r.get("unix_user"): r for r in payload.get("slots") or []
+               if isinstance(r, Mapping)}
+    findings: list[Finding] = []
+    for row in slot_rows:
+        creds = (reports.get(row.get("unix_user")) or {}).get("credentials") or {}
+        others = _elsewhere(creds.get("account_fp"), row["id"], places)
+        if others:
+            findings.append(Finding(
+                f"account_elsewhere:{row.get('unix_user')}", LEVEL_CRITICAL,
+                f"the Claude account on {row['id']} is also signed in on "
+                f"{', '.join(others)}: one account, one node"))
+    return findings
+
+
 def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
              previous: Optional[Mapping[str, Any]], now: float,
              cfg: Config,
-             slot_rows: Sequence[Mapping[str, Any]] = ()) -> tuple[Finding, ...]:
+             slot_rows: Sequence[Mapping[str, Any]] = (),
+             places: Optional[Places] = None) -> tuple[Finding, ...]:
     """Return every finding for one node given its latest two heartbeats.
 
     ``latest`` and ``previous`` are heartbeat rows (``{"ts": ..., "payload": {...}}``).
     ``slot_rows`` are the slots declared on this node, for a shared machine.
+    ``places`` is where every account in the fleet is live (see account_places).
     """
+    places = places or {}
     findings = _heartbeat_findings(node, latest, now, cfg)
     if latest is None:
         return tuple(findings)
@@ -256,6 +339,7 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
         findings += _disk_findings(payload, cfg)
         findings += _egress_findings(payload, prev_payload)
         findings += _slot_findings(slot_rows, payload)
+        findings += _slot_account_findings(slot_rows, payload, places)
         return tuple(findings)
     findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg)
@@ -263,6 +347,7 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
     findings += _quota_findings(payload, now, cfg)
     findings += _egress_findings(payload, prev_payload)
     findings += _remote_control_findings(node, payload)
+    findings += _account_findings(node, payload, places)
     return tuple(findings)
 
 
