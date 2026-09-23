@@ -24,6 +24,7 @@ from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
 from .render import (
+    CONSOLE_PATH,
     build_rows,
     render_add_result,
     render_dashboard,
@@ -143,12 +144,6 @@ def _safe_next(raw: str) -> str:
     if "\\" in raw or "\n" in raw or "\r" in raw:
         return ""
     return raw
-
-
-#: The operator's console. The bare address belongs to the people who use the
-#: product; the console sits under its own path on the same host (or at the
-#: root of a dedicated CCFLEET_ADMIN_HOST, which forwards / here).
-CONSOLE_PATH = "/admin"
 
 
 def request_host(header: Optional[str]) -> str:

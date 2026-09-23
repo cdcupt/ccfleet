@@ -1,9 +1,35 @@
 from __future__ import annotations
 
+import re
+import urllib.parse
+
 import pytest
 
 from ccfleetd.config import Config
 from ccfleetd.store import Store
+
+
+def refresh_of(page: str):
+    """A page's own refresh: after how many seconds, and to where — "" meaning
+    the address the page was opened at, note and fragment and all. None when
+    the page stays put."""
+    found = re.search(r'<meta http-equiv="refresh" content="(\d+)(?:;url=([^"]*))?">', page)
+    return (int(found.group(1)), found.group(2) or "") if found else None
+
+
+def next_load(at: str, page: str):
+    """What a browser showing `page` at address `at` requests when the refresh
+    fires, or None when it requests nothing: no refresh, or one that resolves
+    to the same address with a fragment. That is a fragment navigation, which
+    only scrolls; it is what a refresh naming no address does on /admin#card."""
+    refresh = refresh_of(page)
+    if refresh is None:
+        return None
+    target = urllib.parse.urljoin(at, refresh[1])
+    bare = urllib.parse.urldefrag(target)[0]
+    if "#" in target and bare == urllib.parse.urldefrag(at)[0]:
+        return None
+    return bare
 
 
 @pytest.fixture

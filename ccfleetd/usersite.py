@@ -405,11 +405,14 @@ def privacy_page(cfg: Config) -> str:
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
     """Come back soon while something is moving; never while a code is being typed.
 
-    Always to the bare page. The note after an action rides in the address,
-    and a refresh that reloads the address says it again every few seconds:
-    "Starting the sign-in on your slot…" stood for minutes above a card that
-    had long since moved on to the link. A note is said once, right after the
-    action; from then on the cards say how things stand.
+    Always to the bare page, never the address the page was opened at. After an
+    action that address is /account?note=…#slot-…, and a refresh naming no
+    address on a page whose address has a fragment is a fragment navigation:
+    the browser scrolls and reloads nothing. "Starting the sign-in on your
+    slot…" stood for minutes that way, the link it was waiting for already
+    there for anybody who reloaded by hand. The bare page also leaves the note
+    behind: said once, right after the action, and from then on the cards say
+    how things stand. The target never carries a fragment, for the same reason.
     """
     states = {(login or {}).get("state") for login in logins.values()}
     if "url_ready" in states:
