@@ -2,10 +2,13 @@
 
 bootstrap.sh and install.sh turn password login off. Done blindly, that locks a
 machine whose image turned key login off too (seen on a real provider image:
-`PubkeyAuthentication no` at the end of sshd_config), and on an image that never
-reads sshd_config.d it reports hardening that sshd never applied. harden_sshd()
-asks sshd itself before reloading anything, and puts SSH's files back as they
-were whenever it refuses.
+`PubkeyAuthentication no` at the end of sshd_config); on an image that never
+reads sshd_config.d it reports hardening sshd never applied; and on a stock
+Ubuntu cloud image, where cloud-init's 50-cloud-init.conf says
+`PasswordAuthentication yes`, a drop-in that sorts after it loses. harden_sshd()
+writes 01-ccfleet.conf so it is read first, takes away the 60-ccfleet.conf
+earlier versions wrote, asks sshd itself before reloading anything, and puts
+SSH's files back byte for byte whenever it refuses.
 
 These run the real function, cut out of each script, in a sandbox: a fake `sshd`
 that reads config the way sshd does (Include expanded where it stands, the first
@@ -27,7 +30,15 @@ SCRIPTS = {"bootstrap": NODE / "bootstrap.sh", "install": NODE / "install.sh"}
 DEFAULT_LINES = ["PubkeyAuthentication yes", "PasswordAuthentication no",
                  "KbdInteractiveAuthentication no", "PermitRootLogin prohibit-password",
                  "X11Forwarding no"]
-EARLIER_RUN = "PubkeyAuthentication yes\nPasswordAuthentication no\n# from an earlier run\n\n"
+# What install.sh wrote to 60-ccfleet.conf before this version.
+OLD_INSTALL_DROPIN = ("PasswordAuthentication no\nKbdInteractiveAuthentication no\n"
+                      "PermitRootLogin prohibit-password\nX11Forwarding no\nMaxAuthTries 3\n")
+# Hand-edited leftovers, each ending in a blank line, to prove a byte-exact restore.
+EARLIER = {"01": "PubkeyAuthentication yes\nPasswordAuthentication no\n# an earlier run\n\n",
+           "60": "PasswordAuthentication no\nX11Forwarding no\n# an older ccfleet, edited\n\n"}
+UBUNTU_CLOUD_MAIN = ("Include {dropins}/*.conf\nKbdInteractiveAuthentication no\nUsePAM yes\n"
+                     "X11Forwarding yes\nPrintMotd no\nAcceptEnv LANG LC_*\n"
+                     "Subsystem sftp /usr/lib/openssh/sftp-server\n")
 
 FAKE_SSHD = textwrap.dedent('''\
     #!/usr/bin/env python3
@@ -39,7 +50,8 @@ FAKE_SSHD = textwrap.dedent('''\
     """
     import glob, os, sys
     YES_NO = {"pubkeyauthentication", "passwordauthentication", "kbdinteractiveauthentication",
-              "challengeresponseauthentication", "x11forwarding", "usepam"}
+              "challengeresponseauthentication", "x11forwarding", "usepam", "printmotd"}
+    ANY_VALUE = {"acceptenv", "subsystem"}
     ROOT = {"yes", "no", "prohibit-password", "without-password", "forced-commands-only"}
     METHODS = {"any", "publickey", "password", "keyboard-interactive", "hostbased",
                "gssapi-with-mic"}
@@ -72,6 +84,8 @@ FAKE_SSHD = textwrap.dedent('''\
                 ok = value.isdigit()
             elif key == "authenticationmethods":
                 ok = all(m in METHODS for group in value.split() for m in group.split(","))
+            elif key in ANY_VALUE:
+                ok = True
             else:
                 refuse(path, number, f"Bad configuration option: {key}")
             if not ok:
@@ -103,10 +117,13 @@ FAKE_SYSTEMCTL = textwrap.dedent('''\
 
 
 def function_text(script: pathlib.Path) -> str:
-    """harden_sshd() as it stands in the script, from its first line to its closing brace."""
+    """harden_sshd() as it stands in the script, with the comment block above it,
+    from the first line of that block to the function's closing brace."""
     lines = script.read_text().splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith("harden_sshd() {"))
     end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+    while start > 0 and lines[start - 1].startswith("#"):
+        start -= 1
     return "\n".join(lines[start:end + 1]) + "\n"
 
 
@@ -150,6 +167,11 @@ class Box:
 
     @property
     def dropin(self) -> pathlib.Path:
+        return self.dropins / "01-ccfleet.conf"
+
+    @property
+    def legacy(self) -> pathlib.Path:
+        """What versions before this one wrote."""
         return self.dropins / "60-ccfleet.conf"
 
 
@@ -171,14 +193,17 @@ def test_both_scripts_harden_through_it_and_stop_when_it_refuses():
     """The wiring, checked structurally: running either script whole needs root
     and a real machine. The behaviour is the function's, proven below; this pins
     that both hardening paths go through it, that a refusal stops the script
-    before anything after it runs, and that install.sh keeps its extra line."""
+    before anything after it runs, that install.sh keeps its extra line, and that
+    nothing else in either script touches sshd's drop-ins."""
     bootstrap, install = (s.read_text().splitlines() for s in SCRIPTS.values())
     assert ('  harden_sshd || { echo "bootstrap.sh stopped: SSH is as it was, and nothing '
             'after this ran" >&2; exit 1; }') in bootstrap
     call = install.index('  harden_sshd "MaxAuthTries 3" \\')
     assert install[call + 1].startswith('    || die "SSH was not hardened')
-    for lines in (bootstrap, install):
-        assert "\n".join(lines).count("60-ccfleet.conf") == 1, "the drop-in is written in one place"
+    for script in SCRIPTS.values():
+        rest = script.read_text().replace(function_text(script), "")
+        assert "sshd_config.d" not in rest and "ccfleet.conf" not in rest, \
+            f"{script.name} touches sshd's drop-ins outside harden_sshd()"
 
 
 # -- hardened --------------------------------------------------------------------
@@ -201,6 +226,40 @@ def test_an_ordinary_image_is_hardened(box, script):
     assert result.returncode == 0, result.stderr
     assert (box.effective()["pubkeyauthentication"], box.effective()["passwordauthentication"]) \
         == ("yes", "no")
+    assert box.reloads() == ["reload ssh"]
+
+
+@both
+def test_an_ubuntu_cloud_image_is_hardened_over_cloud_inits_password_line(box, script):
+    """Most VPSes: cloud-init's 50-cloud-init.conf says `PasswordAuthentication
+    yes`. 01-ccfleet.conf is read before it, so passwords go off, and cloud-init's
+    own files are left exactly as they were."""
+    box.config.write_text(UBUNTU_CLOUD_MAIN.format(dropins=box.dropins))
+    cloud = box.dropins / "50-cloud-init.conf"
+    cloud.write_text("PasswordAuthentication yes\n")
+    cloudimg = box.dropins / "60-cloudimg-settings.conf"
+    cloudimg.write_text("PasswordAuthentication no\n")
+    result = box.harden(script, "MaxAuthTries 3")
+    assert result.returncode == 0, result.stderr
+    assert box.effective()["passwordauthentication"] == "no"
+    assert box.effective()["pubkeyauthentication"] == "yes"
+    assert box.reloads() == ["reload ssh"]
+    assert cloud.read_text() == "PasswordAuthentication yes\n"
+    assert cloudimg.read_text() == "PasswordAuthentication no\n"
+
+
+@both
+def test_an_earlier_60_ccfleet_conf_is_replaced_by_01_and_reloaded_once(box, script):
+    """A machine hardened by an earlier version carries 60-ccfleet.conf. It goes,
+    01-ccfleet.conf takes its place, and sshd is reloaded once."""
+    box.config.write_text(f"{box.include}\n")
+    box.legacy.write_text(OLD_INSTALL_DROPIN)
+    result = box.harden(script, "MaxAuthTries 3")
+    assert result.returncode == 0, result.stderr
+    assert not box.legacy.exists()
+    assert box.dropin.read_text().splitlines() == [*DEFAULT_LINES, "MaxAuthTries 3"]
+    assert box.effective()["passwordauthentication"] == "no"
+    assert box.effective()["maxauthtries"] == "3"
     assert box.reloads() == ["reload ssh"]
 
 
@@ -234,6 +293,7 @@ def test_the_drop_in_says_both_halves_and_any_extra_line(box, script):
 
 def refused(box, result):
     assert result.returncode != 0
+    assert "SSH was not hardened" in result.stderr
     assert "nothing was reloaded" in result.stderr
     assert box.reloads() == []
 
@@ -252,22 +312,25 @@ def test_an_image_that_never_reads_the_drop_in_dir_is_left_as_it_was(box, script
 def test_keys_turned_off_before_the_drop_in_is_read_is_refused(box, script):
     """The lockout itself: passwords would go off and keys stay off."""
     box.config.write_text(f"PubkeyAuthentication no\n{box.include}\n")
-    refused(box, box.harden(script))
+    result = box.harden(script)
+    refused(box, result)
+    assert "key login would be off" in result.stderr
     assert not box.dropin.exists()
 
 
 @both
-def test_passwords_kept_on_by_a_file_read_first_is_refused(box, script):
-    """cloud-init's 50-cloud-init.conf sorts before 60-ccfleet.conf, so its
-    `PasswordAuthentication yes` wins. Better a loud stop than a false claim."""
+def test_passwords_kept_on_by_a_file_that_sorts_first_is_refused(box, script):
+    """A provider file named to be read even before 01-ccfleet.conf still wins.
+    Better a loud stop than a false claim; its file is left alone."""
     box.config.write_text(f"{box.include}\n")
-    cloud = box.dropins / "50-cloud-init.conf"
-    cloud.write_text("PasswordAuthentication yes\n")
+    provider = box.dropins / "00-provider.conf"
+    provider.write_text("PasswordAuthentication yes\n")
     result = box.harden(script)
     refused(box, result)
-    assert "50-cloud-init.conf" in result.stderr
+    assert "password login would stay on" in result.stderr
+    assert "sorts before it" in result.stderr
     assert not box.dropin.exists()
-    assert cloud.read_text() == "PasswordAuthentication yes\n", "somebody else's file is left alone"
+    assert provider.read_text() == "PasswordAuthentication yes\n"
 
 
 @both
@@ -302,18 +365,45 @@ def test_a_line_sshd_rejects_is_taken_back_and_nothing_is_reloaded(box, script):
 def test_an_sshd_that_cannot_report_its_config_is_not_trusted(box, script):
     """No answer is not a yes. Under `set -e` a failed -T must still clean up."""
     box.config.write_text(f"{box.include}\n")
-    refused(box, box.harden(script, FAKE_SSHD_T_FAILS="1"))
+    result = box.harden(script, FAKE_SSHD_T_FAILS="1")
+    refused(box, result)
+    assert "could not report" in result.stderr
     assert not box.dropin.exists()
 
 
 @both
+@pytest.mark.parametrize("before", ["01", "60", "both"])
 @pytest.mark.parametrize("how", ["rejected", "overruled"])
-def test_a_failed_rerun_puts_the_earlier_hardening_back(box, script, how):
-    """A re-run that refuses must not take away hardening an earlier run put in
-    place: on disk it would come back off at the next restart of sshd."""
+def test_a_refusal_puts_every_earlier_drop_in_back_byte_for_byte(box, script, before, how):
+    """A run that refuses must not take away hardening already in place, under
+    either name: on disk it would come off at the next restart of sshd. The old
+    60-ccfleet.conf is left exactly as it was, and a new 01 is not left behind."""
     box.config.write_text(("KbdInteractiveAuthentication yes\n" if how == "overruled" else "")
                           + f"{box.include}\n")
-    box.dropin.write_text(EARLIER_RUN)
+    present = {"01": box.dropin, "60": box.legacy}
+    wanted = ["01", "60"] if before == "both" else [before]
+    for name in wanted:
+        present[name].write_text(EARLIER[name])
     result = box.harden(script, *(["MaxAuthTries"] if how == "rejected" else []))
     refused(box, result)
-    assert box.dropin.read_text() == EARLIER_RUN, "byte for byte, trailing blank line included"
+    for name, path in present.items():
+        if name in wanted:
+            assert path.read_text() == EARLIER[name], f"{path.name} not restored byte for byte"
+        else:
+            assert not path.exists(), f"{path.name} left behind"
+
+
+@both
+def test_the_old_drop_in_is_not_taken_away_from_under_a_setting_it_holds(box, script):
+    """The proof is of the state the reload will run: 60-ccfleet.conf is gone
+    before sshd is asked. Here it was all that kept a later AuthenticationMethods
+    line from demanding the password being turned off; proven with it still in
+    place, its removal would lock the box."""
+    box.config.write_text(f"{box.include}\nAuthenticationMethods publickey,password\n")
+    held = OLD_INSTALL_DROPIN + "AuthenticationMethods publickey\n"
+    box.legacy.write_text(held)
+    result = box.harden(script)
+    refused(box, result)
+    assert "AuthenticationMethods would not let a key in" in result.stderr
+    assert box.legacy.read_text() == held
+    assert not box.dropin.exists()
