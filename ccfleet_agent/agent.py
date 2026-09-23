@@ -1413,8 +1413,15 @@ def finish_restart(state: Mapping[str, Any], remote: Mapping[str, Any],
         return state
     if rc_session_running(runner) is not False:
         return state
-    _run(runner, ["systemctl", "--user", "restart", DEFAULT_RC_SERVICE], timeout=60)
-    state["restart"] = "done"
+    # Done only on systemctl's own clean exit. A restart that failed leaves
+    # Remote Control on the old version, so it stays owed and is tried again.
+    try:
+        proc = runner(["systemctl", "--user", "restart", DEFAULT_RC_SERVICE],
+                      capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return state
+    if proc.returncode == 0:
+        state["restart"] = "done"
     return state
 
 

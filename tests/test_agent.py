@@ -1793,7 +1793,8 @@ RC_RESTART = ["systemctl", "--user", "restart", "claude-remote-control.service"]
 
 
 def moving_claude(calls, *, before="2.1.278", after="2.1.300", install_rc=0,
-                  session=1, rc="active", pgrep_raises=False, procs=None):
+                  session=1, rc="active", pgrep_raises=False, procs=None,
+                  restart_rc=0, restart_raises=False):
     """A slot whose Claude Code really moves: `install` changes what --version says.
 
     `session` is pgrep's exit code: 0 a Remote Control session is open, 1 none,
@@ -1827,6 +1828,11 @@ def moving_claude(calls, *, before="2.1.278", after="2.1.300", install_rc=0,
             return subprocess.CompletedProcess(argv, 0, stdout=rc, stderr="")
         if argv[:3] == ["systemctl", "--user", "is-enabled"]:
             return subprocess.CompletedProcess(argv, 0, stdout="enabled", stderr="")
+        if argv[:3] == ["systemctl", "--user", "restart"]:
+            if restart_raises:
+                raise subprocess.TimeoutExpired(argv, 60)
+            return subprocess.CompletedProcess(argv, restart_rc, stdout="",
+                                               stderr="" if restart_rc == 0 else "Failed")
         return base(argv, **kwargs)
     return run
 
@@ -2038,3 +2044,18 @@ def test_a_session_worker_is_somebody_working(slot_home):
     facts = agent.slot_facts(FOLLOW, moving_claude(calls, procs=IDLE_SLOT + [SESSION_WORKER]),
                              now=1_000.0)
     assert RC_RESTART not in calls and facts["upgrade"]["restart"] == "waiting"
+
+
+
+@pytest.mark.parametrize("restart_rc,raises", [(1, False), (0, True)])
+def test_a_restart_that_failed_is_tried_again(slot_home, restart_rc, raises):
+    """systemctl refusing, or hanging, leaves Remote Control on the old version:
+    the restart stays owed rather than being forgotten as done."""
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, restart_rc=restart_rc,
+                                                   restart_raises=raises), now=1_000.0)
+    assert RC_RESTART in calls
+    assert facts["upgrade"]["restart"] == "waiting"
+    calls = []
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300"), now=1_060.0)
+    assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"
