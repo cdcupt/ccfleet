@@ -57,8 +57,11 @@ class Monitor:
         # it reports, and the other place's at that place's next check.
         places = rules.account_places(self._store.list_nodes(), self._store.latest_heartbeats(),
                                       self._store.list_slots(), now, self._cfg)
+        # A machine's own slots: an owner slot is a record, with nothing on the
+        # machine's side to judge.
         findings = rules.evaluate(node, latest, previous, now, self._cfg,
-                                  self._store.list_slots(node_id=node["id"]), places)
+                                  self._store.list_slots(node_id=node["id"],
+                                                         kind=slotstates.MACHINE_SLOT), places)
         return self._reconcile(node, findings, now)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:

@@ -153,3 +153,19 @@ def test_a_shared_machines_slot_trouble_reaches_the_operator(store, cfg):
     assert [(e["event"], e["alert"]["rule"]) for e in events] == [
         ("opened", "slot_occupied:slot01")]
     assert "slot_occupied:slot01" in notifier.messages[0]
+
+
+def test_an_owner_slot_is_never_judged_as_a_machines_slot(store, cfg):
+    """Somebody's own node counted as their slot has no machine agent to vouch
+    for its Linux user; a machine-shaped report about that user is no alarm."""
+    store.add_node("erik-1", "erik", now=NOW - 86400)
+    store.add_account("e1", "sub-e", "cdcupt@gmail.com", slot_quota=1, now=NOW)
+    store.hold_owner_node("erik-1", "e1", now=NOW)
+    monitor, _, _ = make_monitor(store, cfg)
+    payload = heartbeat(NOW)["payload"]
+    payload.update(node_id="erik-1", mode="machine",
+                   slots=[{"unix_user": "erik", "present": False}])
+    for key in ("claude", "credentials", "remote_control"):
+        payload.pop(key)
+    events = monitor.record_heartbeat(store.get_node("erik-1"), payload, NOW)
+    assert not [e for e in events if str(e["alert"]["rule"]).startswith("slot_")]

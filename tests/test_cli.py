@@ -141,7 +141,6 @@ def _confirm_empty(db, machine, *users):
 
 def test_slot_lifecycle_from_the_command_line(db, capsys):
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
     assert cli.main(["--db", db, "slot", "add", "s1", "--machine", "m1",
                      "--unix-user", "slot01"]) == 0
     out = capsys.readouterr().out
@@ -158,24 +157,43 @@ def test_slot_lifecycle_from_the_command_line(db, capsys):
     assert "not yet seen" in listed, "the list hid that no machine has vouched for it"
 
 
-def test_declaring_more_slots_than_the_machine_holds_is_refused(db, capsys):
+def test_a_second_slot_on_a_machine_is_refused(db, capsys):
+    """One machine is one slot: claude.ai/code shows a machine by its hostname,
+    so two people on one machine would both see one name."""
+    from ccfleetd.store import Store
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "1"]) == 0
     assert cli.main(["--db", db, "slot", "add", "s1", "--machine", "m1",
                      "--unix-user", "slot01"]) == 0
+    capsys.readouterr()
     assert cli.main(["--db", db, "slot", "add", "s2", "--machine", "m1",
                      "--unix-user", "slot02"]) != 0
-    assert "capacity" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "one machine is one slot" in err and "s1" in err
+    st = Store(db)
+    try:
+        assert [s["id"] for s in st.list_slots(node_id="m1")] == ["s1"]
+    finally:
+        st.close()
 
 
-def test_capacity_cannot_be_dropped_below_what_is_already_declared(db, capsys):
+@pytest.mark.parametrize("count", ["2", "8"])
+def test_capacity_above_one_is_refused(db, capsys, count):
+    from ccfleetd.store import Store
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
-    for n in (1, 2):
-        assert cli.main(["--db", db, "slot", "add", f"s{n}", "--machine", "m1",
-                         "--unix-user", f"slot0{n}"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "1"]) != 0
-    assert "already has 2 slots" in capsys.readouterr().err
+    capsys.readouterr()
+    assert cli.main(["--db", db, "slot", "capacity", "m1", count]) != 0
+    assert "one machine is one slot" in capsys.readouterr().err
+    st = Store(db)
+    try:
+        assert st.get_node("m1")["capacity"] == 1
+    finally:
+        st.close()
+
+
+@pytest.mark.parametrize("count", ["0", "1"])
+def test_capacity_of_none_or_one_is_fine(db, capsys, count):
+    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
+    assert cli.main(["--db", db, "slot", "capacity", "m1", count]) == 0
 
 
 def test_releasing_from_the_command_line_only_starts_the_wipe(db, capsys):
@@ -222,12 +240,11 @@ def test_granting_an_allowance(db, capsys):
 
 def test_reducing_an_allowance_says_what_it_does_not_do(db, capsys):
     """The surprising half of the rule, said out loud: nobody is evicted."""
-    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "erik"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
     for n in (1, 2):
-        assert cli.main(["--db", db, "slot", "add", f"s{n}", "--machine", "m1",
-                         "--unix-user", f"slot0{n}"]) == 0
-    _confirm_empty(db, "m1", "slot01", "slot02")
+        assert cli.main(["--db", db, "node", "add", f"m{n}", "--owner", "erik"]) == 0
+        assert cli.main(["--db", db, "slot", "add", f"s{n}", "--machine", f"m{n}",
+                         "--unix-user", "slot01"]) == 0
+        _confirm_empty(db, f"m{n}", "slot01")
     _account(db, "erik@example.com", quota=2)
     from ccfleetd.store import Store
     st = Store(db)
@@ -262,7 +279,7 @@ def test_an_empty_fleet_says_so_rather_than_printing_a_header(db, capsys):
 
 
 def test_setting_capacity_on_a_machine_that_is_not_there(db, capsys):
-    assert cli.main(["--db", db, "slot", "capacity", "ghost", "4"]) != 0
+    assert cli.main(["--db", db, "slot", "capacity", "ghost", "1"]) != 0
     assert "no such machine" in capsys.readouterr().err
 
 
@@ -315,7 +332,8 @@ def test_the_slot_list_lines_up_with_its_longest_value(db, capsys):
 def _machine_and_ana(db):
     from ccfleetd.store import Store
     assert cli.main(["--db", db, "node", "add", "m1", "--owner", "op"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
+    assert cli.main(["--db", db, "slot", "add", "m1", "--machine", "m1",
+                     "--unix-user", "slot01"]) == 0
     st = Store(db)
     try:
         return st.upsert_account_from_google("sub-ana", "ana@example.com", now=1.0)
@@ -398,11 +416,10 @@ def test_renaming_a_node_from_the_command_line(db, capsys):
 
 
 def test_renaming_a_slot_from_the_command_line(db, capsys):
-    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "op"]) == 0
-    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
-    for sid, user in (("m1-01", "slot01"), ("m1-02", "slot02")):
-        assert cli.main(["--db", db, "slot", "add", sid, "--machine", "m1",
-                         "--unix-user", user]) == 0
+    for machine, sid in (("m1", "m1-01"), ("m2", "m1-02")):
+        assert cli.main(["--db", db, "node", "add", machine, "--owner", "op"]) == 0
+        assert cli.main(["--db", db, "slot", "add", sid, "--machine", machine,
+                         "--unix-user", "slot01"]) == 0
     capsys.readouterr()
     assert cli.main(["--db", db, "slot", "rename", "m1-01", "m1-a"]) == 0
     assert "Linux user" in capsys.readouterr().out
@@ -416,3 +433,108 @@ def test_renaming_a_slot_from_the_command_line(db, capsys):
     assert "slot id must be" in capsys.readouterr().err
     assert cli.main(["--db", db, "slot", "rename", "nope", "m1-z"]) == 2        # unknown
     assert "no slot" in capsys.readouterr().err
+
+
+# -- one account, one slot, one machine (slot model v2) ---------------------------------
+
+def test_holding_an_owner_node_from_the_command_line(db, capsys):
+    """erik-1 is Erik's own node; counted as his slot, it joins his list."""
+    from ccfleetd import slots
+    from ccfleetd.store import Store
+    assert cli.main(["--db", db, "node", "add", "erik-1", "--owner", "erik"]) == 0
+    _account(db, "cdcupt@gmail.com", quota=1)
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "hold", "erik-1", "cdcupt@gmail.com"]) == 0
+    out = capsys.readouterr().out
+    assert "erik-1" in out and "cdcupt@gmail.com" in out and "nothing on it changes" in out
+    st = Store(db)
+    try:
+        slot = st.get_slot("erik-1")
+        assert (slot["kind"], slot["state"], slot["unix_user"]) == (
+            slots.OWNER_SLOT, slots.ACTIVE, "erik")
+    finally:
+        st.close()
+    assert cli.main(["--db", db, "slot", "list"]) == 0
+    row = capsys.readouterr().out.splitlines()[1]
+    assert "own machine" in row and row.rstrip().endswith("cdcupt@gmail.com")
+
+    assert cli.main(["--db", db, "node", "hold", "erik-1", "--none"]) == 0
+    assert "no longer counted" in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "hold", "erik-1", "--none"]) == 2
+    assert "not counted" in capsys.readouterr().err
+
+
+def test_holding_names_the_login_when_asked(db, capsys):
+    from ccfleetd.store import Store
+    assert cli.main(["--db", db, "node", "add", "erik-1", "--owner", "erik"]) == 0
+    _account(db, "cdcupt@gmail.com", quota=1)
+    assert cli.main(["--db", db, "node", "hold", "erik-1", "cdcupt@gmail.com",
+                     "--unix-user", "dev"]) == 0
+    st = Store(db)
+    try:
+        assert st.get_slot("erik-1")["unix_user"] == "dev"
+    finally:
+        st.close()
+
+
+def test_holding_past_the_allowance_says_how_to_raise_it(db, capsys):
+    assert cli.main(["--db", db, "node", "add", "erik-1", "--owner", "erik"]) == 0
+    _account(db, "cdcupt@gmail.com", quota=0)
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "hold", "erik-1", "cdcupt@gmail.com"]) == 2
+    assert "ccfleetd account quota cdcupt@gmail.com 1" in capsys.readouterr().err
+
+
+def test_holding_for_somebody_who_never_signed_in_fails(db, capsys):
+    assert cli.main(["--db", db, "node", "add", "erik-1", "--owner", "erik"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "hold", "erik-1", "nobody@example.com"]) == 2
+    assert "nobody@example.com" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("args", [["erik-1"], ["erik-1", "a@example.com", "--none"]])
+def test_hold_takes_an_address_or_none_but_not_both(db, capsys, args):
+    assert cli.main(["--db", db, "node", "add", "erik-1", "--owner", "erik"]) == 0
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--db", db, "node", "hold", *args])
+    assert exc.value.code == 2
+
+
+def test_choosing_what_somebodys_slots_are_named_after(db, capsys):
+    from ccfleetd.store import Store
+    _account(db, "cdcupt@gmail.com")
+    capsys.readouterr()
+    assert cli.main(["--db", db, "account", "handle", "cdcupt@gmail.com", "erik"]) == 0
+    assert "erik-1" in capsys.readouterr().out
+    assert cli.main(["--db", db, "account", "handle", "cdcupt@gmail.com", "Erik!"]) == 2
+    assert "handle is" in capsys.readouterr().err
+    st = Store(db)
+    try:
+        assert st.account_by_email("cdcupt@gmail.com")["handle"] == "erik"
+    finally:
+        st.close()
+    assert cli.main(["--db", db, "account", "handle", "cdcupt@gmail.com", "--none"]) == 0
+    assert "cdcupt-1" in capsys.readouterr().out
+    assert cli.main(["--db", db, "account", "handle", "nobody@example.com", "x"]) == 2
+    assert "nobody registered" in capsys.readouterr().err
+
+
+def test_the_slot_list_shows_names_and_holders_by_address(db, capsys):
+    from ccfleetd.store import Store
+    assert cli.main(["--db", db, "node", "add", "pool-1", "--owner", "erik"]) == 0
+    assert cli.main(["--db", db, "slot", "add", "pool-1", "--machine", "pool-1",
+                     "--unix-user", "slot01"]) == 0
+    _confirm_empty(db, "pool-1", "slot01")
+    _account(db, "alice@example.com", quota=1)
+    st = Store(db)
+    try:
+        st.claim_slot("alice", now=2.0)
+    finally:
+        st.close()
+    capsys.readouterr()
+    assert cli.main(["--db", db, "slot", "list"]) == 0
+    header, row = capsys.readouterr().out.splitlines()[:2]
+    assert header.split()[:2] == ["slot", "machine"], "scripts read the id off the front"
+    fields = row.split()
+    assert fields[0] == "pool-1" and fields[3] == "claiming" and fields[4] == "no"
+    assert "alice-1" in row and row.rstrip().endswith("alice@example.com")

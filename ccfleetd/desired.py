@@ -17,6 +17,8 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import Any, Optional
 
+from . import names
+
 # A node may be pinned to an exact version, or told to track a channel. Anything
 # else is refused rather than passed to the installer: this string reaches
 # `claude install <target>` on the node.
@@ -137,14 +139,33 @@ def _slot_block(slot: Mapping[str, Any],
     return block
 
 
+def machine_hostname(node_id: str, slots: list[Mapping[str, Any]]) -> str:
+    """What a shared machine should call itself: its one slot's name.
+
+    One machine is one slot, and claude.ai/code shows a machine by its
+    hostname, so the machine answers to whatever the slot is called — its
+    holder's name while held, its id while free. With no slot, or a slot id
+    that is no hostname, the machine keeps its own id, which always is one.
+    """
+    # Exactly one: a machine from before one slot per machine may still carry
+    # several, and giving it one holder's name would show the others under it.
+    if len(slots) == 1:
+        name = names.display(slots[0])
+        if names.valid_hostname(name):
+            return name
+    return node_id
+
+
 def desired_state(node: Mapping[str, Any],
                   login: Optional[Mapping[str, Any]] = None,
                   slots: Optional[list[Mapping[str, Any]]] = None,
-                  slot_logins: Optional[Mapping[str, Mapping[str, Any]]] = None
-                  ) -> dict[str, Any]:
+                  slot_logins: Optional[Mapping[str, Mapping[str, Any]]] = None,
+                  hostname: Optional[str] = None) -> dict[str, Any]:
     """What this node should look like, derived from its stored row.
 
     `slot_logins` maps a slot's id to its sign-in row, for a shared machine.
+    `hostname` is what a shared machine should answer to; an owner's node is
+    never told one.
     """
     pending = _login_block(login)
     desired: dict[str, Any] = {
@@ -152,6 +173,8 @@ def desired_state(node: Mapping[str, Any],
         "remote_control": bool(node.get("rc_expected")),
         "login": pending,
     }
+    if hostname is not None:
+        desired["hostname"] = hostname
     # Only a machine with slots declared on it hears about slots at all; an
     # ordinary node's reply stays exactly what it was.
     if slots:

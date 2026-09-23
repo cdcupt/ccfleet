@@ -82,7 +82,7 @@ def site(monkeypatch):
                  admin_token="admin-token", public_url="http://127.0.0.1",
                  google_client_id="cid", google_client_secret="secret",
                  cookie_secret=SECRET, cookie_secure=False)
-    store = Store(":memory:")
+    store = Store(":memory:", max_slots_per_machine=8)
     srv = build_server(Context(store, cfg, Monitor(store, cfg, LogNotifier())),
                        host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)

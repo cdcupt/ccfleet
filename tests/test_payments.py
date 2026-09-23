@@ -118,7 +118,7 @@ def test_the_last_day_is_still_paid_and_the_day_after_is_not():
 
 @pytest.fixture
 def store():
-    st = Store(":memory:")
+    st = Store(":memory:", max_slots_per_machine=8)
     st.add_account("ana", "sub-ana", "ana@example.com", slot_quota=1, now=NOW)
     st.add_account("bo", "sub-bo", "bo@example.com", slot_quota=0, now=NOW)
     yield st

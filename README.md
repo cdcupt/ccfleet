@@ -123,12 +123,16 @@ ccfleet-connect --status    # which token, and whether it still works
 ccfleet-connect --remove    # undo it
 ```
 
-### 4. Shared machines: several people on one box, one account each
+### 4. Shared machines: one machine, one slot, named after its holder
 
-A machine can carry several **slots**. Each slot is its own Linux user, with
-its own home, its own Claude Code and its own Claude sign-in, made by the person
-who holds it with their own Claude account, so no credential is ever shared
-between people. People sign in to ccfleet with Google, which is asked only for
+A shared machine carries one **slot**: its own Linux user, with its own home,
+its own Claude Code and its own Claude sign-in, made by the person who holds it
+with their own Claude account, so no credential is ever shared between people.
+One machine is one slot because claude.ai/code shows a machine by its hostname:
+when somebody claims the slot it is named after them (`alice-1`, from the part
+of their address before the @, or a handle the operator sets with
+`ccfleetd account handle <email> <handle>`), the machine takes that name as its
+hostname, and the name goes when the slot is freed. People sign in to ccfleet with Google, which is asked only for
 the `openid email` scopes: ccfleet keeps the address and Google's stable account
 id, which is what an account is keyed on because addresses change. The operator
 grants each person an allowance of slots, and they claim one, sign it in to
@@ -142,17 +146,18 @@ landing by accident; it is not a wall against the holder, whose home the slot
 is and who can change its files. So a slot found signed in to another account
 some other way raises `account_changed` once Claude Code's profile says so. And an account signed in on two live places at once (two
 slots, or a slot and a node) raises `account_elsewhere` on both. The holder's
-card says so either way. The guidebook predates shared machines; this
-section is their reference until it catches up.
+card says so either way. An owner's own node can count as a slot they hold,
+`ccfleetd node hold <node> <email>`, so everything a person uses is one list
+on their page: a record only, never handed out or wiped. The guidebook
+predates shared machines; this section is their reference until it catches up.
 
 ```bash
 # fleet server: Google sign-in needs an OAuth "Web application" client whose
 # redirect URI is <CCFLEET_PUBLIC_URL>/auth/google/callback, and in ccfleetd.env
 #   CCFLEET_GOOGLE_CLIENT_ID=...  CCFLEET_GOOGLE_CLIENT_SECRET=...
 #   CCFLEET_COOKIE_SECRET=<openssl rand -hex 32>
-ccfleetd node add shared-1 --owner ops --region us-west          # prints the machine's token once
-ccfleetd slot capacity shared-1 4                                 # how many slots it may hold
-ccfleetd slot add shared-1-01 --machine shared-1 --unix-user slot01   # one line per slot
+ccfleetd node add pool-1 --owner ops --region us-west            # prints the machine's token once
+ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01     # its one slot, named after it
 
 # the machine, as root. Harden it first with bootstrap.sh: keys-only SSH, the
 # firewall, unattended upgrades, and a login for you, but no agent. Not install.sh,
@@ -160,7 +165,7 @@ ccfleetd slot add shared-1-01 --machine shared-1 --unix-user slot01   # one line
 # beside that node's agent.
 git clone https://github.com/cdcupt/ccfleet.git && sudo ./ccfleet/node/bootstrap.sh ops "ssh-ed25519 AAAA... you"
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
-  | sudo bash -s -- --server https://fleet.example.com --node shared-1 --token <64-hex>
+  | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token <64-hex>
 
 # once somebody has signed in with Google
 ccfleetd account quota alice@example.com 1                        # their allowance; zero until granted

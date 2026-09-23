@@ -17,7 +17,7 @@ from tests.conftest import heartbeat, next_load
 
 @pytest.fixture
 def server(cfg):
-    store = Store(":memory:")
+    store = Store(":memory:", max_slots_per_machine=8)
     ctx = Context(store, cfg, Monitor(store, cfg, LogNotifier()))
     srv = build_server(ctx, host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -485,3 +485,50 @@ def test_after_an_action_the_console_really_comes_back(server, cfg):
     status, page, _ = call(srv, "GET", urllib.parse.urldefrag(at)[0], headers=admin)
     assert status == 200
     assert next_load(at, page.decode()) == "/admin"
+
+
+# -- slot model v2: a machine answers to its slot's name ---------------------------------
+
+def _post(srv, token, payload):
+    return json.loads(call(srv, "POST", "/api/heartbeat", payload,
+                           {"Authorization": f"Bearer {token}"})[1])
+
+
+def test_a_machine_is_told_to_answer_to_its_slots_name(server):
+    """Free, the slot is called by its id; claimed, by its holder's name — and
+    the machine is told to take that as its hostname, since claude.ai/code
+    shows a machine by its hostname."""
+    srv, store = server
+    token = store.add_node("pool-1", "op")
+    store.add_slot("pool-1", "pool-1", "slot01", now=1.0)
+    store.add_account("a1", "sub-1", "alice@example.com", slot_quota=1, now=1.0)
+    free = [{"unix_user": "slot01", "present": False}]
+    assert _post(srv, token, _machine_payload("pool-1", free))["desired"]["hostname"] == "pool-1"
+    store.claim_slot("a1", now=time.time())
+    assert _post(srv, token, _machine_payload("pool-1", free))["desired"]["hostname"] == "alice-1"
+
+
+def test_a_machine_with_no_slot_is_told_its_own_id(server):
+    srv, store = server
+    token = store.add_node("pool-9", "op")
+    assert _post(srv, token, _machine_payload("pool-9", []))["desired"]["hostname"] == "pool-9"
+
+
+def test_a_slot_id_that_is_no_hostname_falls_back_to_the_machines(server):
+    srv, store = server
+    token = store.add_node("pool-2", "op")
+    store.add_slot("pool-2-", "pool-2", "slot01", now=1.0)
+    reply = _post(srv, token, _machine_payload("pool-2", []))
+    assert reply["desired"]["hostname"] == "pool-2"
+
+
+def test_an_owner_node_counted_as_a_slot_hears_nothing_about_slots(server):
+    """The record is ours; the node is theirs. Its agent is told nothing new:
+    no slot to provision, no name to take."""
+    srv, store = server
+    token = store.add_node("erik-1", "erik")
+    store.add_account("e1", "sub-e", "cdcupt@gmail.com", slot_quota=1, now=1.0)
+    store.hold_owner_node("erik-1", "e1", now=1.0)
+    reply = _post(srv, token, dict(heartbeat(time.time())["payload"], node_id="erik-1"))
+    assert "slots" not in reply["desired"] and "hostname" not in reply["desired"]
+    assert store.get_slot("erik-1")["state"] == "active"

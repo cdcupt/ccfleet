@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """ccfleet machine agent: the one agent on a shared machine, running as root.
 
-A shared machine carries several slots, each a Linux user with its own home,
-its own Claude Code and its own login. The single-owner agent cannot look after
-them: it runs as its owner, creating and removing Linux users is root's work,
+A shared machine carries one slot: a Linux user with its own home, its own
+Claude Code and its own login. (It looks after a list of them all the same: a
+machine from before one slot per machine may still carry several.) The
+single-owner agent cannot look after them: it runs as its owner, creating and
+removing Linux users is root's work,
 and its unit sets NoNewPrivileges so it could not borrow root if it tried. So a
 shared machine runs this instead, once a minute, under a system timer.
 

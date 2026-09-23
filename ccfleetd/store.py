@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
-from . import payments
+from . import names, payments
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -131,7 +131,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- that grants everybody a slot is a bill.
     slot_quota INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
-    last_seen_at REAL NOT NULL DEFAULT 0
+    last_seen_at REAL NOT NULL DEFAULT 0,
+    -- What their slots are named after, if the operator chose it; otherwise
+    -- the part of their address before the @. See ccfleetd/names.py.
+    handle TEXT
 );
 -- One Linux user on one machine. The unit a person holds.
 CREATE TABLE IF NOT EXISTS slots (
@@ -149,6 +152,12 @@ CREATE TABLE IF NOT EXISTS slots (
     -- confirm it.
     present INTEGER,
     reported_at REAL,
+    -- Its holder's name while somebody holds it ("alice-1"), NULL while free:
+    -- the name people see, and its machine's hostname. The id never changes.
+    name TEXT,
+    -- 'machine': a Linux user the machine agent makes and wipes. 'owner': a
+    -- person's own node counted as their slot, a record and nothing more.
+    kind TEXT NOT NULL DEFAULT 'machine',
     UNIQUE (node_id, unix_user)
 );
 CREATE INDEX IF NOT EXISTS ix_slots_state ON slots(state);
@@ -327,7 +336,12 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
 class Store:
     """Thread-safe wrapper around one SQLite connection."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str,
+                 max_slots_per_machine: int = slotstates.MAX_SLOTS_PER_MACHINE) -> None:
+        # One machine is one slot, held here as well as at the operator's
+        # commands, so no way in can declare a second. Raised only by tests
+        # of the lifecycle, which is per slot and exercised several at once.
+        self._max_slots = int(max_slots_per_machine)
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
@@ -381,6 +395,19 @@ class Store:
             self._add_missing_columns("sessions", {
                 "site": "TEXT NOT NULL DEFAULT 'product'",
             })
+            # Names come with claims, so every slot written before them has
+            # none and shows its id; and every slot before owner slots was a
+            # machine's. No handle yet means the address is used.
+            self._add_missing_columns("slots", {
+                "name": "TEXT",
+                "kind": "TEXT NOT NULL DEFAULT 'machine'",
+            })
+            self._add_missing_columns("accounts", {"handle": "TEXT"})
+            # A name becomes a hostname: two slots answering to one would be
+            # two people's machines under one name in claude.ai. Created here,
+            # after the column exists, so an older database gets it too.
+            self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_slots_name "
+                               "ON slots(name) WHERE name IS NOT NULL")
             self._conn.commit()
 
     def _add_missing_columns(self, table: str, columns: dict[str, str]) -> None:
@@ -431,9 +458,14 @@ class Store:
                 "lowercase letters, digits, underscore or hyphen, max 32 characters"
             )
         token = secrets.token_hex(TOKEN_BYTES)
-        with self._lock:
+        with self._write_txn() as conn:
+            # A machine answers to its id while its slot is free: no slot may
+            # already be called that, by id or by its holder's name.
+            if conn.execute("SELECT 1 FROM slots WHERE id = ? OR name = ?",
+                            (node_id, node_id)).fetchone() is not None:
+                raise StoreError(f"a slot already answers to {node_id!r}")
             try:
-                self._conn.execute(
+                conn.execute(
                     "INSERT INTO nodes (id, owner, region, token_hash, pinned_version, "
                     "rc_expected, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
                     (node_id, owner.strip(), region.strip(), hash_token(token),
@@ -441,7 +473,6 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise StoreError(f"node {node_id!r} already exists") from exc
-            self._conn.commit()
         return token
 
     def rotate_token(self, node_id: str) -> str:
@@ -520,13 +551,29 @@ class Store:
         and the stale request acts on the new holder's slot. `held_by` None is
         the operator's side, which acts on any slot.
         """
-        row = conn.execute("SELECT state, held_by FROM slots WHERE id = ?",
+        row = conn.execute("SELECT state, kind, node_id, held_by FROM slots WHERE id = ?",
                            (slot_id,)).fetchone()
         if row is None:
             raise StoreError(f"no slot {slot_id!r}")
         if held_by is not None and row["held_by"] != held_by:
             raise NotYours(f"{slot_id} is not held by this account")
         return row
+
+    @staticmethod
+    def _sign_in_key(row: sqlite3.Row, slot_id: str) -> str:
+        """Where a slot's sign-in lives. A machine slot's is its own, under
+        "slot:<id>". An owner slot's is its node's own row: the owner's own
+        agent is what signs in, and it reads its node's row, exactly as it
+        does for a sign-in started from the console."""
+        if row["kind"] == slotstates.OWNER_SLOT:
+            return str(row["node_id"])
+        return slot_login_key(slot_id)
+
+    def login_for_slot(self, slot: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+        """The sign-in in flight on a slot, from wherever that slot keeps it."""
+        if slot.get("kind") == slotstates.OWNER_SLOT:
+            return self.get_login(str(slot["node_id"]))
+        return self.get_login(slot_login_key(str(slot["id"])))
 
     def request_slot_login(self, slot_id: str, email: str, now: float,
                            kind: str = "login", *, held_by: Optional[str] = None) -> None:
@@ -543,7 +590,7 @@ class Store:
             if row["state"] not in self.SLOT_SIGN_IN_STATES:
                 raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
                                  f"into once it is set up")
-            self._begin_login(conn, slot_login_key(slot_id), email, now, kind)
+            self._begin_login(conn, self._sign_in_key(row, slot_id), email, now, kind)
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -560,8 +607,8 @@ class Store:
                                held_by: Optional[str] = None) -> None:
         """The code a slot's holder pasted, for their slot and nobody else's."""
         with self._write_txn() as conn:
-            self._held(conn, slot_id, held_by)
-            self._submit_code(conn, slot_login_key(slot_id), code, now)
+            row = self._held(conn, slot_id, held_by)
+            self._submit_code(conn, self._sign_in_key(row, slot_id), code, now)
 
     def _submit_code(self, conn: sqlite3.Connection, key: str, code: str,
                      now: float) -> None:
@@ -708,7 +755,11 @@ class Store:
         """A token minted on a slot, for as long as its attempt lasts — and
         only for whoever holds the slot as it is read."""
         with self._write_txn() as conn:
-            self._held(conn, slot_id, held_by)
+            row = self._held(conn, slot_id, held_by)
+            if row["kind"] == slotstates.OWNER_SLOT:
+                # Noted on the node: a token handed over for the owner's own
+                # node, exactly as if they had asked from the console.
+                return self._read_secret(conn, row["node_id"], "nodes", row["node_id"], now)
             return self._read_secret(conn, slot_login_key(slot_id), "slots", slot_id, now)
 
     @staticmethod
@@ -740,8 +791,9 @@ class Store:
     def clear_slot_login(self, slot_id: str, *, held_by: Optional[str] = None) -> None:
         """End whatever flow is in flight on a slot, for its holder."""
         with self._write_txn() as conn:
-            self._held(conn, slot_id, held_by)
-            conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(slot_id),))
+            row = self._held(conn, slot_id, held_by)
+            conn.execute("DELETE FROM logins WHERE node_id = ?",
+                         (self._sign_in_key(row, slot_id),))
 
     def expire_logins(self, older_than: float) -> int:
         """Drop attempts nobody finished, so a stale code cannot be replayed."""
@@ -785,8 +837,12 @@ class Store:
         """
         with self._write_txn() as conn:
             slot_rows = conn.execute(
-                "SELECT id, state FROM slots WHERE node_id = ? ORDER BY unix_user",
+                "SELECT id, state, kind FROM slots WHERE node_id = ? ORDER BY unix_user",
                 (node_id,)).fetchall()
+            if any(r["kind"] == slotstates.OWNER_SLOT for r in slot_rows):
+                raise StoreError(
+                    f"{node_id} is counted as somebody's slot. Let go of it first: "
+                    f"'ccfleetd node hold {node_id} --none'.")
             if slot_rows:
                 held = [r["id"] for r in slot_rows
                         if r["state"] in slotstates.HELD]
@@ -833,17 +889,31 @@ class Store:
                 raise StoreError(f"unknown node {old!r}")
             if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a node called {new!r} already exists")
+            # A machine answers to its id when its slot is free: no slot on
+            # another machine may already be called that, by id or by name.
+            if conn.execute("SELECT 1 FROM slots WHERE (id = ? OR name = ?) AND node_id != ?",
+                            (new, new, old)).fetchone() is not None:
+                raise StoreError(f"a slot on another machine already answers to {new!r}")
             stray = [r["id"] for r in conn.execute(
                 "SELECT id FROM slots WHERE node_id = ? ORDER BY id", (new,))]
             if stray:
                 raise StoreError(
                     f"slots still name {new!r} though no node by that name exists "
                     f"({', '.join(stray)}); they are somebody's, so settle them first")
+            # An owner's node counted as their slot is called by the node's id,
+            # so the slot is renamed with it. A slot elsewhere already called
+            # the new id was refused just above, so nothing is half-done.
+            carries = conn.execute(
+                "SELECT 1 FROM slots WHERE id = ? AND node_id = ? AND kind = ?",
+                (old, old, slotstates.OWNER_SLOT)).fetchone() is not None
             for table in ("logins", "heartbeats", "alerts"):
                 conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
             for table, column in self.NODE_ID_COLUMNS:
                 conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
                              (new, old))
+            if carries:
+                conn.execute("UPDATE slots SET id = ? WHERE id = ? AND kind = ?",
+                             (new, old, slotstates.OWNER_SLOT))
 
     def get_node(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -1057,6 +1127,9 @@ class Store:
         """
         if int(capacity) < 0:
             raise StoreError("capacity cannot be negative")
+        if int(capacity) > self._max_slots:
+            raise StoreError(f"{slotstates.ONE_SLOT_WHY}; a machine's capacity is at most "
+                             f"{self._max_slots}")
         with self._write_txn() as conn:
             have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
@@ -1086,9 +1159,11 @@ class Store:
             if node is None:
                 raise StoreError(f"no machine {node_id!r}")
             if account_id is not None:
+                # A machine's slots only: an owner's node counted as their
+                # slot has nothing on offer to keep for anybody.
                 declared = conn.execute(
-                    "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
-                    (node_id,)).fetchone()["n"]
+                    "SELECT COUNT(*) AS n FROM slots WHERE node_id = ? AND kind = ?",
+                    (node_id, slotstates.MACHINE_SLOT)).fetchone()["n"]
                 if int(node["capacity"]) <= 1 and not declared:
                     raise StoreError(
                         f"{node_id} is not a shared machine: it has no slots and room "
@@ -1212,9 +1287,21 @@ class Store:
                 "SELECT capacity FROM nodes WHERE id = ?", (node_id,)).fetchone()
             if node is None:
                 raise StoreError(f"no machine {node_id!r}")
+            # The slot's id is its machine's name while it is free: it may be
+            # its own machine's id — the rule, pool-1 on pool-1 — and nothing
+            # else that already answers to a name.
+            if conn.execute("SELECT 1 FROM slots WHERE name = ?", (slot_id,)).fetchone() or \
+                    conn.execute("SELECT 1 FROM nodes WHERE id = ? AND id != ?",
+                                 (slot_id, node_id)).fetchone():
+                raise StoreError(f"something already answers to {slot_id!r}")
             # Capacity is what the operator declared they sold. Refuse to
             # declare more slots than that rather than discovering it as a
             # machine that will not hold them.
+            placed = [r["id"] for r in conn.execute(
+                "SELECT id FROM slots WHERE node_id = ? ORDER BY id", (node_id,))]
+            if len(placed) >= self._max_slots:
+                raise StoreError(f"{node_id} already has its slot ({', '.join(placed)}): "
+                                 f"{slotstates.ONE_SLOT_WHY}")
             have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
                 (node_id,)).fetchone()["n"]
@@ -1243,10 +1330,14 @@ class Store:
         """
         with self._write_txn() as conn:
             row = conn.execute(
-                "SELECT state, held_by FROM slots WHERE id = ?",
+                "SELECT state, kind, node_id, held_by FROM slots WHERE id = ?",
                 (slot_id,)).fetchone()
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
+            if row["kind"] == slotstates.OWNER_SLOT:
+                raise StoreError(
+                    f"{slot_id} is its holder's own machine, counted as their slot. "
+                    f"Let go of it with: ccfleetd node hold {row['node_id']} --none")
             if row["state"] != slotstates.FREE:
                 raise StoreError(
                     f"{slot_id} is {row['state']}"
@@ -1282,6 +1373,16 @@ class Store:
                 raise StoreError(f"no slot {old!r}")
             if conn.execute("SELECT 1 FROM slots WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a slot called {new!r} already exists")
+            # A slot's id is its machine's name while it is free, so nothing
+            # else may already answer to it: another slot's holder, or another
+            # machine. Its own machine's id, and its own holder's name, may.
+            if conn.execute("SELECT 1 FROM slots WHERE name = ? AND id != ?",
+                            (new, old)).fetchone() is not None:
+                raise StoreError(f"a slot already answers to {new!r}")
+            if conn.execute("SELECT 1 FROM nodes WHERE id = ? AND id != "
+                            "(SELECT node_id FROM slots WHERE id = ?)",
+                            (new, old)).fetchone() is not None:
+                raise StoreError(f"another machine already answers to {new!r}")
             conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(new),))
             conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (new,))
             for table, column in self.SLOT_ID_COLUMNS:
@@ -1298,11 +1399,15 @@ class Store:
 
     def list_slots(self, *, node_id: str | None = None,
                    held_by: str | None = None,
-                   state: str | None = None) -> list[dict[str, Any]]:
+                   state: str | None = None,
+                   kind: str | None = None) -> list[dict[str, Any]]:
         where, args = [], []
         if node_id is not None:
             where.append("node_id = ?")
             args.append(node_id)
+        if kind is not None:
+            where.append("kind = ?")
+            args.append(kind)
         if held_by is not None:
             where.append("held_by = ?")
             args.append(held_by)
@@ -1358,6 +1463,13 @@ class Store:
         # the last one's URL, or read their minted token.
         with self._write_txn() as conn:
             row = self._held(conn, slot_id, held_by)
+            if row["kind"] == slotstates.OWNER_SLOT:
+                # Releasing means wiping, and nothing on somebody's own node is
+                # ours to wipe. Letting go of the record is its own command.
+                raise StoreError(
+                    f"{slot_id} is its holder's own machine: ccfleet never wipes anything "
+                    f"on it. To stop counting it as a slot: ccfleetd node hold "
+                    f"{row['node_id']} --none")
             slotstates.check_move(row["state"], slotstates.RELEASING)
             conn.execute("UPDATE slots SET state = ? WHERE id = ?",
                          (slotstates.RELEASING, slot_id))
@@ -1400,9 +1512,12 @@ class Store:
         last handed a device token — all of it in the same statement, pinned
         to `releasing` so a slot in any other state is left untouched.
         """
+        # The name goes too: it was the last holder's, and a free slot is
+        # called by its id until the next claim names it after somebody else.
         cur = conn.execute(
             "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
-            "released_at = ?, device_token_at = 0 WHERE id = ? AND state = ?",
+            "released_at = ?, device_token_at = 0, name = NULL "
+            "WHERE id = ? AND state = ?",
             (slotstates.FREE, now, slot_id, slotstates.RELEASING))
         return cur.rowcount > 0
 
@@ -1430,9 +1545,12 @@ class Store:
         if not by_user:
             return moved
         with self._write_txn() as conn:
+            # Machine slots only. An owner slot is somebody's own node counted
+            # as theirs; nothing a report says may wipe-confirm it into free.
             rows = conn.execute(
-                "SELECT id, unix_user, state, claimed_at FROM slots WHERE node_id = ?",
-                (node_id,)).fetchall()
+                "SELECT id, unix_user, state, claimed_at FROM slots "
+                "WHERE node_id = ? AND kind = ?",
+                (node_id, slotstates.MACHINE_SLOT)).fetchall()
             for row in rows:
                 report = by_user.get(row["unix_user"])
                 if report is None:
@@ -1473,6 +1591,112 @@ class Store:
                              (slotstates.RELEASING, row["id"]))
         return [row["id"] for row in rows]
 
+    @staticmethod
+    def _name_for(conn: sqlite3.Connection, account: sqlite3.Row) -> str:
+        """What a slot this account takes is called: "<handle>-<n>".
+
+        Read in the claim's own write transaction, so two claims cannot both
+        pick the same number. Skipped: every slot's id and name and every
+        node's id — the name becomes a hostname, and one that another machine
+        already answers to would be two machines under one name.
+        """
+        handle = account["handle"] or names.handle_from_email(account["email"])
+        taken = {r["id"] for r in conn.execute("SELECT id FROM nodes")}
+        for row in conn.execute("SELECT id, name FROM slots"):
+            taken.add(row["id"])
+            if row["name"]:
+                taken.add(row["name"])
+        name = names.next_name(handle, taken)
+        if not names.valid_hostname(name):  # pragma: no cover - names.py guarantees it
+            raise StoreError(f"{name!r} is not a hostname")
+        return name
+
+    def set_account_handle(self, account_id: str, handle: Optional[str]) -> None:
+        """What this account's slots are named after; None goes back to the
+        part of their address before the @. Only claims from now on are named
+        by it: a slot already named keeps the name its holder already knows."""
+        if handle is not None and not names.valid_handle(handle):
+            raise StoreError(
+                f"a handle is 1-{names.MAX_HANDLE} lowercase letters, digits and inner "
+                "hyphens: it starts the hostname of every slot this person holds")
+        with self._write_txn() as conn:
+            cur = conn.execute("UPDATE accounts SET handle = ? WHERE id = ?",
+                               (handle, account_id))
+            if cur.rowcount == 0:
+                raise StoreError(f"no account {account_id!r}")
+
+    def hold_owner_node(self, node_id: str, account_id: str, *,
+                        unix_user: Optional[str] = None, now: float) -> dict[str, Any]:
+        """Count somebody's own node as a slot they hold (Erik, 2026-09-23).
+
+        A record and nothing more: the slot is in use from the start, is never
+        on offer, is never wiped and never reaches the machine agent, and the
+        node goes on exactly as it was. It counts toward the holder's
+        allowance like any slot, so the one-account-one-slot bookkeeping sees
+        everything a person uses. Holding again updates the one row; handing
+        it to somebody else checks their allowance.
+        """
+        with self._write_txn() as conn:
+            node = conn.execute("SELECT owner FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            if node is None:
+                raise StoreError(f"no node {node_id!r}")
+            if conn.execute("SELECT 1 FROM slots WHERE node_id = ? AND kind = ?",
+                            (node_id, slotstates.MACHINE_SLOT)).fetchone() is not None:
+                raise StoreError(
+                    f"{node_id} is a shared machine: its slot is claimed from the page, "
+                    "not held")
+            account = conn.execute("SELECT email, slot_quota FROM accounts WHERE id = ?",
+                                   (account_id,)).fetchone()
+            if account is None:
+                raise StoreError(f"no account {account_id!r}")
+            user = unix_user or node["owner"]
+            if not UNIX_USER_RE.match(user or ""):
+                raise StoreError(f"{user!r} is not a Linux login; name it with --unix-user")
+            existing = conn.execute("SELECT id, held_by FROM slots WHERE node_id = ? AND kind = ?",
+                                    (node_id, slotstates.OWNER_SLOT)).fetchone()
+            marks = ",".join("?" * len(slotstates.HELD))
+            held = int(conn.execute(
+                f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
+                f"AND state IN ({marks}) AND id != ?",
+                (account_id, *sorted(slotstates.HELD),
+                 existing["id"] if existing else "")).fetchone()["n"])
+            quota = int(account["slot_quota"])
+            if held + 1 > quota:
+                raise QuotaExceeded(
+                    f"{account['email']} has an allowance of {quota} and already holds "
+                    f"{held}; raise their allowance first: "
+                    f"ccfleetd account quota {account['email']} {held + 1}")
+            if not existing or existing["held_by"] != account_id:
+                # The node's own sign-in row is what an owner slot's page reads:
+                # a link, a code or a minted token in it belongs to whoever
+                # started it — the last holder, or the console — and never to
+                # the account the record now goes to.
+                conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+            if existing:
+                conn.execute("UPDATE slots SET held_by = ?, unix_user = ?, state = ? "
+                             "WHERE id = ?",
+                             (account_id, user, slotstates.ACTIVE, existing["id"]))
+                slot_id = existing["id"]
+            else:
+                if conn.execute("SELECT 1 FROM slots WHERE id = ?",
+                                (node_id,)).fetchone() is not None:
+                    raise StoreError(f"a slot called {node_id!r} already exists")
+                conn.execute(
+                    "INSERT INTO slots (id, node_id, unix_user, state, held_by, claimed_at, "
+                    "released_at, device_token_at, kind) VALUES (?,?,?,?,?,?,NULL,0,?)",
+                    (node_id, node_id, user, slotstates.ACTIVE, account_id, now,
+                     slotstates.OWNER_SLOT))
+                slot_id = node_id
+        return self.get_slot(slot_id)  # type: ignore[return-value]
+
+    def unhold_owner_node(self, node_id: str) -> bool:
+        """Stop counting somebody's own node as their slot. Forgets the record
+        and nothing else: the node, its history and its own sign-in stay."""
+        with self._write_txn() as conn:
+            cur = conn.execute("DELETE FROM slots WHERE node_id = ? AND kind = ?",
+                               (node_id, slotstates.OWNER_SLOT))
+        return cur.rowcount > 0
+
     def claim_slot(self, account_id: str, *, now: float,
                    node_id: str | None = None,
                    heard_since: float | None = None) -> dict[str, Any]:
@@ -1505,7 +1729,7 @@ class Store:
         held_states = sorted(slotstates.HELD)
         with self._write_txn() as conn:
             account = conn.execute(
-                "SELECT slot_quota FROM accounts WHERE id = ?",
+                "SELECT slot_quota, email, handle FROM accounts WHERE id = ?",
                 (account_id,)).fetchone()
             if account is None:
                 raise StoreError(f"no account {account_id!r}")
@@ -1526,20 +1750,23 @@ class Store:
             if heard_since is not None:
                 extra += " AND s.reported_at >= ?"
                 args.append(heard_since)
+            # A machine's slot only: an owner slot is somebody's own node,
+            # never on offer, whatever state a stray write left it in.
             candidate = conn.execute(
                 "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
-                "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1"
+                "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1 AND s.kind = ?"
                 " AND (n.reserved_for IS NULL OR n.reserved_for = ?)" + extra +
                 " ORDER BY n.reserved_for IS NULL, s.node_id, s.unix_user LIMIT 1",
-                (slotstates.FREE, account_id, *args)).fetchone()
+                (slotstates.FREE, slotstates.MACHINE_SLOT, account_id, *args)).fetchone()
             if candidate is None:
                 raise NoSlotAvailable(
                     f"no free slot on {node_id}" if node_id
                     else "no free slot on any enabled machine")
+            name = self._name_for(conn, account)
             cur = conn.execute(
                 "UPDATE slots SET state = ?, held_by = ?, claimed_at = ?, "
-                "released_at = NULL WHERE id = ? AND state = ?",
-                (slotstates.CLAIMING, account_id, now,
+                "released_at = NULL, name = ? WHERE id = ? AND state = ?",
+                (slotstates.CLAIMING, account_id, now, name,
                  candidate["id"], slotstates.FREE))
             if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
                 raise NoSlotAvailable("the free slot was taken; try again")

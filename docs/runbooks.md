@@ -6,16 +6,24 @@ Commands marked *node* run as the owner on the node; *server* runs where
 
 ## Naming machines and slots
 
-One name per machine, used everywhere: its node id, its hostname, and so the
-name Remote Control shows in the claude.ai/code machine picker. Named by role:
+One machine is one slot, and one name per machine, used everywhere: its node
+id, its slot's id, its hostname, and so the name Remote Control shows in the
+claude.ai/code machine picker, which shows a machine by its hostname. Named by
+role:
 
 - `<operator>-N` for the operator's own machines, owner nodes and shared
   machines kept for their own account alike: `erik-1`, `erik-2`;
-- `pool-N` for shared machines whose slots are offered to customers: `pool-1`,
-  `pool-2`.
+- `pool-N` for shared machines offered to customers: `pool-1`, `pool-2`.
 
-A slot is its machine's name and a letter: `pool-1-a`, `pool-1-b`. The Linux
-user behind each stays `slot01`, `slot02`, in the same order.
+A shared machine's one slot takes the machine's name (`pool-1` on `pool-1`),
+and its Linux user is `slot01`. When somebody claims it, the slot is named
+after them, `<handle>-<n>`: the part of their address before the @, or the
+handle the operator chose with `ccfleetd account handle <email> <handle>`, and
+the first number nobody answers to (`alice-1`, then `alice-2` for their next).
+The machine takes that name as its hostname on its next run, so claude.ai/code
+shows the holder their own name; the console marks the machine "hostname
+pending" until it has. When the wipe that frees the slot completes, the name
+goes and the slot is called by its id again.
 
 Set the hostname when the machine is added, the way step 4 of
 [Rename a machine](#rename-a-machine) does, so a provider's serial-number
@@ -35,21 +43,17 @@ moves onto these with [Rename a machine](#rename-a-machine), held slots included
 
 ## Add a shared machine
 
-A shared machine carries several slots, each its own Linux user with its own
-Claude sign-in. *root* here means root on the new machine; *laptop* is wherever
-your SSH key lives.
+A shared machine carries one slot: its own Linux user with its own Claude
+sign-in, named after whoever holds it. *root* here means root on the new
+machine; *laptop* is wherever your SSH key lives.
 
 **Pick the box.** A KVM VPS running Debian or Ubuntu with at least 2 GiB of RAM.
 LXC and OpenVZ containers are unsuitable: every slot needs its own systemd user
 manager. Size it from what a slot really uses (measured 2026-09-23 on a
 signed-in slot with Remote Control on): about 420 MiB idle, about 665 MiB while
 a session runs, and about 225 MB of disk for Claude Code; the OS and the machine
-agent take about 400 MiB. So
-
-    slots ≈ (RAM in MiB − 400) / 700
-
-which is 2 on a 2 GiB box and 5 on 4 GiB. Below 4 GiB, add a 2 GiB swap file as
-a cushion for spikes, not as extra capacity.
+agent take about 400 MiB. So a 2 GiB box carries its one slot with room to
+spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.
 
 1. *laptop*: make a key for this machine and install it for root, e.g.
    `ssh-copy-id -i <key> root@<machine>` while password login still works.
@@ -72,15 +76,16 @@ a cushion for spikes, not as extra capacity.
    token it prints is shown once; keep it for step 8 and nowhere else.
 6. *server*: `ccfleetd node pin <machine> stable`, the Claude Code channel the
    machine's slots are meant to follow.
-7. *server*: `ccfleetd slot capacity <machine> <slots>`, then once per slot
-   `ccfleetd slot add <machine>-a --machine <machine> --unix-user slot01`
-   (`-b`/`slot02`, and so on). Do not create those Linux users yourself: the
-   machine makes each one when somebody claims it and wipes it when they give it back.
+7. *server*: `ccfleetd slot add <machine> --machine <machine> --unix-user slot01`.
+   Its capacity stays 1: a second slot is refused, because claude.ai/code shows
+   a machine by its hostname and two holders would share one name there. Do not
+   create the Linux user yourself: the machine makes it when somebody claims the
+   slot and wipes it when they give it back.
 8. *root*:
    `curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh | bash -s -- --server <fleet url> --node <machine> --token <token>`.
 9. *server*: within a couple of minutes `ccfleetd slot list --machine <machine>`
-   shows every slot `free` and `on machine` `no`: the machine itself has
-   confirmed they are empty, which is what makes them claimable.
+   shows its slot `free` and `on machine` `no`: the machine itself has
+   confirmed it is empty, which is what makes it claimable.
 
 Prove the machine is closed before anyone is given a slot on it:
 
@@ -242,11 +247,12 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
 1. *server*: `ccfleetd node rename <old> <new>`. Its slots, heartbeats, alerts
    and its own sign-in move with it, in one transaction; its token does not
    change.
-2. *server*, shared machine only: rename each slot, whatever its state, held
-   and in use included: `ccfleetd slot rename <old>-01 <new>-a`, and so on. The
-   holder, the claim, the sign-in and any request about its accounts move with
-   it. The machine knows its slots by their Linux user and each claim by its
-   time, never by the slot's id, so the box needs nothing for this.
+2. *server*, shared machine only: rename its slot, whatever its state, held
+   and in use included: `ccfleetd slot rename <old> <new>`. The holder, the
+   claim and the sign-in move with it, and a held slot keeps its holder's name.
+   The machine knows its slot by its Linux user and each claim by its time,
+   never by the slot's id, so the box needs nothing for this. An owner's node
+   counted as their slot is renamed with the node in step 1.
 3. The box's own record of its id: *root*, on a shared machine, set
    `CCFLEET_NODE_ID=<new>` in `/etc/ccfleet/agent.env`; *node*, on an owner's
    node, the same line in `~/.config/ccfleet/agent.env`. The next heartbeat is
@@ -259,7 +265,7 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
    `printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' > /etc/cloud/cloud.cfg.d/99-ccfleet.cfg`.
 5. Remote Control takes its name from the hostname (`--name %H`), which systemd
    fills in when it loads the unit. So, as each user running it (the owner on
-   an owner's node, each signed-in slot on a shared machine):
+   an owner's node, the signed-in slot on a shared machine):
    `systemctl --user daemon-reload && systemctl --user restart claude-remote-control`,
    or reboot the box, which does both. It keeps its environment and registers
    again under the new hostname, so claude.ai/code shows the machine by its new
@@ -268,6 +274,25 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
    Restarting ends whatever is running in Remote Control, so pick a quiet moment.
 6. *server*: `ccfleetd node list` shows the new id with a fresh `last seen`, and
    `ccfleetd slot list --machine <new>` the renamed slots in their old states.
+
+## Count an owner's own node as their slot
+
+An owner's own node can count as a slot they hold, so everything a person
+uses is one list on their page and in the console: one account, one slot.
+It is a record and nothing more. Nothing on the node changes, and ccfleet
+never hands it out, provisions it or wipes it.
+
+1. *server*: it counts toward their allowance like any slot, so raise it first
+   if they are at it: `ccfleetd account quota <email> <n>`.
+2. *server*: `ccfleetd node hold <node> <email>`. Their Linux login on it is
+   taken as the node's owner; name another with `--unix-user <login>`.
+3. Their page shows the node as their slot, from the node's own heartbeat:
+   signed in or not, the plan, Remote Control, usage. Signing in again and a
+   device token run the node's own sign-in, for them alone. There is no
+   "Give it back": that would mean wiping somebody's own machine.
+
+Let go of the record with `ccfleetd node hold <node> --none`; the node, its
+history and its own sign-in stay exactly as they are.
 
 ## Remove an owner
 

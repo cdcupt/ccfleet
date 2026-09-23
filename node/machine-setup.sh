@@ -148,14 +148,13 @@ note "reported to $SERVER; the timer runs it every minute from here"
 cat <<MSG
 
 ──────────────────────────────────────────────────────────────────────
- $NODE_ID is a shared machine.
+ $NODE_ID is a shared machine: one machine, one slot.
 
- Declare its slots from the fleet server, for example:
+ Declare its slot from the fleet server, named after the machine:
 
-     ccfleetd slot capacity $NODE_ID 4
-     ccfleetd slot add ${NODE_ID}-01 --machine $NODE_ID --unix-user slot01
+     ccfleetd slot add $NODE_ID --machine $NODE_ID --unix-user slot01
 
- Do not create the slot users yourself. Each is made when somebody claims it,
- and a user that already exists reads as occupied and is never handed out.
+ Do not create the slot user yourself. It is made when somebody claims the
+ slot, and a user that already exists reads as occupied and is never handed out.
 ──────────────────────────────────────────────────────────────────────
 MSG

@@ -9,7 +9,8 @@ import time
 from collections.abc import Sequence
 from typing import Optional
 
-from . import __version__, payments
+from . import __version__, names, payments
+from . import slots as slotstates
 from .api import Context, serve
 from .config import Config, ConfigError
 from .monitor import Monitor
@@ -62,6 +63,13 @@ def _parser() -> argparse.ArgumentParser:
     keep_for = reserve.add_mutually_exclusive_group(required=True)
     keep_for.add_argument("email", nargs="?", help="the account's address, as it signed in")
     keep_for.add_argument("--none", action="store_true", help="open it to anybody again")
+    hold = node.add_parser("hold", help="count an owner's own node as a slot they hold")
+    hold.add_argument("node_id")
+    holder = hold.add_mutually_exclusive_group(required=True)
+    holder.add_argument("email", nargs="?", help="the account's address, as it signed in")
+    holder.add_argument("--none", action="store_true", help="stop counting it as a slot")
+    hold.add_argument("--unix-user", default=None,
+                      help="their Linux login on it; defaults to the node's owner")
 
     slot = sub.add_parser("slot", help="manage slots on a machine").add_subparsers(
         dest="slot_command", required=True)
@@ -98,6 +106,13 @@ def _parser() -> argparse.ArgumentParser:
         "role", help="make somebody who has signed in an operator, or not")
     role.add_argument("email")
     role.add_argument("role", choices=("admin", "user"))
+    handle = acct.add_parser(
+        "handle", help="what this person's slots are named after, e.g. erik for erik-1")
+    handle.add_argument("email")
+    named = handle.add_mutually_exclusive_group(required=True)
+    named.add_argument("handle", nargs="?")
+    named.add_argument("--none", action="store_true",
+                       help="go back to the part of their address before the @")
 
     pay = sub.add_parser(
         "payment", help="the record of who paid, and through when").add_subparsers(
@@ -154,6 +169,11 @@ def _print_password(username: str, password: str, cfg: Config) -> None:
 
 def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     if args.slot_command == "add":
+        already = store.list_slots(node_id=args.machine, kind=slotstates.MACHINE_SLOT)
+        if len(already) >= slotstates.MAX_SLOTS_PER_MACHINE:
+            print(f"error: {args.machine} already has its slot ({already[0]['id']}): "
+                  f"{slotstates.ONE_SLOT_WHY}", file=sys.stderr)
+            return EXIT_USAGE
         slot = store.add_slot(args.slot_id, args.machine, args.unix_user,
                               now=time.time())
         print(f"slot {slot['id']} declared on {slot['node_id']} "
@@ -170,14 +190,20 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         if not rows:
             print("no slots declared")
             return EXIT_OK
+        emails = {a["id"]: a["email"] for a in store.list_accounts()}
+        # The name goes before the holder, so what scripts read — the id off
+        # the front, the state and "on machine" after it — stays where it was.
         print(f"{'slot':<16} {'machine':<14} {'unix user':<12} {'state':<10} "
-              f"{'on machine':<13} held by")
+              f"{'on machine':<13} {'name':<24} held by")
         for r in rows:
             # What the machine last said, which is the half of "free" the
-            # records cannot vouch for on their own.
-            on_machine = {1: "yes", 0: "no"}.get(r["present"], "not yet seen")
+            # records cannot vouch for on their own. An owner's own node has
+            # no machine agent to say it: it is theirs, not ours to vouch for.
+            on_machine = ("own machine" if r["kind"] == slotstates.OWNER_SLOT
+                          else {1: "yes", 0: "no"}.get(r["present"], "not yet seen"))
+            holder = emails.get(r["held_by"], r["held_by"]) if r["held_by"] else "-"
             print(f"{r['id']:<16} {r['node_id']:<14} {r['unix_user']:<12} "
-                  f"{r['state']:<10} {on_machine:<13} {r['held_by'] or '-'}")
+                  f"{r['state']:<10} {on_machine:<13} {r['name'] or '-':<24} {holder}")
     elif args.slot_command == "release":
         # Only ever starts the wipe. The slot does not become free here — it
         # becomes free when the machine reports the wipe finished, because only
@@ -198,6 +224,10 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
               f"requests came along. The machine knows its slots by their Linux user, "
               f"so nothing changes there.")
     elif args.slot_command == "capacity":
+        if args.count > slotstates.MAX_SLOTS_PER_MACHINE:
+            print(f"error: {slotstates.ONE_SLOT_WHY}; a machine's capacity is 0 or 1",
+                  file=sys.stderr)
+            return EXIT_USAGE
         if not store.set_machine_capacity(args.machine, args.count):
             print(f"error: no such machine {args.machine!r}", file=sys.stderr)
             return EXIT_USAGE
@@ -268,6 +298,15 @@ def _account_command(args: argparse.Namespace, store: Store, cfg: Config) -> int
             ended = store.end_all_sessions(account["id"])
             if ended:
                 print(f"ended {ended} session(s)")
+    elif args.account_command == "handle":
+        account = store.account_by_email(args.email)
+        if account is None:
+            print(f"error: nobody registered as {args.email!r}", file=sys.stderr)
+            return EXIT_USAGE
+        store.set_account_handle(account["id"], None if args.none else args.handle)
+        base = args.handle if not args.none else names.handle_from_email(account["email"])
+        print(f"{args.email}: slots they claim from now on are named {base}-1, "
+              f"{base}-2 and so on; slots already named keep their names")
     elif args.account_command == "quota":
         account = store.account_by_email(args.email)
         if account is None:
@@ -376,6 +415,25 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
             return EXIT_USAGE
         store.reserve_machine(args.node_id, keeper["id"])
         print(f"{args.node_id}: kept for {keeper['email']}")
+    elif args.node_command == "hold":
+        if args.none:
+            if not store.unhold_owner_node(args.node_id):
+                print(f"error: {args.node_id} is not counted as anybody's slot",
+                      file=sys.stderr)
+                return EXIT_USAGE
+            print(f"{args.node_id}: no longer counted as a slot; the node itself is untouched")
+            return EXIT_OK
+        email = args.email.strip()
+        holder = store.account_by_email(email)
+        if holder is None:
+            print(f"error: nobody has signed in as {email!r}; they sign in once, then their "
+                  "node can be counted as their slot", file=sys.stderr)
+            return EXIT_USAGE
+        slot = store.hold_owner_node(args.node_id, holder["id"], unix_user=args.unix_user,
+                                     now=time.time())
+        print(f"{args.node_id}: counted as {holder['email']}'s slot (their Linux login "
+              f"{slot['unix_user']}). A record only: nothing on it changes, and it is "
+              "never handed out or wiped.")
     return EXIT_OK
 
 

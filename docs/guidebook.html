@@ -779,10 +779,12 @@ claude
 
 <section id="shared">
   <h2><span class="n">11</span>Shared machines</h2>
-  <p>A shared machine carries several <strong>slots</strong>: one Linux user per person, each
-  with its own Claude Code signed in to that person's own Claude account, so no credential is
-  ever shared. People sign in to the product with Google, you set how many slots each may
-  hold, and they do everything else themselves at <code>/account</code>.</p>
+  <p>A shared machine carries one <strong>slot</strong>: one Linux user for one person, with
+  its own Claude Code signed in to that person's own Claude account, so no credential is ever
+  shared. One machine is one slot because claude.ai/code shows a machine by its hostname:
+  claimed, the slot is named after its holder (<code>alice-1</code>) and the machine takes that
+  name. People sign in to the product with Google, you set how many slots each may hold, and
+  they do everything else themselves at <code>/account</code>.</p>
   <div class="two">
     <div>
       <h3>Selling a slot</h3>
@@ -802,9 +804,9 @@ claude
       them.</p>
       <h3>Sizing</h3>
       <p>Measured on a real slot: signed in with Remote Control, about 420 MiB idle and 665 MiB
-      in use, plus 225 MB of disk. The OS and the agent take about 400 MiB. So slots &asymp;
-      (RAM in MiB &minus; 400) &divide; 700: a 2 GiB machine carries 2, a 4 GiB machine 5. Under
-      4 GiB, add a 2 GiB swap file as a cushion, not as capacity.</p>
+      in use, plus 225 MB of disk. The OS and the agent take about 400 MiB, so a 2 GiB
+      machine carries its one slot with room to spare. Under 4 GiB, add a 2 GiB swap file as
+      a cushion.</p>
     </div>
     <div>
       <h3>Adding a machine</h3>
@@ -815,19 +817,20 @@ sudo ./bootstrap.sh you "ssh-ed25519 AAAA&hellip; you"
 <span class="c"># on the server</span>
 ccfleetd node add pool-1 --owner you --region us-west
 ccfleetd node pin pool-1 stable
-ccfleetd slot capacity pool-1 2
-ccfleetd slot add pool-1-a --machine pool-1 --unix-user slot01
-ccfleetd slot add pool-1-b --machine pool-1 --unix-user slot02
+ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
 <span class="c"># on the machine, as root</span>
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
   | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token &lt;64-hex&gt;
-<span class="c"># back on the server: every slot free, and "on machine: no"</span>
+<span class="c"># back on the server: its slot free, and "on machine: no"</span>
 ccfleetd slot list --machine pool-1</code></pre>
-      <p>Set the machine's hostname to its id first: it is the name each slot shows in the
-      claude.ai machine picker. Machines are named by role, <code>&lt;you&gt;-N</code> for your
-      own and <code>pool-N</code> for the ones offered to customers, and slots by letter;
+      <p>Set the machine's hostname to its id first: it is the name the claude.ai machine
+      picker shows until somebody claims its slot, and the machine takes its holder's name
+      from then on. Machines are named by role, <code>&lt;you&gt;-N</code> for your own and
+      <code>pool-N</code> for the ones offered to customers, and a free slot by its machine;
       <code>ccfleetd node rename</code> and <code>ccfleetd slot rename</code> move a running
-      fleet onto that, held slots included.</p>
+      fleet onto that, held slots included. <code>ccfleetd account handle</code> picks the name
+      a person's slots are called by, and <code>ccfleetd node hold</code> counts somebody's own
+      node as one of their slots.</p>
       <h3>Keeping it current</h3>
       <ul>
         <li><strong>Claude Code in slots</strong> follows the machine's pin: <code>stable</code>
