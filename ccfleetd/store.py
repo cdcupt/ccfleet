@@ -1298,8 +1298,7 @@ class Store:
             # declare more slots than that rather than discovering it as a
             # machine that will not hold them.
             placed = [r["id"] for r in conn.execute(
-                "SELECT id FROM slots WHERE node_id = ? AND kind = ? ORDER BY id",
-                (node_id, slotstates.MACHINE_SLOT))]
+                "SELECT id FROM slots WHERE node_id = ? ORDER BY id", (node_id,))]
             if len(placed) >= self._max_slots:
                 raise StoreError(f"{node_id} already has its slot ({', '.join(placed)}): "
                                  f"{slotstates.ONE_SLOT_WHY}")
