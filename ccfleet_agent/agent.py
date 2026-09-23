@@ -1805,11 +1805,11 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # in below — and the slot is active in the same heartbeat, not the next.
     moved = drop_config_dir_line()
     # Bound before the sign-in step, so a slot signed in before it kept its
-    # account is held to that account from its very next sign-in; and after,
-    # so a first sign-in that finishes in this step binds in this step too.
+    # account is held to that account from its very next sign-in. A first
+    # sign-in binds here too, on the run that finds its credential: the code is
+    # typed on one run and Claude Code writes the credential before the next.
     state = bind_first_account(state)
     progress, state, finished = reconcile_slot_login(request.get("login"), state, runner)
-    state = bind_first_account(state)
     if "login" not in state:
         discard_scratch()                   # a sign-in cancelled, abandoned or over
     if moved or finished:
