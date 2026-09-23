@@ -484,3 +484,77 @@ def test_the_form_offers_the_currency_they_paid_in_last(console):
     assert 'name="currency" value="USD"' in accounts_card(call("GET", "/").body)
     record(call, ana["id"], soon(), currency="CNY")
     assert 'name="currency" value="CNY"' in accounts_card(call("GET", "/").body)
+
+
+
+# -- versions and reboots ------------------------------------------------------------
+
+def held_slot(store, pin=""):
+    """A machine with one slot set up and held, and the machine's pin."""
+    shared(store, users=("slot01",))
+    if pin:
+        store.set_pinned_version("m1", pin)
+    slot = store.claim_slot(holder(store)["id"], now=time.time())
+    store.apply_slot_report("m1", [{"unix_user": "slot01", "present": True,
+                                    "provisioned_for": slot["claimed_at"]}], now=time.time())
+    return slot
+
+
+def machine_said(store, slot_entry=None, **payload):
+    """The machine's latest heartbeat, as the console reads it."""
+    body = {"node_id": "m1", "mode": "machine", "slots": [slot_entry] if slot_entry else []}
+    body.update(payload)
+    store.insert_heartbeat("m1", time.time(), body)
+
+
+def test_each_slot_shows_the_claude_code_it_runs(console):
+    store, call = console
+    held_slot(store)
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
+    assert "Claude Code 2.1.278" in slots_card(call("GET", "/").body)
+
+
+def test_a_slot_behind_an_exact_pin_is_pending(console):
+    store, call = console
+    held_slot(store, pin="2.1.300")
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
+    assert "update pending" in slots_card(call("GET", "/").body)
+
+
+@pytest.mark.parametrize("pin,running", [("2.1.300", "2.1.300"), ("stable", "2.1.278"),
+                                         ("", "2.1.278")])
+def test_nothing_is_pending_when_nothing_can_be_behind(console, pin, running):
+    """Met exactly, a channel with no number to compare, or no pin at all."""
+    store, call = console
+    held_slot(store, pin=pin)
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": running}})
+    assert "update pending" not in slots_card(call("GET", "/").body)
+
+
+def test_a_free_slot_is_never_pending(console):
+    """Nobody holds it: its next holder gets whatever is current when they claim."""
+    store, call = console
+    shared(store, users=("slot01",))
+    store.set_pinned_version("m1", "2.1.300")
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
+    assert "update pending" not in slots_card(call("GET", "/").body)
+
+
+def test_an_update_that_failed_says_why(console):
+    store, call = console
+    held_slot(store, pin="2.1.300")
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"},
+                         "upgrade": {"to": "2.1.300", "ok": False,
+                                     "error": "<b>network</b> down"}})
+    card = slots_card(call("GET", "/").body)
+    assert "Claude Code update to 2.1.300 failed" in card
+    assert "&lt;b&gt;network&lt;/b&gt; down" in card and "<b>network</b>" not in card
+
+
+def test_a_machine_whose_os_wants_a_reboot_says_so(console):
+    store, call = console
+    held_slot(store)
+    machine_said(store, reboot_required=True)
+    assert "reboot needed" in slots_card(call("GET", "/").body)
+    machine_said(store, reboot_required=False)
+    assert "reboot needed" not in slots_card(call("GET", "/").body)

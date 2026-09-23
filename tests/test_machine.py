@@ -920,3 +920,102 @@ def test_nobody_is_cut_short_by_the_run_ending(cfg):
               if kw["env"]["USER"] == "slot01" and json.loads(kw["input_text"])["login"]}
     assert max(handed) < cap // 300, "an attempt arriving after the hour was started"
     assert clock.now < slot02_at + window + 60, "stayed on after its last attempt"
+
+
+
+# -- following the machine's pin -----------------------------------------------------
+
+def asked(fake):
+    """What each slot was asked, by user, from the last run's spawns."""
+    out = {}
+    for _argv, kw in fake.spawned:
+        user = kw["env"]["USER"]
+        out[user] = (json.loads(kw["input_text"]), kw["timeout"])
+    return out
+
+
+def two_runs(cfg, fake):
+    """The pin and each slot's state arrive in one reply; the next run acts on them."""
+    _, _, state = machine.run_cycle(cfg, {}, fake.system())
+    fake.spawned.clear()
+    machine.run_cycle(cfg, state, fake.system())
+    return asked(fake)
+
+
+def test_slots_somebody_holds_are_told_the_machines_pin(cfg):
+    # slot04's wipe fails, so it is still there to be asked about while releasing.
+    fake = Fake(users=["slot01", "slot02", "slot03", "slot04"],
+                script_codes={("slot-remove.sh", "slot04"): (1, "busy\n")}, desired={
+        "claude_version": "2.1.300", "slots": [
+            {"unix_user": "slot01", "state": "claimed"},
+            {"unix_user": "slot02", "state": "active"},
+            {"unix_user": "slot03", "state": "free"},
+            {"unix_user": "slot04", "state": "releasing"}]})
+    requests = two_runs(cfg, fake)
+    for held in ("slot01", "slot02"):
+        request, _ = requests[held]
+        assert request["claude_version"] == "2.1.300" and request["may_upgrade"] is True
+    for other in ("slot03", "slot04"):
+        request, _ = requests[other]
+        assert "claude_version" not in request and "may_upgrade" not in request, \
+            f"{other} is not held, and was told to follow the pin"
+
+
+def test_a_slot_being_signed_into_is_told_to_stay_put(cfg):
+    """A restart in the middle of somebody's sign-in would cut it short."""
+    login = {"requested_at": NOW, "kind": "login"}
+    fake = Fake(users=["slot01"], desired={"claude_version": "2.1.300", "slots": [
+        {"unix_user": "slot01", "state": "active", "login": login}]})
+    request, timeout = two_runs(cfg, fake)["slot01"]
+    assert request["claude_version"] == "2.1.300" and request["may_upgrade"] is False
+    assert timeout == machine.SLOT_FACTS_TIMEOUT_S, "waited for an install that is not allowed"
+
+
+@pytest.mark.parametrize("sent", ["--force", "stable; rm -rf /", 2.1, None, "x" * 50])
+def test_a_version_the_installer_must_not_see_never_reaches_a_slot(cfg, sent):
+    desired = {"slots": [{"unix_user": "slot01", "state": "active"}]}
+    if sent is not None:
+        desired["claude_version"] = sent
+    fake = Fake(users=["slot01"], desired=desired)
+    request, timeout = two_runs(cfg, fake)["slot01"]
+    assert request["claude_version"] == ""
+    assert timeout == machine.SLOT_FACTS_TIMEOUT_S
+
+
+def test_a_channel_is_passed_on_as_a_channel(cfg):
+    fake = Fake(users=["slot01"], desired={"claude_version": "stable", "slots": [
+        {"unix_user": "slot01", "state": "active"}]})
+    request, _ = two_runs(cfg, fake)["slot01"]
+    assert request["claude_version"] == "stable"
+
+
+def test_a_slot_that_may_upgrade_is_given_time_for_the_installer(cfg):
+    """A download, not a probe: the ordinary budget would kill it half way."""
+    fake = Fake(users=["slot01"], desired={"claude_version": "2.1.300", "slots": [
+        {"unix_user": "slot01", "state": "active"}]})
+    _, timeout = two_runs(cfg, fake)["slot01"]
+    assert timeout == machine.SLOT_FACTS_TIMEOUT_S + machine.core.INSTALL_TIMEOUT_S
+
+
+def test_what_a_slot_says_about_its_upgrade_reaches_the_server(cfg):
+    fake = Fake(users=["slot01"], facts={
+        "claude": {"version": "2.1.300"},
+        "upgrade": {"from": "2.1.278", "to": "2.1.300", "ok": True, "restart": "waiting"}})
+    entry = machine.slot_report("slot01", {}, cfg, fake.system(), False)
+    assert entry["upgrade"] == {"from": "2.1.278", "to": "2.1.300", "ok": True,
+                                "restart": "waiting"}
+
+
+def test_an_upgrade_report_that_is_not_a_record_is_dropped(cfg):
+    fake = Fake(users=["slot01"], facts={"claude": {"version": "2.1.300"},
+                                         "upgrade": "installed everything"})
+    assert "upgrade" not in machine.slot_report("slot01", {}, cfg, fake.system(), False)
+
+
+def test_the_machine_says_when_its_os_wants_a_reboot(cfg, tmp_path, monkeypatch):
+    flag = tmp_path / "reboot-required"
+    monkeypatch.setenv("CCFLEET_REBOOT_REQUIRED_FILE", str(flag))
+    fake = Fake()
+    assert machine.machine_payload(cfg, {}, fake.system())["reboot_required"] is False
+    flag.write_text("")
+    assert machine.machine_payload(cfg, {}, fake.system())["reboot_required"] is True

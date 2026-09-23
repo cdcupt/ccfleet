@@ -135,6 +135,23 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+#: What a slot says about restarting Remote Control onto a new version.
+RESTART_STATES = ("waiting", "done")
+
+
+def _upgrade(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """What an agent did about its pin, or None when it reported nothing.
+
+    None rather than a skeleton of Nones: a truthy empty record would make
+    "has this ever reconciled?" unanswerable.
+    """
+    if not any(section.get(k) is not None for k in ("from", "to", "ok", "error", "ts")):
+        return None
+    return {"from": _str(section.get("from")), "to": _str(section.get("to")),
+            "ok": _bool_or_none(section.get("ok")), "error": _str(section.get("error")),
+            "ts": _num(section.get("ts"))}
+
+
 def _slots(value: Any) -> list[dict[str, Any]]:
     """One entry per slot on a shared machine, each about one Linux user.
 
@@ -177,6 +194,13 @@ def _slots(value: Any) -> list[dict[str, Any]]:
         progress = _login_progress(_section(entry, "login"))
         if progress:
             out[-1]["login"] = progress
+        said = _section(entry, "upgrade")
+        upgrade = _upgrade(said)
+        restart = said.get("restart") if said.get("restart") in RESTART_STATES else None
+        # A restart can be owed after the record that caused it is gone: the
+        # record is dropped once the pin is satisfied, the restart once done.
+        if upgrade is not None or restart is not None:
+            out[-1]["upgrade"] = {**(upgrade or {}), "restart": restart}
     return out
 
 
@@ -215,11 +239,6 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     login = _section(reconcile, "login")
     usage = _section(payload, "usage")
     quota = _section(payload, "quota")
-    # Only carry the section when the agent actually reported one. Emitting a
-    # skeleton of Nones makes "has this node ever reconciled?" unanswerable: the
-    # dict is truthy, so every node looks like it has.
-    has_upgrade = any(upgrade.get(k) is not None
-                      for k in ("from", "to", "ok", "error", "ts"))
     # Sign-in progress. The URL is shown to an operator and the detail may quote
     # the CLI, so both are length-capped like every other node-supplied string.
     login_state = _str(login.get("state"))
@@ -258,16 +277,15 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     if payload.get("mode") == MACHINE_MODE:
         result["mode"] = MACHINE_MODE
         result["slots"] = _slots(payload.get("slots"))
+    # Whether the OS asked for a reboot. A strict bool or nothing: "yes", 1 or a
+    # string from an agent that got it wrong is not a reboot anybody asked for.
+    if isinstance(payload.get("reboot_required"), bool):
+        result["reboot_required"] = payload["reboot_required"]
     if login_state:
         result["reconcile"] = {"login": _login_progress(login)}
-    if has_upgrade:
+    upgraded = _upgrade(upgrade)
+    if upgraded is not None:
         # What the agent did about the last desired state it was handed. Reported
         # one beat late by construction: the agent acts after posting.
-        result.setdefault("reconcile", {})["upgrade"] = {
-                "from": _str(upgrade.get("from")),
-                "to": _str(upgrade.get("to")),
-                "ok": _bool_or_none(upgrade.get("ok")),
-                "error": _str(upgrade.get("error")),
-            "ts": _num(upgrade.get("ts")),
-        }
+        result.setdefault("reconcile", {})["upgrade"] = upgraded
     return result
