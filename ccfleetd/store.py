@@ -550,6 +550,22 @@ class Store:
             raise NotYours(f"{slot_id} is not held by this account")
         return row
 
+    @staticmethod
+    def _sign_in_key(row: sqlite3.Row, slot_id: str) -> str:
+        """Where a slot's sign-in lives. A machine slot's is its own, under
+        "slot:<id>". An owner slot's is its node's own row: the owner's own
+        agent is what signs in, and it reads its node's row, exactly as it
+        does for a sign-in started from the console."""
+        if row["kind"] == slotstates.OWNER_SLOT:
+            return str(row["node_id"])
+        return slot_login_key(slot_id)
+
+    def login_for_slot(self, slot: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+        """The sign-in in flight on a slot, from wherever that slot keeps it."""
+        if slot.get("kind") == slotstates.OWNER_SLOT:
+            return self.get_login(str(slot["node_id"]))
+        return self.get_login(slot_login_key(str(slot["id"])))
+
     def request_slot_login(self, slot_id: str, email: str, now: float,
                            kind: str = "login", *, held_by: Optional[str] = None) -> None:
         """Start a sign-in, or a device token, on a slot — for its holder.
@@ -565,7 +581,7 @@ class Store:
             if row["state"] not in self.SLOT_SIGN_IN_STATES:
                 raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
                                  f"into once it is set up")
-            self._begin_login(conn, slot_login_key(slot_id), email, now, kind)
+            self._begin_login(conn, self._sign_in_key(row, slot_id), email, now, kind)
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -582,8 +598,8 @@ class Store:
                                held_by: Optional[str] = None) -> None:
         """The code a slot's holder pasted, for their slot and nobody else's."""
         with self._write_txn() as conn:
-            self._held(conn, slot_id, held_by)
-            self._submit_code(conn, slot_login_key(slot_id), code, now)
+            row = self._held(conn, slot_id, held_by)
+            self._submit_code(conn, self._sign_in_key(row, slot_id), code, now)
 
     def _submit_code(self, conn: sqlite3.Connection, key: str, code: str,
                      now: float) -> None:
@@ -730,7 +746,11 @@ class Store:
         """A token minted on a slot, for as long as its attempt lasts — and
         only for whoever holds the slot as it is read."""
         with self._write_txn() as conn:
-            self._held(conn, slot_id, held_by)
+            row = self._held(conn, slot_id, held_by)
+            if row["kind"] == slotstates.OWNER_SLOT:
+                # Noted on the node: a token handed over for the owner's own
+                # node, exactly as if they had asked from the console.
+                return self._read_secret(conn, row["node_id"], "nodes", row["node_id"], now)
             return self._read_secret(conn, slot_login_key(slot_id), "slots", slot_id, now)
 
     @staticmethod
@@ -762,8 +782,9 @@ class Store:
     def clear_slot_login(self, slot_id: str, *, held_by: Optional[str] = None) -> None:
         """End whatever flow is in flight on a slot, for its holder."""
         with self._write_txn() as conn:
-            self._held(conn, slot_id, held_by)
-            conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(slot_id),))
+            row = self._held(conn, slot_id, held_by)
+            conn.execute("DELETE FROM logins WHERE node_id = ?",
+                         (self._sign_in_key(row, slot_id),))
 
     def expire_logins(self, older_than: float) -> int:
         """Drop attempts nobody finished, so a stale code cannot be replayed."""

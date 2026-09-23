@@ -400,3 +400,68 @@ def test_the_live_database_behaves(tmp_path):
             st.begin_release("erik-1")
     finally:
         st.close()
+
+
+# -- signing in on an owner slot is the node's own sign-in ---------------------------------
+
+def held_owner(st):
+    owner_node(st)
+    account(st, "e1", "cdcupt@gmail.com")
+    account(st, "x1", "someone@example.com")
+    st.hold_owner_node("erik-1", "e1", now=NOW)
+
+
+def test_signing_in_on_an_owner_slot_asks_the_node_itself(store):
+    """The owner's own agent does the signing in; it reads the node's row."""
+    held_owner(store)
+    store.request_slot_login("erik-1", "", NOW, held_by="e1")
+    assert store.get_login("erik-1")["state"] == "requested"
+    assert store.get_login("slot:erik-1") is None
+    assert store.login_for_slot(store.get_slot("erik-1"))["state"] == "requested"
+
+
+def test_a_machine_slot_keeps_its_own_sign_in_row(store):
+    machine(store, "pool-1")
+    account(store, "a1")
+    store.claim_slot("a1", now=NOW)
+    store.apply_slot_report("pool-1", [{"unix_user": "slot01", "present": True,
+                                        "provisioned_for": NOW}], now=NOW)
+    store.request_slot_login("pool-1", "", NOW, held_by="a1")
+    assert store.get_login("slot:pool-1")["state"] == "requested"
+    assert store.get_login("pool-1") is None
+    assert store.login_for_slot(store.get_slot("pool-1"))["state"] == "requested"
+
+
+def test_only_the_holder_signs_in_on_an_owner_slot(store):
+    from ccfleetd.store import NotYours
+    held_owner(store)
+    with pytest.raises(NotYours):
+        store.request_slot_login("erik-1", "", NOW, held_by="x1")
+    assert store.get_login("erik-1") is None
+
+
+def test_the_code_goes_to_the_nodes_own_sign_in(store):
+    held_owner(store)
+    store.request_slot_login("erik-1", "", NOW, held_by="e1")
+    store.submit_slot_login_code("erik-1", "abc#123", NOW, held_by="e1")
+    assert store.get_login("erik-1")["state"] == "code_sent"
+
+
+def test_cancelling_on_an_owner_slot_ends_the_nodes_sign_in(store):
+    held_owner(store)
+    store.request_slot_login("erik-1", "", NOW, held_by="e1")
+    store.clear_slot_login("erik-1", held_by="e1")
+    assert store.get_login("erik-1") is None
+
+
+def test_a_token_minted_on_an_owner_slot_is_read_from_the_node(store):
+    held_owner(store)
+    store.request_slot_login("erik-1", "", NOW, kind="token", held_by="e1")
+    requested_at = store.get_login("erik-1")["requested_at"]
+    store.record_login_progress("erik-1", "ready", "", "", NOW + 5, requested_at,
+                                secret="sk-ant-oat01-" + "x" * 90)
+    assert store.read_slot_secret("erik-1", NOW + 6, held_by="e1").startswith("sk-ant-oat01-")
+    assert store.get_node("erik-1")["device_token_at"] == NOW + 6
+    from ccfleetd.store import NotYours
+    with pytest.raises(NotYours):
+        store.read_slot_secret("erik-1", NOW + 7, held_by="x1")
