@@ -91,7 +91,8 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                   if said.get("reboot_required") is True else "")
         base = f"/actions/machine/{escape(node['id'])}"
         head = (f'<div class="row-line"><div class="row-name">{escape(node["id"])}'
-                f'<span class="muted"> · {len(rows)} of {capacity} declared</span>{reboot}</div>'
+                f'<span class="muted"> · {len(rows)} of {capacity} declared</span>{reboot}'
+                f"{_kept_for(node, accounts)}</div>"
                 '<div class="actions">'
                 + _form(f"{base}/capacity", csrf, "Set capacity",
                         '<input type="text" name="count" class="count" inputmode="numeric" '
@@ -100,6 +101,11 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                         '<input type="text" name="slot_id" placeholder="slot id" size="10" '
                         'required><input type="text" name="unix_user" placeholder="unix user" '
                         'size="10" required>')
+                + _form(f"{base}/reserve", csrf, "Reserve",
+                        '<input type="email" name="email" placeholder="keep for (email)" '
+                        'size="18" required>')
+                + (_form(f"{base}/unreserve", csrf, "Clear reservation")
+                   if node.get("reserved_for") else "")
                 + "</div></div>")
         pin = str(node.get("pinned_version") or "")
         lines = [head] + [_slot_line(s, accounts, alerts, csrf, now,
@@ -113,6 +119,16 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
             '<p class="note">Taking a slot back is a release: the machine wipes it, and it is '
             "free again once the machine confirms the Linux user is gone. There is no way here "
             "to sign in as anybody or to finish anybody's Claude sign-in, by design.</p></div>")
+
+
+def _kept_for(node: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]) -> str:
+    """Who this machine's free slots are kept for, when it is anybody."""
+    account_id = node.get("reserved_for")
+    if not account_id:
+        return ""
+    keeper = accounts.get(account_id)
+    who = escape(str(keeper["email"])) if keeper else "an account that no longer exists"
+    return f' <span class="pill ok">Reserved for {who}</span>'
 
 
 def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
@@ -260,6 +276,21 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
     if kind == "machine" and action == "slot-add":
         store.add_slot(form.get("slot_id", "").strip(), target,
                        form.get("unix_user", "").strip(), now=now)
+        return "slots"
+    if kind == "machine" and action == "reserve":
+        # By address, the way the operator knows people; an address nobody has
+        # signed in with is refused, never stored as a promise to nobody.
+        email = (form.get("email") or "").strip()
+        if not email:
+            raise StoreError("type the email address of the account to keep this machine for")
+        keeper = store.account_by_email(email)
+        if keeper is None:
+            raise StoreError(f"nobody has signed in as {email}; they sign in once, then "
+                             "the machine can be kept for them")
+        store.reserve_machine(target, keeper["id"])
+        return "slots"
+    if kind == "machine" and action == "unreserve":
+        store.reserve_machine(target, None)
         return "slots"
     if kind == "slot" and action == "reclaim":
         if form.get("confirm") != target:

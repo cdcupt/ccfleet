@@ -308,3 +308,66 @@ def test_the_slot_list_lines_up_with_its_longest_value(db, capsys):
     header, row = capsys.readouterr().out.splitlines()[:2]
     assert "not yet seen" in row
     assert row.rindex(" -") + 1 == header.index("held by")
+
+
+# -- keeping a machine for one account ----------------------------------------------
+
+def _machine_and_ana(db):
+    from ccfleetd.store import Store
+    assert cli.main(["--db", db, "node", "add", "m1", "--owner", "op"]) == 0
+    assert cli.main(["--db", db, "slot", "capacity", "m1", "2"]) == 0
+    st = Store(db)
+    try:
+        return st.upsert_account_from_google("sub-ana", "ana@example.com", now=1.0)
+    finally:
+        st.close()
+
+
+def _node_row(listing, node_id):
+    [row] = [line for line in listing.splitlines() if line.split()[:1] == [node_id]]
+    return row
+
+
+def test_keeping_a_machine_for_one_account_and_opening_it_again(db, capsys):
+    _machine_and_ana(db)
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "reserve", "m1", "ana@example.com"]) == 0
+    assert "kept for ana@example.com" in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "list"]) == 0
+    listing = capsys.readouterr().out
+    assert listing.splitlines()[0].rstrip().endswith("reserved")
+    assert _node_row(listing, "m1").rstrip().endswith("ana@example.com")
+
+    assert cli.main(["--db", db, "node", "reserve", "m1", "--none"]) == 0
+    assert "open to anybody" in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "list"]) == 0
+    assert _node_row(capsys.readouterr().out, "m1").rstrip().endswith("-")
+
+
+def test_keeping_a_machine_for_an_address_nobody_signed_in_with_fails(db, capsys):
+    from ccfleetd.store import Store
+    _machine_and_ana(db)
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "reserve", "m1", "ana@exmaple.com"]) == 2
+    assert "ana@exmaple.com" in capsys.readouterr().err
+    st = Store(db)
+    try:
+        assert st.get_node("m1")["reserved_for"] is None
+    finally:
+        st.close()
+
+
+def test_an_owner_node_cannot_be_kept_from_the_command_line(db, capsys):
+    _machine_and_ana(db)
+    assert cli.main(["--db", db, "node", "add", "laptop", "--owner", "erik"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--db", db, "node", "reserve", "laptop", "ana@example.com"]) == 2
+    assert "not a shared machine" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("args", [["m1"], ["m1", "ana@example.com", "--none"]])
+def test_reserve_takes_an_address_or_none_but_not_both(db, capsys, args):
+    _machine_and_ana(db)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--db", db, "node", "reserve", *args])
+    assert exc.value.code == 2

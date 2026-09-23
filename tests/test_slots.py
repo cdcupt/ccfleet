@@ -987,3 +987,213 @@ def test_only_claims_time_out(store):
                             now=CLAIM + 5)
     assert store.expire_claims(older_than=CLAIM + 10 ** 6) == []
     assert store.get_slot("s1")["state"] == slots.CLAIMED
+
+
+# -- keeping a machine for one account ----------------------------------------------
+
+def test_a_machine_kept_for_somebody_hands_nobody_else_its_free_slots(store):
+    machine(store, capacity=2)
+    declare(store, "m1-01", "m1", "slot01")
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=1)
+    store.reserve_machine("m1", "a1")
+    with pytest.raises(NoSlotAvailable):
+        store.claim_slot("a2", now=NOW)
+    assert store.get_slot("m1-01")["state"] == slots.FREE
+    assert store.claim_slot("a1", now=NOW)["id"] == "m1-01"
+
+
+def test_the_account_a_machine_is_kept_for_is_given_it_first(store):
+    """Ahead of an open machine that sorts earlier: what they were promised is
+    what they get, and the open machine stays for everybody else."""
+    machine(store, "a-open", capacity=1)
+    declare(store, "a-open-01", "a-open", "slot01")
+    machine(store, "z-kept", capacity=1)
+    declare(store, "z-kept-01", "z-kept", "slot01")
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=1)
+    store.reserve_machine("z-kept", "a1")
+    assert store.claim_slot("a1", now=NOW)["id"] == "z-kept-01"
+    assert store.claim_slot("a2", now=NOW)["id"] == "a-open-01"
+
+
+def test_a_machine_kept_for_nobody_is_claimed_as_before(store):
+    """Keeping one machine changes nothing about the others."""
+    machine(store, "m1", capacity=1)
+    declare(store, "m1-01", "m1", "slot01")
+    machine(store, "m2", capacity=1)
+    declare(store, "m2-01", "m2", "slot01")
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=2)
+    store.reserve_machine("m1", "a1")
+    assert store.claim_slot("a2", now=NOW)["id"] == "m2-01"
+    with pytest.raises(NoSlotAvailable):
+        store.claim_slot("a2", now=NOW)
+
+
+def test_a_kept_machine_does_not_lift_the_allowance(store):
+    machine(store, capacity=2)
+    declare(store, "m1-01", "m1", "slot01")
+    account(store, "a1", quota=0)
+    store.reserve_machine("m1", "a1")
+    with pytest.raises(QuotaExceeded):
+        store.claim_slot("a1", now=NOW)
+
+
+def test_asking_for_a_kept_machine_by_name_is_refused_to_others(store):
+    machine(store, capacity=1)
+    declare(store, "m1-01", "m1", "slot01")
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=1)
+    store.reserve_machine("m1", "a1")
+    with pytest.raises(NoSlotAvailable):
+        store.claim_slot("a2", now=NOW, node_id="m1")
+
+
+def test_keeping_a_machine_takes_back_nothing_already_held(store):
+    """A reservation is about the next claim. Taking a held slot back is a
+    release, with the wipe it implies, and never a side effect of this."""
+    machine(store, capacity=1)
+    declare(store, "m1-01", "m1", "slot01")
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=1)
+    store.claim_slot("a2", now=NOW)
+    store.reserve_machine("m1", "a1")
+    slot = store.get_slot("m1-01")
+    assert slot["held_by"] == "a2" and slot["state"] == slots.CLAIMING
+
+
+def test_opening_a_kept_machine_again_lets_anybody_claim_it(store):
+    machine(store, capacity=1)
+    declare(store, "m1-01", "m1", "slot01")
+    account(store, "a1", quota=1)
+    account(store, "a2", quota=1)
+    store.reserve_machine("m1", "a1")
+    store.reserve_machine("m1", None)
+    assert store.get_node("m1")["reserved_for"] is None
+    assert store.claim_slot("a2", now=NOW)["id"] == "m1-01"
+
+
+@pytest.mark.parametrize("capacity, with_slot", [(2, False), (1, True)])
+def test_a_shared_machine_can_be_kept(store, capacity, with_slot):
+    """A machine is what the console lists as one: capacity for more than one
+    slot, or a slot already declared on it."""
+    machine(store, capacity=capacity)
+    if with_slot:
+        declare(store, "m1-01", "m1", "slot01")
+    account(store, "a1")
+    store.reserve_machine("m1", "a1")
+    assert store.get_node("m1")["reserved_for"] == "a1"
+
+
+def test_an_owner_node_cannot_be_kept_for_anybody(store):
+    """Somebody's own node has no slots to hand out, so keeping it for somebody
+    is a mistake the operator should hear about, not a silent no-op."""
+    store.add_node("laptop", "erik", now=NOW)
+    account(store, "a1")
+    with pytest.raises(StoreError, match="not a shared machine"):
+        store.reserve_machine("laptop", "a1")
+    assert store.get_node("laptop")["reserved_for"] is None
+
+
+def test_a_machine_cannot_be_kept_for_an_account_that_does_not_exist(store):
+    machine(store, capacity=2)
+    with pytest.raises(StoreError, match="no account"):
+        store.reserve_machine("m1", "nobody")
+    assert store.get_node("m1")["reserved_for"] is None
+
+
+def test_keeping_a_machine_that_does_not_exist_says_so(store):
+    account(store, "a1")
+    for keep_for in ("a1", None):
+        with pytest.raises(StoreError, match="no machine"):
+            store.reserve_machine("nowhere", keep_for)
+
+
+class _PauseBefore:
+    """Holds one connection just before it runs a statement."""
+
+    def __init__(self, conn, gate, marker):
+        self._conn = conn
+        self._gate = gate
+        self._marker = marker
+        self.reached = threading.Event()
+
+    def execute(self, sql, *args):
+        if self._marker in sql and not self.reached.is_set():
+            self.reached.set()
+            self._gate.wait(20)
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_a_machine_kept_while_a_claim_waits_for_the_lock_is_not_handed_out(tmp_path):
+    """The claim decides inside its own write transaction. "That machine is
+    open", read before it, can be stale by the time the slot is taken — and the
+    slot goes to somebody the machine is no longer for."""
+    db = str(tmp_path / "fleet.db")
+    setup = Store(db)
+    try:
+        machine(setup, capacity=1)
+        declare(setup, "s1", "m1", "slot01")
+        account(setup, "a1", quota=1)
+        account(setup, "a2", quota=1)
+    finally:
+        setup.close()
+
+    gate = threading.Event()
+    outcome: dict[str, str] = {}
+    claimer = Store(db)
+    claimer._conn = _PauseBefore(claimer._conn, gate, "BEGIN IMMEDIATE")
+
+    def claim():
+        try:
+            outcome["a2"] = claimer.claim_slot("a2", now=NOW)["id"]
+        except NoSlotAvailable:
+            outcome["a2"] = "refused"
+
+    thread = threading.Thread(target=claim)
+    thread.start()
+    try:
+        assert claimer._conn.reached.wait(10), "the claim never reached its transaction"
+        operator = Store(db)
+        try:
+            operator.reserve_machine("m1", "a1")
+        finally:
+            operator.close()
+    finally:
+        gate.set()
+        thread.join(timeout=30)
+        claimer.close()
+    assert outcome == {"a2": "refused"}
+
+
+def test_a_database_from_before_reservations_opens_with_every_machine_open(tmp_path):
+    """The nodes table as it was before this column: the column is added on
+    open, every machine reads as kept for nobody, and claims work as before."""
+    import sqlite3
+    path = str(tmp_path / "before.db")
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE nodes (id TEXT PRIMARY KEY, owner TEXT NOT NULL,
+            region TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE,
+            pinned_version TEXT NOT NULL DEFAULT '', rc_expected INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL,
+            device_token_at REAL NOT NULL DEFAULT 0,
+            capacity INTEGER NOT NULL DEFAULT 1, tier TEXT NOT NULL DEFAULT 'dedicated');
+        INSERT INTO nodes (id, owner, token_hash, created_at, capacity)
+        VALUES ('m1', 'op', 'deadbeef', 1.0, 2);
+    """)
+    con.commit()
+    con.close()
+
+    st = Store(path)
+    try:
+        assert st.get_node("m1")["reserved_for"] is None
+        declare(st, "m1-01", "m1", "slot01")
+        account(st, "a2", quota=1)
+        assert st.claim_slot("a2", now=NOW)["id"] == "m1-01"
+    finally:
+        st.close()
