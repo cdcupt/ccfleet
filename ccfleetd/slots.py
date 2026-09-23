@@ -73,6 +73,15 @@ RELEASABLE: frozenset[str] = frozenset({CLAIMING, CLAIMED, ACTIVE})
 #: reports its slots rather than an owner login, which it does not have.
 MACHINE_MODE = "machine"
 
+#: The two kinds of slot. A machine slot is a Linux user the machine agent
+#: makes and wipes, claimed through this lifecycle. An owner slot is a
+#: person's own node counted as a slot they hold (Erik, 2026-09-23): a record
+#: and nothing more. Nothing on that node is ever provisioned, handed out or
+#: wiped because of it, so it never enters the moves above.
+MACHINE_SLOT = "machine"
+OWNER_SLOT = "owner"
+SLOT_KINDS: tuple[str, ...] = (MACHINE_SLOT, OWNER_SLOT)
+
 #: How long provisioning may take before the claim is given up. Creating the
 #: account is seconds; installing Claude Code downloads a release, which is a
 #: few minutes on a slow link. Past this the machine is down or stuck, and the

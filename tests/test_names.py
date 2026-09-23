@@ -12,7 +12,6 @@ import pytest
 
 from ccfleetd import names
 
-
 # -- the handle: who a name is about ----------------------------------------------------
 
 @pytest.mark.parametrize("email, handle", [

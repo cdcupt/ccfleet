@@ -24,7 +24,7 @@ FALLBACK_HANDLE = "user"
 
 # fullmatch, never match-with-$: `$` also matches before a trailing newline,
 # and a name with a newline in it is a hostname nobody can type.
-_HANDLE_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,%d}[a-z0-9])?" % (MAX_HANDLE - 2))
+_HANDLE_RE = re.compile(rf"[a-z0-9](?:[a-z0-9-]{{0,{MAX_HANDLE - 2}}}[a-z0-9])?")
 _HOSTNAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _NOT_KEPT = re.compile(r"[^a-z0-9]+")
 
