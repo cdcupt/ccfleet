@@ -1710,17 +1710,19 @@ def use_account(account: SlotAccount) -> bool:
     return _atomic_write(path, "".join(f"{line}\n" for line in lines))
 
 
-def _put_back(path: Path, previous: Optional[str]) -> None:
-    """Restore the env file to what it said before a switch that failed."""
+def _put_back(path: Path, previous: Optional[str]) -> bool:
+    """Restore the env file to what it said before a switch that failed.
+    True once it says that again."""
     if previous is not None:
-        _atomic_write(path, previous)
-        return
+        return _atomic_write(path, previous)
     try:
         path.unlink()
     except FileNotFoundError:
         pass
     except OSError as exc:
         log.warning("could not remove %s: %s", path.name, exc.__class__.__name__)
+        return False
+    return True
 
 
 def prepare_account(account: SlotAccount) -> bool:
@@ -1775,10 +1777,12 @@ def restart_remote_control(runner: Runner = subprocess.run) -> bool:
 
     Only ever at the holder's word — a switch, a sign-in — so a session open
     in it does not hold this back the way it holds back an upgrade. True when
-    it restarted, or when it is switched off on purpose: it starts as the
-    right account whenever it is turned back on.
+    it restarted, or when it is switched off on purpose and not running: it
+    starts as the right account whenever it is turned back on. Disabling a
+    unit does not stop it, so one still running is restarted all the same.
     """
-    if not _rc_enabled(runner):
+    if (not _rc_enabled(runner)
+            and remote_control_state(DEFAULT_RC_SERVICE, runner).get("state") != "active"):
         return True
     try:
         proc = runner(["systemctl", "--user", "restart", DEFAULT_RC_SERVICE],
@@ -1867,11 +1871,15 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
     token = wanted.get("kind") == "token"
     fresh = mine.get("requested_at") != requested_at
     if fresh:
-        # A device token belongs to the account in use; only a sign-in picks one.
+        # A device token belongs to the account in use, as it is: only a
+        # sign-in picks an account, or needs a place made for one.
         target = in_use if token else sign_in_target(wanted.get("account"), in_use)
-        why = ("this slot already has 3 accounts" if target is None else
-               "could not make a place for that account" if not prepare_account(target)
-               else "")
+        if target is None:
+            why = "this slot already has 3 accounts"
+        elif not token and not prepare_account(target):
+            why = "could not make a place for that account"
+        else:
+            why = ""
         if why:
             if mine:
                 end_login(runner)           # the attempt this one replaces
@@ -1963,7 +1971,9 @@ def switch_account(account: SlotAccount, state: Mapping[str, Any], runner: Runne
     Asked first, as that account: a sign-in that stopped working is refused
     before anything moves, with Remote Control still on the account that
     works. Then the line, then Remote Control; if Remote Control will not
-    restart, the line goes back to what it said.
+    restart, the line goes back to what it said and Remote Control is
+    restarted onto it. A failure says only what is known to be true of where
+    that left the slot; the accounts in the same report say which is recorded.
     """
     state = dict(state)
     if not _usable(account_facts(account), now):
@@ -1978,10 +1988,13 @@ def switch_account(account: SlotAccount, state: Mapping[str, Any], runner: Runne
     if not use_account(account):
         return {"state": "failed", "detail": "could not record the switch"}, state
     if not restart_remote_control(runner):
-        _put_back(path, previous)
-        restart_remote_control(runner)      # back onto the account that was in use
-        return {"state": "failed",
-                "detail": "Remote Control did not restart; still on the previous account"}, state
+        if not _put_back(path, previous):
+            why = "Remote Control did not restart, and the switch could not be undone"
+        elif not restart_remote_control(runner):   # back onto the account that was in use
+            why = "Remote Control would not restart as either account"
+        else:
+            why = "Remote Control did not restart; still on the previous account"
+        return {"state": "failed", "detail": why}, state
     return {"state": "done", "detail": ""}, _moved_on(state)
 
 

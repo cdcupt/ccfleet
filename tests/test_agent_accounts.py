@@ -83,12 +83,13 @@ class Slot:
     as; systemd for Remote Control; tmux for the sign-in pane."""
 
     def __init__(self, home, *, rc="active", enabled="enabled", restart_code=0,
-                 stop_code=0, broken=(), logout_deletes=True):
+                 stop_code=0, broken=(), logout_deletes=True, on_restart=None):
         self.home = home
         self.calls = []                 # (argv, the directory Claude Code ran in)
         self.rc = rc
         self.enabled = enabled
-        self.restart_code = restart_code
+        self.restart_code = restart_code  # a list: one exit code per restart, in turn
+        self.on_restart = on_restart
         self.stop_code = stop_code      # None: systemctl hangs and is killed
         self.broken = {str(d) for d in broken}   # sign-ins the CLI itself rejects
         self.logout_deletes = logout_deletes
@@ -125,9 +126,13 @@ class Slot:
         if argv[:3] == ["systemctl", "--user", "is-active"]:
             return done(self.rc)
         if argv[:3] == ["systemctl", "--user", "restart"]:
-            if self.restart_code == 0:
+            if self.on_restart is not None:
+                self.on_restart()
+            code = (self.restart_code.pop(0) if isinstance(self.restart_code, list)
+                    else self.restart_code)
+            if code == 0:
                 self.rc = "active"
-            return done(code=self.restart_code)
+            return done(code=code)
         if argv[:3] == ["systemctl", "--user", "start"]:
             self.rc = "active"
             return done()
@@ -549,6 +554,37 @@ def test_remote_control_that_will_not_restart_puts_the_previous_account_back(hom
     assert listed(facts) == [("1", True), ("2", False)]
 
 
+@pytest.mark.parametrize("codes,detail", [
+    ([1, 0], "Remote Control did not restart; still on the previous account"),
+    ([1, 1], "Remote Control would not restart as either account"),
+])
+def test_a_failed_switch_says_only_what_is_true(home, codes, detail):
+    sign_in(home, "1", "work@example.com")
+    sign_in(home, "2", "home@example.com")
+    slot = Slot(home, restart_code=codes)
+    facts = agent.slot_facts(intent(), slot, now=NOW)
+    assert facts["account_switch"] == {"requested_at": 7.0, "state": "failed",
+                                       "detail": detail}
+    assert not env_file(home).exists(), "the line was not put back"
+
+
+def test_a_switch_that_cannot_be_undone_does_not_claim_it_was(home):
+    sign_in(home, "1", "work@example.com")
+    sign_in(home, "2", "home@example.com")
+    config = home / ".config" / "ccfleet"
+    slot = Slot(home, restart_code=1, on_restart=lambda: config.chmod(0o500))
+    try:
+        facts = agent.slot_facts(intent(), slot, now=NOW)
+    finally:
+        config.chmod(0o700)
+    assert facts["account_switch"] == {
+        "requested_at": 7.0, "state": "failed",
+        "detail": "Remote Control did not restart, and the switch could not be undone"}
+    # What is recorded is still the new account, and the report says so.
+    assert env_file(home).read_text() == f"CLAUDE_CONFIG_DIR={place(home, '2')[0]}\n"
+    assert listed(facts) == [("1", False), ("2", True)]
+
+
 def test_switching_to_the_account_already_in_use_restarts_nothing(home):
     sign_in(home, "1", "work@example.com")
     slot = Slot(home)
@@ -820,6 +856,26 @@ def test_remote_control_switched_off_on_purpose_is_not_started_by_a_switch(home)
     assert facts["account_switch"]["state"] == "done"
     assert env_file(home).read_text() == f"CLAUDE_CONFIG_DIR={place(home, '2')[0]}\n"
     assert slot.systemctl("restart") == [] and slot.systemctl("start") == []
+
+
+def test_remote_control_switched_off_but_still_running_is_moved_too(home):
+    """Disabling a unit does not stop it. Still running, it is still running as
+    the old account, and the switch has to reach it."""
+    sign_in(home, "1", "work@example.com")
+    sign_in(home, "2", "home@example.com")
+    slot = Slot(home, rc="active", enabled="disabled")
+    agent.slot_facts(intent(), slot, now=NOW)
+    assert slot.systemctl("restart") == [RESTART]
+
+
+def test_a_device_token_touches_no_directory(home, tmp_path):
+    """A token needs no place of its own; the directory in use is left as it is."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o755)
+    env_file(home).write_text(f"CLAUDE_CONFIG_DIR={elsewhere}\n")
+    agent.slot_facts({"login": {"requested_at": 1.0, "kind": "token"}}, Slot(home), now=NOW)
+    assert stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
+    assert not (elsewhere / ".claude.json").exists()
 
 
 def test_a_switch_is_the_restart_an_upgrade_was_waiting_for(home):
