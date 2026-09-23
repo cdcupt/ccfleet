@@ -124,7 +124,12 @@ def test_the_one_accounts_address_is_kept_whole(address):
 
 @pytest.mark.parametrize("address", [
     "not an address", "x" * 250 + "@example.org", "a@b", "tab\t@example.org",
-    "new\nline@example.org", 7, None, ["a@b.co"]])
+    "new\nline@example.org", 7, None, ["a@b.co"],
+    # Shaped like one, but longer than SMTP allows: cut short it would be
+    # somebody else's, so none of it is kept.
+    "x" * 64 + "@" + "d" * 190 + ".example.org",
+    # Shaped like one, with a control character the shape does not rule out.
+    "bell\x07@example.org"])
 def test_anything_that_is_not_an_address_is_not_kept_at_all(address):
     kept = validate_heartbeat(machine_payload({"credentials": {"email": address}}), "m1")
     assert kept["slots"][0]["credentials"]["email"] == ""
@@ -162,6 +167,19 @@ def test_the_page_names_the_one_account_and_how_long_it_lasts(site):
            refresh_expires_at=time.time() + 28 * DAY + 60)
     page = erik.page()
     assert f"Signed in as {ADDRESS} · max plan · sign-in good for 28 more days." in page
+
+
+@pytest.mark.parametrize("left, said", [(2 * DAY + 60, "good for 2 more days"),
+                                        (DAY + 60, "good for 1 more day"),
+                                        (3600, "ends within a day")])
+def test_how_long_a_sign_in_has_left_is_said_in_words(left, said):
+    now = 1_000_000.0
+    assert usersite._sign_in_left(now + left, now) == said
+
+
+@pytest.mark.parametrize("expires", [1_000_000.0 - 1, 1_000_000.0, True, "soon", None])
+def test_a_sign_in_with_no_time_left_or_no_time_at_all_says_nothing(expires):
+    assert usersite._sign_in_left(expires, 1_000_000.0) == ""
 
 
 def test_an_address_on_the_page_is_escaped(site):
