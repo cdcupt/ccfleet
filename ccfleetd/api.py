@@ -15,7 +15,7 @@ import urllib.parse
 from dataclasses import dataclass
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import consoleslots, customer_docs, oauth, sessions, usersite
 from . import slots as slotstates
@@ -327,6 +327,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             account, session_id = self._peek_signed_in()
             return usersite.viewer_for(account, session_id, ctx.cfg, ctx.store)
 
+        def _docs_page(self, page: Callable[..., str]) -> None:
+            """A public page of the product, for whoever is looking, with the
+            price the operator set, if any."""
+            current = ctx.store.get_price()
+            self._send(200, page(ctx.cfg, viewer=self._viewer(),
+                                 price=current["price"] if current else None).encode("utf-8"),
+                       HTML_HEADERS)
+
         def _console_corner(self) -> str:
             """The console's corner: whoever is signed in with Google on this
             site, as their menu. The admin token and console passwords are basic
@@ -562,30 +570,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            HTML_HEADERS)
             elif customer_docs.page_for(path):
                 # Public, for people deciding whether to buy a slot and then using one.
-                current = ctx.store.get_price()
-                self._send(200, customer_docs.page_for(path)(
-                    ctx.cfg, viewer=self._viewer(),
-                    price=current["price"] if current else None).encode("utf-8"),
-                    HTML_HEADERS)
+                self._docs_page(customer_docs.page_for(path))
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":
                 self._sign_in_callback()
             elif path == "/":
-                # The bare address takes everybody to their own page, never to a
-                # page that changes with who is looking: the console for somebody
-                # the console already knows, your slots when you are signed in,
-                # and otherwise what ccfleet is and how to start.
-                # Only where the console exists: on a separate product
-                # hostname an operator is a customer like anybody else, and
-                # /admin there is a 404, not a destination.
-                if not self._product_site() or (self._admin_site() and (
-                        identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
-                        or self._operator_session())):
+                # The bare address is the product's front page, the same page
+                # for everybody: what ccfleet is, with a way on that suits
+                # whoever is looking. Only the console's side of two sites (its
+                # own hostname, or loopback for the operator's tunnel) keeps it
+                # for the console, since the console is all that side serves.
+                if not self._product_site():
                     self._redirect(CONSOLE_PATH)
                     return
-                account, _ = self._signed_in()
-                self._redirect("/account" if account else "/docs")
+                self._docs_page(customer_docs.overview)
             elif path.rstrip("/") == CONSOLE_PATH:
                 who = (identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
                        or self._operator_session())

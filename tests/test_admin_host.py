@@ -72,6 +72,18 @@ def _basic(token=ADMIN_TOKEN):
     return {"Authorization": "Basic " + base64.b64encode(f"admin:{token}".encode()).decode()}
 
 
+LANDING = "<h1>Claude Code on a machine that is always on</h1>"
+HOW = ("How it works", "/docs/how-it-works")
+
+
+def _way_on(page):
+    """The front page's buttons, as (label, href), in the order they are shown."""
+    row = page[page.index('<div class="cta-row">'):]
+    row = row[:row.index("</div>")]
+    return [(label, href) for href, label
+            in re.findall(r'<a class="btn[^"]*" href="([^"]*)">([^<]*)</a>', row)]
+
+
 def _server(cfg, monkeypatch, who):
     monkeypatch.setattr(oauth, "exchange_code", lambda **kw: "access-token")
     monkeypatch.setattr(oauth, "fetch_identity", lambda token, **kw: dict(who))
@@ -137,18 +149,27 @@ def test_the_admin_callback_is_on_the_admin_host():
 
 # -- the product never shows a console ---------------------------------------------
 
-def test_the_products_front_door_sends_each_person_to_their_own_page(split):
-    """A visitor to what ccfleet is; somebody signed in to their slots; and an
-    operator signed in here too, because on the product an operator is a
-    customer like anybody else and there is no console to send them to."""
+def test_the_products_bare_address_is_its_front_page_for_everybody(split):
+    """The same page, never a redirect, for a visitor, for somebody signed in
+    and for an operator signed in here too: only the way on differs. There is
+    no console on the product, so an operator's button names the admin host."""
     store, browser, _ = split
-    reply = browser(PRODUCT).call("GET", "/")
-    assert reply.status == 303 and reply.getheader("Location") == "/docs"
+    visitor = browser(PRODUCT).call("GET", "/")
+    assert visitor.status == 200 and LANDING in visitor.body
+    assert [label for label, _ in _way_on(visitor.body)] == ["Sign in with Google", HOW[0]]
     person = browser(PRODUCT)
     person.sign_in_with_google()
-    assert person.call("GET", "/").getheader("Location") == "/account"
-    store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
-    assert person.call("GET", "/").getheader("Location") == "/account"
+    account_id = store.account_by_google_sub("google-erik")["id"]
+    seen = store.get_account(account_id)["last_seen_at"]
+    mine = person.call("GET", "/")
+    assert mine.status == 200 and LANDING in mine.body
+    assert _way_on(mine.body) == [("Your slots", "/account"), HOW]
+    assert store.get_account(account_id)["last_seen_at"] == seen, "reading it wrote a visit"
+    store.set_account_role(account_id, "admin")
+    theirs = person.call("GET", "/")
+    assert theirs.status == 200 and LANDING in theirs.body
+    assert _way_on(theirs.body) == [("Your slots", "/account"),
+                                    ("Console", f"https://{ADMIN}/admin"), HOW]
     assert person.call("GET", "/admin").status == 404
     assert browser(PRODUCT).call("GET", "/account").status == 200
 
@@ -209,6 +230,22 @@ def test_the_console_door_offers_google_not_a_password_prompt(split):
     assert door.getheader("WWW-Authenticate") is None, "the browser would ask for a password"
     assert 'href="/auth/google/start?next=/admin"' in door.body
     assert 'href="/auth/basic"' in door.body
+
+
+def test_the_admin_hosts_bare_address_is_still_the_console(split):
+    """Whoever asks, and however they are signed in: the console is all that
+    host serves, so its bare address never plays the product's front page."""
+    store, browser, _ = split
+    admin = browser(ADMIN)
+    admin.sign_in_with_google()
+    for who, headers in ((browser(ADMIN), None), (browser(ADMIN), _basic()),
+                         (admin, None), (browser("127.0.0.1:8111"), None)):
+        root = who.call("GET", "/", headers=headers)
+        assert root.status == 303 and root.getheader("Location") == "/admin", who.host
+        assert LANDING not in root.body
+    store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
+    root = admin.call("GET", "/")
+    assert root.status == 303 and root.getheader("Location") == "/admin"
 
 
 def test_the_admin_token_is_asked_for_only_when_asked(split):
@@ -287,7 +324,8 @@ def test_a_session_from_one_site_opens_nothing_on_the_other(split):
     product = browser(PRODUCT)
     product.sign_in_with_google()
     store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
-    assert product.call("GET", "/").getheader("Location") == "/account"
+    assert ("Your slots", "/account") in _way_on(product.call("GET", "/").body), \
+        "the product session is not signed in on the product"
 
     carried = browser(ADMIN)
     carried.jar = dict(product.jar)
@@ -325,18 +363,22 @@ def test_with_no_admin_host_one_site_is_both_as_it_always_was(monkeypatch):
     srv, store, thread = _server(cfg, monkeypatch, who)
     try:
         one = Browser(srv.server_address[1], PRODUCT)
-        assert one.call("GET", "/").getheader("Location") == "/docs"
-        assert one.call("GET", "/", headers=_basic()).getheader("Location") == "/admin"
+        # The bare address is the front page for everybody, the admin token too.
+        for headers in (None, _basic()):
+            front = one.call("GET", "/", headers=headers)
+            assert front.status == 200 and LANDING in front.body
+            assert [label for label, _ in _way_on(front.body)] == ["Sign in with Google", HOW[0]]
         assert one.call("GET", "/admin", headers=_basic()).status == 200
         assert one.call("GET", "/admin/", headers=_basic()).status == 200
         assert one.call("GET", "/account").status == 200
         one.sign_in_with_google()
-        assert one.call("GET", "/").getheader("Location") == "/account", \
-            "a customer's bare address is their own page"
+        assert _way_on(one.call("GET", "/").body) == [("Your slots", "/account"), HOW], \
+            "a customer's front page offers their own page"
         assert one.call("GET", "/admin").status == 401
         store.set_account_role(store.account_by_google_sub("google-erik")["id"], "admin")
-        assert one.call("GET", "/").getheader("Location") == "/admin", \
-            "an operator's bare address is the console"
+        assert _way_on(one.call("GET", "/").body) == [
+            ("Your slots", "/account"), ("Console", "/admin"), HOW], \
+            "an operator's front page offers the console too"
         assert one.call("GET", "/admin").status == 200, "an operator's session opens the console"
         assert one.call("GET", "/account").status == 200, "and their own slots are still theirs"
     finally:

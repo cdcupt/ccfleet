@@ -391,18 +391,19 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 """
 
 #: The pages anybody can read, in the order the bar on top shows them.
-NAV = (("/docs", "Overview"), ("/docs/guide", "Guide"),
+NAV = (("/", "Overview"), ("/docs/guide", "Guide"),
        ("/docs/how-it-works", "How it works"), ("/privacy", "Privacy"),
        ("/docs/terms", "Terms"))
 def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
            here: str = "", viewer: Optional[Viewer] = None, door: bool = False,
-           width: str = "narrow") -> str:
+           width: str = "narrow", canonical: str = "") -> str:
     """A page of the user site, in its frame: the bar on top, the page, the footer.
 
     ``here`` marks the bar's link to this page, and nothing else is marked, so
     somebody can always tell where they are. The bar's corner says who is
     looking: their menu when they are signed in, a way to sign in when not,
-    and nothing on a page that is itself the way in (``door``).
+    and nothing on a page that is itself the way in (``door``). A page served
+    at more than one address names the one to keep in ``canonical``.
     """
     links = "".join(f'<a href="{path}"{_HERE if path == here else ""}>{escape(name)}</a>'
                     for path, name in NAV)
@@ -411,14 +412,15 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"{refresh}<title>ccfleet · {escape(title)}</title>"
             f'<link rel="icon" href="{FAVICON}">'
-            f"<style>{USER_CSS}{extra_css}</style></head>"
+            + (f'<link rel="canonical" href="{escape(canonical)}">' if canonical else "")
+            + f"<style>{USER_CSS}{extra_css}</style></head>"
             '<body class="site"><header class="topbar"><div class="topbar-in">'
-            f'<a class="brand" href="/docs">{MARK}<span>ccfleet</span></a>'
+            f'<a class="brand" href="/">{MARK}<span>ccfleet</span></a>'
             f'<nav class="doc-nav">{links}</nav>'
             f'<div class="topbar-end">{corner}</div></div></header>'
             f'<main class="page {escape(width)}">{body}</main>'
             '<footer class="sitefoot"><div class="sitefoot-in"><div>'
-            f'<a class="brand" href="/docs">{MARK}<span>ccfleet</span></a>'
+            f'<a class="brand" href="/">{MARK}<span>ccfleet</span></a>'
             "<p>Claude Code on a machine that is always on. You bring your own Claude "
             "plan.</p></div>"
             '<nav aria-label="More"><a href="/account">Your slots</a>'

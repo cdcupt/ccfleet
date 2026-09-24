@@ -153,9 +153,10 @@ def contact(cfg: Config) -> str:
 
 
 def _page(here: str, title: str, body: str, width: str = "doc",
-          viewer: Optional[Viewer] = None) -> str:
+          viewer: Optional[Viewer] = None, canonical: str = "") -> str:
     """A docs page in the site's frame, with its own link in the bar marked."""
-    return _shell(title, body, extra_css=DOCS_CSS, here=here, width=width, viewer=viewer)
+    return _shell(title, body, extra_css=DOCS_CSS, here=here, width=width, viewer=viewer,
+                  canonical=canonical)
 
 
 # -- the overview -------------------------------------------------------------------
@@ -200,13 +201,18 @@ def _demo() -> str:
 
 def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
              price: Optional[pricing.Price] = None) -> str:
+    """The site's front page: the bare address and /docs serve it alike, and
+    it names the bare address as the one to keep."""
     # Straight into Google's sign-in when it is set up; otherwise the page that
     # says it is not, rather than a button that goes nowhere. Somebody already
-    # signed in is offered their slots instead of a sign-in they have done.
+    # signed in is offered their slots instead of a sign-in they have done, and
+    # an operator the console too, which checks the role again itself.
     how = '<a class="btn big" href="/docs/how-it-works">How it works</a>'
     if viewer is not None:
-        way_in = ('<div class="cta-row"><a class="btn primary big" href="/account">'
-                  f"Your slots</a>{how}</div>")
+        console = (f'<a class="btn big" href="{escape(viewer.console_href)}">Console</a>'
+                   if viewer.operator else "")
+        way_in = ('<div class="cta-row"><a class="btn primary big" '
+                  f'href="{escape(viewer.slots_href)}">Your slots</a>{console}{how}</div>')
     else:
         sign_in = "/auth/google/start?next=/account" if cfg.google_ready else "/account"
         way_in = (f'<div class="cta-row"><a class="btn primary big" href="{sign_in}">Sign in '
@@ -261,7 +267,7 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<a href="/privacy"><b>Privacy</b><span>What we keep about you, why, and for how '
         "long.</span></a>"
         "</div></section>")
-    return _page("/docs", "about", body, width="", viewer=viewer)
+    return _page("/", "about", body, width="", viewer=viewer, canonical="/")
 
 
 # -- getting started ----------------------------------------------------------------
