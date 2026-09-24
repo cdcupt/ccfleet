@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from html import escape
 from shlex import quote as shq
 from typing import Any, Optional
 
+from . import names as slotnames
+from . import slots as slotstates
 from .config import Config
 from .desired import is_channel, is_login_url
 
@@ -447,12 +449,42 @@ def _in(now: float, ts_ms: Optional[float]) -> str:
     return ("in " if delta >= 0 else "") + _age(0, -abs(delta)) + ("" if delta >= 0 else " ago")
 
 
+def _slot_facts(node: Mapping[str, Any], payload: Mapping[str, Any],
+                mine: list[Mapping[str, Any]]) -> tuple[Mapping[str, Any], str]:
+    """What a shared machine is running, and the name it goes by.
+
+    Root on a shared machine runs no Claude Code and is signed in to nothing:
+    its version, sign-in, Remote Control and usage are its slot's. Read from
+    the machine's own fields they said "-" and "unknown" beside a slot that was
+    signed in and in use. With its one slot (every machine since one slot per
+    machine) that slot's report stands in for the machine; with none, or
+    several from before, there is no single answer, and the Slots card says
+    each.
+    """
+    if len(mine) != 1:
+        return {}, node["id"]
+    report = next((r for r in payload.get("slots") or []
+                   if isinstance(r, Mapping) and r.get("unix_user") == mine[0]["unix_user"]),
+                  {})
+    return report, slotnames.display(mine[0])
+
+
 def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str, Any]],
-               alerts: list[Mapping[str, Any]], now: float) -> list[dict[str, Any]]:
-    """Merge node records, latest heartbeats and open alerts into dashboard rows."""
+               alerts: list[Mapping[str, Any]], now: float,
+               slots: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Merge node records, latest heartbeats and open alerts into dashboard rows.
+
+    ``slots`` are the store's slot rows. A node with a machine slot, or whose
+    agent says it is a shared machine, is described by its slot and named
+    after it, the way claude.ai and the Slots card name it.
+    """
     alerts_by_node: dict[str, list[Mapping[str, Any]]] = {}
     for alert in alerts:
         alerts_by_node.setdefault(alert["node_id"], []).append(alert)
+    machine_slots: dict[str, list[Mapping[str, Any]]] = {}
+    for slot in slots:
+        if slot.get("kind") == slotstates.MACHINE_SLOT:
+            machine_slots.setdefault(slot["node_id"], []).append(slot)
     rows = []
     for node in nodes:
         hb = latest.get(node["id"])
@@ -462,13 +494,17 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
         for alert in node_alerts:
             if LEVEL_ORDER.get(alert["level"], 0) > LEVEL_ORDER[level]:
                 level = alert["level"]
-        creds = payload.get("credentials") or {}
+        mine = machine_slots.get(node["id"], [])
+        machine = bool(mine) or payload.get("mode") == slotstates.MACHINE_MODE
+        facts, shown = _slot_facts(node, payload, mine) if machine else (payload, node["id"])
+        creds = facts.get("credentials") or {}
         rows.append({
-            "id": node["id"], "owner": node["owner"], "region": node["region"],
+            "id": node["id"], "name": shown, "machine": machine, "slot_count": len(mine),
+            "owner": node["owner"], "region": node["region"],
             "enabled": node["enabled"], "status": level if node["enabled"] else "disabled",
             "last_seen_ts": (hb or {}).get("ts"),
             "hostname": payload.get("hostname"),
-            "claude_version": (payload.get("claude") or {}).get("version"),
+            "claude_version": (facts.get("claude") or {}).get("version"),
             "pinned_version": node["pinned_version"],
             "egress_ip": (payload.get("egress") or {}).get("ip"),
             "disk_used_pct": (payload.get("disk") or {}).get("used_pct"),
@@ -478,7 +514,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "credentials_mtime": creds.get("mtime"),
             "token_expires_at": creds.get("expires_at"),
             "subscription_type": creds.get("subscription_type"),
-            "remote_control": (payload.get("remote_control") or {}).get("state"),
+            "remote_control": (facts.get("remote_control") or {}).get("state"),
             "rc_expected": node["rc_expected"],
             # What the node did about its pin last time it was asked. A silent
             # reconcile is indistinguishable from one that never ran.
@@ -486,8 +522,8 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # The OS asked for a reboot (a kernel, a libc). A badge, not an alert:
             # it is the operator's to schedule, and nothing is broken meanwhile.
             "reboot_required": payload.get("reboot_required") is True,
-            "usage": payload.get("usage") or {},
-            "quota": payload.get("quota") or {},
+            "usage": facts.get("usage") or {},
+            "quota": facts.get("quota") or {},
             "open_alerts": [a["rule"] for a in node_alerts],
         })
     return rows
@@ -525,6 +561,17 @@ def _actions_html(row: Mapping[str, Any], csrf: str) -> str:
     return f'<div class="actions">{toggle}{rc}{pin}{rotate}{remove}</div>'
 
 
+def _called(row: Mapping[str, Any]) -> tuple[str, str]:
+    """The name a node goes by, and where it is when that is not its id.
+
+    A shared machine goes by its slot's name, which is its hostname and what
+    claude.ai shows; its id stays the operator's handle for it on the server.
+    Returned unescaped.
+    """
+    shown = row.get("name") or row["id"]
+    return shown, (f"on {row['id']} \u00b7 " if shown != row["id"] else "")
+
+
 def _row_html(row: Mapping[str, Any], now: float) -> str:
     version = _fmt(row["claude_version"])
     pinned = row["pinned_version"]
@@ -546,21 +593,28 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     creds = row["credentials_present"]
     cred_text = ("unknown" if creds is None else ("missing" if creds is False else
                  f"refreshed {_age(now, row['credentials_mtime'])} ago"))
+    if row.get("machine"):
+        count = row.get("slot_count") or 0
+        cred_text = ("no slot yet" if count == 0 else
+                     f"{count} slots, see Slots" if count > 1 else
+                     "not signed in" if creds is False else cred_text)
     if row["subscription_type"]:
         # The plan is a label on the login, not a qualifier on the time. Trailing
         # it read as "refreshed 10m ago (max)", where (max) looks like it modifies
         # the age; leading it reads as what it is.
         cred_text = f"{row['subscription_type']} \u00b7 {cred_text}"
     rc = row["remote_control"] or "-"
-    # Nothing is expected of a node that is switched off, so saying so is noise.
-    if row["rc_expected"] and row["enabled"]:
+    # Nothing is expected of a node that is switched off, so saying so is noise;
+    # nor of a shared machine, whose Remote Control is its slot's to run.
+    if row["rc_expected"] and row["enabled"] and not row.get("machine"):
         rc += " (expected)"
+    shown, where = _called(row)
     return (
         f'<tr class="r-{escape(row["status"])}">'
         f"<td>{_pill(row['status'])}</td>"
-        f'<td><span class="node-id">{escape(row["id"])}</span>'
+        f'<td><span class="node-id">{escape(shown)}</span>'
         + (' <span class="pill warn">reboot needed</span>' if row.get("reboot_required") else "")
-        + f"<br><span class=\"muted\">{escape(row['owner'])}"
+        + f"<br><span class=\"muted\">{escape(where)}{escape(row['owner'])}"
         f" · {escape(row['region'] or '-')}</span></td>"
         f"<td class=\"num\">{escape(_age(now, row['last_seen_ts']))}</td>"
         f'<td class="v">{version}</td>'
@@ -587,9 +641,12 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
                     f'<input type="hidden" name="csrf" value="{escape(csrf)}">{extra}'
                     f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
 
-        buttons = [form("disable", "Disable") if row["enabled"] else form("enable", "Enable"),
-                   form("rc-off", "RC alert off") if row["rc_expected"] else
-                   form("rc-on", "RC alert on")]
+        buttons = [form("disable", "Disable") if row["enabled"] else form("enable", "Enable")]
+        # A shared machine is never judged on Remote Control: its slot runs it,
+        # and only once somebody has signed in. A switch there would do nothing.
+        if not row.get("machine"):
+            buttons.append(form("rc-off", "RC alert off") if row["rc_expected"] else
+                           form("rc-on", "RC alert on"))
         if row["claude_version"] and row["claude_version"] != row["pinned_version"]:
             version = escape(str(row["claude_version"]))
             buttons.append(form("pin", f"Pin {row['claude_version']}",
@@ -597,8 +654,9 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
         buttons.append(form("rotate-token", "New token", cls="danger"))
         buttons.append(form("remove", "Remove",
                             f'<input type="hidden" name="confirm" value="{node}">', cls="danger"))
-        items.append(f'<div class="row-line"><div class="row-name">{node}'
-                     f'<span class="muted"> · {escape(row["owner"])}</span></div>'
+        shown, where = _called(row)
+        items.append(f'<div class="row-line"><div class="row-name">{escape(shown)}'
+                     f'<span class="muted"> · {escape(where)}{escape(row["owner"])}</span></div>'
                      f'<div class="actions">{"".join(buttons)}</div></div>')
     return ('<h2 id="manage">Manage nodes</h2><div class="card">' + "".join(items) +
             '<p class="note">'
@@ -860,14 +918,22 @@ TOKEN_WORDS = {
 }
 
 
+#: Said under the sign-in and device-token cards when shared machines are left out.
+SHARED_ELSEWHERE = ("Shared machines are not listed here: whoever holds a slot signs it in, "
+                    "and gets device tokens, on their own page.")
+
+
 def _token_html(rows: list[Mapping[str, Any]], csrf: str,
                 logins: Mapping[str, Any], now: float) -> str:
     """Mint a credential for a machine that is not a node.
 
     The node is already signed in, so it can mint one on request. This card is
     how that is asked for and collected without anybody opening a terminal,
-    which was the last thing still requiring SSH.
+    which was the last thing still requiring SSH. An owner's node only: a
+    shared machine's slot gets its tokens on its holder's page.
     """
+    shared = any(r.get("machine") for r in rows)
+    rows = [r for r in rows if not r.get("machine")]
     if not rows:
         return ""
     items = []
@@ -928,12 +994,19 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
             "that node is signed in as, and shown here for as long as the request lasts "
             "&mdash; so a second machine can have the same one &mdash; then forgotten. One "
             "year, inference scope &mdash; Anthropic's limit, not ours, which is why it "
-            "cannot drive Remote Control.</p></div>")
+            "cannot drive Remote Control."
+            + (f" {SHARED_ELSEWHERE}" if shared else "") + "</p></div>")
 
 
 def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
                  logins: Mapping[str, Any]) -> str:
-    """One block per node: start a sign-in, or carry the one in flight forward."""
+    """One block per node: start a sign-in, or carry the one in flight forward.
+
+    An owner's node only. A shared machine's root has no Claude Code to sign in;
+    its slot is signed in by whoever holds it, on their own page.
+    """
+    shared = any(r.get("machine") for r in rows)
+    rows = [r for r in rows if not r.get("machine")]
     if not rows:
         return ""
     # A sign-in in flight is the only row here anyone has to act on. Settled rows
@@ -999,7 +1072,8 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
             '<p class="note">'
             "Starting a sign-in runs Claude Code's own login on the node. The credential is "
             "written there and never reaches this server; only the verification URL and the "
-            "code you paste pass through, and both are discarded when it finishes.</p></div>")
+            "code you paste pass through, and both are discarded when it finishes."
+            + (f" {SHARED_ELSEWHERE}" if shared else "") + "</p></div>")
 
 
 def _plural(n: Any, word: str) -> str:
@@ -1106,7 +1180,7 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
         return ""
     # A row of dashes says nothing an operator can act on, and four of them bury
     # the two that matter. Name the quiet nodes in one line instead.
-    quiet = [r["id"] for r in rows if not reporting(r)]
+    quiet = [_called(r)[0] for r in rows if not reporting(r)]
     tail = ""
     if quiet:
         names = ", ".join(escape(str(q)) for q in quiet[:8])
@@ -1122,11 +1196,12 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
         spark, caption = _usage_chart(usage)
         # Which model did the work is left out: it is whatever each person
         # chose in their session, and can change turn by turn.
+        shown, where = _called(row)
         items.append(
-            f'<div class="usage-row"><div class="usage-name">{escape(row["id"])}'
-            f'<span class="muted"> &middot; {escape(row["owner"])}</span>'
+            f'<div class="usage-row"><div class="usage-name">{escape(shown)}'
+            f'<span class="muted"> &middot; {escape(where)}{escape(row["owner"])}</span>'
             f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
-            f'<span class="muted"> tokens on this node, last '
+            f'<span class="muted"> tokens on this {"slot" if row.get("machine") else "node"}, last '
             f'{escape(_usage_span(usage))}</span></div>'
             f'<div class="usage-meta muted">'
             f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
@@ -1136,6 +1211,7 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
     return ('<h2>Usage and quota</h2><div class="card">' + "".join(items) + tail +
             '<p class="note">'
             "Windows come from <code>/usage</code> inside a Claude Code session on the node, "
+            "or in the slot on a shared machine, "
             "read on a slow schedule &mdash; Claude Code reporting on itself, not a usage "
             "endpoint. Token counts come from the transcripts it writes there. Conversation "
             "content never leaves the node; only counts do.</p></div>")
@@ -1199,9 +1275,15 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
              "No nodes are assigned to you yet. Your operator adds them.")
     body_rows = "".join(_row_html(r, now) for r in rows) or (
         f'<tr><td colspan="9" class="muted">{escape(empty)}</td></tr>')
+    # An alert is about a node: say it by the name that node goes by.
+    called = {}
+    for r in rows:
+        shown, _ = _called(r)
+        called[r["id"]] = shown if shown == r["id"] else f"{shown} on {r['id']}"
     alert_items = "".join(
         f'<div class="alert">{_pill(a["level"])}'
-        f'<span class="alert-rule">{escape(a["node_id"])} · {escape(a["rule"])}</span>'
+        f'<span class="alert-rule">{escape(called.get(a["node_id"], a["node_id"]))} · '
+        f'{escape(a["rule"])}</span>'
         f'<span class="alert-msg">{escape(a["message"])}</span>'
         f'<span class="muted small">{escape(_age(now, a["opened_at"]))} ago</span></div>'
         for a in alerts) or (
