@@ -856,7 +856,9 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
             return ""                     # a sign-in is in flight; one thing at a time
         issued = slot.get("device_token_at") or 0
         said = (f'<span class="pill ok">last issued {escape(_age(now, issued))} ago</span> '
-                if issued else '<span class="muted small">for your own laptop or desktop</span> ')
+                if issued else
+                '<span class="muted small">None yet &middot; optional, for using this '
+                'account from your own computer</span> ')
         return ('<div class="row-line"><div class="row-name">Device token</div>'
                 f'<div class="actions">{said}'
                 + _form(f"{base}/token", csrf, "Get another" if issued else "Get a device token")

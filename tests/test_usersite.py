@@ -398,6 +398,10 @@ def test_a_device_token_from_the_page(site):
     erik = sign_in(quota=1)
     slot = claimed(store, erik)
     key = slot_login_key(slot["id"])
+    # Before any token exists the row says it is optional, not a status to act on.
+    before = erik.page()
+    assert "None yet &middot; optional, for using this account from your own computer" in before
+    assert "last issued" not in before
     erik.press(f"/account/slots/{slot['id']}/token")
     row = store.get_login(key)
     assert row["kind"] == "token"
@@ -412,7 +416,8 @@ def test_a_device_token_from_the_page(site):
     erik.press(f"/account/slots/{slot['id']}/token-done")
     assert store.get_login(key) is None
     assert "Nothing to show" in erik.press(f"/account/slots/{slot['id']}/token-show").body
-    assert "last issued" in erik.page()
+    after = erik.page()
+    assert "last issued" in after and "None yet" not in after
 
 
 def test_one_flow_at_a_time_on_a_slot(site):
