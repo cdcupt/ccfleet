@@ -376,6 +376,12 @@ def _problems(slot: Mapping[str, Any], report: Mapping[str, Any],
         tone = "critical" if alert["level"] == "critical" else "warn"
         pills.append(_pill(tone, escape(str(alert["rule"]).split(":", 1)[0].replace("_", " "))))
         notes.append(_note(str(alert["message"])))
+    # Its holder moved it to another Claude account: said for the week that
+    # holds the next change back, which covers every change there is. Never
+    # which account; that is theirs to see.
+    switched = slot.get("account_switched_at")
+    if slotstates.switch_wait_until(switched, now) is not None:
+        notes.append(_note(f"changed Claude account {_age(now, switched)} ago", "muted"))
     # A claiming slot always has claimed_at: the claim writes both at once.
     if slot["state"] == slotstates.CLAIMING and now - slot["claimed_at"] > STUCK_AFTER_S:
         pills.append(_pill("warn", "stuck"))

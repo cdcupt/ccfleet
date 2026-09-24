@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, oauth, payments
+from . import claude_versions, names, oauth, payments, resets
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -63,6 +63,7 @@ NOTES = {
     "released": ("ok", "Given back. Everything on it is being deleted."),
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
     "signin": ("ok", "Starting the sign-in on your slot…"),
+    "switch": ("ok", "Starting the change of account on your slot…"),
     "token": ("ok", "Starting a device token on your slot…"),
     "code": ("ok", "Code sent to your slot."),
     "cancelled": ("ok", "Cancelled."),
@@ -90,8 +91,8 @@ STATE_WORDS = {
                            "allowance once the machine confirms it is gone."),
 }
 
-SLOT_ACTIONS = ("release", "signin", "code", "cancel", "token", "token-show", "token-done",
-                "update", "stable")
+SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "token", "token-show",
+                "token-done", "update", "stable")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
@@ -236,6 +237,11 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
         if action == "signin":
             store.request_slot_login(slot_id, form.get("email", ""), now, held_by=holder)
             return _back("signin", anchor)
+        if action == "switch":
+            # The store holds it to a slot in use and to once a week, in the
+            # same transaction as the holder check.
+            store.request_slot_login(slot_id, "", now, kind="switch", held_by=holder)
+            return _back("switch", anchor)
         if action == "token":
             store.request_slot_login(slot_id, "", now, kind="token", held_by=holder)
             return _back("token", anchor)
@@ -304,6 +310,7 @@ margin:0 0 18px;font-weight:550;background:var(--panel)}
 .note-banner.ok{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
 .note-banner.warn{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
 .lapsed{color:var(--warn);font-weight:650}
+.switched{color:var(--ok);font-weight:650}
 .card+.card{margin-top:14px}
 .card ul{margin:10px 0;padding-left:20px}.card li{margin:7px 0;line-height:1.55}
 .card li::marker{color:var(--acc)}
@@ -358,6 +365,7 @@ background:var(--inset);border:1px solid var(--rule-soft)}
 background:var(--acc-soft);border-radius:12px}
 .row-line.flow .login-url{background:var(--panel)}
 .row-line.flow input[type=text]{max-width:280px}
+.row-line.flow .flow-why{margin:0 0 10px;font-size:14px;max-width:64ch}
 /* Claude Code on the slot: the version it runs, and one press to the newest. */
 .cc-say{font-size:14px;overflow-wrap:anywhere}
 .cc-say b{font-family:var(--mono);font-size:13.5px;font-weight:650}
@@ -540,7 +548,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-09-23"
+PRIVACY_UPDATED = "2026-09-24"
 
 
 def _span(seconds: int) -> str:
@@ -578,11 +586,12 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         '<div class="card"><h2>What we keep because you use ccfleet</h2><ul>'
         "<li>Your account: the address and id above, whether you are an operator, how many "
         "slots you may hold, when you first signed in, and when you last visited.</li>"
-        "<li>The slots you hold, when you claimed each one, and when a device token was last "
-        "handed out for it. Each slot you hold is named after you, from the part of your "
-        "address before the @ (or a name the operator chose for you) and a number: that "
-        "name is also the one its machine answers to in claude.ai/code, and it goes when "
-        "you give the slot back.</li>"
+        "<li>The slots you hold, when you claimed each one, when a device token was last "
+        "handed out for it, and when you last moved it to another Claude account, which a "
+        "slot may do once a week. Each slot you hold is named after you, from the part of "
+        "your address before the @ (or a name the operator chose for you) and a number: "
+        "that name is also the one its machine answers to in claude.ai/code. The name and "
+        "the date go when you give the slot back.</li>"
         "<li>Your sign-in here: a random value in a cookie, of which we store only a hash, "
         "with when it began and when it ends. "
         f"It lasts {_span(cfg.session_ttl_s)}, or until you sign out.</li>"
@@ -594,9 +603,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "signed in on it, so your page can show which of your accounts it is, a "
         "fingerprint of that account (a one-way digest of Anthropic&#x27;s id for it, which "
         "cannot be turned back into the id or your address) and of the account the slot "
-        "was first signed in with, so we can tell when one account is signed in on two "
-        "machines, or a slot on another account than its own, which ccfleet does not "
-        "allow, that "
+        "keeps, so we can tell when one account is signed in on two machines, or a slot on "
+        "another account than its own, which ccfleet does not allow, that "
         "plan&#x27;s rate-limit tier, when that sign-in expires, whether Remote Control is "
         "running, how much of your Claude usage limits is used and when they reset, and how "
         "many tokens were used each hour over the last week. The token counts are worked "
@@ -610,9 +618,9 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "written on the machine, in your slot, and nowhere else: this server never stores "
         f"it. While a sign-in is in progress, its link, the code you paste and its progress "
         f"are held here for at most {attempt}. If one does not go through, why is kept for "
-        f"your page, and nothing else of it, for at most {attempt}. A device token you ask "
-        f"for is held here until you say you are done with it, and for at most "
-        f"{attempt}.</p>"
+        f"your page, and nothing else of it, for at most {attempt}, and so is how a change "
+        f"of account ended. A device token you ask for is held here until you say you are "
+        f"done with it, and for at most {attempt}.</p>"
         "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
         "Anthropic&#x27;s own terms and privacy policy.</p></div>"
         '<div class="card"><h2>What the operator can see</h2>'
@@ -680,9 +688,22 @@ ELSEWHERE = ("The Claude account on this slot is also signed in on another machi
              "this fleet. ccfleet keeps one account on one machine: sign it out of one of "
              "them.")
 #: Said on the card of a slot signed in to another account than the one it keeps.
-CHANGED = ("This slot is signed in to another Claude account than the one it was first "
-           "signed in with. A slot keeps its first account: sign that one in again, or "
-           "give the slot back and claim a new one.")
+CHANGED = ("This slot is signed in to another Claude account than the one it keeps. Sign "
+           "that one in again, or move the slot to the other with Change account.")
+#: Over a change of account while it runs: which account to sign in with, and
+#: that nothing is lost or changed until it finishes.
+SWITCH_FLOW = ("Sign in with the Claude account this slot should use from now on. Your "
+               "files stay; until this finishes the slot keeps its current account.")
+#: How a change of account ended, from the machine's fixed word: the class the
+#: sentence is said in, and the sentence.
+SWITCH_ENDED = {
+    slotstates.SWITCHED: ("switched", "Your slot now uses the new Claude account."),
+    slotstates.SAME_ACCOUNT: ("lapsed", "That is the account this slot already had; "
+                                        "nothing changed."),
+}
+#: What a flow that did not go through was, by its kind.
+NOT_DONE = {"token": "The device token was not made",
+            "switch": "The account was not changed"}
 
 
 def _flags(slot: Mapping[str, Any], alerts: list[Mapping[str, Any]]) -> frozenset[str]:
@@ -723,10 +744,11 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                channels: Optional[Mapping[str, Any]] = None) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
-    # A sign-in or token that failed is over: it is said once, below, and the
-    # buttons come back as if nothing were in flight.
-    failed = login if login.get("state") == "failed" else {}
-    login = {} if failed else login
+    # A sign-in or token that failed, or a change of account that finished, is
+    # over: it is said once, below, and the buttons come back as if nothing
+    # were in flight.
+    ended = login if login.get("state") in ("failed", "done") else {}
+    login = {} if ended else login
     if own:
         tone, title, detail = _own_state(report)
         # A token handed over for their own node is noted on the node.
@@ -773,13 +795,10 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
                 parts.append(f'<p class="lapsed">{escape(words)}</p>')
-    if failed and slot["state"] in CAN_SIGN_IN:
-        what = "The device token was not made" if failed.get("kind") == "token" else \
-            "The sign-in was not kept"
-        parts.append(f'<p class="lapsed">{what}: '
-                     f'{escape(str(failed.get("detail") or "no reason given"))}.</p>')
+    if ended and slot["state"] in CAN_SIGN_IN:
+        parts.append(_ended(ended))
     if slot["state"] in CAN_SIGN_IN:
-        parts.append(_sign_in(slot, report, login, csrf))
+        parts.append(_sign_in(slot, report, login, csrf, now))
         parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         parts.append(_tokens(slot, login, csrf, now))
     # Never on somebody's own node: giving back means wiping, and nothing
@@ -852,8 +871,19 @@ def _sign_in_left(expires: Any, now: float) -> str:
     return "good for 1 more day" if days == 1 else "ends within a day"
 
 
+def _ended(login: Mapping[str, Any]) -> str:
+    """How a flow that is over ended, said once on the card: a change of
+    account by the machine's fixed word, anything that failed with its reason."""
+    if login.get("state") == "done":
+        cls, words = SWITCH_ENDED.get(str(login.get("detail")), ("", ""))
+        return f'<p class="{cls}">{escape(words)}</p>' if words else ""
+    what = NOT_DONE.get(str(login.get("kind")), "The sign-in was not kept")
+    return (f'<p class="lapsed">{what}: '
+            f'{escape(str(login.get("detail") or "no reason given"))}.</p>')
+
+
 def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
-             login: Mapping[str, Any], csrf: str) -> str:
+             login: Mapping[str, Any], csrf: str, now: float) -> str:
     base = f"/account/slots/{escape(slot['id'])}"
     state = login.get("state") if login.get("kind") != "token" else None
     if not state:
@@ -867,8 +897,10 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
                 '<div class="actions">'
                 + _form(f"{base}/signin", csrf, "Sign in again" if signed_in else
                         "Sign in to Claude", field, "" if signed_in else "primary")
-                + "</div></div>")
+                + _change_account(slot, csrf, now) + "</div></div>")
     body = f'<span class="login-say">{escape(LOGIN_WORDS.get(state, state))}</span>'
+    if login.get("kind") == "switch":
+        body = f'<p class="flow-why">{escape(SWITCH_FLOW)}</p>' + body
     url = login.get("url") or ""
     # Checked again here, not only when it was stored: a link on this page must
     # never be anything but a sign-in on Anthropic's own hosts.
@@ -882,6 +914,21 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
     return (f'<div class="row-line stacked flow"><div class="row-name">Claude</div>'
             f"{body}</div>")
+
+
+def _change_account(slot: Mapping[str, Any], csrf: str, now: float) -> str:
+    """Moving a machine's slot in use to another Claude account: the button,
+    or — for a week after the last move — when it comes back, in the viewer's
+    own time where the page can say it (see LOCAL_TIMES_JS)."""
+    if slot.get("kind") == slotstates.OWNER_SLOT or slot["state"] != slotstates.ACTIVE:
+        return ""
+    wait = slotstates.switch_wait_until(slot.get("account_switched_at"), now)
+    if wait is None:
+        return " " + _form(f"/account/slots/{escape(slot['id'])}/switch", csrf,
+                           "Change account")
+    return (' <span class="muted small">You can change account again '
+            f'<time datetime="{escape(resets.iso(wait))}" data-local>'
+            f"{escape(resets.until(now, wait))}</time></span>")
 
 
 #: A channel as the page names it.

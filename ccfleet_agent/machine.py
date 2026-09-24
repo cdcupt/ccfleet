@@ -99,9 +99,10 @@ MAX_REPLY_BYTES = 1024 * 1024
 FULL_EVERY_S = 60.0
 # After this long a run takes on no new sign-ins; the next run starts them.
 MAX_RESIDENT_S = 60 * 60
-# The slot states a sign-in can run in, and the kinds it can be.
+# The slot states a sign-in can run in, and the kinds it can be: a sign-in, a
+# device token, or a change to another Claude account ("switch").
 SIGN_IN_STATES = ("claimed", "active")
-LOGIN_KINDS = ("login", "token")
+LOGIN_KINDS = ("login", "token", "switch")
 MAX_LOGIN_FIELD = 512
 # How long a child that has closed its output gets to exit before it is killed.
 EXIT_GRACE_S = 5.0

@@ -1925,6 +1925,12 @@ def _credentials_stamp(config_dir: Path) -> Optional[list[int]]:
 # in a scratch Claude Code directory: the same account's fresh credential then
 # replaces the old one in ~/.claude, whole; any other account's is thrown away,
 # and the sign-in the slot already had is never touched.
+#
+# Its holder can move it to another Claude account of theirs — a change of
+# account, kind "switch", which the server allows once a week. It signs in to
+# scratch the same way, and only a sign-in that finishes there replaces the
+# account the slot had: credential, account block and binding. Until then the
+# slot keeps the old one, so it never holds two.
 
 SIGNIN_SCRATCH = "~/.config/ccfleet/signin-scratch"
 # Where Claude Code keeps its global config when CLAUDE_CONFIG_DIR names a
@@ -1933,11 +1939,16 @@ SIGNIN_SCRATCH = "~/.config/ccfleet/signin-scratch"
 # Only the default ~/.claude keeps it beside, as ~/.claude.json, which is what
 # global_config_of is for; it does not apply to the scratch directory.
 SCRATCH_GLOBAL_CONFIG = ".claude.json"
-OTHER_ACCOUNT = ("this slot stays with the Claude account it was first signed in with; "
-                 "to use another account, hold another slot")
+OTHER_ACCOUNT = ("this slot stays with its own Claude account; to move it to another, "
+                 "use Change account")
 UNKNOWN_ACCOUNT = "could not tell which Claude account signed in; nothing was changed"
 NOT_ADOPTED = "could not put the new sign-in in place; nothing was changed"
 NO_SCRATCH = "could not make a place for the sign-in; nothing was changed"
+# How a change of account that went through ended, word for word: the server
+# starts the week before the next change on the first alone, and the holder's
+# page says which it was (ccfleetd/slots.py keeps the same two).
+SWITCHED = "now signed in with another Claude account"
+SAME_ACCOUNT = "signed in again with the same Claude account"
 
 
 def bind_first_account(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -2001,13 +2012,17 @@ def _read_once(path: Path) -> Optional[bytes]:
         return None
 
 
-def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
-    """Keep the scratch sign-in if it is the slot's own account. "" when kept,
-    else why not. The scratch directory is gone either way.
+def adopt_sign_in(bound_fp: str, runner: Runner, switch: bool = False
+                  ) -> tuple[str, Optional[str]]:
+    """Keep the scratch sign-in if it is the slot's own account — or, on a
+    change of account (`switch`), whichever account it is. Returns ("" when
+    kept, else why not; the fingerprint of the account that signed in). The
+    scratch directory is gone either way.
 
     Both files are read once, and what is written into ~/.claude is exactly the
     credential read beside the account that was checked — never the file again,
-    which could have changed in between.
+    which could have changed in between. Another account, kept, takes the
+    slot's account block with it (see _take_sign_in).
 
     What this is, and is not. It keeps the page's "Sign in again" from putting
     another account on the slot: somebody signing in, honestly, as the wrong
@@ -2028,7 +2043,7 @@ def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
     why = ""
     if fp is None:
         why = UNKNOWN_ACCOUNT
-    elif fp != bound_fp:
+    elif fp != bound_fp and not switch:
         why = OTHER_ACCOUNT
         path = find_claude()
         if path:
@@ -2036,15 +2051,56 @@ def adopt_sign_in(bound_fp: str, runner: Runner) -> str:
             # machine. Best effort: deleting the directory is what counts here.
             _run(_in_config_dir(runner, scratch), [path, "auth", "logout"], timeout=30.0)
     else:
-        try:
-            text = credential.decode("utf-8") if credential is not None else None
-        except UnicodeDecodeError:
-            text = None
-        target = Path.home() / ".claude" / ".credentials.json"
-        if text is None or not _atomic_write(target, text):
-            why = NOT_ADOPTED
+        why = _take_sign_in(credential, profile if fp != bound_fp else None)
     discard_scratch()
-    return why
+    return why, fp
+
+
+def _with_account(raw: Optional[bytes], account: Mapping[str, Any]) -> Optional[str]:
+    """This ~/.claude.json, as read, with its account block replaced by
+    `account` and every other key kept where it was. None unless it is a
+    JSON object, and then nothing is written.
+
+    Escaped to ASCII, so nothing the file holds can fail to be written back.
+    """
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except ValueError:                    # not JSON, or not UTF-8 (UnicodeDecodeError)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return json.dumps({**data, "oauthAccount": account}, indent=2)
+
+
+def _take_sign_in(credential: Optional[bytes], other: Optional[bytes]) -> str:
+    """Put a checked scratch sign-in in ~/.claude. "" when done, else why not.
+
+    The same account is its credential, whole, and nothing else. Another
+    account — `other`, the scratch profile it signed in with — is that, and
+    the account block of ~/.claude.json: the rest of that file is the holder's
+    own settings and history, and stays. The block goes first and the
+    credential last, so until the credential lands the slot signs in exactly
+    as it did; a credential that cannot be written puts the old block back.
+    """
+    try:
+        text = credential.decode("utf-8") if credential is not None else None
+    except UnicodeDecodeError:
+        text = None
+    if text is None:
+        return NOT_ADOPTED
+    target = Path.home() / ".claude" / ".credentials.json"
+    if other is None:
+        return "" if _atomic_write(target, text) else NOT_ADOPTED
+    config = global_config_of(Path.home() / ".claude")
+    was = _read_once(config)
+    # fingerprint_of has read `other` as a JSON object with an account block.
+    moved = _with_account(was, json.loads(other.decode("utf-8"))["oauthAccount"])
+    if moved is None or not _atomic_write(config, moved):
+        return NOT_ADOPTED
+    if _atomic_write(target, text):
+        return ""
+    _atomic_write(config, was.decode("utf-8"))     # read whole above, or moved is None
+    return NOT_ADOPTED
 
 
 def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
@@ -2060,6 +2116,11 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
     bind_first_account), every sign-in goes to scratch and is kept only if it
     is the bound account (see adopt_sign_in). A device token is not a sign-in:
     it is minted from ~/.claude as it is.
+
+    A change of account signs in to scratch too, and keeps another account:
+    the slot is bound to it from then on, and says which way it ended in
+    words the server knows (SWITCHED, SAME_ACCOUNT). On a slot not yet bound
+    it is simply its first sign-in.
     """
     mine = state.get("login") if isinstance(state.get("login"), Mapping) else {}
     asked = isinstance(wanted, Mapping)
@@ -2067,6 +2128,9 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
     token = asked and wanted.get("kind") == "token"
     bound = state.get("bound_fp")
     scratch = (not token and bool(bound)) if fresh else bool(mine.get("scratch"))
+    # Decided when the attempt starts and kept with it, like the place: what
+    # may be kept at the end is what was asked for at the start.
+    switch = wanted.get("kind") == "switch" if fresh else bool(mine.get("switch"))
     place = Path(SIGNIN_SCRATCH).expanduser() if scratch else Path.home() / ".claude"
     if fresh and scratch and not prepare_scratch():
         requested_at = wanted.get("requested_at")
@@ -2084,12 +2148,16 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner
         env_prefix=("env", f"{CONFIG_DIR_VAR}={place}") if scratch else (),
         signed_in=None if token else signed_in)
     if fresh and isinstance(new_state.get("login"), Mapping):
-        new_state["login"] = {**new_state["login"], "before": before, "scratch": scratch}
+        new_state["login"] = {**new_state["login"], "before": before, "scratch": scratch,
+                              "switch": switch}
     done = not token and (progress or {}).get("state") == "done"
     if done and scratch:
-        why = adopt_sign_in(str(bound), runner)
+        why, fp = adopt_sign_in(str(bound), runner, switch=switch)
         if why:
             return {**progress, "state": "failed", "detail": why}, new_state, False
+        if switch:
+            progress = {**progress, "detail": SWITCHED if fp != bound else SAME_ACCOUNT}
+            new_state = {**new_state, "bound_fp": fp}
     return progress, new_state, done
 
 
@@ -2224,6 +2292,12 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # typed on one run and Claude Code writes the credential before the next.
     state = bind_first_account(state)
     progress, state, finished = reconcile_slot_login(request.get("login"), state, runner)
+    if finished:
+        # Kept at once, before anything slow runs: a change of account has just
+        # moved the binding with the credential, and a run cut short after this
+        # (Remote Control's restart alone may take a minute) must not leave the
+        # slot bound to the account it no longer has.
+        write_state(state_path, state)
     if "login" not in state:
         discard_scratch()                   # a sign-in cancelled, abandoned or over
     if moved or finished:

@@ -95,6 +95,27 @@ ONE_SLOT_WHY = ("one machine is one slot: claude.ai/code shows a machine by its 
 #: person is better told no than left watching "setting up" for an evening.
 CLAIM_TIMEOUT_S = 30 * 60
 
+#: How often a slot's holder may move it to another Claude account of theirs
+#: (Erik, 2026-09-24): once a week. The files stay, and the slot never holds
+#: two accounts; the week keeps a change from becoming a way to take turns.
+SWITCH_EVERY_S = 7 * 86400
+#: How a change of account ended, word for word as a machine's agent says it
+#: (ccfleet_agent/agent.py): moved to another account, or signed in again with
+#: the one it had. Only the first starts the week.
+SWITCHED = "now signed in with another Claude account"
+SAME_ACCOUNT = "signed in again with the same Claude account"
+SWITCH_ENDINGS = (SWITCHED, SAME_ACCOUNT)
+
+
+def switch_wait_until(switched_at: Optional[float], now: float) -> Optional[float]:
+    """When a slot last moved to another account at `switched_at` may move
+    again: that moment while it is still ahead, None once it may."""
+    if switched_at is None:
+        return None
+    until = switched_at + SWITCH_EVERY_S
+    return until if now < until else None
+
+
 def _same_claim(reported: Any, claimed_at: Optional[float]) -> bool:
     """Is this report about this claim? Compared exactly: the timestamp goes
     down as JSON, is kept by the machine as JSON and comes back as JSON, and a

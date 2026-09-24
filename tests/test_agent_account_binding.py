@@ -292,7 +292,7 @@ def test_what_is_kept_is_the_credential_that_was_checked_not_the_file_again(home
         return answer
 
     monkeypatch.setattr(agent, "fingerprint_of", checked_then_swapped)
-    assert agent.adopt_sign_in(fp_of(MINE), Slot(home)) == ""
+    assert agent.adopt_sign_in(fp_of(MINE), Slot(home)) == ("", fp_of(MINE))
     kept = (home / ".claude" / ".credentials.json").read_text()
     assert "sk-ant-oat01-CHECKED" in kept and "SWAPPED" not in kept
 
@@ -302,7 +302,7 @@ def test_a_credential_that_cannot_be_read_is_not_adopted(home):
     before = (home / ".claude" / ".credentials.json").read_bytes()
     write_account(scratch(home), scratch(home) / ".claude.json", MINE, "x")
     (scratch(home) / ".credentials.json").unlink()
-    assert agent.adopt_sign_in(fp_of(MINE), Slot(home)) == agent.NOT_ADOPTED
+    assert agent.adopt_sign_in(fp_of(MINE), Slot(home)) == (agent.NOT_ADOPTED, fp_of(MINE))
     assert (home / ".claude" / ".credentials.json").read_bytes() == before
 
 

@@ -101,6 +101,7 @@ def test_the_kind_handed_to_a_node_is_one_it_knows():
 
     assert kind_for("token") == "token"
     assert kind_for("login") == "login"
+    assert kind_for("switch") == "switch"
     for strange in ("relay", "", None, 7, "TOKEN"):
         assert kind_for(strange) == "login", f"{strange!r} must not reach the node"
 

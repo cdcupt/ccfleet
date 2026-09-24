@@ -318,8 +318,8 @@ def _slot_account_findings(slot_rows: Sequence[Mapping[str, Any]],
                 and now_fp and kept_fp and now_fp != kept_fp):
             findings.append(Finding(
                 f"account_changed:{user}", LEVEL_CRITICAL,
-                f"{row['id']} is signed in to another Claude account than the one it was "
-                f"first signed in with: a slot keeps its account"))
+                f"{row['id']} is signed in to another Claude account than the one it "
+                f"keeps: a slot moves to another account only by Change account"))
     return findings
 
 
