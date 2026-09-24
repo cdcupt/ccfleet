@@ -17,6 +17,7 @@ paid-through day is.
 
 from __future__ import annotations
 
+import calendar
 import re
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta, timezone
@@ -82,6 +83,29 @@ def format_amount(minor: int, currency: str) -> str:
 def today(now: float) -> date:
     """Paid-through days are calendar days, counted in UTC."""
     return datetime.fromtimestamp(now, tz=timezone.utc).date()
+
+
+def month_through(start: date) -> str:
+    """The last day a month paid from ``start`` covers: the day before the same
+    day a month later, when the next one would be due. A day the next month
+    lacks (the 31st, into a shorter month) is due on that month's last day."""
+    year, month = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+    due = date(year, month, min(start.day, calendar.monthrange(year, month)[1]))
+    return (due - timedelta(days=1)).isoformat()
+
+
+def next_through(current: Optional[str], today: date) -> str:
+    """The paid-through day to suggest for one more month.
+
+    It runs on from the day after what is already paid for, so paying a few days
+    early loses nobody those days, or from today when that has passed or
+    nothing has been paid. Typed by hand, the first payment here was put a
+    month short, on the day before it was recorded.
+    """
+    start = today
+    if current:
+        start = max(start, date.fromisoformat(current) + timedelta(days=1))
+    return month_through(start)
 
 
 def paid_through(rows: Iterable[Mapping[str, Any]]) -> Optional[str]:

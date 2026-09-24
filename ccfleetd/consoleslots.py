@@ -547,7 +547,7 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
                     "Set allowance",
                     '<input type="text" name="count" class="count" inputmode="numeric" '
                     f'value="{quota}" required>')
-            + "</div>" + _ledger(account, paid, csrf) + "</div>")
+            + "</div>" + _ledger(account, paid, csrf, now) + "</div>")
     body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
     return ('<h2 id="accounts">Accounts</h2><div class="card">' + body +
             '<p class="note">An allowance is how many slots somebody may hold; it starts at '
@@ -576,17 +576,21 @@ def _standing(paid: list[Mapping[str, Any]], counts: bool, now: float) -> str:
     return f" · paid through {day}, ended"
 
 
-def _ledger(account: Mapping[str, Any], paid: list[Mapping[str, Any]], csrf: str) -> str:
+def _ledger(account: Mapping[str, Any], paid: list[Mapping[str, Any]], csrf: str,
+            now: float) -> str:
     items = "".join(_payment_line(p, csrf) for p in paid)
     # Whatever they paid in last time is the likeliest this time.
     currency = paid[0]["currency"] if paid else "USD"
+    # And a month, from the end of what they have paid for or from today.
+    through = payments.next_through(payments.paid_through(paid), payments.today(now))
     record = _form(
         f"/actions/account/{escape(account['id'])}/payment", csrf, "Record payment",
         '<input type="text" name="amount" placeholder="amount" inputmode="decimal" '
         'size="7" required>'
         f'<input type="text" name="currency" value="{escape(currency)}" size="4" '
         'maxlength="3" required>'
-        '<input type="date" name="through" title="paid through" required>'
+        f'<input type="date" name="through" title="paid through" value="{escape(through)}" '
+        'required>'
         '<input type="text" name="note" placeholder="note, seen only here" size="18" '
         f'maxlength="{payments.NOTE_MAX}">')
     return (f'<details class="ledger"><summary>Payments ({len(paid)})</summary>'
