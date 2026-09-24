@@ -566,7 +566,7 @@ def test_the_console_shows_each_slots_version_and_the_releases(console):  # noqa
         "node_id": "m1", "mode": "machine",
         "slots": [{"unix_user": "slot01", "present": True, "claude": {"version": "2.1.267"}}]})
     page = text(call_as("GET", "/admin").body)
-    assert "Claude Code releases: stable 2.1.273 · latest 2.1.281" in page
+    assert "Claude Code releases: Latest 2.1.281 · Stable 2.1.273" in page
     assert "Claude Code 2.1.267 (stable)" in page
     store.request_claude_update(slot["id"], time.time(), held_by="a1")
     assert "Claude Code 2.1.267 (latest)" in text(call_as("GET", "/admin").body)

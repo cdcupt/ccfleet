@@ -8,7 +8,9 @@ the slot's id typed out, and there is no action here that acts as a user.
 from __future__ import annotations
 
 import base64
+import html
 import http.client
+import re
 import threading
 import time
 import urllib.parse
@@ -81,6 +83,34 @@ def accounts_card(page):
     return page[page.index('id="accounts"'):]
 
 
+def text(fragment):
+    """What a person reads: the tags gone, the entities said."""
+    return html.unescape(re.sub(r"<[^>]+>", "", fragment))
+
+
+def rows(card):
+    """The Slots card's rows, each as (the machine it is on, its markup)."""
+    body = card[:card.rindex('<p class="note">')]
+    return [(re.match(r'data-machine="([^"]*)"', part).group(1), part)
+            for part in body.split('<div class="slotrow" ')[1:]]
+
+
+def row_of(card, machine):
+    """The one row a machine has."""
+    found = [row for name, row in rows(card) if name == machine]
+    assert len(found) == 1, f"{machine} has {len(found)} rows"
+    return found[0]
+
+
+def on_the_row(row):
+    """What a row shows before anybody opens its Manage."""
+    return row[:row.index('<details class="manage"')]
+
+
+def under_manage(row):
+    return row[row.index('<details class="manage"'):]
+
+
 def holder(store, email="ana@example.com", quota=1):
     account = store.upsert_account_from_google(f"sub-{email}", email, now=time.time())
     store.set_slot_quota(account["id"], quota)
@@ -97,7 +127,7 @@ def test_the_operator_sees_every_slot_and_who_holds_it(console):
     card = slots_card(call("GET", "/admin").body)
     assert "m1-01" in card and "m1-02" in card
     assert "ana@example.com" in card
-    assert ">claiming<" in card and ">free<" in card
+    assert ">Setting up<" in card and ">Free<" in card
 
 
 def test_what_people_and_machines_wrote_is_shown_not_run(console):
@@ -189,7 +219,9 @@ def test_setting_a_machines_capacity(console):
     reply = call("POST", "/actions/machine/m1/capacity", {"count": "1"})
     assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
     assert store.get_node("m1")["capacity"] == 1
-    assert "0 of 1 declared" in call("GET", "/admin").body
+    row = row_of(slots_card(call("GET", "/admin").body), "m1")
+    assert "No slot declared yet" in row
+    assert 'name="count" class="count" inputmode="numeric" value="1"' in row
 
 
 @pytest.mark.parametrize("count", ["2", "5"])
@@ -533,7 +565,7 @@ def test_each_slot_shows_the_claude_code_it_runs(console):
     store, call = console
     held_slot(store)
     machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}})
-    assert "Claude Code 2.1.278" in slots_card(call("GET", "/admin").body)
+    assert "Claude Code 2.1.278" in text(slots_card(call("GET", "/admin").body))
 
 
 def test_a_slot_behind_an_exact_pin_is_pending(console):
@@ -602,11 +634,11 @@ def test_keeping_a_machine_for_somebody_from_the_console(console):
     store, call = console
     shared(store)
     ana = holder(store)
-    assert "Reserved for" not in slots_card(call("GET", "/admin").body)
+    assert "kept for" not in slots_card(call("GET", "/admin").body)
     reply = call("POST", "/actions/machine/m1/reserve", {"email": " ana@example.com "})
     assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
     assert store.get_node("m1")["reserved_for"] == ana["id"]
-    assert "Reserved for ana@example.com" in slots_card(call("GET", "/admin").body)
+    assert "kept for ana@example.com" in slots_card(call("GET", "/admin").body)
 
 
 @pytest.mark.parametrize("email", ["ana@exmaple.com", "", "   "])
@@ -633,7 +665,7 @@ def test_opening_a_kept_machine_again_from_the_console(console):
     assert reply.status == 303 and reply.getheader("Location") == "/admin#slots"
     assert store.get_node("m1")["reserved_for"] is None
     card = slots_card(call("GET", "/admin").body)
-    assert "Reserved for" not in card and "/unreserve" not in card
+    assert "kept for" not in card and "/unreserve" not in card
 
 
 def test_an_owner_node_cannot_be_kept_from_the_console(console):
@@ -652,7 +684,7 @@ def test_who_a_machine_is_kept_for_is_shown_not_run(console):
     store.reserve_machine("m1", odd["id"])
     card = slots_card(call("GET", "/admin").body)
     assert "<b>x</b>" not in card
-    assert "Reserved for o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;@example.com" in card
+    assert "kept for o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;@example.com" in card
 
 
 def test_a_machine_kept_for_an_account_that_is_gone_still_says_so(console):
@@ -665,7 +697,7 @@ def test_a_machine_kept_for_an_account_that_is_gone_still_says_so(console):
         store._conn.commit()
     reply = call("GET", "/admin")
     assert reply.status == 200
-    assert "Reserved for an account that no longer exists" in slots_card(reply.body)
+    assert "kept for an account that no longer exists" in slots_card(reply.body)
 
 
 # -- slot model v2: names, own machines, one slot each --------------------------------------
@@ -700,8 +732,7 @@ def test_a_machine_from_before_one_slot_each_is_flagged(console):
     assert "more than one slot" in card
     shared(store, node="m2", users=("slot01",))
     one = slots_card(call("GET", "/admin").body)
-    m2 = one[one.index('row-name">m2<'):]
-    assert "more than one slot" not in m2[:m2.index("</div>")]
+    assert "more than one slot" not in row_of(one, "m2")
 
 
 def test_a_machine_that_never_said_its_hostname_is_not_called_pending(console):
@@ -732,3 +763,215 @@ def test_taking_back_an_owners_node_is_refused_even_by_a_hand_made_form(console)
     reply = call("POST", "/actions/slot/erik-1/reclaim", {"confirm": "erik-1"})
     assert reply.status == 400 and "own machine" in reply.body
     assert store.get_slot("erik-1")["state"] == slots.ACTIVE
+
+
+# -- the card's shape: a row a machine, its actions under Manage ----------------------------
+
+def own_machine(store, node="erik-1", email="cdcupt@gmail.com"):
+    """Somebody's own node, counted as their slot."""
+    store.add_node(node, "erik", now=time.time())
+    owner = holder(store, email=email)
+    store.hold_owner_node(node, owner["id"], now=time.time())
+    return owner
+
+
+def by_name(card):
+    """Each row by the name it shows."""
+    return {re.search(r'class="row-name">([^<]*)<', row).group(1): row for _, row in rows(card)}
+
+
+def test_every_kind_of_machine_is_one_row(console):
+    """A machine and its one slot were a head and a line saying the same name
+    twice; now the slot is the row. An ordinary owner node has none."""
+    store, call = console
+    held_slot(store)                                          # m1: held
+    shared(store, node="m2", users=("slot01",))               # m2: free
+    shared(store, node="m3", users=())                        # m3: says it is one, no slot
+    store.insert_heartbeat("m3", time.time(), {"node_id": "m3", "mode": "machine", "slots": []})
+    own_machine(store)                                        # erik-1: counted as a slot
+    store.add_node("laptop", "erik", now=time.time())         # nothing about slots
+    card = slots_card(call("GET", "/admin").body)
+    assert sorted(name for name, _ in rows(card)) == ["erik-1", "m1", "m2", "m3"]
+    assert card.count('class="slothead"') == 1
+    shown = text(on_the_row(row_of(card, "m1")))
+    assert "ana-1" in shown and "on m1" in shown and "ana@example.com" in shown
+    assert "Ready to sign in" in shown
+    for inside in ("declared", "slot01", "on machine"):
+        assert inside not in shown
+
+
+def test_every_action_waits_under_its_rows_manage(console):
+    """Nothing that acts is out on a row: every form, Take back among them,
+    folds under Manage, a details element that needs no script."""
+    store, call = console
+    held_slot(store)                                          # m1: take back, keep for
+    shared(store, node="m2", users=("slot01",))               # m2: remove
+    own_machine(store)
+    card = slots_card(call("GET", "/admin").body)
+    for name, row in rows(card):
+        assert "<form" not in on_the_row(row), name
+        assert "<summary>Manage" in row
+    assert "<script" not in card
+    m1 = under_manage(row_of(card, "m1"))
+    assert 'action="/actions/slot/m1-01/reclaim"' in m1 and 'name="confirm"' in m1
+    assert 'action="/actions/machine/m1/reserve"' in m1 and 'name="email"' in m1
+    assert 'action="/actions/slot/m2-01/remove"' in under_manage(row_of(card, "m2"))
+
+
+def test_take_back_asks_for_the_slots_id_typed_and_never_fills_it_in(console):
+    store, call = console
+    held_slot(store)
+    manage = under_manage(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    form = manage[manage.index('action="/actions/slot/m1-01/reclaim"'):]
+    form = form[:form.index("</form>")]
+    box = re.search(r'<input type="text" name="confirm"[^>]*>', form).group(0)
+    assert 'placeholder="type m1-01"' in box and "required" in box and "value=" not in box
+    assert '<button class="danger" type="submit">Take back</button>' in form
+
+
+def test_a_machine_is_kept_for_somebody_or_opened_again_never_both(console):
+    store, call = console
+    shared(store, users=("slot01",))
+    ana = holder(store)
+    manage = under_manage(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    assert "/actions/machine/m1/reserve" in manage and "/unreserve" not in manage
+    store.reserve_machine("m1", ana["id"])
+    manage = under_manage(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    assert "/actions/machine/m1/unreserve" in manage
+    assert "/actions/machine/m1/reserve" not in manage
+
+
+def test_capacity_and_declaring_only_where_they_can_do_anything(console):
+    """A machine with its one slot has nothing to declare and no capacity to
+    change. One with none yet opens straight onto declaring it; one from
+    before, with two, gets its capacity and the way out, but no third slot."""
+    store, call = console
+    held_slot(store)                                          # m1: its one slot
+    shared(store, node="m2", users=())                        # m2: none yet
+    store.insert_heartbeat("m2", time.time(), {"node_id": "m2", "mode": "machine", "slots": []})
+    shared(store, node="m3")                                  # m3: two, from before
+    card = slots_card(call("GET", "/admin").body)
+    one = row_of(card, "m1")
+    assert "/capacity" not in one and "/slot-add" not in one and "Advanced" not in one
+    assert '<details class="manage" open>' not in one
+    none = row_of(card, "m2")
+    assert '<details class="manage" open>' in none and "No slot declared yet" in none
+    declare = under_manage(none)
+    for field in ('action="/actions/machine/m2/slot-add"', 'name="slot_id"',
+                  'name="unix_user"', 'action="/actions/machine/m2/capacity"'):
+        assert field in declare
+    crowded = [row for name, row in rows(card) if name == "m3"]
+    assert len(crowded) == 2
+    for row in crowded:
+        assert 'action="/actions/machine/m3/capacity"' in under_manage(row)
+        assert "/slot-add" not in row and '<details class="manage" open>' not in row
+
+
+def test_an_own_machines_row_carries_no_command(console):
+    """How to stop counting somebody's own machine is a server command. It
+    waits under Manage, said once, and nothing on the row acts on it."""
+    store, call = console
+    own_machine(store)
+    row = row_of(slots_card(call("GET", "/admin").body), "erik-1")
+    assert "ccfleetd" not in on_the_row(row) and "<code>" not in on_the_row(row)
+    assert "own machine" in text(on_the_row(row))
+    assert under_manage(row).count("ccfleetd node hold erik-1 --none") == 1
+    assert "<form" not in row
+
+
+def test_alerts_are_pills_on_the_row_they_are_about(console):
+    store, call = console
+    shared(store)                                             # m1-01 slot01, m1-02 slot02
+    now = time.time()
+    store.open_alert("m1", "account_elsewhere:slot01", "critical",
+                     "the Claude account on m1-01 is also signed in on m9", now)
+    store.open_alert("m1", "slot_provision_failed:slot01", "warn", "setting up slot01 failed", now)
+    store.open_alert("m1", "slot_wipe_failed:slot02", "critical",
+                     "wiping slot02 failed: userdel exited 8", now)
+    # The machine's own, about no slot: the Alerts card says it, not a row.
+    store.open_alert("m1", "account_elsewhere", "critical", "about the machine itself", now)
+    card = slots_card(call("GET", "/admin").body)
+    first, second = on_the_row(by_name(card)["m1-01"]), on_the_row(by_name(card)["m1-02"])
+    assert '<span class="pill critical">account elsewhere</span>' in first
+    assert '<span class="pill warn">slot provision failed</span>' in first
+    assert '<span class="pill critical">slot wipe failed</span>' in second
+    assert "slot wipe failed" not in first and "account elsewhere" not in second
+    assert "also signed in on m9" in first and "setting up slot01 failed" in first
+    assert "about the machine itself" not in card
+    assert text(card).count("wiping slot02 failed: userdel exited 8") == 1
+
+
+def test_an_own_machines_account_alert_is_a_pill_on_its_row(console):
+    """Its own node raises the account alert bare: the node is the slot."""
+    store, call = console
+    own_machine(store)
+    store.open_alert("erik-1", "account_elsewhere", "critical",
+                     "the Claude account signed in here is also signed in on m1", time.time())
+    row = on_the_row(row_of(slots_card(call("GET", "/admin").body), "erik-1"))
+    assert '<span class="pill critical">account elsewhere</span>' in row
+    assert "also signed in on m1" in row
+
+
+def test_a_row_with_nothing_wrong_has_no_pills(console):
+    store, call = console
+    held_slot(store)
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}},
+                 hostname="ana-1", reboot_required=False)
+    row = row_of(slots_card(call("GET", "/admin").body), "m1")
+    assert '<div class="c-flags"></div>' in row and "slot-notes" not in row
+
+
+def test_each_machine_problem_is_a_pill_on_that_machines_row_only(console):
+    store, call = console
+    held_slot(store)                                          # m1
+    shared(store, node="m2", users=("slot01",))               # m2: nothing wrong
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"},
+                         "upgrade": {"to": "2.1.300", "ok": False, "error": "disk full"}},
+                 reboot_required=True, hostname="m1")
+    card = slots_card(call("GET", "/admin").body)
+    m1 = on_the_row(row_of(card, "m1"))
+    for pill in ('warn">reboot needed', 'warn">hostname pending', 'critical">update failed'):
+        assert f'<span class="pill {pill}</span>' in m1
+    assert "still answers to m1; becomes ana-1 on its next run" in m1
+    assert "Claude Code update to 2.1.300 failed: disk full" in m1
+    assert '<div class="c-flags"></div>' in row_of(card, "m2")
+
+
+def test_a_claim_stuck_setting_up_is_a_pill_that_says_for_how_long(console):
+    store, call = console
+    shared(store, users=("slot01",))
+    store.claim_slot(holder(store)["id"], now=time.time() - 3600)
+    row = on_the_row(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    assert '<span class="pill warn">stuck</span>' in row and "setting up for 60m" in row
+
+
+def test_an_update_the_server_saw_fail_is_a_pill_with_its_reason(console):
+    """The machine said nothing about it, but the update it was asked for
+    came back failed: the row says so all the same."""
+    store, call = console
+    slot = held_slot(store, pin="stable")
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.267"}})
+    asked = time.time()
+    store.request_claude_update(slot["id"], asked, held_by=slot["held_by"])
+    store.record_claude_update(slot["id"], asked, "failed", "2.1.281", "npm <b>exited</b> 1",
+                               time.time())
+    row = on_the_row(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    assert '<span class="pill critical">update failed</span>' in row
+    assert "Claude Code update failed: npm &lt;b&gt;exited&lt;/b&gt; 1" in row
+
+
+def test_names_and_addresses_are_text_in_every_cell(console):
+    store, call = console
+    shared(store, users=("slot01",))
+    odd = holder(store, email="o'neil&<b>x</b>@example.com")
+    store.reserve_machine("m1", odd["id"])
+    store.claim_slot(odd["id"], now=time.time())
+    with store._lock:
+        store._conn.execute("UPDATE slots SET name = '<i>ana</i>' WHERE id = 'm1-01'")
+        store._conn.commit()
+    card = slots_card(call("GET", "/admin").body)
+    row = row_of(card, "m1")
+    assert "<b>x</b>" not in card and "<i>ana</i>" not in card
+    assert row.count("o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;@example.com") == 2   # holds, kept
+    assert 'class="row-name">&lt;i&gt;ana&lt;/i&gt;<' in row
+    assert '<span class="vh"> &lt;i&gt;ana&lt;/i&gt;</span>' in row

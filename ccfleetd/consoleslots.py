@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
@@ -23,6 +24,7 @@ from . import slots as slotstates
 from .desired import is_channel, machine_hostname
 from .render import _age
 from .store import Store, StoreError
+from .usersite import STATE_WORDS
 
 #: How long a claim may sit in "setting up" before the console calls it stuck.
 #: Well before the claim timeout gives up on it, so the operator hears first.
@@ -37,38 +39,38 @@ PAYMENT_ID_RE = re.compile(r"[0-9]{1,15}")
 #: What the price is the price of, in its action path: /actions/price/slot/set.
 PRICE_TARGET = "slot"
 
-# The same meanings as everywhere else: green running, amber waiting on its
-# holder, the accent while the machine works on it, grey empty.
-STATE_TONE = {slotstates.FREE: "disabled", slotstates.CLAIMING: "busy",
-              slotstates.CLAIMED: "warn", slotstates.ACTIVE: "ok",
-              slotstates.RELEASING: "busy"}
+# A slot's state in the words and colours its holder's own page uses. Free is
+# the one state no holder sees there, and an owner's own node, which never
+# goes through the lifecycle, is signed in or not.
+FREE_WORDS = ("disabled", "Free")
+NOT_SIGNED_IN = ("warn", "Not signed in")
+#: The states in which a slot's Claude Code is somebody's, so where it is
+#: going is worth a word.
+IN_USE = (slotstates.CLAIMED, slotstates.ACTIVE)
+#: An owner's own node raises its account alert bare, since the node is the
+#: slot; a machine names each slot's alert by the slot's Linux user.
+OWN_NODE_RULES = ("account_elsewhere",)
+#: What an owner's node says of itself at the top of its heartbeat that its
+#: row reads, as its owner's page reads it.
+OWN_REPORT = ("claude", "credentials")
+#: The release channels, newest first.
+RELEASE_ORDER = ("latest", "stable")
+#: The column heads, for the eye only: each cell also says what it is, to a
+#: screen reader, and on a phone, where the rows stack as cards, to everybody.
+SLOT_HEAD = ('<div class="slothead" aria-hidden="true"><span>Slot</span><span>Holder</span>'
+             "<span>State</span><span>Claude Code</span><span>Held</span>"
+             "<span>Attention</span></div>")
+EMPTY_SAYS = "No slot declared yet: nobody can claim it until it has one."
+OWN_NOTE = ("Counted as their slot, and never wiped or handed out from here. To stop "
+            "counting it, on the server: <code>ccfleetd node hold {node} --none</code>")
+WIPE_NOTE = ("Take back is a wipe: everything on the slot goes, and it is free again once the "
+             "machine confirms.")
 
 
 def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") -> str:
     return (f'<form class="field" method="post" action="{escape(action)}">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
             f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
-
-
-def _trouble(slot: Mapping[str, Any], alerts: list[Mapping[str, Any]], now: float) -> list[str]:
-    """Why this slot needs the operator, in words. Empty when it does not."""
-    said = [a["message"] for a in alerts
-            if a["node_id"] == slot["node_id"]
-            and str(a["rule"]).endswith(f":{slot['unix_user']}")]
-    # A claiming slot always has claimed_at: the claim writes both at once.
-    if slot["state"] == slotstates.CLAIMING and now - slot["claimed_at"] > STUCK_AFTER_S:
-        said.append(f"setting up for {_age(now, slot['claimed_at'])}; given up at "
-                    f"{slotstates.CLAIM_TIMEOUT_S // 60} min")
-    return said
-
-
-def _upgrade_trouble(report: Mapping[str, Any]) -> list[str]:
-    """A Claude Code update the machine tried for this slot and could not make."""
-    upgrade = report.get("upgrade") or {}
-    if upgrade.get("ok") is not False:
-        return []
-    return [f"Claude Code update to {upgrade.get('to') or '?'} failed: "
-            f"{upgrade.get('error') or 'no reason given'}"]
 
 
 def section(store: Store, csrf: str, now: float) -> str:
@@ -109,83 +111,234 @@ def _price_card(store: Store, csrf: str, now: float) -> str:
             "lets somebody claim a slot, and the payments above are a record.</p></div>")
 
 
+# -- the slots card -------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _Look:
+    """What every row of the card reads, the same for all of them."""
+
+    accounts: Mapping[str, Mapping[str, Any]]
+    alerts: list[Mapping[str, Any]]
+    channels: Mapping[str, Any]
+    csrf: str
+    now: float
+
+
+@dataclass(frozen=True)
+class _Machine:
+    """One machine: its record, what it last said, the slots declared on it,
+    and what is wrong with the whole machine rather than with one slot."""
+
+    node: Mapping[str, Any]
+    said: Mapping[str, Any]
+    rows: tuple[Mapping[str, Any], ...]
+    pills: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
 def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
                 now: float) -> str:
-    alerts = store.open_alerts()
+    """A row a machine, its slot being the row; each row's actions wait under
+    its Manage, so nothing that wipes somebody sits out in the open."""
+    look = _Look(accounts, store.open_alerts(), store.get_channel_versions(), csrf, now)
     latest = store.latest_heartbeats()
-    blocks = []
-    for node in store.list_nodes():
-        all_rows = store.list_slots(node_id=node["id"])
-        rows = [r for r in all_rows if r["kind"] == slotstates.MACHINE_SLOT]
-        capacity = int(node["capacity"])
-        # What the machine last said: each slot's own report, and its own state.
-        said = (latest.get(node["id"]) or {}).get("payload") or {}
-        reboot = (' <span class="pill warn">reboot needed</span>'
-                  if said.get("reboot_required") is True else "")
-        owned = [r for r in all_rows if r["kind"] == slotstates.OWNER_SLOT]
-        if owned and not rows:
-            blocks.append(_own_machine_line(owned[0], accounts, reboot,
-                                            _running(said, owned[0], node)))
-            continue
-        # A machine is one with its slot declared, or one whose agent says it
-        # is one — with one slot per machine, capacity no longer tells.
-        if not rows and capacity <= 1 and said.get("mode") != slotstates.MACHINE_MODE:
-            continue          # an ordinary owner node: nothing about slots to show
-        reports = {r.get("unix_user"): r for r in said.get("slots") or []
-                   if isinstance(r, Mapping)}
-        base = f"/actions/machine/{escape(node['id'])}"
-        # From before one slot per machine: it answers to its own id, never to
-        # one holder's name, until the extra slots are taken off.
-        crowded = (' <span class="pill warn">more than one slot: claude.ai shows every '
-                   f"holder here as {escape(node['id'])}; take the extra off</span>"
-                   if len(rows) > slotstates.MAX_SLOTS_PER_MACHINE else "")
-        head = (f'<div class="row-line"><div class="row-name">{escape(node["id"])}'
-                f'<span class="muted"> · {len(rows)} of {capacity} declared</span>{reboot}'
-                f"{crowded}{_hostname_pending(node['id'], rows, said)}"
-                f"{_kept_for(node, accounts)}</div>"
-                '<div class="actions">'
-                + _form(f"{base}/capacity", csrf, "Set capacity",
-                        '<input type="text" name="count" class="count" inputmode="numeric" '
-                        f'value="{capacity}" required>')
-                + _form(f"{base}/slot-add", csrf, "Declare a slot",
-                        '<input type="text" name="slot_id" placeholder="slot id" size="10" '
-                        'required><input type="text" name="unix_user" placeholder="unix user" '
-                        'size="10" required>')
-                + _form(f"{base}/reserve", csrf, "Reserve",
-                        '<input type="email" name="email" placeholder="keep for (email)" '
-                        'size="18" required>')
-                + (_form(f"{base}/unreserve", csrf, "Clear reservation")
-                   if node.get("reserved_for") else "")
-                + "</div></div>")
-        pin = str(node.get("pinned_version") or "")
-        lines = [head] + [_slot_line(s, accounts, alerts, csrf, now,
-                                     reports.get(s["unix_user"]) or {}, pin,
-                                     _follows(claude_versions.slot_target(s, node)))
-                          for s in rows]
-        blocks.append("".join(lines))
-    body = "".join(blocks) or ('<p class="quiet">No shared machines yet. A machine joins '
-                               "with its one slot, declared on the server: "
-                               "<code>ccfleetd slot add &lt;machine&gt; --machine "
-                               "&lt;machine&gt; --unix-user slot01</code>.</p>")
-    return ('<h2 id="slots">Slots</h2><div class="card">'
-            + _releases(store.get_channel_versions(), now) + body +
-            '<p class="note">Taking a slot back is a release: the machine wipes it, and it is '
-            "free again once the machine confirms the Linux user is gone. There is no way here "
-            "to sign in as anybody or to finish anybody's Claude sign-in, by design.</p></div>")
+    rows = "".join(_machine_rows(store, node, (latest.get(node["id"]) or {}).get("payload") or {},
+                                 look)
+                   for node in store.list_nodes())
+    body = SLOT_HEAD + rows if rows else (
+        '<p class="quiet">No shared machines yet. A machine joins with its one slot, declared '
+        "on the server: <code>ccfleetd slot add &lt;machine&gt; --machine &lt;machine&gt; "
+        "--unix-user slot01</code>.</p>")
+    return ('<h2 id="slots">Slots</h2><div class="card slots">'
+            + _releases(look.channels, now) + body + f'<p class="note">{WIPE_NOTE}</p></div>')
 
 
-def _releases(channels: Mapping[str, Any], now: float) -> str:
-    """Where Anthropic's release channels stood when last read: what a slot's
-    holder is offered to move to, said once above every slot."""
-    known = [f"{channel} <b>{escape(number)}</b>" for channel in claude_versions.CHANNELS
-             if (number := claude_versions.channel_version(channels, channel))]
-    if not known:
-        return ('<p class="muted small">Claude Code releases: not read yet. The server reads '
-                "them about once an hour.</p>")
-    checked = channels.get("checked_at")
-    when = f" &middot; checked {escape(_age(now, checked))} ago" if checked else ""
-    return (f'<p class="muted small">Claude Code releases: {" &middot; ".join(known)}'
-            f"{when}</p>")
+def _machine_rows(store: Store, node: Mapping[str, Any], said: Mapping[str, Any],
+                  look: _Look) -> str:
+    """One machine's row: its slot's, one saying it has none yet, or nothing
+    at all for an ordinary owner node."""
+    all_rows = store.list_slots(node_id=node["id"])
+    rows = tuple(r for r in all_rows if r["kind"] == slotstates.MACHINE_SLOT)
+    owned = [r for r in all_rows if r["kind"] == slotstates.OWNER_SLOT]
+    if owned and not rows:
+        return _own_row(owned[0], _machine(node, said, rows, shared=False),
+                        store.get_claude_update(owned[0]["id"]), look)
+    # A machine is one with its slot declared, or one whose agent says it
+    # is one — with one slot per machine, capacity no longer tells.
+    if not rows and int(node["capacity"]) <= 1 and said.get("mode") != slotstates.MACHINE_MODE:
+        return ""          # an ordinary owner node: nothing about slots to show
+    machine = _machine(node, said, rows, shared=True)
+    if not rows:
+        return _empty_row(machine, look)
+    # What the machine last said about each slot, by its Linux user.
+    reports = {r.get("unix_user"): r for r in said.get("slots") or [] if isinstance(r, Mapping)}
+    # From before one slot per machine there may be several: a row each, so
+    # none of them hides, each flagged until the extra ones are taken off.
+    return "".join(_slot_row(s, machine, reports.get(s["unix_user"]) or {},
+                             store.get_claude_update(s["id"]), look) for s in rows)
+
+
+def _machine(node: Mapping[str, Any], said: Mapping[str, Any],
+             rows: tuple[Mapping[str, Any], ...], *, shared: bool) -> _Machine:
+    pills, notes = _machine_problems(node, rows, said, shared=shared)
+    return _Machine(node, said, rows, tuple(pills), tuple(notes))
+
+
+def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, Any],
+              update: Optional[Mapping[str, Any]], look: _Look) -> str:
+    node = machine.node
+    said = _update_said(slot, node, report, update, look.channels)
+    pills, notes = _problems(slot, report, look.alerts, said, look.now)
+    shown = names.display(slot)
+    sub = [f"on {escape(node['id'])}"] if shown != node["id"] else []
+    keeper = _kept_for(node, look.accounts)
+    cells = _cells(_name(shown, sub + ([keeper] if keeper else [])),
+                   _holder(slot, look.accounts), _state_pill(slot),
+                   _claude_cell(slot, node, report, said), _held_for(slot, look.now),
+                   pills + list(machine.pills))
+    crowded = len(machine.rows) > slotstates.MAX_SLOTS_PER_MACHINE
+    manage = (_slot_actions(slot, look.csrf) + _keep_part(node, look.csrf)
+              + (_advanced_part(machine, look.csrf) if crowded else ""))
+    return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage)
+
+
+def _own_row(slot: Mapping[str, Any], machine: _Machine,
+             update: Optional[Mapping[str, Any]], look: _Look) -> str:
+    """Somebody's own node, counted as their slot. Nothing here acts on it:
+    ccfleet never wipes, hands out or provisions anything on an owner's node."""
+    node = machine.node
+    # It says these at the top of its heartbeat, not per slot: read as the
+    # owner's own page reads them.
+    report = {key: machine.said.get(key) or {} for key in OWN_REPORT}
+    said = _update_said(slot, node, report, update, look.channels)
+    pills, notes = _problems(slot, report, look.alerts, said, look.now)
+    shown = names.display(slot)
+    sub = ["own machine"] + ([f"on {escape(node['id'])}"] if shown != node["id"] else [])
+    cells = _cells(_name(shown, sub), _holder(slot, look.accounts), _state_pill(slot, report),
+                   _claude_cell(slot, node, report, said), _held_for(slot, look.now),
+                   pills + list(machine.pills))
+    manage = _part("Their own machine", "", OWN_NOTE.format(node=escape(node["id"])))
+    return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage)
+
+
+def _empty_row(machine: _Machine, look: _Look) -> str:
+    """A machine with no slot declared: nobody can claim it, so its Manage
+    starts open on declaring one."""
+    node = machine.node
+    keeper = _kept_for(node, look.accounts)
+    cells = (f'<div class="c-name">{_name(node["id"], [keeper] if keeper else [])}</div>'
+             f'<div class="c-empty">{EMPTY_SAYS}</div>'
+             f'<div class="c-flags">{" ".join(machine.pills)}</div>')
+    manage = (_advanced_part(machine, look.csrf)
+              + (_keep_part(node, look.csrf) if node.get("reserved_for") else ""))
+    return _row(node["id"], "", node["id"], cells, list(machine.notes), manage, opened=True)
+
+
+def _row(machine_id: str, state: str, shown: str, cells: str, notes: list[str], manage: str,
+         *, opened: bool = False) -> str:
+    """A row: its cells, a line for each thing it has more to say about, and
+    its actions folded under Manage — a details element, so no script."""
+    said = f'<ul class="slot-notes">{"".join(notes)}</ul>' if notes else ""
+    return (f'<div class="slotrow" data-machine="{escape(machine_id)}" '
+            f'data-state="{escape(state)}"><div class="slotline">{cells}</div>{said}'
+            f'<details class="manage"{" open" if opened else ""}><summary>Manage'
+            f'<span class="vh"> {escape(shown)}</span> '
+            '<span class="caret" aria-hidden="true">&#9662;</span></summary>'
+            f'<div class="manage-panel">{manage}</div></details></div>')
+
+
+def _cells(name: str, holder: str, state: str, claude: str, held: str,
+           pills: list[str]) -> str:
+    """The row's cells, in the order of the column heads."""
+    cc = "c-cc" if claude else "c-cc none"
+    return (f'<div class="c-name">{name}</div><div class="c-holder">{holder}</div>'
+            f'<div class="c-state">{state}</div><div class="{cc}">{claude}</div>'
+            f'<div class="c-age">{held}</div><div class="c-flags">{" ".join(pills)}</div>')
+
+
+def _name(shown: str, sub: list[str]) -> str:
+    """The name its holder and claude.ai know it by; under it, small, where it
+    is and who it is kept for. Everything given here is already escaped."""
+    under = f'<span class="sub">{" &middot; ".join(sub)}</span>' if sub else ""
+    return f'<span class="row-name">{escape(shown)}</span>{under}'
+
+
+def _holder(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]) -> str:
+    holder = accounts.get(slot.get("held_by") or "")
+    if holder:
+        return escape(str(holder["email"]))
+    return '<span class="muted">free</span>' if slot["state"] == slotstates.FREE else "&mdash;"
+
+
+def _state_pill(slot: Mapping[str, Any], report: Optional[Mapping[str, Any]] = None) -> str:
+    """The state in the words and colours the holder's own page uses. An
+    owner's own node never goes through the lifecycle: it is signed in or
+    not, by the node's own word."""
+    state = str(slot["state"])
+    if slot.get("kind") == slotstates.OWNER_SLOT:
+        creds = (report or {}).get("credentials")
+        signed_in = isinstance(creds, Mapping) and creds.get("logged_in") is True
+        tone, words = STATE_WORDS[slotstates.ACTIVE][:2] if signed_in else NOT_SIGNED_IN
+    else:
+        tone, words = (STATE_WORDS[state][:2] if state in STATE_WORDS
+                       else FREE_WORDS if state == slotstates.FREE else ("disabled", state))
+    return _pill(tone, escape(words), escape(state))
+
+
+def _held_for(slot: Mapping[str, Any], now: float) -> str:
+    """How long its holder has had it, from the claim."""
+    claimed = slot.get("claimed_at")
+    if slot["state"] not in slotstates.HELD or not claimed:
+        return ""
+    age = escape(_age(now, claimed))
+    return f'<span class="lbl">held </span><span title="claimed {age} ago">{age}</span>'
+
+
+def _claude_cell(slot: Mapping[str, Any], node: Mapping[str, Any], report: Mapping[str, Any],
+                 said: Optional[Mapping[str, Any]]) -> str:
+    """The Claude Code it runs and what that follows, then where it is going."""
+    version = (report.get("claude") or {}).get("version") if isinstance(report, Mapping) else None
+    if not version:
+        return ""
+    follows = _follows(claude_versions.slot_target(slot, node))
+    return (f'<span class="lbl">Claude Code </span>{escape(str(version))}'
+            + (f" ({escape(follows)})" if follows else "")
+            + _update_word(slot, node, str(version), said))
+
+
+def _update_said(slot: Mapping[str, Any], node: Mapping[str, Any], report: Mapping[str, Any],
+                 update: Optional[Mapping[str, Any]],
+                 channels: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """What the holder's own page says of this slot's Claude Code: only for a
+    slot somebody uses. A free one's next holder gets whatever is current."""
+    if slot["state"] not in IN_USE or not isinstance(report, Mapping):
+        return None
+    restart = (report.get("upgrade") or {}).get("restart") == "waiting"
+    return claude_versions.status((report.get("claude") or {}).get("version"),
+                                  claude_versions.slot_target(slot, node), channels, update,
+                                  restart)
+
+
+def _update_word(slot: Mapping[str, Any], node: Mapping[str, Any], version: str,
+                 said: Optional[Mapping[str, Any]]) -> str:
+    """At most one word on where a used slot's Claude Code is going. A failed
+    update is trouble, and said with the rest of it."""
+    if slot["state"] not in IN_USE:
+        return ""
+    pin = str(node.get("pinned_version") or "")
+    # The operator's exact pin on a machine: only it can be behind, since a
+    # channel has no number to compare, and nobody else moves it.
+    if slot.get("kind") != slotstates.OWNER_SLOT and pin and not is_channel(pin):
+        return ' <span class="pill warn">update pending</span>' if version != pin else ""
+    kind = (said or {}).get("status")
+    if kind == "updating":
+        to = (said or {}).get("to")
+        where = f" to {escape(str(to))}" if to else ""
+        return f' <span class="pill busy">updating{where}</span>'
+    if kind == "updated":
+        return (' <span class="pill busy" title="Remote Control switches over once no session '
+                'is open">restart pending</span>')
+    return ' <span class="cc-new">update available</span>' if kind == "available" else ""
 
 
 def _follows(target: claude_versions.Target) -> str:
@@ -197,96 +350,179 @@ def _follows(target: claude_versions.Target) -> str:
     return f"pinned {target.version}" if target.version else ""
 
 
-def _running(said: Mapping[str, Any], slot: Mapping[str, Any],
-             node: Mapping[str, Any]) -> str:
-    """The Claude Code an owner's own node says it runs, and what it follows."""
-    version = (said.get("claude") or {}).get("version") if isinstance(said, Mapping) else None
-    follows = _follows(claude_versions.slot_target(slot, node))
-    if not version:
-        return ""
-    return f" · Claude Code {escape(str(version))}" + (f" ({escape(follows)})" if follows else "")
+def _releases(channels: Mapping[str, Any], now: float) -> str:
+    """Where Anthropic's release channels stood when last read: what a slot's
+    holder is offered to move to, said once above every slot."""
+    known = [f"{channel.capitalize()} <b>{escape(number)}</b>" for channel in RELEASE_ORDER
+             if (number := claude_versions.channel_version(channels, channel))]
+    if not known:
+        return ('<p class="muted small releases">Claude Code releases: not read yet. The server '
+                "reads them about once an hour.</p>")
+    checked = channels.get("checked_at")
+    when = f" &middot; checked {escape(_age(now, checked))} ago" if checked else ""
+    return (f'<p class="muted small releases">Claude Code releases: '
+            f'{" &middot; ".join(known)}{when}</p>')
 
 
-def _hostname_pending(node_id: str, rows: list[Mapping[str, Any]],
-                      said: Mapping[str, Any]) -> str:
-    """The name the machine still answers to, when it is not its slot's yet.
+# -- what is wrong with a slot, and with its machine ------------------------------------
 
-    It takes the new one on its next run; until then claude.ai/code shows the
-    old one, which is worth the operator knowing. Nothing reported, nothing
-    said: that is a machine that has not checked in, not one that is behind.
-    """
+def _problems(slot: Mapping[str, Any], report: Mapping[str, Any],
+              alerts: list[Mapping[str, Any]], said: Optional[Mapping[str, Any]],
+              now: float) -> tuple[list[str], list[str]]:
+    """What is wrong with this slot: a pill for each thing, for the eye, and a
+    line for each that has more to say. Each is said once."""
+    pills, notes = [], []
+    for alert in _alerts_for(slot, alerts):
+        tone = "critical" if alert["level"] == "critical" else "warn"
+        pills.append(_pill(tone, escape(str(alert["rule"]).split(":", 1)[0].replace("_", " "))))
+        notes.append(_note(str(alert["message"])))
+    # A claiming slot always has claimed_at: the claim writes both at once.
+    if slot["state"] == slotstates.CLAIMING and now - slot["claimed_at"] > STUCK_AFTER_S:
+        pills.append(_pill("warn", "stuck"))
+        notes.append(_note(f"setting up for {_age(now, slot['claimed_at'])}; given up at "
+                           f"{slotstates.CLAIM_TIMEOUT_S // 60} min"))
+    # The machine's own word on a failed update first; the server's record of
+    # the same failure only when the machine said nothing.
+    failed = _upgrade_trouble(report)
+    if not failed and (said or {}).get("status") == "failed":
+        why = (said or {}).get("detail") or "no reason given"
+        failed = [f"Claude Code update failed: {why}"]
+    if failed:
+        pills.append(_pill("critical", "update failed"))
+        notes.extend(_note(line) for line in failed)
+    return pills, notes
+
+
+def _alerts_for(slot: Mapping[str, Any],
+                alerts: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The open alerts about this slot and no other: a machine names each by
+    the slot's Linux user, and two machines both have a slot01."""
+    own = slot.get("kind") == slotstates.OWNER_SLOT
+    return [a for a in alerts if a["node_id"] == slot["node_id"]
+            and (str(a["rule"]).endswith(f":{slot['unix_user']}")
+                 or (own and a["rule"] in OWN_NODE_RULES))]
+
+
+def _upgrade_trouble(report: Mapping[str, Any]) -> list[str]:
+    """A Claude Code update the machine tried for this slot and could not make."""
+    upgrade = (report.get("upgrade") if isinstance(report, Mapping) else None) or {}
+    if upgrade.get("ok") is not False:
+        return []
+    return [f"Claude Code update to {upgrade.get('to') or '?'} failed: "
+            f"{upgrade.get('error') or 'no reason given'}"]
+
+
+def _machine_problems(node: Mapping[str, Any], rows: tuple[Mapping[str, Any], ...],
+                      said: Mapping[str, Any], *, shared: bool) -> tuple[list[str], list[str]]:
+    """What is wrong with the machine itself, said on its every row. An
+    owner's own node names itself, so only a reboot is worth saying there."""
+    pills, notes = [], []
+    if said.get("reboot_required") is True:
+        pills.append(_pill("warn", "reboot needed"))
+    if not shared:
+        return pills, notes
+    if len(rows) > slotstates.MAX_SLOTS_PER_MACHINE:
+        # It answers to its own id, never one holder's name, until the extra
+        # slots are taken off.
+        pills.append(_pill("warn", "more than one slot",
+                           f"claude.ai shows every holder here as {escape(node['id'])}"))
+    # It takes its slot's name on its next run; until then claude.ai/code
+    # shows the old one. Nothing reported is a machine not yet heard from.
     reported = said.get("hostname")
-    wanted = machine_hostname(node_id, list(rows))
-    if not reported or reported == wanted:
-        return ""
-    return (f' <span class="pill warn">hostname pending: answers to {escape(str(reported))}, '
-            f"becoming {escape(wanted)}</span>")
+    wanted = machine_hostname(node["id"], list(rows))
+    if reported and reported != wanted:
+        pills.append(_pill("warn", "hostname pending"))
+        notes.append(_note(f"still answers to {reported}; becomes {wanted} on its next run",
+                           "muted"))
+    return pills, notes
 
 
-def _own_machine_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
-                      reboot: str, running: str = "") -> str:
-    """Somebody's own node, counted as their slot. Nothing here acts on it:
-    ccfleet never wipes, hands out or provisions anything on an owner's node."""
-    holder = accounts.get(slot.get("held_by") or "")
-    who = escape(str(holder["email"])) if holder else "&mdash;"
-    return (f'<div class="row-line"><div class="row-name">{escape(names.display(slot))}'
-            f'<span class="muted"> · own machine · {escape(slot["unix_user"])}{running}</span>'
-            f'{reboot} <span class="pill ok">{escape(slot["state"])}</span>'
-            f' <span class="small">{who}</span></div>'
-            '<div class="actions"><span class="muted small">counted as their slot; '
-            "let go with <code>ccfleetd node hold "
-            f'{escape(slot["node_id"])} --none</code></span></div></div>')
+def _pill(tone: str, words: str, title: str = "") -> str:
+    """A pill. The words and the title come escaped."""
+    hint = f' title="{title}"' if title else ""
+    return f'<span class="pill {tone}"{hint}>{words}</span>'
+
+
+def _note(text: str, tone: str = "bad-text") -> str:
+    """One line under a row. Whatever a machine or a person wrote is text."""
+    return f'<li class="{tone}">{escape(text)}</li>'
+
+
+# -- what the operator can do to a row, under its Manage --------------------------------
+
+def _part(title: str, body: str, hint: str = "") -> str:
+    """One part of a row's Manage: a head, its forms, and a line saying what
+    they do. The hint comes escaped."""
+    said = f'<p class="mhint">{hint}</p>' if hint else ""
+    return f'<div class="mpart"><p class="mhead">{escape(title)}</p>{body}{said}</div>'
+
+
+def _slot_actions(slot: Mapping[str, Any], csrf: str) -> str:
+    """Take back a slot somebody holds; forget a free one."""
+    base = f"/actions/slot/{escape(slot['id'])}"
+    typed = escape(slot["id"])
+    if slot["state"] in slotstates.RELEASABLE:
+        # Typed, not pre-filled: this deletes somebody's work.
+        box = (f'<input type="text" name="confirm" placeholder="type {typed}" '
+               f'size="{max(12, len(slot["id"]) + 6)}" autocomplete="off" required '
+               f'aria-label="Type {typed} to confirm">')
+        return _part("Take back", _form(f"{base}/reclaim", csrf, "Take back", box, "danger"),
+                     f"Wipes it: everything on it goes, its Claude sign-in with it. Type "
+                     f"<b>{typed}</b> to confirm.")
+    if slot["state"] == slotstates.FREE:
+        return _part("Remove the slot", _form(f"{base}/remove", csrf, "Remove"),
+                     f"Takes {typed} off the machine. It is free, so there is nothing on it "
+                     "to lose.")
+    return _part("Take back", "", "Being wiped already: it is free again once the machine "
+                                  "confirms.")
+
+
+def _keep_part(node: Mapping[str, Any], csrf: str) -> str:
+    """Keep the machine for one account, or open it to anybody again."""
+    base = f"/actions/machine/{escape(node['id'])}"
+    if node.get("reserved_for"):
+        return _part("Reservation", _form(f"{base}/unreserve", csrf, "Clear reservation"),
+                     "Once cleared, anybody with an allowance may claim it.")
+    return _part("Keep for somebody",
+                 _form(f"{base}/reserve", csrf, "Reserve",
+                       '<input type="email" name="email" placeholder="their email" size="20" '
+                       'aria-label="Email of the account to keep it for" required>'),
+                 "While it is free, only they can claim it.")
+
+
+def _advanced_part(machine: _Machine, csrf: str) -> str:
+    """Capacity and declaring the slot: only where either can do anything, a
+    machine with no slot yet or one with too many."""
+    node = machine.node
+    base = f"/actions/machine/{escape(node['id'])}"
+    capacity = int(node["capacity"])
+    sized = _form(f"{base}/capacity", csrf, "Set capacity",
+                  '<input type="text" name="count" class="count" inputmode="numeric" '
+                  f'value="{capacity}" aria-label="Capacity" required>')
+    if machine.rows:
+        return _part("Advanced", sized,
+                     "From before one slot per machine: claude.ai shows every holder here as "
+                     f"{escape(node['id'])}. Take the extra slot back, then remove it.")
+    # The server refuses a second slot, so declaring is only for a machine
+    # with none.
+    declare = _form(f"{base}/slot-add", csrf, "Declare its slot",
+                    '<input type="text" name="slot_id" placeholder="slot id" size="10" '
+                    'aria-label="Slot id" required><input type="text" name="unix_user" '
+                    'placeholder="unix user" size="10" aria-label="Unix user" required>')
+    first = "Set its capacity to 1, then declare its slot" if capacity < 1 else "Its slot"
+    return _part("Advanced", declare + sized,
+                 f"{first}: usually the machine's own id, {escape(node['id'])}, with the "
+                 "unix user slot01.")
 
 
 def _kept_for(node: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]) -> str:
-    """Who this machine's free slots are kept for, when it is anybody."""
+    """Who this machine's free slot is kept for, when it is anybody; escaped."""
     account_id = node.get("reserved_for")
     if not account_id:
         return ""
     keeper = accounts.get(account_id)
     who = escape(str(keeper["email"])) if keeper else "an account that no longer exists"
-    return f' <span class="pill ok">Reserved for {who}</span>'
-
-
-def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
-               alerts: list[Mapping[str, Any]], csrf: str, now: float,
-               report: Optional[Mapping[str, Any]] = None, pin: str = "",
-               follows: str = "") -> str:
-    report = report or {}
-    holder = accounts.get(slot.get("held_by") or "")
-    who = escape(str(holder["email"])) if holder else "&mdash;"
-    seen = {1: "on machine", 0: "not on machine"}.get(slot.get("present"), "not yet seen")
-    claimed = (f" · claimed {escape(_age(now, slot['claimed_at']))} ago"
-               if slot.get("claimed_at") else "")
-    version = (report.get("claude") or {}).get("version")
-    running = (f" · Claude Code {escape(str(version))}"
-               + (f" ({escape(follows)})" if follows else "")) if version else ""
-    # Only an exact pin can be behind; a channel has no number to compare. And
-    # only for a slot somebody holds: a free one has no Claude Code to update.
-    pending = (' <span class="pill warn">update pending</span>'
-               if version and pin and not is_channel(pin) and version != pin
-               and slot["state"] in (slotstates.CLAIMED, slotstates.ACTIVE) else "")
-    trouble = "".join(f'<br><span class="bad-text">{escape(t)}</span>'
-                      for t in _trouble(slot, alerts, now) + _upgrade_trouble(report))
-    base = f"/actions/slot/{escape(slot['id'])}"
-    buttons = ""
-    if slot["state"] in slotstates.RELEASABLE:
-        # Typed, not pre-filled: this deletes somebody's work.
-        buttons = _form(f"{base}/reclaim", csrf, "Take back",
-                        f'<input type="text" name="confirm" placeholder="type {escape(slot["id"])}"'
-                        ' size="12" autocomplete="off" required>', "danger")
-    elif slot["state"] == slotstates.FREE:
-        buttons = _form(f"{base}/remove", csrf, "Remove")
-    tone = STATE_TONE.get(slot["state"], "disabled")
-    # The name its holder and claude.ai know it by; the id, which every
-    # command takes, beside it whenever the two differ.
-    also = f" · {escape(slot['id'])}" if names.display(slot) != slot["id"] else ""
-    return (f'<div class="row-line"><div class="row-name">{escape(names.display(slot))}'
-            f'<span class="muted">{also} · {escape(slot["unix_user"])} · {escape(seen)}{claimed}'
-            f"{running}</span> <span class=\"pill {tone}\">{escape(slot['state'])}</span>"
-            f"{pending}"
-            f" <span class=\"small\">{who}</span>{trouble}</div>"
-            f'<div class="actions">{buttons}</div></div>')
+    return f"kept for {who}"
 
 
 def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
