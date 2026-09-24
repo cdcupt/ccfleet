@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.7.0 · 2026-09-23 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.8.0 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -642,8 +642,12 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 ccfleetd node pin node-a 2.1.92
 <span class="c"># confirm the row shows it with no failure, work a day, then pin the rest</span>
 ccfleetd node pin node-b 2.1.92
-<span class="c"># or track a channel: resolves once, re-checks daily, never reports drift</span>
-ccfleetd node pin node-a stable</code></pre>
+<span class="c"># or track a channel, latest or stable; a channel pin never reports drift</span>
+ccfleetd node pin node-a latest</code></pre>
+      <p>A channel follows Anthropic's own release numbers, which the server reads about
+      hourly from the files the official installer reads, and sends with every reply. A node
+      installs a new release at its next quiet moment, never while somebody is signing in.
+      Without a number from the server it resolves the channel itself, once a day.</p>
       <p class="muted"><strong>Upgrading on the node no longer sticks.</strong> While a pin is
       set, the next heartbeat installs the pinned version over whatever
       <code>ccfleet-upgrade-claude</code> just put there. Change the pin instead, or run that
@@ -826,8 +830,10 @@ claude
       is, what they must bring (their own Pro, Max, Team or Enterprise plan; API keys do not
       work) and how to start, and links
       <code>/docs/guide</code>, <code>/docs/how-it-works</code>, <code>/docs/terms</code> and
-      <code>/privacy</code>. Set <code>CCFLEET_CONTACT_EMAIL</code> to publish an address on
-      them.</p>
+      <code>/privacy</code>. It is the same page for everybody; only its buttons follow whoever
+      is looking: <em>Sign in with Google</em> for a visitor, <em>Your slots</em> once signed in,
+      and <em>Console</em> as well for an operator. Set <code>CCFLEET_CONTACT_EMAIL</code> to
+      publish an address on them.</p>
       <p>Every page shares one top bar. Signed in, a round avatar at the top right opens a menu
       with the person's address, <em>Your slots</em> with how many they hold, <em>Console</em>
       for operators, and <em>Sign out</em>; signed out, the same spot is <em>Sign in</em>.</p>
@@ -845,7 +851,7 @@ claude
 sudo ./bootstrap.sh you "ssh-ed25519 AAAA&hellip; you"
 <span class="c"># on the server</span>
 ccfleetd node add pool-1 --owner you --region us-west
-ccfleetd node pin pool-1 stable
+ccfleetd node pin pool-1 latest
 ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
 <span class="c"># on the machine, as root</span>
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
@@ -875,9 +881,17 @@ ccfleetd slot list --machine pool-1</code></pre>
       </ul>
       <h3>Keeping it current</h3>
       <ul>
-        <li><strong>Claude Code in slots</strong> follows the machine's pin: <code>stable</code>
-        tracks Anthropic's stable channel, an exact version holds the machine back. The machine
-        agent installs it at a quiet moment and never interrupts a running session.</li>
+        <li><strong>Claude Code in slots</strong> follows the machine's pin:
+        <code>latest</code> or <code>stable</code> tracks that Anthropic channel, and an exact
+        version holds the whole machine back. The machine agent installs a new release at a
+        quiet moment, never during a sign-in, and never interrupts a running session; Remote
+        Control moves over once no session is open.</li>
+        <li><strong>Holders choose for their own slot.</strong> The Claude Code row on their
+        card shows the version and, once a newer one is out, <em>Update to</em> that number:
+        it switches the slot to <code>latest</code> and installs now. <em>Back to Stable</em>
+        goes back. An exact pin on the machine overrides both, and the row says <em>held by
+        the operator</em>. On somebody's own node the buttons set that node's pin, which is
+        theirs and never a hold.</li>
         <li><strong>The agents</strong>: after a release that changes them, update one node
         first, then the rest. Owner nodes re-fetch the agent; machines re-run
         <code>machine-setup.sh</code> pointed at that commit with
@@ -887,6 +901,51 @@ ccfleetd slot list --machine pool-1</code></pre>
       </ul>
     </div>
   </div>
+  <h3>What a slot starts with</h3>
+  <p>Claude Code on a new slot starts on <strong>Opus at max effort</strong>. Setting a slot
+  up writes two keys into its <code>~/.claude/settings.json</code>, and only keys the holder
+  has not set, so setting it up again never takes a choice back:</p>
+  <pre><code>{ "model": "opus", "env": { "CLAUDE_CODE_EFFORT_LEVEL": "max" } }</code></pre>
+  <ul>
+    <li><strong>Max goes in <code>env</code>.</strong> The settings file's own
+    <code>effortLevel</code> stops at <code>xhigh</code> and drops <code>max</code> without a
+    word. The variable pins every session at max, so <code>/effort</code> cannot lower it; a
+    holder who wants less edits that line, and <code>/docs/guide</code> tells them how.
+    <code>/model</code> still changes the model for a session.</li>
+    <li><strong><code>opus</code> is the newest Opus that the installed Claude Code
+    knows.</strong> Opus 5.5 needs Claude Code 2.1.280 or later. On
+    2026-09-24 only <code>latest</code> had that, and a slot on
+    <code>stable</code> got Opus 5, which is why machines are pinned to
+    <code>latest</code>.</li>
+    <li><strong>It costs the holder.</strong> Max effort uses their plan's limits fastest,
+    and the guide says so.</li>
+  </ul>
+  <h3>The console's Slots card</h3>
+  <p>One line on top gives Anthropic's release numbers, for example <em>Claude Code releases:
+  Latest 2.1.281 &middot; Stable 2.1.273 &middot; checked 5m ago</em>. Under it, one row per
+  machine, and the machine's slot is the row:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Column</th><th>Says</th></tr></thead>
+    <tbody>
+      <tr><td>Slot</td><td>Its name; under it <em>on &lt;machine&gt;</em> when the two differ, <em>own machine</em>, or <em>kept for &lt;email&gt;</em></td></tr>
+      <tr><td>Holder</td><td>Their address, or <em>free</em></td></tr>
+      <tr><td>State</td><td>The words the holder's own page uses: In use, Ready to sign in, Setting up, Being wiped, or Free. An own machine reads In use or Not signed in</td></tr>
+      <tr><td>Claude Code</td><td>The version and what it follows (stable, latest, pinned, held at), then <em>update available</em>, <em>updating to &hellip;</em> or <em>restart pending</em></td></tr>
+      <tr><td>Held</td><td>How long it has been held</td></tr>
+      <tr><td>Attention</td><td>A pill for each open alert on the slot or its account, a claim stuck setting up, a failed update, a reboot needed, a hostname still pending, or more than one slot; the details go on a line under the row</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Manage &#9662;</strong> on each row holds every action, so nothing that wipes sits
+  on the row itself:</p>
+  <ul>
+    <li><em>Take back</em>: the slot's name has to be typed to confirm.</li>
+    <li><em>Remove</em>, for a free slot.</li>
+    <li><em>Keep for somebody</em>, or <em>Clear reservation</em> on a kept machine.</li>
+    <li><em>Advanced</em>, only where it can do something: declaring the slot of a machine
+    that has none yet, or the capacity of a machine from before one slot per machine.</li>
+  </ul>
+  <p>An own machine has no forms; the one command that stops counting it is inside its
+  Manage. At 960&nbsp;px and narrower, phones included, the rows become cards.</p>
   <h3>One account per slot, enforced</h3>
   <p>The product keeps the rule without relying on anybody to remember it:</p>
   <ul>

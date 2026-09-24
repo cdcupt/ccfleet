@@ -211,10 +211,16 @@ to ask whoever sent the link.
 Keeping it up to date:
 
 - **Claude Code in slots** follows the machine's pin, which the server sends
-  with every reply: `ccfleetd node pin <machine> stable` tracks Anthropic's
-  stable channel, and an exact version holds the whole machine back. The
-  machine agent installs it in each slot at a quiet moment and never interrupts
-  a running session.
+  with every reply: `ccfleetd node pin <machine> latest` (or `stable`) tracks
+  that Anthropic channel, and an exact version holds the whole machine back.
+  The machine agent installs a new release in each slot at a quiet moment and
+  never interrupts a running session. Holders move their own slot between the
+  two channels from their page (*Update to …*, *Back to Stable*); an exact pin
+  overrides them.
+- **Slots start on Opus at max effort.** `slot-add.sh` writes `"model": "opus"`
+  and `CLAUDE_CODE_EFFORT_LEVEL=max` (in `env`, the only place Claude Code keeps
+  max) into the slot's `~/.claude/settings.json`, wherever the holder has not
+  chosen already.
 - **The agents** change only when ccfleet does. Roll them out after deploying
   the server: owner nodes re-fetch `ccfleet_agent/agent.py`, shared machines
   re-run `machine-setup.sh` pointed at the same commit
