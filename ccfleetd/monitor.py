@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from . import claude_versions, rules
+from . import claude_versions, rules, status
 from . import slots as slotstates
 from .config import Config
 from .notify import Notifier, format_event
@@ -158,10 +158,26 @@ class Monitor:
         if removed:
             log.info("pruned %d old heartbeats", removed)
 
+    def record_status(self, now: Optional[float] = None) -> None:
+        """Count this minute for the status page (see ccfleetd/status.py).
+
+        Only the serving loop calls it, because its running is what says the
+        site is up: `ccfleetd check` runs check_all beside a server that may
+        well be down. Under the lock, with the checks that read the same
+        heartbeats and alerts."""
+        now = self._clock() if now is None else now
+        with self._lock:
+            status.record(self._store, now, self._cfg.check_interval_s)
+
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
             try:
                 self.check_all()
             except Exception:  # noqa: BLE001 - keep the loop alive, but log the traceback
                 log.exception("periodic check failed")
+            # On its own: the site is up whether or not one check went wrong.
+            try:
+                self.record_status()
+            except Exception:  # noqa: BLE001 - as above
+                log.exception("counting the status minute failed")
             stop.wait(self._cfg.check_interval_s)

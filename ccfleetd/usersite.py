@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, oauth, payments, plans, resets
+from . import claude_versions, names, oauth, payments, plans, resets, status
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -401,7 +401,7 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 .usage{grid-template-columns:minmax(0,1fr);padding:14px}
 .door{padding:22px 20px 20px}
 .sitefoot-in{padding-left:16px;padding-right:16px}}
-"""
+""" + status.LINE_CSS
 
 #: The pages anybody can read, in the order the bar on top shows them.
 NAV = (("/", "Overview"), ("/docs/guide", "Guide"),
@@ -439,6 +439,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             '<nav aria-label="More"><a href="/account">Your slots</a>'
             '<a href="/docs/guide">Guide</a><a href="/docs/how-it-works">How it works</a>'
             '<a href="/privacy">Privacy</a><a href="/docs/terms">Terms</a>'
+            '<a href="/status">Status</a>'
             '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">Source code</a></nav>'
             "</div></footer>" + LOCAL_TIMES_TAG + "</body></html>")
@@ -490,9 +491,14 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     # The operator's alerts about the rule, said to the holder without naming
     # the other place: it may be somebody else's.
     flagged = {s["id"]: _flags(s, store.open_alerts(s["node_id"])) for s in held}
+    # Each slot's machine, in the words of the status page: a shared machine
+    # reports every minute, somebody's own node every five.
+    lines = {s["id"]: status.slot_line(status.machine_state(
+        latest.get(s["node_id"]), store.open_alerts(s["node_id"]),
+        s.get("kind") != slotstates.OWNER_SLOT, now), now) for s in held}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
-                               updates[s["id"]], channels)
+                               updates[s["id"]], channels, machine_line=lines[s["id"]])
                     for s in held)
     body = (
         '<div class="pagehead"><h1>Your slots</h1>'
@@ -745,7 +751,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                csrf: str, cfg: Config, now: float,
                flagged: frozenset[str] = frozenset(),
                update: Optional[Mapping[str, Any]] = None,
-               channels: Optional[Mapping[str, Any]] = None) -> str:
+               channels: Optional[Mapping[str, Any]] = None, *,
+               machine_line: str = "") -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
     # A sign-in or token that failed, or a change of account that finished, is
@@ -785,6 +792,9 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         f'<p class="slot-meta">{about + " · " if about else ""}machine {machine}</p>'
         '</div><div class="slot-body">',
     ]
+    # Its machine's state, as the status page says it (status.slot_line).
+    if machine_line:
+        parts.append(machine_line)
     if detail:
         parts.append(f"<p>{escape(detail)}</p>")
     if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):

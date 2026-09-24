@@ -75,7 +75,7 @@ border:1px solid var(--rule-soft);color:var(--muted);font-size:14.5px}
 .buy>li::before{content:counter(buy);position:absolute;left:0;top:0;width:28px;height:28px;
 border-radius:50%;background:var(--acc-soft);color:var(--acc);border:1px solid var(--acc-line);
 font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
-.next{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.next{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .next a{display:block;padding:18px 20px;border:1px solid var(--rule);border-radius:var(--radius);
 background:var(--panel);text-decoration:none;color:var(--ink);box-shadow:var(--shadow)}
 .next a:hover{border-color:var(--acc)}
@@ -267,6 +267,8 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         "see what, and how it is kept up to date.</span></a>"
         '<a href="/privacy"><b>Privacy</b><span>What we keep about you, why, and for how '
         "long.</span></a>"
+        '<a href="/status"><b>Status</b><span>Whether this site and the machines are up, now '
+        "and over the last 90 days.</span></a>"
         "</div></section>")
     return _page("/", "about", body, width="", viewer=viewer, canonical="/")
 
@@ -473,7 +475,10 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<li><strong>Security updates</strong> for the machine install every day.</li>"
         "<li><strong>Reboots</strong>: when an update needs one, the machine says so and the "
         "operator reboots it at a quiet time. Your slot and its services come back by "
-        "themselves.</li></ul></div>"
+        "themselves.</li>"
+        '<li><strong>Status</strong>: whether this site and the machines are up, now and over '
+        'the last 90 days, is on <a href="/status">the status page</a>; your own page says '
+        "how your slot&#x27;s machine is.</li></ul></div>"
         '<div class="card"><h2>Giving a slot back</h2>'
         "<p>When you give a slot back, the machine stops everything running in it and deletes "
         "your Linux account and every file in it. The slot is offered to anybody else only "

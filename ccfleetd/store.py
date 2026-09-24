@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -234,7 +235,30 @@ CREATE TABLE IF NOT EXISTS users (
     owner TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL
 );
+-- The minutes behind the status page (see ccfleetd/status.py): for this site
+-- and each machine that counts, how many minutes of each UTC day it was up,
+-- degraded or down. Counted once a minute by the serving loop, 90 days kept.
+-- Machine-level facts only: no account, holder or name is ever in it.
+CREATE TABLE IF NOT EXISTS status_minutes (
+    component TEXT NOT NULL,
+    day TEXT NOT NULL,
+    green INTEGER NOT NULL DEFAULT 0,
+    yellow INTEGER NOT NULL DEFAULT 0,
+    red INTEGER NOT NULL DEFAULT 0,
+    first_minute INTEGER NOT NULL,
+    last_minute INTEGER NOT NULL,
+    PRIMARY KEY (component, day)
+);
+CREATE INDEX IF NOT EXISTS ix_status_minutes_day ON status_minutes(day);
 """
+
+#: The states a status minute is counted as, which are its table's columns.
+STATUS_COLUMNS = ("green", "yellow", "red")
+
+
+def _status_day(minute: int) -> str:
+    """The UTC date a minute since the epoch falls on (status.utc_day)."""
+    return datetime.fromtimestamp(minute * 60, timezone.utc).strftime("%Y-%m-%d")
 
 
 ACCOUNT_ID_BYTES = 12
@@ -1038,6 +1062,63 @@ class Store:
     def prune_heartbeats(self, older_than_ts: float) -> int:
         with self._lock:
             cur = self._conn.execute("DELETE FROM heartbeats WHERE ts < ?", (older_than_ts,))
+            self._conn.commit()
+        return cur.rowcount
+
+    # -- status minutes (see ccfleetd/status.py) ---------------------------------
+
+    def count_status(self, component: str, state: str, now: float, *, grace: int,
+                     gap_state: Optional[str] = None) -> None:
+        """Count the minute `now` falls in for `component`, in `state`, once.
+
+        Minutes gone uncounted since its last count, up to `grace` of them, are
+        a check running a little late and take `state` too. A longer gap is
+        counted as `gap_state` when there is one (the site: its silence was
+        its downtime), and left out when not (a machine nobody was watching).
+        A minute already counted, or a clock gone back, counts nothing.
+        """
+        if state not in STATUS_COLUMNS or gap_state not in (None, *STATUS_COLUMNS):
+            raise ValueError(f"not a status: {state!r} / {gap_state!r}")
+        minute = int(now // 60)
+        with self._write_txn() as conn:
+            last = conn.execute("SELECT MAX(last_minute) FROM status_minutes "
+                                "WHERE component = ?", (component,)).fetchone()[0]
+            if last is not None and last >= minute:
+                return
+            missed = minute - last - 1 if last is not None else 0
+            fill = state if missed <= grace else gap_state
+            if missed and fill is not None:
+                self._add_status(conn, component, fill, last + 1, minute - 1)
+            self._add_status(conn, component, state, minute, minute)
+
+    @staticmethod
+    def _add_status(conn: sqlite3.Connection, component: str, column: str,
+                    first: int, last: int) -> None:
+        """Add the minutes first..last, both counted, to `column`, each on the
+        UTC day it fell on. `column` is one of STATUS_COLUMNS, checked above."""
+        while first <= last:
+            upto = min(last, (first // 1440 + 1) * 1440 - 1)       # this day's last minute
+            conn.execute(
+                f"INSERT INTO status_minutes (component, day, {column}, first_minute, "
+                f"last_minute) VALUES (?, ?, ?, ?, ?) ON CONFLICT(component, day) DO UPDATE "
+                f"SET {column} = {column} + excluded.{column}, "
+                "first_minute = MIN(first_minute, excluded.first_minute), "
+                "last_minute = MAX(last_minute, excluded.last_minute)",
+                (component, _status_day(first), upto - first + 1, first, upto))
+            first = upto + 1
+
+    def status_minutes(self, since_day: str) -> list[dict[str, Any]]:
+        """Every component's counted days from `since_day` (YYYY-MM-DD) on."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT component, day, green, yellow, red FROM status_minutes "
+                "WHERE day >= ? ORDER BY component, day", (since_day,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def prune_status_minutes(self, before_day: str) -> int:
+        """Forget every day before `before_day`."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM status_minutes WHERE day < ?", (before_day,))
             self._conn.commit()
         return cur.rowcount
 
