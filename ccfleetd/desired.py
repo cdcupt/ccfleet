@@ -17,7 +17,7 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from . import names
+from . import claude_versions, names
 
 # A node may be pinned to an exact version, or told to track a channel. Anything
 # else is refused rather than passed to the installer: this string reaches
@@ -118,8 +118,45 @@ def _login_block(login: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]
 SLOT_SIGN_IN_STATES = ("claimed", "active")
 
 
+def _update_block(update: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """An update somebody asked for from their page, while it waits: the agent
+    installs now instead of at its next check. Named by its own time, so an
+    answer can only ever close the request it answers."""
+    if not update or update.get("state") != "pending":
+        return None
+    requested_at = update.get("requested_at")
+    if not isinstance(requested_at, (int, float)) or isinstance(requested_at, bool):
+        return None
+    return {"requested_at": requested_at}
+
+
+def _version_fields(target: claude_versions.Target, channels: Mapping[str, Any],
+                    update: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    """What to install, the number that channel stands at, and whether now.
+
+    The number lets an agent see a new release within the hour instead of at
+    its own daily check. The operator's hold carries neither an update nor a
+    number: nothing on a page moves a held machine. Nothing to aim for says
+    nothing at all, so a slot with no pin keeps the shape it always had.
+    """
+    version = _version_target(target.version)
+    if not version:
+        return {}
+    fields: dict[str, Any] = {"claude_version": version}
+    number = claude_versions.channel_version(channels, target.channel)
+    if number:
+        fields["channel_version"] = number
+    pending = None if target.held else _update_block(update)
+    if pending:
+        fields["update_now"] = pending
+    return fields
+
+
 def _slot_block(slot: Mapping[str, Any],
-                login: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                login: Optional[Mapping[str, Any]] = None,
+                node: Optional[Mapping[str, Any]] = None,
+                channels: Optional[Mapping[str, Any]] = None,
+                update: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """What a shared machine should do about one of its slots.
 
     The state is the whole instruction: `claiming` means provision it,
@@ -136,6 +173,12 @@ def _slot_block(slot: Mapping[str, Any],
     pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None
     if pending:
         block["login"] = pending
+    # Its own Claude Code, only while somebody holds it set up: a slot being
+    # made or wiped has nothing to update. An agent from before this reads the
+    # machine's pin above and ignores these, which is the old behaviour.
+    if node is not None and slot.get("state") in SLOT_SIGN_IN_STATES:
+        block.update(_version_fields(claude_versions.slot_target(slot, node),
+                                     channels or {}, update))
     return block
 
 
@@ -160,12 +203,17 @@ def desired_state(node: Mapping[str, Any],
                   login: Optional[Mapping[str, Any]] = None,
                   slots: Optional[list[Mapping[str, Any]]] = None,
                   slot_logins: Optional[Mapping[str, Mapping[str, Any]]] = None,
-                  hostname: Optional[str] = None) -> dict[str, Any]:
+                  hostname: Optional[str] = None,
+                  channels: Optional[Mapping[str, Any]] = None,
+                  slot_updates: Optional[Mapping[str, Mapping[str, Any]]] = None,
+                  own_update: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """What this node should look like, derived from its stored row.
 
     `slot_logins` maps a slot's id to its sign-in row, for a shared machine.
     `hostname` is what a shared machine should answer to; an owner's node is
-    never told one.
+    never told one. `channels` is the last read of Anthropic's release
+    channels; `slot_updates` maps a slot's id to the update its holder asked
+    for, and `own_update` is the one asked for on an owner's own node.
     """
     pending = _login_block(login)
     desired: dict[str, Any] = {
@@ -179,8 +227,17 @@ def desired_state(node: Mapping[str, Any],
     # ordinary node's reply stays exactly what it was.
     if slots:
         logins = slot_logins or {}
-        desired["slots"] = [_slot_block(s, logins.get(s.get("id"))) for s in slots]
-    # Somebody is watching a page for a URL, on the node or on any slot.
-    waiting = pending or any("login" in b for b in desired.get("slots", ()))
+        updates = slot_updates or {}
+        desired["slots"] = [_slot_block(s, logins.get(s.get("id")), node, channels or {},
+                                        updates.get(s.get("id"))) for s in slots]
+    elif hostname is None:
+        # An owner's own node: its pin is its owner's, so it is never a hold.
+        own = claude_versions.slot_target({"kind": "owner"}, node)
+        fields = _version_fields(own, channels or {}, own_update)
+        fields.pop("claude_version", None)          # already said, unchanged
+        desired.update(fields)
+    # Somebody is watching a page, for a URL or an update, on the node or a slot.
+    waiting = (pending or "update_now" in desired
+               or any("login" in b or "update_now" in b for b in desired.get("slots", ())))
     desired["poll_s"] = LOGIN_POLL_S if waiting else IDLE_POLL_S
     return desired

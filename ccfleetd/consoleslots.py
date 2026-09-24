@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
 
-from . import names, payments, pricing
+from . import claude_versions, names, payments, pricing
 from . import slots as slotstates
 from .desired import is_channel, machine_hostname
 from .render import _age
@@ -124,7 +124,8 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                   if said.get("reboot_required") is True else "")
         owned = [r for r in all_rows if r["kind"] == slotstates.OWNER_SLOT]
         if owned and not rows:
-            blocks.append(_own_machine_line(owned[0], accounts, reboot))
+            blocks.append(_own_machine_line(owned[0], accounts, reboot,
+                                            _running(said, owned[0], node)))
             continue
         # A machine is one with its slot declared, or one whose agent says it
         # is one — with one slot per machine, capacity no longer tells.
@@ -158,16 +159,52 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                 + "</div></div>")
         pin = str(node.get("pinned_version") or "")
         lines = [head] + [_slot_line(s, accounts, alerts, csrf, now,
-                                     reports.get(s["unix_user"]) or {}, pin) for s in rows]
+                                     reports.get(s["unix_user"]) or {}, pin,
+                                     _follows(claude_versions.slot_target(s, node)))
+                          for s in rows]
         blocks.append("".join(lines))
     body = "".join(blocks) or ('<p class="quiet">No shared machines yet. A machine joins '
                                "with its one slot, declared on the server: "
                                "<code>ccfleetd slot add &lt;machine&gt; --machine "
                                "&lt;machine&gt; --unix-user slot01</code>.</p>")
-    return ('<h2 id="slots">Slots</h2><div class="card">' + body +
+    return ('<h2 id="slots">Slots</h2><div class="card">'
+            + _releases(store.get_channel_versions(), now) + body +
             '<p class="note">Taking a slot back is a release: the machine wipes it, and it is '
             "free again once the machine confirms the Linux user is gone. There is no way here "
             "to sign in as anybody or to finish anybody's Claude sign-in, by design.</p></div>")
+
+
+def _releases(channels: Mapping[str, Any], now: float) -> str:
+    """Where Anthropic's release channels stood when last read: what a slot's
+    holder is offered to move to, said once above every slot."""
+    known = [f"{channel} <b>{escape(number)}</b>" for channel in claude_versions.CHANNELS
+             if (number := claude_versions.channel_version(channels, channel))]
+    if not known:
+        return ('<p class="muted small">Claude Code releases: not read yet. The server reads '
+                "them about once an hour.</p>")
+    checked = channels.get("checked_at")
+    when = f" &middot; checked {escape(_age(now, checked))} ago" if checked else ""
+    return (f'<p class="muted small">Claude Code releases: {" &middot; ".join(known)}'
+            f"{when}</p>")
+
+
+def _follows(target: claude_versions.Target) -> str:
+    """What a slot's Claude Code follows, in a word or two."""
+    if target.held:
+        return f"held at {target.version}"
+    if target.channel:
+        return target.channel
+    return f"pinned {target.version}" if target.version else ""
+
+
+def _running(said: Mapping[str, Any], slot: Mapping[str, Any],
+             node: Mapping[str, Any]) -> str:
+    """The Claude Code an owner's own node says it runs, and what it follows."""
+    version = (said.get("claude") or {}).get("version") if isinstance(said, Mapping) else None
+    follows = _follows(claude_versions.slot_target(slot, node))
+    if not version:
+        return ""
+    return f" · Claude Code {escape(str(version))}" + (f" ({escape(follows)})" if follows else "")
 
 
 def _hostname_pending(node_id: str, rows: list[Mapping[str, Any]],
@@ -187,13 +224,13 @@ def _hostname_pending(node_id: str, rows: list[Mapping[str, Any]],
 
 
 def _own_machine_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
-                      reboot: str) -> str:
+                      reboot: str, running: str = "") -> str:
     """Somebody's own node, counted as their slot. Nothing here acts on it:
     ccfleet never wipes, hands out or provisions anything on an owner's node."""
     holder = accounts.get(slot.get("held_by") or "")
     who = escape(str(holder["email"])) if holder else "&mdash;"
     return (f'<div class="row-line"><div class="row-name">{escape(names.display(slot))}'
-            f'<span class="muted"> · own machine · {escape(slot["unix_user"])}</span>'
+            f'<span class="muted"> · own machine · {escape(slot["unix_user"])}{running}</span>'
             f'{reboot} <span class="pill ok">{escape(slot["state"])}</span>'
             f' <span class="small">{who}</span></div>'
             '<div class="actions"><span class="muted small">counted as their slot; '
@@ -213,7 +250,8 @@ def _kept_for(node: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]
 
 def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
                alerts: list[Mapping[str, Any]], csrf: str, now: float,
-               report: Optional[Mapping[str, Any]] = None, pin: str = "") -> str:
+               report: Optional[Mapping[str, Any]] = None, pin: str = "",
+               follows: str = "") -> str:
     report = report or {}
     holder = accounts.get(slot.get("held_by") or "")
     who = escape(str(holder["email"])) if holder else "&mdash;"
@@ -221,7 +259,8 @@ def _slot_line(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]
     claimed = (f" · claimed {escape(_age(now, slot['claimed_at']))} ago"
                if slot.get("claimed_at") else "")
     version = (report.get("claude") or {}).get("version")
-    running = f" · Claude Code {escape(str(version))}" if version else ""
+    running = (f" · Claude Code {escape(str(version))}"
+               + (f" ({escape(follows)})" if follows else "")) if version else ""
     # Only an exact pin can be behind; a channel has no number to compare. And
     # only for a slot somebody holds: a free one has no Claude Code to update.
     pending = (' <span class="pill warn">update pending</span>'

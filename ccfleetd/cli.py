@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from typing import Optional
 
-from . import __version__, names, payments, pricing
+from . import __version__, claude_versions, names, payments, pricing
 from . import slots as slotstates
 from .api import Context, serve
 from .config import Config, ConfigError
@@ -487,7 +487,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return _payment_command(args, store)
             if args.command == "price":
                 return _price_command(args, store)
-            monitor = Monitor(store, cfg, build_notifier(cfg))
+            # Only the running server reads Anthropic's release channels; a
+            # one-off `check` never reaches out to the network.
+            fetcher = claude_versions.default_fetcher if args.command == "serve" else None
+            monitor = Monitor(store, cfg, build_notifier(cfg), channel_fetcher=fetcher)
             if args.command == "check":
                 for event in monitor.check_all():
                     alert = event["alert"]

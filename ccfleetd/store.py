@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
-from . import names, payments, pricing
+from . import claude_versions, names, payments, pricing
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -94,6 +94,18 @@ CREATE TABLE IF NOT EXISTS account_intents (
     account TEXT NOT NULL,                    -- '1' | '2' | '3'
     requested_at REAL NOT NULL,
     state TEXT NOT NULL DEFAULT 'requested',  -- 'requested' | 'failed'
+    detail TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL
+);
+-- A Claude Code update a slot's holder asked for from their page, one per slot:
+-- 'pending' until the machine says it installed it or could not, then 'done'
+-- or 'failed' so the page can say so, until the sweep clears it. The machine
+-- installs; this only carries the ask (see ccfleetd/claude_versions.py).
+CREATE TABLE IF NOT EXISTS claude_updates (
+    slot_id TEXT PRIMARY KEY REFERENCES slots(id),
+    requested_at REAL NOT NULL,
+    state TEXT NOT NULL,                     -- 'pending' | 'done' | 'failed'
+    to_version TEXT NOT NULL DEFAULT '',
     detail TEXT NOT NULL DEFAULT '',
     updated_at REAL NOT NULL
 );
@@ -412,6 +424,9 @@ class Store:
                 "kind": "TEXT NOT NULL DEFAULT 'machine'",
             })
             self._add_missing_columns("accounts", {"handle": "TEXT"})
+            # The release channel a slot's holder chose on their page: NULL
+            # follows the machine's pin, which every slot before this did.
+            self._add_missing_columns("slots", {"claude_channel": "TEXT"})
             # A name becomes a hostname: two slots answering to one would be
             # two people's machines under one name in claude.ai. Created here,
             # after the column exists, so an older database gets it too.
@@ -923,6 +938,9 @@ class Store:
             if carries:
                 conn.execute("UPDATE slots SET id = ? WHERE id = ? AND kind = ?",
                              (new, old, slotstates.OWNER_SLOT))
+                conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (new,))
+                conn.execute("UPDATE claude_updates SET slot_id = ? WHERE slot_id = ?",
+                             (new, old))
 
     def get_node(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -1318,6 +1336,125 @@ class Store:
             cur = conn.execute("DELETE FROM settings WHERE key = ?", (pricing.SETTING_KEY,))
         return cur.rowcount > 0
 
+    # -- Claude Code releases and updates ------------------------------------
+    #
+    # The numbers Anthropic's channels stood at when last read, and the updates
+    # holders asked for. A record of intent: the machine does the installing.
+
+    def get_channel_versions(self) -> dict[str, Any]:
+        """The last good read of each channel, checked again on the way out."""
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM settings WHERE key = ?",
+                                     (claude_versions.SETTING_KEY,)).fetchone()
+        return claude_versions.from_json(row["value"]) if row is not None else {}
+
+    def set_channel_versions(self, record: Mapping[str, Any], *, now: float) -> None:
+        with self._write_txn() as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                (claude_versions.SETTING_KEY, claude_versions.to_json(record), now,
+                 "release check"))
+
+    def get_claude_update(self, slot_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM claude_updates WHERE slot_id = ?",
+                                     (slot_id,)).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _choosable(conn: sqlite3.Connection, slot_id: str,
+                   held_by: Optional[str]) -> sqlite3.Row:
+        """The slot, if its holder may choose its Claude Code right now: set up
+        and held, and not under the operator's hold. Checked in the caller's
+        transaction, like every other holder action."""
+        row = Store._held(conn, slot_id, held_by)
+        if row["state"] not in Store.SLOT_SIGN_IN_STATES:
+            raise StoreError(f"{slot_id} is {row['state']}; its Claude Code can be chosen "
+                             "once it is set up")
+        node = conn.execute("SELECT pinned_version FROM nodes WHERE id = ?",
+                            (row["node_id"],)).fetchone()
+        slot = {"kind": row["kind"], "claude_channel": None}
+        if claude_versions.slot_target(slot, dict(node) if node else {}).held:
+            raise StoreError(f"{slot_id}'s machine is held at a version by the operator")
+        return row
+
+    @staticmethod
+    def _set_channel(conn: sqlite3.Connection, row: sqlite3.Row, slot_id: str,
+                     channel: str) -> None:
+        """A machine slot keeps its own choice; somebody's own node takes it as
+        the node's pin, which is theirs to set."""
+        if row["kind"] == slotstates.OWNER_SLOT:
+            conn.execute("UPDATE nodes SET pinned_version = ? WHERE id = ?",
+                         (channel, row["node_id"]))
+        else:
+            conn.execute("UPDATE slots SET claude_channel = ? WHERE id = ?", (channel, slot_id))
+
+    def request_claude_update(self, slot_id: str, now: float, *, to_version: str = "",
+                              held_by: Optional[str] = None) -> None:
+        """Move a slot to the latest release now, for its holder.
+
+        The slot switches to the latest channel, so it keeps itself current
+        from then on and the daily stable check cannot undo it; and an update
+        is asked for, so the machine installs now rather than at its next
+        check. One transaction, the holder checked inside it.
+        """
+        with self._write_txn() as conn:
+            row = self._choosable(conn, slot_id, held_by)
+            self._set_channel(conn, row, slot_id, "latest")
+            conn.execute(
+                "INSERT INTO claude_updates (slot_id, requested_at, state, to_version, "
+                "detail, updated_at) VALUES (?, ?, 'pending', ?, '', ?) "
+                "ON CONFLICT(slot_id) DO UPDATE SET requested_at = excluded.requested_at, "
+                "state = 'pending', to_version = excluded.to_version, detail = '', "
+                "updated_at = excluded.updated_at",
+                (slot_id, now, str(to_version or "")[:40], now))
+
+    def choose_stable(self, slot_id: str, *, held_by: Optional[str] = None) -> None:
+        """Back to the stable release, for its holder. The machine moves there
+        at its next quiet moment; an update still waiting is withdrawn."""
+        with self._write_txn() as conn:
+            row = self._choosable(conn, slot_id, held_by)
+            self._set_channel(conn, row, slot_id, "stable")
+            conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (slot_id,))
+
+    def record_claude_update(self, slot_id: str, requested_at: Any, state: str,
+                             to_version: str, detail: str, now: float) -> bool:
+        """What the machine says it did about an update. Only news about the
+        update still waiting counts: a report that names another request, one
+        already answered, or a state it cannot have, changes nothing."""
+        if state not in ("done", "failed"):
+            return False
+        if not isinstance(requested_at, (int, float)) or isinstance(requested_at, bool):
+            return False
+        to_version = str(to_version or "")[:40]
+        with self._write_txn() as conn:
+            cur = conn.execute(
+                "UPDATE claude_updates SET state = ?, "
+                "to_version = CASE WHEN ? != '' THEN ? ELSE to_version END, "
+                "detail = ?, updated_at = ? "
+                "WHERE slot_id = ? AND requested_at = ? AND state = 'pending'",
+                (state, to_version, to_version, str(detail or "")[:300], now, slot_id,
+                 float(requested_at)))
+        return cur.rowcount > 0
+
+    #: Said when a machine never answered an update in time.
+    UPDATE_TIMED_OUT = "the machine did not answer in time; try again"
+
+    def expire_claude_updates(self, now: float, max_age_s: float) -> int:
+        """An update nobody answered becomes a failure the page can say; an
+        answered one is forgotten once it has been on the page long enough."""
+        with self._write_txn() as conn:
+            timed_out = conn.execute(
+                "UPDATE claude_updates SET state = 'failed', detail = ?, updated_at = ? "
+                "WHERE state = 'pending' AND requested_at < ?",
+                (self.UPDATE_TIMED_OUT, now, now - max_age_s)).rowcount
+            dropped = conn.execute(
+                "DELETE FROM claude_updates WHERE state != 'pending' AND updated_at < ?",
+                (now - max_age_s,)).rowcount
+        return timed_out + dropped
+
     # -- slots ------------------------------------------------------------
     #
     # Releasing is written before claiming, and that order is deliberate. The
@@ -1404,7 +1541,8 @@ class Store:
     # Every column that holds a slot's id, beside its sign-in row, which
     # `logins` keeps under "slot:<id>" and which moves with it. Guarded by the
     # same schema test as NODE_ID_COLUMNS.
-    SLOT_ID_COLUMNS = (("slots", "id"), ("account_intents", "slot_id"))
+    SLOT_ID_COLUMNS = (("slots", "id"), ("account_intents", "slot_id"),
+                       ("claude_updates", "slot_id"))
 
     def rename_slot(self, old: str, new: str) -> None:
         """Give a slot a new id, in any state — held and in use included.
@@ -1436,6 +1574,7 @@ class Store:
                 raise StoreError(f"another machine already answers to {new!r}")
             conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(new),))
             conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (new,))
+            conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (new,))
             for table, column in self.SLOT_ID_COLUMNS:
                 conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
                              (new, old))
@@ -1567,9 +1706,12 @@ class Store:
         # called by its id until the next claim names it after somebody else.
         cur = conn.execute(
             "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
-            "released_at = ?, device_token_at = 0, name = NULL "
+            "released_at = ?, device_token_at = 0, name = NULL, claude_channel = NULL "
             "WHERE id = ? AND state = ?",
             (slotstates.FREE, now, slot_id, slotstates.RELEASING))
+        if cur.rowcount > 0:
+            # Nor their update: the next holder starts on the machine's pin.
+            conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (slot_id,))
         return cur.rowcount > 0
 
     def apply_slot_report(self, node_id: str, reports: Any, *,
@@ -1723,6 +1865,9 @@ class Store:
                 # started it — the last holder, or the console — and never to
                 # the account the record now goes to.
                 conn.execute("DELETE FROM logins WHERE node_id = ?", (node_id,))
+                # Nor an update the last holder asked for.
+                conn.execute("DELETE FROM claude_updates WHERE slot_id = ?",
+                             (existing["id"] if existing else node_id,))
             if existing:
                 conn.execute("UPDATE slots SET held_by = ?, unix_user = ?, state = ? "
                              "WHERE id = ?",
@@ -1744,6 +1889,9 @@ class Store:
         """Stop counting somebody's own node as their slot. Forgets the record
         and nothing else: the node, its history and its own sign-in stay."""
         with self._write_txn() as conn:
+            conn.execute("DELETE FROM claude_updates WHERE slot_id IN "
+                         "(SELECT id FROM slots WHERE node_id = ? AND kind = ?)",
+                         (node_id, slotstates.OWNER_SLOT))
             cur = conn.execute("DELETE FROM slots WHERE node_id = ? AND kind = ?",
                                (node_id, slotstates.OWNER_SLOT))
         return cur.rowcount > 0

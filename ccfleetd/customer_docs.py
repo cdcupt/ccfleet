@@ -326,6 +326,18 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<p>Your slot is a whole machine, named after you: the part of your address before "
         "the @ and a number, like alice-1. claude.ai/code shows it by that name. When you "
         "give it back, the name goes with it.</p></div>"
+        '<div class="card"><h2>Keeping Claude Code up to date</h2>'
+        "<p>Your slot card has a <strong>Claude Code</strong> row: the version your slot "
+        "runs and, when Anthropic has published a newer one, its number. The button beside "
+        "it, <strong>Update to</strong> and that number, installs it now. Your slot then "
+        "follows Anthropic&#x27;s latest release and keeps itself current from then on.</p>"
+        "<p>A session that is open keeps running on the version it started with; new "
+        "sessions start on the new one. Remote Control switches over by itself once no "
+        "session is open.</p>"
+        '<p>To go back to Anthropic&#x27;s stable release, press <span class="btnlabel">'
+        "Back to Stable</span>. A version <strong>held by the operator</strong> has been "
+        "fixed on purpose, for example while a release misbehaves, and there is nothing to "
+        "press.</p></div>"
         '<div class="card"><h2>Good to know</h2><ul>'
         "<li>Your slot is <strong>not backed up</strong>. Keep your work in git, or anywhere "
         "else that is yours.</li>"
@@ -414,7 +426,8 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "that you could not accept an administrator being able to read.</p></div>"
         '<div class="card"><h2>Kept up to date</h2><ul>'
         "<li><strong>Claude Code</strong> in your slot is updated automatically, on the "
-        "release channel the operator sets, normally Anthropic&#x27;s stable channel. A "
+        "release channel the operator sets, normally Anthropic&#x27;s stable channel, or "
+        "on the latest release once you choose it on your page. A "
         "session that is running is never interrupted; the new version is used from the "
         "next one.</li>"
         "<li><strong>Security updates</strong> for the machine install every day.</li>"

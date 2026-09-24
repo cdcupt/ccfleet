@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from . import rules
+from . import claude_versions, rules
 from . import slots as slotstates
 from .config import Config
 from .notify import Notifier, format_event
@@ -24,8 +24,12 @@ LOGIN_MAX_AGE_S = 15 * 60
 
 class Monitor:
     def __init__(self, store: Store, cfg: Config, notifier: Notifier,
-                 clock: Optional[Clock] = None) -> None:
+                 clock: Optional[Clock] = None,
+                 channel_fetcher: Optional[claude_versions.Fetcher] = None) -> None:
         self._store = store
+        # None reads no release channel: the tests, and every command but
+        # `serve`, never touch the network.
+        self._channel_fetcher = channel_fetcher
         self._cfg = cfg
         self._notifier = notifier
         self._clock = clock or time.time
@@ -72,6 +76,8 @@ class Monitor:
             if node["enabled"]:
                 events.extend(self.check_node(node, now))
         self._expire_logins(now)
+        self._expire_updates(now)
+        self._refresh_channels(now)
         self._maybe_prune(now)
         return events
 
@@ -123,6 +129,24 @@ class Monitor:
         dropped = self._store.expire_logins(now - LOGIN_MAX_AGE_S)
         if dropped:
             log.info("expired %d unfinished sign-in(s)", dropped)
+
+    def _expire_updates(self, now: float) -> None:
+        """An update nobody answered is said to have failed, so the page stops
+        saying "updating"; an answered one leaves the page in time."""
+        changed = self._store.expire_claude_updates(now, LOGIN_MAX_AGE_S)
+        if changed:
+            log.info("aged %d Claude Code update(s)", changed)
+
+    def _refresh_channels(self, now: float) -> None:
+        """Read Anthropic's release channels, about once an hour. Here in the
+        periodic loop and never on a heartbeat: a slow download site must not
+        slow a node's reply."""
+        if self._channel_fetcher is None:
+            return
+        record = claude_versions.refresh(self._store.get_channel_versions(), now,
+                                         self._channel_fetcher)
+        if record is not None:
+            self._store.set_channel_versions(record, now=now)
 
     def _maybe_prune(self, now: float) -> None:
         if now - self._last_prune < PRUNE_EVERY_S:
