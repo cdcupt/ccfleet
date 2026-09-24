@@ -303,7 +303,30 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
         login = _login_request(entry.get("login")) if state in SIGN_IN_STATES else None
         if login is not None:
             item["login"] = login
+        if state in UPGRADE_STATES:
+            item.update(_version_request(entry))
         out.append(item)
+    return out
+
+
+def _version_request(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """The Claude Code the server wants on one held slot, checked field by field.
+
+    The version reaches a slot's installer, so it passes the check the slot
+    itself makes; the channel's release number must be one, and an update
+    asked for from the page is its time and nothing else. Anything else is
+    dropped: a slot with none of these follows the machine's own pin.
+    """
+    version = core.installable_version(entry.get("claude_version"))
+    if version is None:
+        return {}
+    out: dict[str, Any] = {"claude_version": version}
+    number = core.channel_number(entry.get("channel_version"))
+    if number is not None:
+        out["channel_version"] = number
+    asked = core.update_request(entry.get("update_now"))
+    if asked is not None:
+        out["update_now"] = {"requested_at": asked}
     return out
 
 
@@ -380,7 +403,9 @@ def ask_slot(account: pwd.struct_passwd, cfg: MachineConfig, system: System,
         return {}
     # Sign-in progress rides along too: its URL and any minted token are for
     # this slot's holder, and the server checks the URL and bounds the token.
-    return {k: facts[k] for k in (*SLOT_FACT_KEYS, "login")
+    # So does its answer to an update asked for from the page: news once, like
+    # a sign-in's, so never repeated from the cache on the fast polls.
+    return {k: facts[k] for k in (*SLOT_FACT_KEYS, "login", "claude_update")
             if isinstance(facts.get(k), Mapping)}
 
 
@@ -420,7 +445,14 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
         if (state.get("slot_states") or {}).get(user) in UPGRADE_STATES:
             # The machine's pin, and whether this slot may move to it now: not
             # while its holder is signing in, which a restart would cut short.
-            request["claude_version"] = state.get("claude_version") or ""
+            # Its own, when the server named one: the channel its holder chose,
+            # or the operator's hold. Otherwise the machine's.
+            own = (state.get("slot_versions") or {}).get(user) or {}
+            request["claude_version"] = (own.get("claude_version")
+                                         or state.get("claude_version") or "")
+            for key in ("channel_version", "update_now"):
+                if key in own:
+                    request[key] = own[key]
             request["may_upgrade"] = login is None
             if request["may_upgrade"] and request["claude_version"]:
                 # Room for the installer too: a download, not a probe.
@@ -723,6 +755,12 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     # The version this machine's slots should run, checked the way the owner
     # agent checks its own before it reaches an installer. Empty: leave them be.
     new_state["claude_version"] = core.installable_version(desired.get("claude_version")) or ""
+    # And each held slot's own, for the next run to hand it: checked on the way
+    # in (see _version_request), so nothing else is kept.
+    new_state["slot_versions"] = {
+        s["unix_user"]: {k: s[k] for k in ("claude_version", "channel_version", "update_now")
+                         if k in s}
+        for s in wanted_slots(desired) if "claude_version" in s}
     new_state["quota_turn"] = (turn + (0 if fast else 1)) if users else 0
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state
