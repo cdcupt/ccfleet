@@ -609,7 +609,7 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
   <p><strong>When a window resets.</strong> Claude Code prints a reset in the machine's own
   clock, and the machines keep theirs on UTC. The server places those words at a moment, and
   the page shows it in the viewer's own time zone with how long is left beside it:
-  <em>Thu 6:00 PM GMT+8 (in 2d 5h)</em>. One small script does that, the only script ccfleet's
+  <em>Thu 10:00 AM GMT+2 (in 2d 5h)</em>. One small script does that, the only script ccfleet's
   pages carry, and their Content-Security-Policy allows it by its SHA-256 and nothing else.
   Without it the page still says how long is left, and words the server cannot place stay as
   Claude Code printed them.</p>
@@ -969,9 +969,9 @@ ccfleetd slot list --machine pool-1</code></pre>
     <p>Remote Control needs the feature-flag evaluation that <code>DISABLE_TELEMETRY</code>
     turns off, and <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> includes it. With
     either one set, Remote Control refuses to start: <em>Remote Control requires feature-flag
-    evaluation, which is disabled because DISABLE_TELEMETRY is set</em>. On 2026-09-24 it was
-    set on the live slots for a few minutes, and Remote Control stopped on all three until it
-    came out. A test keeps both out of what a slot starts with.</p>
+    evaluation, which is disabled because DISABLE_TELEMETRY is set</em>. Set on live slots
+    once, it stopped Remote Control on every one of them until it came out; a test now keeps
+    both out of what a slot starts with.</p>
   </div>
   <h3>The console's Slots card</h3>
   <p>One line on top gives Anthropic's release numbers, for example <em>Claude Code releases:
@@ -1016,10 +1016,11 @@ ccfleetd slot list --machine pool-1</code></pre>
     <li><strong><em>Change account</em> moves it, at most once a week.</strong> It is offered on
     a shared machine's slot in use, never on somebody's own node. The new account signs in to
     the scratch directory while the old one keeps working, and only a finished sign-in is moved
-    in, whole or not at all: the account block of <code>~/.claude.json</code> (every other key
-    stays), then the credential, then the binding. A step that fails puts back the ones before
-    it, so the slot never holds two accounts, and a change that does not go through changes
-    nothing. Remote Control then restarts on the new account, which ends any session open in
+    in, in order: the account block of <code>~/.claude.json</code> (every other key stays),
+    then the credential, then the binding. A step that fails puts back the ones before it, so a
+    change that fails leaves the slot as it was; should putting back fail too, the holder's page
+    says it stopped halfway, and changing account again finishes it. There is only ever one
+    credential on the slot, so it never holds two accounts. Remote Control then restarts on the new account, which ends any session open in
     it, and the slot shows in claude.ai/code under that account instead. Signing in with the
     account the slot already has is not a change; the week starts only when the account really
     moved. The files stay throughout.</li>
@@ -1032,7 +1033,7 @@ ccfleetd slot list --machine pool-1</code></pre>
   </ul>
   <figure>
     <div class="fig-wrap">
-    <svg viewBox="0 0 980 232" role="img" aria-label="Change account. The holder presses Change account on a slot in use, a week after any last change. The new account signs in to a scratch directory while the old one keeps working. Only a finished sign-in is moved in: the account block, then the credential, then the binding, and a failed step puts back the ones before it. Remote Control then restarts on the new account, and the next change can come a week later. A sign-in that fails, is cancelled, or is the same account changes nothing.">
+    <svg viewBox="0 0 980 232" role="img" aria-label="Change account. The holder presses Change account on a slot in use, a week after any last change. The new account signs in to a scratch directory while the old one keeps working. Only a finished sign-in is moved in, in order: the account block, then the credential, then the binding, and a failed step puts back the ones before it. Remote Control then restarts on the new account, and the next change can come a week later. A sign-in that fails, is cancelled, or is the same account changes nothing.">
       <defs><marker id="c-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
 
       <rect x="8" y="40" width="180" height="88" rx="8" class="box"/>
@@ -1050,9 +1051,9 @@ ccfleetd slot list --machine pool-1</code></pre>
       <line x1="466" y1="84" x2="500" y2="84" class="ln" marker-end="url(#c-arr)"/>
 
       <rect x="504" y="40" width="252" height="88" rx="8" class="box-acc"/>
-      <text x="630" y="68" text-anchor="middle" class="t12">moved in, whole</text>
+      <text x="630" y="68" text-anchor="middle" class="t12">moved in, in order</text>
       <text x="630" y="89" text-anchor="middle" class="t10 mute">account block, credential, binding</text>
-      <text x="630" y="106" text-anchor="middle" class="t10 mute">a failed step puts back the rest</text>
+      <text x="630" y="106" text-anchor="middle" class="t10 mute">a failed step is put back</text>
 
       <line x1="756" y1="84" x2="790" y2="84" class="ln" marker-end="url(#c-arr)"/>
 
@@ -1065,7 +1066,7 @@ ccfleetd slot list --machine pool-1</code></pre>
       <rect x="146" y="170" width="400" height="34" rx="8" class="box-soft"/>
       <text x="346" y="192" text-anchor="middle" class="t10 mute">fails, cancelled, or the same account: nothing changes</text>
 
-      <text x="8" y="226" class="t11 mute">Until the accent box finishes, the slot signs in exactly as before. It never holds two accounts.</text>
+      <text x="8" y="226" class="t11 mute">Until the credential is moved in, the slot signs in exactly as before, and it only ever holds one.</text>
     </svg>
     </div>
     <figcaption><b>Figure 3.</b> Changing a slot's Claude account. The files stay throughout; only the sign-in and the binding move.</figcaption>
