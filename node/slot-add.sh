@@ -223,10 +223,14 @@ PY"
 # session and which /effort then cannot lower. A holder who wants less edits
 # that line, as the guide tells them.
 #
-# And nothing optional leaves for Anthropic: Claude Code's usage telemetry,
-# error reports, bug reports and feedback surveys are off, by Claude Code's own
-# documented switches (Erik, 2026-09-24). What still goes is what Claude needs
-# to answer. The same rule as above: a holder who turned one back on keeps it.
+# And nothing optional leaves for Anthropic that a slot can do without: Claude
+# Code's error reports, bug reports and feedback surveys are off, by its own
+# documented switches (Erik, 2026-09-24). The same rule as above: a holder who
+# turned one back on keeps it. NOT DISABLE_TELEMETRY: Remote Control needs the
+# feature-flag evaluation it turns off, and refuses to start without it ("Remote
+# Control requires feature-flag evaluation, which is disabled because
+# DISABLE_TELEMETRY is set"). Set on the live slots for a few minutes, it took
+# Remote Control down on all three.
 as_slot "python3 - <<'PY'
 import json, os
 p = os.path.expanduser('~/.claude/settings.json')
@@ -235,7 +239,7 @@ d = json.load(open(p)) if os.path.exists(p) else {}
 d.setdefault('model', 'opus')
 env = d.setdefault('env', {})
 env.setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')
-for key in ('DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_BUG_COMMAND',
+for key in ('DISABLE_ERROR_REPORTING', 'DISABLE_BUG_COMMAND',
             'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY'):
     env.setdefault(key, '1')
 tmp = p + '.tmp'

@@ -436,9 +436,10 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "much of your usage limits is used, and token counts per hour. Never your prompts, "
         "conversations, files or credential. "
         '<a href="/privacy">The privacy page</a> lists everything, and for how long.</p>'
-        "<p>Claude Code on your slot sends Anthropic what Claude needs to answer you, and "
-        "nothing optional: its usage telemetry, error reports, bug reports and feedback "
-        "surveys are switched off.</p>"
+        "<p>Claude Code on your slot sends Anthropic less than it would by default: its "
+        "error reports, bug reports and feedback surveys are switched off. Its usage "
+        "telemetry stays on, because Remote Control, which is how you reach your slot, "
+        "does not work without it.</p>"
         "<p>One limit is worth saying plainly: the machines are ours, and their "
         "administrators have root, so they can technically read any slot. No feature does "
         "this and we do not look, but nothing can make it impossible. Keep nothing in a slot "

@@ -419,7 +419,7 @@ def test_the_effort_joins_an_env_block_the_holder_already_has(tmp_path):
     assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
 
 
-OPTIONAL_REPORTING = ("DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
+OPTIONAL_REPORTING = ("DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
                       "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY")
 
 
@@ -435,13 +435,26 @@ def test_a_new_slot_sends_anthropic_nothing_optional(tmp_path):
         assert env.get(key) == "1", key
 
 
+def test_telemetry_is_never_switched_off_because_remote_control_needs_it(tmp_path):
+    """Remote Control refuses to start with DISABLE_TELEMETRY set: it needs the
+    feature-flag evaluation that switch turns off. Set on the live slots, it
+    took Remote Control down on all three within minutes."""
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    assert "DISABLE_TELEMETRY" not in _settings(slot_home)["env"]
+    assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in _settings(slot_home)["env"], \
+        "it includes DISABLE_TELEMETRY"
+
+
 def test_a_holder_who_turned_reporting_back_on_keeps_it(tmp_path):
     slot_home = tmp_path / "slothome"
-    _holders_settings(slot_home, {"env": {"DISABLE_TELEMETRY": "0"}})
+    _holders_settings(slot_home, {"env": {"DISABLE_BUG_COMMAND": "0"}})
     result = _add_slot(tmp_path, slot_home)
     assert result.returncode == 0, result.stderr
     env = _settings(slot_home)["env"]
-    assert env["DISABLE_TELEMETRY"] == "0"
+    assert env["DISABLE_BUG_COMMAND"] == "0"
     assert env["DISABLE_ERROR_REPORTING"] == "1", "the rest still go off"
 
 

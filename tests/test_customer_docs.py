@@ -215,12 +215,14 @@ def test_how_it_works_says_what_slot_add_switches_off():
     from pathlib import Path
 
     script = (Path(__file__).parents[1] / "node" / "slot-add.sh").read_text()
-    for key in ("DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
+    for key in ("DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
                 "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"):
         assert f"'{key}'" in script, key
     page = render("/docs/how-it-works")
-    assert "usage telemetry, error reports, bug reports and feedback" in page
-    assert "switched off" in page
+    assert "error reports, bug reports and feedback surveys are switched off" in page
+    # And no claim the slot cannot keep: telemetry stays on, for Remote Control.
+    assert "'DISABLE_TELEMETRY'" not in script
+    assert "telemetry stays on, because Remote Control" in page
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
