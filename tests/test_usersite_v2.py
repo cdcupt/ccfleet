@@ -7,6 +7,7 @@ from the node's own heartbeat. Nothing on that card can wipe it.
 
 from __future__ import annotations
 
+import re
 import time
 
 from ccfleetd import slots
@@ -41,7 +42,8 @@ def test_a_claimed_slot_is_shown_by_its_holders_name(site):  # noqa: F811
     assert erik.press("/account/claim").status == 303
     title = card(erik.page(), "pool-1")
     assert "<h2>erik-1 " in title, "the name claude.ai shows the holder"
-    assert "on pool-1" in title, "and the machine it runs on, which is not that name"
+    shown = re.sub(r"<[^>]+>", " ", title[title.index(">") + 1:])   # past the card's own tag
+    assert "pool-1" not in shown, "and nothing of the machine it is on (Erik, 2026-09-24)"
 
 
 def test_the_machine_is_not_named_twice(site):  # noqa: F811

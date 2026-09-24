@@ -770,11 +770,10 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     region = f" · {escape(node['region'])}" if node.get("region") else ""
     claimed = (f" · claimed {escape(_age(now, slot['claimed_at']))} ago"
                if slot.get("claimed_at") else "")
-    # The name claude.ai/code shows them; the machine only when it is not that.
+    # The name claude.ai/code shows them, and nothing about the machine it is
+    # on: while they hold it, the name is theirs (Erik, 2026-09-24).
     name = names.display(slot)
-    where = ("" if own
-             else f"on {escape(slot['node_id'])}" if slot["node_id"] != name else "")
-    about = f"{where}{region}{claimed}".lstrip(" ·")
+    about = f"{region}{claimed}".lstrip(" ·")
     # Somebody's own node, said beside its name rather than lost in the small
     # print: it is theirs outright, not one of ours they hold.
     kind, mine = (' data-kind="own"', ' <span class="tag">your own machine</span>') if own \

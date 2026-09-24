@@ -516,6 +516,9 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
         creds = facts.get("credentials") or {}
         rows.append({
             "id": node["id"], "name": shown, "machine": machine, "slot_count": len(mine),
+            # Named after whoever holds it: from the claim until the wipe that
+            # frees it (see _called).
+            "held_name": len(mine) == 1 and bool(mine[0].get("name")),
             "owner": node["owner"], "region": node["region"],
             "enabled": node["enabled"], "status": level if node["enabled"] else "disabled",
             "last_seen_ts": (hb or {}).get("ts"),
@@ -578,14 +581,20 @@ def _actions_html(row: Mapping[str, Any], csrf: str) -> str:
 
 
 def _called(row: Mapping[str, Any]) -> tuple[str, str]:
-    """The name a node goes by, and where it is when that is not its id.
+    """The name a node goes by, and what is said beside it, if anything.
 
     A shared machine goes by its slot's name, which is its hostname and what
-    claude.ai shows; its id stays the operator's handle for it on the server.
-    Returned unescaped.
+    claude.ai shows. While somebody holds the slot the name is theirs
+    (alice-1), and it is said alone: not the machine's id, which is the
+    operator's handle for it on the server, nor the operator who owns it
+    (Erik, 2026-09-24). Once the slot is freed its name goes, and the machine
+    answers to its pool name and its owner again. `ccfleetd slot list` still
+    says which machine a name is on. Returned unescaped; "" for nothing.
     """
     shown = row.get("name") or row["id"]
-    return shown, (f"on {row['id']} \u00b7 " if shown != row["id"] else "")
+    if row.get("held_name"):
+        return shown, ""
+    return shown, (f"on {row['id']} \u00b7 " if shown != row["id"] else "") + row["owner"]
 
 
 def _row_html(row: Mapping[str, Any], now: float) -> str:
@@ -624,14 +633,14 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     # nor of a shared machine, whose Remote Control is its slot's to run.
     if row["rc_expected"] and row["enabled"] and not row.get("machine"):
         rc += " (expected)"
-    shown, where = _called(row)
+    shown, beside = _called(row)
+    byline = " \u00b7 ".join(part for part in (beside, row["region"] or "-") if part)
     return (
         f'<tr class="r-{escape(row["status"])}">'
         f"<td>{_pill(row['status'])}</td>"
         f'<td><span class="node-id">{escape(shown)}</span>'
         + (' <span class="pill warn">reboot needed</span>' if row.get("reboot_required") else "")
-        + f"<br><span class=\"muted\">{escape(where)}{escape(row['owner'])}"
-        f" · {escape(row['region'] or '-')}</span></td>"
+        + f"<br><span class=\"muted\">{escape(byline)}</span></td>"
         f"<td class=\"num\">{escape(_age(now, row['last_seen_ts']))}</td>"
         f'<td class="v">{version}</td>'
         f"<td><code>{_fmt(row['egress_ip'])}</code></td>"
@@ -670,9 +679,9 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
         buttons.append(form("rotate-token", "New token", cls="danger"))
         buttons.append(form("remove", "Remove",
                             f'<input type="hidden" name="confirm" value="{node}">', cls="danger"))
-        shown, where = _called(row)
-        items.append(f'<div class="row-line"><div class="row-name">{escape(shown)}'
-                     f'<span class="muted"> · {escape(where)}{escape(row["owner"])}</span></div>'
+        shown, beside = _called(row)
+        by = f'<span class="muted"> · {escape(beside)}</span>' if beside else ""
+        items.append(f'<div class="row-line"><div class="row-name">{escape(shown)}{by}</div>'
                      f'<div class="actions">{"".join(buttons)}</div></div>')
     return ('<h2 id="manage">Manage nodes</h2><div class="card">' + "".join(items) +
             '<p class="note">'
@@ -1234,11 +1243,11 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
         spark, caption = _usage_chart(usage)
         # Which model did the work is left out: it is whatever each person
         # chose in their session, and can change turn by turn.
-        shown, where = _called(row)
+        shown, beside = _called(row)
         place = "slot" if row.get("machine") else "node"
+        by = f'<span class="muted"> &middot; {escape(beside)}</span>' if beside else ""
         items.append(
-            f'<div class="usage-row"><div class="usage-name">{escape(shown)}'
-            f'<span class="muted"> &middot; {escape(where)}{escape(row["owner"])}</span>'
+            f'<div class="usage-row"><div class="usage-name">{escape(shown)}{by}'
             f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
             f'<span class="muted"> tokens run on this {place}, last '
             f'{escape(_usage_span(usage))}</span></div>'
@@ -1318,10 +1327,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     body_rows = "".join(_row_html(r, now) for r in rows) or (
         f'<tr><td colspan="9" class="muted">{escape(empty)}</td></tr>')
     # An alert is about a node: say it by the name that node goes by.
-    called = {}
-    for r in rows:
-        shown, _ = _called(r)
-        called[r["id"]] = shown if shown == r["id"] else f"{shown} on {r['id']}"
+    called = {r["id"]: _called(r)[0] for r in rows}
     alert_items = "".join(
         f'<div class="alert">{_pill(a["level"])}'
         f'<span class="alert-rule">{escape(called.get(a["node_id"], a["node_id"]))} · '

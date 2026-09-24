@@ -184,14 +184,46 @@ def test_an_own_node_still_reads_its_own_facts(console):
     assert "active (expected)" in row
 
 
-def test_a_machine_goes_by_its_slots_name(console):
+def byline(row):
+    """The small line under a row's name in the fleet table."""
+    return re.search(r'node-id">[^<]*</span>.*?<br><span class="muted">(.*?)</span>',
+                     row, re.S).group(1)
+
+
+def test_a_held_slot_is_said_by_its_holders_name_alone(console):
+    """Erik, 2026-09-24: while somebody holds a slot it is their name and
+    nothing else, not the machine it is on nor the operator who owns it."""
     store, call = console
     fleet(store, time.time())
     page = call("GET", "/admin").body
     row = row_of(page, "ysflowerdog-1")
-    assert "on pool-1 · erik" in row
-    # A machine whose slot bears its own id says nothing about where it is.
-    assert "on erik-2" not in row_of(page, "erik-2")
+    assert byline(row) == "us-west-residential"
+    assert "pool-1" not in row
+    assert 'row-name">ysflowerdog-1</div>' in manage_line(page, "ysflowerdog-1")
+
+
+def test_what_nobody_holds_by_name_keeps_its_owner(console):
+    """A free machine, a slot from before names and an owner's own node go by
+    their own ids, with their owner beside them."""
+    store, call = console
+    fleet(store, time.time())
+    page = call("GET", "/admin").body
+    for name in ("pool-2", "erik-2", "erik-1"):
+        assert byline(row_of(page, name)).startswith("erik \u00b7 "), name
+        assert "on " not in byline(row_of(page, name)), name
+        assert f'row-name">{name}<span class="muted"> · erik</span>' in manage_line(page, name)
+
+
+def test_a_slot_given_back_answers_to_its_pool_name_again(console):
+    store, call = console
+    fleet(store, time.time())
+    store.begin_release("pool-1")
+    store.apply_slot_report("pool-1", [{"unix_user": "slot01", "present": False}],
+                            now=time.time())
+    assert store.get_slot("pool-1")["state"] == slots.FREE
+    page = call("GET", "/admin").body
+    assert byline(row_of(page, "pool-1")) == "erik \u00b7 us-west-residential"
+    assert "ysflowerdog-1" not in page
 
 
 def test_a_slot_nobody_has_signed_in_says_so(console):
@@ -302,7 +334,34 @@ def test_a_slots_use_is_under_the_slots_name(cfg):
         {"unix_user": "slot01", "usage": {"total_tokens": 1200, "by_day": []}}]}}}
     page = render_dashboard(build_rows(nodes, latest, [], now, slots=one), [], now, cfg)
     usage = page[page.index("<h2>Usage and quota</h2>"):]
-    assert 'usage-name">ana-1<' in usage and "on pool-9 \u00b7 erik" in usage
+    assert 'usage-name">ana-1<div' in usage
+    assert "pool-9" not in usage and "erik" not in usage
+
+
+def one_machine(cfg, slot_rows, now=3_000_000.0):
+    """The console for one machine, m1, with these slots declared on it."""
+    nodes = [{"id": "m1", "owner": "erik", "region": "us", "pinned_version": "",
+              "rc_expected": False, "enabled": True, "created_at": 0}]
+    latest = {"m1": {"ts": now - 5, "payload": {"mode": slots.MACHINE_MODE, "slots": []}}}
+    return render_dashboard(build_rows(nodes, latest, [], now, slots=slot_rows), [], now, cfg)
+
+
+def slot_row(slot_id, user, name=None):
+    return {"id": slot_id, "node_id": "m1", "unix_user": user, "kind": slots.MACHINE_SLOT,
+            "name": name}
+
+
+def test_a_free_slot_not_called_as_its_machine_says_which_machine(cfg):
+    page = one_machine(cfg, [slot_row("m1-01", "slot01")])
+    assert byline(row_of(page, "m1-01")) == "on m1 \u00b7 erik \u00b7 us"
+
+
+def test_a_machine_of_two_slots_goes_by_its_own_id(cfg):
+    """From before one slot per machine: no one slot speaks for it, so the row
+    is the machine's, with its owner, even while a slot on it is somebody's."""
+    page = one_machine(cfg, [slot_row("m1-01", "slot01", "ana-1"), slot_row("m1-02", "slot02")])
+    row = row_of(page, "m1")
+    assert byline(row) == "erik \u00b7 us" and "2 slots, see Slots" in row
 
 
 def test_no_remote_control_alert_switch_for_a_shared_machine(console):
@@ -313,7 +372,7 @@ def test_no_remote_control_alert_switch_for_a_shared_machine(console):
     for name in ("erik-2", "ysflowerdog-1", "pool-2"):
         line = manage_line(page, name)
         assert "RC alert" not in line and "Remove" in line
-    assert "on pool-1 · erik" in manage_line(page, "ysflowerdog-1")
+    assert 'row-name">ysflowerdog-1</div>' in manage_line(page, "ysflowerdog-1")
 
 
 def test_an_alert_names_the_machine_by_its_slot(console):
@@ -324,7 +383,7 @@ def test_an_alert_names_the_machine_by_its_slot(console):
     page = call("GET", "/admin").body
     alerts = page[page.index("<h2>Open alerts</h2>"):page.index("<h2", page.index(
         "<h2>Open alerts</h2>") + 5)]
-    assert "ysflowerdog-1 on pool-1 · disk_high" in alerts
+    assert "ysflowerdog-1 · disk_high" in alerts and "pool-1" not in alerts
 
 
 def test_a_slots_name_is_shown_not_run(cfg):

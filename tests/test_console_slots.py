@@ -281,16 +281,20 @@ def test_a_slot_declared_with_stray_spaces_is_still_declared(console):
     assert reply.status == 303 and store.get_slot("m1-03")["unix_user"] == "slot03"
 
 
-def test_taking_a_slot_back_needs_its_id_typed(console):
+def test_taking_a_slot_back_needs_its_name_typed(console):
+    """The name its row shows, which is its holder's while they hold it. The
+    machine's id, which the console no longer shows beside it, is not it."""
     store, call = console
     shared(store)
     ana = holder(store)
     slot = store.claim_slot(ana["id"], now=time.time())
-    for typed in ("yes", "", f" {slot['id']}", slot["id"].upper()):
+    name = slot["name"]
+    assert name and name != slot["id"]
+    for typed in ("yes", "", f" {name}", name.upper(), slot["id"]):
         refused = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": typed})
         assert refused.status == 400
     assert store.get_slot(slot["id"])["state"] == slots.CLAIMING
-    taken = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": slot["id"]})
+    taken = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": name})
     assert taken.status == 303
     assert store.get_slot(slot["id"])["state"] == slots.RELEASING
 
@@ -303,7 +307,7 @@ def test_taking_back_a_signed_in_slot_takes_its_sign_in_too(console):
     store.apply_slot_report("m1", [{"unix_user": slot["unix_user"], "present": True,
                                     "provisioned_for": slot["claimed_at"]}], now=time.time())
     store.request_slot_login(slot["id"], "", time.time(), kind="token")
-    call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": slot["id"]})
+    call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": slot["name"]})
     assert store.get_login(slot_login_key(slot["id"])) is None
 
 
@@ -313,8 +317,44 @@ def test_taking_back_a_slot_already_on_its_way_out_is_refused_not_crashed(consol
     ana = holder(store)
     slot = store.claim_slot(ana["id"], now=time.time())
     store.begin_release(slot["id"])
-    reply = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": slot["id"]})
+    reply = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": slot["name"]})
     assert reply.status == 400
+    assert store.get_slot(slot["id"])["state"] == slots.RELEASING
+
+
+def test_taking_back_a_slot_that_is_not_there_is_refused_not_crashed(console):
+    store, call = console
+    shared(store)
+    reply = call("POST", "/actions/slot/m1-09/reclaim", {"confirm": "m1-09"})
+    assert reply.status == 400
+
+
+def test_a_free_slot_says_its_machine_only_when_its_name_does_not(console):
+    """Nobody holds it, so its name is nobody's: a slot whose id is not its
+    machine's says which machine it is on, and one called as its machine does
+    not say so twice."""
+    store, call = console
+    shared(store, node="m2", users=("slot01",))                  # its slot is m2-01
+    store.add_node("pool-4", "op", now=time.time())
+    store.set_machine_capacity("pool-4", 1)
+    store.add_slot("pool-4", "pool-4", "slot01", now=time.time())
+    card = slots_card(call("GET", "/admin").body)
+    assert "on m2" in text(on_the_row(row_of(card, "m2")))
+    assert "on pool-4" not in text(on_the_row(row_of(card, "pool-4")))
+
+
+def test_a_take_back_typed_for_somebody_since_renamed_is_refused(console):
+    """Typed against the page as it was drawn: a slot that has somebody else's
+    name by now is not the one the operator meant to wipe."""
+    store, call = console
+    shared(store)
+    slot = store.claim_slot(holder(store)["id"], now=time.time())
+    with store._lock:
+        store._conn.execute("UPDATE slots SET name = 'bea-1' WHERE id = ?", (slot["id"],))
+        store._conn.commit()
+    refused = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": slot["name"]})
+    assert refused.status == 400 and "bea-1" in refused.body
+    assert store.get_slot(slot["id"])["state"] == slots.CLAIMING
 
 
 def test_removing_only_a_free_slot(console):
@@ -794,7 +834,8 @@ def test_every_kind_of_machine_is_one_row(console):
     assert sorted(name for name, _ in rows(card)) == ["erik-1", "m1", "m2", "m3"]
     assert card.count('class="slothead"') == 1
     shown = text(on_the_row(row_of(card, "m1")))
-    assert "ana-1" in shown and "on m1" in shown and "ana@example.com" in shown
+    assert "ana-1" in shown and "ana@example.com" in shown
+    assert "on m1" not in shown, "a held slot is its holder's name alone"
     assert "Ready to sign in" in shown
     for inside in ("declared", "slot01", "on machine"):
         assert inside not in shown
@@ -818,14 +859,15 @@ def test_every_action_waits_under_its_rows_manage(console):
     assert 'action="/actions/slot/m2-01/remove"' in under_manage(row_of(card, "m2"))
 
 
-def test_take_back_asks_for_the_slots_id_typed_and_never_fills_it_in(console):
+def test_take_back_asks_for_the_slots_name_typed_and_never_fills_it_in(console):
     store, call = console
-    held_slot(store)
+    name = held_slot(store)["name"]
     manage = under_manage(row_of(slots_card(call("GET", "/admin").body), "m1"))
     form = manage[manage.index('action="/actions/slot/m1-01/reclaim"'):]
     form = form[:form.index("</form>")]
     box = re.search(r'<input type="text" name="confirm"[^>]*>', form).group(0)
-    assert 'placeholder="type m1-01"' in box and "required" in box and "value=" not in box
+    assert f'placeholder="type {name}"' in box and "required" in box and "value=" not in box
+    assert f"Type <b>{name}</b> to confirm" in manage
     assert '<button class="danger" type="submit">Take back</button>' in form
 
 
