@@ -264,6 +264,78 @@ details.ledger summary{cursor:pointer;color:var(--muted);font-size:12.5px;font-w
 overflow-wrap:anywhere}
 .payment.voided{color:var(--muted)}
 details.ledger form.field{margin-top:6px}
+/* The slots card: a row a machine, its one slot being the row, under column
+   heads. Each row's actions fold under its Manage, which opens below the row
+   across its whole width; on a phone the rows stack as small cards. */
+.slots .releases{margin:14px 0 2px}
+.slots .note{border-top:0;padding-top:0}
+.slothead,.slotline{display:grid;gap:4px 14px;padding-right:100px;
+grid-template-columns:minmax(0,1.35fr) minmax(0,1.25fr) 150px minmax(0,1.35fr) 52px
+minmax(0,1.45fr)}
+.slothead{padding-top:12px;padding-bottom:8px;border-bottom:1px solid var(--rule-soft);
+font-size:11px;line-height:1.3;letter-spacing:.07em;text-transform:uppercase;
+color:var(--muted);font-weight:650}
+.slotrow{position:relative;padding:12px 0;border-bottom:1px solid var(--rule-soft)}
+.slotline{align-items:baseline;font-size:13px}
+.slotline>div{min-width:0;overflow-wrap:anywhere}
+.slotline .row-name{display:block}
+.slotline .sub{display:block;margin-top:2px;font-size:12px;color:var(--muted)}
+.c-state .pill{white-space:nowrap}
+.c-age{color:var(--muted);font-variant-numeric:tabular-nums}
+.c-flags{display:flex;flex-wrap:wrap;gap:4px 6px}
+.c-empty{grid-column:2/6;color:var(--muted)}
+.c-cc .pill,.c-cc .cc-new{margin-left:2px}
+.cc-new{color:var(--acc);font-size:12px;font-weight:650;white-space:nowrap}
+.lbl,.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);
+white-space:nowrap}
+.slot-notes{list-style:none;margin:6px 0 0;padding:0;font-size:12.5px;line-height:1.45}
+.slot-notes li{margin-top:2px;overflow-wrap:anywhere}
+details.manage>summary{position:absolute;top:8px;right:0;list-style:none;cursor:pointer;
+display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;
+padding:5px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--panel);
+color:var(--ink);white-space:nowrap}
+details.manage>summary::-webkit-details-marker{display:none}
+details.manage>summary::marker{content:""}
+details.manage>summary:hover{border-color:var(--acc);color:var(--acc)}
+details.manage>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+details.manage[open]>summary{background:var(--acc-soft);border-color:var(--acc-line);
+color:var(--acc)}
+details.manage .caret{display:inline-block;font-size:12px;line-height:1;
+transition:transform .15s}
+details.manage[open] .caret{transform:rotate(180deg)}
+.manage-panel{display:flex;flex-wrap:wrap;gap:14px 32px;margin-top:10px;padding:12px 14px;
+background:var(--inset);border:1px solid var(--rule-soft);border-radius:10px}
+.mpart{flex:1 1 250px;min-width:0}
+.mpart .mhead{margin:0 0 7px;font-size:11px;line-height:1.3;letter-spacing:.07em;
+text-transform:uppercase;color:var(--muted);font-weight:650}
+.mpart .mhint{margin:7px 0 0;font-size:12.5px;line-height:1.45;color:var(--muted)}
+.mpart form.field{display:flex}
+.mpart form.field+form.field{margin-top:8px}
+.mpart button.danger{color:var(--bad);border-color:var(--bad-line)}
+/* Narrower, the attention pills leave their column for a line under the row,
+   so an address keeps room enough not to break mid-word. */
+@media (max-width:1100px){
+.slothead,.slotline{grid-template-columns:minmax(0,1.35fr) minmax(0,1.25fr) 150px
+minmax(0,1.35fr) 52px}
+.slothead span:last-child{display:none}
+.c-flags{grid-column:1/-1}
+.c-flags:empty{display:none}
+.c-empty{grid-column:2/-1}
+}
+@media (max-width:960px){
+.slothead{display:none}
+.slotrow{padding:12px 14px;margin:10px 0;border:1px solid var(--rule);border-radius:12px}
+.slotline{padding-right:0;gap:6px 10px;grid-template-columns:minmax(0,1fr) auto}
+.c-name{grid-area:1/1}.c-state{grid-area:1/2;justify-self:end}
+/* The age shares the holder's line, not the state's column: an address
+   squeezed beside "Ready to sign in" would break mid-word. */
+.c-holder{grid-area:2/1/3/3;padding-right:84px}.c-age{grid-area:2/1/3/3;justify-self:end}
+.c-cc,.c-flags,.c-empty{grid-column:1/-1}
+.c-cc.none,.c-flags:empty{display:none}
+.lbl{position:static;width:auto;height:auto;overflow:visible;clip:auto;color:var(--muted)}
+details.manage>summary{position:static;margin-top:10px}
+.manage-panel{padding:12px}
+}
 button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;font:inherit;
 font-size:13.5px;font-weight:600;line-height:1.25;padding:8px 14px;border-radius:10px;
 border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;
