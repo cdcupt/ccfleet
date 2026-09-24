@@ -190,7 +190,7 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
     said = _update_said(slot, node, report, update, look.channels)
     pills, notes = _problems(slot, report, look.alerts, said, look.now)
     shown = names.display(slot)
-    sub = [f"on {escape(node['id'])}"] if shown != node["id"] else []
+    sub = _on_machine(slot, node)
     keeper = _kept_for(node, look.accounts)
     cells = _cells(_name(shown, sub + ([keeper] if keeper else [])),
                    _holder(slot, look.accounts), _state_pill(slot),
@@ -213,8 +213,9 @@ def _own_row(slot: Mapping[str, Any], machine: _Machine,
     said = _update_said(slot, node, report, update, look.channels)
     pills, notes = _problems(slot, report, look.alerts, said, look.now)
     shown = names.display(slot)
-    sub = ["own machine"] + ([f"on {escape(node['id'])}"] if shown != node["id"] else [])
-    cells = _cells(_name(shown, sub), _holder(slot, look.accounts), _state_pill(slot, report),
+    # Always somebody's, so said by its name alone, like a held slot.
+    cells = _cells(_name(shown, ["own machine"]), _holder(slot, look.accounts),
+                   _state_pill(slot, report),
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     manage = _part("Their own machine", "", OWN_NOTE.format(node=escape(node["id"])))
@@ -254,6 +255,17 @@ def _cells(name: str, holder: str, state: str, claude: str, held: str,
     return (f'<div class="c-name">{name}</div><div class="c-holder">{holder}</div>'
             f'<div class="c-state">{state}</div><div class="{cc}">{claude}</div>'
             f'<div class="c-age">{held}</div><div class="c-flags">{" ".join(pills)}</div>')
+
+
+def _on_machine(slot: Mapping[str, Any], node: Mapping[str, Any]) -> list[str]:
+    """The machine a slot is on, when its name does not say so already.
+
+    A slot named after its holder is said by that name alone, from the claim
+    until the wipe that frees it: not the machine it is on (Erik, 2026-09-24;
+    see render._called). Escaped."""
+    if slot.get("name") or names.display(slot) == node["id"]:
+        return []
+    return [f"on {escape(node['id'])}"]
 
 
 def _name(shown: str, sub: list[str]) -> str:
@@ -466,11 +478,13 @@ def _part(title: str, body: str, hint: str = "") -> str:
 def _slot_actions(slot: Mapping[str, Any], csrf: str) -> str:
     """Take back a slot somebody holds; forget a free one."""
     base = f"/actions/slot/{escape(slot['id'])}"
-    typed = escape(slot["id"])
+    # The name the row shows, which is its holder's while they hold it.
+    shown = names.display(slot)
+    typed = escape(shown)
     if slot["state"] in slotstates.RELEASABLE:
         # Typed, not pre-filled: this deletes somebody's work.
         box = (f'<input type="text" name="confirm" placeholder="type {typed}" '
-               f'size="{max(12, len(slot["id"]) + 6)}" autocomplete="off" required '
+               f'size="{max(12, len(shown) + 6)}" autocomplete="off" required '
                f'aria-label="Type {typed} to confirm">')
         return _part("Take back", _form(f"{base}/reclaim", csrf, "Take back", box, "danger"),
                      f"Wipes it: everything on it goes, its Claude sign-in with it. Type "
@@ -663,12 +677,13 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
         store.reserve_machine(target, None)
         return "slots"
     if kind == "slot" and action == "reclaim":
-        if form.get("confirm") != target:
-            raise StoreError(f"type the slot's id, {target}, to confirm")
         try:
             # The operator's side: any holder. It is a release like any other,
-            # with the same wipe, and the sign-in in flight goes with it.
-            store.begin_release(target)
+            # with the same wipe, and the sign-in in flight goes with it. By the
+            # name the row showed, checked as the release starts: a slot given
+            # back and claimed by somebody else since the page was drawn has
+            # another name by then, and the old one no longer matches.
+            store.begin_release(target, named=form.get("confirm") or "")
         except slotstates.TransitionError as exc:     # a stale form: already on its way out
             raise StoreError(str(exc)) from exc
         return "slots"

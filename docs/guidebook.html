@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.9.0 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.9.1 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -578,8 +578,10 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
   <p><strong>A shared machine's row is its slot.</strong> Root on a shared machine runs no
   Claude Code and is signed in to nothing, so the row shows the slot's version, sign-in,
   Remote Control and usage, and goes by the slot's name: the machine's hostname, which is
-  what claude.ai shows. <em>on &lt;id&gt;</em> beside the owner gives the id the server knows
-  it by. Login says <em>no slot yet</em> on a machine with none declared, and <em>2 slots, see
+  what claude.ai shows. While somebody holds the slot, that is their name, said alone: not
+  the machine's id nor its owner, here, in the Slots card or on the holder's own page;
+  <code>ccfleetd slot list</code> says which machine a name is on. Once the slot is given
+  back, the machine answers to its pool name again. Login says <em>no slot yet</em> on a machine with none declared, and <em>2 slots, see
   Slots</em> on one from before one slot per machine, where no single slot can speak for it.
   Remote Control is the slot's to run, so a machine is never judged on it and its row has no
   switch for that alert. The sign-in and device-token cards list owners' nodes only: a slot is
@@ -980,7 +982,7 @@ ccfleetd slot list --machine pool-1</code></pre>
   <div class="table-wrap"><table>
     <thead><tr><th>Column</th><th>Says</th></tr></thead>
     <tbody>
-      <tr><td>Slot</td><td>Its name; under it <em>on &lt;machine&gt;</em> when the two differ, <em>own machine</em>, or <em>kept for &lt;email&gt;</em></td></tr>
+      <tr><td>Slot</td><td>Its name, which is its holder's while they hold it; under it <em>own machine</em> or <em>kept for &lt;email&gt;</em>, and <em>on &lt;machine&gt;</em> only for a free slot whose id is not its machine's</td></tr>
       <tr><td>Holder</td><td>Their address, or <em>free</em></td></tr>
       <tr><td>State</td><td>The words the holder's own page uses: In use, Ready to sign in, Setting up, Being wiped, or Free. An own machine reads In use or Not signed in</td></tr>
       <tr><td>Claude Code</td><td>The version and what it follows (stable, latest, pinned, held at), then <em>update available</em>, <em>updating to &hellip;</em> or <em>restart pending</em></td></tr>
@@ -991,7 +993,9 @@ ccfleetd slot list --machine pool-1</code></pre>
   <p><strong>Manage &#9662;</strong> on each row holds every action, so nothing that wipes sits
   on the row itself:</p>
   <ul>
-    <li><em>Take back</em>: the slot's name has to be typed to confirm.</li>
+    <li><em>Take back</em>: the slot's name, as the row shows it, has to be typed to
+    confirm. A slot given back and claimed by somebody else since the page was drawn has
+    another name by then, so the old one is refused.</li>
     <li><em>Remove</em>, for a free slot.</li>
     <li><em>Keep for somebody</em>, or <em>Clear reservation</em> on a kept machine.</li>
     <li><em>Advanced</em>, only where it can do something: declaring the slot of a machine
