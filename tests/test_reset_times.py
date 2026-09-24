@@ -61,6 +61,22 @@ def test_words_it_does_not_know_are_left_alone(text):
     assert resets.reset_at(text, utc(2026, 9, 24).timestamp()) is None
 
 
+@pytest.mark.parametrize("read_at", [10**15, -10**15, float("inf"), float("nan")])
+def test_a_reading_time_out_of_the_calendar_is_left_alone(read_at):
+    assert resets.reset_at("1:10am (UTC)", read_at) is None
+    assert resets.reset_at("Dec 31, 1am (UTC)", read_at) is None
+
+
+def test_a_reset_past_the_end_of_the_calendar_is_left_alone():
+    last_evening = datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc).timestamp()
+    assert resets.reset_at("1:10am (UTC)", last_evening) is None, "tomorrow is year 10000"
+
+
+def test_a_meter_with_a_mad_reading_time_still_draws():
+    bar = _meter(4, "5-hour", "1:10am (UTC)", 10**15, 1000.0)
+    assert "resets 1:10am (UTC)" in bar
+
+
 @pytest.mark.parametrize("seconds,said", [
     (13_020, "in 3h 37m"), (190_800, "in 2d 5h"), (720, "in 12m"), (30, "now"), (-5, "now"),
 ])

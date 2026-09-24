@@ -50,21 +50,28 @@ def reset_at(text: object, read_at: float) -> Optional[float]:
     if zone is None or not 1 <= hour <= 12 or minute > 59:
         return None
     hour = hour % 12 + (12 if found["half"] == "pm" else 0)
-    read = datetime.fromtimestamp(read_at, zone)
+    if found["month"] is not None and found["month"] not in MONTHS:
+        return None
+    # A machine's reading time is only as sane as the machine: one out of the
+    # calendar's range (the server accepts any number) must not take the page
+    # down with it, and neither may a date past the end of the calendar.
+    try:
+        return _place(found, hour, minute, datetime.fromtimestamp(read_at, zone))
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _place(found: re.Match, hour: int, minute: int, read: datetime) -> float:
+    """The instant, given when the words were read, in their own zone."""
     if found["month"] is None:
         at = read.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if at < read:
             at = (at + timedelta(days=1)).replace(hour=hour, minute=minute)
         return at.timestamp()
-    if found["month"] not in MONTHS:
-        return None
     month = MONTHS.index(found["month"]) + 1
-    try:
-        at = datetime(read.year, month, int(found["day"]), hour, minute, tzinfo=zone)
-        if at < read - timedelta(days=1):
-            at = at.replace(year=read.year + 1)
-    except ValueError:
-        return None
+    at = datetime(read.year, month, int(found["day"]), hour, minute, tzinfo=read.tzinfo)
+    if at < read - timedelta(days=1):
+        at = at.replace(year=read.year + 1)
     return at.timestamp()
 
 
