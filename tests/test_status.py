@@ -115,6 +115,10 @@ def test_an_alert_without_its_opening_time_still_colours_its_machine():
     state = status.machine_state(beat(20), [{"rule": "claude_missing", "level": "critical"}],
                                  False, NOW)
     assert state == status.State(status.RED, None)
+    # Beside one that says when, the one that does not is simply not asked.
+    both = [{"rule": "claude_missing", "level": "critical"},
+            alert("slot_missing:slot01", LEVEL_CRITICAL, NOW - 70)]
+    assert status.machine_state(beat(20), both, False, NOW) == status.State(status.RED, NOW - 70)
 
 
 def test_the_holders_alerts_leave_a_fresh_machine_green():
