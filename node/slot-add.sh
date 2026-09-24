@@ -222,18 +222,27 @@ PY"
 # word, so max goes in the env block, which Claude Code applies to every
 # session and which /effort then cannot lower. A holder who wants less edits
 # that line, as the guide tells them.
+#
+# And nothing optional leaves for Anthropic: Claude Code's usage telemetry,
+# error reports, bug reports and feedback surveys are off, by Claude Code's own
+# documented switches (Erik, 2026-09-24). What still goes is what Claude needs
+# to answer. The same rule as above: a holder who turned one back on keeps it.
 as_slot "python3 - <<'PY'
 import json, os
 p = os.path.expanduser('~/.claude/settings.json')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 d = json.load(open(p)) if os.path.exists(p) else {}
 d.setdefault('model', 'opus')
-d.setdefault('env', {}).setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')
+env = d.setdefault('env', {})
+env.setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')
+for key in ('DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'DISABLE_BUG_COMMAND',
+            'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY'):
+    env.setdefault(key, '1')
 tmp = p + '.tmp'
 json.dump(d, open(tmp, 'w'), indent=2)
 os.replace(tmp, p)
 PY"
-note "Claude Code starts on Opus at max effort"
+note "Claude Code starts on Opus at max effort, with its optional reporting off"
 
 step "5/5  a way in"
 # Without this the slot has no access path at all: password login is disabled,

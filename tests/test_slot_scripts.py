@@ -389,7 +389,7 @@ def test_a_new_slot_starts_on_opus_at_max_effort(tmp_path):
     assert result.returncode == 0, result.stderr
     settings = _settings(slot_home)
     assert settings["model"] == "opus"
-    assert settings["env"] == {"CLAUDE_CODE_EFFORT_LEVEL": "max"}
+    assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
     assert "effortLevel" not in settings
 
 
@@ -402,7 +402,10 @@ def test_what_a_holder_chose_for_themselves_is_kept(tmp_path):
     _holders_settings(slot_home, theirs)
     result = _add_slot(tmp_path, slot_home)
     assert result.returncode == 0, result.stderr
-    assert _settings(slot_home) == theirs
+    settings = _settings(slot_home)
+    assert settings["model"] == "sonnet"
+    assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+    assert settings["permissions"] == {"allow": ["Bash(ls)"]}
 
 
 def test_the_effort_joins_an_env_block_the_holder_already_has(tmp_path):
@@ -410,8 +413,36 @@ def test_the_effort_joins_an_env_block_the_holder_already_has(tmp_path):
     _holders_settings(slot_home, {"env": {"TZ": "Asia/Shanghai"}})
     result = _add_slot(tmp_path, slot_home)
     assert result.returncode == 0, result.stderr
-    assert _settings(slot_home) == {
-        "env": {"TZ": "Asia/Shanghai", "CLAUDE_CODE_EFFORT_LEVEL": "max"}, "model": "opus"}
+    settings = _settings(slot_home)
+    assert settings["model"] == "opus"
+    assert settings["env"]["TZ"] == "Asia/Shanghai"
+    assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+
+
+OPTIONAL_REPORTING = ("DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
+                      "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY")
+
+
+def test_a_new_slot_sends_anthropic_nothing_optional(tmp_path):
+    """Usage telemetry, error reports, bug reports and feedback surveys, each by
+    Claude Code's own switch. What still goes is what Claude needs to answer."""
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    env = _settings(slot_home)["env"]
+    for key in OPTIONAL_REPORTING:
+        assert env.get(key) == "1", key
+
+
+def test_a_holder_who_turned_reporting_back_on_keeps_it(tmp_path):
+    slot_home = tmp_path / "slothome"
+    _holders_settings(slot_home, {"env": {"DISABLE_TELEMETRY": "0"}})
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    env = _settings(slot_home)["env"]
+    assert env["DISABLE_TELEMETRY"] == "0"
+    assert env["DISABLE_ERROR_REPORTING"] == "1", "the rest still go off"
 
 
 def test_a_slot_is_given_a_way_in(tmp_path):
