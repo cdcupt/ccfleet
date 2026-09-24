@@ -251,13 +251,23 @@ def test_an_owners_node_updates_when_asked_and_says_so_next_time(tmp_path, claud
     assert "claude_update" not in kept, "and forgot it once the server stopped asking"
 
 
-def test_an_owners_node_does_not_update_under_a_sign_in(tmp_path, claude_dir,  # noqa: F811
-                                                         monkeypatch):
-    desired = {"claude_version": "latest", "channel_version": "2.1.281",
-               "update_now": {"requested_at": 7.0},
-               "login": {"requested_at": 6.0, "email": "", "kind": "login"}}
+@pytest.mark.parametrize("target", [
+    {"claude_version": "latest", "channel_version": "2.1.281", "update_now": {"requested_at": 7.0}},
+    {"claude_version": "2.1.281"},                      # an exact pin it does not run
+    {"claude_version": "stable"},                       # a channel due its daily re-check
+])
+def test_an_owners_node_installs_nothing_under_a_sign_in(tmp_path, claude_dir,  # noqa: F811
+                                                          monkeypatch, target):
+    """Not the ask, not a moved channel, not the pin: the installer would swap
+    the binary under the login it is running. The ask stays unanswered, so the
+    first run after the sign-in takes it up."""
+    login = {"requested_at": 6.0, "email": "", "kind": "login"}
     monkeypatch.setattr(agent, "reconcile_login", lambda desired, state: (None, dict(state)))
-    _, asked, kept = owner_run(tmp_path, claude_dir, monkeypatch, desired)
-    [(pin, now)] = asked
-    assert now is False and pin["channel_version"] is None, "neither the ask nor the move"
+    _, asked, kept = owner_run(tmp_path, claude_dir, monkeypatch, {**target, "login": login})
+    assert asked == [], "reached the installer during a sign-in"
     assert "claude_update" not in kept
+    if "update_now" in target:
+        done = {"from": "2.1.280", "to": "2.1.281", "ok": True, "ts": 1.0, "error": None}
+        _, asked, kept = owner_run(tmp_path, claude_dir, monkeypatch, target, state=kept,
+                                   result=done)
+        assert asked == [(target, True)] and kept["claude_update"]["state"] == "done"

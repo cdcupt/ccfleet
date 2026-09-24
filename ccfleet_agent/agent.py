@@ -1722,12 +1722,13 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
     progress, state = reconcile_login(desired, state)
     state = prune_state(state, desired, installed)
     state = settle_update(state, desired.get("update_now"))
-    # Never under a sign-in: an update asked for waits for it, and so does a
-    # channel the server says moved on. The daily re-check goes on as before.
-    signing_in = bool(desired.get("login"))
-    asked = None if signing_in else update_asked(desired.get("update_now"), state)
-    pin = {**desired, "channel_version": None} if signing_in else desired
-    result = reconcile_version(pin, installed, state, asked=asked is not None)
+    # Never under a sign-in: an install would swap the binary under the login
+    # it is running. Nothing is installed until it is over, and an update asked
+    # for meanwhile stays unanswered, so the first run after it takes it up.
+    asked, result = None, None
+    if not desired.get("login"):
+        asked = update_asked(desired.get("update_now"), state)
+        result = reconcile_version(desired, installed, state, asked=asked is not None)
     if asked is not None:
         state["claude_update"] = update_answer(
             asked, installable_version(desired.get("claude_version")), installed, result)
