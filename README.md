@@ -148,8 +148,11 @@ some other way raises `account_changed` once Claude Code's profile says so. And 
 slots, or a slot and a node) raises `account_elsewhere` on both. The holder's
 card says so either way. An owner's own node can count as a slot they hold,
 `ccfleetd node hold <node> <email>`, so everything a person uses is one list
-on their page: a record only, never handed out or wiped. The guidebook
-predates shared machines; this section is their reference until it catches up.
+on their page: a record only, never handed out or wiped. A shared machine can
+be kept for one account, `ccfleetd node reserve <machine> <email>`: its free
+slot then goes to that account and nobody else, and `--none` opens it again.
+The guidebook's chapter 11 covers the same ground for the operator, step by
+step.
 
 ```bash
 # fleet server: Google sign-in needs an OAuth "Web application" client whose
