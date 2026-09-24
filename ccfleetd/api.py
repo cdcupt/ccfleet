@@ -26,6 +26,7 @@ from .monitor import Monitor
 from .passwords import verify_password
 from .render import (
     CONSOLE_PATH,
+    LOCAL_TIMES_CSP,
     build_rows,
     render_add_result,
     render_dashboard,
@@ -44,7 +45,11 @@ HTML_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+    # Images: data: only, which is the icon in the tab; default-src 'none'
+    # blocked it on every page. Scripts: the one that says reset times in the
+    # viewer's zone, by its hash.
+    "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
+                                f"img-src data:; script-src {LOCAL_TIMES_CSP}"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 

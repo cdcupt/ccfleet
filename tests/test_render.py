@@ -224,7 +224,11 @@ def test_quota_meters_show_both_windows_and_colour_by_pressure():
     html = _quota_html(row, NOW)
     assert "5-hour session" in html and "This week" in html
     assert "3%" in html and "15%" in html
-    assert "7:50pm (UTC)" in html and "Sep 23, 3pm (UTC)" in html
+    # Claude Code's words, read into instants the viewer's browser says in its
+    # own zone; no machine's zone is repeated on the page.
+    assert '<time datetime="1970-02-04T19:50:00Z" data-local>' in html
+    assert '<time datetime="1970-09-23T15:00:00Z" data-local>' in html
+    assert "(UTC)" not in html
     assert "read 10m ago" in html
     assert html.count("meter-track") == 2
     # Colour is the same three-level scale the rest of the page uses.

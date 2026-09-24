@@ -23,6 +23,7 @@ from ccfleetd.api import Context, build_server
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
+from ccfleetd.render import LOCAL_TIMES_TAG
 from ccfleetd.store import Store, slot_login_key
 from tests.conftest import next_load, refresh_of
 
@@ -440,7 +441,9 @@ def test_a_note_is_chosen_by_code_never_written_by_the_link(site):
     erik = sign_in(quota=1)
     evil = erik.call("GET", "/account?note=" + urllib.parse.quote(
         "<script>alert(1)</script>Your account is locked, call +1-555"))
-    assert "<script>" not in evil.body and "locked" not in evil.body
+    assert "alert(1)" not in evil.body and "locked" not in evil.body
+    # The one script on the page is the site's own, the one its policy allows.
+    assert evil.body.count("<script") == 1 and LOCAL_TIMES_TAG in evil.body
     known = erik.call("GET", "/account?note=released")
     assert usersite.NOTES["released"][1] in known.body
 

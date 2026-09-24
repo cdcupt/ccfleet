@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 from collections.abc import Mapping, Sequence
 from html import escape
@@ -9,11 +10,26 @@ from shlex import quote as shq
 from typing import Any, Optional
 
 from . import names as slotnames
+from . import resets
 from . import slots as slotstates
 from .config import Config
 from .desired import is_channel, is_login_url
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
+
+#: Says a reset time in the viewer's own time zone. The page carries the instant
+#: (<time datetime> from resets.iso) and, as text, how long until then, which
+#: needs no zone at all and is what shows if this does not run. The one script
+#: the site runs, allowed by its hash (LOCAL_TIMES_CSP) and nothing else.
+LOCAL_TIMES_JS = (
+    'document.querySelectorAll("time[data-local]").forEach(function(t){'
+    'var d=new Date(t.dateTime);if(isNaN(d))return;'
+    'var o={hour:"numeric",minute:"2-digit",timeZoneName:"short"};'
+    'if(d-Date.now()>864e5)o.weekday="short";'
+    't.textContent=d.toLocaleString(undefined,o)+" ("+t.textContent+")";});')
+LOCAL_TIMES_TAG = f"<script>{LOCAL_TIMES_JS}</script>"
+LOCAL_TIMES_CSP = ("'sha256-" + base64.b64encode(
+    hashlib.sha256(LOCAL_TIMES_JS.encode("utf-8")).digest()).decode("ascii") + "'")
 
 # How often the page comes back for more. Fast enough while a sign-in is moving
 # that a step finishing on the node shows up almost at once; slow the rest of
@@ -1134,18 +1150,34 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
             f'<circle class="spark-dot" cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.5"/></svg>')
 
 
-def _meter(used: Any, label: str, resets: Any) -> str:
+def _reset_foot(text: Any, read_at: Any, now: Optional[float]) -> str:
+    """When a window resets: in the viewer's own zone where the words can be
+    read (see LOCAL_TIMES_JS), and as Claude Code printed them where not."""
+    if not text:
+        return ""
+    readable = (isinstance(read_at, (int, float)) and not isinstance(read_at, bool)
+                and now is not None)
+    at = resets.reset_at(text, float(read_at)) if readable else None
+    if at is None:
+        return f"resets {escape(str(text))}"
+    return (f'resets <time datetime="{escape(resets.iso(at))}" data-local>'
+            f"{escape(resets.until(now, at))}</time>")
+
+
+def _meter(used: Any, label: str, resets: Any, read_at: Any = None,
+           now: Optional[float] = None) -> str:
     """One quota window as a labelled bar.
 
     Colour carries the same meaning as everywhere else on this page: fine,
     getting close, nearly out. A bare number makes you do that comparison
-    yourself, every time you look.
+    yourself, every time you look. ``read_at`` is when the window was read,
+    which a reset time without a date needs to be placed.
     """
     if not isinstance(used, (int, float)) or isinstance(used, bool):
         return ""
     pct = max(0.0, min(100.0, float(used)))
     level = "crit" if pct >= 90 else "warn" if pct >= 75 else "ok"
-    foot = f"resets {escape(str(resets))}" if resets else ""
+    foot = _reset_foot(resets, read_at, now)
     return (f'<div class="meter"><div class="meter-head">'
             f'<span>{escape(label)}</span>'
             f'<span class="meter-pct">{pct:.0f}%</span></div>'
@@ -1166,10 +1198,11 @@ def _quota_html(row: Mapping[str, Any], now: float) -> str:
     session, week = quota.get("session") or {}, quota.get("week") or {}
     if not session and not week:
         return '<p class="muted small">No window reading yet.</p>'
-    bars = ('<div class="usage-nums muted">Claude account &middot; every device</div>'
-            + _meter(session.get("used_pct"), "5-hour session", session.get("resets"))
-            + _meter(week.get("used_pct"), "This week", week.get("resets")))
     checked = quota.get("checked_at")
+    bars = ('<div class="usage-nums muted">Claude account &middot; every device</div>'
+            + _meter(session.get("used_pct"), "5-hour session", session.get("resets"),
+                     checked, now)
+            + _meter(week.get("used_pct"), "This week", week.get("resets"), checked, now))
     if isinstance(checked, (int, float)) and not isinstance(checked, bool):
         bars += f'<p class="muted small">read {escape(_age(now, checked))} ago</p>'
     return bars
@@ -1353,5 +1386,5 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
         + extra
-        + "</div></body></html>"
+        + "</div>" + LOCAL_TIMES_TAG + "</body></html>"
     )
