@@ -44,6 +44,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -742,12 +743,56 @@ def _quota_tmux(runner: Runner, *args: str, timeout: float = 15.0) -> Optional[s
 
 
 def _quota_home() -> Optional[str]:
-    """The one directory this is willing to open a trusted session in."""
+    """The home the probe's directory lives in, and the old probe worked in."""
     try:
         home = Path.home()
     except (RuntimeError, OSError):
         return None
     return str(home) if home.is_dir() else None
+
+
+# The probe works in a directory of its own. Claude Code files every prompt in its
+# history under the directory the session started in, and started in the home the
+# probe put "/usage" there every half hour: 112 of one owner's 118 lines on
+# 2026-09-23. An empty directory nobody works in takes those lines now, and the
+# folder-trust answer the probe gives covers that directory instead of the home.
+QUOTA_PROBE_DIR = (".cache", "ccfleet", "usage-probe")
+
+
+def quota_probe_dir() -> tuple[Optional[str], Optional[str]]:
+    """The probe's working directory, made 0700 if missing.
+
+    Returns (path, None), or (None, why) when it is not a directory of this user's
+    own. The trust prompt the probe answers applies to whatever its session starts
+    in, so a symlink there, or something another user put there, must not be able
+    to carry that answer anywhere else.
+    """
+    home = _quota_home()
+    if home is None:
+        return None, "no home directory to keep the usage probe in"
+    path = os.path.join(home, *QUOTA_PROBE_DIR)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            pass
+        info = os.lstat(path)
+    except OSError as exc:
+        return None, f"cannot make the usage probe directory {path}: {exc.strerror or exc}"
+    if stat.S_ISLNK(info.st_mode):
+        return None, f"the usage probe directory {path} is a symlink"
+    if not stat.S_ISDIR(info.st_mode):
+        return None, f"the usage probe directory {path} is not a directory"
+    if info.st_uid != os.getuid():
+        return None, f"the usage probe directory {path} is not owned by this user"
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        try:
+            os.chmod(path, 0o700)
+        except OSError as exc:
+            return None, f"cannot make the usage probe directory {path} private: " \
+                         f"{exc.strerror or exc}"
+    return path, None
 
 
 def parse_quota(pane: str) -> dict[str, Any]:
@@ -792,17 +837,20 @@ def read_quota(runner: Runner = subprocess.run,
     path = find_claude()
     if not path:
         return None
-    # Start it in the owner's home and nowhere else. The loop below answers
-    # Claude Code's folder-trust prompt, and answering it means trusting whatever
-    # directory this happened to start in — a checked-out project, if someone ran
-    # the agent by hand from one. Pinning the directory is what makes that answer
-    # safe, rather than assuming the service was launched somewhere harmless.
-    home = _quota_home()
-    if home is None:
+    # Start it in the probe's own directory and nowhere else. The loop below
+    # answers Claude Code's folder-trust prompt, and answering it means trusting
+    # whatever directory this happened to start in — a checked-out project, if
+    # someone ran the agent by hand from one. Pinning the directory is what makes
+    # that answer safe, rather than assuming the service was launched somewhere
+    # harmless; and an empty directory keeps the probe's "/usage" out of the
+    # history of anywhere anybody works.
+    probe, why = quota_probe_dir()
+    if probe is None:
+        log.warning("usage probe not started: %s", why)
         return None
     _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
     started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
-                          "-c", home, "-x", "180", "-y", "45", shlex.quote(path))
+                          "-c", probe, "-x", "180", "-y", "45", shlex.quote(path))
     if not started:
         return None
     deadline = (time.time() if now is None else now) + QUOTA_TIMEOUT_S
@@ -813,9 +861,10 @@ def read_quota(runner: Runner = subprocess.run,
             time.sleep(3)
             pane = _quota_tmux(runner, "capture-pane", "-p", "-J", "-t", QUOTA_SESSION) or ""
             # A fresh working directory asks whether the folder is trusted. It is
-            # the node's own home; answer once and carry on.
+            # the probe's own empty directory; answer once and carry on.
             if "trust this folder" in pane:
-                # The node's own home directory. Answer once and let it settle.
+                # Only ever the probe directory, checked above. Answer once and
+                # let it settle.
                 _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Down")
                 _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Enter")
                 continue
@@ -852,14 +901,117 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
     if cached:
         age = now - (cached.get("ts") or 0)
         if age < QUOTA_REFRESH_S:
-            return {k: v for k, v in cached.items() if k != "ts"}, None
+            return _quota_report(cached), None
+    probe, why = quota_probe_dir()
+    if probe is None:
+        # Said where it will be seen: in the log, and in the state beside the last
+        # reading, which keeps its old stamp so the next run tries again. The
+        # server keeps only the windows from a report; this is for whoever looks
+        # at the node.
+        log.warning("quota not read: %s", why)
+        kept = {k: v for k, v in (cached or {}).items() if k != "skipped"}
+        return {**_quota_report(kept), "skipped": why}, {**kept, "skipped": why}
     fresh = read_quota(runner, now)
     if fresh is None:
         # Keep showing the last known answer rather than blanking the card; it is
         # stamped, so the console can say how old it is.
-        return ({k: v for k, v in cached.items() if k != "ts"} if cached else None), None
+        return (_quota_report(cached) if cached else None), None
     fresh["checked_at"] = now
     return fresh, {**fresh, "ts": now}
+
+
+def _quota_report(cached: Mapping[str, Any]) -> dict[str, Any]:
+    """A stored reading as it is reported: without its stamp or an old reason."""
+    return {k: v for k, v in cached.items() if k not in ("ts", "skipped")}
+
+
+# -- the old probe's lines in Claude Code's prompt history -------------------------
+#
+# Before the probe had a directory of its own it ran in the home, and each
+# "/usage" it typed went into Claude Code's prompt history under the home. Those
+# lines are taken out once. After that the probe never writes under the home
+# again, so a "/usage" there later is the owner's own, and it stays.
+
+HISTORY_FILE = "history.jsonl"
+HISTORY_CLEANED_KEY = "probe_history_cleaned"
+
+
+def _old_probe_line(line: bytes, home: str) -> bool:
+    try:
+        entry = json.loads(line)
+    except ValueError:                  # UnicodeDecodeError is one too
+        return False
+    if not isinstance(entry, dict):
+        return False
+    display = entry.get("display")
+    return (isinstance(display, str) and display.strip() == "/usage"
+            and entry.get("project") == home)
+
+
+def clean_probe_history(config_dir: Path, home: str) -> Optional[int]:
+    """Take the old probe's lines out of Claude Code's prompt history.
+
+    Only a line whose display is "/usage" and whose project is exactly the home
+    goes. Every other line, malformed ones included, is written back byte for
+    byte, in the file's own mode. Returns how many went (0 when there is no
+    history), or None when the file could not be read or rewritten, so the next
+    run tries again.
+    """
+    # Where it really lives, so a history kept elsewhere through a symlink is
+    # tidied there and the link stays a link.
+    path = Path(os.path.realpath(config_dir / HISTORY_FILE))
+    # From read to rename in one short step. Claude Code appends to this file as
+    # prompts are typed, and a line appended in between is lost: the rename puts
+    # back the file as it was read. Nothing on this side can close that window
+    # without Claude Code's help, so it is kept as small as it can be, and the
+    # tidy runs once.
+    try:
+        info = path.stat()
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return None
+    # Split on newlines only: a stray carriage return inside a malformed line must
+    # not cut it into pieces that could each pass for the probe's.
+    pieces = raw.split(b"\n")
+    lines = [piece + b"\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+    kept = [line for line in lines if not _old_probe_line(line, home)]
+    dropped = len(lines) - len(kept)
+    if not dropped:
+        return 0
+    tmp = path.with_name(f".{path.name}.ccfleet-{os.getpid()}")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            out.write(b"".join(kept))
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tmp, stat.S_IMODE(info.st_mode))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return None
+    return dropped
+
+
+def clean_probe_history_once(state: Mapping[str, Any], config_dir: Path,
+                             now: float) -> Mapping[str, Any]:
+    """The tidy, done once: the state as it was, or with the mark that it ran."""
+    if state.get(HISTORY_CLEANED_KEY):
+        return state
+    home = _quota_home()
+    if home is None:
+        return state
+    dropped = clean_probe_history(config_dir, home)
+    if dropped is None:
+        return state
+    if dropped:
+        log.info("took %d old usage-probe lines out of %s", dropped, config_dir / HISTORY_FILE)
+    return {**state, HISTORY_CLEANED_KEY: now}
 
 
 # -- reconcile -------------------------------------------------------------------
@@ -1347,6 +1499,14 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
 
     Returns (status, desired, new state, login progress to report next time).
     """
+    if reconcile:
+        # Saved at once rather than with the rest of the state after a good post:
+        # a node the server cannot hear would otherwise tidy on every run, and
+        # take the owner's own "/usage" lines with it.
+        tidied = clean_probe_history_once(state, cfg.claude_config_dir, time.time())
+        if HISTORY_CLEANED_KEY in tidied and HISTORY_CLEANED_KEY not in state:
+            write_state(cfg.state_path, tidied)
+        state = tidied
     # Reading the windows starts a Claude Code session, so it runs on its own slow
     # schedule and the answer is cached between heartbeats.
     quota, remember = quota_summary(state) if reconcile else (None, None)
@@ -1841,6 +2001,11 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     now = time.time() if now is None else now
     state_path = Path(SLOT_STATE_PATH).expanduser()
     state = read_state(state_path)
+    # The slot's own history, once; saved at once, as on an owner's node.
+    tidied = dict(clean_probe_history_once(state, Path.home() / ".claude", now))
+    if HISTORY_CLEANED_KEY in tidied and HISTORY_CLEANED_KEY not in state:
+        write_state(state_path, tidied)
+    state = tidied
     # First, so a sign-in that completes in this step already reads as signed
     # in below — and the slot is active in the same heartbeat, not the next.
     moved = drop_config_dir_line()

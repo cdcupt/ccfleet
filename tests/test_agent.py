@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import urllib.error
@@ -10,6 +11,18 @@ from pathlib import Path
 import pytest
 
 from ccfleet_agent import agent
+
+
+@pytest.fixture(autouse=True)
+def _a_home_of_its_own(tmp_path_factory, monkeypatch):
+    """Nothing here may touch the home of whoever runs the suite.
+
+    The agent writes under the home by design: its state, the usage probe's own
+    directory, and a one-time tidy of Claude Code's prompt history. So every test
+    gets a home of its own. A test that wants a particular one still sets it,
+    as slot_home does.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
 
 
 class FakeResponse(io.BytesIO):
@@ -184,6 +197,9 @@ def test_send_retries_network_errors_but_not_4xx():
 
 
 def test_main_print_and_send(tmp_path, monkeypatch, capsys):
+    # A run reads the quota, which would drive whatever `claude` is on the
+    # machine running the suite. Nothing about sending needs that.
+    monkeypatch.setattr(agent, "find_claude", lambda: None)
     env_file = tmp_path / "agent.env"
     env_file.write_text("CCFLEET_URL=https://f.example\nCCFLEET_NODE_ID=node-a\nCCFLEET_NODE_TOKEN=t\n")
     monkeypatch.setattr(agent, "build_payload",
@@ -1223,27 +1239,124 @@ def test_parse_quota_stops_at_the_next_window_even_when_it_is_adjacent():
     assert got["week"]["used_pct"] == 15
 
 
-def test_read_quota_only_ever_trusts_the_owners_home(monkeypatch, tmp_path):
+def _probe_dir(home):
+    return home / ".cache" / "ccfleet" / "usage-probe"
+
+
+class RecordingTmux(QuotaTmux):
+    """A QuotaTmux that also keeps every session it was asked to open."""
+
+    def __init__(self, panes, claude_ok=True):
+        super().__init__(panes, claude_ok)
+        self.opened = []
+
+    def __call__(self, argv, **kwargs):
+        if "new-session" in argv:
+            self.opened.append(argv)
+        return super().__call__(argv, **kwargs)
+
+
+def test_read_quota_only_ever_trusts_its_own_probe_directory(monkeypatch, tmp_path):
     """The loop answers Claude Code's folder-trust prompt, so the directory that
     answer applies to cannot be left to however the agent happened to be started.
     Run it by hand from a checked-out project and that project would be trusted.
+
+    Nor is it the home any more. Claude Code files every prompt in its history
+    under the directory the session started in, and a probe started in the home
+    put "/usage" there every half hour: 112 of one owner's 118 lines. An empty
+    directory of the probe's own takes those, and the trust answer with them.
     """
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
     monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
-    opened = []
-
-    class Recording(QuotaTmux):
-        def __call__(self, argv, **kwargs):
-            if "new-session" in argv:
-                opened.append(argv)
-            return super().__call__(argv, **kwargs)
-
-    tmux = Recording(["❯ ready", USAGE_PANE])
+    tmux = RecordingTmux(["❯ ready", USAGE_PANE])
     assert agent.read_quota(tmux) is not None
-    assert len(opened) == 1
-    argv = opened[0]
-    assert "-c" in argv and argv[argv.index("-c") + 1] == str(tmp_path)
+    assert len(tmux.opened) == 1
+    argv = tmux.opened[0]
+    assert "-c" in argv and argv[argv.index("-c") + 1] == str(_probe_dir(tmp_path))
+
+
+def test_the_probe_directory_is_made_private(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    old = os.umask(0o022)
+    try:
+        path, why = agent.quota_probe_dir()
+    finally:
+        os.umask(old)
+    assert why is None and path == str(_probe_dir(tmp_path))
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o700
+    # One left open, by hand or by an older tool, is closed again.
+    os.chmod(path, 0o755)
+    assert agent.quota_probe_dir() == (path, None)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o700
+
+
+@pytest.mark.parametrize("planted, said", [("symlink", "symlink"),
+                                           ("file", "not a directory")])
+def test_a_probe_directory_that_is_not_one_of_its_own_is_refused(monkeypatch, tmp_path,
+                                                                  planted, said):
+    """A symlink there would carry the trust answer into wherever it points: a
+    project with its own settings and hooks, say."""
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    where = _probe_dir(tmp_path)
+    where.parent.mkdir(parents=True)
+    if planted == "symlink":
+        project = tmp_path / "workspace" / "project"
+        project.mkdir(parents=True)
+        where.symlink_to(project)
+    else:
+        where.write_text("not a directory")
+    path, why = agent.quota_probe_dir()
+    assert path is None and said in why
+    monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
+    tmux = RecordingTmux(["Do you trust this folder?", USAGE_PANE])
+    assert agent.read_quota(tmux) is None
+    assert tmux.opened == [] and tmux.sent == [], "no session, so nothing trusted"
+
+
+def test_a_probe_directory_somebody_else_owns_is_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    _probe_dir(tmp_path).mkdir(parents=True, mode=0o700)
+    me = os.getuid()
+    monkeypatch.setattr(agent.os, "getuid", lambda: me + 1)
+    path, why = agent.quota_probe_dir()
+    assert path is None and "owned" in why
+
+
+def test_a_refused_probe_directory_skips_the_read_and_says_why(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    where = _probe_dir(tmp_path)
+    where.parent.mkdir(parents=True)
+    where.write_text("not a directory")
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("read it anyway"))
+    stale = {"session": {"used_pct": 3}, "checked_at": 500.0, "ts": 500.0}
+    with caplog.at_level("WARNING", logger=agent.log.name):
+        report, store = agent.quota_summary({"quota": stale}, fake_runner(),
+                                            now=500.0 + agent.QUOTA_REFRESH_S + 1)
+    assert report["session"] == {"used_pct": 3}, "the last reading still stands"
+    assert "not a directory" in report["skipped"]
+    assert store["skipped"] == report["skipped"], "and the state says why"
+    assert store["ts"] == 500.0, "a skipped read must not restamp the cache as fresh"
+    assert "not a directory" in caplog.text
+    # With nothing cached, it still says why rather than saying nothing.
+    report, store = agent.quota_summary({}, fake_runner(), now=1.0)
+    assert set(report) == {"skipped"} and store == report
+
+    # Once the directory is right again the next read goes ahead, and the
+    # reason goes with the stale answer.
+    where.unlink()
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: {"session": {"used_pct": 9}})
+    report, store = agent.quota_summary({"quota": {**stale, "skipped": "old"}}, fake_runner(),
+                                        now=500.0 + agent.QUOTA_REFRESH_S + 1)
+    assert "skipped" not in report and "skipped" not in store
+    assert report["session"] == {"used_pct": 9}
+
+    # A read that fails after the directory came back reports the last reading,
+    # and not an old reason that no longer holds.
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: None)
+    report, store = agent.quota_summary({"quota": {**stale, "skipped": "old"}}, fake_runner(),
+                                        now=500.0 + agent.QUOTA_REFRESH_S + 1)
+    assert report == {"session": {"used_pct": 3}, "checked_at": 500.0} and store is None
 
 
 def test_read_quota_refuses_rather_than_trusting_an_unknown_directory(monkeypatch):
@@ -1267,6 +1380,174 @@ def test_quota_home_will_not_hand_back_something_that_is_not_a_directory(monkeyp
 
     monkeypatch.setattr(agent.Path, "home", staticmethod(boom))
     assert agent._quota_home() is None
+
+
+# -- the old probe's lines in Claude Code's prompt history -------------------------
+
+def _history(home):
+    """A history.jsonl as Claude Code writes it, the old probe's lines among the
+    owner's own. Returns (the file's bytes, the bytes that should be left)."""
+    h = str(home)
+    rows = [
+        (json.dumps({"display": "/usage", "pastedContents": {}, "timestamp": 1,
+                     "project": h, "sessionId": "a"}) + "\n", False),
+        (json.dumps({"display": " /usage \n", "project": h, "timestamp": 2}) + "\n", False),
+        (json.dumps({"display": "/usage", "project": h + "/workspace", "timestamp": 3}) + "\n",
+         True),                                     # typed in a project: the owner's
+        (json.dumps({"display": "/usage", "project": "/tmp", "timestamp": 4}) + "\n", True),
+        (json.dumps({"display": "fix the build", "project": h, "timestamp": 5}) + "\n", True),
+        (json.dumps({"display": "/usage please", "project": h}) + "\n", True),
+        ('{"display": "/usage", "project": "' + h + '", broken\n', True),   # malformed
+        ("[1, 2, 3]\n", True),
+        (json.dumps({"display": ["/usage"], "project": h}) + "\n", True),
+        ("\n", True),
+        ('{"display": "/usage", "project": "' + h + '"}\r\n', False),
+        (json.dumps({"display": "/usage", "project": h, "timestamp": 6}), False),  # no newline
+    ]
+    return ("".join(r for r, _ in rows).encode(),
+            "".join(r for r, keep in rows if keep).encode())
+
+
+@pytest.fixture
+def claude_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
+    config = tmp_path / ".claude"
+    config.mkdir()
+    return config
+
+
+def test_the_old_probe_lines_go_and_every_other_line_stays_byte_for_byte(claude_dir, tmp_path):
+    raw, kept = _history(tmp_path)
+    (claude_dir / "history.jsonl").write_bytes(raw)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert (claude_dir / "history.jsonl").read_bytes() == kept
+
+
+def test_cleaning_the_history_keeps_its_mode(claude_dir, tmp_path):
+    for mode in (0o600, 0o640):
+        path = claude_dir / "history.jsonl"
+        path.write_bytes(_history(tmp_path)[0])
+        os.chmod(path, mode)
+        agent.clean_probe_history(claude_dir, str(tmp_path))
+        assert stat.S_IMODE(os.stat(path).st_mode) == mode
+
+
+def test_a_history_that_is_a_symlink_is_cleaned_where_it_points(claude_dir, tmp_path):
+    elsewhere = tmp_path / "synced" / "history.jsonl"
+    elsewhere.parent.mkdir()
+    raw, kept = _history(tmp_path)
+    elsewhere.write_bytes(raw)
+    (claude_dir / "history.jsonl").symlink_to(elsewhere)
+    agent.clean_probe_history(claude_dir, str(tmp_path))
+    assert (claude_dir / "history.jsonl").is_symlink(), "the link itself stays a link"
+    assert elsewhere.read_bytes() == kept
+
+
+def test_a_history_with_nothing_to_remove_is_not_rewritten(claude_dir, tmp_path):
+    path = claude_dir / "history.jsonl"
+    path.write_bytes(_history(tmp_path)[1])
+    os.utime(path, (1_000_000, 1_000_000))
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 0
+    assert os.stat(path).st_mtime == 1_000_000
+
+
+def test_a_missing_or_unreadable_history_is_left_alone(claude_dir, tmp_path):
+    path = claude_dir / "history.jsonl"
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 0
+    assert not path.exists(), "no history is not a reason to make one"
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file anyway")
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    os.chmod(path, 0o000)
+    try:
+        assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    finally:
+        os.chmod(path, 0o600)
+    assert path.read_bytes() == raw
+
+
+def test_the_history_is_tidied_once(claude_dir, tmp_path):
+    """After this the probe never writes a line under the home again, so a
+    "/usage" typed there later is the owner's own and must be left alone."""
+    path = claude_dir / "history.jsonl"
+    path.write_bytes(_history(tmp_path)[0])
+    state = agent.clean_probe_history_once({}, claude_dir, 1_000.0)
+    assert state[agent.HISTORY_CLEANED_KEY] == 1_000.0
+    mine = path.read_bytes() + (json.dumps({"display": "/usage", "project": str(tmp_path)})
+                                + "\n").encode()
+    path.write_bytes(mine)
+    assert agent.clean_probe_history_once(state, claude_dir, 2_000.0) == state
+    assert path.read_bytes() == mine
+
+
+def test_no_history_counts_as_tidied_but_an_unreadable_one_is_tried_again(claude_dir,
+                                                                          tmp_path):
+    assert agent.HISTORY_CLEANED_KEY in agent.clean_probe_history_once({}, claude_dir, 1.0)
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file anyway")
+    path = claude_dir / "history.jsonl"
+    path.write_bytes(_history(tmp_path)[0])
+    os.chmod(path, 0o000)
+    try:
+        assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once({}, claude_dir, 1.0)
+    finally:
+        os.chmod(path, 0o600)
+
+
+def _owner_cfg(tmp_path, config_dir):
+    return agent.AgentConfig.from_env({
+        "CCFLEET_URL": "https://fleet.invalid/", "CCFLEET_NODE_ID": "node-a",
+        "CCFLEET_NODE_TOKEN": "a" * 64, "CCFLEET_STATE_FILE": str(tmp_path / "state.json"),
+        "CCFLEET_CLAUDE_CONFIG_DIR": str(config_dir)})
+
+
+def test_an_owner_node_tidies_its_history_once_and_keeps_the_mark_if_the_post_fails(
+        claude_dir, tmp_path, monkeypatch):
+    """The mark is written as soon as the tidy is done, not with the rest of the
+    state after a successful post. Otherwise a node the server cannot hear would
+    tidy again on every run, taking the owner's own "/usage" lines with it."""
+    raw, kept = _history(tmp_path)
+    (claude_dir / "history.jsonl").write_bytes(raw)
+    cfg = _owner_cfg(tmp_path, claude_dir)
+    monkeypatch.setattr(agent, "build_payload", lambda *a, **k: {"node_id": "node-a"})
+    monkeypatch.setattr(agent, "quota_summary", lambda *a, **k: (None, None))
+    monkeypatch.setattr(agent, "send_heartbeat", lambda cfg, payload: (503, "down"))
+    assert agent.run_cycle(cfg, {})[0] == 503
+    assert (claude_dir / "history.jsonl").read_bytes() == kept
+    assert agent.HISTORY_CLEANED_KEY in agent.read_state(cfg.state_path)
+
+
+def test_a_report_only_run_leaves_the_history_alone(claude_dir, tmp_path, monkeypatch):
+    raw = _history(tmp_path)[0]
+    (claude_dir / "history.jsonl").write_bytes(raw)
+    cfg = _owner_cfg(tmp_path, claude_dir)
+    monkeypatch.setattr(agent, "build_payload", lambda *a, **k: {"node_id": "node-a"})
+    monkeypatch.setattr(agent, "send_heartbeat", lambda cfg, payload: (200, "{}"))
+    agent.run_cycle(cfg, {}, reconcile=False)
+    assert (claude_dir / "history.jsonl").read_bytes() == raw
+
+
+def test_a_slot_tidies_its_own_history_once(slot_home, monkeypatch):
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+    raw, kept = _history(slot_home)
+    (slot_home / ".claude" / "history.jsonl").write_bytes(raw)
+    agent.slot_facts({}, slot_runner([]), now=7_000.0)
+    assert (slot_home / ".claude" / "history.jsonl").read_bytes() == kept
+    state = json.loads((slot_home / ".config/ccfleet/slot-state.json").read_text())
+    assert state[agent.HISTORY_CLEANED_KEY] == 7_000.0
+
+
+def test_a_slot_keeps_the_mark_even_when_a_later_step_fails(slot_home, monkeypatch):
+    def broken(runner=None):
+        raise RuntimeError("the CLI fell over")
+
+    monkeypatch.setattr(agent, "auth_status", broken)
+    (slot_home / ".claude" / "history.jsonl").write_bytes(_history(slot_home)[0])
+    with pytest.raises(RuntimeError):
+        agent.slot_facts({}, slot_runner([]), now=7_000.0)
+    state = json.loads((slot_home / ".config/ccfleet/slot-state.json").read_text())
+    assert state[agent.HISTORY_CLEANED_KEY] == 7_000.0
 
 
 # -- device tokens ----------------------------------------------------------------
