@@ -1093,17 +1093,29 @@ def _tidy_locked(path: Path, home: str, lock: str,
     return len(gone)
 
 
-def clean_probe_history_once(state: Mapping[str, Any], config_dir: Path,
-                             now: float) -> Mapping[str, Any]:
-    """The tidy, done once: the state as it was, or with the mark that it ran."""
+def clean_probe_history_once(state: Mapping[str, Any], config_dir: Path, now: float,
+                             save: Callable[[Mapping[str, Any]], bool]) -> Mapping[str, Any]:
+    """The tidy, done once: the state as it was, or with the mark that it ran.
+
+    The mark is saved before anything is taken out, and nothing is taken out
+    unless it was. A mark that never reached the disk would let every later run
+    tidy again, each taking a "/usage" the owner had since typed alone in a
+    session in the home. A tidy that could not run takes its mark back so the
+    next run tries again; if even that save fails, the mark stands and the old
+    lines stay, which errs toward the owner's history.
+    """
     if state.get(HISTORY_CLEANED_KEY):
         return state
     home = _quota_home()
     if home is None:
         return state
-    if clean_probe_history(config_dir, home) is None:
+    marked = {**state, HISTORY_CLEANED_KEY: now}
+    if not save(marked):
         return state
-    return {**state, HISTORY_CLEANED_KEY: now}
+    if clean_probe_history(config_dir, home) is None:
+        save(state)
+        return state
+    return marked
 
 
 # -- reconcile -------------------------------------------------------------------
@@ -1130,12 +1142,18 @@ def read_state(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def write_state(path: Path, state: Mapping[str, Any]) -> None:
+def write_state(path: Path, state: Mapping[str, Any]) -> bool:
+    """Save the notes whole or not at all; True when they were saved.
+
+    Written beside the file and renamed over it: a run cut short mid-write must
+    not leave half a file, which would read back as no notes, marks included.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
     except OSError as exc:
-        log.debug("could not write state: %s", exc.__class__.__name__)
+        log.warning("could not write state: %s", exc.__class__.__name__)
+        return False
+    return _atomic_write(path, json.dumps(state, sort_keys=True))
 
 
 def parse_desired(body: str) -> dict[str, Any]:
@@ -1592,13 +1610,11 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
     Returns (status, desired, new state, login progress to report next time).
     """
     if reconcile:
-        # Saved at once rather than with the rest of the state after a good post:
-        # a node the server cannot hear would otherwise tidy on every run, taking
-        # a "/usage" the owner later types alone in a session in the home.
-        tidied = clean_probe_history_once(state, cfg.claude_config_dir, time.time())
-        if HISTORY_CLEANED_KEY in tidied and HISTORY_CLEANED_KEY not in state:
-            write_state(cfg.state_path, tidied)
-        state = tidied
+        # Its mark is saved at once rather than with the rest of the state after
+        # a good post: a node the server cannot hear would otherwise tidy on
+        # every run.
+        state = clean_probe_history_once(state, cfg.claude_config_dir, time.time(),
+                                         lambda marked: write_state(cfg.state_path, marked))
     # Reading the windows starts a Claude Code session, so it runs on its own slow
     # schedule and the answer is cached between heartbeats.
     quota, remember = quota_summary(state) if reconcile else (None, None)
@@ -2093,11 +2109,9 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     now = time.time() if now is None else now
     state_path = Path(SLOT_STATE_PATH).expanduser()
     state = read_state(state_path)
-    # The slot's own history, once; saved at once, as on an owner's node.
-    tidied = dict(clean_probe_history_once(state, Path.home() / ".claude", now))
-    if HISTORY_CLEANED_KEY in tidied and HISTORY_CLEANED_KEY not in state:
-        write_state(state_path, tidied)
-    state = tidied
+    # The slot's own history, once; its mark saved at once, as on an owner's node.
+    state = dict(clean_probe_history_once(state, Path.home() / ".claude", now,
+                                          lambda marked: write_state(state_path, marked)))
     # First, so a sign-in that completes in this step already reads as signed
     # in below — and the slot is active in the same heartbeat, not the next.
     moved = drop_config_dir_line()

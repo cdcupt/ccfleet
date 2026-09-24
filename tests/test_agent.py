@@ -330,11 +330,28 @@ def test_installable_version_refuses_anything_that_is_not_a_version():
 
 def test_state_round_trips_and_a_corrupt_file_is_just_no_state(tmp_path):
     path = tmp_path / "nested" / "reconcile.json"
-    agent.write_state(path, {"upgrade": {"to": "2.1.92", "ok": True}})
+    assert agent.write_state(path, {"upgrade": {"to": "2.1.92", "ok": True}}) is True
     assert agent.read_state(path) == {"upgrade": {"to": "2.1.92", "ok": True}}
     path.write_text("{half written")
     assert agent.read_state(path) == {}
     assert agent.read_state(tmp_path / "absent.json") == {}
+
+
+def test_state_is_saved_whole_or_not_at_all_and_says_which(tmp_path, monkeypatch):
+    """A save cut short must leave the notes as they were: a half-written file
+    reads back as no notes at all, and the history tidy's mark with them."""
+    path = tmp_path / "reconcile.json"
+    assert agent.write_state(path, {"mark": 1}) is True
+
+    def refuse(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(agent.os, "replace", refuse)
+    assert agent.write_state(path, {"mark": 2}) is False
+    assert agent.read_state(path) == {"mark": 1}
+    assert [p.name for p in tmp_path.iterdir()] == ["reconcile.json"]
+    (tmp_path / "a-file").write_text("")
+    assert agent.write_state(tmp_path / "a-file" / "state.json", {}) is False
 
 
 def _claude_at(tmp_path, monkeypatch):
@@ -1764,51 +1781,94 @@ def test_a_temp_file_left_by_a_crashed_run_does_not_block_the_tidy(claude_dir, t
     assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
 
 
+class Saves:
+    """A save that remembers what it was given, and what the history held then."""
+
+    def __init__(self, history=None, works=True):
+        self.history, self.works, self.saved = history, works, []
+
+    def __call__(self, state):
+        seen = self.history.read_bytes() if self.history and self.history.exists() else None
+        self.saved.append((dict(state), seen))
+        return self.works
+
+
 def test_the_history_is_tidied_once(claude_dir, tmp_path):
     """After this the probe never writes a line under the home again, so a
     "/usage" typed there later is the owner's own and must be left alone, even
     one typed alone in a session."""
     path = claude_dir / "history.jsonl"
     path.write_bytes(_history(tmp_path)[0])
-    state = agent.clean_probe_history_once({}, claude_dir, 1_000.0)
+    state = agent.clean_probe_history_once({}, claude_dir, 1_000.0, Saves())
     assert state[agent.HISTORY_CLEANED_KEY] == 1_000.0
     mine = path.read_bytes() + (json.dumps({"display": "/usage", "project": str(tmp_path),
                                             "sessionId": "later"}) + "\n").encode()
     path.write_bytes(mine)
-    assert agent.clean_probe_history_once(state, claude_dir, 2_000.0) == state
+    save = Saves()
+    assert agent.clean_probe_history_once(state, claude_dir, 2_000.0, save) == state
     assert path.read_bytes() == mine
+    assert save.saved == []
+
+
+def test_the_mark_is_saved_before_anything_is_taken_out(claude_dir, tmp_path):
+    path = claude_dir / "history.jsonl"
+    raw, kept = _history(tmp_path)
+    path.write_bytes(raw)
+    save = Saves(path)
+    state = agent.clean_probe_history_once({"other": 1}, claude_dir, 1_000.0, save)
+    assert save.saved == [({"other": 1, agent.HISTORY_CLEANED_KEY: 1_000.0}, raw)]
+    assert state == {"other": 1, agent.HISTORY_CLEANED_KEY: 1_000.0}
+    assert path.read_bytes() == kept
+
+
+def test_nothing_is_taken_out_unless_the_mark_could_be_saved(claude_dir, tmp_path):
+    """Otherwise every later run would tidy again, each taking a "/usage" the
+    owner had since typed alone in a session in the home."""
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    state = agent.clean_probe_history_once({}, claude_dir, 1_000.0, Saves(works=False))
+    assert agent.HISTORY_CLEANED_KEY not in state
+    assert path.read_bytes() == raw
 
 
 def test_no_history_counts_as_tidied_but_an_unreadable_or_locked_one_is_tried_again(
         claude_dir, tmp_path):
-    assert agent.HISTORY_CLEANED_KEY in agent.clean_probe_history_once({}, claude_dir, 1.0)
+    assert agent.HISTORY_CLEANED_KEY in agent.clean_probe_history_once(
+        {}, claude_dir, 1.0, Saves())
     path = claude_dir / "history.jsonl"
     path.write_bytes(_history(tmp_path)[0])
     _lock(claude_dir).mkdir()
-    assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once({}, claude_dir, 1.0)
+    save = Saves()
+    assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once(
+        {"other": 1}, claude_dir, 1.0, save)
+    # The mark went down first, and is taken back so the next run tries again.
+    assert [state for state, _ in save.saved] == [
+        {"other": 1, agent.HISTORY_CLEANED_KEY: 1.0}, {"other": 1}]
     _lock(claude_dir).rmdir()
     if os.geteuid() == 0:
         pytest.skip("root reads a mode-000 file anyway")
     os.chmod(path, 0o000)
     try:
-        assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once({}, claude_dir, 1.0)
+        assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once(
+            {}, claude_dir, 1.0, Saves())
     finally:
         os.chmod(path, 0o600)
 
 
-def _owner_cfg(tmp_path, config_dir):
+def _owner_cfg(tmp_path, config_dir, state_file="state.json"):
     return agent.AgentConfig.from_env({
         "CCFLEET_URL": "https://fleet.invalid/", "CCFLEET_NODE_ID": "node-a",
-        "CCFLEET_NODE_TOKEN": "a" * 64, "CCFLEET_STATE_FILE": str(tmp_path / "state.json"),
+        "CCFLEET_NODE_TOKEN": "a" * 64, "CCFLEET_STATE_FILE": str(tmp_path / state_file),
         "CCFLEET_CLAUDE_CONFIG_DIR": str(config_dir)})
 
 
 def test_an_owner_node_tidies_its_history_once_and_keeps_the_mark_if_the_post_fails(
         claude_dir, tmp_path, monkeypatch):
-    """The mark is written as soon as the tidy is done, not with the rest of the
-    state after a successful post. Otherwise a node the server cannot hear would
-    tidy again on every run, taking a "/usage" the owner later types alone in a
-    session in the home."""
+    """The mark is saved with the tidy, not with the rest of the state after a
+    successful post. Otherwise a node the server cannot hear would tidy again
+    on every run, taking a "/usage" the owner later types alone in a session in
+    the home."""
     raw, kept = _history(tmp_path)
     (claude_dir / "history.jsonl").write_bytes(raw)
     cfg = _owner_cfg(tmp_path, claude_dir)
@@ -1818,6 +1878,19 @@ def test_an_owner_node_tidies_its_history_once_and_keeps_the_mark_if_the_post_fa
     assert agent.run_cycle(cfg, {})[0] == 503
     assert (claude_dir / "history.jsonl").read_bytes() == kept
     assert agent.HISTORY_CLEANED_KEY in agent.read_state(cfg.state_path)
+
+
+def test_an_owner_node_that_cannot_save_its_state_leaves_the_history_alone(
+        claude_dir, tmp_path, monkeypatch):
+    raw = _history(tmp_path)[0]
+    (claude_dir / "history.jsonl").write_bytes(raw)
+    (tmp_path / "a-file").write_text("")
+    cfg = _owner_cfg(tmp_path, claude_dir, state_file="a-file/state.json")
+    monkeypatch.setattr(agent, "build_payload", lambda *a, **k: {"node_id": "node-a"})
+    monkeypatch.setattr(agent, "quota_summary", lambda *a, **k: (None, None))
+    monkeypatch.setattr(agent, "send_heartbeat", lambda cfg, payload: (503, "down"))
+    agent.run_cycle(cfg, {})
+    assert (claude_dir / "history.jsonl").read_bytes() == raw
 
 
 def test_a_report_only_run_leaves_the_history_alone(claude_dir, tmp_path, monkeypatch):
@@ -1850,6 +1923,16 @@ def test_a_slot_keeps_the_mark_even_when_a_later_step_fails(slot_home, monkeypat
         agent.slot_facts({}, slot_runner([]), now=7_000.0)
     state = json.loads((slot_home / ".config/ccfleet/slot-state.json").read_text())
     assert state[agent.HISTORY_CLEANED_KEY] == 7_000.0
+
+
+def test_a_slot_that_cannot_save_its_state_leaves_the_history_alone(slot_home, monkeypatch):
+    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+    monkeypatch.setattr(agent, "SLOT_STATE_PATH", str(slot_home / "a-file" / "slot-state.json"))
+    (slot_home / "a-file").write_text("")
+    raw = _history(slot_home)[0]
+    (slot_home / ".claude" / "history.jsonl").write_bytes(raw)
+    agent.slot_facts({}, slot_runner([]), now=7_000.0)
+    assert (slot_home / ".claude" / "history.jsonl").read_bytes() == raw
 
 
 # -- device tokens ----------------------------------------------------------------
