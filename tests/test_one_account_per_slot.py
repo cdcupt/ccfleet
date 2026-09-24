@@ -9,7 +9,9 @@ out. What is left to prove:
 - nothing a machine says about several accounts is kept, however many it names;
 - the one account's address reaches the holder's page, whole or not at all,
   and never the console or an owner node's record;
-- the page and the guide offer no way to switch, and say what to do instead;
+- the page and the guide offer no way to keep two and switch between them, and
+  say what to do instead: hold two slots. Moving a slot to another account,
+  which replaces the one it had, is tests/test_slot_account_switch.py's;
 - the database keeps the columns the feature added, so no live one migrates.
 """
 
@@ -228,7 +230,7 @@ def test_the_switching_buttons_are_gone_from_the_server_too(site, action):
 def test_the_guide_says_one_account_per_slot_and_what_to_do_instead():
     guide = customer_docs.page_for("/docs/guide")(Config())
     assert "<h2>One Claude account per slot</h2>" in guide
-    assert "To use another account, hold another slot." in guide
+    assert "To use two accounts at once, hold two slots." in guide
     assert "each account sees only its own machine" in guide
 
 

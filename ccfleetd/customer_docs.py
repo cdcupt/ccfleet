@@ -22,7 +22,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, _span
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-09-23"
+DOCS_UPDATED = "2026-09-24"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -324,14 +324,29 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "first.</li></ul></div>"
         '<div class="card"><h2>One Claude account per slot</h2>'
         "<p>A slot is signed in to one Claude account, your own, and keeps it: "
-        '<span class="btnlabel">Sign in again</span> works with that account only. To use '
-        "another account, hold another slot. In claude.ai/code each account sees only its "
-        "own machine.</p>"
+        '<span class="btnlabel">Sign in again</span> works with that account only. To move '
+        "your slot to another Claude account of yours, press "
+        '<span class="btnlabel">Change account</span> (once a week). To use two accounts at '
+        "once, hold two slots. In claude.ai/code each account sees only its own "
+        "machine.</p>"
         "<p>One account also stays on one machine: signed in on two at once, it is flagged "
         "to you and to the operator.</p>"
         "<p>Your slot is a whole machine, named after you: the part of your address before "
         "the @ and a number, like alice-1. claude.ai/code shows it by that name. When you "
         "give it back, the name goes with it.</p></div>"
+        '<div class="card"><h2>Changing to another Claude account</h2>'
+        '<p>On a slot in use, <span class="btnlabel">Change account</span> moves it to '
+        "another Claude account of yours. Open the link it shows, sign in with the account "
+        "the slot should use from now on, and paste the code as you did the first time. "
+        "Your files and settings stay; only the Claude sign-in changes.</p>"
+        "<p>Until that sign-in finishes, the slot keeps its current account; if it does not "
+        "go through, or you sign in with the account the slot already has, the account does "
+        "not change. Once it finishes, Remote Control restarts on the new account, which "
+        "ends any session open in it, and the slot appears in claude.ai/code under the new "
+        "account instead of the old one.</p>"
+        "<p>A slot can change account once a week; after a change, your slot card says when "
+        "it can change again. The operator sees that the account changed, never which "
+        "account it is.</p></div>"
         '<div class="card"><h2>Keeping Claude Code up to date</h2>'
         "<p>Your slot card has a <strong>Claude Code</strong> row: the version your slot "
         "runs and, when Anthropic has published a newer one, its number. The button beside "

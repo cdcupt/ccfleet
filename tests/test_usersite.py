@@ -742,6 +742,8 @@ def test_the_policy_lists_every_field_kept_about_a_person():
                  "when you first signed in",                  # accounts.created_at
                  "when you last visited",                     # accounts.last_seen_at
                  "when a device token was last handed out",   # slots.device_token_at
+                 # slots.account_switched_at
+                 "when you last moved it to another Claude account",
                  "with when it began and when it ends",       # sessions.created_at/expires_at
                  "when and by whom it was recorded",          # payments.recorded_at/_by
                  "whether it was later voided",               # payments.voided_at

@@ -26,10 +26,13 @@ VERSION_CHANNELS = ("stable", "latest")
 MAX_VERSION_LEN = 40
 
 # What a node may be asked to run. "login" signs the node itself in; "token"
-# mints a one-year device credential the owner takes to their own machine.
-# Anything else is coerced to "login" rather than forwarded: this word decides
-# which command the agent runs.
-LOGIN_KINDS = ("login", "token")
+# mints a one-year device credential the owner takes to their own machine;
+# "switch", only ever for a machine's slot, signs it in to another Claude
+# account of its holder's. Anything else is coerced to "login" rather than
+# forwarded: this word decides which command the agent runs. An agent from
+# before "switch" coerces it the same way, and a slot that keeps its account
+# then refuses the other one: nothing changes on it.
+LOGIN_KINDS = ("login", "token", "switch")
 
 
 # The verification URL is supplied by a node and then shown to an operator as a

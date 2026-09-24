@@ -427,6 +427,10 @@ class Store:
             # The release channel a slot's holder chose on their page: NULL
             # follows the machine's pin, which every slot before this did.
             self._add_missing_columns("slots", {"claude_channel": "TEXT"})
+            # When its holder last moved the slot to another Claude account
+            # (see request_slot_login): NULL for never, which every slot before
+            # this is. The slot's own, so it goes when the slot is freed.
+            self._add_missing_columns("slots", {"account_switched_at": "REAL"})
             # A name becomes a hostname: two slots answering to one would be
             # two people's machines under one name in claude.ai. Created here,
             # after the column exists, so an older database gets it too.
@@ -523,6 +527,10 @@ class Store:
     # someone to collect it. It is not active — the node has nothing left to do
     # — but the row must survive until it is shown, which 'done' does not.
     LOGIN_KINDS = ("login", "token")
+    # A slot's holder has one more: "switch", moving the slot to another Claude
+    # account of theirs (see request_slot_login). A node's own sign-in keeps no
+    # account to move from, so a node is never asked for one.
+    SLOT_LOGIN_KINDS = LOGIN_KINDS + ("switch",)
     MAX_SECRET = 512
     MAX_LOGIN_CODE = 512
     MAX_LOGIN_URL = 1024
@@ -575,8 +583,8 @@ class Store:
         and the stale request acts on the new holder's slot. `held_by` None is
         the operator's side, which acts on any slot.
         """
-        row = conn.execute("SELECT state, kind, node_id, held_by FROM slots WHERE id = ?",
-                           (slot_id,)).fetchone()
+        row = conn.execute("SELECT state, kind, node_id, held_by, account_switched_at "
+                           "FROM slots WHERE id = ?", (slot_id,)).fetchone()
         if row is None:
             raise StoreError(f"no slot {slot_id!r}")
         if held_by is not None and row["held_by"] != held_by:
@@ -601,19 +609,30 @@ class Store:
 
     def request_slot_login(self, slot_id: str, email: str, now: float,
                            kind: str = "login", *, held_by: Optional[str] = None) -> None:
-        """Start a sign-in, or a device token, on a slot — for its holder.
+        """Start a sign-in, a device token or a change of account on a slot —
+        for its holder.
 
         The same dance as a node's own, run by the machine as the slot's user.
         The check and the write are one transaction, so a release landing in
         between cannot leave a sign-in hanging off a slot being wiped.
+
+        A change of account ("switch") asks more, in the same transaction: a
+        machine's slot in use, and a week since its last change. An owner's
+        own node keeps no account to change: a sign-in there is its owner's.
         """
-        if kind not in self.LOGIN_KINDS:
+        if kind not in self.SLOT_LOGIN_KINDS:
             raise StoreError(f"unknown sign-in kind: {kind}")
         with self._write_txn() as conn:
             row = self._held(conn, slot_id, held_by)
             if row["state"] not in self.SLOT_SIGN_IN_STATES:
                 raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
                                  f"into once it is set up")
+            if kind == "switch" and (row["kind"] != slotstates.MACHINE_SLOT
+                                     or row["state"] != slotstates.ACTIVE):
+                raise StoreError(f"{slot_id} can change its Claude account once it is in use")
+            if kind == "switch" and slotstates.switch_wait_until(row["account_switched_at"],
+                                                                 now) is not None:
+                raise StoreError(f"{slot_id} changed its Claude account less than a week ago")
             self._begin_login(conn, self._sign_in_key(row, slot_id), email, now, kind)
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
@@ -718,9 +737,31 @@ class Store:
                 self._conn.commit()
                 return
 
+            said = str(detail or "").strip()
+            if (state == "done" and current["kind"] == "switch"
+                    and said in slotstates.SWITCH_ENDINGS):
+                # A change of account, over. Its holder is told how, on their
+                # page, as a failed one is: the machine's fixed word stays and
+                # nothing else, until the sweep takes it; a done row is never
+                # asked of the machine again. The week before the next change
+                # starts only when the account really moved. Only a machine's
+                # slot is ever asked for one, so the key is always a slot's.
+                # The machine says it again until it hears back (see the
+                # agent's _to_say); heard once, the week is not moved on.
+                if current["state"] == "done":
+                    return
+                self._conn.execute(
+                    "UPDATE logins SET state='done', code='', url='', secret='', "
+                    "detail=?, updated_at=? WHERE node_id = ? AND requested_at = ?",
+                    (said, now, *pin))
+                if said == slotstates.SWITCHED:
+                    self._conn.execute("UPDATE slots SET account_switched_at = ? WHERE id = ?",
+                                       (now, node_id[len(SLOT_LOGIN_PREFIX):]))
+                self._conn.commit()
+                return
             if state == "failed" and node_id.startswith(SLOT_LOGIN_PREFIX):
                 # A slot's holder is told why, on their own page: above all
-                # that a slot keeps the account it was first signed in with.
+                # that a slot keeps its account, and moves only by a change.
                 # Only the reason stays — code, link and secret go now — and
                 # only until the sweep takes it; the machine is never asked
                 # about a failed row again (see desired._login_block).
@@ -1704,10 +1745,12 @@ class Store:
         """
         # The name goes too: it was the last holder's, and a free slot is
         # called by its id until the next claim names it after somebody else.
+        # So does their last change of account: the next holder's week is
+        # their own.
         cur = conn.execute(
             "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
-            "released_at = ?, device_token_at = 0, name = NULL, claude_channel = NULL "
-            "WHERE id = ? AND state = ?",
+            "released_at = ?, device_token_at = 0, name = NULL, claude_channel = NULL, "
+            "account_switched_at = NULL WHERE id = ? AND state = ?",
             (slotstates.FREE, now, slot_id, slotstates.RELEASING))
         if cur.rowcount > 0:
             # Nor their update: the next holder starts on the machine's pin.
