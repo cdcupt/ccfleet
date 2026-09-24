@@ -344,6 +344,16 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "Back to Stable</span>. A version <strong>held by the operator</strong> has been "
         "fixed on purpose, for example while a release misbehaves, and there is nothing to "
         "press.</p></div>"
+        '<div class="card"><h2>Model and effort</h2>'
+        "<p>Claude Code on your slot starts on <strong>Opus</strong> at <strong>max "
+        "effort</strong>, so it thinks as hard as it can about everything you ask. That also "
+        "uses your Claude plan&#x27;s limits fastest; the bars on your slot card show how "
+        "fast.</p>"
+        "<p>In a session, <code>/model</code> picks another model. The effort is set for the "
+        "whole slot, so <code>/effort</code> cannot lower it. To change it, set the "
+        "<code>CLAUDE_CODE_EFFORT_LEVEL</code> line in <code>~/.claude/settings.json</code> "
+        "on your slot to low, medium, high or xhigh, or ask Claude to. Sessions you start "
+        "after that use the new level.</p></div>"
         '<div class="card"><h2>Good to know</h2><ul>'
         "<li>Your slot is <strong>not backed up</strong>. Keep your work in git, or anywhere "
         "else that is yours.</li>"

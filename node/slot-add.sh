@@ -195,7 +195,7 @@ CC_VERSION="$(as_slot '"$HOME"/.local/bin/claude --version 2>/dev/null | head -1
 [ -n "$CC_VERSION" ] || die "Claude Code is installed for $SLOT but will not report a version"
 note "installed: $CC_VERSION"
 
-step "4/5  the two setup prompts"
+step "4/5  the two setup prompts, and Opus at max effort"
 # The same two questions install.sh pre-answers, for the same reason: neither is
 # about anybody's account, and leaving them would mean every slot needs an
 # interactive terminal before it can be used.
@@ -215,6 +215,25 @@ json.dump(d, open(tmp, 'w'), indent=2)
 os.replace(tmp, p)
 os.chmod(p, 0o600)
 PY"
+# Opus at max effort, what every slot starts on. Written only where the holder
+# has not chosen for themselves, so running this again never takes a choice
+# back. The model is a default that /model changes. The effort cannot be one:
+# the settings file's own effort field stops at xhigh and drops max without a
+# word, so max goes in the env block, which Claude Code applies to every
+# session and which /effort then cannot lower. A holder who wants less edits
+# that line, as the guide tells them.
+as_slot "python3 - <<'PY'
+import json, os
+p = os.path.expanduser('~/.claude/settings.json')
+os.makedirs(os.path.dirname(p), exist_ok=True)
+d = json.load(open(p)) if os.path.exists(p) else {}
+d.setdefault('model', 'opus')
+d.setdefault('env', {}).setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')
+tmp = p + '.tmp'
+json.dump(d, open(tmp, 'w'), indent=2)
+os.replace(tmp, p)
+PY"
+note "Claude Code starts on Opus at max effort"
 
 step "5/5  a way in"
 # Without this the slot has no access path at all: password login is disabled,
