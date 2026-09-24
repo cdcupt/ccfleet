@@ -126,9 +126,47 @@ def test_a_slot_the_server_does_not_know_is_not_counted():
 
 # -- the alert -------------------------------------------------------------------------
 
-def evaluate(node, latest, places, slot_rows=()):
+def evaluate(node, latest, places, slot_rows=(), names=None):
     return {f.rule: f for f in rules.evaluate(node, latest, None, NOW, Config(), slot_rows,
-                                              places)}
+                                              places, names)}
+
+
+def named_fleet():
+    """The fleet, with its held slot named after its holder, as a claim names it."""
+    nodes, rows = fleet()
+    rows[0]["name"] = "ana-1"
+    return nodes, rows
+
+
+def test_both_alerts_call_a_held_slot_by_its_holders_name():
+    """Erik, 2026-09-24: an alert says a held slot's name, never the slot's id
+    or the machine it is on, and names the other place the same way."""
+    nodes, rows = named_fleet()
+    latest = {"erik-1": beat(NOW, account_fp=FP),
+              "pool-1": machine_beat(NOW, slot_entry("slot01", account_fp=FP))}
+    places, names = places_of(latest, slot_rows=rows), rules.place_names(rows)
+    on_node = evaluate(nodes[0], latest["erik-1"], places, names=names)["account_elsewhere"]
+    on_slot = evaluate(nodes[1], latest["pool-1"], places, rows, names)["account_elsewhere:slot01"]
+    assert on_node.message.endswith("also signed in on ana-1: one account, one node")
+    assert on_slot.message.startswith("the Claude account on ana-1 is also signed in on erik-1")
+    assert "pool-1" not in on_node.message + on_slot.message
+
+
+def test_a_slot_on_another_account_is_called_by_its_holders_name():
+    nodes, rows = named_fleet()
+    entry = {"unix_user": "slot01", "credentials": {"logged_in": True, "account_fp": OTHER_FP,
+                                                    "bound_fp": FP}}
+    latest = {"pool-1": machine_beat(NOW, entry)}
+    found = evaluate(nodes[1], latest["pool-1"], places_of(latest, slot_rows=rows), rows)
+    message = found["account_changed:slot01"].message
+    assert message.startswith("ana-1 is signed in to another Claude account")
+    assert "pool-1" not in message
+
+
+def test_a_place_nobody_holds_by_name_keeps_its_id():
+    nodes, rows = fleet()
+    assert rules.place_names(rows) == {"pool-1-a": "pool-1-a", "pool-1-b": "pool-1-b"}
+    assert rules.place_names(named_fleet()[1])["pool-1-a"] == "ana-1"
 
 
 def test_both_places_are_flagged_each_naming_the_other():
@@ -196,6 +234,12 @@ def test_the_alert_opens_on_both_and_closes_when_it_stops(store, cfg):
     rules_open = {(a["node_id"], a["rule"]) for a in store.open_alerts()}
     assert ("erik-1", "account_elsewhere") in rules_open
     assert ("pool-1", "account_elsewhere:slot01") in rules_open
+    # Said by the holder's name, which the claim gave the slot.
+    name = store.get_slot("pool-1-a")["name"]
+    assert name and name != "pool-1-a"
+    said = {a["rule"]: a["message"] for a in store.open_alerts()}
+    assert f"also signed in on {name}:" in said["account_elsewhere"]
+    assert said["account_elsewhere:slot01"].startswith(f"the Claude account on {name} ")
 
     owner["credentials"]["logged_in"] = False
     monitor.record_heartbeat(store.get_node("erik-1"), owner, NOW + 1)
