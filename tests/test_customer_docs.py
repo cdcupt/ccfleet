@@ -223,6 +223,8 @@ def test_how_it_works_says_what_slot_add_switches_off():
     # And no claim the slot cannot keep: telemetry stays on, for Remote Control.
     assert "'DISABLE_TELEMETRY'" not in script
     assert "telemetry stays on, because Remote Control" in page
+    switched_off = page.split("are switched off")[0].rsplit(":", 1)[-1]
+    assert "telemetry" not in switched_off, "the list of what is off must not name it"
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
