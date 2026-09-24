@@ -583,7 +583,7 @@ class Store:
         and the stale request acts on the new holder's slot. `held_by` None is
         the operator's side, which acts on any slot.
         """
-        row = conn.execute("SELECT state, kind, node_id, held_by, account_switched_at "
+        row = conn.execute("SELECT state, kind, node_id, held_by, account_switched_at, name "
                            "FROM slots WHERE id = ?", (slot_id,)).fetchone()
         if row is None:
             raise StoreError(f"no slot {slot_id!r}")
@@ -1681,12 +1681,18 @@ class Store:
             self._conn.commit()
         return cur.rowcount > 0
 
-    def begin_release(self, slot_id: str, *, held_by: Optional[str] = None) -> bool:
+    def begin_release(self, slot_id: str, *, held_by: Optional[str] = None,
+                      named: Optional[str] = None) -> bool:
         """Start the wipe. Legal from every state a person can hold.
 
         Whatever sign-in was in flight goes with it: its URL, a code typed in,
         a minted device token waiting to be collected. All of it belongs to the
         person giving the slot back, and none of it may be waiting for the next.
+
+        `named` is the operator's typed confirmation: the name the slot goes by
+        (its holder's, else its id), checked in this same transaction. Checked
+        before it, a slot freed and claimed by somebody else in between would
+        be wiped on the old holder's name.
         """
         # One transaction, both or neither. As two, a crash between them left
         # the slot releasing with the sign-in still in place — and once that
@@ -1694,6 +1700,9 @@ class Store:
         # the last one's URL, or read their minted token.
         with self._write_txn() as conn:
             row = self._held(conn, slot_id, held_by)
+            shown = row["name"] or slot_id
+            if named is not None and named != shown:
+                raise StoreError(f"type the slot's name, {shown}, to confirm")
             if row["kind"] == slotstates.OWNER_SLOT:
                 # Releasing means wiping, and nothing on somebody's own node is
                 # ours to wipe. Letting go of the record is its own command.

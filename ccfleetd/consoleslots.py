@@ -677,17 +677,13 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
         store.reserve_machine(target, None)
         return "slots"
     if kind == "slot" and action == "reclaim":
-        # By the name the row shows: whose work this wipes, as of now. A slot
-        # given back and claimed again since the page was drawn has another
-        # name, and the old one no longer matches.
-        slot = store.get_slot(target)
-        shown = names.display(slot) if slot else target
-        if form.get("confirm") != shown:
-            raise StoreError(f"type the slot's name, {shown}, to confirm")
         try:
             # The operator's side: any holder. It is a release like any other,
-            # with the same wipe, and the sign-in in flight goes with it.
-            store.begin_release(target)
+            # with the same wipe, and the sign-in in flight goes with it. By the
+            # name the row showed, checked as the release starts: a slot given
+            # back and claimed by somebody else since the page was drawn has
+            # another name by then, and the old one no longer matches.
+            store.begin_release(target, named=form.get("confirm") or "")
         except slotstates.TransitionError as exc:     # a stale form: already on its way out
             raise StoreError(str(exc)) from exc
         return "slots"

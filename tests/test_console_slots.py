@@ -24,7 +24,7 @@ from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.passwords import hash_password
-from ccfleetd.store import Store, slot_login_key
+from ccfleetd.store import Store, StoreError, slot_login_key
 
 ADMIN_TOKEN = "admin-token-long-enough-to-pass"
 
@@ -293,6 +293,7 @@ def test_taking_a_slot_back_needs_its_name_typed(console):
     for typed in ("yes", "", f" {name}", name.upper(), slot["id"]):
         refused = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": typed})
         assert refused.status == 400
+    assert call("POST", f"/actions/slot/{slot['id']}/reclaim", {}).status == 400
     assert store.get_slot(slot["id"])["state"] == slots.CLAIMING
     taken = call("POST", f"/actions/slot/{slot['id']}/reclaim", {"confirm": name})
     assert taken.status == 303
@@ -341,6 +342,22 @@ def test_a_free_slot_says_its_machine_only_when_its_name_does_not(console):
     card = slots_card(call("GET", "/admin").body)
     assert "on m2" in text(on_the_row(row_of(card, "m2")))
     assert "on pool-4" not in text(on_the_row(row_of(card, "pool-4")))
+
+
+def test_the_typed_name_is_checked_in_the_release_itself(console):
+    """Not beforehand: the name and the release are one transaction, so no
+    claim can land between the check and the wipe."""
+    store, _ = console
+    shared(store)
+    slot = store.claim_slot(holder(store)["id"], now=time.time())
+    with store._lock:
+        store._conn.execute("UPDATE slots SET name = 'bea-1' WHERE id = ?", (slot["id"],))
+        store._conn.commit()
+    with pytest.raises(StoreError, match="bea-1"):
+        store.begin_release(slot["id"], named=slot["name"])
+    assert store.get_slot(slot["id"])["state"] == slots.CLAIMING
+    assert store.begin_release(slot["id"], named="bea-1")
+    assert store.get_slot(slot["id"])["state"] == slots.RELEASING
 
 
 def test_a_take_back_typed_for_somebody_since_renamed_is_refused(console):
