@@ -195,6 +195,20 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
         assert "one Claude account" in page, where
 
 
+def test_the_guide_names_the_line_a_slot_really_starts_with():
+    """The guide tells people which line to edit to lower the effort. Naming a
+    line or a file slot-add does not write would send them looking for nothing."""
+    from pathlib import Path
+
+    script = (Path(__file__).parents[1] / "node" / "slot-add.sh").read_text()
+    guide = render("/docs/guide")
+    assert "setdefault('model', 'opus')" in script and "<strong>Opus</strong>" in guide
+    assert "setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')" in script
+    assert "<code>CLAUDE_CODE_EFFORT_LEVEL</code>" in guide and "max effort" in guide
+    assert "expanduser('~/.claude/settings.json')" in script
+    assert "<code>~/.claude/settings.json</code>" in guide
+
+
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
     terms = render("/docs/terms")
     assert f"Last updated {customer_docs.DOCS_UPDATED}" in terms

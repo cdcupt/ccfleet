@@ -16,6 +16,7 @@ That belongs in the PR, not here: a test needing root on a live host is one
 nobody runs.
 """
 
+import json
 import os
 import pathlib
 import re
@@ -356,6 +357,61 @@ def test_the_trust_prompt_is_answered_for_the_directory_people_work_in(tmp_path)
     assert "expanduser('~'), {})['hasTrustDialogAccepted']" not in text, \
         "trusting the home is not the same as trusting the workspace"
     assert "remoteDialogSeen" in text, "both prompts, or the step does not do what it says"
+
+
+# -- what Claude Code starts on ------------------------------------------------------
+
+def _add_slot(tmp_path, slot_home):
+    bindir = fake_system(tmp_path, slot_home=slot_home)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CCFLEET_SLICE_ROOT"] = str(tmp_path / "slices")
+    return subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                          text=True, env=env, timeout=60)
+
+
+def _holders_settings(slot_home, settings):
+    (slot_home / ".claude").mkdir(parents=True)
+    (slot_home / ".claude" / "settings.json").write_text(json.dumps(settings))
+
+
+def _settings(slot_home):
+    return json.loads((slot_home / ".claude" / "settings.json").read_text())
+
+
+def test_a_new_slot_starts_on_opus_at_max_effort(tmp_path):
+    """Max goes in the env block, never in the settings file's own effort
+    field: that field stops at xhigh and drops max without a word, so a slot
+    set up that way would quietly run at the default instead."""
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    settings = _settings(slot_home)
+    assert settings["model"] == "opus"
+    assert settings["env"] == {"CLAUDE_CODE_EFFORT_LEVEL": "max"}
+    assert "effortLevel" not in settings
+
+
+def test_what_a_holder_chose_for_themselves_is_kept(tmp_path):
+    """Running this again on a slot somebody uses must not take their choices
+    back: a lower effort to save their limits, another model, anything else."""
+    slot_home = tmp_path / "slothome"
+    theirs = {"model": "sonnet", "env": {"CLAUDE_CODE_EFFORT_LEVEL": "high"},
+              "permissions": {"allow": ["Bash(ls)"]}}
+    _holders_settings(slot_home, theirs)
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    assert _settings(slot_home) == theirs
+
+
+def test_the_effort_joins_an_env_block_the_holder_already_has(tmp_path):
+    slot_home = tmp_path / "slothome"
+    _holders_settings(slot_home, {"env": {"TZ": "Asia/Shanghai"}})
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    assert _settings(slot_home) == {
+        "env": {"TZ": "Asia/Shanghai", "CLAUDE_CODE_EFFORT_LEVEL": "max"}, "model": "opus"}
 
 
 def test_a_slot_is_given_a_way_in(tmp_path):
