@@ -7,12 +7,13 @@ payment outside the system and lets only the operator's allowance reach it.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from ccfleetd import cli, payments, slots
+from ccfleetd import cli, consoleslots, payments, slots
 from ccfleetd.store import Store, StoreError
 
 NOW = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc).timestamp()
@@ -257,3 +258,41 @@ def test_the_account_list_says_who_is_paid_up(db, capsys):
     assert cli.main(["--db", db, "account", "list"]) == 0
     out = capsys.readouterr().out
     assert ahead(27) in out and "(lapsed)" not in out
+
+
+# -- the next month, suggested -------------------------------------------------------
+
+@pytest.mark.parametrize("start,through", [
+    ("2026-09-24", "2026-10-23"),   # the day before the same day next month
+    ("2026-12-15", "2027-01-14"),   # into the next year
+    ("2026-01-31", "2026-02-27"),   # a day February lacks: due on its last day
+    ("2028-01-31", "2028-02-28"),   # a leap year's February
+    ("2026-03-01", "2026-03-31"),   # a whole calendar month
+])
+def test_a_month_runs_to_the_day_before_it_is_due_again(start, through):
+    assert payments.month_through(date.fromisoformat(start)) == through
+
+
+def test_paying_early_carries_on_from_what_is_already_paid():
+    assert payments.next_through("2026-10-23", date(2026, 10, 20)) == "2026-11-23"
+    assert payments.next_through("2026-10-23", date(2026, 10, 23)) == "2026-11-23"
+
+
+def test_with_nothing_paid_ahead_the_month_starts_today():
+    today = date(2026, 9, 24)
+    assert payments.next_through(None, today) == "2026-10-23"
+    assert payments.next_through("2026-09-23", today) == "2026-10-23", "lapsed yesterday"
+    assert payments.next_through("2026-08-01", today) == "2026-10-23", "lapsed long ago"
+
+
+def _through_field(card, account_id):
+    form = re.search(rf'action="/actions/account/{account_id}/payment".*?</form>', card, re.S)
+    return re.search(r'name="through"[^>]*value="([0-9-]+)"', form.group(0)).group(1)
+
+
+def test_the_payment_form_suggests_the_next_month(store):
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc).timestamp()
+    pay(store, who="ana", through="2026-10-23", at=now)
+    card = consoleslots.section(store, "csrf", now)
+    assert _through_field(card, "ana") == "2026-11-23", "one more month after what is paid"
+    assert _through_field(card, "bo") == "2026-10-23", "nothing paid: a month from today"
