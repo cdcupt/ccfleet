@@ -1384,26 +1384,39 @@ def test_quota_home_will_not_hand_back_something_that_is_not_a_directory(monkeyp
 
 # -- the old probe's lines in Claude Code's prompt history -------------------------
 
+DROPPED = 6
+
+
 def _history(home):
     """A history.jsonl as Claude Code writes it, the old probe's lines among the
     owner's own. Returns (the file's bytes, the bytes that should be left)."""
     h = str(home)
+
+    def row(keep, **entry):
+        return json.dumps(entry) + "\n", keep
+
     rows = [
-        (json.dumps({"display": "/usage", "pastedContents": {}, "timestamp": 1,
-                     "project": h, "sessionId": "a"}) + "\n", False),
-        (json.dumps({"display": " /usage \n", "project": h, "timestamp": 2}) + "\n", False),
-        (json.dumps({"display": "/usage", "project": h + "/workspace", "timestamp": 3}) + "\n",
-         True),                                     # typed in a project: the owner's
-        (json.dumps({"display": "/usage", "project": "/tmp", "timestamp": 4}) + "\n", True),
-        (json.dumps({"display": "fix the build", "project": h, "timestamp": 5}) + "\n", True),
-        (json.dumps({"display": "/usage please", "project": h}) + "\n", True),
+        row(False, display="/usage", pastedContents={}, timestamp=1, project=h, sessionId="p1"),
+        row(False, display=" /usage \n", project=h, timestamp=2, sessionId="p2"),
+        row(True, display="/usage", project=h + "/workspace", sessionId="w1"),  # in a project
+        row(True, display="/usage", project="/tmp", sessionId="t1"),
+        # The owner's own: a session in the home that went on to other work.
+        row(True, display="/usage", project=h, sessionId="o1"),
+        row(True, display="fix the build", project=h, sessionId="o1"),
+        row(True, display="/usage", project=h, timestamp=3),       # no session to judge by
+        row(True, display="/usage", project=h, sessionId=7),
+        row(True, display="/usage", project=h, sessionId=["p6"]),
+        row(True, display="/usage please", project=h, sessionId="o2"),
         ('{"display": "/usage", "project": "' + h + '", broken\n', True),   # malformed
         ("[1, 2, 3]\n", True),
-        (json.dumps({"display": ["/usage"], "project": h}) + "\n", True),
+        row(True, display=["/usage"], project=h, sessionId="o3"),
         ("\n", True),
-        ('{"display": "/usage", "project": "' + h + '"}\r\n', False),
-        (json.dumps({"display": "/usage", "project": h, "timestamp": 6}), False),  # no newline
+        (json.dumps({"display": "/usage", "project": h, "sessionId": "p3"}) + "\r\n", False),
+        row(False, display="/usage", project=h, sessionId="p4"),
+        row(False, display="/usage", project=h, sessionId="p4"),   # asked twice
+        (json.dumps({"display": "/usage", "project": h, "sessionId": "p5"}), False),  # no newline
     ]
+    assert sum(not keep for _, keep in rows) == DROPPED
     return ("".join(r for r, _ in rows).encode(),
             "".join(r for r, keep in rows if keep).encode())
 
@@ -1416,11 +1429,37 @@ def claude_dir(tmp_path, monkeypatch):
     return config
 
 
+def _leftovers(directory):
+    return sorted(p.name for p in directory.iterdir() if ".ccfleet-" in p.name)
+
+
+def _backups(directory):
+    return sorted(directory.glob("history.jsonl.before-ccfleet-tidy-*"))
+
+
+def _lock(directory):
+    return directory / "history.jsonl.lock"
+
+
 def test_the_old_probe_lines_go_and_every_other_line_stays_byte_for_byte(claude_dir, tmp_path):
     raw, kept = _history(tmp_path)
     (claude_dir / "history.jsonl").write_bytes(raw)
-    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
     assert (claude_dir / "history.jsonl").read_bytes() == kept
+
+
+def test_the_history_as_it_was_is_kept_beside_it(claude_dir, tmp_path):
+    """Nothing taken out is gone: the old file itself stays, under a new name."""
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    os.chmod(path, 0o640)
+    before = os.stat(path).st_ino
+    agent.clean_probe_history(claude_dir, str(tmp_path))
+    [backup] = _backups(claude_dir)
+    assert backup.read_bytes() == raw
+    assert os.stat(backup).st_ino == before, "the old file itself, not a copy of it"
+    assert stat.S_IMODE(os.stat(backup).st_mode) == 0o640
 
 
 def test_cleaning_the_history_keeps_its_mode(claude_dir, tmp_path):
@@ -1428,19 +1467,30 @@ def test_cleaning_the_history_keeps_its_mode(claude_dir, tmp_path):
         path = claude_dir / "history.jsonl"
         path.write_bytes(_history(tmp_path)[0])
         os.chmod(path, mode)
-        agent.clean_probe_history(claude_dir, str(tmp_path))
+        assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
         assert stat.S_IMODE(os.stat(path).st_mode) == mode
 
 
-def test_a_history_that_is_a_symlink_is_cleaned_where_it_points(claude_dir, tmp_path):
+def test_a_history_that_is_a_symlink_is_cleaned_where_it_points(claude_dir, tmp_path,
+                                                                 monkeypatch):
     elsewhere = tmp_path / "synced" / "history.jsonl"
     elsewhere.parent.mkdir()
     raw, kept = _history(tmp_path)
     elsewhere.write_bytes(raw)
     (claude_dir / "history.jsonl").symlink_to(elsewhere)
+    real_fsync = os.fsync
+    locks = []
+
+    def fsync_and_look(fd):
+        real_fsync(fd)
+        locks.append((_lock(elsewhere.parent).is_dir(), _lock(claude_dir).exists()))
+
+    monkeypatch.setattr(agent.os, "fsync", fsync_and_look)
     agent.clean_probe_history(claude_dir, str(tmp_path))
     assert (claude_dir / "history.jsonl").is_symlink(), "the link itself stays a link"
     assert elsewhere.read_bytes() == kept
+    assert locks == [(True, False)], "locked where Claude Code locks it: beside the file"
+    assert len(_backups(elsewhere.parent)) == 1
 
 
 def test_a_history_with_nothing_to_remove_is_not_rewritten(claude_dir, tmp_path):
@@ -1449,12 +1499,18 @@ def test_a_history_with_nothing_to_remove_is_not_rewritten(claude_dir, tmp_path)
     os.utime(path, (1_000_000, 1_000_000))
     assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 0
     assert os.stat(path).st_mtime == 1_000_000
+    assert _backups(claude_dir) == []
+    assert not _lock(claude_dir).exists()
 
 
 def test_a_missing_or_unreadable_history_is_left_alone(claude_dir, tmp_path):
     path = claude_dir / "history.jsonl"
     assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 0
     assert not path.exists(), "no history is not a reason to make one"
+    assert not _lock(claude_dir).exists()
+    nowhere = tmp_path / "no-such-config"
+    assert agent.clean_probe_history(nowhere, str(tmp_path)) == 0
+    assert not nowhere.exists()
     if os.geteuid() == 0:
         pytest.skip("root reads a mode-000 file anyway")
     raw = _history(tmp_path)[0]
@@ -1465,18 +1521,98 @@ def test_a_missing_or_unreadable_history_is_left_alone(claude_dir, tmp_path):
     finally:
         os.chmod(path, 0o600)
     assert path.read_bytes() == raw
+    assert not _lock(claude_dir).exists()
 
 
-def _leftovers(claude_dir):
-    return sorted(p.name for p in claude_dir.iterdir() if ".ccfleet-" in p.name)
+@pytest.mark.parametrize("planted", ["pipe", "directory"])
+def test_a_history_that_is_not_a_file_is_left_alone(claude_dir, tmp_path, planted):
+    """Left like an unreadable one; and a pipe must not hang the agent waiting
+    for a writer."""
+    path = claude_dir / "history.jsonl"
+    if planted == "pipe":
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert not _lock(claude_dir).exists()
 
 
-def test_a_prompt_typed_during_the_tidy_makes_it_wait_and_nothing_is_lost(
+def test_a_history_claude_code_has_locked_is_left_for_the_next_run(claude_dir, tmp_path):
+    """Claude Code holds this lock while it appends a prompt or prunes the file."""
+    path = claude_dir / "history.jsonl"
+    raw, kept = _history(tmp_path)
+    path.write_bytes(raw)
+    _lock(claude_dir).mkdir()
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert path.read_bytes() == raw
+    assert _lock(claude_dir).is_dir(), "somebody else's lock is theirs to let go"
+    assert _leftovers(claude_dir) == [] and _backups(claude_dir) == []
+    _lock(claude_dir).rmdir()
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
+    assert path.read_bytes() == kept
+
+
+def test_the_tidy_holds_claude_codes_lock_while_it_rewrites_and_then_lets_it_go(
         claude_dir, tmp_path, monkeypatch):
-    """Claude Code appends to its history as prompts are typed. One arriving
-    after the read must not be lost to a rewrite from the older copy: the
-    tidy stands down, as Claude Code's own history prune does, and tries again
-    next run."""
+    (claude_dir / "history.jsonl").write_bytes(_history(tmp_path)[0])
+    real_fsync = os.fsync
+    held = []
+
+    def fsync_and_look(fd):
+        real_fsync(fd)
+        held.append(_lock(claude_dir).is_dir())
+
+    monkeypatch.setattr(agent.os, "fsync", fsync_and_look)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
+    assert held == [True]
+    assert not _lock(claude_dir).exists()
+
+
+def test_a_lock_taken_over_during_the_tidy_is_left_to_its_new_holder(
+        claude_dir, tmp_path, monkeypatch):
+    """Held past Claude Code's ten seconds, the lock counts as abandoned and
+    Claude Code may take it over. Then the tidy stands down, and does not let go
+    of a lock that is no longer its own."""
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    real_fsync = os.fsync
+
+    def fsync_then_take_over(fd):
+        real_fsync(fd)
+        _lock(claude_dir).rmdir()
+        _lock(claude_dir).mkdir()
+        os.utime(_lock(claude_dir), (1_000_000, 1_000_000))
+
+    monkeypatch.setattr(agent.os, "fsync", fsync_then_take_over)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert path.read_bytes() == raw
+    assert _lock(claude_dir).is_dir()
+    assert _leftovers(claude_dir) == [] and _backups(claude_dir) == []
+
+
+def test_a_lock_is_told_apart_from_one_made_in_its_place(tmp_path):
+    """A lock made where another was can get the old one's inode number back, or
+    land on the same timestamp; it takes both to tell them apart."""
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for lock in (first, second):
+        os.utime(lock, (5, 5))
+    assert agent._lock_mark(str(first)) != agent._lock_mark(str(second))
+    before = agent._lock_mark(str(first))
+    os.utime(first, (6, 6))
+    assert agent._lock_mark(str(first)) != before
+    assert agent._lock_mark(str(tmp_path / "gone")) is None
+
+
+def test_a_prompt_written_without_the_lock_during_the_tidy_makes_it_wait(
+        claude_dir, tmp_path, monkeypatch):
+    """A writer that does not take Claude Code's lock can still append after the
+    read. That line must not be lost to a rewrite from the older copy: the tidy
+    stands down, as Claude Code's own history prune does, and tries again. On a
+    filesystem with coarse timestamps the append may not move the mtime, so the
+    size alone must be enough."""
     path = claude_dir / "history.jsonl"
     raw, kept = _history(tmp_path)[0] + b"\n", _history(tmp_path)[1]
     path.write_bytes(raw)
@@ -1489,29 +1625,29 @@ def test_a_prompt_typed_during_the_tidy_makes_it_wait_and_nothing_is_lost(
         real_fsync(fd)
         if not appended:
             appended.append(1)
+            was = os.stat(path)
             with open(path, "ab") as history:
                 history.write(typed)
+            os.utime(path, ns=(was.st_atime_ns, was.st_mtime_ns))
 
     monkeypatch.setattr(agent.os, "fsync", fsync_then_type)
     assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
     assert path.read_bytes() == raw + typed, "the file is left exactly as it now is"
-    assert _leftovers(claude_dir) == []
+    assert _leftovers(claude_dir) == [] and _backups(claude_dir) == []
+    assert not _lock(claude_dir).exists()
     # The next run finds it quiet and finishes, the typed prompt kept.
-    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
     assert path.read_bytes() == kept + typed
 
 
 def test_a_history_replaced_during_the_tidy_is_left_to_whoever_replaced_it(
         claude_dir, tmp_path, monkeypatch):
-    """Claude Code prunes this file itself by replacing it. A tidy that raced a
-    prune must not put back the copy it read."""
+    """A tidy that raced a rewrite by someone else must not put back the copy
+    it read."""
     path = claude_dir / "history.jsonl"
     raw = _history(tmp_path)[0]
     path.write_bytes(raw)
-    # The same length as what was read, so only the file's identity tells them apart.
-    pruned = b'{"display": "kept by the prune", "project": "/x"}\n'
-    pruned = pruned + b" " * (len(raw) - len(pruned) - 1) + b"\n"
-    assert len(pruned) == len(raw)
+    pruned = _same_length_as(raw)
     real_fsync = os.fsync
     done = []
 
@@ -1519,45 +1655,58 @@ def test_a_history_replaced_during_the_tidy_is_left_to_whoever_replaced_it(
         real_fsync(fd)
         if not done:
             done.append(1)
+            # The same length and timestamp, so only the file's identity tells
+            # the two apart.
+            was = os.stat(path)
             other = claude_dir / "pruned.tmp"
             other.write_bytes(pruned)
+            os.utime(other, ns=(was.st_atime_ns, was.st_mtime_ns))
             os.replace(other, path)
 
     monkeypatch.setattr(agent.os, "fsync", fsync_then_prune)
     assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
     assert path.read_bytes() == pruned
-    assert _leftovers(claude_dir) == []
+    assert _leftovers(claude_dir) == [] and _backups(claude_dir) == []
 
 
-def test_a_prompt_that_races_the_rename_is_carried_over(claude_dir, tmp_path, monkeypatch):
-    """An append that opened the file just before it was replaced lands in the
-    old file. The old file is watched a moment longer and that line moved."""
-    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
-    path = claude_dir / "history.jsonl"
-    raw, kept = _history(tmp_path)[0] + b"\n", _history(tmp_path)[1]
-    path.write_bytes(raw)
-    typed = (json.dumps({"display": "ship it", "project": str(tmp_path / "workspace")})
-             + "\n").encode()
-    real_replace = os.replace
-    raced = []
-
-    def type_then_replace(src, dst):
-        if Path(dst) == path and not raced:
-            raced.append(1)
-            with open(path, "ab") as history:
-                history.write(typed)
-        return real_replace(src, dst)
-
-    monkeypatch.setattr(agent.os, "replace", type_then_replace)
-    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
-    assert path.read_bytes() == kept + typed
-    assert _leftovers(claude_dir) == []
-
-
-def test_a_prompt_that_reaches_the_old_file_a_moment_later_is_still_carried_over(
+def test_a_history_rewritten_in_place_during_the_tidy_is_left_alone(
         claude_dir, tmp_path, monkeypatch):
-    """A writer that opened the file before the rename can write a beat after
-    it. The old file is watched for a few looks, not just one."""
+    """The same file and the same length, but written to: only its timestamp
+    says so."""
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    os.utime(path, (1_000_000, 1_000_000))
+    rewritten = _same_length_as(raw)
+    real_fsync = os.fsync
+    done = []
+
+    def fsync_then_rewrite(fd):
+        real_fsync(fd)
+        if not done:
+            done.append(1)
+            with open(path, "r+b") as history:
+                history.write(rewritten)
+            os.utime(path, (2_000_000, 2_000_000))
+
+    monkeypatch.setattr(agent.os, "fsync", fsync_then_rewrite)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert path.read_bytes() == rewritten
+    assert _leftovers(claude_dir) == [] and _backups(claude_dir) == []
+
+
+def _same_length_as(raw):
+    other = b'{"display": "kept by the prune", "project": "/x"}\n'
+    other = other + b" " * (len(raw) - len(other) - 1) + b"\n"
+    assert len(other) == len(raw)
+    return other
+
+
+def test_a_prompt_that_reaches_the_old_file_after_the_rename_is_kept(
+        claude_dir, tmp_path, monkeypatch):
+    """A writer that ignores the lock and opened the file before the rename
+    writes into the old file. That file is the one kept beside the history, so
+    the line is still on disk."""
     path = claude_dir / "history.jsonl"
     raw, kept = _history(tmp_path)[0] + b"\n", _history(tmp_path)[1]
     path.write_bytes(raw)
@@ -1571,44 +1720,75 @@ def test_a_prompt_that_reaches_the_old_file_a_moment_later_is_still_carried_over
             held.append(open(path, "ab"))       # the writer's handle, on the old file
         return real_replace(src, dst)
 
-    def write_during_the_pause(seconds):
-        if held and not held[0].closed:
-            held[0].write(typed)
-            held[0].close()
-
     monkeypatch.setattr(agent.os, "replace", open_then_replace)
-    monkeypatch.setattr(agent.time, "sleep", write_during_the_pause)
-    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
-    assert path.read_bytes() == kept + typed
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
+    held[0].write(typed)
+    held[0].close()
+    assert path.read_bytes() == kept
+    [backup] = _backups(claude_dir)
+    assert backup.read_bytes() == raw + typed
+
+
+def test_a_failed_rename_leaves_no_trace(claude_dir, tmp_path, monkeypatch):
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+
+    def refuse(src, dst):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(agent.os, "replace", refuse)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert path.read_bytes() == raw
+    assert _leftovers(claude_dir) == [] and _backups(claude_dir) == []
+    assert not _lock(claude_dir).exists()
+
+
+def test_a_backup_name_already_taken_is_not_touched(claude_dir, tmp_path, monkeypatch):
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    monkeypatch.setattr(agent.time, "time_ns", lambda: 42)
+    theirs = claude_dir / "history.jsonl.before-ccfleet-tidy-42"
+    theirs.write_bytes(b"not the tidy's")
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert theirs.read_bytes() == b"not the tidy's"
+    assert path.read_bytes() == raw
+    assert _leftovers(claude_dir) == []
+    assert not _lock(claude_dir).exists()
 
 
 def test_a_temp_file_left_by_a_crashed_run_does_not_block_the_tidy(claude_dir, tmp_path):
     (claude_dir / f".history.jsonl.ccfleet-{os.getpid()}").write_bytes(b"half written")
     (claude_dir / "history.jsonl").write_bytes(_history(tmp_path)[0])
-    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == DROPPED
 
 
 def test_the_history_is_tidied_once(claude_dir, tmp_path):
     """After this the probe never writes a line under the home again, so a
-    "/usage" typed there later is the owner's own and must be left alone."""
+    "/usage" typed there later is the owner's own and must be left alone, even
+    one typed alone in a session."""
     path = claude_dir / "history.jsonl"
     path.write_bytes(_history(tmp_path)[0])
     state = agent.clean_probe_history_once({}, claude_dir, 1_000.0)
     assert state[agent.HISTORY_CLEANED_KEY] == 1_000.0
-    mine = path.read_bytes() + (json.dumps({"display": "/usage", "project": str(tmp_path)})
-                                + "\n").encode()
+    mine = path.read_bytes() + (json.dumps({"display": "/usage", "project": str(tmp_path),
+                                            "sessionId": "later"}) + "\n").encode()
     path.write_bytes(mine)
     assert agent.clean_probe_history_once(state, claude_dir, 2_000.0) == state
     assert path.read_bytes() == mine
 
 
-def test_no_history_counts_as_tidied_but_an_unreadable_one_is_tried_again(claude_dir,
-                                                                          tmp_path):
+def test_no_history_counts_as_tidied_but_an_unreadable_or_locked_one_is_tried_again(
+        claude_dir, tmp_path):
     assert agent.HISTORY_CLEANED_KEY in agent.clean_probe_history_once({}, claude_dir, 1.0)
-    if os.geteuid() == 0:
-        pytest.skip("root reads a mode-000 file anyway")
     path = claude_dir / "history.jsonl"
     path.write_bytes(_history(tmp_path)[0])
+    _lock(claude_dir).mkdir()
+    assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once({}, claude_dir, 1.0)
+    _lock(claude_dir).rmdir()
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file anyway")
     os.chmod(path, 0o000)
     try:
         assert agent.HISTORY_CLEANED_KEY not in agent.clean_probe_history_once({}, claude_dir, 1.0)
@@ -1627,7 +1807,8 @@ def test_an_owner_node_tidies_its_history_once_and_keeps_the_mark_if_the_post_fa
         claude_dir, tmp_path, monkeypatch):
     """The mark is written as soon as the tidy is done, not with the rest of the
     state after a successful post. Otherwise a node the server cannot hear would
-    tidy again on every run, taking the owner's own "/usage" lines with it."""
+    tidy again on every run, taking a "/usage" the owner later types alone in a
+    session in the home."""
     raw, kept = _history(tmp_path)
     (claude_dir / "history.jsonl").write_bytes(raw)
     cfg = _owner_cfg(tmp_path, claude_dir)
