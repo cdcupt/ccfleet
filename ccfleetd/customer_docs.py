@@ -15,6 +15,7 @@ from __future__ import annotations
 from html import escape
 from typing import Callable, Optional
 
+from . import pricing
 from .config import Config
 from .monitor import LOGIN_MAX_AGE_S
 from .render import _meter
@@ -133,6 +134,11 @@ align-items:start}
 PAGES_TITLES = NAV
 
 
+def _cost(price: pricing.Price) -> str:
+    """The price in a sentence, bold, escaped: "<strong>$20</strong> a month"."""
+    return f"<strong>{escape(pricing.display(price))}</strong> a {pricing.PERIOD}"
+
+
 def contact(cfg: Config) -> str:
     """How to reach the operator, in the words a sentence needs.
 
@@ -192,7 +198,8 @@ def _demo() -> str:
         "much of your usage limits is left.</figcaption></figure>")
 
 
-def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
+def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
+             price: Optional[pricing.Price] = None) -> str:
     # Straight into Google's sign-in when it is set up; otherwise the page that
     # says it is not, rather than a button that goes nowhere. Somebody already
     # signed in is offered their slots instead of a sign-in they have done.
@@ -206,6 +213,10 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                   f"with Google</a>{how}</div>"
                   '<p class="muted small">Already have a slot? '
                   '<a href="/account">Go to your slots</a>.</p>')
+    # With a price the operator set, say it; without one, say it is agreed with them.
+    paying = (f"A slot costs {_cost(price)}, paid directly to the operator; this site takes no "
+              "card and no payment." if price is not None else
+              "Slots are sold directly by the operator; price and payment are agreed with them.")
     body = (
         '<section class="hero"><div class="hero-copy">'
         '<p class="eyebrow">Bring your own Claude plan</p>'
@@ -238,8 +249,7 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         '<div class="card"><h2>How to buy</h2><ol class="buy">'
         '<li>First <a href="/account">sign in once</a> with Google, so there is an account '
         "to switch on.</li>"
-        f"<li>Then ask {contact(cfg)} for a slot, and pay them. Slots are sold directly by "
-        "the operator; price and payment are agreed with them.</li>"
+        f"<li>Then ask {contact(cfg)} for a slot, and pay them. {paying}</li>"
         "<li>Once they have switched it on, a <span class=\"btnlabel\">Claim a slot</span> "
         "button is waiting on your page.</li></ol></div>"
         "</section>"
@@ -256,7 +266,10 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
 
 # -- getting started ----------------------------------------------------------------
 
-def guide(cfg: Config, viewer: Optional[Viewer] = None) -> str:
+def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
+          price: Optional[pricing.Price] = None) -> str:
+    paying = (f"and pay them: {_cost(price)}, paid directly to them; this site takes no "
+              "card. They switch" if price is not None else "and pay them. They switch")
     body = (
         '<div class="dochead"><h1>Getting started</h1>'
         '<p class="lead">From buying a slot to your first Claude Code session. It takes a few '
@@ -268,7 +281,7 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "says you have no slots yet, which is expected.</p></li>"
         "<li><h3>Get a slot</h3>"
         f"<p>Ask {contact(cfg)} for a slot, tell them the Google address you signed in "
-        "with, and pay them. They switch your slot on for that account.</p></li>"
+        f"with, {paying} your slot on for that account.</p></li>"
         "<li><h3>Claim it</h3>"
         '<p>Press <span class="btnlabel">Claim a slot</span>. The card shows '
         '<span class="pill busy">Setting up</span> while the machine creates your Linux '
@@ -364,7 +377,10 @@ orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></ma
 </svg>"""
 
 
-def how_it_works(cfg: Config, viewer: Optional[Viewer] = None) -> str:
+def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
+                 price: Optional[pricing.Price] = None) -> str:
+    """Nothing here is about paying; `price` is taken so every page is called
+    the same way."""
     body = (
         '<div class="dochead"><h1>How it works</h1>'
         '<p class="lead">Your work runs in your slot, on our machine. Your conversations go '
@@ -421,7 +437,13 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None) -> str:
 
 # -- terms ------------------------------------------------------------------------------
 
-def terms(cfg: Config, viewer: Optional[Viewer] = None) -> str:
+def terms(cfg: Config, viewer: Optional[Viewer] = None, *,
+          price: Optional[pricing.Price] = None) -> str:
+    paying = (f"A slot costs {_cost(price)}, paid directly to the operator, who switches your "
+              "slot on when you pay; this site takes no card and no payment."
+              if price is not None else
+              "Price and payment are agreed directly with the operator, who switches your slot "
+              "on when you pay.")
     body = (
         '<div class="dochead"><h1>Terms</h1>'
         f'<p class="sub">Last updated {escape(DOCS_UPDATED)}</p></div>'
@@ -434,8 +456,7 @@ def terms(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "following Anthropic&#x27;s terms and usage policy, as you would on your own "
         "computer. Do not share your slot, or your sign-in, with anybody else.</p></div>"
         '<div class="card"><h2>Paying</h2>'
-        "<p>Price and payment are agreed directly with the operator, who switches your slot "
-        "on when you pay. If a payment lapses, the operator may take a slot back, and taking "
+        f"<p>{paying} If a payment lapses, the operator may take a slot back, and taking "
         "a slot back deletes everything in it.</p></div>"
         '<div class="card"><h2>Your files</h2>'
         "<p>Slots are <strong>not backed up</strong>. Giving a slot back, or having it taken "

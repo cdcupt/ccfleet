@@ -742,6 +742,7 @@ claude
       <tr><td>server</td><td><code>ccfleetd slot add|list|release|remove|rename|capacity</code></td><td>A shared machine's one slot: declare it, see who holds it, take it back (a wipe), rename it. Capacity is 0 or 1</td></tr>
       <tr><td>server</td><td><code>ccfleetd account list|quota|role|handle</code></td><td>People who signed in with Google: their allowance, operator or not, and the name their slots take</td></tr>
       <tr><td>server</td><td><code>ccfleetd payment add|list|void</code></td><td>A record of who paid through when; it enforces nothing</td></tr>
+      <tr><td>server</td><td><code>ccfleetd price show|set|clear</code></td><td>What the public pages say a slot costs for a month; shown, never charged</td></tr>
       <tr><td>server</td><td><code>ccfleetd user add|list|passwd|remove</code></td><td>Console logins with a password, for owners and operators</td></tr>
       <tr><td>server</td><td><code>ccfleetd check</code></td><td>Evaluate every node once and print transitions</td></tr>
       <tr><td>server</td><td><code>ccfleetd alert-test</code></td><td>Send a test notification</td></tr>
@@ -816,6 +817,11 @@ claude
         <li>They claim a slot, sign in to Claude with their own account, and use it from
         claude.ai/code or the Claude app.</li>
       </ol>
+      <p>The price of a slot for a month is yours to set, in the console's Price card or with
+      <code>ccfleetd price set 20 USD</code>, and the public pages show it. It is shown, never
+      charged: people still pay you directly, the allowance is still the only thing that lets
+      somebody claim a slot, and the payments you record stay a record. With no price set, the
+      pages say price and payment are agreed with you.</p>
       <p>Send them <code>/docs</code>. It says what ccfleet is, what they must bring (their own
       Pro, Max, Team or Enterprise plan; API keys do not work) and how to start, and links
       <code>/docs/guide</code>, <code>/docs/how-it-works</code>, <code>/docs/terms</code> and

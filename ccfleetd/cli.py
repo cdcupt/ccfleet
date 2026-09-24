@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from typing import Optional
 
-from . import __version__, names, payments
+from . import __version__, names, payments, pricing
 from . import slots as slotstates
 from .api import Context, serve
 from .config import Config, ConfigError
@@ -128,6 +128,15 @@ def _parser() -> argparse.ArgumentParser:
     pay_void = pay.add_parser(
         "void", help="mark a payment written down in error; it stays in the record")
     pay_void.add_argument("payment_id", type=int)
+
+    price = sub.add_parser(
+        "price", help="what the public pages say a slot costs; shown, never charged"
+    ).add_subparsers(dest="price_command", required=True)
+    price.add_parser("show", help="the price the public pages show")
+    price_set = price.add_parser("set", help="set the price of a slot for a month")
+    price_set.add_argument("amount", help="e.g. 20 or 20.50")
+    price_set.add_argument("currency", help="one of " + ", ".join(pricing.CURRENCIES))
+    price.add_parser("clear", help="show no price: the pages say it is agreed with you")
 
     user = sub.add_parser("user", help="manage console accounts").add_subparsers(
         dest="user_command", required=True)
@@ -264,6 +273,25 @@ def _payment_command(args: argparse.Namespace, store: Store) -> int:
         print(f"{r['id']:<6} {payments.today(r['recorded_at']).isoformat():<11} "
               f"{emails.get(r['account_id'], r['account_id']):<32} {amount:<14} "
               f"{r['paid_through']:<11} {r['note']}{voided}")
+    return EXIT_OK
+
+
+def _price_command(args: argparse.Namespace, store: Store) -> int:
+    if args.price_command == "set":
+        price = store.set_price(args.amount, args.currency, by="server command line",
+                                now=time.time())
+        print(f"the public pages now say: {pricing.per_slot(price)}")
+        return EXIT_OK
+    if args.price_command == "clear":
+        store.clear_price()
+        print("no price shown: the pages say price and payment are agreed with you")
+        return EXIT_OK
+    current = store.get_price()
+    if current is None:
+        print("no price set: the pages say price and payment are agreed with you")
+        return EXIT_OK
+    print(f"{pricing.per_slot(current['price'])}, set by {current['updated_by']} on "
+          f"{payments.today(current['updated_at']).isoformat()}")
     return EXIT_OK
 
 
@@ -457,6 +485,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return _account_command(args, store, cfg)
             if args.command == "payment":
                 return _payment_command(args, store)
+            if args.command == "price":
+                return _price_command(args, store)
             monitor = Monitor(store, cfg, build_notifier(cfg))
             if args.command == "check":
                 for event in monitor.check_all():

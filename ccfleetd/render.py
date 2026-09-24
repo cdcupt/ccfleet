@@ -250,6 +250,12 @@ form.field{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin:
 form.field input[type=text],form.field input[type=email]{width:auto;padding:6px 10px;
 font-size:13px;min-height:32px}
 form.field input.count{width:4.8em}
+form.field input.price{width:7em}
+/* The price card's currency: the same box as the fields beside it. */
+form.field select{font:inherit;font-size:13px;padding:5px 8px;min-height:32px;
+border-radius:10px;border:1px solid var(--rule);background:var(--inset);color:var(--ink)}
+form.field select:focus{border-color:var(--acc);outline:3px solid var(--acc-soft);
+outline-offset:0}
 form.field input[type=date]{font-size:13px;padding:5px 8px;min-height:32px;width:auto}
 /* An account's payments, folded under its row. */
 details.ledger{flex-basis:100%;font-size:13px}
