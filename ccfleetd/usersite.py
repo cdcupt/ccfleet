@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, oauth, payments, resets
+from . import claude_versions, names, oauth, payments, plans, resets
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -824,7 +824,7 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
     if creds.get("logged_in") is False:
         return "<p>Not signed in to Claude right now. Sign in below to use your slot.</p>"
     remote = (report.get("remote_control") or {}).get("state")
-    plan = creds.get("subscription_type")
+    plan = plans.label(creds.get("subscription_type"), creds.get("plan"))
     who = f" as {escape(str(creds['email']))}" if creds.get("email") else ""
     left = _sign_in_left(creds.get("refresh_expires_at"), now)
     lines = [f'<p class="signed">Signed in{who}'

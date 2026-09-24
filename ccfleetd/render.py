@@ -10,7 +10,7 @@ from shlex import quote as shq
 from typing import Any, Optional
 
 from . import names as slotnames
-from . import resets
+from . import plans, resets
 from . import slots as slotstates
 from .config import Config
 from .desired import is_channel, is_login_url
@@ -533,6 +533,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "credentials_mtime": creds.get("mtime"),
             "token_expires_at": creds.get("expires_at"),
             "subscription_type": creds.get("subscription_type"),
+            "plan": creds.get("plan"),
             "remote_control": (facts.get("remote_control") or {}).get("state"),
             "rc_expected": node["rc_expected"],
             # What the node did about its pin last time it was asked. A silent
@@ -623,11 +624,12 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         cred_text = ("no slot yet" if count == 0 else
                      f"{count} slots, see Slots" if count > 1 else
                      "not signed in" if creds is False else cred_text)
-    if row["subscription_type"]:
+    plan = plans.label(row["subscription_type"], row.get("plan"))
+    if plan:
         # The plan is a label on the login, not a qualifier on the time. Trailing
         # it read as "refreshed 10m ago (max)", where (max) looks like it modifies
         # the age; leading it reads as what it is.
-        cred_text = f"{row['subscription_type']} \u00b7 {cred_text}"
+        cred_text = f"{plan} \u00b7 {cred_text}"
     rc = row["remote_control"] or "-"
     # Nothing is expected of a node that is switched off, so saying so is noise;
     # nor of a shared machine, whose Remote Control is its slot's to run.

@@ -157,6 +157,9 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "logged_in": _bool_or_none(section.get("logged_in")),
         "auth_method": _str(section.get("auth_method"), 40),
         "subscription_type": _str(section.get("subscription_type"), 40),
+        # The account's rate-limit tier, which tells Max 5x from Max 20x (see
+        # plans.label). The agent always sent it; the server dropped it.
+        "plan": _str(section.get("plan"), 40),
         "expires_at": _num(section.get("expires_at")),
         "mtime": _num(section.get("mtime")),
         "email": _email(section.get("email")),

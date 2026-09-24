@@ -168,7 +168,7 @@ def test_the_page_names_the_one_account_and_how_long_it_lasts(site):
     in_use(store, erik, email=ADDRESS, subscription_type="max",
            refresh_expires_at=time.time() + 28 * DAY + 60)
     page = erik.page()
-    assert f"Signed in as {ADDRESS} · max plan · sign-in good for 28 more days." in page
+    assert f"Signed in as {ADDRESS} · Max plan · sign-in good for 28 more days." in page
 
 
 @pytest.mark.parametrize("left, said", [(2 * DAY + 60, "good for 2 more days"),

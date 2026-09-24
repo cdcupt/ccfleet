@@ -89,7 +89,7 @@ def test_an_owners_node_is_their_slot_on_their_page(site):  # noqa: F811
     body = whole_card(page, "erik-1")
     assert "<h2>erik-1 " in body and "In use" in body
     assert "your own machine" in body
-    assert "max plan" in body and "Remote Control is on" in body
+    assert "Max plan" in body and "Remote Control is on" in body
     assert "This week" in body, "the account's usage, from the node's own report"
     assert "Sign in again" in body and "Get a device token" in body
 

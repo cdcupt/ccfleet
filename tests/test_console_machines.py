@@ -169,7 +169,7 @@ def test_a_shared_machines_row_says_what_its_slot_runs(console):
     store.set_rc_expected("erik-2", True)
     row = row_of(call("GET", "/admin").body, "erik-2")
     assert "2.1.281" in row and "9.9.9" not in row
-    assert "max · refreshed 2.0h ago" in row and "unknown" not in row
+    assert "Max · refreshed 2.0h ago" in row and "unknown" not in row
     assert "token in 5.0h" in row
     # Remote Control is the slot's; nothing is expected of the machine itself.
     assert ">active<" in row and "(expected)" not in row
@@ -180,7 +180,7 @@ def test_an_own_node_still_reads_its_own_facts(console):
     fleet(store, time.time())
     store.set_rc_expected("erik-1", True)
     row = row_of(call("GET", "/admin").body, "erik-1")
-    assert "2.1.281" in row and "max · refreshed 30m ago" in row
+    assert "2.1.281" in row and "Max · refreshed 30m ago" in row
     assert "active (expected)" in row
 
 

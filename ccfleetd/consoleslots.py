@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, payments, pricing
+from . import claude_versions, names, payments, plans, pricing
 from . import slots as slotstates
 from .desired import is_channel, machine_hostname
 from .render import _age
@@ -76,8 +76,37 @@ def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") ->
 def section(store: Store, csrf: str, now: float) -> str:
     """The slots card, the accounts card and the price, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
-    return (_slots_card(store, accounts, csrf, now) + _accounts_card(store, accounts, csrf, now)
+    return (_slots_card(store, accounts, csrf, now)
+            + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store))
             + _price_card(store, csrf, now))
+
+
+def _report_of(slot: Mapping[str, Any], payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """What a slot last said about itself: an own node at the top of its
+    heartbeat, a machine's slot in its entry under its Linux user."""
+    if slot.get("kind") == slotstates.OWNER_SLOT:
+        return payload
+    return next((r for r in payload.get("slots") or []
+                 if isinstance(r, Mapping) and r.get("unix_user") == slot.get("unix_user")), {})
+
+
+def _plan_of(report: Mapping[str, Any]) -> Optional[str]:
+    """The Claude plan of the account signed in on a slot, as it is sold."""
+    creds = report.get("credentials") or {}
+    return plans.label(creds.get("subscription_type"), creds.get("plan"))
+
+
+def _plans_by_holder(store: Store) -> dict[Optional[str], list[str]]:
+    """Each person's Claude plans, one for each slot they hold that says one.
+    A free slot has no sign-in on it, so it says none."""
+    latest = store.latest_heartbeats()
+    found: dict[Optional[str], list[str]] = {}
+    for slot in store.list_slots():
+        payload = (latest.get(slot["node_id"]) or {}).get("payload") or {}
+        plan = _plan_of(_report_of(slot, payload))
+        if plan:
+            found.setdefault(slot.get("held_by"), []).append(plan)
+    return {who: sorted(said) for who, said in found.items()}
 
 
 def _price_card(store: Store, csrf: str, now: float) -> str:
@@ -193,7 +222,7 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
     sub = _on_machine(slot, node)
     keeper = _kept_for(node, look.accounts)
     cells = _cells(_name(shown, sub + ([keeper] if keeper else [])),
-                   _holder(slot, look.accounts), _state_pill(slot),
+                   _holder(slot, look.accounts, report), _state_pill(slot),
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     crowded = len(machine.rows) > slotstates.MAX_SLOTS_PER_MACHINE
@@ -214,7 +243,7 @@ def _own_row(slot: Mapping[str, Any], machine: _Machine,
     pills, notes = _problems(slot, report, look.alerts, said, look.now)
     shown = names.display(slot)
     # Always somebody's, so said by its name alone, like a held slot.
-    cells = _cells(_name(shown, ["own machine"]), _holder(slot, look.accounts),
+    cells = _cells(_name(shown, ["own machine"]), _holder(slot, look.accounts, report),
                    _state_pill(slot, report),
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
@@ -275,10 +304,14 @@ def _name(shown: str, sub: list[str]) -> str:
     return f'<span class="row-name">{escape(shown)}</span>{under}'
 
 
-def _holder(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]) -> str:
+def _holder(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
+            report: Mapping[str, Any]) -> str:
+    """Who holds it, and under them the plan of the Claude account on it."""
     holder = accounts.get(slot.get("held_by") or "")
     if holder:
-        return escape(str(holder["email"]))
+        plan = _plan_of(report)
+        under = f'<span class="sub">{escape(plan)}</span>' if plan else ""
+        return escape(str(holder["email"])) + under
     return '<span class="muted">free</span>' if slot["state"] == slotstates.FREE else "&mdash;"
 
 
@@ -546,7 +579,7 @@ def _kept_for(node: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]
 
 
 def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
-                   now: float) -> str:
+                   now: float, plans_held: Mapping[Optional[str], list[str]]) -> str:
     ledger: dict[str, list[dict[str, Any]]] = {}
     for row in store.list_payments():
         ledger.setdefault(row["account_id"], []).append(row)
@@ -560,7 +593,8 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
                 if account.get("last_seen_at") else "never back")
         lines.append(
             f'<div class="row-line"><div class="row-name">{escape(str(account["email"]))}'
-            f'<span class="muted">{role} · holds {held} · {seen}'
+            f'<span class="muted">{role} · holds {held}{_plans_said(plans_held, account)}'
+            f' · {seen}'
             f"{_standing(paid, bool(held or quota), now)}</span></div>"
             '<div class="actions">'
             + _form(f"/actions/account/{escape(account['id'])}/allowance", csrf,
@@ -575,6 +609,13 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
             "more stops. Payments are a record for you and nothing more: a lapsed one takes no "
             "slot back and stops no claim. Operators are made on the server: "
             "<code>ccfleetd account role &lt;email&gt; admin</code>.</p></div>")
+
+
+def _plans_said(plans_held: Mapping[Optional[str], list[str]],
+                account: Mapping[str, Any]) -> str:
+    """Their slots' Claude plans, beside how many they hold; escaped."""
+    said = plans_held.get(account["id"]) or []
+    return f" ({escape(', '.join(said))})" if said else ""
 
 
 def _standing(paid: list[Mapping[str, Any]], counts: bool, now: float) -> str:

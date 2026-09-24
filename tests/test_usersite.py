@@ -384,7 +384,7 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
                                                 "tokens": [0] * 160 + [100] * 8}}}])
     assert store.get_slot(slot["id"])["state"] == slots.ACTIVE
     shown = erik.page()
-    assert "In use" in shown and "max plan" in shown
+    assert "In use" in shown and "Max plan" in shown
     assert 'href="https://claude.ai/code"' in shown
     assert "900</b> tokens run on this slot itself" in shown
     # The windows are the account's, used anywhere; said under them, so a week

@@ -190,7 +190,8 @@ def _demo() -> str:
         '<div class="demo-head"><b>alice-1</b><span class="pill ok">In use</span></div>'
         '<div class="demo-body">'
         '<p class="demo-meta">machine last heard 12s ago</p>'
-        '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; max plan.</p>'
+        '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
+        'Max 20x plan.</p>'
         '<p class="rc on">Remote Control is on: pick alice-1 in claude.ai/code.</p>'
         '<div class="demo-usage">'
         + _meter(34, "5-hour session", "at 11:40pm") + _meter(61, "This week", "on Friday")
