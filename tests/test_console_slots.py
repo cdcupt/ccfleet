@@ -960,6 +960,80 @@ def test_an_update_the_server_saw_fail_is_a_pill_with_its_reason(console):
     assert "Claude Code update failed: npm &lt;b&gt;exited&lt;/b&gt; 1" in row
 
 
+def test_a_failed_update_is_said_once_in_the_machines_own_words(console):
+    store, call = console
+    slot = held_slot(store, pin="stable")
+    asked = time.time()
+    store.request_claude_update(slot["id"], asked, held_by=slot["held_by"])
+    store.record_claude_update(slot["id"], asked, "failed", "2.1.281", "timed out", time.time())
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.267"},
+                         "upgrade": {"to": "2.1.281", "ok": False, "error": "disk full"}})
+    row = on_the_row(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    assert row.count(">update failed<") == 1
+    assert "Claude Code update to 2.1.281 failed: disk full" in row and "timed out" not in row
+
+
+def test_the_row_says_where_a_slots_claude_code_is_going(console):
+    store, call = console
+    slot = held_slot(store, pin="stable")
+    now = time.time()
+    store.set_channel_versions({"checked_at": now,
+                                "stable": {"version": "2.1.273", "fetched_at": now},
+                                "latest": {"version": "2.1.281", "fetched_at": now}}, now=now)
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.267"}})
+
+    def row():
+        return on_the_row(row_of(slots_card(call("GET", "/admin").body), "m1"))
+
+    assert "update available" in row()
+    store.request_claude_update(slot["id"], now, held_by=slot["held_by"])
+    assert '<span class="pill busy">updating to 2.1.281</span>' in row()
+    assert "update available" not in row()
+    store.record_claude_update(slot["id"], now, "done", "2.1.281", "", time.time())
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.281"},
+                         "upgrade": {"restart": "waiting"}})
+    assert ">restart pending</span>" in row()
+
+
+def test_an_own_machine_is_in_use_only_while_signed_in(console):
+    """Its slot never goes through the lifecycle: as on its owner's page, it
+    is in use by the node's own word."""
+    store, call = console
+    own_machine(store)
+
+    def row():
+        return on_the_row(row_of(slots_card(call("GET", "/admin").body), "erik-1"))
+
+    assert ">Not signed in<" in row()
+    store.insert_heartbeat("erik-1", time.time(), {"node_id": "erik-1",
+                                                   "credentials": {"logged_in": True}})
+    assert ">In use<" in row()
+
+
+def test_an_own_machine_is_never_called_hostname_pending(console):
+    """Its owner named it; no slot's name is coming for it."""
+    store, call = console
+    own_machine(store)
+    store.insert_heartbeat("erik-1", time.time(), {"node_id": "erik-1", "hostname": "Eriks-Mac",
+                                                   "reboot_required": True})
+    row = on_the_row(row_of(slots_card(call("GET", "/admin").body), "erik-1"))
+    assert "hostname pending" not in row and "reboot needed" in row
+
+
+def test_a_machine_with_no_slot_yet_is_only_offered_clearing_its_keeper(console):
+    """Keeping it waits for a slot to keep; one kept from before can still
+    be opened again."""
+    store, call = console
+    shared(store, users=(), capacity=2)                       # none yet, room from before
+    ana = holder(store)
+    row = row_of(slots_card(call("GET", "/admin").body), "m1")
+    assert "/reserve" not in row and "/unreserve" not in row
+    store.reserve_machine("m1", ana["id"])
+    row = row_of(slots_card(call("GET", "/admin").body), "m1")
+    assert 'action="/actions/machine/m1/unreserve"' in under_manage(row)
+    assert "kept for ana@example.com" in on_the_row(row)
+
+
 def test_names_and_addresses_are_text_in_every_cell(console):
     store, call = console
     shared(store, users=("slot01",))
@@ -969,9 +1043,13 @@ def test_names_and_addresses_are_text_in_every_cell(console):
     with store._lock:
         store._conn.execute("UPDATE slots SET name = '<i>ana</i>' WHERE id = 'm1-01'")
         store._conn.commit()
+    machine_said(store, {"unix_user": "slot01", "claude": {"version": "<s>1</s>"}})
+    store.open_alert("m1", "slot_<u>odd</u>:slot01", "warn", "odd", time.time())
     card = slots_card(call("GET", "/admin").body)
     row = row_of(card, "m1")
-    assert "<b>x</b>" not in card and "<i>ana</i>" not in card
+    for raw in ("<b>x</b>", "<i>ana</i>", "<s>1</s>", "<u>odd</u>"):
+        assert raw not in card
     assert row.count("o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;@example.com") == 2   # holds, kept
     assert 'class="row-name">&lt;i&gt;ana&lt;/i&gt;<' in row
     assert '<span class="vh"> &lt;i&gt;ana&lt;/i&gt;</span>' in row
+    assert "&lt;s&gt;1&lt;/s&gt;" in row and "slot &lt;u&gt;odd&lt;/u&gt;" in row
