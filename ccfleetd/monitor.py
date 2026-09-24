@@ -59,13 +59,15 @@ class Monitor:
         # One account, one node is a fleet-wide rule, so each node is judged
         # against where every account is live: its own alert opens as soon as
         # it reports, and the other place's at that place's next check.
+        every_slot = self._store.list_slots()
         places = rules.account_places(self._store.list_nodes(), self._store.latest_heartbeats(),
-                                      self._store.list_slots(), now, self._cfg)
+                                      every_slot, now, self._cfg)
         # A machine's own slots: an owner slot is a record, with nothing on the
         # machine's side to judge.
         findings = rules.evaluate(node, latest, previous, now, self._cfg,
                                   self._store.list_slots(node_id=node["id"],
-                                                         kind=slotstates.MACHINE_SLOT), places)
+                                                         kind=slotstates.MACHINE_SLOT), places,
+                                  rules.place_names(every_slot))
         return self._reconcile(node, findings, now)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:
