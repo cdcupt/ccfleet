@@ -257,8 +257,8 @@ def _cells(name: str, holder: str, state: str, claude: str, held: str,
 
 
 def _name(shown: str, sub: list[str]) -> str:
-    """The name its holder and claude.ai know it by; under it, small, where it
-    is and who it is kept for. Everything given here is already escaped."""
+    """The name its holder and claude.ai know it by, escaped here; under it,
+    small, where it is and who it is kept for, which come escaped."""
     under = f'<span class="sub">{" &middot; ".join(sub)}</span>' if sub else ""
     return f'<span class="row-name">{escape(shown)}</span>{under}'
 

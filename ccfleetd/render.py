@@ -312,7 +312,17 @@ text-transform:uppercase;color:var(--muted);font-weight:650}
 .mpart form.field{display:flex}
 .mpart form.field+form.field{margin-top:8px}
 .mpart button.danger{color:var(--bad);border-color:var(--bad-line)}
-@media (max-width:820px){
+/* Narrower, the attention pills leave their column for a line under the row,
+   so an address keeps room enough not to break mid-word. */
+@media (max-width:1100px){
+.slothead,.slotline{grid-template-columns:minmax(0,1.35fr) minmax(0,1.25fr) 150px
+minmax(0,1.35fr) 52px}
+.slothead span:last-child{display:none}
+.c-flags{grid-column:1/-1}
+.c-flags:empty{display:none}
+.c-empty{grid-column:2/-1}
+}
+@media (max-width:960px){
 .slothead{display:none}
 .slotrow{padding:12px 14px;margin:10px 0;border:1px solid var(--rule);border-radius:12px}
 .slotline{padding-right:0;gap:6px 10px;grid-template-columns:minmax(0,1fr) auto}
