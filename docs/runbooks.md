@@ -67,7 +67,11 @@ spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.
    beside): `git clone https://github.com/cdcupt/ccfleet.git && ccfleet/node/bootstrap.sh <your-login> "<your public key>"`.
    It gives you a login with sudo, key-only SSH, a firewall and unattended
    security upgrades, and it stops, leaving SSH as it was, if sshd would not
-   end up with keys on and passwords off.
+   end up with keys on and passwords off. Then name it and put its clock on
+   UTC: `hostnamectl set-hostname <machine> && timedatectl set-timezone Etc/UTC`.
+   Claude Code can tell Anthropic the machine's time zone; UTC says nothing
+   about where the slot's holder is, and the pages show times in each viewer's
+   own zone.
 4. *root*, only below 4 GiB of RAM:
    `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`,
    then `echo '/swapfile none swap sw 0 0' >> /etc/fstab` and
@@ -189,6 +193,17 @@ rotate automatically (`CCFLEET_BACKUP_KEEP`); `~/.claude/debug` and
 valid login; if it complains about eligibility, do the re-login runbook. The
 very first start must be interactive to accept the one-time prompt.
 
+On a shared machine's slot, as root, with `u` its Linux user:
+`sudo -u $u XDG_RUNTIME_DIR=/run/user/$(id -u $u) systemctl --user show -p ActiveState,SubState claude-remote-control.service`.
+`activating` with `auto-restart` is a crash loop, not a start in progress. While
+it is failing, run it once in the foreground to read why:
+`sudo -iu $u script -qc 'claude remote-control' /dev/null`, then Ctrl-C. If it
+says *Remote Control requires feature-flag evaluation, which is disabled because
+DISABLE_TELEMETRY is set*, take `DISABLE_TELEMETRY` and
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (which includes it) out of the `env`
+block of the slot's `~/.claude/settings.json` and restart the unit. Never set
+either on a slot.
+
 ## `slot_wipe_failed:<user>`
 
 A slot was given back, or taken back, and removing its Linux user failed. It
@@ -249,24 +264,51 @@ with nothing after the colon; a slot carries its Linux user.
    person signed a slot in with the account already on their own node.
 2. Sign it out of the other place. On an owner's node, the owner runs
    `claude auth logout` there, then signs that node in to its own account. A
-   slot keeps the account it was first signed in with, so a slot on the wrong
-   account is given back (a wipe) and a new one claimed with the right account.
+   slot on the wrong account moves to another of its holder's accounts with
+   *Change account* on their page, files kept, at most once a week; or it is
+   given back (a wipe) and a new one claimed with the right account.
 3. The alert closes on the next report from the place that stopped reporting
    the account. A node gone quiet counts as nowhere: it is left out rather than
    counted twice.
 
 ## `account_changed:<user>`
 
-A held slot is signed in to another Claude account than the one it was first
-signed in with. Nothing in the product does that: *Sign in again* keeps only
-the slot's own account. So its holder signed in by hand, or put another
-account's credential in place. The slot is their own Linux account, so ccfleet
-detects this; it cannot prevent it.
+A held slot is signed in to another Claude account than the one it keeps.
+Nothing in the product does that: *Sign in again* keeps only the slot's own
+account, and *Change account* moves the binding along with the sign-in. So its
+holder signed in by hand, or put another account's credential in place. The
+slot is their own Linux account, so ccfleet detects this; it cannot prevent it.
 
-1. Ask the holder to sign the slot's own account in again from their page. The
-   sign-in is kept only if it is that account, and it replaces the wrong one.
+1. Ask the holder to sign the slot's own account in again from their page, or,
+   if the other account is the one they mean to use, to move the slot to it
+   with *Change account*. Either is kept only once it has worked, and replaces
+   the wrong sign-in.
 2. If they will not, it is the terms' rule of one account per slot: take the
    slot back in the console, which wipes it.
+
+## A holder wants their slot on another Claude account
+
+It is theirs to do: *Change account* on their page, on a slot in use. The new
+account signs in to a scratch directory while the old one keeps working, and
+replaces it only once that sign-in has finished; the files stay. Remote Control
+restarts on the new account, which ends any session open in it.
+
+- **Once a week.** The next change can come seven days after one that moved the
+  account; signing in with the account the slot already has does not count.
+  Their slot card says when, in their own time zone. There is no override: if
+  it cannot wait, they give the slot back (a wipe) and claim another, which
+  starts with no week behind it.
+- **What you see.** The Slots card says *changed Claude account <age> ago* for
+  that week; it never says which account.
+- **If it says it stopped halfway.** *it stopped halfway and could not be
+  undone; change account again to finish it* means a step failed and so did
+  putting it back. Changing account again, to the same new account, finishes
+  it; the week has not started.
+- **An owner's own node** has no *Change account*: its owner signs it in to
+  whichever account on the node itself, and `account_elsewhere` still applies.
+- **Agents and server ship together.** An agent from before *Change account*
+  hears it as a plain sign-in and refuses the other account, so nothing changes
+  on that slot until its agent is current.
 
 ## Rebuild a node
 

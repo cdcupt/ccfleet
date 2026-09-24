@@ -139,12 +139,16 @@ grants each person an allowance of slots, and they claim one, sign it in to
 their own Claude account and give it back from `/account`. One Claude account
 per slot: somebody with two accounts holds two slots. Their page shows which
 account each slot is signed in to, so the slot reports that account's email
-address; the console never shows it. A slot keeps the account it was first
-signed in with: signing in again happens in a scratch directory and is kept only
-if it is that same account. That keeps a sign-in with the wrong account from
+address; the console never shows it. A slot keeps its account: signing in
+again happens in a scratch directory and is kept only if it is that same
+account. That keeps a sign-in with the wrong account from
 landing by accident; it is not a wall against the holder, whose home the slot
 is and who can change its files. So a slot found signed in to another account
-some other way raises `account_changed` once Claude Code's profile says so. And an account signed in on two live places at once (two
+some other way raises `account_changed` once Claude Code's profile says so.
+The way to move a slot to another Claude account is *Change account* on its
+holder's page, at most once a week: the new account signs in to the scratch
+directory while the old one stays, and replaces it only once that has worked,
+files kept, so the slot never holds two. And an account signed in on two live places at once (two
 slots, or a slot and a node) raises `account_elsewhere` on both. The holder's
 card says so either way. An owner's own node can count as a slot they hold,
 `ccfleetd node hold <node> <email>`, so everything a person uses is one list
@@ -170,6 +174,8 @@ ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01     # its one slot,
 # which turns the box into one owner's node, and machine-setup.sh refuses to run
 # beside that node's agent.
 git clone https://github.com/cdcupt/ccfleet.git && sudo ./ccfleet/node/bootstrap.sh ops "ssh-ed25519 AAAA... you"
+# its name, and a clock that says nothing about where its holder is
+sudo hostnamectl set-hostname pool-1 && sudo timedatectl set-timezone Etc/UTC
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
   | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token <64-hex>
 
@@ -193,6 +199,8 @@ The rules the rest depends on:
 - **Payments are a record, not a gate.** The console shows who is paid through
   when, and marks a lapse in red while that person still holds or may claim
   slots. A lapse takes no slot and stops no claim; what to do about it is yours.
+  The form that records one suggests the next paid-through day: a month on from
+  what they have paid for, or from today.
 - **The console is at `/admin`; the bare address is the product's.** It is the
   front page, the same page for everybody (and at `/docs` too): what ccfleet is
   and how to start. Only its buttons follow who is looking: sign in, or your
@@ -200,7 +208,14 @@ The rules the rest depends on:
   `CCFLEET_ADMIN_HOST=admin.fleet.example.com` moves the console to its own
   hostname instead, with its own Google redirect URI and its own sessions;
   every other hostname is then only the product, and the admin host's bare
-  address goes to the console.
+  address goes to the console. The mark at the top left of every page, the
+  console's included, goes to the front page.
+- **A slot tells Anthropic about the machine, not the person.** Machines keep
+  their clocks on UTC, and the pages show times in the viewer's own zone.
+  Slots start with Claude Code's error reports, bug reports and feedback
+  surveys off; its usage telemetry stays on, because Remote Control will not
+  start without it. Nothing rewrites what Claude Code reports about where it
+  runs.
 
 What to send the people who buy slots: the product site serves public pages
 for them — the bare address (what it is, what they need, how to buy; also at
