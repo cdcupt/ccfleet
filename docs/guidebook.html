@@ -120,9 +120,9 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.6.0 · 2026-09-23 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.7.0 · 2026-09-23 · live</p>
   <h1>ccfleet Guidebook</h1>
-  <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
+  <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
     <span>Repo <b>github.com/cdcupt/ccfleet</b></span>
     <span>Runtime <b>Python 3.9+, no dependencies</b></span>
@@ -534,9 +534,10 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 <section id="laptop">
   <h2><span class="n">05</span>One account per computer</h2>
   <p>A computer uses one Claude account, connected with that account's token through <code>ccfleet-connect</code>; several accounts means several slots, one for each.</p>
+  <p>The same account can be on as many of your own computers as you like, each with the same token. What a computer never does is keep a second account on the side to switch to: connecting again with another account's token <strong>replaces</strong> the one it had, and says so. The <code>--add</code>, <code>--use</code> and <code>--list</code> of an earlier version are refused. On a computer that saved several tokens under names, the first run keeps the one in use and removes the rest, telling you how many went so you can revoke them in your Claude account. <a href="#daily">Section 00</a> has the setup.</p>
 </section>
 
-<section id="daily">
+<section id="use">
   <h2><span class="n">06</span>Daily use</h2>
   <h3 id="accounts">Who can sign in</h3>
   <p>The console takes two kinds of credential.</p>
@@ -596,7 +597,7 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 
   <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages. They are scoped the same way the page is, so an owner account gets only its own nodes.</p>
 
-  <h3>What the alerts mean and who acts</h3>
+  <h3 id="alerts">What the alerts mean and who acts</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Alert</th><th>Level</th><th>Meaning</th><th>Who acts</th></tr></thead>
     <tbody>
@@ -610,9 +611,15 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
       <tr><td><code>quota_high_session</code><br><code>quota_high_week</code></td><td><span class="pill warn">warn</span> / <span class="pill bad">critical</span></td><td>75% / 90% of that Claude usage window used. The two windows alert separately, so a fresh session cannot hide a full week. A reading older than two hours is ignored rather than reported as current</td><td>owner &mdash; slow down, or wait for the reset the message names</td></tr>
       <tr><td><code>egress_changed</code></td><td><span class="pill warn">warn</span></td><td>Public IP differs from the previous heartbeat</td><td>operator checks the provider</td></tr>
       <tr><td><code>remote_control_down</code></td><td><span class="pill warn">warn</span></td><td>Expected service not active. Turn the expectation on or off any time with <code>ccfleetd node rc-expected &lt;id&gt; on|off</code></td><td>owner restarts it</td></tr>
+      <tr><td><code>slot_wipe_failed:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>Removing a given-back slot's Linux user failed. The slot stays out of the pool, and the machine tries again by itself</td><td>operator, if the retry keeps failing</td></tr>
+      <tr><td><code>slot_occupied:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A free slot's Linux user exists on the machine, so the slot is not handed out</td><td>operator: look before removing it</td></tr>
+      <tr><td><code>slot_missing:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot's Linux user is gone from the machine, and its files with it</td><td>operator takes it back; the person claims again</td></tr>
+      <tr><td><code>slot_provision_failed:&lt;user&gt;</code></td><td><span class="pill warn">warn</span></td><td>Setting up a claimed slot failed; the claim was given up and the slot is being wiped</td><td>the person claims again; operator if it repeats</td></tr>
+      <tr><td><code>account_elsewhere</code><br><code>account_elsewhere:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>One Claude account is signed in on two live places at once: two slots, or a slot and a node. Raised on each of them</td><td>sign it out of one of them</td></tr>
+      <tr><td><code>account_changed:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot is signed in to another Claude account than the one it was first signed in with</td><td>holder signs its own account in again, or gives the slot back</td></tr>
     </tbody>
   </table></div>
-  <p>An alert is sent once when it opens, once when it resolves, and again if its level changes. Between those, nothing repeats. Messages name the node and owner and, when <code>CCFLEET_PUBLIC_URL</code> is set, link to the dashboard.</p>
+  <p>An alert is sent once when it opens, once when it resolves, and again if its level changes. Between those, nothing repeats. Messages name the node and owner and, when <code>CCFLEET_PUBLIC_URL</code> is set, link to the dashboard. A shared machine's slot alerts carry the slot's Linux user after the colon, so two slots in trouble are two alerts; an owner's node has <code>account_elsewhere</code> with nothing after it. <code>docs/runbooks.md</code> has a short procedure for each.</p>
 
   <h3>Working on a node</h3>
   <ul>
@@ -731,6 +738,11 @@ claude
     <tbody>
       <tr><td>server</td><td><code>ccfleetd serve</code></td><td>Run the HTTP server and periodic checks</td></tr>
       <tr><td>server</td><td><code>ccfleetd node add|list|pin|rc-expected|rotate-token|enable|disable|remove</code></td><td>Node registry</td></tr>
+      <tr><td>server</td><td><code>ccfleetd node rename|reserve|hold</code></td><td>Give a node a new id with everything on it; keep a shared machine's free slot for one account; count an owner's own node as their slot</td></tr>
+      <tr><td>server</td><td><code>ccfleetd slot add|list|release|remove|rename|capacity</code></td><td>A shared machine's one slot: declare it, see who holds it, take it back (a wipe), rename it. Capacity is 0 or 1</td></tr>
+      <tr><td>server</td><td><code>ccfleetd account list|quota|role|handle</code></td><td>People who signed in with Google: their allowance, operator or not, and the name their slots take</td></tr>
+      <tr><td>server</td><td><code>ccfleetd payment add|list|void</code></td><td>A record of who paid through when; it enforces nothing</td></tr>
+      <tr><td>server</td><td><code>ccfleetd user add|list|passwd|remove</code></td><td>Console logins with a password, for owners and operators</td></tr>
       <tr><td>server</td><td><code>ccfleetd check</code></td><td>Evaluate every node once and print transitions</td></tr>
       <tr><td>server</td><td><code>ccfleetd alert-test</code></td><td>Send a test notification</td></tr>
       <tr><td>node</td><td><code>node/install.sh</code></td><td>Blank server to ready-for-sign-in, in one command</td></tr>
@@ -738,9 +750,12 @@ claude
       <tr><td>node</td><td><code>ccfleet-backup</code></td><td>Archive state without credentials</td></tr>
       <tr><td>node</td><td><code>ccfleet-upgrade-claude [version]</code></td><td>Staged upgrade via the official installer</td></tr>
       <tr><td>node</td><td><code>exitip</code></td><td>Print the public egress IP</td></tr>
-      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use an account on this device with no login. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--status</code>, <code>--remove</code></td></tr>
+      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use an account on this device with no login; one account per computer, and connecting again replaces it. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--status</code>, <code>--remove</code></td></tr>
     </tbody>
   </table></div>
+
+  <h3>Alerts</h3>
+  <p>Every rule the server raises, with its level and who acts, is the table in section 06: <a href="#alerts">What the alerts mean and who acts</a>.</p>
 
   <h3>Files and paths</h3>
   <div class="table-wrap"><table>
@@ -785,6 +800,10 @@ claude
   claimed, the slot is named after its holder (<code>alice-1</code>) and the machine takes that
   name. People sign in to the product with Google, you set how many slots each may hold, and
   they do everything else themselves at <code>/account</code>.</p>
+  <p>One Claude account, one slot: a slot is signed in to one account for as long as its holder
+  has it, and somebody with two accounts holds two slots. That account can still be used from
+  wherever its holder likes: claude.ai/code and the Claude app on any device, or a device token
+  on each of their own computers.</p>
   <div class="two">
     <div>
       <h3>Selling a slot</h3>
@@ -802,6 +821,9 @@ claude
       <code>/docs/guide</code>, <code>/docs/how-it-works</code>, <code>/docs/terms</code> and
       <code>/privacy</code>. Set <code>CCFLEET_CONTACT_EMAIL</code> to publish an address on
       them.</p>
+      <p>Every page shares one top bar. Signed in, a round avatar at the top right opens a menu
+      with the person's address, <em>Your slots</em> with how many they hold, <em>Console</em>
+      for operators, and <em>Sign out</em>; signed out, the same spot is <em>Sign in</em>.</p>
       <h3>Sizing</h3>
       <p>Measured on a real slot: signed in with Remote Control, about 420 MiB idle and 665 MiB
       in use, plus 225 MB of disk. The OS and the agent take about 400 MiB, so a 2 GiB
@@ -824,13 +846,26 @@ curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-se
 <span class="c"># back on the server: its slot free, and "on machine: no"</span>
 ccfleetd slot list --machine pool-1</code></pre>
       <p>Set the machine's hostname to its id first: it is the name the claude.ai machine
-      picker shows until somebody claims its slot, and the machine takes its holder's name
-      from then on. Machines are named by role, <code>&lt;you&gt;-N</code> for your own and
-      <code>pool-N</code> for the ones offered to customers, and a free slot by its machine;
-      <code>ccfleetd node rename</code> and <code>ccfleetd slot rename</code> move a running
-      fleet onto that, held slots included. <code>ccfleetd account handle</code> picks the name
-      a person's slots are called by, and <code>ccfleetd node hold</code> counts somebody's own
-      node as one of their slots.</p>
+      picker shows until somebody claims its slot. Machines are named by role,
+      <code>&lt;you&gt;-N</code> for your own and <code>pool-N</code> for the ones offered to
+      customers, and a free slot by its machine.</p>
+      <ul>
+        <li><strong>Names follow holders.</strong> A claimed slot is named
+        <code>&lt;handle&gt;-&lt;n&gt;</code>: the part of the address before the @, unless you
+        pick a handle with <code>ccfleetd account handle</code>. The machine takes that name as
+        its hostname before the slot is set up, and answers to its own id again once the wipe
+        that frees the slot completes.</li>
+        <li><strong>Renaming a running fleet</strong>: <code>ccfleetd node rename</code> and
+        <code>ccfleetd slot rename</code>, held slots included. The runbook <em>Rename a
+        machine</em> in <code>docs/runbooks.md</code> has the order.</li>
+        <li><strong>A machine kept for one account</strong>:
+        <code>ccfleetd node reserve &lt;machine&gt; &lt;email&gt;</code> hands its free slot to
+        that account and nobody else; <code>--none</code> opens it again. Customers never see a
+        reservation.</li>
+        <li><strong>Somebody's own node</strong> counts as one of their slots with
+        <code>ccfleetd node hold &lt;node&gt; &lt;email&gt;</code>: a record only, never handed
+        out or wiped.</li>
+      </ul>
       <h3>Keeping it current</h3>
       <ul>
         <li><strong>Claude Code in slots</strong> follows the machine's pin: <code>stable</code>
@@ -844,6 +879,33 @@ ccfleetd slot list --machine pool-1</code></pre>
         reboot says so in the console.</li>
       </ul>
     </div>
+  </div>
+  <h3>One account per slot, enforced</h3>
+  <p>The product keeps the rule without relying on anybody to remember it:</p>
+  <ul>
+    <li><strong>A slot binds to its first account.</strong> The first Claude account signed in
+    on a slot is the one it keeps. The binding lives in the slot's own state, so it goes with
+    the slot's wipe.</li>
+    <li><strong><em>Sign in again</em> only takes that account.</strong> It signs in to one
+    side, in a scratch directory, and keeps the result only if it is the same account. Any other
+    account is thrown away with <em>this slot stays with the Claude account it was first signed
+    in with; to use another account, hold another slot</em>, and the sign-in the slot already
+    had is left as it was.</li>
+    <li><strong>One account is in one place.</strong> Every node and slot reports a fingerprint
+    of its account: the first 16 hex characters of a SHA-256 of Claude's account id, never the
+    id itself, and never an owner node's address. One account live in two places raises
+    <code>account_elsewhere</code> on both; a held slot signed in to another account than its
+    own raises <code>account_changed</code>. The holder's card says so too, without naming the
+    other place.</li>
+  </ul>
+  <div class="note warn">
+    <p class="t">What it cannot stop</p>
+    <p>A slot is its holder's own Linux account, and they can change its files: sign in there by
+    hand, or put another account's credential in place. ccfleet notices with
+    <code>account_changed</code> &mdash; a hand sign-in at the next report, a swapped credential
+    once Claude Code next refreshes its profile &mdash; but cannot prevent it. That is detection,
+    not prevention. The terms say one account per slot, and taking the slot back is yours to
+    decide.</p>
   </div>
   <div class="note warn">
     <p class="t">Key login before hardening</p>

@@ -225,6 +225,45 @@ unless it repeats. Repeats mean the machine cannot make slots at all: read the
 error in the alert, then `journalctl -u ccfleet-machine --since -1h` on the
 machine. Disk space and a failed Claude Code install are the usual causes.
 
+## `quota_high_session` or `quota_high_week`
+
+The account's Claude usage window is 75% used (warn) or 90% (critical); the
+thresholds are `CCFLEET_QUOTA_WARN_PCT` and `CCFLEET_QUOTA_CRIT_PCT`. Nothing is
+broken and nothing on the node needs doing: the owner slows down or waits for
+the reset the message names. The windows belong to the Claude account, counted
+across every device it is used on, so the node is only where it was noticed. A
+reading older than two hours is ignored rather than alerted on.
+
+## `account_elsewhere` or `account_elsewhere:<user>`
+
+One Claude account is signed in on two live places at once: two slots, or a
+slot and a node. ccfleet keeps one account in one place, so the alert is raised
+on each place, and the message names the other. An owner's node carries it
+with nothing after the colon; a slot carries its Linux user.
+
+1. Find out whose account it is and which place should keep it. Usually one
+   person signed a slot in with the account already on their own node.
+2. Sign it out of the other place. On an owner's node, the owner runs
+   `claude auth logout` there, then signs that node in to its own account. A
+   slot keeps the account it was first signed in with, so a slot on the wrong
+   account is given back (a wipe) and a new one claimed with the right account.
+3. The alert closes on the next report from the place that stopped reporting
+   the account. A node gone quiet counts as nowhere: it is left out rather than
+   counted twice.
+
+## `account_changed:<user>`
+
+A held slot is signed in to another Claude account than the one it was first
+signed in with. Nothing in the product does that: *Sign in again* keeps only
+the slot's own account. So its holder signed in by hand, or put another
+account's credential in place. The slot is their own Linux account, so ccfleet
+detects this; it cannot prevent it.
+
+1. Ask the holder to sign the slot's own account in again from their page. The
+   sign-in is kept only if it is that account, and it replaces the wrong one.
+2. If they will not, it is the terms' rule of one account per slot: take the
+   slot back in the console, which wipes it.
+
 ## Rebuild a node
 
 1. New VPS, `bootstrap.sh`, `setup-owner.sh`, then restore the latest
@@ -299,6 +338,22 @@ never hands it out, provisions it or wipes it.
 
 Let go of the record with `ccfleetd node hold <node> --none`; the node, its
 history and its own sign-in stay exactly as they are.
+
+## Keep a machine for one account
+
+A shared machine can be kept for one account, so its free slot never goes to
+anybody else: your own `erik-N` machines, or a machine set aside for one
+customer.
+
+1. *server*: `ccfleetd node reserve <machine> <email>`. The address is the
+   account's, as it signed in; an unknown address is refused, and only a shared
+   machine can be kept.
+2. Claims from that account take a slot on a machine kept for it first; nobody
+   else is ever handed its slot. The account's allowance still applies.
+3. `ccfleetd node list` shows the reservation in its last column. Customers'
+   pages never show one.
+
+Open it to anybody again with `ccfleetd node reserve <machine> --none`.
 
 ## Remove an owner
 
