@@ -2207,6 +2207,10 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner, 
         if switch:
             progress = {**progress, "detail": SWITCHED if fp != bound else SAME_ACCOUNT}
             new_state = {**new_state, "bound_fp": fp, "login": _to_say(progress)}
+            if fp == bound:
+                # Nothing moved, so there is nothing to undo; kept before the
+                # restart all the same, as rebind keeps SWITCHED.
+                save({**new_state, "account_restart": "owed"})
     return progress, new_state, done
 
 

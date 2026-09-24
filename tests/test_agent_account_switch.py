@@ -97,7 +97,8 @@ class CutShort(Exception):
     """The run dying while Remote Control restarts."""
 
 
-def test_a_run_cut_short_after_the_change_keeps_the_new_binding(home):
+@pytest.mark.parametrize("theirs,word", [(THEIRS, agent.SWITCHED), (MINE, agent.SAME_ACCOUNT)])
+def test_a_run_cut_short_after_the_change_keeps_the_new_binding(home, theirs, word):
     bound_as(home, MINE)
 
     class Dies(Slot):
@@ -107,15 +108,15 @@ def test_a_run_cut_short_after_the_change_keeps_the_new_binding(home):
             return super().__call__(argv, **kwargs)
 
     with pytest.raises(CutShort):
-        sign_in(Dies(home, signs_in_as=THEIRS), kind="switch")
+        sign_in(Dies(home, signs_in_as=theirs), kind="switch")
     assert "sk-ant-oat01-NEW" in credential(home)
-    assert state(home)["bound_fp"] == fp_of(THEIRS), "bound to an account it no longer has"
+    assert state(home)["bound_fp"] == fp_of(theirs), "bound to an account it no longer has"
     # The next run, still asked for the same attempt: the word the server
     # never heard is said, and the restart that was cut short is made.
-    fake = Slot(home, signs_in_as=THEIRS)
+    fake = Slot(home, signs_in_as=theirs)
     wanted = {"login": {"requested_at": 100.0, "kind": "switch", "code": "c"}}
     said = agent.slot_facts(wanted, fake, now=NOW)["login"]
-    assert said == {"state": "done", "detail": agent.SWITCHED, "requested_at": 100.0}
+    assert said == {"state": "done", "detail": word, "requested_at": 100.0}
     assert len(fake.restarts()) == 1 and fake.started() == [], "signed in all over again"
     # Heard: the server asks no more, and nothing of the attempt is left.
     assert "login" not in agent.slot_facts({}, fake, now=NOW)
