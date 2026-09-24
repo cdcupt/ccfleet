@@ -74,8 +74,9 @@ spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.
    `echo vm.swappiness=10 > /etc/sysctl.d/99-ccfleet-swap.conf && sysctl -p /etc/sysctl.d/99-ccfleet-swap.conf`.
 5. *server*: `ccfleetd node add <machine> --owner <your-login> --region <region>`. The
    token it prints is shown once; keep it for step 8 and nowhere else.
-6. *server*: `ccfleetd node pin <machine> stable`, the Claude Code channel the
-   machine's slots are meant to follow.
+6. *server*: `ccfleetd node pin <machine> latest`, the Claude Code channel the
+   machine's slots are meant to follow. Slots start on `opus`, which is the
+   newest Opus only on a Claude Code that knows it.
 7. *server*: `ccfleetd slot add <machine> --machine <machine> --unix-user slot01`.
    Its capacity stays 1: a second slot is refused, because claude.ai/code shows
    a machine by its hostname and two holders would share one name there. Do not
@@ -162,9 +163,12 @@ prove itself before the next.
 3. Pin the remaining nodes. Never pin them all at once: a bad release would take
    the whole fleet in the same five minutes.
 
-A node can also be told to track a channel — `ccfleetd node pin <node> stable`.
-It resolves once and re-checks daily rather than on every heartbeat, and a
-channel pin never reports drift, because tracking it is what the pin asks for.
+A node can also be told to track a channel — `ccfleetd node pin <node> latest`
+or `stable`. The server reads both channels' release numbers from Anthropic
+about hourly and sends them with every reply, and the node installs a new
+release at its next quiet moment, never during a sign-in. Without a number from
+the server it resolves the channel itself once a day. A channel pin never
+reports drift, because tracking it is what the pin asks for.
 
 ## `egress_changed`
 
