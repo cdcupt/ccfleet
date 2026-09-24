@@ -710,7 +710,7 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "",
         "root. Drop the flag for a node where that is not wanted.</p>"
         if cfg.bypass_by_default else "")
     return (
-        _console_open(f"{node_id} added", corner)
+        _console_open(f"{node_id} added", corner, product_href(cfg, "/"))
         + f"<h1>{escape(node_id)} added</h1>"
         "<div class=\"ok-banner\">Copy the three lines below now. The token is shown once "
         "and is not stored in readable form.</div>"
@@ -734,26 +734,31 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "",
         "<code>~/.config/ccfleet/agent.env</code>; you can place them by hand and run "
         "<code>node/setup-owner.sh</code> instead.</p>"
         "</div>"
-        "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
+        f"<p><a class=\"back\" href=\"{CONSOLE_PATH}\">&larr; back to the fleet</a></p>"
         "</div></body></html>")
 
 
-def _console_bar(corner: str = "") -> str:
-    """The console's bar: the mark, which side this is, and who is signed in."""
+def _console_bar(corner: str = "", home: str = "/") -> str:
+    """The console's bar: the mark, which side this is, and who is signed in.
+
+    The mark goes home, to the product's front page, as it does on every other
+    page; the console is one press away from there, in the avatar's menu.
+    ``home`` is that page as a link from here (see product_href).
+    """
     return ('<header class="topbar"><div class="topbar-in">'
-            f'<a class="brand" href="{CONSOLE_PATH}">{MARK}<span>ccfleet</span></a>'
+            f'<a class="brand" href="{escape(home)}">{MARK}<span>ccfleet</span></a>'
             '<span class="tag">console</span>'
             f'<div class="topbar-end">{corner}</div></div></header>')
 
 
-def _console_open(title: str, corner: str = "") -> str:
+def _console_open(title: str, corner: str = "", home: str = "/") -> str:
     """The head and the bar of a console page that is not the dashboard."""
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>ccfleet · {escape(title)}</title>"
             f'<link rel="icon" href="{FAVICON}">'
             f"<style>{CSS}</style></head><body class=\"console\">"
-            + _console_bar(corner) + "<div class=\"page\">")
+            + _console_bar(corner, home) + "<div class=\"page\">")
 
 
 # -- who is looking -------------------------------------------------------------------
@@ -853,15 +858,15 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "",
     """
     if not token:
         return (
-            _console_open("device token", corner)
+            _console_open("device token", corner, product_href(cfg, "/"))
             + "<h1>Nothing to show</h1>"
             "<p class=\"sub\">No token is waiting for this node. Either it was finished "
             "with, or the request expired. Start a new one from the fleet page.</p>"
-            "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
+            f"<p><a class=\"back\" href=\"{CONSOLE_PATH}\">&larr; back to the fleet</a></p>"
             "</div></body></html>")
     who = f" for {escape(owner)}" if owner else ""
     return (
-        _console_open("device token", corner)
+        _console_open("device token", corner, product_href(cfg, "/"))
         + f"<h1>Device token{who}</h1>"
         "<p class=\"sub\">Minted on <strong>" + escape(node_id) + "</strong>, from the "
         "account that node is signed in as. Good for one year.</p>"
@@ -889,7 +894,7 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "",
         "Revoke it from the Claude account it belongs to; there is nothing to revoke here, "
         "because nothing here kept it.</p>"
         "</div>"
-        "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
+        f"<p><a class=\"back\" href=\"{CONSOLE_PATH}\">&larr; back to the fleet</a></p>"
         "</div></body></html>")
 
 
@@ -1327,7 +1332,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f'{auto_refresh}<title>ccfleet console</title>'
         f'<link rel="icon" href="{FAVICON}">'
         f"<style>{CSS}</style></head><body class=\"console\">"
-        + _console_bar(corner) + "<div class=\"page\">"
+        + _console_bar(corner, product_href(cfg, "/")) + "<div class=\"page\">"
         '<header class="mast"><div>'
         "<h1>Fleet</h1>"
         '<p class="sub">One owner, one account, one node · heartbeat max age '
