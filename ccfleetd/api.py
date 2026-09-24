@@ -820,12 +820,26 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                      form.get("owner", "").strip(), self._console_corner())
             self._send(200, body.encode("utf-8"), HTML_HEADERS)
 
+        def _shared_machine(self, node_id: str) -> bool:
+            """A node with a machine slot, or whose agent says it is a shared machine."""
+            if ctx.store.list_slots(node_id=node_id, kind=slotstates.MACHINE_SLOT):
+                return True
+            beat = ctx.store.latest_heartbeats().get(node_id) or {}
+            return (beat.get("payload") or {}).get("mode") == slotstates.MACHINE_MODE
+
         def _action_on_node(self, node_id: str, action: str, form: dict[str, str]) -> None:
             # Read before acting. `login-code` and `login-cancel` serve both
             # cards and the row is what says which — but a cancel deletes that
             # row, so asking afterwards finds nothing and sends you to the wrong
             # one. Asked here, it is still there to answer.
             kind_before = (ctx.store.get_login(node_id) or {}).get("kind")
+            if action in ("login-start", "token-start") and self._shared_machine(node_id):
+                # Root on a shared machine runs no Claude Code, and its agent
+                # only signs in slots, so this would sit unanswered for fifteen
+                # minutes and then fail. A slot's sign-in and tokens are its
+                # holder's, from their own page.
+                raise StoreError(f"{node_id} is a shared machine: whoever holds its slot "
+                                 "signs it in, and gets device tokens, on their own page")
             if action == "enable":
                 ctx.store.set_enabled(node_id, True)
             elif action == "disable":
@@ -899,7 +913,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _rows(self, who: Identity) -> list[dict[str, Any]]:
             return build_rows(self._visible_nodes(who), ctx.store.latest_heartbeats(),
-                              ctx.store.open_alerts(), time.time())
+                              ctx.store.open_alerts(), time.time(),
+                              slots=ctx.store.list_slots())
 
         def _dashboard(self, who: Identity) -> str:
             # An owner now has exactly one thing to submit — their own sign-in —
