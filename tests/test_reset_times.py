@@ -57,8 +57,16 @@ def test_claude_codes_words_become_an_instant(text, read, expected):
     "13pm (UTC)", "0am (UTC)", "1:75am (UTC)", "Foo 3, 1pm (UTC)", "Feb 30, 1pm (UTC)",
     None, 12,
 ])
+
 def test_words_it_does_not_know_are_left_alone(text):
     assert resets.reset_at(text, utc(2026, 9, 24).timestamp()) is None
+
+
+@pytest.mark.parametrize("text", ["Sep 23, 3pm (UTC)", "Sep 24, 11am (UTC)"])
+def test_a_date_only_just_gone_is_not_a_reset_still_to_come(text):
+    """Read at 1pm on 24 September, neither can be a reset still to come, and
+    neither is a year away either: the words are shown as printed."""
+    assert resets.reset_at(text, utc(2026, 9, 24, 13, 0).timestamp()) is None
 
 
 @pytest.mark.parametrize("read_at", [10**15, -10**15, float("inf"), float("nan")])

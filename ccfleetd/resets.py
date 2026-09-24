@@ -18,6 +18,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+#: How far back a date must be to be next year's rather than a mistake: a
+#: reset is at most a week off, so months back can only be the year turning.
+YEAR_TURNS_DAYS = 180
 
 # "1:10am (Asia/Shanghai)", "3pm (UTC)", "Sep 26, 7pm (Asia/Shanghai)".
 RESET_RE = re.compile(
@@ -39,29 +42,29 @@ def reset_at(text: object, read_at: float) -> Optional[float]:
 
     The time alone is the next time the clock reads it after the reading: a
     window resets after it was read, never before. A date is this year's, or
-    next year's when that is the one still ahead, as it is for "Jan 2" read on
-    30 December.
+    next year's when this year's is months gone, as "Jan 2" is on 30 December.
+    A date only just gone cannot be a reset still to come, and is not read.
     """
     found = RESET_RE.fullmatch(text.strip()) if isinstance(text, str) else None
     if found is None:
         return None
     zone = _zone(found["zone"])
     hour, minute = int(found["hour"]), int(found["minute"] or 0)
-    if zone is None or not 1 <= hour <= 12 or minute > 59:
+    if zone is None or not 1 <= hour <= 12:
         return None
     hour = hour % 12 + (12 if found["half"] == "pm" else 0)
-    if found["month"] is not None and found["month"] not in MONTHS:
-        return None
     # A machine's reading time is only as sane as the machine: one out of the
     # calendar's range (the server accepts any number) must not take the page
-    # down with it, and neither may a date past the end of the calendar.
+    # down with it, and neither may a date past the end of the calendar. Minutes
+    # past 59, a month that is not one and a day the month lacks all end here
+    # too, as ValueError.
     try:
         return _place(found, hour, minute, datetime.fromtimestamp(read_at, zone))
     except (ValueError, OverflowError, OSError):
         return None
 
 
-def _place(found: re.Match, hour: int, minute: int, read: datetime) -> float:
+def _place(found: re.Match, hour: int, minute: int, read: datetime) -> Optional[float]:
     """The instant, given when the words were read, in their own zone."""
     if found["month"] is None:
         at = read.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -70,9 +73,9 @@ def _place(found: re.Match, hour: int, minute: int, read: datetime) -> float:
         return at.timestamp()
     month = MONTHS.index(found["month"]) + 1
     at = datetime(read.year, month, int(found["day"]), hour, minute, tzinfo=read.tzinfo)
-    if at < read - timedelta(days=1):
+    if at < read - timedelta(days=YEAR_TURNS_DAYS):
         at = at.replace(year=read.year + 1)
-    return at.timestamp()
+    return at.timestamp() if at >= read else None
 
 
 def iso(at: float) -> str:
