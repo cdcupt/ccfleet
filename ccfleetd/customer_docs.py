@@ -441,9 +441,9 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "this and we do not look, but nothing can make it impossible. Keep nothing in a slot "
         "that you could not accept an administrator being able to read.</p></div>"
         '<div class="card"><h2>Kept up to date</h2><ul>'
-        "<li><strong>Claude Code</strong> in your slot is updated automatically, on the "
-        "release channel the operator sets, normally Anthropic&#x27;s stable channel, or "
-        "on the latest release once you choose it on your page. A "
+        "<li><strong>Claude Code</strong> in your slot is updated automatically to "
+        "Anthropic&#x27;s latest release, or to its stable release if you choose that on "
+        "your page. A "
         "session that is running is never interrupted; the new version is used from the "
         "next one.</li>"
         "<li><strong>Security updates</strong> for the machine install every day.</li>"
