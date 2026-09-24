@@ -86,8 +86,11 @@ def test_every_machine_down_is_a_major_outage(store, cfg):
 
 
 def test_no_machines_yet(store, cfg):
-    page = shown(page_of(store, cfg))
+    raw = page_of(store, cfg)
+    page = shown(raw)
     assert "All systems operational" in page and "No slot machines yet" in page
+    assert "No uptime counted yet" in page
+    assert 'aria-label="Website and account pages: no data yet"' in raw
 
 
 # -- what it never says ----------------------------------------------------------------------
@@ -140,10 +143,32 @@ def test_uptime_is_shown_for_each_component_and_overall(store, cfg):
     store.count_status(status.SITE, status.GREEN, NOW, grace=2, gap_state=status.RED)
     store.count_status(status.SITE, status.GREEN, NOW + 3 * 60, grace=0, gap_state=status.RED)
     store.count_status("node:pool-7", status.GREEN, NOW, grace=2)
-    page = shown(page_of(store, cfg, NOW + 240))
+    store.count_status("node:pool-8", status.YELLOW, NOW, grace=2)     # degraded is up
+    store.count_status(status.GROUP, status.YELLOW, NOW, grace=2)
+    raw = page_of(store, cfg, NOW + 240)
+    page = shown(raw)
     assert "50.00% uptime" in page                 # the site: 2 up, 2 down
-    assert "100% uptime" in page                   # the machines
-    assert "60.00% uptime over the last 90 days" in page    # 3 up of 5 counted
+    assert "100% uptime" in page                   # the machines: 2 machine-minutes, both up
+    assert "66.66% uptime over the last 90 days" in page    # 4 up of 6 counted
+    assert ('aria-label="Website and account pages: 50.00% uptime over the last 90 days; '
+            '1 day with trouble"') in raw
+    assert 'aria-label="Slot machines: 100% uptime over the last 90 days; 1 day with trouble"' in raw
+
+
+def test_each_day_says_what_it_was(store, cfg):
+    today = status.utc_day(int(NOW // 60))
+    yesterday = status.utc_day(int(NOW // 60) - 1440)
+    store.count_status(status.SITE, status.GREEN, NOW, grace=2, gap_state=status.RED)
+    store.count_status(status.SITE, status.GREEN, NOW + 3 * 60, grace=0, gap_state=status.RED)
+    for i, state in enumerate([status.RED, status.RED, status.YELLOW]):
+        store.count_status(status.GROUP, state, NOW + 60 * i, grace=2)
+    raw = page_of(store, cfg, NOW + 240)
+    assert f'title="{today} (UTC): 50.00% up, down 2 min"' in raw
+    assert f'title="{today} (UTC): every machine down 2 min, some in trouble 1 min"' in raw
+    assert f'title="{yesterday} (UTC): no data"' in raw
+    store.count_status(status.GROUP, status.GREEN, NOW + 86400, grace=2)
+    tomorrow = status.utc_day(int(NOW // 60) + 1440)
+    assert f'title="{tomorrow} (UTC): all up"' in page_of(store, cfg, NOW + 86400 + 60)
 
 
 # -- where it is ----------------------------------------------------------------------------
@@ -163,6 +188,23 @@ def test_every_public_page_links_it_from_the_footer_and_the_front_page_from_its_
         assert 'href="/status"' in foot, path
     front = browser(PRODUCT).call("GET", "/").body
     assert 'href="/status"' in front[:front.index('<footer class="sitefoot">')]
+
+
+def test_signed_in_the_only_address_on_it_is_the_viewers_own_in_their_menu(site):  # noqa: F811
+    """Codex, PR #111: signed in, the page wears the same bar as every public
+    page, whose menu shows the viewer their own address. Nobody else's name,
+    address or machine is anywhere on it."""
+    store, sign_in, _ = site
+    fleet(store, now=time.time())
+    viewer = sign_in(sub="google-viewer", email="viewer@example.com")
+    raw = viewer.call("GET", "/status").body
+    menu_at = raw.index('<details class="usermenu">')
+    menu = raw[menu_at:raw.index("</details>", menu_at) + len("</details>")]
+    assert "viewer@example.com" in menu
+    rest = raw.replace(menu, "")
+    assert not re.search(r"[\w.+-]+@[\w-]+\.\w+", rest)
+    for name in NAMES:
+        assert name not in rest, name
 
 
 def test_how_it_works_says_where_to_look(split):  # noqa: F811
@@ -237,7 +279,8 @@ def test_the_serving_loop_counts_the_minute(store, cfg):
     fleet(store, now=time.time())
     Monitor(store, cfg, LogNotifier()).run_forever(OneRound())
     components = {r["component"] for r in store.status_minutes(since_day="2000-01-01")}
-    assert components == {status.SITE, "node:pool-7", "node:pool-8", "node:erik-9"}
+    assert components == {status.SITE, status.GROUP, "node:pool-7", "node:pool-8",
+                          "node:erik-9"}
 
 
 def test_a_check_that_fails_still_counts_the_minute(store, cfg, monkeypatch):

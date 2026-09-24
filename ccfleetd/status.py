@@ -75,8 +75,12 @@ EXCLUDED_RULES = ("no_heartbeat", "credentials_missing", "token_stale", "token_e
                   "version_mismatch")
 
 #: The site's own component, beside one "node:<id>" per machine; the prefix
-#: keeps a machine that happens to be called "site" apart from it.
+#: keeps a machine that happens to be called "site" apart from it. The
+#: machines are also counted as one group, in the state the group is in that
+#: minute: only that says whether they were ever all down at once, which a
+#: day of each machine's own minutes cannot.
 SITE = "site"
+GROUP = "machines"
 MACHINE_PREFIX = "node:"
 #: How much history is kept and shown.
 HISTORY_DAYS = 90
@@ -148,19 +152,13 @@ def components(nodes: Sequence[Mapping[str, Any]], slot_rows: Sequence[Mapping[s
     A machine counts once it is switched on, carries a slot (a shared
     machine's, or somebody's own node counted as their slot) and has reported
     at least once: a box still being set up, a laptop, or a node nobody counts
-    as a slot is not the service. Shared means it reports every minute."""
+    as a slot is not the service. Shared, which is to say reporting every
+    minute, is a machine's slot; somebody's own node reports every five."""
     kinds: dict[str, set[str]] = {}
     for row in slot_rows:
-        kinds.setdefault(row["node_id"], set()).add(row.get("kind") or slotstates.MACHINE_SLOT)
-    found = []
-    for node in nodes:
-        carried = kinds.get(node["id"])
-        if not node.get("enabled") or not carried or node["id"] not in latest:
-            continue
-        mode = ((latest[node["id"]] or {}).get("payload") or {}).get("mode")
-        shared = slotstates.MACHINE_SLOT in carried or mode == slotstates.MACHINE_MODE
-        found.append((node, shared))
-    return found
+        kinds.setdefault(row["node_id"], set()).add(row["kind"])
+    return [(node, slotstates.MACHINE_SLOT in kinds[node["id"]]) for node in nodes
+            if node.get("enabled") and node["id"] in kinds and node["id"] in latest]
 
 
 def group_state(states: Sequence[State]) -> State:
@@ -204,12 +202,16 @@ def grace_minutes(check_interval_s: int) -> int:
 
 def record(store: Any, now: float, check_interval_s: int) -> dict[str, State]:
     """Count this minute: up for the site, since this runs; each machine as it
-    is. And forget what is older than the history kept."""
+    is, and the machines as a group. And forget what is older than the
+    history kept."""
     grace = grace_minutes(check_interval_s)
     machines = snapshot(store, now)
     store.count_status(SITE, GREEN, now, grace=grace, gap_state=RED)
     for node_id, state in machines.items():
         store.count_status(MACHINE_PREFIX + node_id, state.level, now, grace=grace)
+    if machines:
+        store.count_status(GROUP, group_state(list(machines.values())).level, now,
+                           grace=grace)
     store.prune_status_minutes(before_day=utc_day(int(now // 60) - (HISTORY_DAYS - 1) * 1440))
     return machines
 
@@ -239,32 +241,17 @@ def day_colour(up: int, degraded: int, down: int) -> str:
 
 
 @dataclass(frozen=True)
-class GroupDay:
-    """One UTC day of the machines together: their minutes summed, and each
-    machine's own colour that day, which decide the group's."""
-
-    day: str
-    up: int
-    degraded: int
-    down: int
-    colours: tuple[str, ...]
-
-    @property
-    def colour(self) -> str:
-        if not self.colours:
-            return NO_DATA
-        if all(c == RED for c in self.colours):
-            return RED
-        return GREEN if all(c == GREEN for c in self.colours) else YELLOW
-
-
-@dataclass(frozen=True)
 class History:
     """The last HISTORY_DAYS days, oldest first, and the minutes behind the
-    uptime of each: (up, counted)."""
+    uptime of each: (up, counted).
+
+    The machines' days are the group's own minutes: down only while every
+    machine was down at once, degraded while some were in trouble. Their
+    uptime is every machine's minutes together, so one of three down for an
+    hour costs an hour of one machine, not of the service."""
 
     site: list[Day]
-    machines: list[GroupDay]
+    machines: list[Day]
     site_minutes: tuple[int, int]
     machines_minutes: tuple[int, int]
 
@@ -285,18 +272,16 @@ def history(store: Any, now: float, days: int = HISTORY_DAYS) -> History:
     today = int(now // 60) // 1440
     window = [utc_day((today - back) * 1440) for back in range(days - 1, -1, -1)]
     rows = store.status_minutes(since_day=window[0])
-    site_rows = {r["day"]: _day_of(r) for r in rows if r["component"] == SITE}
-    per_day: dict[str, list[Day]] = {}
+    by_component: dict[str, dict[str, Day]] = {}
     for row in rows:
-        if row["component"].startswith(MACHINE_PREFIX):
-            per_day.setdefault(row["day"], []).append(_day_of(row))
-    site = [site_rows.get(day, Day(day)) for day in window]
-    machines = [GroupDay(day, sum(d.up for d in found), sum(d.degraded for d in found),
-                         sum(d.down for d in found), tuple(d.colour for d in found))
-                for day, found in ((day, per_day.get(day, [])) for day in window)]
+        by_component.setdefault(row["component"], {})[row["day"]] = _day_of(row)
+    site = [by_component.get(SITE, {}).get(day, Day(day)) for day in window]
+    machines = [by_component.get(GROUP, {}).get(day, Day(day)) for day in window]
+    each = [d for name, found in by_component.items() if name.startswith(MACHINE_PREFIX)
+            for d in found.values()]
     return History(site, machines,
                    (sum(d.up for d in site), sum(d.up + d.down for d in site)),
-                   (sum(d.up for d in machines), sum(d.up + d.down for d in machines)))
+                   (sum(d.up for d in each), sum(d.up + d.down for d in each)))
 
 
 def percent(up: int, counted: int) -> str:
@@ -335,8 +320,8 @@ def since_html(since: float, now: float) -> str:
 
 def slot_line(state: State, now: float) -> str:
     """A slot card's line about the machine its slot is on, linked to /status."""
-    since = (f" since {since_html(state.since, now)}"
-             if state.level != GREEN and state.since is not None else "")
+    # Only trouble has a beginning: green never carries one.
+    since = f" since {since_html(state.since, now)}" if state.since is not None else ""
     return (f'<p class="machine-line"><span class="st-dot {state.level}" aria-hidden="true">'
             f"</span><span>Machine: {LINE_WORDS[state.level]}{since}</span>"
             '<a href="/status">Status page</a></p>')

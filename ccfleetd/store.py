@@ -245,7 +245,6 @@ CREATE TABLE IF NOT EXISTS status_minutes (
     green INTEGER NOT NULL DEFAULT 0,
     yellow INTEGER NOT NULL DEFAULT 0,
     red INTEGER NOT NULL DEFAULT 0,
-    first_minute INTEGER NOT NULL,
     last_minute INTEGER NOT NULL,
     PRIMARY KEY (component, day)
 );
@@ -1095,16 +1094,17 @@ class Store:
     def _add_status(conn: sqlite3.Connection, component: str, column: str,
                     first: int, last: int) -> None:
         """Add the minutes first..last, both counted, to `column`, each on the
-        UTC day it fell on. `column` is one of STATUS_COLUMNS, checked above."""
+        UTC day it fell on. `column` is one of STATUS_COLUMNS, checked above.
+        Minutes only ever come after the component's last, so each day's
+        last minute is simply the newest one added."""
         while first <= last:
             upto = min(last, (first // 1440 + 1) * 1440 - 1)       # this day's last minute
             conn.execute(
-                f"INSERT INTO status_minutes (component, day, {column}, first_minute, "
-                f"last_minute) VALUES (?, ?, ?, ?, ?) ON CONFLICT(component, day) DO UPDATE "
+                f"INSERT INTO status_minutes (component, day, {column}, last_minute) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(component, day) DO UPDATE "
                 f"SET {column} = {column} + excluded.{column}, "
-                "first_minute = MIN(first_minute, excluded.first_minute), "
-                "last_minute = MAX(last_minute, excluded.last_minute)",
-                (component, _status_day(first), upto - first + 1, first, upto))
+                "last_minute = excluded.last_minute",
+                (component, _status_day(first), upto - first + 1, upto))
             first = upto + 1
 
     def status_minutes(self, since_day: str) -> list[dict[str, Any]]:

@@ -1031,7 +1031,10 @@ ccfleetd slot list --machine pool-1</code></pre>
     address, or a version behind its pin. Those are on the holder's page and in the
     console.</li>
     <li><strong>The group</strong> is yellow when any machine is degraded or some are
-    down, and red only when every one is down. A day is red from 5 minutes down.</li>
+    down, and red only when every one is down. It is counted each minute as a group too,
+    so a red day means every machine down at the same time for 5 minutes or more; two
+    machines down at different times make a yellow day. Its uptime is every machine's
+    minutes together.</li>
     <li><strong>The site's own downtime</strong> is its silence: the serving loop counts
     every minute it runs, a check running a little late is forgiven, and a longer gap is
     counted as down when the server comes back. <code>ccfleetd check</code> counts nothing.

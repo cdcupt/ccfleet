@@ -103,7 +103,8 @@ def test_an_alert_colours_a_fresh_machine_from_when_it_opened():
 
 
 def test_the_worst_reason_wins_and_says_the_earliest_start_at_its_level():
-    alerts = [alert("disk_high", LEVEL_WARN, NOW - 50),
+    """Degraded since long ago and down since lately is down since lately."""
+    alerts = [alert("disk_high", LEVEL_WARN, NOW - 500),
               alert("slot_missing:slot01", LEVEL_CRITICAL, NOW - 70),
               alert("claude_missing", LEVEL_CRITICAL, NOW - 40)]
     state = status.machine_state(beat(200), alerts, True, NOW)      # late: yellow
@@ -166,6 +167,12 @@ def test_the_group_says_when_its_trouble_began():
     assert status.group_state([G, G]).since is None
 
 
+def test_a_machine_down_since_nobody_knows_when_does_not_hide_when_the_rest_began():
+    never = status.State(status.RED)
+    assert status.group_state([never, status.State(status.YELLOW, 5.0)]).since == 5.0
+    assert status.group_state([never]).since is None
+
+
 # -- minutes -------------------------------------------------------------------------------
 
 def counted(store, component):
@@ -188,8 +195,18 @@ def test_a_state_is_counted_in_its_own_column(store):
 
 
 def test_anything_but_the_three_states_is_refused(store):
+    """They become column names in SQL: nothing else may reach it."""
     with pytest.raises(ValueError):
         store.count_status(status.SITE, "green; DROP TABLE alerts", NOW, grace=2)
+    with pytest.raises(ValueError):
+        store.count_status(status.SITE, status.GREEN, NOW, grace=2, gap_state="x = 1 --")
+    assert store.status_minutes(since_day="2000-01-01") == []
+
+
+def test_the_days_asked_for_start_where_asked(store):
+    store.count_status(status.SITE, status.GREEN, NOW - 3 * 86400, grace=2)
+    store.count_status(status.SITE, status.GREEN, NOW, grace=2)
+    assert [r["day"] for r in store.status_minutes(since_day=DAY)] == [DAY]
 
 
 def test_a_check_a_little_late_is_not_downtime(store):
@@ -234,11 +251,11 @@ def test_a_clock_that_went_back_counts_nothing_until_it_catches_up(store):
 
 
 def test_ninety_days_are_kept(store):
-    old = NOW - 91 * 86400
-    store.count_status(status.SITE, status.GREEN, old, grace=2)
-    store.count_status(status.SITE, status.GREEN, NOW, grace=2)
-    removed = store.prune_status_minutes(before_day=status.utc_day(MINUTE - 89 * 1440))
-    assert removed == 1 and list(counted(store, status.SITE)) == [DAY]
+    first = status.utc_day(MINUTE - 89 * 1440)
+    for when in (NOW - 91 * 86400, NOW - 89 * 86400, NOW):
+        store.count_status(status.SITE, status.GREEN, when, grace=2)
+    removed = store.prune_status_minutes(before_day=first)
+    assert removed == 1 and list(counted(store, status.SITE)) == [first, DAY]
 
 
 # -- recording, as the monitor does once a minute --------------------------------------------
@@ -256,13 +273,28 @@ def fleet(store, now=NOW):
     store.insert_heartbeat("laptop", now - 10, {"node_id": "laptop"})
 
 
-def test_recording_counts_the_site_and_every_machine_that_counts(store):
+def test_recording_counts_the_site_every_machine_that_counts_and_the_group(store):
     fleet(store)
     status.record(store, NOW, check_interval_s=60)
     rows = {r["component"]: (r["green"], r["yellow"], r["red"])
             for r in store.status_minutes(since_day=DAY)}
     assert rows == {status.SITE: (1, 0, 0), "node:pool-1": (1, 0, 0),
-                    "node:erik-1": (0, 1, 0)}
+                    "node:erik-1": (0, 1, 0), status.GROUP: (0, 1, 0)}
+
+
+def test_the_group_is_counted_red_only_while_every_machine_is_down(store):
+    fleet(store)
+    store.insert_heartbeat("pool-1", NOW - 400, {"node_id": "pool-1", "mode": "machine",
+                                                  "slots": []})
+    status.record(store, NOW, check_interval_s=60)                 # erik-1 late, pool-1 down
+    store.insert_heartbeat("erik-1", NOW - 1000, {"node_id": "erik-1"})
+    status.record(store, NOW + 60, check_interval_s=60)            # both down
+    assert counted(store, status.GROUP) == {DAY: (0, 1, 1)}
+
+
+def test_no_machines_no_group(store):
+    status.record(store, NOW, check_interval_s=60)
+    assert counted(store, status.GROUP) == {}
 
 
 def test_recording_forgets_what_is_past_ninety_days(store):
@@ -304,27 +336,30 @@ def test_a_day_nobody_counted_has_no_colour():
     assert status.day_colour(up=0, degraded=0, down=0) == status.NO_DATA
 
 
-def five_minutes(store, component, state):
-    for i in range(5):
-        store.count_status(component, state, NOW + 60 * i, grace=2)
+def minutes_of(store, component, states, start=NOW):
+    for i, state in enumerate(states):
+        store.count_status(component, state, start + 60 * i, grace=2)
 
 
-def test_the_machines_day_is_yellow_when_only_some_machine_was_down(store):
-    five_minutes(store, "node:a", status.RED)
-    five_minutes(store, "node:b", status.GREEN)
-    assert status.history(store, NOW + 300).machines[-1].colour == status.YELLOW
+def test_every_machine_down_but_never_at_once_is_a_yellow_day(store):
+    """Codex, PR #111: a and b each down five minutes, one after the other, is
+    never the service down. Each machine's day is red; the group's is not."""
+    minutes_of(store, "node:a", [status.RED] * 5 + [status.GREEN] * 5)
+    minutes_of(store, "node:b", [status.GREEN] * 5 + [status.RED] * 5)
+    minutes_of(store, status.GROUP, [status.YELLOW] * 10)
+    assert status.history(store, NOW + 600).machines[-1].colour == status.YELLOW
 
 
-def test_the_machines_day_is_red_when_every_machine_was_down(store):
-    five_minutes(store, "node:a", status.RED)
-    five_minutes(store, "node:c", status.RED)
+def test_every_machine_down_at_once_for_five_minutes_is_a_red_day(store):
+    minutes_of(store, status.GROUP, [status.RED] * 5)
     assert status.history(store, NOW + 300).machines[-1].colour == status.RED
 
 
-def test_the_machines_day_counts_only_the_machines_seen_that_day(store):
-    five_minutes(store, "node:a", status.GREEN)
-    assert status.history(store, NOW + 300).machines[-1].colour == status.GREEN
-    assert status.history(store, NOW + 300).machines[-2].colour == status.NO_DATA
+def test_the_machines_days_are_the_groups_own(store):
+    minutes_of(store, "node:a", [status.RED] * 5)                  # no group minute
+    history = status.history(store, NOW + 300)
+    assert history.machines[-1].colour == status.NO_DATA
+    assert history.machines_minutes == (0, 5)
 
 
 def test_uptime_is_minutes_up_out_of_minutes_counted(store):

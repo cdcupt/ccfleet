@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from html import escape
-from typing import Optional, Union
+from typing import Optional
 
 from . import status
 from .config import Config
@@ -69,21 +69,22 @@ background:var(--rule);transform:translateY(1px)}
 """
 
 
-def _day_title(day: Union[status.Day, status.GroupDay]) -> str:
-    """What one day was, said on hover: the square's title."""
+def _day_title(day: status.Day, group: bool = False) -> str:
+    """What one day was, said on hover: the square's title. For the machines,
+    down is every one of them down at once, and degraded some in trouble."""
     if day.colour == status.NO_DATA:
         return f"{day.day} (UTC): no data"
-    said = f"{day.day} (UTC): {status.percent(day.up, day.up + day.down)} up"
-    if day.down:
-        said += f", down {day.down} min"
-    if day.degraded:
-        said += f", degraded {day.degraded} min"
-    return said
+    if group:
+        said = [f"every machine down {day.down} min"] if day.down else []
+        if day.degraded:
+            said.append(f"some in trouble {day.degraded} min")
+        return f"{day.day} (UTC): " + (", ".join(said) or "all up")
+    said_up = f"{day.day} (UTC): {status.percent(day.up, day.up + day.down)} up"
+    return said_up + (f", down {day.down} min" if day.down else "")
 
 
-def _component(name: str, level: str, word: str,
-               days: Sequence[Union[status.Day, status.GroupDay]],
-               minutes: tuple[int, int]) -> str:
+def _component(name: str, level: str, word: str, days: Sequence[status.Day],
+               minutes: tuple[int, int], group: bool = False) -> str:
     """One part of the service: its state now, and its days as a bar.
 
     The bar is one picture to a screen reader, its label the uptime and how
@@ -95,7 +96,7 @@ def _component(name: str, level: str, word: str,
              f"{trouble} {'day' if trouble == 1 else 'days'} with trouble"
              if counted else f"{name}: no data yet")
     squares = "".join(f'<span class="d {DAY_CLASS[d.colour]}" '
-                      f'title="{escape(_day_title(d))}"></span>' for d in days)
+                      f'title="{escape(_day_title(d, group))}"></span>' for d in days)
     return (f'<div class="st-comp"><div class="st-head">'
             f'<span class="st-dot {level}" aria-hidden="true"></span>'
             f"<h2>{escape(name)}</h2>"
@@ -145,7 +146,7 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> st
     group = status.group_state(states)
     history = status.history(store, now)
     since = (f'<span class="st-since">since {status.since_html(group.since, now)}</span>'
-             if group.level != status.GREEN and group.since is not None else "")
+             if group.since is not None else "")
     up, counted = history.overall_minutes
     overall = (f"{status.percent(up, counted)} uptime over the last "
                f"{status.HISTORY_DAYS} days" if counted else "No uptime counted yet")
@@ -160,6 +161,6 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> st
         + _component(SITE_NAME, status.GREEN, status.WORDS[status.GREEN], history.site,
                      history.site_minutes)
         + _component(MACHINES_NAME, group.level, machines_word(states), history.machines,
-                     history.machines_minutes)
+                     history.machines_minutes, group=True)
         + "</div>" + KEY)
     return _shell("status", body, REFRESH, STATUS_CSS, viewer=viewer)
