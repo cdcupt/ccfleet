@@ -693,6 +693,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     if slot is not None:
                         self._record_login(report.get("login"),
                                            slot_login_key(slot["id"]), now)
+                        self._record_update(report.get("claude_update"), slot["id"], now)
+            # Somebody's own node, counted as their slot, says what it did about
+            # an update asked for on their page under its own reconcile block.
+            owned = ctx.store.list_slots(node_id=node["id"], kind=slotstates.OWNER_SLOT)
+            for own in owned:
+                self._record_update((payload.get("reconcile") or {}).get("claude_update"),
+                                    own["id"], now)
             events = ctx.monitor.record_heartbeat(node, payload, now)
             # A machine's own slots only. An owner's node counted as their slot
             # is a record of ours: its agent is never told to provision it.
@@ -708,9 +715,20 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 "desired": desired_state(
                     node, ctx.store.get_login(node["id"]), slots,
                     {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots},
-                    hostname=hostname),
+                    hostname=hostname, channels=ctx.store.get_channel_versions(),
+                    slot_updates={s["id"]: ctx.store.get_claude_update(s["id"]) for s in slots},
+                    own_update=ctx.store.get_claude_update(owned[0]["id"]) if owned else None),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
+
+        def _record_update(self, update: Any, slot_id: str, now: float) -> None:
+            """What a node says it did about an update asked for on a page. The
+            store only lets it close the request it names, if still waiting."""
+            if not isinstance(update, dict):
+                return
+            ctx.store.record_claude_update(
+                slot_id, update.get("requested_at"), str(update.get("state") or ""),
+                str(update.get("to") or ""), str(update.get("detail") or ""), now)
 
         def _record_login(self, login: Any, key: str, now: float) -> None:
             """What a node says about a sign-in, filed against `key`: the node

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import names, oauth, payments
+from . import claude_versions, names, oauth, payments
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -68,6 +68,10 @@ NOTES = {
     "done": ("ok", "Done. The token is no longer kept here."),
     "not-now": ("warn", "Your slot cannot do that right now. It may still be setting up, "
                         "or being given back."),
+    "updating": ("ok", "Updating Claude Code on your slot. Sessions already open keep "
+                       "running; new ones start on the new version."),
+    "stable": ("ok", "Back to the stable release. Your slot moves there at its next quiet "
+                     "moment."),
 }
 
 # The pill says the state the way every page says a state: green running,
@@ -85,7 +89,8 @@ STATE_WORDS = {
                            "allowance once the machine confirms it is gone."),
 }
 
-SLOT_ACTIONS = ("release", "signin", "code", "cancel", "token", "token-show", "token-done")
+SLOT_ACTIONS = ("release", "signin", "code", "cancel", "token", "token-show", "token-done",
+                "update", "stable")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
@@ -239,6 +244,15 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
         if action == "token-show":
             return Outcome(200, body=token_page(
                 slot, store.read_slot_secret(slot_id, now, held_by=holder), viewer))
+        if action == "update":
+            # The number it is going to, as the page showed it, so the row can
+            # say "Updating to 2.1.281…" while the machine works.
+            latest = claude_versions.channel_version(store.get_channel_versions(), "latest")
+            store.request_claude_update(slot_id, now, to_version=latest or "", held_by=holder)
+            return _back("updating", anchor)
+        if action == "stable":
+            store.choose_stable(slot_id, held_by=holder)
+            return _back("stable", anchor)
         # cancel, token-done: whichever flow is in flight on this slot ends here.
         store.clear_slot_login(slot_id, held_by=holder)
         return _back("done" if action == "token-done" else "cancelled", anchor)
@@ -343,6 +357,13 @@ background:var(--inset);border:1px solid var(--rule-soft)}
 background:var(--acc-soft);border-radius:12px}
 .row-line.flow .login-url{background:var(--panel)}
 .row-line.flow input[type=text]{max-width:280px}
+/* Claude Code on the slot: the version it runs, and one press to the newest. */
+.cc-say{font-size:14px;overflow-wrap:anywhere}
+.cc-say b{font-family:var(--mono);font-size:13.5px;font-weight:650}
+.cc-say .sep{color:var(--muted);margin:0 2px}
+.cc-say.bad-text{font-weight:600}
+.row-line.cc .cc-note{flex-basis:100%;margin:-2px 0 0;font-size:13px;color:var(--muted)}
+button.quiet{font-size:12.5px;padding:6px 11px;font-weight:600}
 .site .page>p.note{margin-top:26px;padding:14px 18px;border:1px solid var(--rule);
 border-radius:12px;background:var(--panel)}
 
@@ -428,6 +449,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     # From wherever each slot keeps it: an owner's node counted as their slot
     # signs in through the node's own row.
     logins = {s["id"]: store.login_for_slot(s) or {} for s in held}
+    # The numbers Anthropic's channels stood at when last read, and any update
+    # asked for on this page, for each slot's Claude Code row.
+    channels = store.get_channel_versions()
+    updates = {s["id"]: store.get_claude_update(s["id"]) or {} for s in held}
     csrf = csrf_for(session_id, cfg.cookie_secret)
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for s in held if s["state"] in slotstates.HELD)
@@ -451,7 +476,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     # the other place: it may be somebody else's.
     flagged = {s["id"]: _flags(s, store.open_alerts(s["node_id"])) for s in held}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
-                               logins[s["id"]], csrf, cfg, now, flagged[s["id"]])
+                               logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
+                               updates[s["id"]], channels)
                     for s in held)
     body = (
         '<div class="pagehead"><h1>Your slots</h1>'
@@ -466,7 +492,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         "machine cannot read yours; the machine's administrators technically can. This page "
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
-    return _shell("your slots", body, _refresh(held, logins),
+    updating = any(u.get("state") == "pending" for u in updates.values())
+    return _shell("your slots", body, _refresh(held, logins, updating),
                   viewer=viewer_for(account, session_id, cfg, store))
 
 
@@ -612,7 +639,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     return _shell("privacy", body, here="/privacy", width="doc", viewer=viewer)
 
 
-def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
+def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]],
+             updating: bool = False) -> str:
     """Come back soon while something is moving; never while a code is being typed.
 
     Always to the bare page, never the address the page was opened at. After an
@@ -627,7 +655,8 @@ def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, An
     states = {(login or {}).get("state") for login in logins.values()}
     if "url_ready" in states:
         return ""
-    moving = any(s["state"] in (slotstates.CLAIMING, slotstates.RELEASING) for s in held)
+    moving = updating or any(s["state"] in (slotstates.CLAIMING, slotstates.RELEASING)
+                             for s in held)
     soon = moving or bool(states & {"requested", "code_sent"})
     seconds = ACTIVE_REFRESH_S if soon else IDLE_REFRESH_S
     return f'<meta http-equiv="refresh" content="{seconds};url=/account">'
@@ -672,7 +701,7 @@ def _own_report(heartbeat: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
     it reports these at the top of its heartbeat rather than per slot."""
     payload = (heartbeat or {}).get("payload") or {}
     return {key: payload.get(key) or {}
-            for key in ("credentials", "remote_control", "quota", "usage")}
+            for key in ("claude", "credentials", "remote_control", "quota", "usage")}
 
 
 def _own_state(report: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -686,7 +715,9 @@ def _own_state(report: Mapping[str, Any]) -> tuple[str, str, str]:
 def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                heartbeat: Optional[Mapping[str, Any]], login: Mapping[str, Any],
                csrf: str, cfg: Config, now: float,
-               flagged: frozenset[str] = frozenset()) -> str:
+               flagged: frozenset[str] = frozenset(),
+               update: Optional[Mapping[str, Any]] = None,
+               channels: Optional[Mapping[str, Any]] = None) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
     # A sign-in or token that failed is over: it is said once, below, and the
@@ -746,6 +777,7 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                      f'{escape(str(failed.get("detail") or "no reason given"))}.</p>')
     if slot["state"] in CAN_SIGN_IN:
         parts.append(_sign_in(slot, report, login, csrf))
+        parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         parts.append(_tokens(slot, login, csrf, now))
     # Never on somebody's own node: giving back means wiping, and nothing
     # there is ours to wipe.
@@ -846,6 +878,70 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
     return (f'<div class="row-line stacked flow"><div class="row-name">Claude</div>'
             f"{body}</div>")
+
+
+#: A channel as the page names it.
+CHANNEL_WORDS = {"stable": "Stable", "latest": "Latest"}
+#: Under the button that moves a slot off Stable: what pressing it commits to.
+UPDATE_NOTE = "Switches this slot to the latest release; it keeps itself current from then on."
+SEP = '<span class="sep">&middot;</span>'
+
+
+def _claude_row(slot: Mapping[str, Any], node: Mapping[str, Any], report: Mapping[str, Any],
+                update: Mapping[str, Any], channels: Mapping[str, Any], csrf: str) -> str:
+    """Which Claude Code the slot runs, whether a newer one is out, and one
+    press to move there. Nothing until the machine has said what it runs.
+
+    Every number and reason here came from a machine or a download, so every
+    one is escaped. The operator's hold offers nothing: it is a safety valve.
+    """
+    restart = (report.get("upgrade") or {}).get("restart") == "waiting"
+    said = claude_versions.status((report.get("claude") or {}).get("version"),
+                                  claude_versions.slot_target(slot, node), channels,
+                                  update, restart)
+    if said is None:
+        return ""
+    base = f"/account/slots/{escape(slot['id'])}"
+    kind, latest, channel = said["status"], said["latest"], said["channel"]
+    buttons, note = [], ""
+    line = _claude_line(said)
+    if kind in ("available", "failed"):
+        label = f"Update to {latest}" if latest else "Update to the latest release"
+        buttons.append(_form(f"{base}/update", csrf, label, cls="primary"))
+        if channel != "latest":
+            note = f'<p class="cc-note">{escape(UPDATE_NOTE)}</p>'
+    if channel == "latest" and kind not in ("held", "updating"):
+        buttons.append(_form(f"{base}/stable", csrf, "Back to Stable", cls="quiet"))
+    tone = " bad-text" if kind == "failed" else ""
+    return ('<div class="row-line cc"><div class="row-name">Claude Code</div>'
+            f'<div class="actions"><span class="cc-say{tone}">{line}</span>'
+            f'{" ".join(buttons)}</div>{note}</div>')
+
+
+def _claude_line(said: Mapping[str, Any]) -> str:
+    """The row's one sentence, for each thing it can say."""
+    kind, version, latest = said["status"], escape(said["installed"]), said["latest"]
+    if kind == "held":
+        return f"<b>{version}</b> {SEP} held by the operator"
+    if kind == "updating":
+        to = said.get("to")
+        return (f"Updating to <b>{escape(to)}</b>&hellip;" if to
+                else "Updating to the latest release&hellip;")
+    if kind == "updated":
+        return (f"Updated to <b>{escape(said['to'])}</b> {SEP} Remote Control switches over "
+                "once no session is open")
+    if kind == "failed":
+        return f"Update failed: {escape(said.get('detail') or 'no reason given')}"
+    if said["channel"] == "latest":
+        told = f" {SEP} up to date" if kind == "current" and latest else ""
+        newer = f" {SEP} latest is <b>{escape(latest)}</b>" if kind == "available" else ""
+        return f"<b>{version}</b>{told} {SEP} follows the latest release{newer}"
+    where = (CHANNEL_WORDS["stable"] if said["channel"] == "stable"
+             else "pinned" if said["pinned"] else "")
+    line = f"<b>{version}</b>" + (f" {SEP} {where}" if where else "")
+    if kind == "available":
+        return line + f" {SEP} latest is <b>{escape(latest)}</b>"
+    return line + (f" {SEP} up to date" if latest else "")
 
 
 def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: float) -> str:

@@ -184,6 +184,25 @@ def _upgrade(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
             "ts": _num(section.get("ts"))}
 
 
+#: What an agent can say about an update somebody asked for from their page.
+UPDATE_REPORT_STATES = ("done", "failed")
+
+
+def _claude_update(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """What an agent did about an update asked for from a page, or None.
+
+    Strict: a known outcome and the request's own time, or nothing. The time
+    is what matches it to the request, so a report without one could only
+    ever close the wrong request.
+    """
+    state = section.get("state")
+    requested_at = _num(section.get("requested_at"))
+    if state not in UPDATE_REPORT_STATES or requested_at is None:
+        return None
+    return {"requested_at": requested_at, "state": state,
+            "to": _str(section.get("to"), 40), "detail": _str(section.get("detail"))}
+
+
 def _slots(value: Any) -> list[dict[str, Any]]:
     """One entry per slot on a shared machine, each about one Linux user.
 
@@ -233,6 +252,9 @@ def _slots(value: Any) -> list[dict[str, Any]]:
         # record is dropped once the pin is satisfied, the restart once done.
         if upgrade is not None or restart is not None:
             out[-1]["upgrade"] = {**(upgrade or {}), "restart": restart}
+        update = _claude_update(_section(entry, "claude_update"))
+        if update is not None:
+            out[-1]["claude_update"] = update
     return out
 
 
@@ -318,6 +340,11 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
         result["reboot_required"] = payload["reboot_required"]
     if login_state:
         result["reconcile"] = {"login": _login_progress(login)}
+    # An owner's own node says what it did about an update asked for from its
+    # owner's page here, in the same shape a machine uses per slot.
+    own_update = _claude_update(_section(reconcile, "claude_update"))
+    if own_update is not None:
+        result.setdefault("reconcile", {})["claude_update"] = own_update
     upgraded = _upgrade(upgrade)
     if upgraded is not None:
         # What the agent did about the last desired state it was handed. Reported
