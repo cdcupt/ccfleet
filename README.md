@@ -151,6 +151,9 @@ card says so either way. An owner's own node can count as a slot they hold,
 on their page: a record only, never handed out or wiped. A shared machine can
 be kept for one account, `ccfleetd node reserve <machine> <email>`: its free
 slot then goes to that account and nobody else, and `--none` opens it again.
+The operator sets the price of a slot for a month in the console's Price card,
+or with `ccfleetd price set 20 USD`, and the public pages show it; it is shown,
+never charged, and the allowance stays the only thing that grants a slot.
 The guidebook's chapter 11 covers the same ground for the operator, step by
 step.
 

@@ -562,8 +562,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            HTML_HEADERS)
             elif customer_docs.page_for(path):
                 # Public, for people deciding whether to buy a slot and then using one.
+                current = ctx.store.get_price()
                 self._send(200, customer_docs.page_for(path)(
-                    ctx.cfg, viewer=self._viewer()).encode("utf-8"), HTML_HEADERS)
+                    ctx.cfg, viewer=self._viewer(),
+                    price=current["price"] if current else None).encode("utf-8"),
+                    HTML_HEADERS)
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":
@@ -774,7 +777,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         return
                     self._action_on_node(parts[2], parts[3], form)
                 elif len(parts) == 4 and parts[1] in ("machine", "slot", "account",
-                                                      "payment"):
+                                                      "payment", "price"):
                     # Slots and the people who hold them are the operator's alone.
                     if not self._require_admin():
                         return

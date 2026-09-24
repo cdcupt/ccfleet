@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
 
-from . import names, payments
+from . import names, payments, pricing
 from . import slots as slotstates
 from .desired import is_channel, machine_hostname
 from .render import _age
@@ -34,6 +34,8 @@ STUCK_AFTER_S = 10 * 60
 COUNT_RE = re.compile(r"[0-9]{1,4}")
 #: A payment's id, from the path. Bounded for the same reason as a count.
 PAYMENT_ID_RE = re.compile(r"[0-9]{1,15}")
+#: What the price is the price of, in its action path: /actions/price/slot/set.
+PRICE_TARGET = "slot"
 
 # The same meanings as everywhere else: green running, amber waiting on its
 # holder, the accent while the machine works on it, grey empty.
@@ -70,9 +72,41 @@ def _upgrade_trouble(report: Mapping[str, Any]) -> list[str]:
 
 
 def section(store: Store, csrf: str, now: float) -> str:
-    """The slots card and the accounts card, for an admin's console."""
+    """The slots card, the accounts card and the price, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
-    return _slots_card(store, accounts, csrf, now) + _accounts_card(store, accounts, csrf, now)
+    return (_slots_card(store, accounts, csrf, now) + _accounts_card(store, accounts, csrf, now)
+            + _price_card(store, csrf, now))
+
+
+def _price_card(store: Store, csrf: str, now: float) -> str:
+    """What the public pages say a slot costs, and the form that changes it."""
+    current = store.get_price()
+    if current is not None:
+        price = current["price"]
+        said = (f"{escape(pricing.per_slot(price))}"
+                f'<span class="muted"> · set by {escape(str(current["updated_by"]))}, '
+                f"{escape(_age(now, current['updated_at']))} ago</span>")
+        amount, chosen = price.amount, price.currency
+    else:
+        said = ('No price set<span class="muted"> · the public pages say price and payment '
+                "are agreed with you</span>")
+        amount, chosen = "", pricing.CURRENCIES[0]
+    options = "".join(f'<option value="{code}"{" selected" if code == chosen else ""}>{code}'
+                      "</option>" for code in pricing.CURRENCIES)
+    base = f"/actions/price/{PRICE_TARGET}"
+    form = _form(f"{base}/set", csrf, "Save",
+                 '<input type="text" name="amount" class="price" inputmode="decimal" '
+                 f'value="{escape(amount)}" placeholder="20" size="8" '
+                 'aria-label="Price per slot per month" required>'
+                 f'<select name="currency" aria-label="Currency">{options}</select>',
+                 "primary")
+    clear = _form(f"{base}/clear", csrf, "Clear") if current is not None else ""
+    return ('<h2 id="price">Price</h2><div class="card">'
+            f'<div class="row-line"><div class="row-name">{said}</div>'
+            f'<div class="actions">{form}{clear}</div></div>'
+            '<p class="note">The price of a slot for a month, shown on the public pages. '
+            "It is shown, never charged: people pay you directly, an allowance is still what "
+            "lets somebody claim a slot, and the payments above are a record.</p></div>")
 
 
 def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
@@ -371,4 +405,10 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
             raise StoreError("no such payment")
         store.void_payment(int(target), now=now)
         return "accounts"
+    if kind == "price" and target == PRICE_TARGET and action == "set":
+        store.set_price(form.get("amount", ""), form.get("currency", ""), by=by, now=now)
+        return "price"
+    if kind == "price" and target == PRICE_TARGET and action == "clear":
+        store.clear_price()
+        return "price"
     return None

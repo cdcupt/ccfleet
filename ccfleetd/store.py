@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
-from . import names, payments
+from . import names, payments, pricing
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -178,6 +178,15 @@ CREATE TABLE IF NOT EXISTS payments (
     voided_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_payments_account ON payments(account_id);
+-- Values the operator sets from the console, one row per key. Today that is
+-- only "price", the price the public pages show (see ccfleetd/pricing.py): a
+-- line people read, never something charged or enforced.
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    updated_by TEXT NOT NULL
+);
 -- Browser sessions, which the console has never had.
 --
 -- The primary key is a SHA-256 of the session id, not the id. The cookie
@@ -1266,6 +1275,48 @@ class Store:
             rows = self._conn.execute(
                 query + " ORDER BY recorded_at DESC, id DESC", args).fetchall()
         return [dict(r) for r in rows]
+
+    # -- the price --------------------------------------------------------
+    #
+    # Shown on the public pages, never charged. Like the ledger above, nothing
+    # that claims or releases a slot reads it.
+
+    def get_price(self) -> Optional[dict[str, Any]]:
+        """The price the operator set, with who set it and when; None when there
+        is none, or when the stored one no longer passes (a hand edit), so the
+        pages fall back to their own words rather than publish it."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value, updated_at, updated_by FROM settings WHERE key = ?",
+                (pricing.SETTING_KEY,)).fetchone()
+        price = pricing.from_json(row["value"]) if row is not None else None
+        if price is None:
+            return None
+        return {"price": price, "updated_at": row["updated_at"],
+                "updated_by": row["updated_by"]}
+
+    def set_price(self, amount: str, currency: str, *, by: str,
+                  now: float) -> pricing.Price:
+        """Set the price every public page shows. Checked first: a refused
+        price changes nothing."""
+        try:
+            price = pricing.parse(amount, currency)
+        except pricing.PriceError as exc:
+            raise StoreError(str(exc)) from exc
+        with self._write_txn() as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                (pricing.SETTING_KEY, pricing.to_json(price), now, str(by)[:254]))
+        return price
+
+    def clear_price(self) -> bool:
+        """Show no price; the pages go back to "agreed with the operator".
+        False when there was none."""
+        with self._write_txn() as conn:
+            cur = conn.execute("DELETE FROM settings WHERE key = ?", (pricing.SETTING_KEY,))
+        return cur.rowcount > 0
 
     # -- slots ------------------------------------------------------------
     #
