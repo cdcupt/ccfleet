@@ -26,6 +26,8 @@ from ccfleetd.store import Store
 PRODUCT = "fleet.example.com"
 ADMIN = "admin.fleet.example.com"
 DOC_PATHS = ("/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms")
+LANDING = "<h1>Claude Code on a machine that is always on</h1>"
+HOW = ("How it works", "/docs/how-it-works")
 
 
 def _serve(**settings):
@@ -98,8 +100,10 @@ def render(path, **settings):
 @pytest.mark.parametrize("path", DOC_PATHS)
 def test_each_page_marks_itself_and_links_the_rest(path):
     page = render(path)
+    # The overview's own address is the bare one, so that is the link it marks.
+    marked = "/" if path == "/docs" else path
     assert page.count(' class="here"') == 1
-    assert f'<a href="{path}" class="here">' in page
+    assert f'<a href="{marked}" class="here">' in page
     for target, _ in customer_docs.PAGES_TITLES:
         assert f'href="{target}"' in page
     assert 'href="/account"' in page
@@ -199,9 +203,92 @@ def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
 
 # -- the way in ----------------------------------------------------------------------
 
-def test_the_bare_address_is_the_customers(one_site):
-    status, _ = one_site("/")
-    assert status == 303
+def test_the_bare_address_is_the_front_page(one_site):
+    """The overview itself, never a redirect to it: the same page /docs is."""
+    status, body = one_site("/")
+    assert status == 200 and LANDING in body
+    assert body == one_site("/docs")[1]
+    assert one_site("/?signin=cancelled")[0] == 200
+
+
+def test_with_two_sites_the_bare_address_is_the_products_front_page(two_sites):
+    """The admin host's bare address is still the console's, since the
+    console is all that host serves."""
+    status, body = two_sites("/", host=PRODUCT)
+    assert status == 200 and LANDING in body
+    status, body = two_sites("/", host=ADMIN)
+    assert status == 303 and LANDING not in body
+
+
+def test_the_front_page_names_the_bare_address_as_its_own(one_site):
+    """Served at / and at /docs alike, it says which address to keep, and no
+    other page claims an address it is not at."""
+    for path in ("/", "/docs", "/docs/"):
+        status, body = one_site(path)
+        head = body[:body.index("</head>")]
+        assert status == 200 and head.count('rel="canonical"') == 1, path
+        assert '<link rel="canonical" href="/">' in head, path
+    for path in ("/docs/guide", "/docs/how-it-works", "/docs/terms", "/privacy", "/account"):
+        assert 'rel="canonical"' not in one_site(path)[1], path
+
+
+def test_the_wordmark_and_the_overview_link_go_to_the_bare_address(one_site):
+    for path in ("/", *DOC_PATHS, "/privacy", "/account"):
+        body = one_site(path)[1]
+        assert body.count('<a class="brand" href="/">') == 2, path  # the bar and the footer
+        nav = body[body.index('<nav class="doc-nav">'):]
+        nav = nav[:nav.index("</nav>")]
+        assert re.search(r'<a href="/"( class="here")?>Overview</a>', nav), path
+        assert 'href="/docs"' not in nav, path
+
+
+def _way_on(page):
+    """The hero's buttons, as (label, href), in the order they are shown."""
+    row = page[page.index('<div class="cta-row">'):]
+    row = row[:row.index("</div>")]
+    return [(label, href) for href, label
+            in re.findall(r'<a class="btn[^"]*" href="([^"]*)">([^<]*)</a>', row)]
+
+
+def _viewer(account, **links):
+    return usersite.Viewer({"id": "u1", "email": "erik@example.com", **account}, "t" * 64,
+                           **links)
+
+
+@pytest.mark.parametrize("account,expected", [
+    (None, [("Sign in with Google", "/account"), HOW]),
+    ({"role": "user"}, [("Your slots", "/account"), HOW]),
+    ({"role": "admin"}, [("Your slots", "/account"), ("Console", "/admin"), HOW]),
+])
+def test_the_front_pages_way_on_suits_whoever_is_looking(account, expected):
+    viewer = None if account is None else _viewer(account)
+    assert _way_on(customer_docs.overview(Config(), viewer=viewer)) == expected
+
+
+@pytest.mark.parametrize("account", [{}, {"role": "user"}, {"role": "owner"},
+                                     {"role": "Admin"}, {"role": "admin "}, {"role": ""}])
+def test_only_an_operator_is_offered_the_console(account):
+    """The button saves an operator a click, and the console checks the role
+    again itself; but nobody else is ever shown a way in that is not theirs."""
+    shown = customer_docs.overview(Config(), viewer=_viewer(account))
+    seen = shown[shown.index("<body"):]  # the page, not the stylesheet's comments
+    assert "Console" not in seen and "/admin" not in seen
+    assert [label for label, _ in _way_on(shown)] == ["Your slots", "How it works"]
+
+
+def test_the_front_pages_own_links_are_escaped():
+    """The console's address comes from configuration and the canonical from
+    the caller; neither is trusted to be free of markup."""
+    viewer = _viewer({"role": "admin"}, slots_href='/account?a="><zz>',
+                     console_href='https://adm.example.com/admin?b="><zz>&c')
+    shown = customer_docs.overview(Config(), viewer=viewer)
+    assert 'href="/account?a=&quot;&gt;&lt;zz&gt;">Your slots</a>' in shown
+    assert 'href="https://adm.example.com/admin?b=&quot;&gt;&lt;zz&gt;&amp;c">Console</a>' in shown
+    assert "<zz>" not in shown
+    framed = usersite._shell("t", "", canonical='/"><zz>')
+    assert '<link rel="canonical" href="/&quot;&gt;&lt;zz&gt;">' in framed
+    assert "<zz>" not in framed
+    assert 'rel="canonical"' not in usersite._shell("t", "")
 
 
 def test_the_consoles_door_points_a_customer_home(one_site):

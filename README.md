@@ -64,7 +64,7 @@ docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd user add alic
 `node add` prints the node's token once, plus the three lines to put in the
 node's `agent.env`. Put a TLS proxy in front of `127.0.0.1:8110`
 (`deploy/Caddyfile.example`) and open `/admin` on it with user `admin` and the admin
-token; the bare address belongs to the people who use the product. To give an owner a read-only view of their own nodes, add a named account with `ccfleetd user add NAME --owner OWNER`.
+token; the bare address is the product's front page, the same for everybody. To give an owner a read-only view of their own nodes, add a named account with `ccfleetd user add NAME --owner OWNER`.
 If you would rather not expose a public endpoint at all, nodes can report over an
 SSH tunnel instead: see [docs/tunnel.md](docs/tunnel.md).
 
@@ -193,17 +193,20 @@ The rules the rest depends on:
 - **Payments are a record, not a gate.** The console shows who is paid through
   when, and marks a lapse in red while that person still holds or may claim
   slots. A lapse takes no slot and stops no claim; what to do about it is yours.
-- **The console is at `/admin`; the bare address is the product's.** It takes
-  everybody to their own page: an operator to the console, a signed-in customer
-  to their slots, anybody else to what ccfleet is and how to start.
+- **The console is at `/admin`; the bare address is the product's.** It is the
+  front page, the same page for everybody (and at `/docs` too): what ccfleet is
+  and how to start. Only its buttons follow who is looking: sign in, or your
+  slots once you are signed in, and the console as well for an operator.
   `CCFLEET_ADMIN_HOST=admin.fleet.example.com` moves the console to its own
   hostname instead, with its own Google redirect URI and its own sessions;
-  every other hostname is then only the product.
+  every other hostname is then only the product, and the admin host's bare
+  address goes to the console.
 
 What to send the people who buy slots: the product site serves public pages
-for them — `/docs` (what it is, what they need, how to buy), `/docs/guide`,
-`/docs/how-it-works`, `/docs/terms` and `/privacy`. Set `CCFLEET_CONTACT_EMAIL`
-to publish an address on them; without it they say to ask whoever sent the link.
+for them — the bare address (what it is, what they need, how to buy; also at
+`/docs`), `/docs/guide`, `/docs/how-it-works`, `/docs/terms` and `/privacy`.
+Set `CCFLEET_CONTACT_EMAIL` to publish an address on them; without it they say
+to ask whoever sent the link.
 
 Keeping it up to date:
 

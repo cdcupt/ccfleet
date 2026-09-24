@@ -361,7 +361,7 @@ ccfleetd serve</code></pre>
 fleet.example.com {
     reverse_proxy 127.0.0.1:8110
 }</code></pre>
-    <p>Open <code>/admin</code> at that address in a browser. User name <code>admin</code>, password the admin token. The bare address belongs to the people who use the product: it takes each of them to their own page, and takes you to the console once it knows you. You will see an empty fleet with the hint to add a node. That token is the operator's way in and always works; named logins for owners come later, in <a href="#accounts">section 06</a>.</p>
+    <p>Open <code>/admin</code> at that address in a browser. User name <code>admin</code>, password the admin token. The bare address is the product's front page, the same for everybody: what ccfleet is and how to start. Once you have signed in there with Google as an operator, it offers you the console too. You will see an empty fleet with the hint to add a node. That token is the operator's way in and always works; named logins for owners come later, in <a href="#accounts">section 06</a>.</p>
     <div class="note">
       <p class="t">No public endpoint?</p>
       <p>You can skip the hostname, the DNS record and the certificate entirely. A node can reach the server through an SSH tunnel instead: a user service forwards a loopback port on the node to this server's loopback port, and the agent posts to its own <code>127.0.0.1</code> with SSH providing the encryption. ccfleetd's HTTP endpoint stays private, though the server does still need a reachable SSH port, which is the one surface this design depends on. See <code>docs/tunnel.md</code> in the repo.</p>
@@ -822,8 +822,9 @@ claude
       charged: people still pay you directly, the allowance is still the only thing that lets
       somebody claim a slot, and the payments you record stay a record. With no price set, the
       pages say price and payment are agreed with you.</p>
-      <p>Send them <code>/docs</code>. It says what ccfleet is, what they must bring (their own
-      Pro, Max, Team or Enterprise plan; API keys do not work) and how to start, and links
+      <p>Send them the bare address (<code>/docs</code> is the same page). It says what ccfleet
+      is, what they must bring (their own Pro, Max, Team or Enterprise plan; API keys do not
+      work) and how to start, and links
       <code>/docs/guide</code>, <code>/docs/how-it-works</code>, <code>/docs/terms</code> and
       <code>/privacy</code>. Set <code>CCFLEET_CONTACT_EMAIL</code> to publish an address on
       them.</p>
