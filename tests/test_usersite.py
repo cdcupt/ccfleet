@@ -8,6 +8,7 @@ session's token, and nothing of anybody else's on the page.
 
 from __future__ import annotations
 
+import base64
 import http.client
 import re
 import threading
@@ -754,3 +755,169 @@ def test_the_policy_no_longer_says_the_account_address_stays_on_the_machine():
     assert "Claude accounts" not in page, "one account per slot, and the page says one"
     assert f"Last updated {usersite.PRIVACY_UPDATED}" in page and \
         usersite.PRIVACY_UPDATED >= "2026-09-23"
+
+
+# -- the corner of the bar: who is looking -------------------------------------------
+
+PUBLIC = ("/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms", "/privacy")
+SIGN_IN = 'href="/account">Sign in</a>'
+
+
+def corner(page):
+    """The bar's corner alone: the part of a page that says who is looking."""
+    start = page.index('<div class="topbar-end">')
+    return page[start:page.index("</header>", start)]
+
+
+def test_public_pages_show_who_is_looking(site):
+    """Signed in, every page anybody can read shows your initial and your menu;
+    signed out, the same spot is the way to sign in."""
+    _, sign_in, _ = site
+    erik = sign_in()
+    anybody = Browser(erik.port)
+    for path in PUBLIC:
+        mine = corner(erik.call("GET", path).body)
+        assert '<details class="usermenu">' in mine, path
+        assert "<strong>erik@<wbr>example.com</strong>" in mine and ">E</span>" in mine, path
+        # The menu's head repeats the face beside the address, as the mockup has it.
+        assert re.search(r'<div class="menu-who"><span class="avatar t\d big" '
+                         r'aria-hidden="true">E</span>', mine), path
+        assert SIGN_IN not in mine, path
+        theirs = corner(anybody.call("GET", path).body)
+        assert SIGN_IN in theirs and "usermenu" not in theirs, path
+
+
+def test_a_session_that_is_no_good_is_nobody(site):
+    """A tampered cookie and an expired session both read as nobody: the corner
+    offers sign-in, never a menu for a session that no longer counts."""
+    store, sign_in, _ = site
+    erik = sign_in()
+    good = erik.jar[sessions.COOKIE_NAME]
+    forged = Browser(erik.port)
+    forged.jar[sessions.COOKIE_NAME] = good[:-1] + ("0" if good[-1] != "0" else "1")
+    stale = Browser(erik.port)
+    expired = store.create_session(erik.account["id"], now=time.time() - 3600, ttl_s=60)
+    stale.jar[sessions.COOKIE_NAME] = sessions.sign(expired, SECRET)
+    for browser in (forged, stale):
+        shown = corner(browser.call("GET", "/docs").body)
+        assert SIGN_IN in shown and "usermenu" not in shown
+
+
+def test_reading_a_public_page_writes_nothing(site):
+    """Saying who is looking reads the session; it does not use it. No visit is
+    recorded and no expired session is swept by a page anybody can read."""
+    store, sign_in, _ = site
+    erik = sign_in()
+    seen = store.get_account(erik.account["id"])["last_seen_at"]
+    stale = Browser(erik.port)
+    expired = store.create_session(erik.account["id"], now=time.time() - 3600, ttl_s=60)
+    stale.jar[sessions.COOKIE_NAME] = sessions.sign(expired, SECRET)
+    before = store._conn.total_changes
+    for path in PUBLIC:
+        assert erik.call("GET", path).status == 200
+        assert stale.call("GET", path).status == 200
+    assert store._conn.total_changes == before, "a public page wrote to the database"
+    assert store.get_account(erik.account["id"])["last_seen_at"] == seen
+    # The page that acts on a session still sweeps an expired one, as before.
+    assert "Continue with Google" in stale.call("GET", "/account").body
+    assert store._conn.total_changes > before
+
+
+def test_the_account_page_the_token_page_and_not_found_show_the_menu(site):
+    store, sign_in, _ = site
+    machine(store)
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    token_page = erik.press(f"/account/slots/{slot['id']}/token-show")
+    missing = erik.press("/account/slots/nobody-01/token")
+    assert token_page.status == 200 and missing.status == 404
+    for body in (erik.page(), token_page.body, missing.body):
+        mine = corner(body)
+        assert '<details class="usermenu">' in mine and "erik@example.com" in mine
+        assert SIGN_IN not in mine
+
+
+def test_the_way_in_does_not_offer_itself(site):
+    """The sign-in page is the way in: a Sign in button on it would point at itself."""
+    _, sign_in, _ = site
+    anybody = Browser(sign_in().port)
+    door = anybody.call("GET", "/account").body
+    assert "Continue with Google" in door and SIGN_IN not in corner(door)
+
+
+def test_only_an_operator_is_offered_the_console(site):
+    store, sign_in, _ = site
+    erik = sign_in()
+    for path in (*PUBLIC, "/account"):
+        mine = corner(erik.call("GET", path).body)
+        assert "<span>Console</span>" not in mine, path
+        assert '"menu-pill">operator<' not in mine, "the operator pill without the console"
+    store.set_account_role(erik.account["id"], "admin")
+    for path in (*PUBLIC, "/account"):
+        assert ('<a href="/admin"><span>Console</span><span class="menu-pill">operator</span>'
+                in corner(erik.call("GET", path).body)), path
+    # The console's own corner is the same menu, for the operator it signed in.
+    console = erik.call("GET", "/admin")
+    assert console.status == 200
+    assert "<strong>erik@<wbr>example.com</strong>" in corner(console.body)
+    # The admin token is basic auth: no session, so nothing to show or sign out.
+    basic = "Basic " + base64.b64encode(b"admin:admin-token").decode()
+    token_only = Browser(erik.port).call("GET", "/admin", headers={"Authorization": basic})
+    assert token_only.status == 200
+    assert '<details class="usermenu">' not in token_only.body
+
+
+def test_your_slots_carries_this_accounts_own_count(site):
+    """How many slots you hold, beside Your slots: your own count, never anybody
+    else's, and nothing at all when it is none."""
+    store, sign_in, _ = site
+    for node in ("m1", "m2", "m3"):
+        machine(store, node, users=("slot01",))
+    erik = sign_in(quota=2)
+    ana = sign_in("google-ana", "ana@example.com", quota=1)
+    bo = sign_in("google-bo", "bo@example.com", quota=0)
+    for browser in (erik, erik, ana):
+        assert browser.press("/account/claim").status == 303
+    for browser, count in ((erik, 2), (ana, 1)):
+        for path in ("/docs", "/account"):
+            mine = corner(browser.call("GET", path).body)
+            assert f'<span>Your slots</span><span class="menu-pill">{count}</span>' in mine, path
+    empty = corner(bo.call("GET", "/docs").body)
+    assert "<span>Your slots</span></a>" in empty and "menu-pill" not in empty
+
+
+def test_signing_out_from_the_menu_is_this_sessions_post(site):
+    """A form carrying this session's token, never a link: a link would let any
+    page that can make a browser fetch a URL sign people out."""
+    _, sign_in, _ = site
+    erik = sign_in()
+    mine = corner(erik.call("GET", "/docs/guide").body)
+    form = mine[mine.index("<form"):mine.index("</form>")]
+    session_id = sessions.unsign(erik.jar[sessions.COOKIE_NAME], SECRET)
+    assert '<form method="post" action="/auth/signout">' in form
+    assert f'name="csrf" value="{usersite.csrf_for(session_id, SECRET)}"' in form
+    assert "/auth/signout" not in mine.replace(form, ""), "signing out is a form, never a link"
+    assert erik.call("POST", "/auth/signout", form={}).status == 403
+    token = re.search(r'name="csrf" value="([0-9a-f]{64})"', form).group(1)
+    assert erik.call("POST", "/auth/signout", form={"csrf": token}).status == 303
+    assert SIGN_IN in corner(erik.call("GET", "/docs").body)
+
+
+def test_the_menu_escapes_the_address():
+    from ccfleetd.render import user_menu
+    shown = user_menu({"id": "u1", "email": 'x"><img src=y>@e.com'}, "t" * 64,
+                      operator=False)
+    assert "<img" not in shown
+    assert 'aria-label="Account menu for x&quot;&gt;&lt;img src=y&gt;@e.com"' in shown
+    assert "<strong>x&quot;&gt;&lt;img src=y&gt;@<wbr>e.com</strong>" in shown
+
+
+def test_an_avatar_is_the_same_every_time_and_says_whose_it_is():
+    from ccfleetd.render import AVATAR_TONES, _initial, _tone
+    assert _initial({"email": "erik@example.com"}) == "E"
+    assert _initial({"email": "_ops.team@example.com"}) == "O", "the first letter or digit"
+    assert _initial({"email": "@example.com"}) == "?" and _initial({}) == "?"
+    assert _initial({"handle": "maya", "email": "zed@example.com"}) == "M", "a handle wins"
+    assert _tone({"id": "u1"}) == _tone({"id": "u1"})
+    tones = {_tone({"id": f"u{n:024x}"}) for n in range(40)}
+    assert len(tones) > 1 and tones <= set(range(AVATAR_TONES))

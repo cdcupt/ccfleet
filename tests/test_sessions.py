@@ -333,6 +333,27 @@ def test_a_session_for_nobody_is_refused(store):
         store.create_session("ghost", now=NOW, ttl_s=60)
 
 
+def test_peeking_at_a_session_answers_like_using_it_and_changes_nothing(store):
+    """For pages anybody may read: the same answer as using the session, on the
+    same terms (unexpired, this site's), but no visit recorded and nothing swept."""
+    live = store.create_session("a1", now=NOW, ttl_s=600, site="product")
+    other_site = store.create_session("a1", now=NOW, ttl_s=600, site="admin")
+    expired = store.create_session("a1", now=NOW - 900, ttl_s=600)
+    before = store._conn.total_changes
+    peeked = store.peek_session(live, now=NOW + 5, site="product")
+    assert peeked["id"] == "a1" and peeked["email"] == "erik@example.com"
+    assert set(peeked) == set(store.get_account("a1")), "the account, and nothing else"
+    assert store.peek_session(other_site, now=NOW + 5, site="product") is None
+    assert store.peek_session(other_site, now=NOW + 5, site="admin")["id"] == "a1"
+    assert store.peek_session(live, now=NOW + 600) is None, "expiry is the same instant"
+    assert store.peek_session(expired, now=NOW) is None
+    assert store.peek_session(sessions.new_session_id(), now=NOW) is None
+    assert store._conn.total_changes == before
+    assert store.get_account("a1")["last_seen_at"] != NOW + 5
+    with store._lock:
+        assert store._conn.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"] == 3
+
+
 def test_signing_out_ends_that_session_and_only_that_one(store):
     here = store.create_session("a1", now=NOW, ttl_s=3600)
     elsewhere = store.create_session("a1", now=NOW, ttl_s=3600)

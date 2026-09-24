@@ -27,14 +27,21 @@ from .config import Config
 from .desired import is_login_url
 from .monitor import LOGIN_MAX_AGE_S
 from .render import (
+    CONSOLE_PATH,
     CSS,
+    FAVICON,
     LOGIN_WORDS,
+    MARK,
+    SIGN_IN_LINK,
     TOKEN_WORDS,
     _age,
     _human_tokens,
     _meter,
     _usage_chart,
     _usage_span,
+    console_href,
+    product_href,
+    user_menu,
 )
 from .store import (
     NoSlotAvailable,
@@ -63,8 +70,11 @@ NOTES = {
                         "or being given back."),
 }
 
+# The pill says the state the way every page says a state: green running,
+# amber waiting on you, the accent while the machine is working on it, grey on
+# its way out.
 STATE_WORDS = {
-    slotstates.CLAIMING: ("warn", "Setting up",
+    slotstates.CLAIMING: ("busy", "Setting up",
                           "Creating your account on the machine and installing Claude Code. "
                           "A few minutes."),
     slotstates.CLAIMED: ("warn", "Ready to sign in",
@@ -81,6 +91,52 @@ SLOT_ACTIONS = ("release", "signin", "code", "cancel", "token", "token-show", "t
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
 IDLE_REFRESH_S = 60
 ACTIVE_REFRESH_S = 4
+
+
+@dataclass(frozen=True)
+class Viewer:
+    """Somebody signed in to us, as the corner of every page shows them.
+
+    Built only from a session this request carried, so the page shows the
+    person looking at it and nobody else. The token is that session's, which
+    is all the menu's sign-out form needs.
+    """
+
+    account: Mapping[str, Any]
+    csrf: str
+    slots_href: str = "/account"
+    console_href: str = CONSOLE_PATH
+    slots_held: int = 0
+
+    @property
+    def operator(self) -> bool:
+        """Whether the menu offers the console. Operators are made only from
+        the server's command line; the console checks the role again itself."""
+        return self.account.get("role") == "admin"
+
+    def menu(self) -> str:
+        return user_menu(self.account, self.csrf, operator=self.operator,
+                         slots_href=self.slots_href, console_href=self.console_href,
+                         slots_held=self.slots_held)
+
+
+def viewer_for(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config,
+               store: Optional[Store] = None, *, on_console: bool = False
+               ) -> Optional[Viewer]:
+    """The viewer for a page, or None when nobody is signed in.
+
+    The count on Your slots is read here, for this account and no other, so no
+    page can show one person another's. On the console the menu's links point
+    back at the product: with two hostnames the console's host has no slots
+    page and the product's has no console, so each side names the other in full.
+    """
+    if account is None or not session_id:
+        return None
+    csrf = csrf_for(session_id, cfg.cookie_secret)
+    held = store.held_slot_count(account["id"]) if store is not None else 0
+    if on_console:
+        return Viewer(account, csrf, slots_href=product_href(cfg, "/account"), slots_held=held)
+    return Viewer(account, csrf, console_href=console_href(cfg), slots_held=held)
 
 
 @dataclass(frozen=True)
@@ -108,33 +164,35 @@ def _back(note: str, anchor: str = "") -> Outcome:
     return Outcome(303, location=f"/account?note={note}" + (f"#{anchor}" if anchor else ""))
 
 
-def not_found() -> Outcome:
-    return Outcome(404, body=_shell("Not found", "<h1>Not found</h1><div class=\"card\">"
+def not_found(viewer: Optional[Viewer] = None) -> Outcome:
+    return Outcome(404, body=_shell("Not found", f'<div class="card door">{MARK}'
+                                    "<h1>Not found</h1>"
                                     "<p>There is nothing here.</p>"
                                     "<p><a class=\"back\" href=\"/account\">&larr; your slots</a>"
-                                    "</p></div>"))
+                                    "</p></div>", viewer=viewer))
 
 
 # -- actions ---------------------------------------------------------------------
 
 def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
-        form: Mapping[str, str], now: float) -> Outcome:
+        form: Mapping[str, str], now: float, session_id: str = "") -> Outcome:
     """Do what a form on this page asked, for this account and nobody else."""
+    viewer = viewer_for(account, session_id, cfg, store)
     parts = path.strip("/").split("/")
     if parts == ["account", "claim"]:
         return _claim(store, cfg, account, now)
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
         if slot is None:
-            return not_found()
+            return not_found(viewer)
         try:
-            return _on_slot(store, slot, account["id"], parts[3], form, now)
+            return _on_slot(store, slot, account["id"], parts[3], form, now, viewer)
         except NotYours:
             # Somebody else's slot answers exactly as a missing one: which ids
             # are held, and by whom, is not this person's to learn. The store
             # decides it, in the same transaction as the action itself.
-            return not_found()
-    return not_found()
+            return not_found(viewer)
+    return not_found(viewer)
 
 
 def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float) -> Outcome:
@@ -151,7 +209,8 @@ def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float) ->
 
 
 def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
-             form: Mapping[str, str], now: float) -> Outcome:
+             form: Mapping[str, str], now: float,
+             viewer: Optional[Viewer] = None) -> Outcome:
     """Every store call carries the holder, and the store checks it in the
     same transaction as the change: a slot given back and claimed by somebody
     else between loading and acting is refused, not acted on."""
@@ -179,7 +238,7 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
             return _back("code", anchor)
         if action == "token-show":
             return Outcome(200, body=token_page(
-                slot, store.read_slot_secret(slot_id, now, held_by=holder)))
+                slot, store.read_slot_secret(slot_id, now, held_by=holder), viewer))
         # cancel, token-done: whichever flow is in flight on this slot ends here.
         store.clear_slot_login(slot_id, held_by=holder)
         return _back("done" if action == "token-done" else "cancelled", anchor)
@@ -191,37 +250,165 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
 
 # -- the page --------------------------------------------------------------------
 
-# What this page adds to the console's styles: the note after an action, and
-# a little air between one slot and the next.
+# What the user site adds to the shared styles: its own frame (a bar on top and a
+# footer, the same on every page people are sent to), the account page, the
+# doors, and the progress a slot shows while the machine works on it.
 USER_CSS = CSS + """
+body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
+.site main{flex:1 0 auto;width:100%}
+.site .page{max-width:1120px;padding-block:34px 64px}
+.site .page.narrow{max-width:880px}
+.site .page.doc{max-width:840px}
+
+/* The bar's links to the pages anybody can read. */
+.doc-nav{display:flex;align-items:center;gap:2px;font-size:14px;min-width:0;
+overflow-x:auto;scrollbar-width:none}
+.doc-nav::-webkit-scrollbar{display:none}
+.doc-nav a{color:var(--muted);text-decoration:none;padding:7px 11px;border-radius:9px;
+white-space:nowrap;font-weight:560}
+.doc-nav a:hover{color:var(--ink);background:var(--inset)}
+.doc-nav a.here{color:var(--acc);background:var(--acc-soft)}
+
+/* The footer: the same ways out, from every page. */
+.sitefoot{border-top:1px solid var(--rule);background:var(--panel)}
+.sitefoot-in{max-width:1120px;margin:0 auto;padding:26px 20px 34px;display:flex;
+flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:14px 40px;
+font-size:13.5px;color:var(--muted)}
+.sitefoot .brand{font-size:15px}
+.sitefoot .brand .mark{width:22px;height:22px}
+.sitefoot p{margin:10px 0 0;max-width:46ch}
+.sitefoot nav{display:flex;flex-wrap:wrap;gap:8px 20px;padding-top:3px}
+.sitefoot nav a{color:var(--muted);text-decoration:none}
+.sitefoot nav a:hover{color:var(--ink)}
+
+/* A page's title, and the line under it. */
+.pagehead{margin:0 0 22px}
+.pagehead .sub{margin-top:8px;font-size:15px}
 .note-banner{border:1px solid var(--rule);border-radius:12px;padding:12px 16px;
-margin:0 0 18px;font-weight:500}
-.note-banner.ok{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
-.note-banner.warn{border-color:var(--warn);background:var(--warn-bg);color:var(--warn)}
-.lapsed{color:var(--warn);font-weight:600}
-.foot{margin:28px 0 0;font-size:12px;color:var(--muted)}
+margin:0 0 18px;font-weight:550;background:var(--panel)}
+.note-banner.ok{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
+.note-banner.warn{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
+.lapsed{color:var(--warn);font-weight:650}
 .card+.card{margin-top:14px}
-.card ul{margin:8px 0;padding-left:20px}.card li{margin:6px 0;line-height:1.5}
-.card.slot{margin:0 0 16px}
-.card.slot h2{text-transform:none;letter-spacing:0;font-family:var(--mono);font-size:15px;
-color:var(--ink)}
-.card.slot h2 .pill{margin-left:6px;vertical-align:1px;font-family:var(--sans)}
-.card .usage{margin:8px 0 4px}
-.card .usage svg.spark{max-width:520px}
-label.check{font-weight:400;color:var(--muted);align-items:flex-start;margin-top:0}
+.card ul{margin:10px 0;padding-left:20px}.card li{margin:7px 0;line-height:1.55}
+.card li::marker{color:var(--acc)}
+
+/* The allowance: how many you may hold, and the one button that spends it. */
+.card.allowance{display:flex;align-items:center;justify-content:space-between;gap:14px 24px;
+flex-wrap:wrap;padding:18px 22px;margin:0 0 24px}
+.allowance h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+margin:0 0 4px;font-weight:680}
+.allowance p{margin:2px 0}
+
+/* A slot: its name and state on top, then what you can do with it. */
+.slots{display:grid;gap:18px}
+.card.slot{padding:0;overflow:hidden;scroll-margin-top:96px}
+.slot-head{padding:16px 22px 14px;border-bottom:1px solid var(--rule-soft)}
+.slot-head h2{margin:0;display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;
+font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:-.01em}
+.slot-head h2 .tag{font-family:var(--sans);font-size:12px;font-weight:650;letter-spacing:.01em}
+.slot-meta{margin:6px 0 0;font-size:13px;color:var(--muted)}
+.slot-body{padding:4px 22px 6px}
+.slot-body>p{margin:14px 0}
+.card.slot[data-state="releasing"] .slot-head{background:var(--off-bg)}
+.card.slot[data-state="releasing"] .slot-body{color:var(--muted)}
+/* The machine is working on it: said by motion, and stated in words beside it. */
+.progress{height:4px;border-radius:99px;background:var(--acc-soft);overflow:hidden;
+margin:14px 0 4px;max-width:320px}
+.progress i{display:block;height:100%;width:36%;border-radius:99px;background:var(--acc);
+animation:ccfleet-slide 1.6s ease-in-out infinite}
+[data-state="releasing"] .progress{background:var(--off-bg)}
+[data-state="releasing"] .progress i{background:var(--off)}
+@keyframes ccfleet-slide{from{transform:translateX(-100%)}to{transform:translateX(280%)}}
+@media (prefers-reduced-motion:reduce){.progress i{animation:none;width:100%;opacity:.4}}
+.signed{margin:14px 0 4px;font-size:15px}
+/* Remote Control's state as a light beside the sentence; the sentence itself
+   stays ordinary running text, link and all. */
+.rc{position:relative;padding-left:18px;margin:4px 0 14px}
+.rc::before{content:"";position:absolute;left:0;top:.55em;width:8px;height:8px;
+border-radius:50%;background:var(--off)}
+.rc.on::before{background:var(--led);box-shadow:0 0 0 3px var(--ok-bg)}
+.usage{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:18px 28px;
+align-items:start;margin:4px 0 14px;padding:16px 18px;border-radius:12px;
+background:var(--inset);border:1px solid var(--rule-soft)}
+.usage.one{grid-template-columns:minmax(0,1fr)}
+.usage .usage-nums{margin:0 0 10px}
+.usage-trend p{margin:0 0 8px}
+.usage-trend svg.spark{height:52px}
+.slot-body .row-line{padding:14px 0}
+.row-line.release .row-name{color:var(--muted)}
+.row-line.release .check{color:var(--muted);max-width:56ch}
+/* A sign-in or a token under way: the one thing on the card that is waiting on you. */
+.row-line.flow{margin:10px 0 14px;padding:16px 18px;border:1px solid var(--acc-line);
+background:var(--acc-soft);border-radius:12px}
+.row-line.flow .login-url{background:var(--panel)}
+.row-line.flow input[type=text]{max-width:280px}
+.site .page>p.note{margin-top:26px;padding:14px 18px;border:1px solid var(--rule);
+border-radius:12px;background:var(--panel)}
+
+/* The doors: signing in, the console's, and a page that is not there. */
+.door{max-width:520px;margin:24px auto 0;padding:28px 30px 24px}
+.door .mark{width:44px;height:44px}
+.door h1{margin:18px 0 10px}
+.door .btn.big{width:100%;margin:8px 0 4px}
+.door-alt{max-width:520px;margin:16px auto 0}
+
+/* A device token: the one string on its page, selected whole with one click. */
+pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:all;
+-webkit-user-select:all;background:var(--panel);border-color:var(--acc-line)}
+
+@media (max-width:760px){
+.topbar-in{padding:10px 16px;gap:6px 12px}
+.doc-nav{order:3;flex:1 0 100%;margin:0 -8px}
+.doc-nav a{padding:6px 8px;font-size:13.5px}
+.site .page{padding-block:24px 48px;padding-left:16px;padding-right:16px}
+.card.slot{scroll-margin-top:124px}
+.slot-head,.slot-body{padding-left:16px;padding-right:16px}
+.usage{grid-template-columns:minmax(0,1fr);padding:14px}
+.door{padding:22px 20px 20px}
+.sitefoot-in{padding-left:16px;padding-right:16px}}
 """
 
+#: The pages anybody can read, in the order the bar on top shows them.
+NAV = (("/docs", "Overview"), ("/docs/guide", "Guide"),
+       ("/docs/how-it-works", "How it works"), ("/privacy", "Privacy"),
+       ("/docs/terms", "Terms"))
+def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
+           here: str = "", viewer: Optional[Viewer] = None, door: bool = False,
+           width: str = "narrow") -> str:
+    """A page of the user site, in its frame: the bar on top, the page, the footer.
 
-def _shell(title: str, body: str, refresh: str = "", extra_css: str = "") -> str:
+    ``here`` marks the bar's link to this page, and nothing else is marked, so
+    somebody can always tell where they are. The bar's corner says who is
+    looking: their menu when they are signed in, a way to sign in when not,
+    and nothing on a page that is itself the way in (``door``).
+    """
+    links = "".join(f'<a href="{path}"{_HERE if path == here else ""}>{escape(name)}</a>'
+                    for path, name in NAV)
+    corner = viewer.menu() if viewer is not None else "" if door else SIGN_IN_LINK
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"{refresh}<title>ccfleet · {escape(title)}</title>"
+            f'<link rel="icon" href="{FAVICON}">'
             f"<style>{USER_CSS}{extra_css}</style></head>"
-            f"<body><div class=\"page\">{body}"
-            '<p class="foot"><a href="/account">Your slots</a> · <a href="/docs">About</a> · '
-            '<a href="/docs/guide">Guide</a> · <a href="/privacy">Privacy</a> · '
-            '<a href="/docs/terms">Terms</a></p>'
-            "</div></body></html>")
+            '<body class="site"><header class="topbar"><div class="topbar-in">'
+            f'<a class="brand" href="/docs">{MARK}<span>ccfleet</span></a>'
+            f'<nav class="doc-nav">{links}</nav>'
+            f'<div class="topbar-end">{corner}</div></div></header>'
+            f'<main class="page {escape(width)}">{body}</main>'
+            '<footer class="sitefoot"><div class="sitefoot-in"><div>'
+            f'<a class="brand" href="/docs">{MARK}<span>ccfleet</span></a>'
+            "<p>Claude Code on a machine that is always on. You bring your own Claude "
+            "plan.</p></div>"
+            '<nav aria-label="More"><a href="/account">Your slots</a>'
+            '<a href="/docs/guide">Guide</a><a href="/docs/how-it-works">How it works</a>'
+            '<a href="/privacy">Privacy</a><a href="/docs/terms">Terms</a>'
+            '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
+            'rel="noopener noreferrer">Source code</a></nav>'
+            "</div></footer></body></html>")
+
+
+_HERE = ' class="here"'
 
 
 def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") -> str:
@@ -247,16 +434,18 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
 
     tone, words = NOTES.get(note, ("", ""))
     banner = f'<div class="note-banner {tone}">{escape(words)}</div>' if words else ""
+    claim = ""
     if quota == 0:
         allowance = ("<p><strong>You have no slots yet.</strong></p>"
                      "<p class=\"muted\">Slots are assigned by the operator. Once you have "
-                     "an allowance, you can claim one here.</p>")
+                     "an allowance, you can claim one here. "
+                     '<a href="/docs">How to buy a slot</a>.</p>')
     else:
         allowance = (f"<p>You may hold <strong>{quota}</strong> "
                      f"{'slot' if quota == 1 else 'slots'}, and hold "
                      f"<strong>{counted}</strong>.</p>")
         if counted < quota:
-            allowance += _form("/account/claim", csrf, "Claim a slot", cls="primary")
+            claim = _form("/account/claim", csrf, "Claim a slot", cls="primary")
     allowance += _paid(payments.paid_through(store.list_payments(account["id"])), now)
     # The operator's alerts about the rule, said to the holder without naming
     # the other place: it may be somebody else's.
@@ -265,19 +454,20 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]])
                     for s in held)
     body = (
-        '<header class="mast"><div><h1>ccfleet<span class="dot">.</span></h1>'
+        '<div class="pagehead"><h1>Your slots</h1>'
         f'<p class="sub">Signed in as <strong>{escape(str(account.get("email", "")))}'
         "</strong></p></div>"
-        + _form("/auth/signout", csrf, "Sign out") + "</header>"
         + banner
-        + f'<div class="card"><h2>Your allowance</h2>{allowance}</div>'
-        + (f"<h2>Your slots</h2>{cards}" if cards else "")
+        + f'<div class="card allowance"><div><h2>Your allowance</h2>{allowance}</div>'
+        f"{claim}</div>"
+        + (f'<div class="slots">{cards}</div>' if cards else "")
         + '<p class="note">Your slot is a Linux account on a machine we operate, with its own '
         "home, its own Claude Code and your own Claude sign-in. Other people's slots on the "
         "machine cannot read yours; the machine's administrators technically can. This page "
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
-    return _shell("your slots", body, _refresh(held, logins))
+    return _shell("your slots", body, _refresh(held, logins),
+                  viewer=viewer_for(account, session_id, cfg, store))
 
 
 def _paid(through: Optional[str], now: float) -> str:
@@ -296,24 +486,27 @@ def _paid(through: Optional[str], now: float) -> str:
 def _signed_out(cfg: Config) -> str:
     if not cfg.google_ready:
         # Said plainly rather than showing a button that cannot work.
-        return _shell("sign in", "<h1>ccfleet</h1><div class=\"card\">"
+        return _shell("sign in", f'<div class="card door">{MARK}<h1>Sign in</h1>'
                       "<p>Sign-in is not set up on this server.</p>"
                       "<p class=\"muted\">An operator configures "
                       "<code>CCFLEET_GOOGLE_CLIENT_ID</code>, "
                       "<code>CCFLEET_GOOGLE_CLIENT_SECRET</code> and "
-                      "<code>CCFLEET_COOKIE_SECRET</code> to turn it on.</p></div>")
-    return _shell("sign in", "<h1>ccfleet</h1><div class=\"card\">"
+                      "<code>CCFLEET_COOKIE_SECRET</code> to turn it on.</p></div>", door=True)
+    return _shell("sign in", f'<div class="card door">{MARK}<h1>Sign in to your slots</h1>'
                   "<p>ccfleet gives you a slot on a machine we operate: your own Linux "
                   "account there, with Claude Code, signed in to your own Claude account. "
                   "The operator decides who gets slots.</p>"
                   "<p>Sign in to see the slots you hold.</p>"
-                  "<p><a class=\"btn\" href=\"/auth/google/start?next=/account\">"
+                  "<p><a class=\"btn primary big\" href=\"/auth/google/start?next=/account\">"
                   "Continue with Google</a></p>"
                   # A promise about oauth.SCOPES; a test keeps the two together.
-                  "<p class=\"muted\">We ask Google for your email address, whether Google "
-                  "has verified it, and the id it gives your account, which stays the same "
-                  "if the address changes. From Google we keep only the address and the "
-                  "id. <a href=\"/privacy\">What else we keep, and why</a>.</p></div>")
+                  "<p class=\"muted small\">We ask Google for your email address, whether "
+                  "Google has verified it, and the id it gives your account, which stays the "
+                  "same if the address changes. From Google we keep only the address and the "
+                  "id. <a href=\"/privacy\">What else we keep, and why</a>.</p></div>"
+                  '<div class="door-alt"><p class="muted">New to ccfleet? Start with '
+                  '<a href="/docs">what it is</a> and <a href="/docs/guide">how to begin</a>.'
+                  "</p></div>", door=True)
 
 
 #: When the privacy page last changed in substance. Change it with the words.
@@ -329,7 +522,7 @@ def _span(seconds: int) -> str:
     return f"{seconds} seconds"
 
 
-def privacy_page(cfg: Config) -> str:
+def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     """What ccfleet keeps about the people who use it, in plain words.
 
     Every length of time on it is read from the settings in force, so the page
@@ -341,8 +534,8 @@ def privacy_page(cfg: Config) -> str:
                "the support address Google shows on ccfleet&#x27;s sign-in screen")
     attempt = _span(LOGIN_MAX_AGE_S)
     body = (
-        "<h1>Privacy</h1>"
-        f'<p class="sub">Last updated {escape(PRIVACY_UPDATED)}</p>'
+        '<div class="pagehead"><h1>Privacy</h1>'
+        f'<p class="sub">Last updated {escape(PRIVACY_UPDATED)}</p></div>'
         '<div class="card"><h2>What ccfleet is</h2>'
         "<p>ccfleet gives you a slot on a machine we operate: your own Linux account there, "
         "with Claude Code, signed in to your own Claude account. The operator decides who "
@@ -416,7 +609,7 @@ def privacy_page(cfg: Config) -> str:
         "has been given back and wiped.</p>"
         "<p>If any of this changes, this page changes, and the date at the top says when.</p>"
         "</div>")
-    return _shell("privacy", body)
+    return _shell("privacy", body, here="/privacy", width="doc", viewer=viewer)
 
 
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]]) -> str:
@@ -519,16 +712,26 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                if slot.get("claimed_at") else "")
     # The name claude.ai/code shows them; the machine only when it is not that.
     name = names.display(slot)
-    where = ("your own machine" if own
+    where = ("" if own
              else f"on {escape(slot['node_id'])}" if slot["node_id"] != name else "")
     about = f"{where}{region}{claimed}".lstrip(" ·")
+    # Somebody's own node, said beside its name rather than lost in the small
+    # print: it is theirs outright, not one of ours they hold.
+    kind, mine = (' data-kind="own"', ' <span class="tag">your own machine</span>') if own \
+        else ("", "")
     parts = [
-        f'<div class="card slot" id="slot-{escape(slot["id"])}">'
-        f'<h2>{escape(name)} <span class="pill {tone}">{escape(title)}</span></h2>',
-        f'<p class="muted small">{about + " · " if about else ""}machine {machine}</p>',
+        f'<div class="card slot" id="slot-{escape(slot["id"])}" '
+        f'data-state="{escape(str(slot["state"]))}"{kind}><div class="slot-head">'
+        f'<h2>{escape(name)} <span class="pill {tone}">{escape(title)}</span>{mine}</h2>',
+        f'<p class="slot-meta">{about + " · " if about else ""}machine {machine}</p>'
+        '</div><div class="slot-body">',
     ]
     if detail:
         parts.append(f"<p>{escape(detail)}</p>")
+    if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):
+        # The machine is working on it. The sentence above says what; this
+        # says it is still moving, which a still page otherwise cannot.
+        parts.append('<div class="progress" aria-hidden="true"><i></i></div>')
     signed_in = (report.get("credentials") or {}).get("logged_in") is True
     if (signed_in if own else slot["state"] == slotstates.ACTIVE):
         parts.append(_in_use(report, now))
@@ -548,7 +751,7 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     # there is ours to wipe.
     if slot["state"] in slotstates.RELEASABLE and not own:
         parts.append(_release(slot, csrf))
-    parts.append("</div>")
+    parts.append("</div></div>")
     return "".join(parts)
 
 
@@ -567,14 +770,15 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
     plan = creds.get("subscription_type")
     who = f" as {escape(str(creds['email']))}" if creds.get("email") else ""
     left = _sign_in_left(creds.get("refresh_expires_at"), now)
-    lines = [f"<p>Signed in{who}{(' · ' + escape(str(plan)) + ' plan') if plan else ''}"
+    lines = [f'<p class="signed">Signed in{who}'
+             f"{(' · ' + escape(str(plan)) + ' plan') if plan else ''}"
              f"{' · sign-in ' + left if left else ''}.</p>"]
     if remote == "active":
-        lines.append('<p>Remote Control is on: open <a href="https://claude.ai/code" '
+        lines.append('<p class="rc on">Remote Control is on: open <a href="https://claude.ai/code" '
                      'target="_blank" rel="noopener noreferrer">claude.ai/code</a> or the '
                      "Claude app, signed in as the same account, and pick this machine.</p>")
     else:
-        lines.append('<p class="muted">Remote Control is starting; it comes on within a '
+        lines.append('<p class="rc">Remote Control is starting; it comes on within a '
                      "minute of signing in.</p>")
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
@@ -593,8 +797,12 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
     if bars:
         bars = ('<div class="usage-nums muted">your Claude account &middot; every device'
                 "</div>" + bars)
-    if bars or spent:
-        lines.append(f'<div class="usage">{bars}{spent}</div>')
+    # The windows beside the trend: what is left now, and how it got there.
+    halves = [f'<div class="usage-{name}">{html}</div>'
+              for name, html in (("bars", bars), ("trend", spent)) if html]
+    if halves:
+        cls = "usage" if len(halves) == 2 else "usage one"
+        lines.append(f'<div class="{cls}">{"".join(halves)}</div>')
     return "".join(lines)
 
 
@@ -634,9 +842,10 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
     if state == "url_ready":
         body += _form(f"{base}/code", csrf, "Send code",
                       '<input type="text" name="code" placeholder="paste the code" '
-                      'autocomplete="off" required>')
+                      'autocomplete="off" required>', "primary")
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
-    return f'<div class="row-line stacked"><div class="row-name">Claude</div>{body}</div>'
+    return (f'<div class="row-line stacked flow"><div class="row-name">Claude</div>'
+            f"{body}</div>")
 
 
 def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: float) -> str:
@@ -656,7 +865,8 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
         body = (f'<span class="pill ok">{escape(TOKEN_WORDS["ready"])}</span> '
                 + _form(f"{base}/token-show", csrf, "Show it", cls="primary") + " "
                 + _form(f"{base}/token-done", csrf, "Done with it"))
-        return f'<div class="row-line"><div class="row-name">Device token</div>{body}</div>'
+        return (f'<div class="row-line"><div class="row-name">Device token</div>'
+                f'<div class="actions">{body}</div></div>')
     body = f'<span class="login-say">{escape(TOKEN_WORDS.get(state, state))}</span>'
     url = login.get("url") or ""
     if is_login_url(url) and state in ("url_ready", "code_sent"):
@@ -665,13 +875,14 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
     if state == "url_ready":
         body += _form(f"{base}/code", csrf, "Send code",
                       '<input type="text" name="code" placeholder="paste the code" '
-                      'autocomplete="off" required>')
+                      'autocomplete="off" required>', "primary")
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
-    return f'<div class="row-line stacked"><div class="row-name">Device token</div>{body}</div>'
+    return (f'<div class="row-line stacked flow"><div class="row-name">Device token</div>'
+            f"{body}</div>")
 
 
 def _release(slot: Mapping[str, Any], csrf: str) -> str:
-    return ('<div class="row-line"><div class="row-name">Give it back</div>'
+    return ('<div class="row-line release"><div class="row-name">Give it back</div>'
             + _form(f"/account/slots/{escape(slot['id'])}/release", csrf, "Give this slot back",
                     '<label class="check"><input type="checkbox" name="confirm" value="wipe" '
                     'required> Delete everything on it: files, sessions and the Claude '
@@ -679,7 +890,8 @@ def _release(slot: Mapping[str, Any], csrf: str) -> str:
             + "</div>")
 
 
-def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config) -> str:
+def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config,
+                 store: Optional[Store] = None) -> str:
     """The console's front door for somebody not signed in as an operator.
 
     Operators sign in the way everybody else does, with Google; an account
@@ -689,8 +901,8 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
     """
     if account is None:
         body = ("<p>Operators sign in with their Google account.</p>"
-                "<p><a class=\"btn\" href=\"/auth/google/start?next=/admin\">Continue with "
-                "Google</a></p>")
+                "<p><a class=\"btn primary big\" href=\"/auth/google/start?next=/admin\">"
+                "Continue with Google</a></p>")
     else:
         body = (f"<p>Signed in as <strong>{escape(str(account.get('email', '')))}</strong>, "
                 "which is not an operator account.</p>"
@@ -698,29 +910,33 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
                 "<code>ccfleetd account role &lt;email&gt; admin</code>.</p>"
                 + _form("/auth/signout", csrf_for(session_id, cfg.cookie_secret), "Sign out"))
     # Customers land here too, by typing the bare address: point them home.
-    elsewhere = ('<div class="card"><p><strong>Looking for your slots?</strong> They are on '
-                 '<a href="/account">your page</a>. New to ccfleet? Start with '
+    elsewhere = ('<div class="card door-alt"><p><strong>Looking for your slots?</strong> They '
+                 'are on <a href="/account">your page</a>. New to ccfleet? Start with '
                  '<a href="/docs">what it is</a> and <a href="/docs/guide">how to begin</a>.'
                  "</p></div>")
-    return _shell("console", "<h1>ccfleet console</h1><div class=\"card\">" + body
+    return _shell("console", f'<div class="card door">{MARK}<h1>ccfleet console</h1>' + body
                   + "<p class=\"note\">Or <a href=\"/auth/basic\">use the admin token</a> "
-                  "&mdash; the way in when Google sign-in is unavailable.</p></div>" + elsewhere)
+                  "&mdash; the way in when Google sign-in is unavailable.</p></div>" + elsewhere,
+                  viewer=viewer_for(account, session_id, cfg, store, on_console=True),
+                  door=True)
 
 
-def token_page(slot: Mapping[str, Any], token: str) -> str:
+def token_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = None) -> str:
     """The minted token, for as long as its request lasts."""
     if not token:
-        return _shell("device token", "<h1>Nothing to show</h1><div class=\"card\">"
+        return _shell("device token", f'<div class="card door">{MARK}<h1>Nothing to show</h1>'
                       "<p>No token is waiting on this slot. Either you were done with it, or "
                       "the request expired. Start a new one from your slots.</p>"
-                      "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p></div>")
+                      "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p></div>",
+                      viewer=viewer)
     return _shell("device token", (
-        f"<h1>Device token</h1><p class=\"sub\">Minted on <strong>{escape(slot['id'])}"
-        "</strong>, for the Claude account you approved. Good for one year.</p>"
+        "<div class=\"pagehead\"><h1>Device token</h1><p class=\"sub\">Minted on <strong>"
+        f"{escape(slot['id'])}</strong>, for the Claude account you approved. Good for one "
+        "year.</p></div>"
         "<div class=\"ok-banner\">You can come back and show this again while the request "
         "lasts. Press <strong>Done with it</strong> on your slots page when you have "
         "finished, or leave it and it expires on its own.</div>"
-        f"<pre>{escape(token)}</pre>"
+        f'<pre class="token">{escape(token)}</pre>'
         "<div class=\"card\"><h2>Put it on a machine</h2>"
         "<pre>bash -c \"$(curl -fsSL https://raw.githubusercontent.com/cdcupt/"
         "ccfleet/main/laptop/ccfleet-connect.sh)\"</pre>"
@@ -729,4 +945,4 @@ def token_page(slot: Mapping[str, Any], token: str) -> str:
         "Anthropic's limit on long-lived tokens; revoke it from your Claude account.</p>"
         "<p class=\"muted\">A computer uses one Claude account: running it again with "
         "another token replaces the one it had.</p></div>"
-        "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"))
+        "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"), viewer=viewer)

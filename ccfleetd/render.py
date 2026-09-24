@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from html import escape
 from shlex import quote as shq
@@ -24,71 +25,183 @@ ACTIVE_REFRESH_S = 4
 #: beside the page, because the page's own refresh has to name it.
 CONSOLE_PATH = "/admin"
 
+#: The mark: three units of a rack, one of them lit — the machine a slot lives
+#: on, which stays on. Inline, because the page may load nothing it did not
+#: render itself (the CSP is default-src 'none').
+MARK = ('<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false">'
+        '<rect class="m-bg" width="28" height="28" rx="7"/>'
+        '<rect class="m-unit" x="6" y="6.5" width="16" height="4" rx="1.4"/>'
+        '<rect class="m-unit" x="6" y="12" width="16" height="4" rx="1.4"/>'
+        '<rect class="m-unit" x="6" y="17.5" width="16" height="4" rx="1.4"/>'
+        '<circle class="m-led" cx="18.6" cy="14" r="1.35"/></svg>')
+
+#: The same mark for the browser tab, as a data URI so there is no second request.
+FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'%3E"
+           "%3Crect width='28' height='28' rx='7' fill='%234338ca'/%3E"
+           "%3Crect x='6' y='6.5' width='16' height='4' rx='1.4' fill='white'/%3E"
+           "%3Crect x='6' y='12' width='16' height='4' rx='1.4' fill='white'/%3E"
+           "%3Crect x='6' y='17.5' width='16' height='4' rx='1.4' fill='white'/%3E"
+           "%3Ccircle cx='18.6' cy='14' r='1.8' fill='%2322c55e'/%3E%3C/svg%3E")
+
 CSS = """
 /* Tokens. Light is the bare :root; dark redefines only the tokens, guarded so an
-   explicit light choice still wins. Nothing below hard-codes a colour. */
-:root{
---bg:#f2f5f8;--panel:#fff;--inset:#eef2f7;--ink:#0f1620;--muted:#586372;
---rule:#dce3eb;--rule-soft:#e9eef4;--acc:#1d4ed8;--acc-soft:#e7edfc;
---ok:#0f7038;--ok-bg:#e2f3e8;--warn:#94540a;--warn-bg:#fbeedb;
---bad:#a62a1e;--bad-bg:#fce4e1;--off:#6b7684;--off-bg:#eceff3;
---on-acc:#fff;--shadow:0 1px 2px rgba(15,22,32,.05),0 1px 12px rgba(15,22,32,.04);
---sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
---mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
---bg:#0b0f15;--panel:#131a23;--inset:#1b232e;--ink:#e9edf3;--muted:#96a1b0;
---rule:#232d39;--rule-soft:#1c242f;--acc:#7ea3ff;--acc-soft:#182238;
---ok:#48c97d;--ok-bg:#10301e;--warn:#e6a648;--warn-bg:#33260d;
---bad:#ff9086;--bad-bg:#3a1512;--off:#8b95a3;--off-bg:#1a212b;--on-acc:#0b0f15;
---shadow:0 1px 2px rgba(0,0,0,.4)}}
+   explicit light choice still wins. Nothing below hard-codes a colour.
+   One accent, for what you can press and for work under way; four status
+   colours, each meaning one thing: green running, amber waiting on you, red
+   trouble, grey off. */
+:root{color-scheme:light;
+--bg:#f5f6fa;--panel:#fff;--inset:#f0f2f8;--ink:#0c111c;--muted:#596277;
+--rule:#dce0ea;--rule-soft:#e9ecf3;
+--acc:#4338ca;--acc-strong:#3730a3;--acc-soft:#eef0ff;--acc-line:#c9cdf8;--on-acc:#fff;
+--ok:#0b7a3b;--ok-bg:#e2f4e9;--ok-line:#a8dbbd;
+--warn:#98580a;--warn-bg:#fcf0da;--warn-line:#f0cf95;
+--bad:#b42318;--bad-bg:#fde7e4;--bad-line:#f4b8b0;
+--off:#667085;--off-bg:#edeff4;--led:#22c55e;
+/* Avatar grounds: the accent's family, each dark enough for a white initial,
+   and the same in both themes because the initial on them does not change. */
+--av0:#4338ca;--av1:#3730a3;--av2:#5b21b6;--av3:#6d28d9;--av4:#1d4ed8;--av5:#1e40af;
+--av-ink:#fff;
+--shadow:0 1px 2px rgba(12,17,28,.05),0 8px 24px -14px rgba(12,17,28,.16);
+--radius:14px;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
+--bg:#0a0d14;--panel:#111621;--inset:#171d2a;--ink:#eceff6;--muted:#9aa3b6;
+--rule:#262d3c;--rule-soft:#1c2230;
+--acc:#a9b3ff;--acc-strong:#c6cdff;--acc-soft:#1b1e40;--acc-line:#3b4180;--on-acc:#0a0d14;
+--ok:#4ade80;--ok-bg:#0d2919;--ok-line:#1f5a36;
+--warn:#f4b04c;--warn-bg:#2c200b;--warn-line:#5c4417;
+--bad:#ff8a80;--bad-bg:#36130f;--bad-line:#6e2a22;
+--off:#8c94a7;--off-bg:#181d29;--led:#4ade80;
+--shadow:0 1px 2px rgba(0,0,0,.5)}}
 
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);
-padding:0;-webkit-font-smoothing:antialiased}
-.page{max-width:1200px;margin:0 auto;padding-block:26px 44px;padding-left:20px;
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);
+-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.page{max-width:1200px;margin:0 auto;padding-block:28px 48px;padding-left:20px;
 padding-right:20px}
+a{color:var(--acc);text-decoration-thickness:1px;text-underline-offset:3px}
+a:hover{color:var(--acc-strong)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 code,.mono,td.num,.v{font-family:var(--mono);font-variant-numeric:tabular-nums}
-
-/* Masthead: what this is, then the fleet in one glance. */
-.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;
-flex-wrap:wrap;margin:0 0 18px}
-h1{font-size:27px;line-height:1.1;letter-spacing:-.02em;margin:0;font-weight:680}
-h1 .dot{color:var(--acc)}
-.sub{color:var(--muted);font-size:13px;margin:5px 0 0}
+/* A code chip never breaks across lines: half a command on each line reads as
+   two commands. */
+code{font-size:.88em;background:var(--inset);border:1px solid var(--rule-soft);
+border-radius:6px;padding:.08em .4em;white-space:nowrap;
+-webkit-box-decoration-break:clone;box-decoration-break:clone}
+pre code{font-size:inherit;background:none;border:0;padding:0;white-space:inherit}
+h1{font-size:30px;line-height:1.15;letter-spacing:-.024em;margin:0;font-weight:720;
+text-wrap:balance}
+h2{font-size:19px;line-height:1.3;letter-spacing:-.012em;margin:30px 0 10px;
+font-weight:680;text-wrap:balance}
+h3{font-size:16px;line-height:1.35;letter-spacing:-.006em;margin:18px 0 6px;font-weight:650}
+.sub{color:var(--muted);font-size:14px;margin:6px 0 0}
 .sub strong{color:var(--ink);font-weight:600}
-.strip{display:grid;grid-template-columns:repeat(4,minmax(74px,1fr));gap:8px;
-width:100%;max-width:420px}
-.tile{background:var(--panel);border:1px solid var(--rule);border-radius:9px;
-padding:8px 10px;border-top:2px solid var(--rule)}
-.tile b{display:block;font-family:var(--mono);font-size:20px;line-height:1.15;
-font-weight:600;font-variant-numeric:tabular-nums}
-.tile span{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
-.tile.ok{border-top-color:var(--ok);background:var(--ok-bg)}.tile.ok b{color:var(--ok)}
-.tile.warn{border-top-color:var(--warn);background:var(--warn-bg)}
+.muted{color:var(--muted)}.small{font-size:13px}
+.bad-text{color:var(--bad);font-weight:600}
+.nowrap{white-space:nowrap}
+
+/* The brand: the mark, the name, and on the console a tag saying which side
+   this is. */
+.brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;
+font-weight:760;letter-spacing:-.022em;line-height:1}
+.brand:hover{color:var(--ink)}
+.mark{width:28px;height:28px;flex:none;display:block}
+.mark .m-bg{fill:var(--acc)}.mark .m-unit{fill:var(--on-acc)}.mark .m-led{fill:var(--led)}
+.tag{font-size:12px;font-weight:650;letter-spacing:.01em;color:var(--acc);
+background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;
+padding:3px 9px}
+
+/* The bar on top of every page: the mark, where you are, and who you are. */
+.topbar{background:var(--panel);border-bottom:1px solid var(--rule);position:sticky;top:0;
+z-index:10}
+.topbar-in{max-width:1120px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;
+gap:8px 22px;flex-wrap:wrap}
+.console .topbar-in{max-width:1200px;gap:8px 12px}
+.topbar .brand{font-size:18px}
+.topbar-end{margin-left:auto;display:flex;align-items:center;gap:10px}
+.topbar-end .btn,.topbar-end button{padding:7px 13px}
+
+/* Who is signed in: an initial that opens a menu. A details element is the
+   popover, so it needs no script and its summary takes the keyboard. */
+.usermenu{position:relative}
+.usermenu>summary{list-style:none;cursor:pointer;border-radius:50%;display:block}
+.usermenu>summary::-webkit-details-marker{display:none}
+.usermenu>summary::marker{content:""}
+.usermenu>summary:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+.avatar{display:flex;align-items:center;justify-content:center;width:34px;height:34px;
+border-radius:50%;color:var(--av-ink);background:var(--av0);font-weight:700;font-size:15px;
+line-height:1;user-select:none;box-shadow:0 0 0 2px var(--panel),0 0 0 3px var(--rule)}
+.usermenu>summary:hover .avatar,.usermenu[open]>summary .avatar{
+box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--acc)}
+.avatar.t1{background:var(--av1)}.avatar.t2{background:var(--av2)}
+.avatar.t3{background:var(--av3)}.avatar.t4{background:var(--av4)}
+.avatar.t5{background:var(--av5)}
+.menu{position:absolute;right:0;top:calc(100% + 10px);z-index:30;width:260px;
+max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--rule);
+border-radius:12px;padding:6px;box-shadow:0 1px 2px rgba(12,17,28,.06),
+0 18px 40px -18px rgba(12,17,28,.35)}
+/* The menu's head: the same face, larger, beside who it is. */
+.menu-who{display:flex;align-items:center;gap:12px;padding:10px 10px 12px;
+border-bottom:1px solid var(--rule-soft)}
+.avatar.big{width:40px;height:40px;font-size:17px;flex:none;box-shadow:none}
+.menu-who p{margin:0;display:grid;gap:1px;min-width:0;line-height:1.35}
+.menu-who p span{color:var(--muted);font-size:14px}
+.menu-who strong{font-size:15.5px;font-weight:700;overflow-wrap:anywhere}
+.menu-links{display:grid;gap:2px;padding:6px 0;border-bottom:1px solid var(--rule-soft)}
+.menu-links a{display:flex;align-items:center;justify-content:space-between;gap:10px;
+padding:9px 10px;border-radius:8px;color:var(--ink);text-decoration:none;font-size:15px;
+font-weight:450}
+.menu-links a:hover,.menu-links a:focus-visible{background:var(--acc-soft);color:var(--acc)}
+.menu-pill{font-size:12px;line-height:1;padding:3px 8px;border-radius:999px;
+border:1px solid var(--rule);color:var(--muted);background:var(--panel);font-weight:500;
+white-space:nowrap}
+.menu form{display:block;padding:6px 0 0}
+.usermenu .menu button.signout{width:100%;justify-content:flex-start;border:0;
+box-shadow:none;background:none;padding:9px 10px;border-radius:8px;font-size:15px;
+font-weight:450;color:var(--bad)}
+.usermenu .menu button.signout:hover,.usermenu .menu button.signout:focus-visible{
+background:var(--bad-bg);color:var(--bad)}
+
+/* Console masthead: what this is, then the fleet in one glance. */
+.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;
+flex-wrap:wrap;margin:0 0 20px}
+h1.brand{font-size:24px}
+h1.brand .mark{width:32px;height:32px}
+.strip{display:grid;grid-template-columns:repeat(4,minmax(76px,1fr));gap:8px;
+width:100%;max-width:440px}
+.tile{background:var(--panel);border:1px solid var(--rule);border-radius:12px;
+padding:9px 12px 8px;box-shadow:var(--shadow)}
+.tile b{display:block;font-family:var(--mono);font-size:22px;line-height:1.15;
+font-weight:650;font-variant-numeric:tabular-nums}
+.tile span{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+font-weight:600}
+.tile.ok{border-color:var(--ok-line);background:var(--ok-bg)}.tile.ok b{color:var(--ok)}
+.tile.warn{border-color:var(--warn-line);background:var(--warn-bg)}
 .tile.warn b{color:var(--warn)}
-.tile.critical{border-top-color:var(--bad);background:var(--bad-bg)}
+.tile.critical{border-color:var(--bad-line);background:var(--bad-bg)}
 .tile.critical b{color:var(--bad)}
 .tile.zero b{color:var(--muted);font-weight:400}
-.tile.zero{border-top-color:var(--rule)}
 
-h2{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
-margin:28px 0 9px;font-weight:650}
-.card{background:var(--panel);border:1px solid var(--rule);border-radius:12px;
-padding:4px 18px 14px;margin:0;box-shadow:var(--shadow)}
-.card h2{margin:14px 0 10px}
+/* The console is dense on purpose: section titles are labels, not headlines. */
+.console h2{font-size:12px;line-height:1.4;letter-spacing:.08em;text-transform:uppercase;
+color:var(--muted);margin:30px 0 10px;font-weight:680}
+.console .card h2{margin:16px 0 10px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
+padding:4px 20px 16px;margin:0;box-shadow:var(--shadow)}
 .card.form{max-width:760px;margin-top:26px}
-.note{color:var(--muted);font-size:12px;line-height:1.5;margin:12px 0 0;
-padding-top:11px;border-top:1px solid var(--rule-soft)}
-.muted{color:var(--muted)}.small{font-size:12px}
+.note{color:var(--muted);font-size:13px;line-height:1.55;margin:14px 0 0;
+padding-top:12px;border-top:1px solid var(--rule-soft)}
 
 /* The table. A rail on the left edge of each row carries state as form, so a
    glance down the column finds trouble without reading any number. */
 .wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);
-border-radius:12px;box-shadow:var(--shadow)}
+border-radius:var(--radius);box-shadow:var(--shadow)}
 table{border-collapse:collapse;width:100%;min-width:880px;font-size:14px}
-th,td{padding:11px 13px;text-align:left;border-bottom:1px solid var(--rule-soft);
+th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--rule-soft);
 vertical-align:top;white-space:nowrap}
-th{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
 background:var(--inset);font-weight:650;border-bottom:1px solid var(--rule)}
 th:first-child,td:first-child{padding-left:16px}
 tbody tr:last-child td{border-bottom:0}
@@ -99,90 +212,114 @@ tbody tr.r-critical{border-left-color:var(--bad)}
 tbody tr.r-disabled{border-left-color:var(--rule)}
 tbody tr.r-disabled td{opacity:.62}
 td.wrap{white-space:normal;min-width:130px}
-.node-id{font-family:var(--mono);font-weight:600;font-size:14px}
-.pill{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:999px;
-border:1px solid;font-weight:600;letter-spacing:.01em}
-.pill.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
-.pill.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
-.pill.critical{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
-.pill.disabled{color:var(--off);border-color:var(--rule);background:var(--off-bg)}
-.bad-text{color:var(--bad);font-weight:600}
+.node-id{font-family:var(--mono);font-weight:650;font-size:14px}
 
-/* Alerts: severity on the edge, rule name in mono, prose in sans. */
-.alert{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;padding:11px 0;
+/* A state, said the same way everywhere: a coloured dot and a word. */
+/* A pill may wrap: a few carry a whole sentence ("hostname pending: …"), and
+   those must fit a phone. A short one never has a reason to. */
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.25;
+padding:3px 10px 3px 8px;border-radius:999px;font-weight:650;max-width:100%;
+overflow-wrap:break-word;vertical-align:middle;border:1px solid var(--rule);
+color:var(--off);background:var(--off-bg);font-family:var(--sans);letter-spacing:0}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;
+flex:none}
+.pill.ok{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
+.pill.warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-line)}
+.pill.critical{color:var(--bad);background:var(--bad-bg);border-color:var(--bad-line)}
+.pill.disabled{color:var(--off);background:var(--off-bg);border-color:var(--rule)}
+.pill.busy{color:var(--acc);background:var(--acc-soft);border-color:var(--acc-line)}
+
+/* Alerts: severity first, rule name in mono, prose in sans. */
+.alert{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;padding:12px 0;
 border-bottom:1px solid var(--rule-soft)}
 .alert:last-of-type{border-bottom:0}
-.alert-rule{font-family:var(--mono);font-size:13px;font-weight:600}
-.alert-msg{font-size:13.5px;min-width:0;overflow-wrap:anywhere}
-.quiet{color:var(--muted);font-size:13.5px;padding:12px 0 4px;margin:0}
+.alert-rule{font-family:var(--mono);font-size:13px;font-weight:650}
+.alert-msg{font-size:14px;min-width:0;overflow-wrap:anywhere}
+.quiet{color:var(--muted);font-size:14px;padding:12px 0 4px;margin:0}
 
 /* Controls */
-form.inline{display:inline;margin:0}
+form.inline{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0;
+vertical-align:middle;max-width:100%}
+/* A field beside its button stays beside it, until there is no room at all. A
+   fixed width, not a flex basis: the form is sized from the field's width, and
+   a basis it grows past would push the button onto a line of its own. */
+form.inline input[type=text],form.inline input[type=email]{width:230px;flex:0 1 auto;
+min-width:0;max-width:100%}
 /* A field and its button on one line: the slot and account rows. */
 form.field{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}
-form.field input[type=text]{width:auto;padding:5px 9px;font-size:13px}
-form.field input.count{width:4.5em}
-form.field input[type=date]{font:inherit;font-size:13px;padding:4px 8px;border-radius:8px;
-border:1px solid var(--rule);background:var(--bg);color:var(--ink)}
+form.field input[type=text],form.field input[type=email]{width:auto;padding:6px 10px;
+font-size:13px;min-height:32px}
+form.field input.count{width:4.8em}
+form.field input[type=date]{font-size:13px;padding:5px 8px;min-height:32px;width:auto}
 /* An account's payments, folded under its row. */
 details.ledger{flex-basis:100%;font-size:13px}
-details.ledger summary{cursor:pointer;color:var(--muted);font-size:12px;font-weight:600}
+details.ledger summary{cursor:pointer;color:var(--muted);font-size:12.5px;font-weight:600}
 .payment{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;
 overflow-wrap:anywhere}
 .payment.voided{color:var(--muted)}
-.nowrap{white-space:nowrap}
 details.ledger form.field{margin-top:6px}
-button,.btn{font:inherit;font-size:12px;padding:5px 11px;border-radius:8px;
-border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer}
-button:hover{border-color:var(--acc);color:var(--acc)}
-button.danger:hover{border-color:var(--bad);color:var(--bad)}
-button.primary{background:var(--acc);color:var(--on-acc);border-color:var(--acc);
-font-size:13px;padding:8px 17px;font-weight:600}
-button.primary:hover{filter:brightness(1.08);color:var(--on-acc)}
-:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-a{color:var(--acc)}
-label{display:block;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
-color:var(--muted);margin:0 0 5px;font-weight:600}
-input[type=text],input[type=email]{font:inherit;font-size:14px;padding:8px 11px;
-border-radius:8px;border:1px solid var(--rule);background:var(--bg);color:var(--ink);
-width:100%;max-width:280px}
-input[type=text]:focus,input[type=email]:focus{border-color:var(--acc);outline:none}
+button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;font:inherit;
+font-size:13.5px;font-weight:600;line-height:1.25;padding:8px 14px;border-radius:10px;
+border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;
+text-decoration:none;white-space:nowrap;box-shadow:0 1px 0 rgba(12,17,28,.04)}
+button:hover,.btn:hover{border-color:var(--acc);color:var(--acc)}
+button.primary,.btn.primary{background:var(--acc);border-color:var(--acc);color:var(--on-acc)}
+button.primary:hover,.btn.primary:hover{background:var(--acc-strong);
+border-color:var(--acc-strong);color:var(--on-acc)}
+button.danger:hover{border-color:var(--bad);color:var(--bad);background:var(--bad-bg)}
+.btn.big{font-size:15px;padding:11px 18px;border-radius:12px}
+.console button,.console .btn{font-size:12.5px;padding:6px 11px;border-radius:8px}
+.console button.primary{font-size:13px;padding:8px 16px}
+label{display:block;font-size:12.5px;color:var(--muted);margin:0 0 6px;font-weight:600}
+input[type=text],input[type=email],input[type=date]{font:inherit;font-size:14px;
+padding:8px 12px;border-radius:10px;border:1px solid var(--rule);background:var(--inset);
+color:var(--ink);width:100%;max-width:300px;min-height:38px}
+input[type=text]:focus,input[type=email]:focus,input[type=date]:focus{
+border-color:var(--acc);outline:3px solid var(--acc-soft);outline-offset:0;
+background:var(--panel)}
+input::placeholder{color:var(--muted)}
+input[type=checkbox]{width:16px;height:16px;margin:3px 0 0;accent-color:var(--acc);flex:none}
 .fields{display:flex;flex-wrap:wrap;gap:14px 18px;margin:0 0 16px}
-.check{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--ink);
-margin-top:20px;text-transform:none;letter-spacing:0}
-.actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.row-line{display:flex;align-items:center;justify-content:space-between;gap:14px;
-flex-wrap:wrap;padding:11px 0;border-bottom:1px solid var(--rule-soft)}
+.check{display:flex;align-items:flex-start;gap:8px;font-size:13.5px;color:var(--ink);
+margin:0;font-weight:400;line-height:1.5}
+.fields .check{margin-top:28px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row-line{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;
+flex-wrap:wrap;padding:13px 0;border-bottom:1px solid var(--rule-soft)}
 .row-line:last-of-type{border-bottom:0}
-.row-name{font-family:var(--mono);font-weight:600;font-size:13.5px}
+.row-name{font-weight:650;font-size:14px}
+.console .row-name{font-family:var(--mono);font-size:13.5px}
 .row-line.stacked{display:block}
 .row-line.stacked .row-name{margin-bottom:8px}
-.login-url{display:block;font-family:var(--mono);font-size:12px;word-break:break-all;
-margin:7px 0;line-height:1.45}
-.login-say{font-size:13px;margin-right:8px}
-pre{background:var(--inset);border:1px solid var(--rule);border-radius:10px;
-padding:13px 15px;overflow-x:auto;font-family:var(--mono);font-size:13px;
-line-height:1.55;margin:0 0 14px;white-space:pre}
-.ok-banner{border:1px solid var(--ok);background:var(--ok-bg);color:var(--ok);
-border-radius:12px;padding:13px 17px;margin:0 0 20px;font-weight:500}
-a.back{font-size:13px}
+.login-url{display:block;font-family:var(--mono);font-size:12.5px;line-height:1.5;
+word-break:break-all;margin:10px 0 12px;padding:10px 12px;border-radius:10px;
+background:var(--inset);border:1px solid var(--rule);text-decoration:none}
+.login-url:hover{border-color:var(--acc)}
+.login-say{font-size:14px;margin-right:8px;font-weight:600}
+pre{background:var(--inset);border:1px solid var(--rule);border-radius:12px;
+padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;
+line-height:1.6;margin:0 0 14px;white-space:pre}
+.ok-banner{border:1px solid var(--ok-line);background:var(--ok-bg);color:var(--ok);
+border-radius:12px;padding:13px 17px;margin:0 0 20px;font-weight:550}
+a.back{font-size:14px;font-weight:600;text-decoration:none}
 
 /* Usage: who, the two windows, then the trend. */
 .usage-row{display:grid;
 grid-template-columns:minmax(150px,.9fr) minmax(200px,1fr) minmax(190px,1.1fr);
-gap:16px 22px;align-items:start;padding:15px 0;border-bottom:1px solid var(--rule-soft)}
+gap:16px 22px;align-items:start;padding:16px 0;border-bottom:1px solid var(--rule-soft)}
 .usage-row:last-of-type{border-bottom:0}
-.usage-name{font-family:var(--mono);font-weight:600;font-size:13.5px;min-width:0;
+.usage-name{font-family:var(--mono);font-weight:650;font-size:13.5px;min-width:0;
 overflow-wrap:anywhere}
 .usage-name span{font-family:var(--sans);font-weight:400}
 .usage-quota,.usage-spark{min-width:0}
 .usage-total{margin-top:9px;font-size:13px}
-.usage-total b{font-family:var(--mono);font-size:21px;font-weight:650;
+.usage-total b{font-family:var(--mono);font-size:22px;font-weight:650;
 letter-spacing:-.01em;line-height:1.1}
 .usage-total span{font-family:var(--sans);font-weight:400}
-.usage-meta{font-family:var(--sans);font-weight:400;font-size:12px;margin-top:5px;
+.usage-meta{font-family:var(--sans);font-weight:400;font-size:12.5px;margin-top:5px;
 line-height:1.45;overflow-wrap:anywhere}
-.usage-nums{font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-top:6px}
+.usage-nums{font-size:11px;letter-spacing:.06em;text-transform:uppercase;margin-top:6px;
+font-weight:600}
 svg.spark{display:block;width:100%;height:46px;overflow:visible}
 .spark-fill{fill:var(--acc-soft);stroke:none}
 .spark-base{stroke:var(--rule);stroke-width:1;vector-effect:non-scaling-stroke}
@@ -190,22 +327,24 @@ svg.spark{display:block;width:100%;height:46px;overflow:visible}
 .spark-dot{fill:var(--acc)}
 
 /* One quota window. The bar is the point; the number confirms it. */
-.meter{margin:0 0 11px}
+.meter{margin:0 0 12px}
 .meter:last-child{margin-bottom:2px}
 .meter-head{display:flex;justify-content:space-between;align-items:baseline;
-font-size:12px;color:var(--muted);margin:0 0 4px}
+font-size:13px;color:var(--muted);margin:0 0 6px}
 .meter-pct{font-family:var(--mono);font-weight:700;color:var(--ink);
-font-variant-numeric:tabular-nums;font-size:13px}
-.meter-track{height:7px;border-radius:99px;background:var(--inset);overflow:hidden;
-border:1px solid var(--rule-soft)}
-.meter-fill{display:block;height:100%;border-radius:99px;min-width:2px}
+font-variant-numeric:tabular-nums;font-size:13.5px}
+.meter-track{height:8px;border-radius:99px;background:var(--inset);overflow:hidden;
+box-shadow:inset 0 0 0 1px var(--rule-soft)}
+.meter-fill{display:block;height:100%;border-radius:99px;min-width:3px}
 .meter-fill.ok{background:var(--acc)}
 .meter-fill.warn{background:var(--warn)}
 .meter-fill.crit{background:var(--bad)}
-.meter-foot{font-size:11px;color:var(--muted);margin-top:3px}
+.meter-foot{font-size:12px;color:var(--muted);margin-top:5px}
 
 @media (max-width:820px){.usage-row{grid-template-columns:1fr;gap:10px}
-.strip{max-width:none}h1{font-size:23px}.page{padding-block:20px 36px}}
+.strip{max-width:none}h1{font-size:25px}.page{padding-block:20px 36px}
+.topbar-in{padding:10px 16px}}
+@media (max-width:420px){.strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
 """
 
 
@@ -409,7 +548,8 @@ def _add_form(csrf: str) -> str:
         '</form></div>')
 
 
-def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
+def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "",
+                      corner: str = "") -> str:
     """Shown once, right after a node is created. This is the only time the token exists."""
     url = cfg.public_url or f"http://127.0.0.1:{cfg.bind_port}"
     steps = (f"CCFLEET_URL={url}\n"
@@ -434,10 +574,8 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "root. Drop the flag for a node where that is not wanted.</p>"
         if cfg.bypass_by_default else "")
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>ccfleet · {escape(node_id)} added</title><style>{CSS}</style></head><body>"
-        f"<h1>{escape(node_id)} added</h1>"
+        _console_open(f"{node_id} added", corner)
+        + f"<h1>{escape(node_id)} added</h1>"
         "<div class=\"ok-banner\">Copy the three lines below now. The token is shown once "
         "and is not stored in readable form.</div>"
         "<div class=\"card\"><h2>1. Run this on a fresh server, as root</h2>"
@@ -461,10 +599,114 @@ def render_add_result(node_id: str, token: str, cfg: Config, owner: str = "") ->
         "<code>node/setup-owner.sh</code> instead.</p>"
         "</div>"
         "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
-        "</body></html>")
+        "</div></body></html>")
 
 
-def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") -> str:
+def _console_bar(corner: str = "") -> str:
+    """The console's bar: the mark, which side this is, and who is signed in."""
+    return ('<header class="topbar"><div class="topbar-in">'
+            f'<a class="brand" href="{CONSOLE_PATH}">{MARK}<span>ccfleet</span></a>'
+            '<span class="tag">console</span>'
+            f'<div class="topbar-end">{corner}</div></div></header>')
+
+
+def _console_open(title: str, corner: str = "") -> str:
+    """The head and the bar of a console page that is not the dashboard."""
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"<title>ccfleet · {escape(title)}</title>"
+            f'<link rel="icon" href="{FAVICON}">'
+            f"<style>{CSS}</style></head><body class=\"console\">"
+            + _console_bar(corner) + "<div class=\"page\">")
+
+
+# -- who is looking -------------------------------------------------------------------
+
+#: The bar's corner for somebody not signed in: the way to their slots, which
+#: begins by signing in.
+SIGN_IN_LINK = '<a class="btn primary" href="/account">Sign in</a>'
+#: How many avatar grounds there are (--av0 to --av5 in the stylesheet).
+AVATAR_TONES = 6
+
+
+def _initial(account: Mapping[str, Any]) -> str:
+    """One character for an avatar: the handle's first, else the email's.
+
+    The first letter or digit, so "_ops@" still gets one; a question mark when
+    there is nothing to take one from.
+    """
+    source = str(account.get("handle") or str(account.get("email") or "").split("@", 1)[0])
+    for char in source:
+        if char.isalnum():
+            return char.upper()[:1]
+    return "?"
+
+
+def _tone(account: Mapping[str, Any]) -> int:
+    """Which avatar ground: fixed by the account, so it is the same on every
+    page and every visit, and two people side by side are told apart."""
+    key = str(account.get("id") or account.get("email") or "")
+    return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16) % AVATAR_TONES
+
+
+def user_menu(account: Mapping[str, Any], csrf: str, *, operator: bool,
+              slots_href: str = "/account", console_href: str = CONSOLE_PATH,
+              slots_held: int = 0) -> str:
+    """The signed-in person's corner of the bar: an initial that opens a menu.
+
+    No script: a details element is the popover, and its summary is a real
+    control, so the keyboard opens it the way it opens anything else. Signing
+    out stays a POST carrying this session's token. A link would let any page
+    that can make a browser fetch a URL sign people out. The console is
+    offered only to an operator, and the console checks again anyway: a link
+    is not a permission. ``slots_held`` is this account's own count, shown on
+    Your slots, and not shown at all when it is none.
+    """
+    email = escape(str(account.get("email") or ""))
+    tone, initial = _tone(account), escape(_initial(account))
+
+    def face(size: str = "") -> str:
+        return f'<span class="avatar t{tone}{size}" aria-hidden="true">{initial}</span>'
+
+    held = f'<span class="menu-pill">{int(slots_held)}</span>' if slots_held > 0 else ""
+    links = f'<a href="{escape(slots_href)}"><span>Your slots</span>{held}</a>'
+    if operator:
+        links += (f'<a href="{escape(console_href)}"><span>Console</span>'
+                  '<span class="menu-pill">operator</span></a>')
+    # Shown with a break allowed after the @, so a long address wraps there on a
+    # phone rather than mid-word; each part is escaped on its own.
+    local, at, domain = str(account.get("email") or "").partition("@")
+    shown = escape(local) + (f"@<wbr>{escape(domain)}" if at else "")
+    return ('<details class="usermenu">'
+            f'<summary aria-label="Account menu for {email}" title="{email}">'
+            + face() + "</summary>"
+            '<div class="menu"><div class="menu-who">' + face(" big")
+            + f"<p><span>Signed in as</span><strong>{shown}</strong></p></div>"
+            f'<nav class="menu-links" aria-label="Your account">{links}</nav>'
+            '<form method="post" action="/auth/signout">'
+            f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+            '<button type="submit" class="signout">Sign out</button></form></div></details>')
+
+
+def console_href(cfg: Config) -> str:
+    """The console, as a link from the product: its own path with one site,
+    the admin host's with two, since there the product has no console."""
+    if not cfg.admin_host:
+        return CONSOLE_PATH
+    scheme = "http" if cfg.public_url.startswith("http://") else "https"
+    return f"{scheme}://{cfg.admin_host}{CONSOLE_PATH}"
+
+
+def product_href(cfg: Config, path: str) -> str:
+    """A product page, as a link from the console: the same site with one, the
+    product's own address with two, since the console's host has no such page."""
+    if not cfg.admin_host or not cfg.public_url:
+        return path
+    return cfg.public_url.rstrip("/") + path
+
+
+def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "",
+                        corner: str = "") -> str:
     """The minted credential, for as long as the request it belongs to lasts.
 
     It was minted on the node from the account that node is signed in as and
@@ -475,22 +717,16 @@ def render_token_result(node_id: str, token: str, cfg: Config, owner: str = "") 
     """
     if not token:
         return (
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            "<title>ccfleet</title>"
-            f"<style>{CSS}</style></head><body><div class=\"page\">"
-            "<h1>Nothing to show</h1>"
+            _console_open("device token", corner)
+            + "<h1>Nothing to show</h1>"
             "<p class=\"sub\">No token is waiting for this node. Either it was finished "
             "with, or the request expired. Start a new one from the fleet page.</p>"
             "<p><a class=\"back\" href=\"/\">&larr; back to the fleet</a></p>"
             "</div></body></html>")
     who = f" for {escape(owner)}" if owner else ""
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>ccfleet \u00b7 device token</title>"
-        f"<style>{CSS}</style></head><body><div class=\"page\">"
-        f"<h1>Device token{who}</h1>"
+        _console_open("device token", corner)
+        + f"<h1>Device token{who}</h1>"
         "<p class=\"sub\">Minted on <strong>" + escape(node_id) + "</strong>, from the "
         "account that node is signed in as. Good for one year.</p>"
         "<div class=\"ok-banner\">You can come back and show this again while the "
@@ -876,7 +1112,8 @@ def _strip_html(counts: Mapping[str, int]) -> str:
 
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
                      now: float, cfg: Config, csrf: str = "", who: Any = None,
-                     logins: Optional[Mapping[str, Any]] = None, extra: str = "") -> str:
+                     logins: Optional[Mapping[str, Any]] = None, extra: str = "",
+                     corner: str = "") -> str:
     # who is None for callers that predate per-user accounts, which are all
     # operator-side, so the default is the full-privilege view.
     is_admin = who is None or getattr(who, "is_admin", True)
@@ -894,13 +1131,6 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
-    # An inline favicon keeps the tab recognisable without a second request, and
-    # without this page depending on anything it did not render itself.
-    icon = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
-            "viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231d4ed8'/%3E"
-            "%3Ccircle cx='5' cy='8' r='1.7' fill='white'/%3E"
-            "%3Ccircle cx='11' cy='5' r='1.7' fill='white'/%3E"
-            "%3Ccircle cx='11' cy='11' r='1.7' fill='white'/%3E%3C/svg%3E")
     # How often to come back, decided by what the page is currently showing.
     #
     # Idle, a minute is plenty. Mid-flow it is not: a step completes on the node
@@ -934,11 +1164,12 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f'{auto_refresh}<title>ccfleet</title>'
-        f'<link rel="icon" href="{icon}">'
-        f"<style>{CSS}</style></head><body><div class=\"page\">"
+        f'{auto_refresh}<title>ccfleet console</title>'
+        f'<link rel="icon" href="{FAVICON}">'
+        f"<style>{CSS}</style></head><body class=\"console\">"
+        + _console_bar(corner) + "<div class=\"page\">"
         '<header class="mast"><div>'
-        '<h1>ccfleet<span class="dot">.</span></h1>'
+        "<h1>Fleet</h1>"
         '<p class="sub">One owner, one account, one node · heartbeat max age '
         f"{cfg.heartbeat_max_age_s // 60} min · {cadence}{whoami}</p></div>"
         + _strip_html(counts) +

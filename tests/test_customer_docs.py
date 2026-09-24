@@ -115,6 +115,28 @@ def test_the_plan_requirement_is_said_where_people_decide():
     assert "does not provide access to Claude" in render("/docs/terms")
 
 
+def test_the_landing_page_signs_in_with_google_only_where_that_works():
+    """Straight into Google's sign-in when it is set up; otherwise the page that
+    says it is not, rather than a button that goes nowhere."""
+    ready = render("/docs", google_client_id="c", google_client_secret="s",
+                   cookie_secret="0" * 32, public_url="https://fleet.example.com")
+    assert 'href="/auth/google/start?next=/account">Sign in with Google' in ready
+    unset = render("/docs")
+    assert 'href="/account">Sign in with Google' in unset
+    assert "/auth/google/start" not in unset
+
+
+def test_the_landing_page_offers_somebody_signed_in_their_slots():
+    """Not a sign-in they have already done."""
+    viewer = usersite.Viewer({"id": "u1", "email": "erik@example.com", "role": "user"},
+                             "t" * 64)
+    shown = customer_docs.page_for("/docs")(Config(), viewer=viewer)
+    hero = shown[shown.index('<div class="cta-row">'):]
+    hero = hero[:hero.index("</div>")]
+    assert 'href="/account">Your slots</a>' in hero
+    assert "Sign in with Google" not in shown and "Already have a slot?" not in shown
+
+
 def test_signing_in_comes_before_buying():
     """The operator can only switch on an account that exists, and an account
     exists once its owner has signed in."""

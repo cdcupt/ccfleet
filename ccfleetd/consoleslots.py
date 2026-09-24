@@ -35,9 +35,11 @@ COUNT_RE = re.compile(r"[0-9]{1,4}")
 #: A payment's id, from the path. Bounded for the same reason as a count.
 PAYMENT_ID_RE = re.compile(r"[0-9]{1,15}")
 
-STATE_TONE = {slotstates.FREE: "disabled", slotstates.CLAIMING: "warn",
+# The same meanings as everywhere else: green running, amber waiting on its
+# holder, the accent while the machine works on it, grey empty.
+STATE_TONE = {slotstates.FREE: "disabled", slotstates.CLAIMING: "busy",
               slotstates.CLAIMED: "warn", slotstates.ACTIVE: "ok",
-              slotstates.RELEASING: "warn"}
+              slotstates.RELEASING: "busy"}
 
 
 def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") -> str:

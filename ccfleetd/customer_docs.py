@@ -17,52 +17,120 @@ from typing import Callable, Optional
 
 from .config import Config
 from .monitor import LOGIN_MAX_AGE_S
-from .usersite import _shell, _span
+from .render import _meter
+from .usersite import NAV, Viewer, _shell, _span
 
 #: When these pages last changed in substance. Change it with the words.
 DOCS_UPDATED = "2026-09-23"
 
 DOCS_CSS = """
-.doc-nav{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;margin:0 0 22px;
-font-size:13.5px}
-.doc-nav a{color:var(--muted);text-decoration:none}
-.doc-nav a.here{color:var(--ink);font-weight:700}
-.doc-nav .brand{color:var(--ink);font-weight:800;font-size:16px;margin-right:6px}
-.doc-nav .cta{margin-left:auto;color:var(--acc);font-weight:600}
-.lead{font-size:17px;line-height:1.6;margin:0 0 22px}
-.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;
-margin:0 0 14px}
-.grid3 .card{margin:0}
-.steps{list-style:none;counter-reset:step;padding:0;margin:0}
-.steps>li{counter-increment:step;position:relative;padding:14px 16px 14px 56px;
-background:var(--panel);border:1px solid var(--rule);border-radius:12px;margin:0 0 12px;
-box-shadow:var(--shadow)}
-.steps>li::before{content:counter(step);position:absolute;left:16px;top:14px;width:26px;
-height:26px;border-radius:50%;background:var(--acc);color:var(--on-acc);font-weight:700;
-font-size:13px;display:flex;align-items:center;justify-content:center}
-.steps h3{margin:0 0 4px;font-size:15.5px}
-.steps p{margin:4px 0}
-.btnlabel{display:inline-block;border:1px solid var(--rule);border-radius:8px;padding:0 7px;
-font-size:12.5px;background:var(--inset);white-space:nowrap}
-.diag{display:block;width:100%;max-width:460px;height:auto;margin:6px auto 4px}
+/* A docs page's title block. */
+.dochead{margin:4px 0 26px}
+.dochead .lead{margin-bottom:0}
+.lead{font-size:18px;line-height:1.6;margin:14px 0 26px;max-width:64ch}
+
+/* The landing page: what it is and a way in, then what you get, then how to buy. */
+.hero{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:48px;
+align-items:center;padding:18px 0 8px}
+.eyebrow{display:inline-flex;font-size:13px;font-weight:650;color:var(--acc);
+background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;
+padding:4px 12px;margin:0 0 18px}
+.hero h1{font-size:clamp(34px,4.6vw,54px);line-height:1.05;letter-spacing:-.034em;
+font-weight:780}
+.hero .lead{font-size:18.5px;margin:20px 0 28px}
+.cta-row{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 14px}
+.hero-demo{margin:0}
+.demo-card{background:var(--panel);border:1px solid var(--rule);border-radius:18px;
+overflow:hidden;box-shadow:0 1px 2px rgba(12,17,28,.05),0 30px 60px -30px rgba(12,17,28,.35)}
+.demo-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+padding:16px 20px;border-bottom:1px solid var(--rule-soft)}
+.demo-head b{font-family:var(--mono);font-size:17px}
+.demo-body{padding:4px 20px 18px}
+.demo-meta{font-size:13px;color:var(--muted);margin:12px 0 4px}
+.demo-body .signed{margin:10px 0 2px}
+.demo-body .rc{margin:4px 0 14px}
+.demo-usage{padding:14px 16px 12px;border-radius:12px;background:var(--inset);
+border:1px solid var(--rule-soft)}
+.hero-demo figcaption{font-size:13px;color:var(--muted);margin:12px 4px 0;text-align:center}
+.band{margin:56px 0 0}
+.band>h2{font-size:26px;letter-spacing:-.024em;margin:0 0 8px}
+.band-lead{font-size:16px;color:var(--muted);margin:0 0 22px;max-width:64ch}
+.features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.feature{background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
+padding:20px;box-shadow:var(--shadow)}
+.feature h3{margin:14px 0 6px}
+.feature p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.55}
+svg.icon{display:block;width:42px;height:42px;padding:9px;border-radius:12px;
+background:var(--acc-soft);color:var(--acc);fill:none;stroke:currentColor;stroke-width:1.7;
+stroke-linecap:round;stroke-linejoin:round}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.two>.card{padding:6px 24px 20px}
+.two>.card+.card{margin-top:0}
+.two>.card>h2:first-child{margin-top:20px}
+.callout{margin:16px 0 0;padding:12px 14px;border-radius:10px;background:var(--inset);
+border:1px solid var(--rule-soft);color:var(--muted);font-size:14.5px}
+.buy{list-style:none;counter-reset:buy;padding:0;margin:14px 0 0}
+.buy>li{counter-increment:buy;position:relative;padding:2px 0 0 42px;margin:0 0 14px}
+.buy>li::before{content:counter(buy);position:absolute;left:0;top:0;width:28px;height:28px;
+border-radius:50%;background:var(--acc-soft);color:var(--acc);border:1px solid var(--acc-line);
+font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
+.next{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.next a{display:block;padding:18px 20px;border:1px solid var(--rule);border-radius:var(--radius);
+background:var(--panel);text-decoration:none;color:var(--ink);box-shadow:var(--shadow)}
+.next a:hover{border-color:var(--acc)}
+.next b{display:block;color:var(--acc);margin-bottom:4px;font-size:15.5px}
+.next span{color:var(--muted);font-size:14px;line-height:1.5}
+
+/* The guide's steps, in order. */
+.steps{list-style:none;counter-reset:step;padding:0;margin:0 0 26px}
+.steps>li{counter-increment:step;position:relative;padding:18px 22px 16px 70px;
+background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
+margin:0 0 12px;box-shadow:var(--shadow)}
+.steps>li::before{content:counter(step);position:absolute;left:22px;top:18px;width:30px;
+height:30px;border-radius:50%;background:var(--acc);color:var(--on-acc);font-weight:700;
+font-size:14px;display:flex;align-items:center;justify-content:center}
+.steps h3{margin:3px 0 4px;font-size:16.5px}
+.steps p{margin:6px 0}
+
+/* A button's label, quoted in the text, looks like the button it names. */
+.btnlabel{display:inline-block;border:1px solid var(--rule);border-radius:7px;padding:0 7px;
+font-size:.88em;font-weight:600;line-height:1.55;background:var(--panel);
+box-shadow:0 1px 0 var(--rule);white-space:nowrap}
+
+/* Document pages: each section a card, the text at a readable width. */
+.doc .card,.how .card{padding:6px 24px 20px}
+.doc .card>h2:first-child,.how .card>h2:first-child{margin-top:20px}
+.card h3{margin:16px 0 6px}
+
+/* How it works: the picture beside the words, where there is room for both. */
+.how{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:18px;
+align-items:start}
+.how .diagram{position:sticky;top:88px;margin:0}
+.how-text .card+.card{margin-top:14px}
+.diag{display:block;width:100%;max-width:420px;height:auto;margin:14px auto 10px}
 .diag .box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
 .diag .you{stroke:var(--acc);stroke-width:2}
 .diag .slot{fill:var(--acc-soft);stroke:var(--acc);stroke-width:2}
-.diag .side{fill:var(--inset);stroke:var(--rule);stroke-dasharray:5 4}
-.diag text{fill:var(--ink);font:600 14px var(--sans)}
-.diag text.sub{fill:var(--muted);font:12.5px var(--sans)}
+.diag .side{fill:var(--inset);stroke:var(--muted);stroke-width:1.2;stroke-dasharray:5 4}
+.diag text{fill:var(--ink);font:650 15px var(--sans)}
+.diag text.sub{fill:var(--muted);font:500 12.5px var(--sans)}
 .diag .arrow{stroke:var(--acc);stroke-width:2;fill:none}
 .diag .faint{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:4 4;fill:none}
 .diag .head{fill:var(--acc)}
 .diag .headfaint{fill:var(--muted)}
-.card h3{margin:14px 0 6px;font-size:15px}
-.card ul{margin:8px 0;padding-left:20px}.card li{margin:6px 0;line-height:1.5}
+
+@media (max-width:980px){.hero{grid-template-columns:minmax(0,1fr);gap:30px}
+.how{grid-template-columns:minmax(0,1fr)}.how .diagram{position:static}}
+@media (max-width:640px){.features,.two,.next{grid-template-columns:minmax(0,1fr)}
+.band{margin-top:40px}.band>h2{font-size:22px}
+.steps>li{padding:16px 16px 14px 58px}
+.steps>li::before{left:16px;top:16px;width:28px;height:28px}
+.lead{font-size:16.5px}.hero .lead{font-size:17px}}
 """
 
-_HERE = ' class="here"'
-PAGES_TITLES = (("/docs", "Overview"), ("/docs/guide", "Getting started"),
-                ("/docs/how-it-works", "How it works"), ("/privacy", "Privacy"),
-                ("/docs/terms", "Terms"))
+#: The pages, in the order the bar on top links them. The bar lives in the
+#: user site's frame, so every page carries the same one.
+PAGES_TITLES = NAV
 
 
 def contact(cfg: Config) -> str:
@@ -78,64 +146,121 @@ def contact(cfg: Config) -> str:
     return "the person who sent you this page"
 
 
-def _page(here: str, title: str, body: str) -> str:
-    """A docs page in the user site's look, with the docs' own navigation."""
-    links = "".join(
-        f'<a href="{path}"{_HERE if path == here else ""}>{escape(name)}</a>'
-        for path, name in PAGES_TITLES)
-    nav = (f'<nav class="doc-nav"><a class="brand" href="/docs">ccfleet</a>{links}'
-           '<a class="cta" href="/account">Sign in &rarr;</a></nav>')
-    return _shell(title, nav + body, extra_css=DOCS_CSS)
+def _page(here: str, title: str, body: str, width: str = "doc",
+          viewer: Optional[Viewer] = None) -> str:
+    """A docs page in the site's frame, with its own link in the bar marked."""
+    return _shell(title, body, extra_css=DOCS_CSS, here=here, width=width, viewer=viewer)
 
 
 # -- the overview -------------------------------------------------------------------
 
-def overview(cfg: Config) -> str:
+def _icon(paths: str) -> str:
+    """A line icon in the text's own colour, so it follows the theme."""
+    return ('<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+            f"{paths}</svg>")
+
+
+ICONS = {
+    "account": _icon('<rect x="3" y="4" width="18" height="16" rx="2.5"/>'
+                     '<path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4"/>'),
+    "machine": _icon('<rect x="3.5" y="4" width="17" height="6.5" rx="2"/>'
+                     '<rect x="3.5" y="13.5" width="17" height="6.5" rx="2"/>'
+                     '<path d="M7 7.25h3M7 16.75h3"/>'
+                     '<circle cx="16.5" cy="7.25" r=".9"/><circle cx="16.5" cy="16.75" r=".9"/>'),
+    "usage": _icon('<path d="M4 19v-8M9.33 19V6M14.67 19v-5M20 19V9"/>'),
+}
+
+
+def _demo() -> str:
+    """The landing page's picture: a slot, as its holder's own page shows it.
+
+    Built from the page's own parts rather than drawn, so it cannot drift from
+    what somebody sees once they have a slot. Hidden from screen readers; the
+    caption says what it shows.
+    """
+    return (
+        '<figure class="hero-demo"><div class="demo-card" aria-hidden="true">'
+        '<div class="demo-head"><b>alice-1</b><span class="pill ok">In use</span></div>'
+        '<div class="demo-body">'
+        '<p class="demo-meta">machine last heard 12s ago</p>'
+        '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; max plan.</p>'
+        '<p class="rc on">Remote Control is on: pick alice-1 in claude.ai/code.</p>'
+        '<div class="demo-usage">'
+        + _meter(34, "5-hour session", "at 11:40pm") + _meter(61, "This week", "on Friday")
+        + "</div></div></div>"
+        "<figcaption>An example of your page: the slot, your Claude account on it, and how "
+        "much of your usage limits is left.</figcaption></figure>")
+
+
+def overview(cfg: Config, viewer: Optional[Viewer] = None) -> str:
+    # Straight into Google's sign-in when it is set up; otherwise the page that
+    # says it is not, rather than a button that goes nowhere. Somebody already
+    # signed in is offered their slots instead of a sign-in they have done.
+    how = '<a class="btn big" href="/docs/how-it-works">How it works</a>'
+    if viewer is not None:
+        way_in = ('<div class="cta-row"><a class="btn primary big" href="/account">'
+                  f"Your slots</a>{how}</div>")
+    else:
+        sign_in = "/auth/google/start?next=/account" if cfg.google_ready else "/account"
+        way_in = (f'<div class="cta-row"><a class="btn primary big" href="{sign_in}">Sign in '
+                  f"with Google</a>{how}</div>"
+                  '<p class="muted small">Already have a slot? '
+                  '<a href="/account">Go to your slots</a>.</p>')
     body = (
+        '<section class="hero"><div class="hero-copy">'
+        '<p class="eyebrow">Bring your own Claude plan</p>'
         "<h1>Claude Code on a machine that is always on</h1>"
         '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux account on a '
         "machine we run, with Claude Code installed and signed in to <em>your own</em> Claude "
         "account. Your slot is a whole machine, named after you. Open claude.ai/code or the "
         "Claude app on any device, pick it by that name, and Claude works there, on your "
         "files and with your tools, while your laptop is closed.</p>"
-        '<div class="grid3">'
-        '<div class="card"><h2>What you get</h2><ul>'
-        "<li>Your own Linux account: a home directory only you can read, and room for your "
-        "projects and tools.</li>"
-        "<li>Claude Code installed, with Remote Control on, kept up to date for you.</li>"
-        "<li>Your own page, showing your slot and how much of your Claude usage limits is "
-        "used.</li></ul></div>"
+        + way_in + "</div>" + _demo() + "</section>"
+        '<section class="band"><h2>What you get</h2>'
+        '<p class="band-lead">For anybody with a Claude plan that includes Claude Code who '
+        "wants it running somewhere that stays on.</p>"
+        '<div class="features">'
+        f'<div class="feature">{ICONS["account"]}<h3>Your own Linux account</h3>'
+        "<p>A home directory only you can read, and room for your projects and tools.</p></div>"
+        f'<div class="feature">{ICONS["machine"]}<h3>Claude Code, always on</h3>'
+        "<p>Installed, with Remote Control on, and kept up to date for you.</p></div>"
+        f'<div class="feature">{ICONS["usage"]}<h3>Your own page</h3>'
+        "<p>Your slot, and how much of your Claude usage limits is used.</p></div>"
+        "</div></section>"
+        '<section class="band two">'
         '<div class="card"><h2>What you need</h2><ul>'
         "<li>Your own paid Claude plan that includes Claude Code: <strong>Pro, Max, Team or "
         "Enterprise</strong>. On Team and Enterprise, your organisation&#x27;s owner must "
         "turn Remote Control on. API keys don&#x27;t work.</li>"
         "<li>A Google account, to sign in here.</li></ul>"
-        '<p class="muted">ccfleet sells the machine, not Claude. Nobody else&#x27;s Claude '
+        '<p class="callout">ccfleet sells the machine, not Claude. Nobody else&#x27;s Claude '
         "account is ever shared with you, and yours is never shared with anybody.</p></div>"
-        '<div class="card"><h2>How to buy</h2>'
-        '<p>First <a href="/account">sign in once</a> with Google, so there is an account '
-        f"to switch on. Then ask {contact(cfg)} for a slot, and pay them. Slots are sold "
-        "directly by the operator; price and payment are agreed with them.</p>"
-        "<p>Once they have switched it on, a <span class=\"btnlabel\">Claim a slot</span> "
-        "button is waiting on your page.</p></div>"
-        "</div>"
-        '<div class="card"><h2>Read next</h2><ul>'
-        '<li><a href="/docs/guide">Getting started</a>: from buying to your first session, '
-        "step by step.</li>"
-        '<li><a href="/docs/how-it-works">How it works</a>: where your work runs, who can see '
-        "what, and how it is kept up to date.</li>"
-        '<li><a href="/privacy">Privacy</a> and <a href="/docs/terms">Terms</a>.</li>'
-        "</ul></div>")
-    return _page("/docs", "about", body)
+        '<div class="card"><h2>How to buy</h2><ol class="buy">'
+        '<li>First <a href="/account">sign in once</a> with Google, so there is an account '
+        "to switch on.</li>"
+        f"<li>Then ask {contact(cfg)} for a slot, and pay them. Slots are sold directly by "
+        "the operator; price and payment are agreed with them.</li>"
+        "<li>Once they have switched it on, a <span class=\"btnlabel\">Claim a slot</span> "
+        "button is waiting on your page.</li></ol></div>"
+        "</section>"
+        '<section class="band"><h2>Read next</h2><div class="next">'
+        '<a href="/docs/guide"><b>Getting started</b><span>From buying to your first session, '
+        "step by step.</span></a>"
+        '<a href="/docs/how-it-works"><b>How it works</b><span>Where your work runs, who can '
+        "see what, and how it is kept up to date.</span></a>"
+        '<a href="/privacy"><b>Privacy</b><span>What we keep about you, why, and for how '
+        "long.</span></a>"
+        "</div></section>")
+    return _page("/docs", "about", body, width="", viewer=viewer)
 
 
 # -- getting started ----------------------------------------------------------------
 
-def guide(cfg: Config) -> str:
+def guide(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     body = (
-        "<h1>Getting started</h1>"
+        '<div class="dochead"><h1>Getting started</h1>'
         '<p class="lead">From buying a slot to your first Claude Code session. It takes a few '
-        "minutes, most of which is the machine setting your slot up.</p>"
+        "minutes, most of which is the machine setting your slot up.</p></div>"
         '<ol class="steps">'
         "<li><h3>Sign in</h3>"
         '<p>Open <a href="/account">your page</a> and choose '
@@ -146,15 +271,15 @@ def guide(cfg: Config) -> str:
         "with, and pay them. They switch your slot on for that account.</p></li>"
         "<li><h3>Claim it</h3>"
         '<p>Press <span class="btnlabel">Claim a slot</span>. The card shows '
-        '<span class="btnlabel">Setting up</span> while the machine creates your Linux '
+        '<span class="pill busy">Setting up</span> while the machine creates your Linux '
         "account and installs Claude Code, which takes a few minutes. The page updates "
         "itself.</p></li>"
         "<li><h3>Sign in to Claude</h3>"
-        '<p>When the card says <span class="btnlabel">Ready to sign in</span>, press '
+        '<p>When the card says <span class="pill warn">Ready to sign in</span>, press '
         '<span class="btnlabel">Sign in to Claude</span> and open the link it shows. Sign in '
         "with your own Claude account, copy the code Claude gives you, paste it into the box "
         'and press <span class="btnlabel">Send code</span>. The card turns '
-        '<span class="btnlabel">In use</span>.</p></li>'
+        '<span class="pill ok">In use</span>.</p></li>'
         "<li><h3>Use it</h3>"
         "<p>Remote Control comes on within a minute. Open "
         '<a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">'
@@ -199,7 +324,7 @@ def guide(cfg: Config) -> str:
         "signing in, check you are signed in to the same Claude account there, then "
         "reload.</li>"
         f"<li>Anything else: ask {contact(cfg)}.</li></ul></div>")
-    return _page("/docs/guide", "getting started", body)
+    return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
 # -- how it works -----------------------------------------------------------------------
@@ -239,13 +364,14 @@ orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></ma
 </svg>"""
 
 
-def how_it_works(cfg: Config) -> str:
+def how_it_works(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     body = (
-        "<h1>How it works</h1>"
+        '<div class="dochead"><h1>How it works</h1>'
         '<p class="lead">Your work runs in your slot, on our machine. Your conversations go '
         "between you, Anthropic and your slot; ccfleet&#x27;s own server is not in that "
-        "path.</p>"
-        f'<div class="card">{PICTURE}</div>'
+        "path.</p></div>"
+        f'<div class="how"><figure class="card diagram">{PICTURE}</figure>'
+        '<div class="how-text">'
         '<div class="card"><h2>Your slot</h2>'
         "<p>Your slot is a whole machine, named after you, and claude.ai/code shows it by "
         "that name. On it you have a Linux account of your own: a home directory only you "
@@ -288,16 +414,17 @@ def how_it_works(cfg: Config) -> str:
         "<p>The machines are in California. Each slot is a machine of its own, with its own "
         "internet address. ccfleet&#x27;s code is open source: "
         '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
-        'rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>.</p></div>')
-    return _page("/docs/how-it-works", "how it works", body)
+        'rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>.</p></div>'
+        "</div></div>")
+    return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
 # -- terms ------------------------------------------------------------------------------
 
-def terms(cfg: Config) -> str:
+def terms(cfg: Config, viewer: Optional[Viewer] = None) -> str:
     body = (
-        "<h1>Terms</h1>"
-        f'<p class="sub">Last updated {escape(DOCS_UPDATED)}</p>'
+        '<div class="dochead"><h1>Terms</h1>'
+        f'<p class="sub">Last updated {escape(DOCS_UPDATED)}</p></div>'
         '<div class="card"><h2>The service</h2>'
         "<p>A slot is a Linux account on a machine the operator runs, for one person, with "
         "Claude Code installed. You bring your own Claude plan and sign in to it yourself; "
@@ -326,15 +453,15 @@ def terms(cfg: Config) -> str:
         "<p>If these terms change, this page changes and the date at the top says when. "
         f"Questions go to {contact(cfg)}. How your information is handled is on the "
         '<a href="/privacy">privacy page</a>.</p></div>')
-    return _page("/docs/terms", "terms", body)
+    return _page("/docs/terms", "terms", body, viewer=viewer)
 
 
-PAGES: dict[str, Callable[[Config], str]] = {
+PAGES: dict[str, Callable[..., str]] = {
     "/docs": overview, "/docs/guide": guide,
     "/docs/how-it-works": how_it_works, "/docs/terms": terms,
 }
 
 
-def page_for(path: str) -> Optional[Callable[[Config], str]]:
+def page_for(path: str) -> Optional[Callable[..., str]]:
     """The page at this path, trailing slash or not; None when there is none."""
     return PAGES.get(path.rstrip("/") or "/")

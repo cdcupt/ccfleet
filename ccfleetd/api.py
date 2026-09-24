@@ -266,8 +266,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
                 return
             account, session_id = self._signed_in()
-            self._send(401, usersite.console_door(account, session_id,
-                                                  ctx.cfg).encode("utf-8"), HTML_HEADERS)
+            self._send(401, usersite.console_door(account, session_id, ctx.cfg,
+                                                  ctx.store).encode("utf-8"), HTML_HEADERS)
 
         def _require_admin(self) -> bool:
             """For anything that changes the fleet. An owner gets 403, not 401:
@@ -290,18 +290,52 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             are the people who rent slots, and the two must not be able to
             stand in for one another.
             """
-            if not ctx.cfg.cookie_secret:
-                return None, ""
-            raw = sessions.read_cookie(self.headers.get("Cookie"))
-            if raw is None:
-                return None, ""
-            try:
-                session_id = sessions.unsign(raw, ctx.cfg.cookie_secret)
-            except sessions.SessionError:
+            session_id = self._session_cookie()
+            if not session_id:
                 return None, ""
             account = ctx.store.account_for_session(session_id, now=time.time(),
                                                     site=self._site())
             return (account, session_id) if account is not None else (None, "")
+
+        def _session_cookie(self) -> str:
+            """The session id this request's cookie carries, verified; "" if none."""
+            if not ctx.cfg.cookie_secret:
+                return ""
+            raw = sessions.read_cookie(self.headers.get("Cookie"))
+            if raw is None:
+                return ""
+            try:
+                return sessions.unsign(raw, ctx.cfg.cookie_secret)
+            except sessions.SessionError:
+                return ""
+
+        def _peek_signed_in(self) -> tuple[Optional[dict[str, Any]], str]:
+            """Who is signed in, for a page that only wants to say who is looking.
+
+            Read-only: no visit is recorded and no expired session is swept, so
+            reading a public page writes nothing. Anything that acts on the
+            session goes through _signed_in() instead.
+            """
+            session_id = self._session_cookie()
+            if not session_id:
+                return None, ""
+            account = ctx.store.peek_session(session_id, now=time.time(), site=self._site())
+            return (account, session_id) if account is not None else (None, "")
+
+        def _viewer(self) -> Optional[usersite.Viewer]:
+            """Who is looking at a public page, as its corner shows them."""
+            account, session_id = self._peek_signed_in()
+            return usersite.viewer_for(account, session_id, ctx.cfg, ctx.store)
+
+        def _console_corner(self) -> str:
+            """The console's corner: whoever is signed in with Google on this
+            site, as their menu. The admin token and console passwords are basic
+            auth, with no session to show or end: the line under the console's
+            title already says who they are."""
+            account, session_id = self._peek_signed_in()
+            viewer = usersite.viewer_for(account, session_id, ctx.cfg, ctx.store,
+                                         on_console=True)
+            return viewer.menu() if viewer is not None else ""
 
         def _site(self) -> str:
             """Which site's sessions this request may use. With one hostname
@@ -453,7 +487,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if not self._csrf_ok(form, session_id):
                 self._json(403, {"error": "bad or missing csrf token"})
                 return
-            outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time())
+            outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
+                                   session_id)
             if outcome.location:
                 self._redirect(outcome.location)
             else:
@@ -523,11 +558,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            HTML_HEADERS)
             elif path == "/privacy":
                 # Public: Google links here from its sign-in screen.
-                self._send(200, usersite.privacy_page(ctx.cfg).encode("utf-8"), HTML_HEADERS)
+                self._send(200, usersite.privacy_page(ctx.cfg, self._viewer()).encode("utf-8"),
+                           HTML_HEADERS)
             elif customer_docs.page_for(path):
                 # Public, for people deciding whether to buy a slot and then using one.
-                self._send(200, customer_docs.page_for(path)(ctx.cfg).encode("utf-8"),
-                           HTML_HEADERS)
+                self._send(200, customer_docs.page_for(path)(
+                    ctx.cfg, viewer=self._viewer()).encode("utf-8"), HTML_HEADERS)
             elif path == "/auth/google/start":
                 self._sign_in_start()
             elif path == "/auth/google/callback":
@@ -761,7 +797,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 form.get("region", "").strip(), form.get("pinned_version", "").strip(),
                 form.get("rc_expected") == "1", now=time.time())
             body = render_add_result(form["node_id"].strip(), token, ctx.cfg,
-                                     form.get("owner", "").strip())
+                                     form.get("owner", "").strip(), self._console_corner())
             self._send(200, body.encode("utf-8"), HTML_HEADERS)
 
         def _action_on_node(self, node_id: str, action: str, form: dict[str, str]) -> None:
@@ -795,7 +831,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 secret = ctx.store.read_secret(node_id)
                 node = ctx.store.get_node(node_id) or {}
                 self._send(200, render_token_result(node_id, secret, ctx.cfg,
-                                                    node.get("owner", "")).encode("utf-8"),
+                                                    node.get("owner", ""),
+                                                    self._console_corner()).encode("utf-8"),
                            HTML_HEADERS)
                 return
             elif action == "token-done":
@@ -806,7 +843,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 token = ctx.store.rotate_token(node_id)
                 node = ctx.store.get_node(node_id) or {}
                 self._send(200, render_add_result(node_id, token, ctx.cfg,
-                                                  node.get("owner", "")).encode("utf-8"),
+                                                  node.get("owner", ""),
+                                                  self._console_corner()).encode("utf-8"),
                            HTML_HEADERS)
                 return
             elif action == "remove":
@@ -859,7 +897,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                     logins=logins,
                                     extra=(consoleslots.section(ctx.store, csrf_token(ctx.cfg),
                                                                 now)
-                                           if who.is_admin else ""))
+                                           if who.is_admin else ""),
+                                    corner=self._console_corner())
 
     return FleetHandler
 
