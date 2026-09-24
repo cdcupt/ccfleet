@@ -47,6 +47,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -934,6 +935,10 @@ def _quota_report(cached: Mapping[str, Any]) -> dict[str, Any]:
 
 HISTORY_FILE = "history.jsonl"
 HISTORY_CLEANED_KEY = "probe_history_cleaned"
+# After the rename, how long to keep watching the old file for an append that
+# opened it just before: three looks, a twentieth of a second apart.
+HISTORY_CARRY_LOOKS = 3
+HISTORY_CARRY_WAIT_S = 0.05
 
 
 def _old_probe_line(line: bytes, home: str) -> bool:
@@ -954,48 +959,85 @@ def clean_probe_history(config_dir: Path, home: str) -> Optional[int]:
     Only a line whose display is "/usage" and whose project is exactly the home
     goes. Every other line, malformed ones included, is written back byte for
     byte, in the file's own mode. Returns how many went (0 when there is no
-    history), or None when the file could not be read or rewritten, so the next
-    run tries again.
+    history), or None when the file could not be read, changed under the scan,
+    or could not be rewritten, so the next run tries again.
+
+    Claude Code appends to this file whenever a prompt is typed, and nothing it
+    appends may be lost to this. So, the way Claude Code's own history prune
+    works: the file is replaced only if it is still exactly what was read, and
+    otherwise the tidy waits for a later run. An append that opens the file just
+    as it is replaced lands in the old one, which is kept open and watched a
+    moment longer, and whatever arrives there is carried over.
     """
     # Where it really lives, so a history kept elsewhere through a symlink is
     # tidied there and the link stays a link.
     path = Path(os.path.realpath(config_dir / HISTORY_FILE))
-    # From read to rename in one short step. Claude Code appends to this file as
-    # prompts are typed, and a line appended in between is lost: the rename puts
-    # back the file as it was read. Nothing on this side can close that window
-    # without Claude Code's help, so it is kept as small as it can be, and the
-    # tidy runs once.
     try:
-        info = path.stat()
-        raw = path.read_bytes()
+        fd = os.open(path, os.O_RDONLY)
     except FileNotFoundError:
         return 0
     except OSError:
         return None
-    # Split on newlines only: a stray carriage return inside a malformed line must
-    # not cut it into pieces that could each pass for the probe's.
-    pieces = raw.split(b"\n")
-    lines = [piece + b"\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
-    kept = [line for line in lines if not _old_probe_line(line, home)]
-    dropped = len(lines) - len(kept)
-    if not dropped:
-        return 0
-    tmp = path.with_name(f".{path.name}.ccfleet-{os.getpid()}")
-    try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as out:
-            out.write(b"".join(kept))
-            out.flush()
-            os.fsync(out.fileno())
-        os.chmod(tmp, stat.S_IMODE(info.st_mode))
-        os.replace(tmp, path)
-    except OSError:
+    with os.fdopen(fd, "rb") as old:
         try:
-            os.unlink(tmp)
+            info = os.fstat(old.fileno())
+            raw = old.read()
         except OSError:
-            pass
-        return None
+            return None
+        # Split on newlines only: a stray carriage return inside a malformed line
+        # must not cut it into pieces that could each pass for the probe's.
+        pieces = raw.split(b"\n")
+        lines = [piece + b"\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+        kept = [line for line in lines if not _old_probe_line(line, home)]
+        dropped = len(lines) - len(kept)
+        if not dropped:
+            return 0
+        tmp = ""
+        try:
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.ccfleet-")
+            with os.fdopen(fd, "wb") as out:
+                out.write(b"".join(kept))
+                out.flush()
+                os.fsync(out.fileno())
+            os.chmod(tmp, stat.S_IMODE(info.st_mode))
+            now_there = os.stat(path)
+            if (now_there.st_ino, now_there.st_size) != (info.st_ino, len(raw)):
+                os.unlink(tmp)
+                log.info("%s changed under the tidy; trying again next run", path)
+                return None
+            os.replace(tmp, path)
+        except OSError:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            return None
+        _carry_over(old, len(raw), path)
     return dropped
+
+
+def _carry_over(old: Any, seen: int, path: Path) -> None:
+    """Whatever reached the replaced file after it was read, appended to the new
+    one. The old file stays open until this is done, so nothing written to it can
+    vanish unseen."""
+    for look in range(HISTORY_CARRY_LOOKS):
+        if look:
+            time.sleep(HISTORY_CARRY_WAIT_S)
+        try:
+            size = os.fstat(old.fileno()).st_size
+            if size <= seen:
+                continue
+            old.seek(seen)
+            extra = old.read(size - seen)
+            with open(path, "ab") as new:
+                new.write(extra)
+                new.flush()
+                os.fsync(new.fileno())
+            seen += len(extra)
+        except OSError as exc:
+            log.warning("could not carry a late history line over to %s: %s", path, exc)
+            return
 
 
 def clean_probe_history_once(state: Mapping[str, Any], config_dir: Path,

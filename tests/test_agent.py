@@ -1467,6 +1467,127 @@ def test_a_missing_or_unreadable_history_is_left_alone(claude_dir, tmp_path):
     assert path.read_bytes() == raw
 
 
+def _leftovers(claude_dir):
+    return sorted(p.name for p in claude_dir.iterdir() if ".ccfleet-" in p.name)
+
+
+def test_a_prompt_typed_during_the_tidy_makes_it_wait_and_nothing_is_lost(
+        claude_dir, tmp_path, monkeypatch):
+    """Claude Code appends to its history as prompts are typed. One arriving
+    after the read must not be lost to a rewrite from the older copy: the
+    tidy stands down, as Claude Code's own history prune does, and tries again
+    next run."""
+    path = claude_dir / "history.jsonl"
+    raw, kept = _history(tmp_path)[0] + b"\n", _history(tmp_path)[1]
+    path.write_bytes(raw)
+    typed = (json.dumps({"display": "deploy it", "project": str(tmp_path / "workspace")})
+             + "\n").encode()
+    real_fsync = os.fsync
+    appended = []
+
+    def fsync_then_type(fd):
+        real_fsync(fd)
+        if not appended:
+            appended.append(1)
+            with open(path, "ab") as history:
+                history.write(typed)
+
+    monkeypatch.setattr(agent.os, "fsync", fsync_then_type)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert path.read_bytes() == raw + typed, "the file is left exactly as it now is"
+    assert _leftovers(claude_dir) == []
+    # The next run finds it quiet and finishes, the typed prompt kept.
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert path.read_bytes() == kept + typed
+
+
+def test_a_history_replaced_during_the_tidy_is_left_to_whoever_replaced_it(
+        claude_dir, tmp_path, monkeypatch):
+    """Claude Code prunes this file itself by replacing it. A tidy that raced a
+    prune must not put back the copy it read."""
+    path = claude_dir / "history.jsonl"
+    raw = _history(tmp_path)[0]
+    path.write_bytes(raw)
+    # The same length as what was read, so only the file's identity tells them apart.
+    pruned = b'{"display": "kept by the prune", "project": "/x"}\n'
+    pruned = pruned + b" " * (len(raw) - len(pruned) - 1) + b"\n"
+    assert len(pruned) == len(raw)
+    real_fsync = os.fsync
+    done = []
+
+    def fsync_then_prune(fd):
+        real_fsync(fd)
+        if not done:
+            done.append(1)
+            other = claude_dir / "pruned.tmp"
+            other.write_bytes(pruned)
+            os.replace(other, path)
+
+    monkeypatch.setattr(agent.os, "fsync", fsync_then_prune)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) is None
+    assert path.read_bytes() == pruned
+    assert _leftovers(claude_dir) == []
+
+
+def test_a_prompt_that_races_the_rename_is_carried_over(claude_dir, tmp_path, monkeypatch):
+    """An append that opened the file just before it was replaced lands in the
+    old file. The old file is watched a moment longer and that line moved."""
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+    path = claude_dir / "history.jsonl"
+    raw, kept = _history(tmp_path)[0] + b"\n", _history(tmp_path)[1]
+    path.write_bytes(raw)
+    typed = (json.dumps({"display": "ship it", "project": str(tmp_path / "workspace")})
+             + "\n").encode()
+    real_replace = os.replace
+    raced = []
+
+    def type_then_replace(src, dst):
+        if Path(dst) == path and not raced:
+            raced.append(1)
+            with open(path, "ab") as history:
+                history.write(typed)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(agent.os, "replace", type_then_replace)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert path.read_bytes() == kept + typed
+    assert _leftovers(claude_dir) == []
+
+
+def test_a_prompt_that_reaches_the_old_file_a_moment_later_is_still_carried_over(
+        claude_dir, tmp_path, monkeypatch):
+    """A writer that opened the file before the rename can write a beat after
+    it. The old file is watched for a few looks, not just one."""
+    path = claude_dir / "history.jsonl"
+    raw, kept = _history(tmp_path)[0] + b"\n", _history(tmp_path)[1]
+    path.write_bytes(raw)
+    typed = (json.dumps({"display": "late", "project": str(tmp_path / "workspace")})
+             + "\n").encode()
+    real_replace = os.replace
+    held = []
+
+    def open_then_replace(src, dst):
+        if Path(dst) == path and not held:
+            held.append(open(path, "ab"))       # the writer's handle, on the old file
+        return real_replace(src, dst)
+
+    def write_during_the_pause(seconds):
+        if held and not held[0].closed:
+            held[0].write(typed)
+            held[0].close()
+
+    monkeypatch.setattr(agent.os, "replace", open_then_replace)
+    monkeypatch.setattr(agent.time, "sleep", write_during_the_pause)
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+    assert path.read_bytes() == kept + typed
+
+
+def test_a_temp_file_left_by_a_crashed_run_does_not_block_the_tidy(claude_dir, tmp_path):
+    (claude_dir / f".history.jsonl.ccfleet-{os.getpid()}").write_bytes(b"half written")
+    (claude_dir / "history.jsonl").write_bytes(_history(tmp_path)[0])
+    assert agent.clean_probe_history(claude_dir, str(tmp_path)) == 4
+
+
 def test_the_history_is_tidied_once(claude_dir, tmp_path):
     """After this the probe never writes a line under the home again, so a
     "/usage" typed there later is the owner's own and must be left alone."""
