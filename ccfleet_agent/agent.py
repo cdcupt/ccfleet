@@ -1185,6 +1185,27 @@ def installable_version(target: Any) -> Optional[str]:
     return None
 
 
+#: A release as Anthropic's channel files spell it: what the server says a
+#: channel stands at. Nothing looser is compared, and nothing else is kept.
+RELEASE_RE = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,6}")
+
+
+def channel_number(value: Any) -> Optional[str]:
+    """The release the server says a channel stands at, checked, or None."""
+    if isinstance(value, str) and RELEASE_RE.fullmatch(value.strip()):
+        return value.strip()
+    return None
+
+
+def update_request(value: Any) -> Optional[float]:
+    """When an update asked for from a page was asked, or None. A number and
+    nothing else: it is what names the request in the answer."""
+    requested_at = value.get("requested_at") if isinstance(value, Mapping) else None
+    if isinstance(requested_at, bool) or not isinstance(requested_at, (int, float)):
+        return None
+    return requested_at
+
+
 def _channel_is_current(state: Mapping[str, Any], target: str,
                         installed: Optional[str], now: float) -> bool:
     """True when a channel was resolved recently and still holds.
@@ -1203,6 +1224,19 @@ def _channel_is_current(state: Mapping[str, Any], target: str,
     if not isinstance(ts, (int, float)) or isinstance(ts, bool):
         return False
     return now - ts < CHANNEL_RECHECK_AFTER_S
+
+
+def _channel_moved(state: Mapping[str, Any], target: str, installed: Optional[str],
+                   number: Optional[str]) -> bool:
+    """The server says the channel stands at a release this does not run, and
+    no install has been made for that release yet: go at once rather than wait
+    out the daily re-check. Once per release, so an installer that lands on
+    another number is not run again every minute."""
+    if number is None or number == installed:
+        return False
+    channel = state.get("channel")
+    channel = channel if isinstance(channel, Mapping) else {}
+    return not (channel.get("target") == target and channel.get("number") == number)
 
 
 # -- console-driven sign-in ------------------------------------------------------
@@ -1549,11 +1583,17 @@ def prune_state(state: Mapping[str, Any], desired: Mapping[str, Any],
 
 def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
                       state: Mapping[str, Any], runner: Runner = subprocess.run,
-                      now: Optional[float] = None) -> Optional[dict[str, Any]]:
+                      now: Optional[float] = None, *,
+                      asked: bool = False) -> Optional[dict[str, Any]]:
     """Bring the CLI to the pinned version. Returns a result to report, or None.
 
     None means nothing was attempted: no pin, already matching, claude not found,
     or still inside the back-off after a failure. Only a real attempt reports.
+
+    A channel is installed again once the server says it moved on to a release
+    this does not run (`channel_version`), and at once when somebody asked for
+    it from their page (`asked`), which also skips the back-off: they pressed
+    the button, and they are watching for the answer.
     """
     now = time.time() if now is None else now
     target = installable_version(desired.get("claude_version"))
@@ -1565,7 +1605,11 @@ def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
     # A channel has no number to compare, so it is governed by time instead. Skip
     # while the last resolution still holds: same channel, the version it resolved
     # to is still what is installed, and the re-check window has not elapsed.
-    if target in VERSION_CHANNELS and _channel_is_current(state, target, installed, now):
+    number = channel_number(desired.get("channel_version")) \
+        if target in VERSION_CHANNELS else None
+    if (target in VERSION_CHANNELS and not asked
+            and not _channel_moved(state, target, installed, number)
+            and _channel_is_current(state, target, installed, now)):
         return None
     path = find_claude()
     if not path:
@@ -1573,7 +1617,7 @@ def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
 
     last = state.get("upgrade")
     last = last if isinstance(last, Mapping) else {}
-    if (last.get("ok") is False and last.get("to") == target
+    if (not asked and last.get("ok") is False and last.get("to") == target
             and isinstance(last.get("ts"), (int, float))
             and now - last["ts"] < INSTALL_RETRY_AFTER_S):
         log.debug("not retrying install of %s yet: backing off after a failure", target)
@@ -1598,7 +1642,45 @@ def reconcile_version(desired: Mapping[str, Any], installed: Optional[str],
         # Remember what the channel resolved to, so the next beat can tell that
         # this channel is already satisfied instead of installing it again.
         result["channel"] = {"target": target, "resolved": landed, "ts": now}
+        if number is not None:
+            # The release the server named when this ran: that one is tried.
+            result["channel"]["number"] = number
     return result
+
+
+def update_asked(raw: Any, state: Mapping[str, Any]) -> Optional[float]:
+    """An update asked for from a page that has not been answered yet, or None."""
+    requested_at = update_request(raw)
+    said = state.get("claude_update")
+    if requested_at is None or (isinstance(said, Mapping)
+                                and said.get("requested_at") == requested_at):
+        return None
+    return requested_at
+
+
+def settle_update(state: Mapping[str, Any], raw: Any) -> dict[str, Any]:
+    """Forget an answer once the server stops asking: it has heard it."""
+    said = state.get("claude_update")
+    if isinstance(said, Mapping) and said.get("requested_at") == update_request(raw):
+        return dict(state)
+    return {k: v for k, v in state.items() if k != "claude_update"}
+
+
+def update_answer(requested_at: float, target: Optional[str], installed: Optional[str],
+                  result: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    """What to tell the page about the update it asked for."""
+    if result is None:
+        # Nothing ran: the exact version asked for is here already, or there
+        # is no Claude Code here to update.
+        done = target is not None and target not in VERSION_CHANNELS and installed == target
+        return {"requested_at": requested_at, "state": "done" if done else "failed",
+                "to": (installed or "") if done else "",
+                "detail": "" if done else "Claude Code was not found to update"}
+    if result.get("ok") is True:
+        return {"requested_at": requested_at, "state": "done",
+                "to": str(result.get("to") or ""), "detail": ""}
+    return {"requested_at": requested_at, "state": "failed", "to": "",
+            "detail": str(result.get("error") or "the installer failed")[:200]}
 
 
 def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
@@ -1621,6 +1703,10 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
     if remember is not None:
         state = {**state, "quota": remember}
     payload = build_payload(cfg, state=state, quota=quota)
+    # What it did about an update asked for from its owner's page, until the
+    # server stops asking.
+    if isinstance(state.get("claude_update"), Mapping):
+        payload.setdefault("reconcile", {})["claude_update"] = dict(state["claude_update"])
     if login_progress:
         payload.setdefault("reconcile", {})["login"] = dict(login_progress)
     status, text = send_heartbeat(cfg, payload)
@@ -1635,7 +1721,17 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
     installed = (payload.get("claude") or {}).get("version")
     progress, state = reconcile_login(desired, state)
     state = prune_state(state, desired, installed)
-    result = reconcile_version(desired, installed, state)
+    state = settle_update(state, desired.get("update_now"))
+    # Never under a sign-in: an install would swap the binary under the login
+    # it is running. Nothing is installed until it is over, and an update asked
+    # for meanwhile stays unanswered, so the first run after it takes it up.
+    asked, result = None, None
+    if not desired.get("login"):
+        asked = update_asked(desired.get("update_now"), state)
+        result = reconcile_version(desired, installed, state, asked=asked is not None)
+    if asked is not None:
+        state["claude_update"] = update_answer(
+            asked, installable_version(desired.get("claude_version")), installed, result)
     if result is not None:
         # The channel note is local bookkeeping, not something the server asked
         # for, so it is filed separately and never reported.
@@ -1707,16 +1803,23 @@ def reconcile_slot_version(request: Mapping[str, Any], state: Mapping[str, Any],
     What is still running the old one is Remote Control, which is restarted
     later, at a quiet moment (see finish_restart).
     """
-    pin = {"claude_version": request.get("claude_version")}
+    pin = {"claude_version": request.get("claude_version"),
+           "channel_version": request.get("channel_version")}
     # prune_state drops a success once it is satisfied, which is right for the
     # record and wrong for the restart it may still owe: that is kept until
     # done, and only forgotten when there is no pin left at all.
     state = prune_state(state, pin, installed)
+    state = settle_update(state, request.get("update_now"))
     if installable_version(pin["claude_version"]) is None:
         state.pop("restart", None)
     if request.get("may_upgrade") is not True:
+        # Its holder is signing in: an update asked for waits with the rest.
         return state, installed
-    result = reconcile_version(pin, installed, state, runner, now)
+    asked = update_asked(request.get("update_now"), state)
+    result = reconcile_version(pin, installed, state, runner, now, asked=asked is not None)
+    if asked is not None:
+        state["claude_update"] = update_answer(
+            asked, installable_version(pin["claude_version"]), installed, result)
     if result is None:
         return state, installed
     channel = result.pop("channel", None)
@@ -2169,6 +2272,8 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     upgrade = state.get("upgrade") if isinstance(state.get("upgrade"), Mapping) else {}
     if upgrade or state.get("restart"):
         facts["upgrade"] = {**upgrade, "restart": state.get("restart")}
+    if isinstance(state.get("claude_update"), Mapping):
+        facts["claude_update"] = dict(state["claude_update"])
     if state.get("restart") == "done":
         state.pop("restart")                # said once; there is nothing left to do
     write_state(state_path, state)
