@@ -23,7 +23,7 @@ def test_rows_merge_alerts_and_escape_html(cfg):
     assert "&lt;script&gt;" in html
     assert "≠ pinned" in html and "203.0.113.10" in html
     assert 'class="pill critical"' in html and "active (expected)" in html
-    assert "max \u00b7 refreshed 10m ago" in html
+    assert "Max \u00b7 refreshed 10m ago" in html
 
 
 def test_empty_dashboard_has_hint(cfg):

@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.9.1 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.9.2 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -570,7 +570,7 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
       <tr><td>Claude Code</td><td>Running version, and the pin when set</td><td>version equals pin; no "≠ pinned"</td></tr>
       <tr><td>Egress IP</td><td>Public address the node answers from</td><td>stable from day to day</td></tr>
       <tr><td>Disk / Load</td><td>Home filesystem usage and 1-minute load</td><td>disk under 85%</td></tr>
-      <tr><td>Login</td><td>Whether a login exists, when Claude Code last refreshed it, and when the access token expires</td><td>"refreshed &lt;1h ago", token "in Nh"</td></tr>
+      <tr><td>Login</td><td>The Claude plan (Pro, Max 5x, Max 20x&hellip;), whether a login exists, when Claude Code last refreshed it, and when the access token expires</td><td>"Max 20x · refreshed &lt;1h ago", token "in Nh"</td></tr>
       <tr><td>Remote Control</td><td>State of the optional service</td><td>active, when expected</td></tr>
 
     </tbody>
@@ -845,7 +845,9 @@ claude
         <li>You record the payment and set their allowance in the console's Accounts card.
         The payment's date comes filled in with one more month: from the day after what they
         have already paid for, or from today when that has passed or nothing is paid yet, so
-        a first payment on 24 September suggests 23 October. That is all you do.</li>
+        a first payment on 24 September suggests 23 October. That is all you do. The same
+        card says, beside how many slots each person holds, the Claude plans on them:
+        <em>holds 2 (Max 20x, Pro)</em>.</li>
         <li>They claim a slot, sign in to Claude with their own account, and use it from
         claude.ai/code or the Claude app.</li>
       </ol>
@@ -983,7 +985,7 @@ ccfleetd slot list --machine pool-1</code></pre>
     <thead><tr><th>Column</th><th>Says</th></tr></thead>
     <tbody>
       <tr><td>Slot</td><td>Its name, which is its holder's while they hold it; under it <em>own machine</em> or <em>kept for &lt;email&gt;</em>, and <em>on &lt;machine&gt;</em> only for a free slot whose id is not its machine's</td></tr>
-      <tr><td>Holder</td><td>Their address, or <em>free</em></td></tr>
+      <tr><td>Holder</td><td>Their address and, under it, the Claude plan of the account signed in on the slot (Pro, Max 5x, Max 20x&hellip;), or <em>free</em></td></tr>
       <tr><td>State</td><td>The words the holder's own page uses: In use, Ready to sign in, Setting up, Being wiped, or Free. An own machine reads In use or Not signed in</td></tr>
       <tr><td>Claude Code</td><td>The version and what it follows (stable, latest, pinned, held at), then <em>update available</em>, <em>updating to &hellip;</em> or <em>restart pending</em></td></tr>
       <tr><td>Held</td><td>How long it has been held</td></tr>
