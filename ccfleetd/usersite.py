@@ -30,6 +30,7 @@ from .render import (
     CONSOLE_PATH,
     CSS,
     FAVICON,
+    LOCAL_TIMES_TAG,
     LOGIN_WORDS,
     MARK,
     SIGN_IN_LINK,
@@ -428,7 +429,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             '<a href="/privacy">Privacy</a><a href="/docs/terms">Terms</a>'
             '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">Source code</a></nav>'
-            "</div></footer></body></html>")
+            "</div></footer>" + LOCAL_TIMES_TAG + "</body></html>")
 
 
 _HERE = ' class="here"'
@@ -816,8 +817,9 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
                      "minute of signing in.</p>")
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
-    bars = (_meter(session.get("used_pct"), "5-hour session", session.get("resets"))
-            + _meter(week.get("used_pct"), "This week", week.get("resets")))
+    read = quota.get("checked_at")
+    bars = (_meter(session.get("used_pct"), "5-hour session", session.get("resets"), read, now)
+            + _meter(week.get("used_pct"), "This week", week.get("resets"), read, now))
     usage = report.get("usage") or {}
     spent = ""
     if usage:
