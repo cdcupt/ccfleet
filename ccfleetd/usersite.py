@@ -703,7 +703,7 @@ SWITCH_ENDED = {
 }
 #: What a flow that did not go through was, by its kind.
 NOT_DONE = {"token": "The device token was not made",
-            "switch": "The account was not changed"}
+            "switch": "The change of account did not go through"}
 
 
 def _flags(slot: Mapping[str, Any], alerts: list[Mapping[str, Any]]) -> frozenset[str]:

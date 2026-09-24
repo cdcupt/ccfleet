@@ -210,20 +210,30 @@ def test_an_account_block_that_cannot_be_swapped_leaves_the_old_account(home, co
     assert not scratch(home).exists()
 
 
-def refusing(monkeypatch, path):
-    """_atomic_write, failing for `path` alone."""
+def refusing(monkeypatch, refuse):
+    """_atomic_write, failing wherever `refuse(path, the bytes)` says."""
     real = agent._atomic_write
 
     def write(target, text, mode=0o600):
-        return False if target == path else real(target, text, mode)
+        data = text.encode("utf-8") if isinstance(text, str) else text
+        return False if refuse(target, data) else real(target, text, mode)
 
     monkeypatch.setattr(agent, "_atomic_write", write)
+
+
+def slot_state(home):
+    return home / ".config" / "ccfleet" / "slot-state.json"
+
+
+def binding_to(home, uuid):
+    """The write that saves the slot bound to `uuid`."""
+    return lambda path, data: path == slot_state(home) and fp_of(uuid).encode() in data
 
 
 def test_an_account_block_that_cannot_be_written_leaves_the_old_account(home, monkeypatch):
     bound_as(home, MINE)
     before = credential(home), (home / ".claude.json").read_bytes()
-    refusing(monkeypatch, home / ".claude.json")
+    refusing(monkeypatch, lambda path, data: path == home / ".claude.json")
     said = sign_in(Slot(home, signs_in_as=THEIRS), kind="switch")
     assert said["state"] == "failed" and said["detail"] == agent.NOT_ADOPTED
     assert (credential(home), (home / ".claude.json").read_bytes()) == before
@@ -233,10 +243,71 @@ def test_an_account_block_that_cannot_be_written_leaves_the_old_account(home, mo
 def test_a_credential_that_cannot_be_written_puts_the_old_block_back(home, monkeypatch):
     bound_as(home, MINE)
     before = credential(home), (home / ".claude.json").read_bytes()
-    refusing(monkeypatch, home / ".claude" / ".credentials.json")
+    refusing(monkeypatch, lambda path, data: path == home / ".claude" / ".credentials.json")
     said = sign_in(Slot(home, signs_in_as=THEIRS), kind="switch")
     assert said["state"] == "failed" and said["detail"] == agent.NOT_ADOPTED
     assert (credential(home), (home / ".claude.json").read_bytes()) == before
+    assert state(home)["bound_fp"] == fp_of(MINE)
+
+
+def test_a_binding_that_cannot_be_saved_puts_the_old_account_back(home, monkeypatch):
+    """Not said to have changed until the slot's binding is saved: without it
+    the slot would sign in as one account and keep another."""
+    bound_as(home, MINE)
+    before = credential(home), (home / ".claude.json").read_bytes()
+    refusing(monkeypatch, binding_to(home, THEIRS))
+    said = sign_in(Slot(home, signs_in_as=THEIRS), kind="switch")
+    assert said["state"] == "failed" and said["detail"] == agent.NOT_ADOPTED
+    assert (credential(home), (home / ".claude.json").read_bytes()) == before
+    assert state(home)["bound_fp"] == fp_of(MINE)
+
+
+def test_a_slot_with_no_credential_before_is_left_with_none(home, monkeypatch):
+    bound_as(home, MINE)
+    (home / ".claude" / ".credentials.json").unlink()        # signed out since
+    refusing(monkeypatch, binding_to(home, THEIRS))
+    said = sign_in(Slot(home, signs_in_as=THEIRS), kind="switch")
+    assert said["detail"] == agent.NOT_ADOPTED
+    assert not (home / ".claude" / ".credentials.json").exists(), "the new one was left"
+
+
+def stuck_halfway(home, stuck):
+    """What fails, so that a change can be neither finished nor put back."""
+    credentials, config = home / ".claude" / ".credentials.json", home / ".claude.json"
+    new_binding = binding_to(home, THEIRS)
+
+    def refuse(path, data):
+        if stuck == "credential":      # the binding, and then the old credential
+            return new_binding(path, data) or (path == credentials and b"OLD" in data)
+        # the credential, and then the old account block
+        return path == credentials or (path == config and MINE.encode() in data)
+    return refuse
+
+
+def test_a_new_credential_that_cannot_be_taken_away_says_so(home, monkeypatch):
+    bound_as(home, MINE)
+    (home / ".claude" / ".credentials.json").unlink()        # signed out since
+    refusing(monkeypatch, binding_to(home, THEIRS))
+    real = agent.Path.unlink
+
+    def unlink(path, *args, **kwargs):
+        if path.name == ".credentials.json" and path.parent == home / ".claude":
+            raise PermissionError("read-only")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(agent.Path, "unlink", unlink)
+    said = sign_in(Slot(home, signs_in_as=THEIRS), kind="switch")
+    assert said["state"] == "failed" and said["detail"] == agent.HALF_DONE
+
+
+@pytest.mark.parametrize("stuck", ["credential", "block"])
+def test_a_change_that_cannot_be_undone_says_so(home, monkeypatch, stuck):
+    """Neither finished nor put back: the holder is told so, never that
+    nothing changed."""
+    bound_as(home, MINE)
+    refusing(monkeypatch, stuck_halfway(home, stuck))
+    said = sign_in(Slot(home, signs_in_as=THEIRS), kind="switch")
+    assert said["state"] == "failed" and said["detail"] == agent.HALF_DONE
     assert state(home)["bound_fp"] == fp_of(MINE)
 
 
@@ -245,7 +316,8 @@ def test_a_credential_that_cannot_be_read_is_not_switched_to(home):
     before = credential(home), (home / ".claude.json").read_bytes()
     write_account(scratch(home), scratch(home) / ".claude.json", THEIRS, "x")
     (scratch(home) / ".credentials.json").unlink()
-    assert agent.adopt_sign_in(fp_of(MINE), Slot(home), switch=True) == (
+    rebound = []
+    assert agent.adopt_sign_in(fp_of(MINE), Slot(home), rebound.append) == (
         agent.NOT_ADOPTED, fp_of(THEIRS))
     assert (credential(home), (home / ".claude.json").read_bytes()) == before
-    assert not scratch(home).exists()
+    assert rebound == [] and not scratch(home).exists()

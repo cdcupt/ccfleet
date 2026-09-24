@@ -302,7 +302,7 @@ def test_a_change_that_did_not_go_through_says_so(site):
     store.record_login_progress(key, "failed", "", agent.NOT_ADOPTED, time.time(),
                                 store.get_login(key)["requested_at"])
     page = erik.page()
-    assert f"The account was not changed: {agent.NOT_ADOPTED}." in page
+    assert f"The change of account did not go through: {agent.NOT_ADOPTED}." in page
     assert CHANGE.format(slot["id"]) in page, "a failed change started the week"
 
 
