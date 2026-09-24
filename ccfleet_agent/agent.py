@@ -2163,6 +2163,9 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner, 
     """
     mine = state.get("login") if isinstance(state.get("login"), Mapping) else {}
     asked = isinstance(wanted, Mapping)
+    if (asked and isinstance(mine.get("said"), Mapping)
+            and mine.get("requested_at") == wanted.get("requested_at")):
+        return dict(mine["said"]), dict(state), False       # not heard yet (see _to_say)
     fresh = asked and mine.get("requested_at") != wanted.get("requested_at")
     token = asked and wanted.get("kind") == "token"
     bound = state.get("bound_fp")
@@ -2192,15 +2195,31 @@ def reconcile_slot_login(wanted: Any, state: Mapping[str, Any], runner: Runner, 
     done = not token and (progress or {}).get("state") == "done"
     if done and scratch:
         def rebind(fp: str) -> bool:
-            return save({**new_state, "bound_fp": fp})
+            # Saved with the word the change ends on and the restart it owes:
+            # a run cut short from here says it again and restarts Remote
+            # Control on the next one.
+            return save({**new_state, "bound_fp": fp, "account_restart": "owed",
+                         "login": _to_say({**progress, "detail": SWITCHED})})
 
         why, fp = adopt_sign_in(str(bound), runner, rebind if switch else None)
         if why:
             return {**progress, "state": "failed", "detail": why}, new_state, False
         if switch:
             progress = {**progress, "detail": SWITCHED if fp != bound else SAME_ACCOUNT}
-            new_state = {**new_state, "bound_fp": fp}
+            new_state = {**new_state, "bound_fp": fp, "login": _to_say(progress)}
     return progress, new_state, done
+
+
+def _to_say(progress: Mapping[str, Any]) -> dict[str, Any]:
+    """How a change of account ended, kept until the server has heard it.
+
+    The one sign-in whose end the server acts on: its word starts the week
+    before the next change. Kept with the attempt it ends and said again on
+    every run the server still asks for that attempt — a done row is never
+    asked for (desired._login_block) — so a report lost to a run cut short, or
+    a heartbeat that never landed, is not a change the server never hears of.
+    """
+    return {"requested_at": progress.get("requested_at"), "said": dict(progress)}
 
 
 def restart_remote_control(runner: Runner = subprocess.run) -> bool:

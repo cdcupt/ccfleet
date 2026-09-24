@@ -746,6 +746,10 @@ class Store:
                 # asked of the machine again. The week before the next change
                 # starts only when the account really moved. Only a machine's
                 # slot is ever asked for one, so the key is always a slot's.
+                # The machine says it again until it hears back (see the
+                # agent's _to_say); heard once, the week is not moved on.
+                if current["state"] == "done":
+                    return
                 self._conn.execute(
                     "UPDATE logins SET state='done', code='', url='', secret='', "
                     "detail=?, updated_at=? WHERE node_id = ? AND requested_at = ?",

@@ -110,6 +110,33 @@ def test_a_run_cut_short_after_the_change_keeps_the_new_binding(home):
         sign_in(Dies(home, signs_in_as=THEIRS), kind="switch")
     assert "sk-ant-oat01-NEW" in credential(home)
     assert state(home)["bound_fp"] == fp_of(THEIRS), "bound to an account it no longer has"
+    # The next run, still asked for the same attempt: the word the server
+    # never heard is said, and the restart that was cut short is made.
+    fake = Slot(home, signs_in_as=THEIRS)
+    wanted = {"login": {"requested_at": 100.0, "kind": "switch", "code": "c"}}
+    said = agent.slot_facts(wanted, fake, now=NOW)["login"]
+    assert said == {"state": "done", "detail": agent.SWITCHED, "requested_at": 100.0}
+    assert len(fake.restarts()) == 1 and fake.started() == [], "signed in all over again"
+    # Heard: the server asks no more, and nothing of the attempt is left.
+    assert "login" not in agent.slot_facts({}, fake, now=NOW)
+    assert "login" not in state(home) and "account_restart" not in state(home)
+
+
+@pytest.mark.parametrize("theirs", [THEIRS, MINE])
+def test_how_a_change_ended_is_said_until_the_server_has_heard_it(home, theirs):
+    """A report can be lost after a run that finished: the heartbeat that
+    carried it never landed. The server then still asks for the attempt, and
+    is told again — never answered with a fresh sign-in."""
+    bound_as(home, MINE)
+    fake = Slot(home, signs_in_as=theirs)
+    first = sign_in(fake, kind="switch")
+    again = agent.slot_facts({"login": {"requested_at": 100.0, "kind": "switch"}},
+                             fake, now=NOW)["login"]
+    assert again == first and first["detail"] in (agent.SWITCHED, agent.SAME_ACCOUNT)
+    assert len(fake.started()) == 1, "a heard-of change was started again"
+    # Another attempt after it is its own, not answered with the old word.
+    later = sign_in(Slot(home, signs_in_as=theirs), requested_at=200.0, kind="login")
+    assert later == {"state": "done", "requested_at": 200.0}
 
 
 def test_a_change_to_the_account_it_already_has_says_so_and_moves_nothing(home):

@@ -101,6 +101,17 @@ def test_a_nodes_own_sign_in_is_never_a_change_of_account(store):
     assert store.get_login("erik-1") is None
 
 
+def test_a_change_said_again_does_not_move_the_week_on(store):
+    """The machine says how a change ended until it hears back, so the same
+    word can arrive twice; the week runs from the first."""
+    held(store)
+    switched(store, NOW + 10)
+    store.record_login_progress(slot_login_key("s1"), "done", "", slots.SWITCHED, NOW + 500,
+                                requested_at=NOW + 10)
+    assert store.get_slot("s1")["account_switched_at"] == NOW + 10
+    assert store.get_login(slot_login_key("s1"))["updated_at"] == NOW + 10
+
+
 def test_a_slot_changes_account_at_most_once_a_week(store):
     held(store)
     switched(store, NOW + 10)
