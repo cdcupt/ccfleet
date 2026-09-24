@@ -91,6 +91,10 @@ STATE_WORDS = {
                            "allowance once the machine confirms it is gone."),
 }
 
+#: What the two windows count, said wherever they are shown beside a slot's own tokens.
+ACCOUNT_WIDE = ("These count everything this Claude account does: claude.ai, the Claude "
+                "app, and Claude Code on any computer, device tokens included.")
+
 SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "token", "token-show",
                 "token-done", "update", "stable")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
@@ -847,11 +851,14 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
         # only what ran on this slot.
         chart, caption = _usage_chart(usage)
         spent = (f'<p class="small"><b>{escape(_human_tokens(usage.get("total_tokens") or 0))}'
-                 f"</b> tokens on this slot, last {escape(_usage_span(usage))}</p>"
+                 f"</b> tokens run on this slot itself, last {escape(_usage_span(usage))}</p>"
                  f"{chart}{caption}")
     if bars:
+        # Said under the bars, because beside "tokens run on this slot" they
+        # read as the same thing: a week at 26% beside 78k tokens looked wrong
+        # when the rest of the week had run on the holder's own laptop.
         bars = ('<div class="usage-nums muted">your Claude account &middot; every device'
-                "</div>" + bars)
+                "</div>" + bars + f'<p class="small muted">{ACCOUNT_WIDE}</p>')
     # The windows beside the trend: what is left now, and how it got there.
     halves = [f'<div class="usage-{name}">{html}</div>'
               for name, html in (("bars", bars), ("trend", spent)) if html]

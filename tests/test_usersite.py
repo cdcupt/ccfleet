@@ -386,7 +386,10 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     shown = erik.page()
     assert "In use" in shown and "max plan" in shown
     assert 'href="https://claude.ai/code"' in shown
-    assert "900</b> tokens on this slot" in shown
+    assert "900</b> tokens run on this slot itself" in shown
+    # The windows are the account's, used anywhere; said under them, so a week
+    # at 30% beside 900 tokens here does not read as a mistake.
+    assert usersite.ACCOUNT_WIDE in shown
     assert "your Claude account &middot; every device" in shown
     assert "Sign in again" in shown
 

@@ -309,8 +309,10 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "</ol>"
         '<div class="card"><h2>Also on your page</h2><ul>'
         "<li><strong>Your usage.</strong> Your Claude account&#x27;s 5-hour and weekly limits, "
-        "counted across every device you use, and the tokens used on this slot over the last "
-        "week.</li>"
+        "which count everything the account does: claude.ai, the Claude app, and Claude "
+        "Code on any computer, device tokens included. Beside them, the tokens Claude Code "
+        "used on this slot itself over the last week; work on your own computer is not in "
+        "that number.</li>"
         '<li><strong>Device tokens.</strong> <span class="btnlabel">Get a device token</span> '
         "makes a one-year token from your own Claude account, for running Claude Code on "
         "your own computer. It is shown until you press "

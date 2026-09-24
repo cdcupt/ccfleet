@@ -228,6 +228,12 @@ def test_how_it_works_says_what_slot_add_switches_off():
     assert "telemetry" not in switched_off, "the list of what is off must not name it"
 
 
+def test_the_guide_says_what_the_usage_numbers_count():
+    guide = render("/docs/guide")
+    assert "Claude Code on any computer, device tokens included" in guide
+    assert "work on your own computer is not in that number" in guide
+
+
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
     terms = render("/docs/terms")
     assert f"Last updated {customer_docs.DOCS_UPDATED}" in terms

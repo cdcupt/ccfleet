@@ -285,7 +285,7 @@ def test_usage_shows_a_slots_use_under_its_name(console):
     store, call = console
     fleet(store, time.time())
     part = card(call("GET", "/admin").body, "usage")
-    assert "erik-2" in part and "39.5k" in part and "tokens on this slot" in part
+    assert "erik-2" in part and "39.5k" in part and "tokens run on this slot" in part
     assert "25%" in part, "the slot's weekly window"
     # The customer's slot has used nothing yet: named, by its own name, as quiet.
     assert re.search(r"No usage reported yet from .*ysflowerdog-1", part, re.S)
