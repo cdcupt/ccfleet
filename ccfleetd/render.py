@@ -1235,11 +1235,12 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
         # Which model did the work is left out: it is whatever each person
         # chose in their session, and can change turn by turn.
         shown, where = _called(row)
+        place = "slot" if row.get("machine") else "node"
         items.append(
             f'<div class="usage-row"><div class="usage-name">{escape(shown)}'
             f'<span class="muted"> &middot; {escape(where)}{escape(row["owner"])}</span>'
             f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
-            f'<span class="muted"> tokens on this {"slot" if row.get("machine") else "node"}, last '
+            f'<span class="muted"> tokens run on this {place}, last '
             f'{escape(_usage_span(usage))}</span></div>'
             f'<div class="usage-meta muted">'
             f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
@@ -1251,8 +1252,11 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
             "Windows come from <code>/usage</code> inside a Claude Code session on the node, "
             "or in the slot on a shared machine, "
             "read on a slow schedule &mdash; Claude Code reporting on itself, not a usage "
-            "endpoint. Token counts come from the transcripts it writes there. Conversation "
-            "content never leaves the node; only counts do.</p></div>")
+            "endpoint. The windows are the whole Claude account&#x27;s, used anywhere: "
+            "claude.ai, the Claude app, and Claude Code on any computer, device tokens "
+            "included. Token counts are only what ran on this node or slot, from the "
+            "transcripts Claude Code writes there. Conversation content never leaves the "
+            "node; only counts do.</p></div>")
 
 
 def _usage_span(usage: Mapping[str, Any]) -> str:

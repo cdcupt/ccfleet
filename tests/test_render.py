@@ -303,7 +303,7 @@ def test_the_week_is_drawn_by_the_hour_and_says_whose_it_is():
     are the account's, spent by every device. Side by side and unlabelled, the
     count looked stuck while the bars moved."""
     html = _usage_html(_hourly(40897, [0] * 160 + [10] * 8), NOW)
-    assert "tokens on this node, last 7 days" in html
+    assert "tokens run on this node, last 7 days" in html
     assert "tokens per hour, last 7 days" in html and "<svg" in html
     assert "168 hour(s) of token use" in html
     assert "claude-opus-5" not in html, "the model is the person's choice, not a fact to show"
