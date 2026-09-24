@@ -10,7 +10,7 @@ import re
 import threading
 import time
 
-from ccfleetd import render, status, statuspage
+from ccfleetd import render, status, statuspage, usersite
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -238,6 +238,12 @@ def claimed_card(site_, age=5, alert=None):
 
 def test_a_slot_card_says_its_machine_is_up(site):  # noqa: F811
     assert "Machine: operational" in claimed_card(site)
+
+
+def test_the_dots_are_styled_wherever_the_line_or_the_page_is(store, cfg):
+    """The state's colour is a styled dot: both pages carry its rules."""
+    assert ".st-dot.green{" in page_of(store, cfg)
+    assert ".st-dot.green{" in usersite._shell("x", "")
 
 
 def test_a_slot_card_says_its_machine_is_down(site):  # noqa: F811

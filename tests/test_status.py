@@ -111,6 +111,12 @@ def test_the_worst_reason_wins_and_says_the_earliest_start_at_its_level():
     assert state == status.State(status.RED, NOW - 70)
 
 
+def test_an_alert_without_its_opening_time_still_colours_its_machine():
+    state = status.machine_state(beat(20), [{"rule": "claude_missing", "level": "critical"}],
+                                 False, NOW)
+    assert state == status.State(status.RED, None)
+
+
 def test_the_holders_alerts_leave_a_fresh_machine_green():
     alerts = [alert(r, LEVEL_CRITICAL) for r in
               ("credentials_missing", "token_expired", "quota_high_week", "egress_changed",
@@ -330,6 +336,10 @@ def test_the_sites_days_run_from_ninety_days_ago_to_today(store):
     (5, 0, status.RED), (60, 30, status.RED)])
 def test_a_day_is_red_from_five_minutes_down(down, degraded, expected):
     assert status.day_colour(up=1000, degraded=degraded, down=down) == expected
+
+
+def test_a_day_down_from_start_to_finish_is_red_not_empty():
+    assert status.day_colour(up=0, degraded=0, down=1440) == status.RED
 
 
 def test_a_day_nobody_counted_has_no_colour():
