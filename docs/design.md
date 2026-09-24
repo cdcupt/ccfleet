@@ -295,15 +295,18 @@ the same file are never collected. The one thing derived from them is a
 fingerprint of the account uuid (the first 16 hex digits of its SHA-256): the
 same on every node the account is on, so the server can raise
 `account_elsewhere` when one account is signed in on two live nodes or slots.
-A slot also reports the fingerprint of the account it was first signed in with,
-which it keeps: its page signs in again only as that account, and a slot found
-on another one anyway raises `account_changed`. Know the limit: the agent runs
+A slot also reports the fingerprint of the account it keeps, the first signed
+in on it until its holder moves it with Change account (at most once a week,
+signed in to scratch and moved in only once that has finished): its page signs
+in again only as that account, and a slot found on another one anyway raises
+`account_changed`. Know the limit: the agent runs
 as the slot's own Unix user and the files are the holder's, and nothing in them
 ties a token to an account, so a holder can pair another account's credential
 with the kept account's profile directly. No check running as them can stop
 that; it shows once Claude Code refreshes the profile with the token in use,
 and it breaks the terms. The binding keeps the page from switching accounts by
-accident; the fingerprints make a deliberate switch visible. That is the rule
+accident, Change account is the one way it moves, and the fingerprints make any
+other switch visible. That is the rule
 this project keeps, one account on one node, checked rather than trusted.
 
 `token_stale` falls back to that timestamp when there is no file to stat, so a

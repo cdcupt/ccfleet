@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.8.0 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.9.0 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -575,6 +575,16 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 
     </tbody>
   </table></div>
+  <p><strong>A shared machine's row is its slot.</strong> Root on a shared machine runs no
+  Claude Code and is signed in to nothing, so the row shows the slot's version, sign-in,
+  Remote Control and usage, and goes by the slot's name: the machine's hostname, which is
+  what claude.ai shows. <em>on &lt;id&gt;</em> beside the owner gives the id the server knows
+  it by. Login says <em>no slot yet</em> on a machine with none declared, and <em>2 slots, see
+  Slots</em> on one from before one slot per machine, where no single slot can speak for it.
+  Remote Control is the slot's to run, so a machine is never judged on it and its row has no
+  switch for that alert. The sign-in and device-token cards list owners' nodes only: a slot is
+  signed in, and gets its device tokens, on its holder's page, and the server refuses a
+  console sign-in on a shared machine.</p>
   <h3>Usage and quota</h3>
   <p>Under the fleet table, one row per node, answering two different questions.</p>
   <p><strong>How much is left.</strong> Two bars: the five-hour session window and
@@ -590,6 +600,19 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
   question, different source: this is what the account <strong>consumed</strong>, and
   it says nothing about the window. A node with a single day of history says so
   rather than drawing a chart of one point.</p>
+  <p><strong>What each counts.</strong> The bars are the whole Claude account's: claude.ai,
+  the Claude app, and Claude Code on any computer, device tokens included. The tokens are only
+  what ran on this node, or in the slot on a shared machine. Somebody who works mostly from
+  their own computer with a device token can see a quarter of the week gone beside a small
+  token count, and both are right; the console and the holder's page each say so under the
+  numbers.</p>
+  <p><strong>When a window resets.</strong> Claude Code prints a reset in the machine's own
+  clock, and the machines keep theirs on UTC. The server places those words at a moment, and
+  the page shows it in the viewer's own time zone with how long is left beside it:
+  <em>Thu 10:00 AM GMT+2 (in 2d 5h)</em>. One small script does that, the only script ccfleet's
+  pages carry, and their Content-Security-Policy allows it by its SHA-256 and nothing else.
+  Without it the page still says how long is left, and words the server cannot place stay as
+  Claude Code printed them.</p>
   <p>Conversation content never leaves the node; only counts do. The server
   whitelists the quota block the way it whitelists everything else a node sends:
   two named windows, an integer from 0 to 100 or nothing at all, and a short reset
@@ -616,7 +639,7 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
       <tr><td><code>slot_missing:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot's Linux user is gone from the machine, and its files with it</td><td>operator takes it back; the person claims again</td></tr>
       <tr><td><code>slot_provision_failed:&lt;user&gt;</code></td><td><span class="pill warn">warn</span></td><td>Setting up a claimed slot failed; the claim was given up and the slot is being wiped</td><td>the person claims again; operator if it repeats</td></tr>
       <tr><td><code>account_elsewhere</code><br><code>account_elsewhere:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>One Claude account is signed in on two live places at once: two slots, or a slot and a node. Raised on each of them</td><td>sign it out of one of them</td></tr>
-      <tr><td><code>account_changed:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot is signed in to another Claude account than the one it was first signed in with</td><td>holder signs its own account in again, or gives the slot back</td></tr>
+      <tr><td><code>account_changed:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot is signed in to another Claude account than the one it keeps. Only <em>Change account</em> moves a slot to another</td><td>holder signs its own account in again, moves the slot to the other one with <em>Change account</em>, or gives it back</td></tr>
     </tbody>
   </table></div>
   <p>An alert is sent once when it opens, once when it resolves, and again if its level changes. Between those, nothing repeats. Messages name the node and owner and, when <code>CCFLEET_PUBLIC_URL</code> is set, link to the dashboard. A shared machine's slot alerts carry the slot's Linux user after the colon, so two slots in trouble are two alerts; an owner's node has <code>account_elsewhere</code> with nothing after it. <code>docs/runbooks.md</code> has a short procedure for each.</p>
@@ -805,10 +828,11 @@ claude
   claimed, the slot is named after its holder (<code>alice-1</code>) and the machine takes that
   name. People sign in to the product with Google, you set how many slots each may hold, and
   they do everything else themselves at <code>/account</code>.</p>
-  <p>One Claude account, one slot: a slot is signed in to one account for as long as its holder
-  has it, and somebody with two accounts holds two slots. That account can still be used from
-  wherever its holder likes: claude.ai/code and the Claude app on any device, or a device token
-  on each of their own computers.</p>
+  <p>One Claude account, one slot: a slot is signed in to one account at a time, and somebody
+  who wants two accounts at once holds two slots. Its holder can move it to another Claude
+  account of theirs with <em>Change account</em>, at most once a week, and keeps its files.
+  Its account can be used from wherever its holder likes: claude.ai/code and the Claude app on
+  any device, or a device token on each of their own computers.</p>
   <div class="two">
     <div>
       <h3>Selling a slot</h3>
@@ -817,7 +841,9 @@ claude
         switch on; an address that has never signed in cannot be given anything.</li>
         <li>They pay you, however you arrange it.</li>
         <li>You record the payment and set their allowance in the console's Accounts card.
-        That is all you do.</li>
+        The payment's date comes filled in with one more month: from the day after what they
+        have already paid for, or from today when that has passed or nothing is paid yet, so
+        a first payment on 24 September suggests 23 October. That is all you do.</li>
         <li>They claim a slot, sign in to Claude with their own account, and use it from
         claude.ai/code or the Claude app.</li>
       </ol>
@@ -836,7 +862,9 @@ claude
       publish an address on them.</p>
       <p>Every page shares one top bar. Signed in, a round avatar at the top right opens a menu
       with the person's address, <em>Your slots</em> with how many they hold, <em>Console</em>
-      for operators, and <em>Sign out</em>; signed out, the same spot is <em>Sign in</em>.</p>
+      for operators, and <em>Sign out</em>; signed out, the same spot is <em>Sign in</em>.
+      The mark at the top left goes to the front page from every page, the console's
+      included, and the console's <em>back to the fleet</em> links go to the console.</p>
       <h3>Sizing</h3>
       <p>Measured on a real slot: signed in with Remote Control, about 420 MiB idle and 665 MiB
       in use, plus 225 MB of disk. The OS and the agent take about 400 MiB, so a 2 GiB
@@ -853,13 +881,16 @@ sudo ./bootstrap.sh you "ssh-ed25519 AAAA&hellip; you"
 ccfleetd node add pool-1 --owner you --region us-west
 ccfleetd node pin pool-1 latest
 ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
-<span class="c"># on the machine, as root</span>
+<span class="c"># on the machine, as root: its name, its clock on UTC, then the agent</span>
+hostnamectl set-hostname pool-1 &amp;&amp; timedatectl set-timezone Etc/UTC
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
   | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token &lt;64-hex&gt;
 <span class="c"># back on the server: its slot free, and "on machine: no"</span>
 ccfleetd slot list --machine pool-1</code></pre>
       <p>Set the machine's hostname to its id first: it is the name the claude.ai machine
-      picker shows until somebody claims its slot. Machines are named by role,
+      picker shows until somebody claims its slot. Put its clock on UTC as well: Claude Code
+      can tell Anthropic the machine's time zone, and UTC says nothing about where the slot's
+      holder is, while every page shows times in the viewer's own zone. Machines are named by role,
       <code>&lt;you&gt;-N</code> for your own and <code>pool-N</code> for the ones offered to
       customers, and a free slot by its machine.</p>
       <ul>
@@ -902,10 +933,15 @@ ccfleetd slot list --machine pool-1</code></pre>
     </div>
   </div>
   <h3>What a slot starts with</h3>
-  <p>Claude Code on a new slot starts on <strong>Opus at max effort</strong>. Setting a slot
-  up writes two keys into its <code>~/.claude/settings.json</code>, and only keys the holder
+  <p>Claude Code on a new slot starts on <strong>Opus at max effort</strong>, and sends
+  Anthropic <strong>nothing optional that a slot can do without</strong>. Setting a slot up
+  writes these keys into its <code>~/.claude/settings.json</code>, and only keys the holder
   has not set, so setting it up again never takes a choice back:</p>
-  <pre><code>{ "model": "opus", "env": { "CLAUDE_CODE_EFFORT_LEVEL": "max" } }</code></pre>
+  <pre><code>{ "model": "opus",
+  "env": { "CLAUDE_CODE_EFFORT_LEVEL": "max",
+           "DISABLE_ERROR_REPORTING": "1",
+           "DISABLE_BUG_COMMAND": "1",
+           "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1" } }</code></pre>
   <ul>
     <li><strong>Max goes in <code>env</code>.</strong> The settings file's own
     <code>effortLevel</code> stops at <code>xhigh</code> and drops <code>max</code> without a
@@ -919,7 +955,24 @@ ccfleetd slot list --machine pool-1</code></pre>
     <code>latest</code>.</li>
     <li><strong>It costs the holder.</strong> Max effort uses their plan's limits fastest,
     and the guide says so.</li>
+    <li><strong>Error reports, bug reports and feedback surveys are off</strong>, by Claude
+    Code's own documented switches. What still goes is what Claude needs to answer, and its
+    usage telemetry, which Remote Control needs (below).</li>
+    <li><strong>A slot is the machine, not the person.</strong> Nothing rewrites what Claude
+    Code says about where it runs: no faked location, time zone or device. Anthropic sees the
+    machine, with its own address and its UTC clock, and the holder's own Claude account. The
+    holder's browser or Claude app, driving the slot, talks to Anthropic as it always
+    would.</li>
   </ul>
+  <div class="note warn">
+    <p class="t">Never switch telemetry off on a slot</p>
+    <p>Remote Control needs the feature-flag evaluation that <code>DISABLE_TELEMETRY</code>
+    turns off, and <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> includes it. With
+    either one set, Remote Control refuses to start: <em>Remote Control requires feature-flag
+    evaluation, which is disabled because DISABLE_TELEMETRY is set</em>. Set on live slots
+    once, it stopped Remote Control on every one of them until it came out; a test now keeps
+    both out of what a slot starts with.</p>
+  </div>
   <h3>The console's Slots card</h3>
   <p>One line on top gives Anthropic's release numbers, for example <em>Claude Code releases:
   Latest 2.1.281 &middot; Stable 2.1.273 &middot; checked 5m ago</em>. Under it, one row per
@@ -946,17 +999,31 @@ ccfleetd slot list --machine pool-1</code></pre>
   </ul>
   <p>An own machine has no forms; the one command that stops counting it is inside its
   Manage. At 960&nbsp;px and narrower, phones included, the rows become cards.</p>
+  <p>For a week after a holder moves their slot to another Claude account, a line under its
+  row says <em>changed Claude account &lt;age&gt; ago</em>. It never says which account; that
+  is the holder's to see.</p>
   <h3>One account per slot, enforced</h3>
   <p>The product keeps the rule without relying on anybody to remember it:</p>
   <ul>
-    <li><strong>A slot binds to its first account.</strong> The first Claude account signed in
-    on a slot is the one it keeps. The binding lives in the slot's own state, so it goes with
-    the slot's wipe.</li>
+    <li><strong>A slot binds to its account.</strong> The first Claude account signed in on a
+    slot is the one it keeps, until its holder moves it with <em>Change account</em>. The
+    binding lives in the slot's own state, so it goes with the slot's wipe.</li>
     <li><strong><em>Sign in again</em> only takes that account.</strong> It signs in to one
     side, in a scratch directory, and keeps the result only if it is the same account. Any other
-    account is thrown away with <em>this slot stays with the Claude account it was first signed
-    in with; to use another account, hold another slot</em>, and the sign-in the slot already
-    had is left as it was.</li>
+    account is thrown away with <em>this slot stays with its own Claude account; to move it to
+    another, use Change account</em>, and the sign-in the slot already had is left as it
+    was.</li>
+    <li><strong><em>Change account</em> moves it, at most once a week.</strong> It is offered on
+    a shared machine's slot in use, never on somebody's own node. The new account signs in to
+    the scratch directory while the old one keeps working, and only a finished sign-in is moved
+    in, in order: the account block of <code>~/.claude.json</code> (every other key stays),
+    then the credential, then the binding. A step that fails puts back the ones before it, so a
+    change that fails leaves the slot as it was; should putting back fail too, the holder's page
+    says it stopped halfway, and changing account again finishes it. There is only ever one
+    credential on the slot, so it never holds two accounts. Remote Control then restarts on the new account, which ends any session open in
+    it, and the slot shows in claude.ai/code under that account instead. Signing in with the
+    account the slot already has is not a change; the week starts only when the account really
+    moved. The files stay throughout.</li>
     <li><strong>One account is in one place.</strong> Every node and slot reports a fingerprint
     of its account: the first 16 hex characters of a SHA-256 of Claude's account id, never the
     id itself, and never an owner node's address. One account live in two places raises
@@ -964,6 +1031,46 @@ ccfleetd slot list --machine pool-1</code></pre>
     own raises <code>account_changed</code>. The holder's card says so too, without naming the
     other place.</li>
   </ul>
+  <figure>
+    <div class="fig-wrap">
+    <svg viewBox="0 0 980 232" role="img" aria-label="Change account. The holder presses Change account on a slot in use, a week after any last change. The new account signs in to a scratch directory while the old one keeps working. Only a finished sign-in is moved in, in order: the account block, then the credential, then the binding, and a failed step puts back the ones before it. Remote Control then restarts on the new account, and the next change can come a week later. A sign-in that fails, is cancelled, or is the same account changes nothing.">
+      <defs><marker id="c-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+
+      <rect x="8" y="40" width="180" height="88" rx="8" class="box"/>
+      <text x="98" y="68" text-anchor="middle" class="t12">holder's page</text>
+      <text x="98" y="89" text-anchor="middle" class="t10 mute">Change account</text>
+      <text x="98" y="106" text-anchor="middle" class="t10 mute">a slot in use, a week on</text>
+
+      <line x1="188" y1="84" x2="222" y2="84" class="ln" marker-end="url(#c-arr)"/>
+
+      <rect x="226" y="40" width="240" height="88" rx="8" class="box"/>
+      <text x="346" y="68" text-anchor="middle" class="t12">scratch sign-in</text>
+      <text x="346" y="89" text-anchor="middle" class="t10 mute">the new account signs in beside</text>
+      <text x="346" y="106" text-anchor="middle" class="t10 mute">the old one keeps working</text>
+
+      <line x1="466" y1="84" x2="500" y2="84" class="ln" marker-end="url(#c-arr)"/>
+
+      <rect x="504" y="40" width="252" height="88" rx="8" class="box-acc"/>
+      <text x="630" y="68" text-anchor="middle" class="t12">moved in, in order</text>
+      <text x="630" y="89" text-anchor="middle" class="t10 mute">account block, credential, binding</text>
+      <text x="630" y="106" text-anchor="middle" class="t10 mute">a failed step is put back</text>
+
+      <line x1="756" y1="84" x2="790" y2="84" class="ln" marker-end="url(#c-arr)"/>
+
+      <rect x="794" y="40" width="178" height="88" rx="8" class="box"/>
+      <text x="883" y="68" text-anchor="middle" class="t12">Remote Control</text>
+      <text x="883" y="89" text-anchor="middle" class="t10 mute">restarts, new account</text>
+      <text x="883" y="106" text-anchor="middle" class="t10 mute">next change in a week</text>
+
+      <path d="M346 128 L346 166" class="ln-dash" marker-end="url(#c-arr)"/>
+      <rect x="146" y="170" width="400" height="34" rx="8" class="box-soft"/>
+      <text x="346" y="192" text-anchor="middle" class="t10 mute">fails, cancelled, or the same account: nothing changes</text>
+
+      <text x="8" y="226" class="t11 mute">Until the credential is moved in, the slot signs in exactly as before, and it only ever holds one.</text>
+    </svg>
+    </div>
+    <figcaption><b>Figure 3.</b> Changing a slot's Claude account. The files stay throughout; only the sign-in and the binding move.</figcaption>
+  </figure>
   <div class="note warn">
     <p class="t">What it cannot stop</p>
     <p>A slot is its holder's own Linux account, and they can change its files: sign in there by
