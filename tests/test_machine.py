@@ -1034,17 +1034,23 @@ def test_the_machine_says_when_its_os_wants_a_reboot(cfg, tmp_path, monkeypatch)
 
 def test_a_slot_asked_to_read_its_usage_goes_first_and_is_told_when(cfg):
     """Erik, 2026-09-24: a Refresh on a page reaches the slot on the machine's
-    next full run, before the slot whose turn it would be."""
+    next full run, before the slot whose turn it would be; handed over once,
+    the turns go on as before."""
     fake = Fake(users=["slot01", "slot02"], desired={"slots": [
-        {"unix_user": "slot01", "state": "active"},
-        {"unix_user": "slot02", "state": "active", "quota_wanted_at": 1000.0}]})
+        {"unix_user": "slot01", "state": "active", "quota_wanted_at": 1000.0},
+        {"unix_user": "slot02", "state": "active"}]})
     _, _, state = machine.run_cycle(cfg, {"slots": ["slot01", "slot02"]}, fake.system())
-    assert state["quota_wanted"] == {"slot02": 1000.0}
+    assert state["quota_wanted"] == {"slot01": 1000.0}
+    fake.spawned.clear()
+    _, _, state = machine.run_cycle(cfg, state, fake.system())       # slot02's turn, but
+    asked = [json.loads(kw["input_text"]) for _, kw in fake.spawned]
+    assert [a["refresh_quota"] for a in asked] == [True, False]
+    assert asked[0]["quota_wanted_at"] == 1000.0 and "quota_wanted_at" not in asked[1]
+    assert state["quota_passed"] == {"slot01": 1000.0}
     fake.spawned.clear()
     machine.run_cycle(cfg, state, fake.system())
-    asked = [json.loads(kw["input_text"]) for _, kw in fake.spawned]
-    assert [a["refresh_quota"] for a in asked] == [False, True]
-    assert asked[1]["quota_wanted_at"] == 1000.0 and "quota_wanted_at" not in asked[0]
+    turns = [json.loads(kw["input_text"])["refresh_quota"] for _, kw in fake.spawned]
+    assert turns == [False, True], "handed over once, never holding slot02 back"
 
 
 def test_a_request_for_a_slot_nobody_uses_is_not_kept(cfg):
@@ -1071,3 +1077,5 @@ def test_a_read_asked_for_is_answered_by_a_reading_as_new():
     assert machine._read_asked({"quota_wanted": {"slot01": 5.0}}, "slot01"), "never read"
     assert not machine._read_asked({"quota_wanted": {"slot01": True}}, "slot01")
     assert not machine._read_asked({}, "slot01")
+    assert not machine._read_asked({"quota_wanted": {"slot01": 5.0},
+                                    "quota_passed": {"slot01": 5.0}}, "slot01")

@@ -212,9 +212,35 @@ def test_a_read_asked_for_is_tried_once_even_when_it_fails(tmp_path, probe):
     assert calls == [NOW] and report["week"]["used_pct"] == 10
     assert store["asked"] == NOW - 10 and store["ts"] == NOW - 60
     assert "asked" not in report
+    again, _ = agent.quota_summary({"quota": store}, now=NOW + 60,
+                                   config_dir=tmp_path / ".claude", wanted_at=NOW - 10)
+    assert calls == [NOW], "the same request is not tried twice"
+    assert "asked" not in again, "the mark is the slot's own, never reported"
+
+
+def test_a_failed_read_with_nothing_kept_is_marked_tried_too(tmp_path, probe):
+    calls, found = probe
+    found["screen"] = None
+    report, store = agent.quota_summary({}, now=NOW, config_dir=tmp_path / ".claude",
+                                        wanted_at=NOW - 10)
+    assert calls == [NOW] and report is None and store == {"asked": NOW - 10}
     agent.quota_summary({"quota": store}, now=NOW + 60, config_dir=tmp_path / ".claude",
                         wanted_at=NOW - 10)
-    assert calls == [NOW], "the same request is not tried twice"
+    assert calls == [NOW, NOW + 60], "nothing kept: read on schedule, not for the request"
+    assert agent._asked(NOW - 10, max(0.0, store["asked"])) is False
+
+
+def test_a_request_is_marked_tried_when_there_is_nowhere_to_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "quota_probe_dir", lambda: (None, "no home"))
+    _, store = agent.quota_summary(kept(NOW - 400), now=NOW, config_dir=tmp_path / ".claude",
+                                   wanted_at=NOW - 10)
+    assert store["asked"] == NOW - 10 and store["skipped"] == "no home"
+
+
+def test_true_is_no_request(tmp_path, probe):
+    _, store = agent.quota_summary({}, now=NOW, config_dir=tmp_path / ".claude",
+                                   wanted_at=True)
+    assert "asked" not in store
 
 
 def test_claude_codes_reading_answers_a_request_it_is_newer_than(tmp_path, probe):

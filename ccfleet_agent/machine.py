@@ -735,13 +735,19 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
             "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s}}
 
 
+def _moment(value: Any) -> Optional[float]:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _read_asked(state: Mapping[str, Any], user: str) -> bool:
-    """A read of this slot's usage asked for since the one it last reported."""
-    wanted = (state.get("quota_wanted") or {}).get(user)
+    """A read of this slot's usage asked for since the one it last reported,
+    and not yet passed on to it: passed once, it goes back to taking turns,
+    so a slot that cannot read never holds the others back."""
+    wanted = _moment((state.get("quota_wanted") or {}).get(user))
     heard = ((state.get("heard") or {}).get(user) or {}).get("quota") or {}
-    read = heard.get("checked_at") if isinstance(heard, Mapping) else None
-    return (isinstance(wanted, (int, float)) and not isinstance(wanted, bool)
-            and wanted > (read if isinstance(read, (int, float)) else 0))
+    read = _moment(heard.get("checked_at")) if isinstance(heard, Mapping) else None
+    passed = _moment((state.get("quota_passed") or {}).get(user))
+    return wanted is not None and wanted > max(read or 0, passed or 0)
 
 
 def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
@@ -784,9 +790,17 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
         s["unix_user"]: {k: s[k] for k in ("claude_version", "channel_version", "update_now")
                          if k in s}
         for s in wanted_slots(desired) if "claude_version" in s}
-    new_state["quota_turn"] = (turn + (0 if fast else 1)) if users else 0
+    # A read asked for goes out of turn, and the slot whose turn it took has
+    # it next.
+    new_state["quota_turn"] = (turn + (0 if fast or asked else 1)) if users else 0
     new_state["quota_wanted"] = {s["unix_user"]: s["quota_wanted_at"]
                                  for s in wanted_slots(desired) if "quota_wanted_at" in s}
+    # The request each slot has been handed, so it is handed once.
+    passed = {u: t for u, t in (state.get("quota_passed") or {}).items() if u in users}
+    handed = _moment((state.get("quota_wanted") or {}).get(refresh_for)) if refresh_for else None
+    if handed is not None:
+        passed[refresh_for] = handed
+    new_state["quota_passed"] = passed
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state
 

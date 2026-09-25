@@ -986,6 +986,9 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
         return theirs, {**theirs, "ts": theirs["checked_at"]}
     if cached and not asked and now - kept < QUOTA_REFRESH_S:
         return _quota_report(cached), None
+    # A read asked for is tried once, whatever comes of it: a slot that cannot
+    # read is not asked again every minute.
+    tried = {"asked": wanted_at} if asked else {}
     probe, why = quota_probe_dir()
     if probe is None:
         # Said where it will be seen: in the log, and in the state beside the last
@@ -993,19 +996,17 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
         # server keeps only the windows from a report; this is for whoever looks
         # at the node.
         log.warning("quota not read: %s", why)
-        kept = {k: v for k, v in (cached or {}).items() if k != "skipped"}
-        return {**_quota_report(kept), "skipped": why}, {**kept, "skipped": why}
+        last = {k: v for k, v in (cached or {}).items() if k != "skipped"}
+        return {**_quota_report(last), "skipped": why}, {**last, "skipped": why, **tried}
     fresh = read_quota(runner, now)
-    tried = {"asked": wanted_at} if asked else {}
     theirs = cached_usage(config_dir)
     if theirs and theirs["checked_at"] >= now - QUOTA_CACHE_SLACK_S:
         return theirs, {**theirs, "ts": now, **tried}
     if fresh is None:
         # Keep showing the last known answer rather than blanking the card; it is
-        # stamped, so the console can say how old it is. A read asked for is
-        # tried once: a slot that cannot read is not asked every minute.
+        # stamped, so the console can say how old it is.
         return ((_quota_report(cached) if cached else None),
-                ({**cached, **tried} if cached and tried else None))
+                ({**(cached or {}), **tried} if tried else None))
     fresh["checked_at"] = now
     return fresh, {**fresh, "ts": now, **tried}
 
