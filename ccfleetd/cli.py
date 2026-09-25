@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from typing import Optional
 
-from . import __version__, claude_versions, names, payments, pricing
+from . import __version__, claude_versions, payments, pricing
 from . import slots as slotstates
 from .api import Context, serve
 from .config import Config, ConfigError
@@ -111,12 +111,12 @@ def _parser() -> argparse.ArgumentParser:
     role.add_argument("email")
     role.add_argument("role", choices=("admin", "user"))
     handle = acct.add_parser(
-        "handle", help="what this person's slots are named after, e.g. erik for erik-1")
+        "handle", help="name this person's slots <handle>-<n>, only if they ask for it")
     handle.add_argument("email")
     named = handle.add_mutually_exclusive_group(required=True)
     named.add_argument("handle", nargs="?")
     named.add_argument("--none", action="store_true",
-                       help="go back to the part of their address before the @")
+                       help="go back to neutral names like slot-4821")
 
     pay = sub.add_parser(
         "payment", help="the record of who paid, and through when").add_subparsers(
@@ -340,9 +340,14 @@ def _account_command(args: argparse.Namespace, store: Store, cfg: Config) -> int
             print(f"error: nobody registered as {args.email!r}", file=sys.stderr)
             return EXIT_USAGE
         store.set_account_handle(account["id"], None if args.none else args.handle)
-        base = args.handle if not args.none else names.handle_from_email(account["email"])
-        print(f"{args.email}: slots they claim from now on are named {base}-1, "
-              f"{base}-2 and so on; slots already named keep their names")
+        if args.none:
+            # Never anything from their address: the name is a hostname, which
+            # claude.ai shows and Anthropic receives (Erik, 2026-09-24).
+            print(f"{args.email}: slots they claim from now on get neutral names like "
+                  f"slot-4821, which they can rename; slots already named keep their names")
+        else:
+            print(f"{args.email}: slots they claim from now on are named {args.handle}-1, "
+                  f"{args.handle}-2 and so on; slots already named keep their names")
     elif args.account_command == "quota":
         account = store.account_by_email(args.email)
         if account is None:

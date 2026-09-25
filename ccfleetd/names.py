@@ -21,8 +21,6 @@ from typing import Any
 
 #: At most this long, so "<handle>-<n>" is a comfortable hostname.
 MAX_HANDLE = 20
-#: For an address with nothing usable before the @.
-FALLBACK_HANDLE = "user"
 #: What a slot is called until its holder names it: "slot-" and random digits.
 NEUTRAL_PREFIX = "slot-"
 NEUTRAL_DIGITS = 4
@@ -40,23 +38,11 @@ _NICKNAME_RE = re.compile(rf"[a-z0-9][a-z0-9-]{{0,{MAX_NICKNAME - 2}}}[a-z0-9]")
 # nickname never takes their shape, so no name reads as a pool machine's or
 # waits to become a neutral one that another slot is later given.
 _RESERVED_RE = re.compile(r"(?:pool|slot)-[0-9]+")
-_NOT_KEPT = re.compile(r"[^a-z0-9]+")
-
-
-def handle_from_email(email: str) -> str:
-    """The part of an address before the @, made hostname-safe.
-
-    Lowercased; every run of anything but a-z and 0-9 becomes one hyphen,
-    letters outside ASCII included; cut to MAX_HANDLE; no hyphen at either
-    end. "user" when nothing is left.
-    """
-    local = (email or "").split("@", 1)[0].lower()
-    kept = _NOT_KEPT.sub("-", local).strip("-")
-    return kept[:MAX_HANDLE].strip("-") or FALLBACK_HANDLE
 
 
 def valid_handle(handle: Any) -> bool:
-    """A handle an operator may choose: what handle_from_email could make."""
+    """A handle an operator may set, at the person's request: 1-20 lowercase
+    letters, digits and inner hyphens, so "<handle>-<n>" is a hostname."""
     return isinstance(handle, str) and _HANDLE_RE.fullmatch(handle) is not None
 
 

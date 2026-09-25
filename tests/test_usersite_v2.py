@@ -180,18 +180,24 @@ def test_another_nodes_alert_is_not_this_owner_slots(site):  # noqa: F811
 
 # -- what the page says it keeps ---------------------------------------------------------
 
-def test_the_privacy_page_says_a_slot_is_named_after_you(site):  # noqa: F811
+def test_the_privacy_page_says_a_slots_name_is_never_from_your_address(site):  # noqa: F811
+    """Erik, 2026-09-24: the name is what claude.ai shows, so Anthropic sees it."""
     store, sign_in, _ = site
     erik = sign_in()
     page = erik.call("GET", "/privacy").body
-    assert "named after you" in page and "before the @" in page
+    assert "never anything from your address" in page and "slot-4821" in page
+    assert "Anthropic sees it too" in page
+    assert "named after you" not in page and "before the @" not in page
 
 
-def test_the_docs_say_a_slot_is_a_whole_machine_named_after_you():
+def test_the_docs_say_a_slot_is_a_whole_machine_under_a_name_you_choose():
     from ccfleetd import customer_docs
     from ccfleetd.config import Config
     for path in ("/docs", "/docs/guide", "/docs/how-it-works"):
         page = customer_docs.page_for(path)(Config())
-        assert "a whole machine, named after you" in page, path
+        assert "a whole machine" in page, path
+        assert "named after you" not in page and "before the @" not in page, path
+    assert "pick anything but your email address" in customer_docs.page_for(
+        "/docs/guide")(Config())
     assert "Several slots share a machine" not in customer_docs.page_for(
         "/docs/how-it-works")(Config()), "one machine is one slot now"

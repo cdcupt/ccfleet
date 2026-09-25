@@ -18,7 +18,7 @@ from datetime import timedelta
 
 import pytest
 
-from ccfleetd import names, oauth, payments, sessions, slots, usersite
+from ccfleetd import oauth, payments, sessions, slots, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -30,6 +30,12 @@ from tests.conftest import next_load, refresh_of
 SECRET = "0123456789abcdef0123456789abcdef"
 URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y"
 TOKEN = "sk-ant-oat01-" + "Q" * 40
+
+
+def handle_of(email):
+    """A handle as an operator might set one from somebody's address, for tests
+    that need a slot's name to read; the product never makes one this way."""
+    return re.sub(r"[^a-z0-9]+", "-", email.split("@", 1)[0].lower()).strip("-")[:20].strip("-")
 
 
 class Browser:
@@ -104,7 +110,7 @@ def site(monkeypatch):
         store.set_slot_quota(account["id"], quota)
         if handle is not None:
             store.set_account_handle(
-                account["id"], names.handle_from_email(email) if handle is True else handle)
+                account["id"], handle_of(email) if handle is True else handle)
         browser.account = store.get_account(account["id"])
         return browser
 

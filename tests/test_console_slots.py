@@ -18,13 +18,15 @@ from datetime import timedelta
 
 import pytest
 
-from ccfleetd import names, payments, slots
+from ccfleetd import payments, slots
 from ccfleetd.api import Context, build_server, csrf_token
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.passwords import hash_password
 from ccfleetd.store import Store, StoreError, slot_login_key
+
+from .test_usersite import handle_of
 
 ADMIN_TOKEN = "admin-token-long-enough-to-pass"
 
@@ -116,7 +118,7 @@ def holder(store, email="ana@example.com", quota=1):
     operator set from their address, so the rows below have names to read."""
     account = store.upsert_account_from_google(f"sub-{email}", email, now=time.time())
     store.set_slot_quota(account["id"], quota)
-    store.set_account_handle(account["id"], names.handle_from_email(email))
+    store.set_account_handle(account["id"], handle_of(email))
     return account
 
 

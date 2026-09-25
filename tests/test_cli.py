@@ -516,7 +516,8 @@ def test_choosing_what_somebodys_slots_are_named_after(db, capsys):
     finally:
         st.close()
     assert cli.main(["--db", db, "account", "handle", "cdcupt@gmail.com", "--none"]) == 0
-    assert "cdcupt-1" in capsys.readouterr().out
+    said = capsys.readouterr().out
+    assert "neutral names like slot-4821" in said and "cdcupt" not in said.split(":", 1)[1]
     assert cli.main(["--db", db, "account", "handle", "nobody@example.com", "x"]) == 2
     assert "nobody registered" in capsys.readouterr().err
 

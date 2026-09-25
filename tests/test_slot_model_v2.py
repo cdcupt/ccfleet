@@ -17,6 +17,8 @@ import pytest
 from ccfleetd import names, slots
 from ccfleetd.store import NoSlotAvailable, QuotaExceeded, Store, StoreError
 
+from .test_usersite import handle_of
+
 NOW = 1_700_000_000.0
 
 
@@ -44,7 +46,7 @@ def account(st, account_id, email=None, *, quota=1, handle=True):
     made = st.add_account(account_id, f"sub-{account_id}", email, slot_quota=quota, now=NOW)
     if handle is not None:
         st.set_account_handle(account_id,
-                              names.handle_from_email(email) if handle is True else handle)
+                              handle_of(email) if handle is True else handle)
     return made
 
 
