@@ -32,6 +32,12 @@ URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y"
 TOKEN = "sk-ant-oat01-" + "Q" * 40
 
 
+def handle_of(email):
+    """A handle as an operator might set one from somebody's address, for tests
+    that need a slot's name to read; the product never makes one this way."""
+    return re.sub(r"[^a-z0-9]+", "-", email.split("@", 1)[0].lower()).strip("-")[:20].strip("-")
+
+
 class Browser:
     """One person's browser: its own cookie jar, and a way to press buttons."""
 
@@ -90,7 +96,10 @@ def site(monkeypatch):
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
 
-    def sign_in(sub="google-erik", email="erik@example.com", quota=0):
+    def sign_in(sub="google-erik", email="erik@example.com", quota=0, handle=True):
+        """Signed in with Google. Their slots are named "<handle>-<n>" after a
+        handle set from their address, as the operator can; `handle=None`
+        leaves the neutral names a claim gives by default."""
         who.update(sub=sub, email=email)
         browser = Browser(srv.server_address[1])
         start = browser.call("GET", "/auth/google/start?next=/account")
@@ -99,6 +108,9 @@ def site(monkeypatch):
         assert browser.call("GET", f"/auth/google/callback?state={state}&code=c").status == 303
         account = store.account_by_google_sub(sub)
         store.set_slot_quota(account["id"], quota)
+        if handle is not None:
+            store.set_account_handle(
+                account["id"], handle_of(email) if handle is True else handle)
         browser.account = store.get_account(account["id"])
         return browser
 

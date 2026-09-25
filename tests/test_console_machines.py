@@ -86,6 +86,7 @@ def fleet(store, now):
     store.set_account_handle(erik["id"], "erik")
     ysf = store.upsert_account_from_google("sub-ysf", "ysflowerdog@gmail.com", now=now - 86400)
     store.set_slot_quota(ysf["id"], 1)
+    store.set_account_handle(ysf["id"], "ysflowerdog")      # as live, from before neutral names
 
     store.add_node("erik-1", "erik", region="us-residential-att", now=now - 9 * 86400)
     store.hold_owner_node("erik-1", erik["id"], unix_user="erik", now=now - 16 * 3600)

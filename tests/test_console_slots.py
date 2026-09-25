@@ -26,6 +26,8 @@ from ccfleetd.notify import LogNotifier
 from ccfleetd.passwords import hash_password
 from ccfleetd.store import Store, StoreError, slot_login_key
 
+from .test_usersite import handle_of
+
 ADMIN_TOKEN = "admin-token-long-enough-to-pass"
 
 
@@ -112,8 +114,11 @@ def under_manage(row):
 
 
 def holder(store, email="ana@example.com", quota=1):
+    """Somebody with an allowance, their slots named after a handle the
+    operator set from their address, so the rows below have names to read."""
     account = store.upsert_account_from_google(f"sub-{email}", email, now=time.time())
     store.set_slot_quota(account["id"], quota)
+    store.set_account_handle(account["id"], handle_of(email))
     return account
 
 

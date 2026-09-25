@@ -187,12 +187,12 @@ def _demo() -> str:
     """
     return (
         '<figure class="hero-demo"><div class="demo-card" aria-hidden="true">'
-        '<div class="demo-head"><b>alice-1</b><span class="pill ok">In use</span></div>'
+        '<div class="demo-head"><b>slot-4821</b><span class="pill ok">In use</span></div>'
         '<div class="demo-body">'
         '<p class="demo-meta">machine last heard 12s ago</p>'
         '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
         'Max 20x plan.</p>'
-        '<p class="rc on">Remote Control is on: pick alice-1 in claude.ai/code.</p>'
+        '<p class="rc on">Remote Control is on: pick slot-4821 in claude.ai/code.</p>'
         '<div class="demo-usage">'
         + _meter(34, "5-hour session", "at 11:40pm") + _meter(61, "This week", "on Friday")
         + "</div></div></div>"
@@ -230,9 +230,9 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<h1>Claude Code on a machine that is always on</h1>"
         '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux account on a '
         "machine we run, with Claude Code installed and signed in to <em>your own</em> Claude "
-        "account. Your slot is a whole machine, named after you. Open claude.ai/code or the "
-        "Claude app on any device, pick it by that name, and Claude works there, on your "
-        "files and with your tools, while your laptop is closed.</p>"
+        "account. Your slot is a whole machine, under a name you choose. Open claude.ai/code "
+        "or the Claude app on any device, pick it by that name, and Claude works there, on "
+        "your files and with your tools, while your laptop is closed.</p>"
         + way_in + "</div>" + _demo() + "</section>"
         '<section class="band"><h2>What you get</h2>'
         '<p class="band-lead">For anybody with a Claude plan that includes Claude Code who '
@@ -307,7 +307,7 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">'
         "claude.ai/code</a> in any browser, or the Claude app on iOS or Android, signed in to "
         "the same Claude account. Your slot appears there under its name, the one at the "
-        "top of your slot card: named after you, like alice-1. Start a session there. "
+        "top of your slot card: slot-4821 until you rename it. Start a session there. "
         "Everything runs on the machine, in your slot, with your files.</p></li>"
         "</ol>"
         '<div class="card"><h2>Also on your page</h2><ul>'
@@ -336,9 +336,11 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "machine.</p>"
         "<p>One account also stays on one machine: signed in on two at once, it is flagged "
         "to you and to the operator.</p>"
-        "<p>Your slot is a whole machine, named after you: the part of your address before "
-        "the @ and a number, like alice-1. claude.ai/code shows it by that name. When you "
-        "give it back, the name goes with it.</p></div>"
+        "<p>Your slot is a whole machine with a name of its own: a neutral one like "
+        "slot-4821 when you claim it, never anything from your address, and whatever you "
+        "rename it to on your page. claude.ai/code shows it by that name, so Anthropic sees "
+        "it too: pick anything but your email address. When you give it back, the name goes "
+        "with it.</p></div>"
         '<div class="card"><h2>Changing to another Claude account</h2>'
         '<p>On a slot in use, <span class="btnlabel">Change account</span> moves it to '
         "another Claude account of yours. Open the link it shows, sign in with the account "
@@ -437,12 +439,12 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         f'<div class="how"><figure class="card diagram">{PICTURE}</figure>'
         '<div class="how-text">'
         '<div class="card"><h2>Your slot</h2>'
-        "<p>Your slot is a whole machine, named after you, and claude.ai/code shows it by "
-        "that name. On it you have a Linux account of your own: a home directory only you "
-        "can read, your own Claude Code, and two services that run while nobody is logged "
-        "in: a work session, and Remote Control, which is what claude.ai/code and the "
-        "Claude app connect to. There is no administrator access in a slot, and it is the "
-        "only slot on its machine.</p></div>"
+        "<p>Your slot is a whole machine under the name you give it, and claude.ai/code shows it "
+        "by that name. On it you have a Linux account of your own: a home directory only you can "
+        "read, your own Claude Code, and two services that run while nobody is logged in: a work "
+        "session, and Remote Control, which is what claude.ai/code and the Claude app connect to. "
+        "There is no administrator access in a slot, and it is the only slot on its "
+        "machine.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
         "<p>You sign in to Claude yourself, through Anthropic&#x27;s own sign-in. The "
         "credential that creates is written on the machine, in your slot, and nowhere else: "

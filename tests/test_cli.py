@@ -121,8 +121,10 @@ def _account(db_path, email, *, quota=0):
     from ccfleetd.store import Store
     st = Store(db_path)
     try:
-        return st.add_account(email.split("@")[0], f"sub-{email}", email,
+        made = st.add_account(email.split("@")[0], f"sub-{email}", email,
                               slot_quota=quota, now=1_700_000_000.0)
+        st.set_account_handle(made["id"], email.split("@")[0])
+        return made
     finally:
         st.close()
 
@@ -514,7 +516,8 @@ def test_choosing_what_somebodys_slots_are_named_after(db, capsys):
     finally:
         st.close()
     assert cli.main(["--db", db, "account", "handle", "cdcupt@gmail.com", "--none"]) == 0
-    assert "cdcupt-1" in capsys.readouterr().out
+    said = capsys.readouterr().out
+    assert "neutral names like slot-4821" in said and "cdcupt" not in said.split(":", 1)[1]
     assert cli.main(["--db", db, "account", "handle", "nobody@example.com", "x"]) == 2
     assert "nobody registered" in capsys.readouterr().err
 
@@ -538,3 +541,29 @@ def test_the_slot_list_shows_names_and_holders_by_address(db, capsys):
     fields = row.split()
     assert fields[0] == "pool-1" and fields[3] == "claiming" and fields[4] == "no"
     assert "alice-1" in row and row.rstrip().endswith("alice@example.com")
+
+
+def test_naming_a_held_slot_from_the_command_line(db, capsys):
+    """The operator's side of renaming (Erik, 2026-09-24): a name the holder
+    asked for, or with none a fresh neutral one, never anything of theirs."""
+    from ccfleetd.store import Store
+    assert cli.main(["--db", db, "node", "add", "pool-1", "--owner", "op"]) == 0
+    assert cli.main(["--db", db, "slot", "add", "pool-1", "--machine", "pool-1",
+                     "--unix-user", "slot01"]) == 0
+    st = Store(db)
+    try:
+        st.apply_slot_report("pool-1", [{"unix_user": "slot01", "present": False}], now=1.0)
+        st.add_account("a1", "sub-a1", "ana@example.com", slot_quota=1, now=1.0)
+        slot = st.claim_slot("a1", now=2.0)
+        st.apply_slot_report("pool-1", [{"unix_user": "slot01", "present": True,
+                                         "provisioned_for": slot["claimed_at"]}], now=3.0)
+    finally:
+        st.close()
+    capsys.readouterr()
+    assert cli.main(["--db", db, "slot", "name", "pool-1", "anas-box"]) == 0
+    assert "pool-1 is now called anas-box" in capsys.readouterr().out
+    assert cli.main(["--db", db, "slot", "name", "pool-1"]) == 0
+    said = capsys.readouterr().out
+    assert re.search(r"pool-1 is now called slot-[0-9]{4};", said)
+    assert cli.main(["--db", db, "slot", "name", "pool-1", "pool-7"]) == 2      # reserved
+    assert "pool-<n>" in capsys.readouterr().err

@@ -16,12 +16,15 @@ role:
 - `pool-N` for shared machines offered to customers: `pool-1`, `pool-2`.
 
 A shared machine's one slot takes the machine's name (`pool-1` on `pool-1`),
-and its Linux user is `slot01`. When somebody claims it, the slot is named
-after them, `<handle>-<n>`: the part of their address before the @, or the
-handle the operator chose with `ccfleetd account handle <email> <handle>`, and
-the first number nobody answers to (`alice-1`, then `alice-2` for their next).
-The machine takes that name as its hostname on its next run, so claude.ai/code
-shows the holder their own name; the console marks the machine "hostname
+and its Linux user is `slot01`. When somebody claims it, the slot gets a
+neutral name, `slot-4821` (random digits nobody answers to yet), never anything
+from their address: the hostname is what claude.ai shows and Anthropic receives
+(Erik, 2026-09-24). The holder renames it on their page, and
+`ccfleetd slot name <slot> [<name>]` does it for them (no name: a fresh neutral
+one). A handle set with `ccfleetd account handle <email> <handle>`, only at the
+person's request, names their slots `<handle>-<n>` instead (`alice-1`, then
+`alice-2`). The machine takes the name as its hostname on its next run, so
+claude.ai/code shows it, and Remote Control restarts under it; the console marks the machine "hostname
 pending" until it has. When the wipe that frees the slot completes, the name
 goes and the slot is called by its id again.
 
@@ -44,7 +47,7 @@ moves onto these with [Rename a machine](#rename-a-machine), held slots included
 ## Add a shared machine
 
 A shared machine carries one slot: its own Linux user with its own Claude
-sign-in, named after whoever holds it. *root* here means root on the new
+sign-in, under a name its holder chooses. *root* here means root on the new
 machine; *laptop* is wherever your SSH key lives.
 
 **Pick the box.** A KVM VPS running Debian or Ubuntu with at least 2 GiB of RAM.

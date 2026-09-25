@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.0 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.1 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -827,8 +827,9 @@ claude
   <p>A shared machine carries one <strong>slot</strong>: one Linux user for one person, with
   its own Claude Code signed in to that person's own Claude account, so no credential is ever
   shared. One machine is one slot because claude.ai/code shows a machine by its hostname:
-  claimed, the slot is named after its holder (<code>alice-1</code>) and the machine takes that
-  name. People sign in to the product with Google, you set how many slots each may hold, and
+  claimed, the slot gets a neutral name (<code>slot-4821</code>) that its holder can rename,
+  and the machine takes that name. Nothing in it comes from the holder's address, because
+  Anthropic receives the hostname. People sign in to the product with Google, you set how many slots each may hold, and
   they do everything else themselves at <code>/account</code>.</p>
   <p>One Claude account, one slot: a slot is signed in to one account at a time, and somebody
   who wants two accounts at once holds two slots. Its holder can move it to another Claude
@@ -898,11 +899,16 @@ ccfleetd slot list --machine pool-1</code></pre>
       <code>&lt;you&gt;-N</code> for your own and <code>pool-N</code> for the ones offered to
       customers, and a free slot by its machine.</p>
       <ul>
-        <li><strong>Names follow holders.</strong> A claimed slot is named
-        <code>&lt;handle&gt;-&lt;n&gt;</code>: the part of the address before the @, unless you
-        pick a handle with <code>ccfleetd account handle</code>. The machine takes that name as
-        its hostname before the slot is set up, and answers to its own id again once the wipe
-        that frees the slot completes.</li>
+        <li><strong>Names are the holder's.</strong> A claimed slot is named
+        <code>slot-4821</code>, random digits, never anything from the holder's address:
+        claude.ai shows the hostname, so Anthropic receives it. The holder renames it on their
+        page (2&ndash;30 letters, digits and hyphens, not <code>pool-N</code> or
+        <code>slot-N</code>); <code>ccfleetd slot name &lt;slot&gt; [&lt;name&gt;]</code> does
+        it for them, a fresh neutral name when none is given. A handle set with
+        <code>ccfleetd account handle</code>, at the person's request, names their slots
+        <code>&lt;handle&gt;-&lt;n&gt;</code> instead. The machine takes the name as its
+        hostname at its next run, Remote Control restarts under it, and the machine answers
+        to its own id again once the wipe that frees the slot completes.</li>
         <li><strong>Renaming a running fleet</strong>: <code>ccfleetd node rename</code> and
         <code>ccfleetd slot rename</code>, held slots included. The runbook <em>Rename a
         machine</em> in <code>docs/runbooks.md</code> has the order.</li>
@@ -1013,7 +1019,7 @@ ccfleetd slot list --machine pool-1</code></pre>
   overall line (<em>All systems operational</em>, <em>Partial outage</em> or <em>Major
   outage</em>), then <em>Website and account pages</em> and <em>Slot machines</em>, each with
   its last 90 days as a bar of UTC days and its uptime. The machines are one group,
-  counted and never listed: a held slot is named after its holder, so no machine's id or
+  counted and never listed: a held slot's name is its holder's, so no machine's id or
   slot's name is ever on the page. Each holder's slot card says how their own machine is,
   with a link to it.</p>
   <ul>

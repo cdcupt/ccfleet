@@ -30,6 +30,7 @@ def fleet(store, now=NOW, ages=(20, 30, 40)):
     held, so its slot is named after its holder."""
     store.add_account("a1", "sub-a1", "ana@example.com", slot_quota=1, now=now - 86400)
     store.add_account("e1", "sub-e1", "erik@example.com", slot_quota=3, now=now - 86400)
+    store.set_account_handle("a1", "ana")          # a name that is plainly a person's
     store.add_node("erik-9", "erik", region="us-west", now=now - 86400)
     store.hold_owner_node("erik-9", "e1", unix_user="erik", now=now - 86400)
     for node in ("pool-7", "pool-8"):

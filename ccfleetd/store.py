@@ -145,8 +145,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     slot_quota INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     last_seen_at REAL NOT NULL DEFAULT 0,
-    -- What their slots are named after, if the operator chose it; otherwise
-    -- the part of their address before the @. See ccfleetd/names.py.
+    -- "<handle>-<n>" for their slots, only if the operator set it at their
+    -- request; otherwise claims get neutral names ("slot-4821"), never anything
+    -- from their address. See ccfleetd/names.py.
     handle TEXT
 );
 -- One Linux user on one machine. The unit a person holds.
@@ -165,8 +166,9 @@ CREATE TABLE IF NOT EXISTS slots (
     -- confirm it.
     present INTEGER,
     reported_at REAL,
-    -- Its holder's name while somebody holds it ("alice-1"), NULL while free:
-    -- the name people see, and its machine's hostname. The id never changes.
+    -- Its name while somebody holds it ("slot-4821", or what its holder
+    -- renamed it to), NULL while free: the name people see, and its machine's
+    -- hostname. The id never changes.
     name TEXT,
     -- 'machine': a Linux user the machine agent makes and wipes. 'owner': a
     -- person's own node counted as their slot, a record and nothing more.
@@ -291,6 +293,14 @@ class NoSlotAvailable(StoreError):
 
 class NotYours(StoreError):
     """The slot is not held by the account acting on it."""
+
+
+class BadName(StoreError):
+    """Not a name a slot may have (see names.valid_nickname)."""
+
+
+class NameTaken(StoreError):
+    """Another slot or machine already answers to that name."""
 
 
 
@@ -441,7 +451,7 @@ class Store:
             })
             # Names come with claims, so every slot written before them has
             # none and shows its id; and every slot before owner slots was a
-            # machine's. No handle yet means the address is used.
+            # machine's. No handle means neutral names.
             self._add_missing_columns("slots", {
                 "name": "TEXT",
                 "kind": "TEXT NOT NULL DEFAULT 'machine'",
@@ -1918,29 +1928,66 @@ class Store:
         return [row["id"] for row in rows]
 
     @staticmethod
-    def _name_for(conn: sqlite3.Connection, account: sqlite3.Row) -> str:
-        """What a slot this account takes is called: "<handle>-<n>".
-
-        Read in the claim's own write transaction, so two claims cannot both
-        pick the same number. Skipped: every slot's id and name and every
-        node's id — the name becomes a hostname, and one that another machine
-        already answers to would be two machines under one name.
-        """
-        handle = account["handle"] or names.handle_from_email(account["email"])
+    def _taken_names(conn: sqlite3.Connection, but: str = "") -> set[str]:
+        """Every name a machine answers to or may: each node's id and each
+        slot's id and name, but the slot `but`'s own. The name becomes a
+        hostname, and one another machine already answers to would be two
+        machines under one name."""
         taken = {r["id"] for r in conn.execute("SELECT id FROM nodes")}
-        for row in conn.execute("SELECT id, name FROM slots"):
+        for row in conn.execute("SELECT id, name FROM slots WHERE id != ?", (but,)):
             taken.add(row["id"])
             if row["name"]:
                 taken.add(row["name"])
-        name = names.next_name(handle, taken)
+        return taken
+
+    @classmethod
+    def _name_for(cls, conn: sqlite3.Connection, account: sqlite3.Row) -> str:
+        """What a slot this account takes is called: a neutral "slot-4821",
+        never anything of theirs (Erik, 2026-09-24), which its holder renames
+        on their page; "<handle>-<n>" only for a handle the operator set.
+
+        Read in the claim's own write transaction, so two claims cannot both
+        pick the same name.
+        """
+        taken = cls._taken_names(conn)
+        handle = account["handle"]
+        name = names.next_name(handle, taken) if handle else names.neutral_name(taken)
         if not names.valid_hostname(name):  # pragma: no cover - names.py guarantees it
             raise StoreError(f"{name!r} is not a hostname")
         return name
 
+    def name_slot(self, slot_id: str, name: Optional[str], *,
+                  held_by: Optional[str] = None) -> str:
+        """Give a machine's slot in use a new name, which is its machine's
+        hostname: its holder's own nickname, or with None a fresh neutral one.
+        Returns the name.
+
+        Checked in one transaction: the holder (None is the operator's side),
+        a machine's slot claimed or in use, and a name nothing else answers
+        to. The machine answers to it at its next run, and Remote Control
+        restarts under it.
+        """
+        with self._write_txn() as conn:
+            # Whose it is first: to anybody else, a slot answers as a missing
+            # one, whatever the name they sent.
+            row = self._held(conn, slot_id, held_by)
+            if name is not None and not names.valid_nickname(name):
+                raise BadName(f"a slot's name is 2-{names.MAX_NICKNAME} lowercase letters, "
+                              "digits and inner hyphens, and not pool-<n> or slot-<n>")
+            if (row["kind"] != slotstates.MACHINE_SLOT
+                    or row["state"] not in (slotstates.CLAIMED, slotstates.ACTIVE)):
+                raise StoreError(f"{slot_id} can be named once it is set up")
+            taken = self._taken_names(conn, but=slot_id)
+            chosen = name if name is not None else names.neutral_name(taken)
+            if chosen in taken:
+                raise NameTaken(f"{chosen} is taken: another slot or machine answers to it")
+            conn.execute("UPDATE slots SET name = ? WHERE id = ?", (chosen, slot_id))
+        return chosen
+
     def set_account_handle(self, account_id: str, handle: Optional[str]) -> None:
-        """What this account's slots are named after; None goes back to the
-        part of their address before the @. Only claims from now on are named
-        by it: a slot already named keeps the name its holder already knows."""
+        """What this account's slots are named after, "<handle>-<n>", when the
+        person asked for it; None goes back to neutral names. Only claims from
+        now on are named by it: a slot already named keeps its name."""
         if handle is not None and not names.valid_handle(handle):
             raise StoreError(
                 f"a handle is 1-{names.MAX_HANDLE} lowercase letters, digits and inner "
