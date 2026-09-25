@@ -72,9 +72,12 @@ def test_a_reply_that_is_not_success_is_not_sent(status):
     assert not mail.ResendMailer(KEY, "x <x@example.com>", open_).send(an_email())
 
 
+# Named by hand: on Python 3.9 an HTTPError with no body raises KeyError, not
+# AttributeError, when pytest looks for a __name__ to name the case by.
 @pytest.mark.parametrize("exc", [
     urllib.error.HTTPError(mail.RESEND_URL, 403, "no", {}, None),
-    urllib.error.URLError("down"), TimeoutError(), OSError("reset"), ValueError("bad")])
+    urllib.error.URLError("down"), TimeoutError(), OSError("reset"), ValueError("bad")],
+    ids=["http-403", "url-error", "timeout", "os-error", "value-error"])
 def test_a_failed_send_says_so_without_the_address_or_key(exc, caplog):
     open_, _ = opener(raises=exc)
     with caplog.at_level(logging.WARNING, logger="ccfleetd.mail"):

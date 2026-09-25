@@ -180,8 +180,9 @@ def test_the_guide_quotes_labels_the_user_site_really_shows():
 
 def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
     """Like a button, a flag a page names has to exist: the script's own usage
-    lines say so. And a computer uses one Claude account, so no page tells
-    anybody to keep several on one and switch between them."""
+    lines say so. The script keeps one token, so no page tells anybody to keep
+    several and switch between them; the switch it has is to the computer's
+    own login, and both pages that hand out a token say how."""
     from pathlib import Path
 
     script = (Path(__file__).parents[1] / "laptop" / "ccfleet-connect.sh").read_text()
@@ -193,7 +194,7 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
             assert any(f"ccfleet-connect {flag}" in line for line in usage), (where, flag)
         for gone in ("--add", "--use", "--list"):
             assert f"ccfleet-connect {gone}" not in page, (where, gone)
-        assert "one Claude account" in page, where
+        assert "ccfleet-connect --off" in page and "ccfleet-connect --on" in page, where
 
 
 def test_the_guide_names_the_line_a_slot_really_starts_with():
@@ -354,3 +355,19 @@ def test_the_device_token_window_is_the_one_the_code_keeps(monkeypatch):
     assert "for at most 15 minutes, and never kept" in render("/docs/guide")
     monkeypatch.setattr(customer_docs, "LOGIN_MAX_AGE_S", 20 * 60)
     assert "for at most 20 minutes, and never kept" in render("/docs/guide")
+
+
+def test_the_update_line_fetches_what_the_installer_fetches():
+    """An older copy is replaced from the address, and to the path, that the
+    script itself installs from and to: the line cannot drift from it."""
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    script = (root / "laptop" / "ccfleet-connect.sh").read_text()
+    url = re.search(r'^SELF_URL="([^"]+)"$', script, re.M).group(1)
+    assert 'local dest="$HOME/.local/bin/ccfleet-connect"' in script
+    line = f"curl -fsSL -o ~/.local/bin/ccfleet-connect \\\n  {url}"
+    for where, text in (("guide", render("/docs/guide")),
+                        ("README", (root / "README.md").read_text()),
+                        ("guidebook", (root / "docs" / "guidebook.html").read_text())):
+        assert line in text, where

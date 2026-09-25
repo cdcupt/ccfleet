@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Connect this computer to your Claude account, once, with no browser login.
+# Connect this computer to your slot's Claude account, with no browser login.
 #
 #   ccfleet-connect             prompt for the token (does not echo) - preferred
 #   echo "$TOKEN" | ccfleet-connect --stdin
-#   ccfleet-connect --status    what is this computer using
+#   ccfleet-connect --off       use this computer's own Claude login instead
+#   ccfleet-connect --on        back to your slot's account
+#   ccfleet-connect --status    which one this computer is using
 #   ccfleet-connect --remove    undo it
 #
-# One computer, one Claude account. ccfleet runs one account per slot, and you
-# can use that account from as many of your own computers as you like; none of
-# them keeps a second account on the side to switch to. Connecting again with
-# another token replaces the one this computer had.
+# ccfleet keeps one Claude account per slot; that rule is about its machines.
+# Your computer is yours, and it can have its own Claude login too, with your
+# own subscription: the slot's account or another one. --off parks the slot's
+# token, so new shells use that login; --on brings the token back. One is in
+# use at a time, and each is yours to use under Anthropic's terms. Connecting
+# again with another token replaces the one this computer had.
 #
 # Put --no-exec first to skip the fresh shell it hands you at the end;
 # a provisioning script wants its own shell back, not a new one.
@@ -34,6 +38,9 @@ TOKEN_FILE="${CCFLEET_TOKEN_FILE:-$HOME/.config/ccfleet/token}"
 # Where an earlier version kept tokens for several accounts under names. Only
 # read to retire them: a computer uses one account now.
 LEGACY_TOKENS_DIR="$(dirname "$TOKEN_FILE")/tokens"
+# Where --off keeps the token while this computer uses its own login: beside
+# it, where the rc line does not look.
+PARKED_FILE="$TOKEN_FILE.off"
 MARK_BEGIN="# >>> ccfleet connect >>>"
 MARK_END="# <<< ccfleet connect <<<"
 
@@ -181,8 +188,8 @@ looks_like_saved_token() {
 
 retire_saved_tokens() {
   # An earlier version kept tokens for several Claude accounts under names and
-  # switched between them. A computer uses one account now, so on one that
-  # saved some, keep the token in use and wipe the rest. Only a count is said:
+  # switched between them. ccfleet-connect keeps one token now, so on a
+  # computer that saved some, keep the token in use and wipe the rest. Only a count is said:
   # they are credentials, so nothing about them reaches the terminal.
   [ -d "$LEGACY_TOKENS_DIR" ] && [ ! -L "$LEGACY_TOKENS_DIR" ] || return 0
   local f others=0
@@ -198,7 +205,7 @@ retire_saved_tokens() {
   done
   rmdir "$LEGACY_TOKENS_DIR" 2>/dev/null || true
   if [ "$others" -gt 0 ]; then
-    note "removed $others other saved token(s): a computer uses one Claude account now. Revoke them in your Claude account settings if nothing else uses them."
+    note "removed $others other saved token(s): ccfleet-connect keeps one token now. Revoke them in your Claude account settings if nothing else uses them."
   fi
 }
 
@@ -253,6 +260,12 @@ cmd_connect() {
     replaced=yes
   fi
   printf '%s\n' "$token" | atomic_put "$TOKEN_FILE" || die "could not write $TOKEN_FILE"
+  # Connecting switches the token on, the new one: one that --off parked is
+  # replaced like the one in use would be.
+  if [ -f "$PARKED_FILE" ]; then
+    [ "$(cat "$PARKED_FILE")" = "$token" ] || replaced=yes
+    wipe "$PARKED_FILE"
+  fi
 
   # Only now, with a token that has been accepted and written: nothing lands on
   # this machine until the credential has proved itself.
@@ -273,17 +286,20 @@ hand_over_shell() {
   # they wanted when they asked; it costs one exec and reads the rc line just
   # written, so the token arrives the same way it will on every later shell
   # rather than by a special case that only works today.
-  if [ "$NO_EXEC" = yes ]; then
-    note ""
-    note "This shell does not have it yet. Open a new terminal, or run:"
-    note "    exec \"\$SHELL\""
-    return 0
+  #
+  # Given two arguments: what this shell has wrong instead, and the line that
+  # puts it right by hand.
+  local wrong="This shell does not have it yet." by_hand='exec "$SHELL"'
+  if [ $# -ge 2 ]; then
+    wrong="$1"
+    by_hand="$2"
   fi
-  if [ ! -t 1 ] || [ -z "${SHELL:-}" ] || [ ! -x "${SHELL:-}" ]; then
-    # No terminal to hand over, or no shell to hand over to. Say the command.
+  if [ "$NO_EXEC" = yes ] || [ ! -t 1 ] || [ -z "${SHELL:-}" ] || [ ! -x "${SHELL:-}" ]; then
+    # Not wanted, or no terminal to hand over, or no shell to hand over to.
+    # Say the command.
     note ""
-    note "This shell does not have it yet. Open a new terminal, or run:"
-    note "    exec \"\$SHELL\""
+    note "$wrong Open a new terminal, or run:"
+    note "    $by_hand"
     return 0
   fi
   note ""
@@ -292,8 +308,102 @@ hand_over_shell() {
   exec "$SHELL"
 }
 
+auth_method() {
+  # The method in `claude auth status` output, given on stdin.
+  sed -n 's/.*"authMethod": "\([^"]*\)".*/\1/p'
+}
+
+own_login() {
+  # This computer's own Claude sign-in, which Claude Code uses whenever no
+  # token is in its environment: its owner's own subscription, if any. Asked
+  # with the token taken out, or the answer would be about the token.
+  command -v claude >/dev/null 2>&1 || { note "own login  : claude is not installed"; return 0; }
+  local out
+  out="$( (unset CLAUDE_CODE_OAUTH_TOKEN; claude auth status </dev/null 2>&1) || true)"
+  case "$out" in
+    *'"loggedIn": true'*)
+      note "own login  : signed in (auth method $(printf '%s' "$out" | auth_method))" ;;
+    *) note "own login  : none yet; sign in with your own subscription: claude auth login" ;;
+  esac
+}
+
+unset_line() {
+  # Taking the variable out of the shell at hand, in its own words.
+  if [ "${SHELL##*/}" = "fish" ]; then
+    printf 'set -e CLAUDE_CODE_OAUTH_TOKEN'
+  else
+    printf 'unset CLAUDE_CODE_OAUTH_TOKEN'
+  fi
+}
+
+cmd_off() {
+  # This computer's own login instead of the slot's token. The token is parked
+  # rather than deleted, so --on brings it back without anybody minting a new
+  # one, and the rc line only reads a token that is there, so new shells stop
+  # exporting it the moment it moves.
+  retire_saved_tokens
+  if [ -f "$TOKEN_FILE" ]; then
+    # A rename, like replacing the token: one parked before is overwritten.
+    mv -f "$TOKEN_FILE" "$PARKED_FILE" || die "could not park $TOKEN_FILE"
+    note "off: new shells use this computer's own Claude login"
+  elif [ -f "$PARKED_FILE" ]; then
+    note "already off: new shells use this computer's own Claude login"
+  else
+    die "not connected, so there is no token to switch off"
+  fi
+  own_login
+  # And not the shell it hands over, which would otherwise inherit it.
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  hand_over_shell "This shell still has the token." "$(unset_line)"
+}
+
+cmd_on() {
+  # Back to the slot's token. Checked first, as on connecting: a token revoked
+  # or expired while it was parked stays parked, and this computer keeps
+  # working on its own login rather than on a credential that is refused.
+  retire_saved_tokens
+  local rc; rc="$(shell_rc)"
+  if [ -f "$TOKEN_FILE" ]; then
+    check_rc_strippable "$rc"
+    write_block "$rc"
+    if [ -f "$PARKED_FILE" ]; then
+      wipe "$PARKED_FILE"
+    fi
+    note "already on: new shells use your slot's account"
+  elif [ -f "$PARKED_FILE" ]; then
+    command -v claude >/dev/null 2>&1 || die "Claude Code is not installed on this device"
+    note "checking the token..."
+    local probe
+    probe="$(CLAUDE_CODE_OAUTH_TOKEN="$(cat "$PARKED_FILE")" claude auth status </dev/null 2>&1 || true)"
+    case "$probe" in
+      *'"loggedIn": true'*) : ;;
+      *) die "the parked token was refused: it may have been revoked or expired. It stays
+     parked. Get a fresh one (claude setup-token) and run ccfleet-connect with it." ;;
+    esac
+    # The rc line first, as on connecting: a refusal there leaves the token
+    # parked, not in place with nothing to read it.
+    check_rc_strippable "$rc"
+    write_block "$rc"
+    mv -f "$PARKED_FILE" "$TOKEN_FILE" || die "could not put $TOKEN_FILE back"
+    note "on: new shells use your slot's account"
+  else
+    die "not connected: run ccfleet-connect with the token from claude setup-token"
+  fi
+  hand_over_shell
+}
+
 cmd_status() {
   retire_saved_tokens
+  if [ ! -r "$TOKEN_FILE" ] && [ -r "$PARKED_FILE" ]; then
+    note "in use     : this computer's own Claude login; the slot's token is parked"
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+      note "in shell   : still a token; open a new terminal, or run: $(unset_line)"
+    fi
+    own_login
+    note ""
+    note "ccfleet-connect --on switches back to your slot's account."
+    return 0
+  fi
   if [ ! -r "$TOKEN_FILE" ]; then
     note "not connected (no $TOKEN_FILE)"
     if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
@@ -301,6 +411,7 @@ cmd_status() {
     fi
     return 0
   fi
+  note "in use     : your slot's account, through its token"
   note "token file : $TOKEN_FILE"
   # Never interpolate the token itself. ${VAR:-default} expands to the VALUE
   # when set, so the obvious one-liner here printed the whole credential.
@@ -316,11 +427,11 @@ cmd_status() {
   local out
   out="$(CLAUDE_CODE_OAUTH_TOKEN="$(cat "$TOKEN_FILE")" claude auth status </dev/null 2>&1 || true)"
   case "$out" in
-    *'"loggedIn": true'*) note "account    : working (auth method $(printf '%s' "$out" |
-        sed -n 's/.*"authMethod": "\([^"]*\)".*/\1/p'))" ;;
+    *'"loggedIn": true'*) note "account    : working (auth method $(printf '%s' "$out" | auth_method))" ;;
     *) note "account    : REFUSED — the token may have been revoked or expired" ;;
   esac
   note ""
+  note "ccfleet-connect --off switches this computer to its own Claude login."
   note "Remote Control is not available on a token; that needs claude auth login."
 }
 
@@ -329,11 +440,16 @@ cmd_remove() {
   strip_block "$rc"
   # Before the token itself, so what is counted as "other" is what it says.
   retire_saved_tokens
-  if [ -f "$TOKEN_FILE" ]; then
-    wipe "$TOKEN_FILE"
+  local f removed=no
+  for f in "$TOKEN_FILE" "$PARKED_FILE"; do
+    if [ -f "$f" ]; then
+      wipe "$f"
+      removed=yes
+    fi
+  done
+  if [ "$removed" = yes ]; then
     note "token removed"
   fi
-  local f
   # A temp file an interrupted write left behind holds a token like any other.
   for f in "$(dirname "$TOKEN_FILE")"/.ccfleet-token.*; do
     [ -f "$f" ] || continue
@@ -343,11 +459,13 @@ cmd_remove() {
   note "this shell still has it until you close it: unset CLAUDE_CODE_OAUTH_TOKEN"
 }
 
-one_account() {
-  # What used to switch a computer between accounts is refused, and says what
-  # to do instead. Refused before anything is read or touched.
-  die "$1 is gone: a computer uses one Claude account, the one on your slot. \
-To change it, run ccfleet-connect with that account's token; it replaces the one in use."
+retired_option() {
+  # What an earlier version used to keep several tokens under names and switch
+  # between them is refused, and says what to do instead. Refused before
+  # anything is read or touched.
+  die "$1 is gone: ccfleet-connect keeps one token, your slot's. To use this \
+computer's own Claude login instead, run ccfleet-connect --off, and --on to come back. \
+To use another account's token, run ccfleet-connect with it; it replaces the one in use."
 }
 
 SELF_URL="https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh"
@@ -407,11 +525,13 @@ main() {
 
   case "${1:-}" in
     --status|-s) cmd_status ;;
+    --off) cmd_off ;;
+    --on) cmd_on ;;
     --remove|-r)
-      [ $# -le 1 ] || die "--remove takes no name now: a computer uses one Claude \
-account, and ccfleet-connect --remove undoes it."
+      [ $# -le 1 ] || die "--remove takes no name now: ccfleet-connect keeps one \
+token, and ccfleet-connect --remove undoes it."
       cmd_remove ;;
-    --add|--use|--list|-l) one_account "$1" ;;
+    --add|--use|--list|-l) retired_option "$1" ;;
     -h|--help)
       # To the first blank line rather than a counted range: the header grows
       # and a fixed number quietly starts cutting the end off the help.

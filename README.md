@@ -105,22 +105,34 @@ Nobody else can do that step: a subscription login must complete through
 Anthropic's own flow. After it, they work from a terminal (`ssh` lands them in a
 live session) or from claude.ai/code and the phone app with nothing installed.
 
-### 3. Laptop (optional): one Claude account per computer
+### 3. Laptop (optional): your slot's account, or the computer's own login
 
-A computer uses one Claude account, connected with that account's token through
-`ccfleet-connect`; several accounts means several slots, one for each.
-
-With a device token (inference only, so no Remote Control),
-`ccfleet-connect` wires a computer to one Claude account: the one on your slot,
-which you can use from as many of your own computers as you like. A computer
-holds one account; connecting it again with another token replaces the one it
-had. A computer that saved several under names with an earlier version keeps
-the one in use and has the others wiped, the first time it runs.
+With a device token (inference only, so no Remote Control), `ccfleet-connect`
+wires a computer to the Claude account on your slot, which you can use from as
+many of your own computers as you like. ccfleet's one-account rule is about its
+own machines, one account per slot; a computer of yours can also have its own
+Claude login, with your own subscription, the slot's account or another one.
+`--off` parks the token so new shells use that login, and `--on` brings the
+token back after checking it still works. One is in use at a time. Connecting
+again with another token replaces the one the computer had. A computer that
+saved several under names with an earlier version keeps the one in use and has
+the others wiped, the first time it runs.
 
 ```bash
 ccfleet-connect             # paste the token from `claude setup-token` (input hidden)
-ccfleet-connect --status    # which token, and whether it still works
+ccfleet-connect --off       # use this computer's own Claude login instead
+ccfleet-connect --on        # back to your slot's account
+ccfleet-connect --status    # which one is in use, and whether it still works
 ccfleet-connect --remove    # undo it
+```
+
+A copy installed before `--off` and `--on` existed answers them with `unknown
+option`, and the installer never overwrites a copy that is already there.
+Replace it with the current one; the token and the rc line stay as they are:
+
+```bash
+curl -fsSL -o ~/.local/bin/ccfleet-connect \
+  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh
 ```
 
 ### 4. Shared machines: one machine, one slot, under the name its holder gives it
