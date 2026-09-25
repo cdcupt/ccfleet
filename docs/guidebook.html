@@ -644,7 +644,7 @@ ccfleet-connect --status   <span class="c"># which one is in use</span></code></
   <div class="table-wrap"><table>
     <thead><tr><th>Alert</th><th>Level</th><th>Meaning</th><th>Who acts</th></tr></thead>
     <tbody>
-      <tr><td><code>no_heartbeat</code></td><td><span class="pill bad">critical</span></td><td>No report for 15 min: node down, agent broken, or token rotated without updating the node</td><td>operator</td></tr>
+      <tr><td><code>no_heartbeat</code></td><td><span class="pill bad">critical</span></td><td>No report for 15 min: node down, agent broken, or token rotated without updating the node. Counted from when the server began listening, so a restart raises none</td><td>operator</td></tr>
       <tr><td><code>claude_missing</code></td><td><span class="pill bad">critical</span></td><td><code>claude</code> not found for the owner user</td><td>re-run the install command; it repairs rather than duplicates</td></tr>
       <tr><td><code>credentials_missing</code></td><td><span class="pill bad">critical</span></td><td>No login on the node</td><td>owner: <code>claude</code>, <code>/login</code></td></tr>
       <tr><td><code>token_expired</code></td><td><span class="pill warn">warn</span></td><td>Access token expired over an hour ago and was not refreshed</td><td>owner opens a session; <code>/login</code> if asked</td></tr>
@@ -1080,7 +1080,8 @@ ccfleetd slot list --machine pool-1</code></pre>
     A machine whose outage was open already stays down until it reports, and an outage
     becomes an email only after five minutes of it seen while listening. So a restart,
     long or short, never tells a holder their slot is down, or back, when it was only the
-    site.</li>
+    site. The operator's <code>no_heartbeat</code> alert counts the same way, and one
+    already raised holds until the node reports.</li>
   </ul>
   <h3>One account per slot, enforced</h3>
   <p>The product keeps the rule without relying on anybody to remember it:</p>

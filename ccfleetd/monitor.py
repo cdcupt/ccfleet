@@ -66,12 +66,18 @@ class Monitor:
         every_slot = self._store.list_slots()
         places = rules.account_places(self._store.list_nodes(), self._store.latest_heartbeats(),
                                       every_slot, now, self._cfg)
+        # Its silence counts from when the serving loop began listening, since
+        # no report could arrive before (see status.machine_state), unless its
+        # alarm is up already: that holds until the node reports, rather than
+        # saying it resolved after every restart.
+        silent = any(a["rule"] == "no_heartbeat" for a in self._store.open_alerts(node["id"]))
+        listening = None if silent else self._store.listening_since()
         # A machine's own slots: an owner slot is a record, with nothing on the
         # machine's side to judge.
         findings = rules.evaluate(node, latest, previous, now, self._cfg,
                                   self._store.list_slots(node_id=node["id"],
                                                          kind=slotstates.MACHINE_SLOT), places,
-                                  rules.place_names(every_slot))
+                                  rules.place_names(every_slot), listening)
         return self._reconcile(node, findings, now)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:

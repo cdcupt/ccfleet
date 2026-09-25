@@ -169,3 +169,28 @@ def test_an_owner_slot_is_never_judged_as_a_machines_slot(store, cfg):
         payload.pop(key)
     events = monitor.record_heartbeat(store.get_node("erik-1"), payload, NOW)
     assert not [e for e in events if str(e["alert"]["rule"]).startswith("slot_")]
+
+
+# -- the server's own silence is not the node's (see status.machine_state) ---------------------
+
+def test_a_restart_raises_no_alarm_about_silence_that_was_the_servers(store, cfg):
+    store.add_node("node-a", "erik", now=NOW - 86400)
+    store.insert_heartbeat("node-a", NOW - 3600, heartbeat(NOW - 3600)["payload"])
+    store.set_listening_since(NOW - 30)
+    monitor, notifier, _ = make_monitor(store, cfg)
+    assert monitor.check_all() == [] and notifier.messages == []
+
+
+def test_an_alarm_raised_before_a_restart_holds_until_the_node_reports(store, cfg):
+    """Counting its silence from the restart would say it resolved, then
+    raise it again a quarter of an hour later."""
+    store.add_node("node-a", "erik", now=NOW - 86400)
+    store.insert_heartbeat("node-a", NOW - 3600, heartbeat(NOW - 3600)["payload"])
+    monitor, notifier, clock = make_monitor(store, cfg)
+    assert [e["event"] for e in monitor.check_all()] == ["opened"]
+    store.set_listening_since(NOW + 1200)            # the server was down, and is back
+    clock["now"] = NOW + 1230
+    assert monitor.check_all() == [] and len(notifier.messages) == 1
+    store.insert_heartbeat("node-a", NOW + 1240, heartbeat(NOW + 1240)["payload"])
+    clock["now"] = NOW + 1250
+    assert [e["event"] for e in monitor.check_all()] == ["closed"]
