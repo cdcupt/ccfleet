@@ -172,12 +172,14 @@ class Monitor:
         now = self._clock() if now is None else now
         grace = status.grace_minutes(self._cfg.check_interval_s)
         with self._lock:
-            # The site's last minute before this one: a long gap since is the
-            # site's own outage, told now that it is over.
-            last = self._store.status_last_minute(status.SITE)
+            # A long gap since the site's last counted minute is the site's own
+            # outage, told now that it is over. Before this minute is counted,
+            # which closes the gap: a crash between the two then tells it at
+            # the next minute (once: see Store.owe_past_outage), not never.
+            outage.site_back(self._store, self._store.status_last_minute(status.SITE), now,
+                             grace)
             machines = status.record(self._store, now, self._cfg.check_interval_s)
             outage.machine_outages(self._store, machines, now)
-            outage.site_back(self._store, last, now, grace)
             owed = outage.owed(self._store, self._cfg.public_url)
         # Sent outside the lock: a slow send must not hold up a heartbeat. An
         # email is marked sent only once Resend has it; one that fails is tried

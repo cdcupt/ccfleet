@@ -251,16 +251,15 @@ CREATE TABLE IF NOT EXISTS status_minutes (
     PRIMARY KEY (component, day)
 );
 CREATE INDEX IF NOT EXISTS ix_status_minutes_day ON status_minutes(day);
--- One machine's time down (see ccfleetd/outage.py): when it began, when the
--- emails that it was down went, when it ended and when those that it was back
--- went. Kept so each outage is told once.
+-- One machine's time down, or the site's (see ccfleetd/outage.py): when it
+-- began, when the emails that it was down were owed, and when it ended. Kept
+-- so each outage is told once.
 CREATE TABLE IF NOT EXISTS outages (
     id INTEGER PRIMARY KEY,
     component TEXT NOT NULL,
     started_at REAL NOT NULL,
     down_sent_at REAL,
-    ended_at REAL,
-    back_sent_at REAL
+    ended_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_outages_open ON outages(component, ended_at);
 -- Each email an outage owes, one per person and kind: queued when it falls
@@ -281,9 +280,6 @@ CREATE TABLE IF NOT EXISTS outage_emails (
 #: Slots whose holders hear of their machine's outage: set up or being set up,
 #: never one given back.
 OUTAGE_TOLD_STATES = (slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)
-
-#: The moments of an outage that may be set, which are its table's columns.
-OUTAGE_MOMENTS = ("down_sent_at", "ended_at", "back_sent_at")
 
 #: The states a status minute is counted as, which are its table's columns.
 STATUS_COLUMNS = ("green", "yellow", "red")
@@ -1191,12 +1187,53 @@ class Store:
                                (cur.lastrowid,)).fetchone()
         return dict(row)
 
-    def mark_outage(self, outage_id: int, column: str, at: float) -> None:
-        """Set one of an outage's moments: when its emails went, or it ended."""
-        if column not in OUTAGE_MOMENTS:
-            raise ValueError(f"not an outage moment: {column!r}")
+    # Each change to an outage below is one transaction with the emails it
+    # owes: a change committed without them would lose them for good, since
+    # nothing looks at that moment of the outage again.
+
+    def owe_outage_start(self, outage_id: int, kind: str,
+                         recipients: list[Mapping[str, Any]], now: float) -> None:
+        """Owe each of them one email that this outage began, and note it told."""
         with self._write_txn() as conn:
-            conn.execute(f"UPDATE outages SET {column} = ? WHERE id = ?", (at, outage_id))
+            conn.executemany(
+                "INSERT OR IGNORE INTO outage_emails (outage_id, kind, account_id, email, "
+                "slot_name) VALUES (?, ?, ?, ?, ?)",
+                [(outage_id, kind, r["account_id"], r["email"], r.get("slot_name") or "")
+                 for r in recipients])
+            conn.execute("UPDATE outages SET down_sent_at = ? WHERE id = ?", (now, outage_id))
+
+    def end_outage(self, outage_id: int, now: float, *, told: Optional[str] = None) -> None:
+        """End an outage. Given `told`, the kind of email that says so, owe
+        one to each who heard it begin and still wants outage emails: nobody
+        hears of an end without its start."""
+        with self._write_txn() as conn:
+            conn.execute("UPDATE outages SET ended_at = ? WHERE id = ?", (now, outage_id))
+            if told is None:
+                return
+            conn.execute(
+                "INSERT OR IGNORE INTO outage_emails (outage_id, kind, account_id, email, "
+                "slot_name) SELECT e.outage_id, ?, e.account_id, a.email, e.slot_name "
+                "FROM outage_emails e JOIN accounts a ON a.id = e.account_id "
+                "WHERE e.outage_id = ? AND e.kind = 'down' AND e.sent_at IS NOT NULL "
+                "AND a.outage_emails = 1", (told, outage_id))
+
+    def owe_past_outage(self, component: str, started_at: float, ended_at: float,
+                        kind: str) -> None:
+        """An outage learned of only once over (the site's own), owed to
+        everybody who asked for outage emails. Once per start, however often
+        it is learned of: a crash before the minute that ended it was counted
+        brings it up again at the next."""
+        with self._write_txn() as conn:
+            if conn.execute("SELECT 1 FROM outages WHERE component = ? AND started_at = ?",
+                            (component, started_at)).fetchone():
+                return
+            cur = conn.execute(
+                "INSERT INTO outages (component, started_at, ended_at) VALUES (?, ?, ?)",
+                (component, started_at, ended_at))
+            conn.execute(
+                "INSERT INTO outage_emails (outage_id, kind, account_id, email) "
+                "SELECT ?, ?, id, email FROM accounts WHERE outage_emails = 1",
+                (cur.lastrowid, kind))
 
     def outage_emails_for(self, node_id: str) -> list[dict[str, Any]]:
         """Whom to tell about a machine: the holder of each slot on it who
@@ -1208,35 +1245,6 @@ class Store:
                 "WHERE s.node_id = ? AND a.outage_emails = 1 AND s.state IN (?, ?, ?) "
                 "ORDER BY s.id",
                 (node_id, *OUTAGE_TOLD_STATES)).fetchall()
-        return [dict(r) for r in rows]
-
-    def outage_subscribers(self) -> list[dict[str, Any]]:
-        """Everybody who asked for outage emails."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT id AS account_id, email FROM accounts WHERE outage_emails = 1 "
-                "ORDER BY email").fetchall()
-        return [dict(r) for r in rows]
-
-    def queue_outage_emails(self, outage_id: int, kind: str,
-                            recipients: list[Mapping[str, Any]]) -> None:
-        """Owe each of them one email of this kind about this outage, once."""
-        with self._write_txn() as conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO outage_emails (outage_id, kind, account_id, email, "
-                "slot_name) VALUES (?, ?, ?, ?, ?)",
-                [(outage_id, kind, r["account_id"], r["email"], r.get("slot_name") or "")
-                 for r in recipients])
-
-    def told_down(self, outage_id: int) -> list[dict[str, Any]]:
-        """Who heard this outage begin, and still wants outage emails: those
-        its end is told to, so nobody hears of an end without its start."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT e.account_id, a.email, e.slot_name FROM outage_emails e "
-                "JOIN accounts a ON a.id = e.account_id "
-                "WHERE e.outage_id = ? AND e.kind = 'down' AND e.sent_at IS NOT NULL "
-                "AND a.outage_emails = 1 ORDER BY a.email", (outage_id,)).fetchall()
         return [dict(r) for r in rows]
 
     def owed_outage_emails(self, max_tries: int) -> list[dict[str, Any]]:

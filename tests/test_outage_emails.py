@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import urllib.error
 
 import pytest
 
-from ccfleetd import mail, outage, slots
+from ccfleetd import mail, outage, slots, status
 from ccfleetd.config import Config
 from ccfleetd.mail import Email
 from ccfleetd.monitor import Monitor
@@ -253,11 +254,11 @@ def test_an_email_owed_just_as_somebody_turned_them_off_is_not_sent(store):
     """The monitor picks recipients, then owes them: somebody can turn emails
     off between the two."""
     fleet(store)
-    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
-    deliver(store, NOW + 300)
-    store.set_outage_emails("a1", False)
-    store.queue_outage_emails(store.open_outage("m1")["id"], outage.SITE, [
-        {"account_id": "a1", "email": "a1@example.com", "slot_name": None}])
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 60)
+    assert store.outage_emails_for("m1")              # a1 asked, and is picked...
+    store.set_outage_emails("a1", False)              # ...then turns them off
+    store.owe_outage_start(store.open_outage("m1")["id"], outage.DOWN, [
+        {"account_id": "a1", "email": "a1@example.com", "slot_name": "x"}], NOW + 300)
     assert due(store) == []
 
 
@@ -421,7 +422,8 @@ def test_turning_emails_on_for_nobody_is_refused(store):
 def test_given_back_slots_and_others_do_not_count_as_recipients(store):
     fleet(store, opted=("a1", "b1", "a3"))
     assert [r["email"] for r in store.outage_emails_for("m1")] == ["a1@example.com"]
-    assert [r["email"] for r in store.outage_subscribers()] == [
+    outage.site_back(store, int(NOW // 60) - 1, NOW + 10 * 60, 2)
+    assert [to for _, to in due(store)] == [
         "a1@example.com", "a3@example.com", "b1@example.com"]
     assert slots.RELEASING not in (s["state"] for s in store.list_slots(node_id="m1"))
 
@@ -443,13 +445,6 @@ def test_a_rename_drops_what_a_removed_machine_left_under_the_new_name(store):
     store.begin_outage("m7", NOW)                  # left by a machine long gone
     store.rename_node("m1", "m7")
     assert store.open_outage("m7") is None
-
-
-def test_only_an_outages_own_moments_can_be_set(store):
-    outage_id = store.begin_outage("m1", NOW)["id"]
-    for column in ("started_at", "component", "down_sent_at = 0, started_at"):
-        with pytest.raises(ValueError):
-            store.mark_outage(outage_id, column, NOW)
 
 
 def test_the_minute_loop_tells_of_the_sites_own_silence_once_back(store):
@@ -488,8 +483,8 @@ def test_owing_the_same_email_twice_owes_it_once(store):
     outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
     deliver(store, NOW + 300)
     row = store.open_outage("m1")
-    store.queue_outage_emails(row["id"], outage.DOWN, [
-        {"account_id": "a1", "email": "a1@example.com", "slot_name": "x"}])
+    store.owe_outage_start(row["id"], outage.DOWN, [
+        {"account_id": "a1", "email": "a1@example.com", "slot_name": "x"}], NOW + 360)
     assert due(store) == []
 
 
@@ -509,3 +504,99 @@ def test_the_key_goes_to_resend_and_none_without_one():
     sender.send(an_email())
     assert seen[0][0].get_header("Idempotency-key") == "k-1"
     assert seen[1][0].get_header("Idempotency-key") is None
+
+
+# -- a change to an outage and the emails it owes are one (Codex, round 3) --
+
+def crash_on(store, when):
+    """Make the store fail mid-transaction, the way a crash would: `when` is
+    the statement a trigger refuses, e.g. "INSERT ON outage_emails"."""
+    store._conn.execute(f"CREATE TEMP TRIGGER crash BEFORE {when} "
+                        "BEGIN SELECT RAISE(ABORT, 'crash'); END")
+
+
+def uncrash(store):
+    store._conn.execute("DROP TRIGGER crash")
+
+
+def outage_count(store):
+    return store._conn.execute("SELECT COUNT(*) FROM outages").fetchone()[0]
+
+
+def test_an_outage_that_cannot_owe_its_start_is_not_told_begun(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 60)
+    crash_on(store, "UPDATE ON outages")
+    with pytest.raises(sqlite3.Error):
+        outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    uncrash(store)
+    assert due(store) == [] and store.open_outage("m1")["down_sent_at"] is None
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 360)
+    assert due(store) == [("down", "a1@example.com")]
+
+
+def test_an_outage_that_cannot_owe_its_end_does_not_end(store):
+    """Ended first and owed after, a crash between lost the news for good:
+    nothing looks at an ended outage again."""
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    crash_on(store, "INSERT ON outage_emails")
+    with pytest.raises(sqlite3.Error):
+        outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 900)
+    uncrash(store)
+    assert store.open_outage("m1") is not None
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 960)
+    assert due(store) == [("back", "a1@example.com")]
+
+
+def test_the_sites_outage_that_cannot_owe_its_news_is_not_recorded(store):
+    fleet(store)
+    crash_on(store, "INSERT ON outage_emails")
+    with pytest.raises(sqlite3.Error):
+        outage.site_back(store, int(NOW // 60) - 1, NOW + 10 * 60, 2)
+    uncrash(store)
+    assert outage_count(store) == 0
+    outage.site_back(store, int(NOW // 60) - 1, NOW + 11 * 60, 2)
+    assert due(store) == [("site", "a1@example.com")]
+
+
+def test_the_sites_outage_learned_of_twice_is_told_once(store):
+    fleet(store)
+    outage.site_back(store, int(NOW // 60) - 1, NOW + 10 * 60, 2)
+    outage.site_back(store, int(NOW // 60) - 1, NOW + 11 * 60, 2)
+    assert due(store) == [("site", "a1@example.com")] and outage_count(store) == 1
+
+
+def crash(*_args, **_kwargs):
+    raise RuntimeError("crash")
+
+
+def test_a_crash_before_the_sites_news_is_owed_tells_it_at_the_next_minute(
+        store, monkeypatch):
+    """The minute is counted only after: counted first, it would close the gap
+    the news is read from, and a crash between would leave nothing to tell."""
+    fleet(store)
+    monitor = Monitor(store, Config(public_url=URL), LogNotifier(), mailer=Outbox())
+    monitor.record_status(NOW)
+    real = outage.site_back
+    monkeypatch.setattr(outage, "site_back", crash)
+    with pytest.raises(RuntimeError):
+        monitor.record_status(NOW + 10 * 60)
+    monkeypatch.setattr(outage, "site_back", real)
+    monitor.record_status(NOW + 11 * 60)
+    assert [e.to for e in monitor._mailer.sent] == ["a1@example.com"]
+
+
+def test_a_crash_after_the_sites_news_is_owed_does_not_tell_it_twice(store, monkeypatch):
+    fleet(store)
+    monitor = Monitor(store, Config(public_url=URL), LogNotifier(), mailer=Outbox())
+    monitor.record_status(NOW)
+    real = status.record
+    monkeypatch.setattr(status, "record", crash)
+    with pytest.raises(RuntimeError):
+        monitor.record_status(NOW + 10 * 60)
+    monkeypatch.setattr(status, "record", real)
+    monitor.record_status(NOW + 11 * 60)
+    monitor.record_status(NOW + 12 * 60)
+    assert [e.to for e in monitor._mailer.sent] == ["a1@example.com"]
