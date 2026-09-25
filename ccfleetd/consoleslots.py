@@ -728,6 +728,10 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
         except slotstates.TransitionError as exc:     # a stale form: already on its way out
             raise StoreError(str(exc)) from exc
         return "slots"
+    if kind == "slot" and action == "quota":
+        # The operator's Refresh on the usage card: any holder's slot in use.
+        store.request_quota_read(target, now)
+        return "usage"
     if kind == "slot" and action == "remove":
         store.remove_slot(target)       # refuses anything but a free slot: nothing to lose
         return "slots"

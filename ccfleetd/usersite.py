@@ -42,6 +42,7 @@ from .render import (
     _usage_span,
     console_href,
     product_href,
+    quota_reading,
     user_menu,
 )
 from .store import (
@@ -81,6 +82,7 @@ NOTES = {
     "name-bad": ("warn", "A name is 2 to 30 letters, digits and inner hyphens, and not "
                          "pool- or slot- followed by a number."),
     "name-taken": ("warn", "That name is taken. Pick another."),
+    "reading": ("ok", "Reading your usage now. It shows here within a minute or two."),
 }
 
 # The pill says the state the way every page says a state: green running,
@@ -103,7 +105,7 @@ ACCOUNT_WIDE = ("These count everything this Claude account does: claude.ai, the
                 "app, and Claude Code on any computer, device tokens included.")
 
 SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "token", "token-show",
-                "token-done", "update", "stable", "rename")
+                "token-done", "update", "stable", "rename", "quota")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
@@ -259,6 +261,11 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
             except NameTaken:
                 return _back("name-taken", anchor)
             return _back("renamed", anchor)
+        if action == "quota":
+            # Once a minute at most, and only a slot in use: the store checks
+            # both, and the holder, in one transaction.
+            store.request_quota_read(slot_id, now, held_by=holder)
+            return _back("reading", anchor)
         if action == "switch":
             # The store holds it to a slot in use and to once a week, in the
             # same transaction as the holder check.
@@ -377,6 +384,8 @@ align-items:start;margin:4px 0 14px;padding:16px 18px;border-radius:12px;
 background:var(--inset);border:1px solid var(--rule-soft)}
 .usage.one{grid-template-columns:minmax(0,1fr)}
 .usage .usage-nums{margin:0 0 10px}
+.refresh{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px}
+.refresh form{margin:0}
 .usage-trend p{margin:0 0 8px}
 .usage-trend svg.spark{height:52px}
 .slot-body .row-line{padding:14px 0}
@@ -532,7 +541,11 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         "never shows your files or conversations, and nothing here holds your Claude "
         "credential: it is written on the machine when you sign in, and nowhere else.</p>")
     updating = any(u.get("state") == "pending" for u in updates.values())
-    return _shell("your slots", body, _refresh(held, logins, updating),
+    # A usage read under way: come back soon, so the new numbers show.
+    reading = any(quota_reading(s.get("quota_wanted_at"),
+                                (_report_for(s, latest.get(s["node_id"])).get("quota") or {})
+                                .get("checked_at"), now) for s in held)
+    return _shell("your slots", body, _refresh(held, logins, updating or reading),
                   viewer=viewer_for(account, session_id, cfg, store))
 
 
@@ -822,7 +835,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         parts.append('<div class="progress" aria-hidden="true"><i></i></div>')
     signed_in = (report.get("credentials") or {}).get("logged_in") is True
     if (signed_in if own else slot["state"] == slotstates.ACTIVE):
-        parts.append(_in_use(report, now))
+        parts.append(_in_use(report, now, "" if own else _quota_refresh(slot, report, csrf,
+                                                                          now)))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
@@ -843,7 +857,7 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     return "".join(parts)
 
 
-def _in_use(report: Mapping[str, Any], now: float) -> str:
+def _in_use(report: Mapping[str, Any], now: float, refresh: str = "") -> str:
     """Signed in: as whom, the plan, a way in, and how much of each window is left.
 
     One Claude account per slot, so this names it: the holder can see which of
@@ -871,8 +885,10 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     read = quota.get("checked_at")
-    bars = (_meter(session.get("used_pct"), "5-hour session", session.get("resets"), read, now)
-            + _meter(week.get("used_pct"), "This week", week.get("resets"), read, now))
+    bars = (_meter(session.get("used_pct"), "5-hour session", session.get("resets"), read, now,
+                   session.get("resets_at"))
+            + _meter(week.get("used_pct"), "This week", week.get("resets"), read, now,
+                     week.get("resets_at")))
     usage = report.get("usage") or {}
     spent = ""
     if usage:
@@ -888,7 +904,10 @@ def _in_use(report: Mapping[str, Any], now: float) -> str:
         # read as the same thing: a week at 26% beside 78k tokens looked wrong
         # when the rest of the week had run on the holder's own laptop.
         bars = ('<div class="usage-nums muted">your Claude account &middot; every device'
-                "</div>" + bars + f'<p class="small muted">{ACCOUNT_WIDE}</p>')
+                "</div>" + bars + f'<p class="small muted">{ACCOUNT_WIDE}</p>' + refresh)
+    elif refresh:
+        # Signed in and not read yet: the first reading can be asked for too.
+        bars = '<p class="small muted">No reading of your limits yet.</p>' + refresh
     # The windows beside the trend: what is left now, and how it got there.
     halves = [f'<div class="usage-{name}">{html}</div>'
               for name, html in (("bars", bars), ("trend", spent)) if html]
@@ -1065,6 +1084,19 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
     return (f'<div class="row-line stacked flow"><div class="row-name">Device token</div>'
             f"{body}</div>")
+
+
+def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
+                   now: float) -> str:
+    """Read the windows again now, rather than at the next five minutes (Erik,
+    2026-09-24), with when they were last read; or say a read is under way."""
+    read = (report.get("quota") or {}).get("checked_at")
+    when = (f"read {escape(_age(now, read))} ago · "
+            if isinstance(read, (int, float)) and not isinstance(read, bool) else "")
+    if quota_reading(slot.get("quota_wanted_at"), read, now):
+        return f'<p class="small muted">{when}reading them again now&hellip;</p>'
+    return (f'<div class="refresh"><span class="small muted">{when}every five minutes</span>'
+            + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh") + "</div>")
 
 
 def _rename(slot: Mapping[str, Any], csrf: str) -> str:

@@ -150,7 +150,7 @@ def row_of(page, name):
 
 
 def card(page, anchor):
-    start = page.index(f'id="{anchor}"' if anchor != "usage" else "<h2>Usage and quota</h2>")
+    start = page.index(f'id="{anchor}"' if anchor != "usage" else "Usage and quota</h2>")
     end = page.find("<h2", start + 1)
     return page[start:end if end > 0 else len(page)]
 
@@ -334,7 +334,7 @@ def test_a_slots_use_is_under_the_slots_name(cfg):
     latest = {"pool-9": {"ts": now - 5, "payload": {"mode": slots.MACHINE_MODE, "slots": [
         {"unix_user": "slot01", "usage": {"total_tokens": 1200, "by_day": []}}]}}}
     page = render_dashboard(build_rows(nodes, latest, [], now, slots=one), [], now, cfg)
-    usage = page[page.index("<h2>Usage and quota</h2>"):]
+    usage = page[page.index("Usage and quota</h2>"):]
     assert 'usage-name">ana-1<div' in usage
     assert "pool-9" not in usage and "erik" not in usage
 

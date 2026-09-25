@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.1 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.2 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -592,11 +592,21 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
   <p><strong>How much is left.</strong> Two bars: the five-hour session window and
   the week. This is the number an owner actually asks for, and it exists in exactly
   one place &mdash; <code>/usage</code>, inside a running Claude Code session. So the
-  agent opens one on a slow schedule, roughly every half hour, in a throwaway tmux
-  session pinned to the owner's home directory, reads the two windows off the screen
-  and sends the percentages and reset times up with the heartbeat. Claude Code
+  agent opens one every five minutes, in a throwaway tmux session in a directory of its
+  own, and sends the percentages and reset times up with the heartbeat. Claude Code
   reporting on itself; there is no usage endpoint behind this. A reading takes about
   nine seconds, and the console says how old the one it is showing is.</p>
+  <p><strong>Claude Code's own saved reading.</strong> Opening <code>/usage</code> makes
+  Claude Code save what it fetched in <code>~/.claude.json</code>
+  (<code>cachedUsageUtilization</code>), with each window's exact reset moment. The agent
+  takes the numbers from there rather than off the screen, which it reads only when that
+  is missing, and a reading the holder made by opening <code>/usage</code> themselves
+  stands in without a probe. The account id stored beside it is compared with the one
+  signed in, so another account's reading is never used, and is never sent.</p>
+  <p><strong>Refresh.</strong> The holder's slot card and the console's usage card have a
+  <em>Refresh</em> button that asks for a read now. The slot tries it once, within a
+  minute or two, and the page says it is reading until the new numbers arrive; pressed
+  twice within a minute, it asks once.</p>
   <p><strong>How much was spent.</strong> A sparkline of daily tokens and the totals
   behind it, counted from the transcripts Claude Code writes on the node. Different
   question, different source: this is what the account <strong>consumed</strong>, and

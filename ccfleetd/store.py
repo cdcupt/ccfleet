@@ -279,6 +279,9 @@ def slot_login_key(slot_id: str) -> str:
     return SLOT_LOGIN_PREFIX + slot_id
 
 
+#: A usage read asked for again within this long asks nothing more.
+QUOTA_ASK_EVERY_S = 60
+
 class StoreError(ValueError):
     """Raised for invalid identifiers or missing rows."""
 
@@ -464,6 +467,10 @@ class Store:
             # (see request_slot_login): NULL for never, which every slot before
             # this is. The slot's own, so it goes when the slot is freed.
             self._add_missing_columns("slots", {"account_switched_at": "REAL"})
+            # When its holder, or the operator, last asked for its usage to be
+            # read again now (see request_quota_read). The slot's own, so it
+            # goes when the slot is freed.
+            self._add_missing_columns("slots", {"quota_wanted_at": "REAL"})
             # A name becomes a hostname: two slots answering to one would be
             # two people's machines under one name in claude.ai. Created here,
             # after the column exists, so an older database gets it too.
@@ -1850,7 +1857,7 @@ class Store:
         cur = conn.execute(
             "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
             "released_at = ?, device_token_at = 0, name = NULL, claude_channel = NULL, "
-            "account_switched_at = NULL WHERE id = ? AND state = ?",
+            "account_switched_at = NULL, quota_wanted_at = NULL WHERE id = ? AND state = ?",
             (slotstates.FREE, now, slot_id, slotstates.RELEASING))
         if cur.rowcount > 0:
             # Nor their update: the next holder starts on the machine's pin.
@@ -1955,6 +1962,23 @@ class Store:
         if not names.valid_hostname(name):  # pragma: no cover - names.py guarantees it
             raise StoreError(f"{name!r} is not a hostname")
         return name
+
+    def request_quota_read(self, slot_id: str, now: float, *,
+                           held_by: Optional[str] = None) -> bool:
+        """Ask a machine's slot in use to read its usage windows again now,
+        rather than at its next five minutes (Erik, 2026-09-24). Returns
+        False, asking nothing, while a request under QUOTA_ASK_EVERY_S old is
+        still out: a button pressed twice asks once."""
+        with self._write_txn() as conn:
+            row = self._held(conn, slot_id, held_by)
+            if row["kind"] != slotstates.MACHINE_SLOT or row["state"] != slotstates.ACTIVE:
+                raise StoreError(f"{slot_id} can read its usage once it is in use")
+            asked = conn.execute("SELECT quota_wanted_at FROM slots WHERE id = ?",
+                                 (slot_id,)).fetchone()[0]
+            if asked is not None and now - asked < QUOTA_ASK_EVERY_S:
+                return False
+            conn.execute("UPDATE slots SET quota_wanted_at = ? WHERE id = ?", (now, slot_id))
+        return True
 
     def name_slot(self, slot_id: str, name: Optional[str], *,
                   held_by: Optional[str] = None) -> str:
