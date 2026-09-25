@@ -527,9 +527,11 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     flagged = {s["id"]: _flags(s, store.open_alerts(s["node_id"])) for s in held}
     # Each slot's machine, in the words of the status page: a shared machine
     # reports every minute, somebody's own node every five.
+    listening = status.listening_for(store)
     lines = {s["id"]: status.slot_line(status.machine_state(
         latest.get(s["node_id"]), store.open_alerts(s["node_id"]),
-        s.get("kind") != slotstates.OWNER_SLOT, now), now) for s in held}
+        s.get("kind") != slotstates.OWNER_SLOT, now, listening(s["node_id"])), now)
+        for s in held}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
                                updates[s["id"]], channels, machine_line=lines[s["id"]])

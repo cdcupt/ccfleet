@@ -307,6 +307,7 @@ def test_a_check_run_by_hand_counts_nothing(store, cfg):
     fleet(store, now=time.time())
     Monitor(store, cfg, LogNotifier()).check_all()
     assert store.status_minutes(since_day="2000-01-01") == []
+    assert store.listening_since() is None, "and it is not listening for reports either"
 
 
 def test_the_grace_follows_the_configured_check_interval(store):
@@ -393,3 +394,38 @@ def test_the_front_page_says_trouble_and_names_nobody(split):  # noqa: F811
 def test_a_front_page_with_no_machine_yet_says_only_status(split):  # noqa: F811
     _, browser, _ = split
     assert shown(pill_on(browser(PRODUCT).call("GET", "/").body)).strip() == "Status"
+
+
+# -- the server's own silence is not the machines' ---------------------------------------------
+
+def test_the_serving_loop_says_when_it_began_listening(store, cfg):
+    Monitor(store, cfg, LogNotifier(), clock=lambda: NOW).run_forever(OneRound())
+    assert store.listening_since() == NOW
+
+
+def test_a_restart_after_a_long_outage_finds_every_machine_up(store, cfg):
+    """Ten minutes down, every machine's last report is ten minutes old: none of
+    them is late for it, the server is."""
+    fleet(store, ages=(600, 600, 600))
+    store.set_listening_since(NOW - 5)
+    assert "All systems operational" in shown(page_of(store, cfg))
+
+
+def test_a_machine_down_before_the_restart_is_still_down_after_it(store, cfg):
+    fleet(store, ages=(20, 600, 30))
+    store.begin_outage("pool-7", NOW - 300)
+    store.set_listening_since(NOW - 5)
+    assert "Partial outage" in shown(page_of(store, cfg))
+
+
+def test_a_slot_card_after_a_restart_does_not_blame_the_machine(site):  # noqa: F811
+    site[0].set_listening_since(time.time() - 5)
+    assert "Machine: operational" in claimed_card(site, age=400)
+
+
+def test_listening_since_is_kept_and_a_bad_value_is_none(store):
+    store.set_listening_since(NOW - 3600)
+    store.set_listening_since(NOW)                   # every start says it again
+    assert store.listening_since() == NOW
+    store._conn.execute("UPDATE settings SET value = 'soon' WHERE key = 'listening_since'")
+    assert store.listening_since() is None

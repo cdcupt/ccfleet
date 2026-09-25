@@ -189,6 +189,12 @@ class Monitor:
                                            self._mailer.send(email), now)
 
     def run_forever(self, stop: threading.Event) -> None:
+        # From now on a machine can be heard: silence before this was the
+        # server's, not the machines' (see status.machine_state).
+        try:
+            self._store.set_listening_since(self._clock())
+        except Exception:  # noqa: BLE001 - serve anyway; lateness then counts as before
+            log.exception("could not note when listening began")
         while not stop.is_set():
             try:
                 self.check_all()

@@ -193,9 +193,11 @@ CREATE TABLE IF NOT EXISTS payments (
     voided_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_payments_account ON payments(account_id);
--- Values the operator sets from the console, one row per key. Today that is
--- only "price", the price the public pages show (see ccfleetd/pricing.py): a
--- line people read, never something charged or enforced.
+-- Values kept one row per key: "price", which the operator sets from the
+-- console and the public pages show (see ccfleetd/pricing.py), a line people
+-- read and never something charged or enforced; the release channels' last read
+-- (ccfleetd/claude_versions.py); and since when the serving loop has been
+-- listening for reports (LISTENING_KEY).
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -276,6 +278,11 @@ CREATE TABLE IF NOT EXISTS outage_emails (
     PRIMARY KEY (outage_id, kind, account_id)
 );
 """
+
+#: The settings row saying since when the serving loop has listened for reports
+#: this time. Before then no report could arrive, so a machine's silence counts
+#: from it (see status.machine_state).
+LISTENING_KEY = "listening_since"
 
 #: Slots whose holders hear of their machine's outage: set up or being set up,
 #: never one given back.
@@ -1655,6 +1662,25 @@ class Store:
                 "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
                 (claude_versions.SETTING_KEY, claude_versions.to_json(record), now,
                  "release check"))
+
+    def set_listening_since(self, at: float) -> None:
+        """The serving loop starts listening for reports (see LISTENING_KEY)."""
+        with self._write_txn() as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                (LISTENING_KEY, repr(float(at)), at, "serving loop"))
+
+    def listening_since(self) -> Optional[float]:
+        """When the serving loop last began listening, or None if it never has."""
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM settings WHERE key = ?",
+                                     (LISTENING_KEY,)).fetchone()
+        try:
+            return float(row["value"]) if row is not None else None
+        except ValueError:
+            return None
 
     def get_claude_update(self, slot_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
