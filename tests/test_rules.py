@@ -364,6 +364,19 @@ def test_a_stale_login_already_raised_holds_through_a_restart(cfg):
     assert stale.message == "credentials not refreshed for 1.2 d"
 
 
+
+def test_a_stale_login_is_told_by_its_real_age_not_the_forgiven_one(cfg):
+    """Stale even counting from the restart, a day and more ago: the alert
+    says how old the credentials really are."""
+    for section, said in ((creds(mtime=NOW - 50 * 3600), "credentials not refreshed for 2.1 d"),
+                          (creds(fetched_ms=(NOW - 50 * 3600) * 1000),
+                           "login not exercised for 2.1 d")):
+        [stale] = [f for f in rules.evaluate(NODE, heartbeat(NOW, credentials=section), None,
+                                             NOW, cfg, listening_since=NOW - 30 * 3600)
+                   if f.rule == "token_stale"]
+        assert stale.message == said
+
+
 def quota(checked_at, session=95.0):
     return {"checked_at": checked_at, "session": {"used_pct": session, "resets": "4pm"},
             "week": {"used_pct": 10.0}}
