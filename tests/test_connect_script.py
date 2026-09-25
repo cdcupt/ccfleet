@@ -37,11 +37,11 @@ def fake_claude(tmp_path, output=LOGGED_IN, script=None):
 
 
 def run(home, tmp_path, *args, token_env=None, claude_output=LOGGED_IN,
-        claude_script=None, stdin=None):
+        claude_script=None, stdin=None, shell="/bin/zsh"):
     env = dict(os.environ)
     env.update({
         "HOME": str(home),
-        "SHELL": "/bin/zsh",
+        "SHELL": shell,
         "CCFLEET_TOKEN_FILE": str(home / ".config" / "ccfleet" / "token"),
         "PATH": f"{fake_claude(tmp_path, claude_output, claude_script)}:{env['PATH']}",
     })
@@ -509,15 +509,16 @@ def snapshot(home):
 @pytest.mark.parametrize("args", [["--add", "work"], ["--use", "work"], ["--list"], ["-l"],
                                   ["--no-exec", "--use", "work"], ["--add", "work", "--stdin"]])
 def test_switching_between_accounts_is_refused_and_changes_nothing(home, tmp_path, args):
-    """A computer uses one Claude account. What used to keep several and switch
+    """ccfleet-connect keeps one token. What used to keep several and switch
     between them says so, and says what to do instead, before touching a thing:
     not even the saved tokens it would otherwise retire."""
     legacy_device(home)
     before = snapshot(home)
     result = run(home, tmp_path, *args, stdin=WORK + "\n", claude_script=PER_TOKEN)
     assert result.returncode != 0
-    assert "one Claude account" in result.stderr
-    assert "replaces the one in use" in result.stderr, "and it says what to do instead"
+    assert "keeps one token" in result.stderr
+    assert "ccfleet-connect --off" in result.stderr, "the computer's own login is the way"
+    assert "replaces the one in use" in result.stderr, "and so is another token"
     assert snapshot(home) == before
     assert not leaked(result)
 
@@ -527,7 +528,7 @@ def test_remove_with_a_name_is_refused_and_changes_nothing(home, tmp_path):
     before = snapshot(home)
     result = run(home, tmp_path, "--remove", "work")
     assert result.returncode != 0
-    assert "takes no name" in result.stderr and "one Claude account" in result.stderr
+    assert "takes no name" in result.stderr and "keeps one token" in result.stderr
     assert snapshot(home) == before
     assert not leaked(result)
 
@@ -546,7 +547,7 @@ def test_saved_tokens_are_retired_keeping_the_one_in_use(home, tmp_path):
     # default and work were other accounts; personal was the one in use, and the
     # interrupted write was a copy, not an account.
     assert "removed 2 other saved token(s)" in result.stdout
-    assert "one Claude account" in result.stdout and "Revoke them" in result.stdout
+    assert "keeps one token" in result.stdout and "Revoke them" in result.stdout
     assert not leaked(result)
 
 
@@ -689,12 +690,258 @@ def test_remove_undoes_it_all_saved_tokens_included(home, tmp_path):
 
 
 def test_nothing_makes_a_tokens_directory_any_more(home, tmp_path):
-    for args in ([GOOD_TOKEN], ["--status"], [WORK], ["--remove"], [GOOD_TOKEN]):
+    for args in ([GOOD_TOKEN], ["--status"], ["--off"], ["--on"], [WORK], ["--remove"],
+                 [GOOD_TOKEN]):
         assert run(home, tmp_path, *args, claude_script=PER_TOKEN).returncode == 0, args
         assert not tokens_dir(home).exists(), args
 
 
-def test_help_says_a_computer_uses_one_account(home, tmp_path):
+def test_help_says_how_to_switch_to_the_computers_own_login(home, tmp_path):
+    """One Claude account per slot is ccfleet's rule for its machines, not for
+    the computers of the people who hold them (Erik, 2026-09-24)."""
     out = run(home, tmp_path, "--help").stdout
-    assert "One computer, one Claude account" in out
+    assert "one Claude account per slot" in out
+    assert "ccfleet-connect --off" in out and "ccfleet-connect --on" in out
     assert "--add" not in out and "--use" not in out and "--list" not in out
+
+
+# -- this computer's own login, and back (Erik, 2026-09-24) ---------------------------
+
+# A claude with a login of its own, which it reports when no token is in its
+# environment, and one without.
+OWN = """#!/bin/sh
+case "${CLAUDE_CODE_OAUTH_TOKEN:-}" in
+  "") printf '{"loggedIn": true, "authMethod": "claude.ai"}\\n' ;;
+  *) printf '{"loggedIn": true, "authMethod": "oauth_token"}\\n' ;;
+esac
+"""
+NO_OWN = OWN.replace('{"loggedIn": true, "authMethod": "claude.ai"}', '{"loggedIn": false}')
+
+
+def parked_path(home):
+    return home / ".config" / "ccfleet" / "token.off"
+
+
+def exported_by_rc(home, rc_name=".zshrc"):
+    """What a new shell would find exported: the rc block's line, run by sh with
+    nothing else in its environment."""
+    rc = (home / rc_name).read_text()
+    line = rc.split("# >>> ccfleet connect >>>\n", 1)[1].split("# <<< ccfleet connect <<<", 1)[0]
+    out = subprocess.run(["sh", "-c", line + 'printf %s "${CLAUDE_CODE_OAUTH_TOKEN:-none}"'],
+                         capture_output=True, text=True, timeout=30,
+                         env={"PATH": os.environ["PATH"], "HOME": str(home)})
+    return out.stdout
+
+
+def handed_over(home, tmp_path, *args, token_env=None):
+    """Run it on a terminal, with a stand-in for the user's shell that says
+    whether it started with a token in its environment."""
+    bindir = fake_claude(tmp_path, script=OWN)
+    shell = bindir / "zsh"
+    shell.write_text('#!/bin/sh\nif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then '
+                     'echo SHELL-STARTED with-token; else echo SHELL-STARTED without-token; fi\n')
+    shell.chmod(0o755)
+    env = dict(os.environ)
+    env.update({"HOME": str(home), "SHELL": str(shell),
+                "CCFLEET_TOKEN_FILE": str(token_path(home)), "PATH": f"{bindir}:{env['PATH']}"})
+    env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    if token_env is not None:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token_env
+    import pty
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execve("/bin/bash", ["bash", str(SCRIPT), *args], env)
+    out = b""
+    try:
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            out += chunk
+    except OSError:
+        pass
+    os.waitpid(pid, 0)
+    return out.decode(errors="replace")
+
+
+def test_off_parks_the_token_so_new_shells_use_the_computers_own_login(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    assert exported_by_rc(home) == GOOD_TOKEN
+    result = run(home, tmp_path, "--off", claude_script=OWN)
+    assert result.returncode == 0, result.stderr
+    assert not token_path(home).exists()
+    assert parked_path(home).read_text().strip() == GOOD_TOKEN
+    assert mode(parked_path(home)) == 0o600
+    assert exported_by_rc(home) == "none", "the rc line stays, and finds nothing to export"
+    assert "own login  : signed in (auth method claude.ai)" in result.stdout
+    assert not leaked(result)
+
+
+def test_on_brings_the_parked_token_back(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    result = run(home, tmp_path, "--on")
+    assert result.returncode == 0, result.stderr
+    assert in_use(home) == GOOD_TOKEN and mode(token_path(home)) == 0o600
+    assert not parked_path(home).exists()
+    assert exported_by_rc(home) == GOOD_TOKEN
+    assert not leaked(result)
+
+
+def test_the_own_login_is_asked_about_without_the_token(home, tmp_path):
+    """Asked with the token still in its environment, claude answers about the
+    token, and a computer with no login of its own would look signed in."""
+    run(home, tmp_path, GOOD_TOKEN)
+    result = run(home, tmp_path, "--off", token_env=GOOD_TOKEN, claude_script=NO_OWN)
+    assert "own login  : none yet" in result.stdout
+    assert "claude auth login" in result.stdout
+    assert not leaked(result)
+
+
+def test_off_hands_over_a_shell_without_the_token(home, tmp_path):
+    """The shell it hands over would inherit the token from this one, and go
+    on using it whatever the rc line says."""
+    run(home, tmp_path, GOOD_TOKEN)
+    text = handed_over(home, tmp_path, "--off", token_env=GOOD_TOKEN)
+    assert "SHELL-STARTED without-token" in text
+
+
+def test_on_hands_over_a_fresh_shell(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    assert "SHELL-STARTED" in handed_over(home, tmp_path, "--on")
+
+
+def test_on_leaves_a_refused_token_parked(home, tmp_path):
+    """Revoked or expired while parked: switching on would send every new shell
+    to a credential that is refused, instead of the login that works."""
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    result = run(home, tmp_path, "--on", claude_output='{"loggedIn": false}')
+    assert result.returncode != 0
+    assert "refused" in result.stderr and "stays" in result.stderr
+    assert not token_path(home).exists() and parked_path(home).exists()
+    assert exported_by_rc(home) == "none"
+    assert not leaked(result)
+
+
+def test_on_refused_by_an_unfinished_rc_block_leaves_the_token_parked(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    (home / ".zshrc").write_text("# mine\n# >>> ccfleet connect >>>\nsomething\n")
+    result = run(home, tmp_path, "--on")
+    assert result.returncode != 0 and "unfinished" in result.stderr
+    assert parked_path(home).exists() and not token_path(home).exists()
+
+
+def test_on_writes_the_rc_line_again_when_it_went_missing(home, tmp_path):
+    """Moved to another shell, or tidied the rc: --on is the command that makes
+    the token work, so it puts the line back, parked or not."""
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    (home / ".zshrc").write_text("# the user's own line\n")
+    assert run(home, tmp_path, "--on").returncode == 0
+    assert exported_by_rc(home) == GOOD_TOKEN
+    (home / ".zshrc").write_text("# the user's own line\n")
+    already = run(home, tmp_path, "--on")
+    assert already.returncode == 0 and "already on" in already.stdout
+    assert exported_by_rc(home) == GOOD_TOKEN
+    assert "# the user's own line" in (home / ".zshrc").read_text()
+
+
+def test_switching_to_where_it_already_is_changes_nothing(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    on = run(home, tmp_path, "--on")
+    assert on.returncode == 0 and "already on" in on.stdout and in_use(home) == GOOD_TOKEN
+    run(home, tmp_path, "--off")
+    off = run(home, tmp_path, "--off")
+    assert off.returncode == 0 and "already off" in off.stdout
+    assert parked_path(home).read_text().strip() == GOOD_TOKEN
+
+
+def test_a_stray_parked_copy_does_not_outlive_a_switch(home, tmp_path):
+    """Both files at once, however it came about: the one in use wins and the
+    other copy of a credential is wiped, not left lying about."""
+    run(home, tmp_path, GOOD_TOKEN)
+    private(parked_path(home), WORK + "\n")
+    assert run(home, tmp_path, "--on").returncode == 0
+    assert not parked_path(home).exists() and in_use(home) == GOOD_TOKEN
+    private(parked_path(home), WORK + "\n")
+    assert run(home, tmp_path, "--off").returncode == 0
+    assert parked_path(home).read_text().strip() == GOOD_TOKEN
+
+
+def test_off_and_on_with_no_token_say_how_to_connect(home, tmp_path):
+    for flag in ("--off", "--on"):
+        result = run(home, tmp_path, flag)
+        assert result.returncode != 0 and "not connected" in result.stderr, flag
+    assert "ccfleet connect" not in (home / ".zshrc").read_text()
+
+
+def test_status_says_which_login_is_in_use(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    on = run(home, tmp_path, "--status", claude_script=OWN).stdout
+    assert "in use     : your slot's account" in on and "ccfleet-connect --off" in on
+    run(home, tmp_path, "--off")
+    off = run(home, tmp_path, "--status", claude_script=OWN)
+    assert "in use     : this computer's own Claude login" in off.stdout
+    assert "own login  : signed in" in off.stdout and "ccfleet-connect --on" in off.stdout
+    assert "in shell" not in off.stdout
+    stale = run(home, tmp_path, "--status", token_env=GOOD_TOKEN, claude_script=OWN)
+    assert "in shell   : still a token" in stale.stdout
+    assert "unset CLAUDE_CODE_OAUTH_TOKEN" in stale.stdout
+    assert "own login  : signed in (auth method claude.ai)" in stale.stdout
+    assert not leaked(stale)
+
+
+def test_connecting_while_off_replaces_the_parked_token(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    result = run(home, tmp_path, WORK)
+    assert result.returncode == 0, result.stderr
+    assert in_use(home) == WORK and not parked_path(home).exists()
+    assert "replaces the token" in result.stdout
+    assert not leaked(result)
+
+
+def test_connecting_while_off_with_the_same_token_replaces_nothing(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    result = run(home, tmp_path, GOOD_TOKEN)
+    assert in_use(home) == GOOD_TOKEN and not parked_path(home).exists()
+    assert "replaces" not in result.stdout
+
+
+def test_remove_wipes_a_parked_token_too(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    run(home, tmp_path, "--off")
+    result = run(home, tmp_path, "--remove")
+    assert result.returncode == 0 and "token removed" in result.stdout
+    assert not parked_path(home).exists() and not token_path(home).exists()
+
+
+def test_a_scripted_off_keeps_its_own_shell_and_says_how(home, tmp_path):
+    run(home, tmp_path, GOOD_TOKEN)
+    result = run(home, tmp_path, "--no-exec", "--off")
+    assert result.returncode == 0
+    assert "This shell still has the token." in result.stdout
+    assert "unset CLAUDE_CODE_OAUTH_TOKEN" in result.stdout
+
+
+def test_fish_is_told_its_own_way_to_drop_the_token(home, tmp_path):
+    fish = "/usr/local/bin/fish"
+    assert run(home, tmp_path, GOOD_TOKEN, shell=fish).returncode == 0
+    result = run(home, tmp_path, "--no-exec", "--off", shell=fish)
+    assert "set -e CLAUDE_CODE_OAUTH_TOKEN" in result.stdout
+    assert "unset" not in result.stdout
+
+
+def test_off_and_on_retire_tokens_an_earlier_version_saved(home, tmp_path):
+    legacy_device(home)
+    result = run(home, tmp_path, "--off")
+    assert result.returncode == 0
+    assert not tokens_dir(home).exists()
+    assert parked_path(home).read_text().strip() == PERSONAL, "the one in use is kept"
+    legacy_device(home, in_use_token=None)
+    assert run(home, tmp_path, "--on").returncode == 0
+    assert not tokens_dir(home).exists() and in_use(home) == PERSONAL
