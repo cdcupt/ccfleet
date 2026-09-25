@@ -1034,10 +1034,11 @@ ccfleetd slot list --machine pool-1</code></pre>
   slot's name is ever on the page. Each holder's slot card says how their own machine is,
   with a link to it.</p>
   <p><strong>Outage emails.</strong> A holder who turns them on, on their page, gets an email
-  when their slot's machine has been down for five minutes and another when it is back;
-  an outage shorter than that is never news, and each is told once. The site cannot email
-  about itself while it is down, so its own outage of five minutes or more is told to
-  everybody who asked once it is back. They go through Resend with
+  when their slot's machine has been down for five minutes, and another when it is back if
+  they got the first; an outage shorter than that is never news, and each is told once. A
+  send that fails is tried again a few times, and turning the emails off drops any not yet
+  sent. The site cannot email about itself while it is down, so its own outage of five
+  minutes or more is told to everybody who asked once it is back. They go through Resend with
   <code>CCFLEET_RESEND_API_KEY</code> and <code>CCFLEET_EMAIL_FROM</code>; without both,
   the pages offer none. Only the holder's address and their slot's name go to Resend.</p>
   <ul>
