@@ -538,6 +538,9 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
   <pre><code>ccfleet-connect --off      <span class="c"># this computer's own Claude login</span>
 ccfleet-connect --on       <span class="c"># back to your slot's account</span>
 ccfleet-connect --status   <span class="c"># which one is in use</span></code></pre>
+  <p>A copy installed before <span class="nw">2026-09-25</span> answers <code>--off</code> with <em>unknown option</em>, since the one-line install never overwrites a copy that is already there. Replace it with the current one; the token and the rc line stay as they are:</p>
+  <pre><code>curl -fsSL -o ~/.local/bin/ccfleet-connect \
+  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh</code></pre>
   <p><code>--off</code> parks the token beside where it was, as <code>token.off</code>. The line in your shell&rsquo;s rc file only exports a token that is there, so new shells stop using it at once, and the shell <code>--off</code> hands you starts without it. It also says whether the computer has a login of its own; if not, <code>claude auth login</code> signs it in. <code>--on</code> checks the parked token against Anthropic first: one revoked or expired while parked stays parked, and the computer keeps working on its own login. One is in use at a time, and each is yours to use under Anthropic&rsquo;s terms.</p>
   <p>Connecting again with another token <strong>replaces</strong> the one the computer had, parked or not, and says so. The <code>--add</code>, <code>--use</code> and <code>--list</code> of an earlier version, which kept several tokens under names, are refused. On a computer that saved several that way, the first run keeps the one in use and removes the rest, telling you how many went so you can revoke them in your Claude account.</p>
 </section>

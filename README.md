@@ -126,6 +126,15 @@ ccfleet-connect --status    # which one is in use, and whether it still works
 ccfleet-connect --remove    # undo it
 ```
 
+A copy installed before `--off` and `--on` existed answers them with `unknown
+option`, and the installer never overwrites a copy that is already there.
+Replace it with the current one; the token and the rc line stay as they are:
+
+```bash
+curl -fsSL -o ~/.local/bin/ccfleet-connect \
+  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh
+```
+
 ### 4. Shared machines: one machine, one slot, under the name its holder gives it
 
 A shared machine carries one **slot**: its own Linux user, with its own home,
