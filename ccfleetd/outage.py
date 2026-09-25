@@ -55,12 +55,17 @@ def _recipients(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def machine_outages(store: Any, machines: Mapping[str, State], now: float) -> None:
     """Each machine's outage as it stands now, and the emails it owes, queued."""
+    # News only after five minutes of it seen while the server listened: an
+    # outage that began before the server went down may have ended meanwhile,
+    # its machine's reports reaching nobody.
+    listening = store.listening_since() or 0.0
     for node_id, state in machines.items():
         outage = store.open_outage(node_id)
         if state.level == RED:
             if outage is None:
                 outage = store.begin_outage(node_id, state.since if state.since else now)
-            if outage["down_sent_at"] is None and now - outage["started_at"] >= DOWN_AFTER_S:
+            if (outage["down_sent_at"] is None
+                    and now - max(outage["started_at"], listening) >= DOWN_AFTER_S):
                 store.owe_outage_start(outage["id"], DOWN,
                                        _recipients(store.outage_emails_for(node_id)), now)
         elif outage is not None:

@@ -18,7 +18,7 @@ minutes it was not running, and are counted as down when it comes back.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
@@ -126,18 +126,25 @@ def _worst(reasons: Sequence[State]) -> State:
 
 
 def machine_state(latest: Optional[Mapping[str, Any]], alerts: Sequence[Mapping[str, Any]],
-                  shared: bool, now: float) -> State:
-    """One machine now: from its last report, and its alerts about itself."""
+                  shared: bool, now: float, listening_since: Optional[float] = None) -> State:
+    """One machine now: from its last report, and its alerts about itself.
+
+    A report sent while the server was down reached nobody, so given when the
+    server began listening again (listening_for), the machine's silence counts
+    from then."""
     heard = (latest or {}).get("ts")
     if heard is None:
         return State(RED)
+    heard = float(heard)
+    if listening_since is not None:
+        heard = max(heard, listening_since)
     late, down = thresholds(shared)
-    age = now - float(heard)
+    age = now - heard
     reasons: list[State] = []
     if age >= down:
-        reasons.append(State(RED, float(heard) + down))
+        reasons.append(State(RED, heard + down))
     elif age >= late:
-        reasons.append(State(YELLOW, float(heard) + late))
+        reasons.append(State(YELLOW, heard + late))
     for alert in alerts:
         level = rule_state(str(alert.get("rule", "")), str(alert.get("level", "")))
         if level is not None:
@@ -171,14 +178,26 @@ def group_state(states: Sequence[State]) -> State:
     return State(level, min(times) if times else None)
 
 
+def listening_for(store: Any) -> Callable[[str], Optional[float]]:
+    """Since when each machine's silence counts (see machine_state): from when
+    the server began listening this time, but not for a machine whose outage
+    was open already. That one stays down until it reports, rather than looking
+    fine for a few minutes after every restart, which would tell its holders it
+    was back."""
+    since = store.listening_since()
+    already = {outage["component"] for outage in store.open_outages()}
+    return lambda node_id: None if node_id in already else since
+
+
 def snapshot(store: Any, now: float) -> dict[str, State]:
     """Every machine that counts, by node id, as it is now."""
     latest = store.latest_heartbeats()
+    listening = listening_for(store)
     by_node: dict[str, list[Mapping[str, Any]]] = {}
     for alert in store.open_alerts():
         by_node.setdefault(alert["node_id"], []).append(alert)
     return {node["id"]: machine_state(latest.get(node["id"]), by_node.get(node["id"], ()),
-                                      shared, now)
+                                      shared, now, listening(node["id"]))
             for node, shared in components(store.list_nodes(), store.list_slots(), latest)}
 
 

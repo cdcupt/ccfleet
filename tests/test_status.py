@@ -88,6 +88,20 @@ def test_late_and_down_say_when_they_began():
     assert status.machine_state(beat(1000), (), True, NOW).since == NOW - 1000 + 300
 
 
+def test_silence_while_the_server_was_down_is_not_the_machines():
+    """A report sent while the server was down reached nobody: a machine's
+    silence counts from when the server began listening again."""
+    back = NOW - 60                                  # the server came back a minute ago
+    assert status.machine_state(beat(900), (), True, NOW, back).level == status.GREEN
+    assert status.machine_state(beat(900), (), True, back + 180, back).level == status.YELLOW
+    assert status.machine_state(beat(900), (), True, back + 300, back) == status.State(
+        status.RED, back + 300)
+
+
+def test_a_report_since_the_server_came_back_is_judged_as_ever():
+    assert status.machine_state(beat(400), (), True, NOW, NOW - 600).level == status.RED
+
+
 def test_a_machine_never_heard_from_is_down_since_nobody_knows_when():
     state = status.machine_state(None, (), True, NOW)
     assert state == status.State(status.RED, None)

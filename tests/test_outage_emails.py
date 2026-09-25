@@ -610,3 +610,51 @@ def test_a_crash_after_the_sites_news_is_owed_does_not_tell_it_twice(store, monk
     monitor.record_status(NOW + 11 * 60)
     monitor.record_status(NOW + 12 * 60)
     assert [e.to for e in monitor._mailer.sent] == ["a1@example.com"]
+
+
+# -- the server's own silence is not the machines' ---------------------------------------------
+
+def reported(store, node, at):
+    store.insert_heartbeat(node, at, {"node_id": node, "mode": "machine", "slots": []})
+
+
+def test_a_restart_after_a_long_outage_tells_nobody_their_slot_is_down(store):
+    """Every machine's last report is as old as the server's own outage: the
+    first minute back must not read that as every machine down."""
+    fleet(store)
+    for node in ("m1", "m2"):
+        reported(store, node, NOW - 600)
+    store.set_listening_since(NOW)
+    monitor = Monitor(store, Config(public_url=URL), LogNotifier(), mailer=Outbox())
+    monitor.record_status(NOW + 30)
+    assert store.open_outages() == [] and monitor._mailer.sent == []
+
+
+def test_an_outage_open_before_a_restart_is_over_only_when_its_machine_reports(store):
+    """Counting its silence from the restart would make it look fine, so back,
+    for a few minutes, and then down again."""
+    fleet(store)
+    reported(store, "m1", NOW - 60)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)                        # a1 heard it was down
+    reported(store, "m2", NOW + 900)
+    store.set_listening_since(NOW + 900)             # the server was down, and is back
+    monitor = Monitor(store, Config(public_url=URL), LogNotifier(), mailer=Outbox())
+    monitor.record_status(NOW + 930)
+    assert store.open_outage("m1") is not None and monitor._mailer.sent == []
+    reported(store, "m1", NOW + 950)
+    monitor.record_status(NOW + 960)
+    assert [(e.to, "is back" in e.subject) for e in monitor._mailer.sent] == [
+        ("a1@example.com", True)]
+
+
+def test_an_outage_is_news_after_five_minutes_seen_while_listening(store):
+    """Down before the server went down, it may have come back meanwhile, its
+    reports reaching nobody: the email waits for five minutes of listening."""
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 60)
+    store.set_listening_since(NOW + 600)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 610)
+    assert due(store) == []
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 900)
+    assert due(store) == [("down", "a1@example.com")]
