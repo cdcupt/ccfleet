@@ -10,6 +10,8 @@ import re
 import threading
 import time
 
+import pytest
+
 from ccfleetd import render, status, statuspage, usersite
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -328,3 +330,66 @@ def test_status_is_recorded_under_the_monitor_lock(store, cfg):
     monitor._lock.release()
     worker.join(timeout=5)
     assert not worker.is_alive()
+
+
+# -- the front page's pill (Erik, 2026-09-25) ---------------------------------------------------
+
+def pill_on(page):
+    """The front page's status pill: the link that says the banner's words."""
+    found = re.search(r'<a class="pill st-pill[^"]*" href="/status"[^>]*>[^<]*</a>', page)
+    assert found, "no status pill"
+    return found.group(0)
+
+
+@pytest.mark.parametrize("ages, alert, level, cls", [
+    ((20, 30, 40), None, status.GREEN, "ok"),
+    ((20, 30, 400), None, status.YELLOW, "warn"),
+    ((20, 30, 40), ("disk_high", LEVEL_WARN), status.YELLOW, "warn"),
+    ((2000, 2000, 2000), None, status.RED, "critical"),
+])
+def test_the_pill_says_what_the_banner_says_in_its_colour(store, cfg, ages, alert, level, cls):
+    fleet(store, ages=ages)
+    if alert:
+        store.open_alert("pool-8", alert[0], alert[1], "x", NOW - 120)
+    banner = statuspage.BANNERS[level]
+    assert f"<strong>{banner}</strong>" in page_of(store, cfg)
+    assert statuspage.health(store, NOW) == level
+    pill = statuspage.pill(level)
+    assert shown(pill).strip() == banner and f'class="pill st-pill {cls}"' in pill
+    assert f'aria-label="Status: {banner}"' in pill
+
+
+def test_with_no_machine_counted_the_pill_is_a_plain_link_never_a_green(store):
+    """The status page says all is well with nothing to count. The front page
+    saying it too would vouch for machines nobody has measured."""
+    assert statuspage.health(store, NOW) is None
+    pill = statuspage.pill(None)
+    assert shown(pill).strip() == "Status" and pill.startswith('<a class="pill st-pill"')
+    assert "ok" not in pill and "operational" not in pill
+
+
+def test_the_front_page_says_it_at_its_top_and_no_other_page_does(split):  # noqa: F811
+    store, browser, _ = split
+    fleet(store, now=time.time())
+    for path in ("/", "/docs"):
+        page = browser(PRODUCT).call("GET", path).body
+        main = page[page.index("<main"):]
+        assert main.index('class="pill st-pill') < main.index("<h1>"), path
+        assert shown(pill_on(page)).strip() == "All systems operational", path
+        assert page.count("<script") == 1, "no script of its own"
+        assert ".st-pill{" in page and ".pill.ok{" in page, "styled, from the theme's tokens"
+    assert 'class="pill st-pill' not in browser(PRODUCT).call("GET", "/docs/guide").body
+
+
+def test_the_front_page_says_trouble_and_names_nobody(split):  # noqa: F811
+    store, browser, _ = split
+    fleet(store, now=time.time(), ages=(20, 30, 400))
+    page = browser(PRODUCT).call("GET", "/").body
+    assert shown(pill_on(page)).strip() == "Partial outage"
+    for name in NAMES:
+        assert name not in page, name
+
+
+def test_a_front_page_with_no_machine_yet_says_only_status(split):  # noqa: F811
+    _, browser, _ = split
+    assert shown(pill_on(browser(PRODUCT).call("GET", "/").body)).strip() == "Status"
