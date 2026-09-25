@@ -13,6 +13,7 @@ from . import __version__, claude_versions, payments, pricing
 from . import slots as slotstates
 from .api import Context, serve
 from .config import Config, ConfigError
+from .mail import build_mailer
 from .monitor import Monitor
 from .notify import build_notifier
 from .passwords import generate_password, hash_password
@@ -503,7 +504,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # Only the running server reads Anthropic's release channels; a
             # one-off `check` never reaches out to the network.
             fetcher = claude_versions.default_fetcher if args.command == "serve" else None
-            monitor = Monitor(store, cfg, build_notifier(cfg), channel_fetcher=fetcher)
+            # Outage emails go from the serving loop alone, like everything else
+            # that reaches out.
+            mailer = build_mailer(cfg) if args.command == "serve" else None
+            monitor = Monitor(store, cfg, build_notifier(cfg), channel_fetcher=fetcher,
+                              mailer=mailer)
             if args.command == "check":
                 for event in monitor.check_all():
                     alert = event["alert"]

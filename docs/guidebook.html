@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.2 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.3 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -748,6 +748,7 @@ claude
       <tr><td><code>CCFLEET_DB</code></td><td><code>data/ccfleet.db</code></td><td>SQLite file</td></tr>
       <tr><td><code>CCFLEET_PUBLIC_URL</code></td><td>empty</td><td>Link appended to alerts</td></tr>
       <tr><td><code>CCFLEET_TELEGRAM_BOT_TOKEN</code>, <code>CCFLEET_TELEGRAM_CHAT_ID</code></td><td>empty</td><td>Telegram delivery; alerts are always logged</td></tr>
+      <tr><td><code>CCFLEET_RESEND_API_KEY</code>, <code>CCFLEET_EMAIL_FROM</code></td><td>empty</td><td>Outage emails to holders who ask for them: a Resend send-only key and the sender, e.g. <code>ccfleet &lt;ccfleet@your-domain&gt;</code>; both empty, none are sent or offered</td></tr>
       <tr><td><code>CCFLEET_HEARTBEAT_MAX_AGE_S</code></td><td>900</td><td>Silence before <code>no_heartbeat</code></td></tr>
       <tr><td><code>CCFLEET_TOKEN_STALE_S</code></td><td>86400</td><td>Age of the credentials file before <code>token_stale</code></td></tr>
       <tr><td><code>CCFLEET_TOKEN_EXPIRED_GRACE_S</code></td><td>3600</td><td>Grace after token expiry before <code>token_expired</code></td></tr>
@@ -1032,6 +1033,13 @@ ccfleetd slot list --machine pool-1</code></pre>
   counted and never listed: a held slot's name is its holder's, so no machine's id or
   slot's name is ever on the page. Each holder's slot card says how their own machine is,
   with a link to it.</p>
+  <p><strong>Outage emails.</strong> A holder who turns them on, on their page, gets an email
+  when their slot's machine has been down for five minutes and another when it is back;
+  an outage shorter than that is never news, and each is told once. The site cannot email
+  about itself while it is down, so its own outage of five minutes or more is told to
+  everybody who asked once it is back. They go through Resend with
+  <code>CCFLEET_RESEND_API_KEY</code> and <code>CCFLEET_EMAIL_FROM</code>; without both,
+  the pages offer none. Only the holder's address and their slot's name go to Resend.</p>
   <ul>
     <li><strong>A machine that counts</strong> is switched on, carries a slot (a shared
     machine's, or somebody's own node counted as theirs) and has reported at least once.</li>

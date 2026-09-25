@@ -83,13 +83,19 @@ class Browser:
 
 @pytest.fixture
 def site(monkeypatch):
+    yield from serving(monkeypatch)
+
+
+def serving(monkeypatch, **settings):
+    """The user site on a live server, and a way to sign in to it; `settings`
+    are more of its configuration, for the tests of a feature it turns on."""
     who = {"sub": "google-erik", "email": "erik@example.com"}
     monkeypatch.setattr(oauth, "exchange_code", lambda **kw: "access-token")
     monkeypatch.setattr(oauth, "fetch_identity", lambda token, **kw: dict(who))
     cfg = Config(bind_host="127.0.0.1", bind_port=0, db_path=":memory:",
                  admin_token="admin-token", public_url="http://127.0.0.1",
                  google_client_id="cid", google_client_secret="secret",
-                 cookie_secret=SECRET, cookie_secure=False)
+                 cookie_secret=SECRET, cookie_secure=False, **settings)
     store = Store(":memory:", max_slots_per_machine=8)
     srv = build_server(Context(store, cfg, Monitor(store, cfg, LogNotifier())),
                        host="127.0.0.1", port=0)

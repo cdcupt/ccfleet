@@ -83,6 +83,9 @@ NOTES = {
                          "pool- or slot- followed by a number."),
     "name-taken": ("warn", "That name is taken. Pick another."),
     "reading": ("ok", "Reading your usage now. It shows here within a minute or two."),
+    "emails-on": ("ok", "Outage emails on: we email you when your slot's machine has been "
+                        "down for five minutes, and again when it is back."),
+    "emails-off": ("ok", "Outage emails off."),
 }
 
 # The pill says the state the way every page says a state: green running,
@@ -201,6 +204,10 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
     parts = path.strip("/").split("/")
     if parts == ["account", "claim"]:
         return _claim(store, cfg, account, now)
+    if parts == ["account", "outage-emails"] and cfg.emails_ready:
+        on = form.get("on") == "1"
+        store.set_outage_emails(account["id"], on)
+        return _back("emails-on" if on else "emails-off", "outage-emails")
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
         if slot is None:
@@ -535,6 +542,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + f'<div class="card allowance"><div><h2>Your allowance</h2>{allowance}</div>'
         f"{claim}</div>"
         + (f'<div class="slots">{cards}</div>' if cards else "")
+        + (_outage_emails(account, csrf) if cfg.emails_ready else "")
         + '<p class="note">Your slot is a Linux account on a machine we operate, with its own '
         "home, its own Claude Code and your own Claude sign-in. Other people's slots on the "
         "machine cannot read yours; the machine's administrators technically can. This page "
@@ -626,7 +634,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "Drive or anything else in your Google account.</p></div>"
         '<div class="card"><h2>What we keep because you use ccfleet</h2><ul>'
         "<li>Your account: the address and id above, whether you are an operator, how many "
-        "slots you may hold, when you first signed in, and when you last visited.</li>"
+        "slots you may hold, when you first signed in, when you last visited, and whether "
+        "you asked for outage emails.</li>"
         "<li>The slots you hold, when you claimed each one, when a device token was last "
         "handed out for it, and when you last moved it to another Claude account, which a "
         "slot may do once a week. Each slot you hold has a name: a neutral one like "
@@ -680,9 +689,12 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "for the same time. There is no analytics, no advertising and no third-party "
         "script on any page.</p></div>"
         '<div class="card"><h2>Sharing, keeping and deleting</h2>'
-        "<p>We do not sell what we keep, and we do not give it to anyone. The servers run at "
-        "hosting companies we rent them from, and Google and Anthropic see what you do with "
-        "their own services: signing in, and using Claude.</p>"
+        "<p>We do not sell what we keep, and we do not give it to anyone, but for one thing "
+        "you choose: if you turn on outage emails, your address and your slot&#x27;s name go "
+        "to Resend, the service that delivers them, each time there is an outage to tell "
+        "you about. The servers run at hosting companies we rent them from, and Google and "
+        "Anthropic see what you do with their own services: signing in, and using "
+        "Claude.</p>"
         "<p>Giving a slot back deletes its Linux account and every file in it. Your account "
         "and the payments recorded for you stay while your account exists. To have your "
         "account deleted, write to the operator: it is done by hand, once any slot you hold "
@@ -1097,6 +1109,24 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
         return f'<p class="small muted">{when}reading them again now&hellip;</p>'
     return (f'<div class="refresh"><span class="small muted">{when}every five minutes</span>'
             + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh") + "</div>")
+
+
+def _outage_emails(account: Mapping[str, Any], csrf: str) -> str:
+    """Emails about outages, for those who ask (Erik, 2026-09-24)."""
+    on = bool(account.get("outage_emails"))
+    said = ("On: we email you when your slot's machine has been down for five minutes, "
+            "and again when it is back." if on else
+            "Off. Turned on, we email you when your slot's machine has been down for five "
+            "minutes, and again when it is back.")
+    button = _form("/account/outage-emails", csrf, "Turn off" if on else "Turn on",
+                   f'<input type="hidden" name="on" value="{"0" if on else "1"}">',
+                   "" if on else "primary")
+    return ('<div class="card allowance" id="outage-emails"><div><h2>Outage emails</h2>'
+            f"<p>{escape(said)}</p>"
+            '<p class="small muted">Sent through Resend, which delivers them: your address and '
+            "your slot's name go to it, and only when there is an outage to tell you about. "
+            "The status page says the same for everybody.</p></div>"
+            f"{button}</div>")
 
 
 def _rename(slot: Mapping[str, Any], csrf: str) -> str:

@@ -113,6 +113,16 @@ class Config:
     # the page says to use the support address on Google's sign-in screen, so
     # nobody's address is published unless the operator chose to publish it.
     contact_email: str = ""
+    # Outage emails (see ccfleetd/mail.py): a Resend send-only key and the
+    # address they come from, e.g. "ccfleet <ccfleet@9relay.com>". Either one
+    # empty, nothing is sent and the pages offer no emails.
+    resend_api_key: str = ""
+    email_from: str = ""
+
+    @property
+    def emails_ready(self) -> bool:
+        """Whether outage emails can be sent, and so offered."""
+        return bool(self.resend_api_key and self.email_from)
 
     @property
     def google_ready(self) -> bool:
@@ -168,6 +178,8 @@ class Config:
             cookie_secure=_env_bool(env, "COOKIE_SECURE", True),
             admin_host=env.get(ENV_PREFIX + "ADMIN_HOST", "").strip().lower(),
             contact_email=env.get(ENV_PREFIX + "CONTACT_EMAIL", "").strip(),
+            resend_api_key=env.get(ENV_PREFIX + "RESEND_API_KEY", "").strip(),
+            email_from=env.get(ENV_PREFIX + "EMAIL_FROM", "").strip(),
         )
         if cfg.contact_email and (len(cfg.contact_email) > 254
                                   or not CONTACT_EMAIL_RE.match(cfg.contact_email)):

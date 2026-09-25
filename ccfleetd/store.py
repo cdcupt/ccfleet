@@ -251,7 +251,26 @@ CREATE TABLE IF NOT EXISTS status_minutes (
     PRIMARY KEY (component, day)
 );
 CREATE INDEX IF NOT EXISTS ix_status_minutes_day ON status_minutes(day);
+-- One machine's time down (see ccfleetd/outage.py): when it began, when the
+-- emails that it was down went, when it ended and when those that it was back
+-- went. Kept so each outage is told once.
+CREATE TABLE IF NOT EXISTS outages (
+    id INTEGER PRIMARY KEY,
+    component TEXT NOT NULL,
+    started_at REAL NOT NULL,
+    down_sent_at REAL,
+    ended_at REAL,
+    back_sent_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_outages_open ON outages(component, ended_at);
 """
+
+#: Slots whose holders hear of their machine's outage: set up or being set up,
+#: never one given back.
+OUTAGE_TOLD_STATES = (slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)
+
+#: The moments of an outage that may be set, which are its table's columns.
+OUTAGE_MOMENTS = ("down_sent_at", "ended_at", "back_sent_at")
 
 #: The states a status minute is counted as, which are its table's columns.
 STATUS_COLUMNS = ("green", "yellow", "red")
@@ -471,6 +490,10 @@ class Store:
             # read again now (see request_quota_read). The slot's own, so it
             # goes when the slot is freed.
             self._add_missing_columns("slots", {"quota_wanted_at": "REAL"})
+            # Whether they asked for outage emails (Erik, 2026-09-24): off
+            # until they turn them on.
+            self._add_missing_columns("accounts",
+                                      {"outage_emails": "INTEGER NOT NULL DEFAULT 0"})
             # A name becomes a hostname: two slots answering to one would be
             # two people's machines under one name in claude.ai. Created here,
             # after the column exists, so an older database gets it too.
@@ -969,7 +992,8 @@ class Store:
     # no node id can equal (a node id has no colon), so moving one never
     # touches the other.
     NODE_ID_COLUMNS = (("nodes", "id"), ("slots", "node_id"), ("heartbeats", "node_id"),
-                       ("alerts", "node_id"), ("logins", "node_id"))
+                       ("alerts", "node_id"), ("logins", "node_id"),
+                       ("outages", "component"))
 
     def rename_node(self, old: str, new: str) -> None:
         """Give a node — an owner's node or a shared machine — a new id.
@@ -1013,6 +1037,7 @@ class Store:
                 (old, old, slotstates.OWNER_SLOT)).fetchone() is not None
             for table in ("logins", "heartbeats", "alerts"):
                 conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
+            conn.execute("DELETE FROM outages WHERE component = ?", (new,))
             for table, column in self.NODE_ID_COLUMNS:
                 conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
                              (new, old))
@@ -1123,6 +1148,68 @@ class Store:
                 "last_minute = excluded.last_minute",
                 (component, _status_day(first), upto - first + 1, upto))
             first = upto + 1
+
+    def status_last_minute(self, component: str) -> Optional[int]:
+        """The last minute counted for `component`, or None before any."""
+        with self._lock:
+            return self._conn.execute("SELECT MAX(last_minute) FROM status_minutes "
+                                      "WHERE component = ?", (component,)).fetchone()[0]
+
+    # -- outages ---------------------------------------------------------------------
+
+    def open_outage(self, component: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM outages WHERE component = ? AND ended_at IS NULL "
+                "ORDER BY id DESC LIMIT 1", (component,)).fetchone()
+        return dict(row) if row else None
+
+    def open_outages(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM outages WHERE ended_at IS NULL ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def begin_outage(self, component: str, started_at: float) -> dict[str, Any]:
+        with self._write_txn() as conn:
+            cur = conn.execute("INSERT INTO outages (component, started_at) VALUES (?, ?)",
+                               (component, started_at))
+            row = conn.execute("SELECT * FROM outages WHERE id = ?",
+                               (cur.lastrowid,)).fetchone()
+        return dict(row)
+
+    def mark_outage(self, outage_id: int, column: str, at: float) -> None:
+        """Set one of an outage's moments: when its emails went, or it ended."""
+        if column not in OUTAGE_MOMENTS:
+            raise ValueError(f"not an outage moment: {column!r}")
+        with self._write_txn() as conn:
+            conn.execute(f"UPDATE outages SET {column} = ? WHERE id = ?", (at, outage_id))
+
+    def outage_emails_for(self, node_id: str) -> list[dict[str, Any]]:
+        """Whom to tell about a machine: the holder of each slot on it who
+        asked for outage emails, their address, and the name the slot goes by."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT a.email, s.id AS slot_id, s.name FROM slots s "
+                "JOIN accounts a ON a.id = s.held_by "
+                "WHERE s.node_id = ? AND a.outage_emails = 1 AND s.state IN (?, ?, ?) "
+                "ORDER BY s.id",
+                (node_id, *OUTAGE_TOLD_STATES)).fetchall()
+        return [dict(r) for r in rows]
+
+    def outage_subscribers(self) -> list[str]:
+        """Everybody who asked for outage emails, by address."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT email FROM accounts WHERE outage_emails = 1 ORDER BY email").fetchall()
+        return [r["email"] for r in rows]
+
+    def set_outage_emails(self, account_id: str, on: bool) -> None:
+        with self._write_txn() as conn:
+            cur = conn.execute("UPDATE accounts SET outage_emails = ? WHERE id = ?",
+                               (1 if on else 0, account_id))
+            if cur.rowcount == 0:
+                raise StoreError(f"no account {account_id!r}")
 
     def status_minutes(self, since_day: str) -> list[dict[str, Any]]:
         """Every component's counted days from `since_day` (YYYY-MM-DD) on."""

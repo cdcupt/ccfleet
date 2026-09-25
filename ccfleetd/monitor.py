@@ -7,9 +7,10 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from . import claude_versions, rules, status
+from . import claude_versions, outage, rules, status
 from . import slots as slotstates
 from .config import Config
+from .mail import Mailer, NoMailer
 from .notify import Notifier, format_event
 from .store import Store
 
@@ -25,8 +26,11 @@ LOGIN_MAX_AGE_S = 15 * 60
 class Monitor:
     def __init__(self, store: Store, cfg: Config, notifier: Notifier,
                  clock: Optional[Clock] = None,
-                 channel_fetcher: Optional[claude_versions.Fetcher] = None) -> None:
+                 channel_fetcher: Optional[claude_versions.Fetcher] = None,
+                 mailer: Optional[Mailer] = None) -> None:
         self._store = store
+        # Outage emails, from the serving loop only (see record_status).
+        self._mailer: Mailer = mailer or NoMailer()
         # None reads no release channel: the tests, and every command but
         # `serve`, never touch the network.
         self._channel_fetcher = channel_fetcher
@@ -166,8 +170,18 @@ class Monitor:
         well be down. Under the lock, with the checks that read the same
         heartbeats and alerts."""
         now = self._clock() if now is None else now
+        grace = status.grace_minutes(self._cfg.check_interval_s)
         with self._lock:
-            status.record(self._store, now, self._cfg.check_interval_s)
+            # The site's last minute before this one: a long gap since is the
+            # site's own outage, told now that it is over.
+            last = self._store.status_last_minute(status.SITE)
+            machines = status.record(self._store, now, self._cfg.check_interval_s)
+            owed = (outage.machine_outages(self._store, machines, now, self._cfg.public_url)
+                    + outage.site_back(self._store, last, now, grace, self._cfg.public_url))
+        # Sent outside the lock: a slow send must not hold up a heartbeat. Each
+        # outage is already marked told, so a send that fails is not repeated.
+        for email in owed:
+            self._mailer.send(email)
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
