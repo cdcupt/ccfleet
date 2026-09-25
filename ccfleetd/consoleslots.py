@@ -289,9 +289,9 @@ def _cells(name: str, holder: str, state: str, claude: str, held: str,
 def _on_machine(slot: Mapping[str, Any], node: Mapping[str, Any]) -> list[str]:
     """The machine a slot is on, when its name does not say so already.
 
-    A slot named after its holder is said by that name alone, from the claim
-    until the wipe that frees it: not the machine it is on (Erik, 2026-09-24;
-    see render._called). Escaped."""
+    A held slot's name is said alone, from the claim until the wipe that
+    frees it: not the machine it is on (Erik, 2026-09-24; see
+    render._called). Escaped."""
     if slot.get("name") or names.display(slot) == node["id"]:
         return []
     return [f"on {escape(node['id'])}"]

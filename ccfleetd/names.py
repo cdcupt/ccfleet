@@ -80,5 +80,5 @@ def next_name(handle: str, taken: Collection[str]) -> str:
 
 
 def display(slot: Mapping[str, Any]) -> str:
-    """What a slot is called on every page: its holder's name, else its id."""
+    """What a slot is called on every page: its name while held, else its id."""
     return slot.get("name") or slot["id"]

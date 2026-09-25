@@ -516,7 +516,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
         creds = facts.get("credentials") or {}
         rows.append({
             "id": node["id"], "name": shown, "machine": machine, "slot_count": len(mine),
-            # Named after whoever holds it: from the claim until the wipe that
+            # Named while somebody holds it: from the claim until the wipe that
             # frees it (see _called).
             "held_name": len(mine) == 1 and bool(mine[0].get("name")),
             "owner": node["owner"], "region": node["region"],

@@ -145,8 +145,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     slot_quota INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     last_seen_at REAL NOT NULL DEFAULT 0,
-    -- What their slots are named after, if the operator chose it; otherwise
-    -- the part of their address before the @. See ccfleetd/names.py.
+    -- "<handle>-<n>" for their slots, only if the operator set it at their
+    -- request; otherwise claims get neutral names ("slot-4821"), never anything
+    -- from their address. See ccfleetd/names.py.
     handle TEXT
 );
 -- One Linux user on one machine. The unit a person holds.
@@ -165,8 +166,9 @@ CREATE TABLE IF NOT EXISTS slots (
     -- confirm it.
     present INTEGER,
     reported_at REAL,
-    -- Its holder's name while somebody holds it ("alice-1"), NULL while free:
-    -- the name people see, and its machine's hostname. The id never changes.
+    -- Its name while somebody holds it ("slot-4821", or what its holder
+    -- renamed it to), NULL while free: the name people see, and its machine's
+    -- hostname. The id never changes.
     name TEXT,
     -- 'machine': a Linux user the machine agent makes and wipes. 'owner': a
     -- person's own node counted as their slot, a record and nothing more.
@@ -449,7 +451,7 @@ class Store:
             })
             # Names come with claims, so every slot written before them has
             # none and shows its id; and every slot before owner slots was a
-            # machine's. No handle yet means the address is used.
+            # machine's. No handle means neutral names.
             self._add_missing_columns("slots", {
                 "name": "TEXT",
                 "kind": "TEXT NOT NULL DEFAULT 'machine'",
