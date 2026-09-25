@@ -84,7 +84,15 @@ def _claude_findings(node: Mapping[str, Any], payload: Mapping[str, Any],
     return []
 
 
-def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) -> list[Finding]:
+def _heard(at: float, listening_since: Optional[float]) -> float:
+    """When a node's word about something counts from: when it said it, or when
+    the server began listening again if that is later, since no newer word
+    could reach it before (see status.machine_state)."""
+    return at if listening_since is None else max(at, listening_since)
+
+
+def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config,
+                         listening_since: Optional[float] = None) -> list[Finding]:
     # `claude auth status` is authoritative when the node could ask it; a present
     # credentials file can still hold a login that no longer works.
     logged_in = _get(payload, "credentials", "logged_in")
@@ -97,7 +105,7 @@ def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) ->
                         "no credentials file: the owner needs to run claude and /login")]
     findings: list[Finding] = []
     mtime = _get(payload, "credentials", "mtime")
-    if isinstance(mtime, (int, float)) and now - mtime > cfg.token_stale_s:
+    if isinstance(mtime, (int, float)) and now - _heard(mtime, listening_since) > cfg.token_stale_s:
         findings.append(Finding("token_stale", LEVEL_WARN,
                                 f"credentials not refreshed for {_fmt_age(now - mtime)}"))
     elif not isinstance(mtime, (int, float)):
@@ -107,10 +115,10 @@ def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) ->
         # stale one means the same thing a stale mtime means.
         fetched_ms = _get(payload, "credentials", "profile_fetched_at")
         if isinstance(fetched_ms, (int, float)):
-            age = now - fetched_ms / 1000.0
-            if age > cfg.token_stale_s:
+            fetched = fetched_ms / 1000.0
+            if now - _heard(fetched, listening_since) > cfg.token_stale_s:
                 findings.append(Finding("token_stale", LEVEL_WARN,
-                                        f"login not exercised for {_fmt_age(age)}"))
+                                        f"login not exercised for {_fmt_age(now - fetched)}"))
     expires_ms = _get(payload, "credentials", "expires_at")
     if isinstance(expires_ms, (int, float)):
         expired_for = now - expires_ms / 1000.0
@@ -123,13 +131,15 @@ def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config) ->
 
 WINDOW_WORDS = {"session": "5-hour window", "week": "weekly window"}
 # A reading older than this is not evidence about now. The agent refreshes every
-# 30 minutes, so two missed refreshes means something is wrong with the read
+# five minutes, so a reading this old means something is wrong with the read
 # rather than with the quota, and alerting on it would be alerting on the wrong
 # thing.
 QUOTA_MAX_AGE_S = 2 * 60 * 60
 
 
-def _quota_findings(payload: Mapping[str, Any], now: float, cfg: Config) -> list[Finding]:
+def _quota_findings(payload: Mapping[str, Any], now: float, cfg: Config,
+                    listening_since: Optional[float] = None,
+                    raised: frozenset[str] = frozenset()) -> list[Finding]:
     """Warn before a window runs out, not after.
 
     The console has shown these two numbers since the windows were added, which
@@ -138,11 +148,17 @@ def _quota_findings(payload: Mapping[str, Any], now: float, cfg: Config) -> list
     quota = payload.get("quota")
     if not isinstance(quota, Mapping):
         return []
+    keep_only: Optional[frozenset[str]] = None
     checked = quota.get("checked_at")
     if isinstance(checked, (int, float)) and not isinstance(checked, bool):
         if now - checked > QUOTA_MAX_AGE_S:
-            # Stale. Say nothing rather than report an old number as current.
-            return []
+            if now - _heard(checked, listening_since) > QUOTA_MAX_AGE_S:
+                # Stale. Say nothing rather than report an old number as current.
+                return []
+            # Old only because the server was down, and no newer reading could
+            # reach it: a warning already raised stands, but an old number
+            # raises no new one.
+            keep_only = raised
     findings = []
     for name, words in WINDOW_WORDS.items():
         window = quota.get(name)
@@ -161,6 +177,8 @@ def _quota_findings(payload: Mapping[str, Any], now: float, cfg: Config) -> list
         # alert that flaps as whichever is worse changes.
         findings.append(Finding(f"quota_high_{name}", level,
                                 f"{words} {used:.0f}% used{tail}"))
+    if keep_only is not None:
+        return [f for f in findings if f.rule in keep_only]
     return findings
 
 
@@ -256,19 +274,23 @@ HELD = (slotstates.CLAIMED, slotstates.ACTIVE)
 def account_places(nodes: Sequence[Mapping[str, Any]],
                    latest: Mapping[str, Mapping[str, Any]],
                    slot_rows: Sequence[Mapping[str, Any]],
-                   now: float, cfg: Config) -> dict[str, list[str]]:
+                   now: float, cfg: Config, listening_since: Optional[float] = None,
+                   silent: frozenset[str] = frozenset()) -> dict[str, list[str]]:
     """Every live sign-in in the fleet, by account fingerprint.
 
     Live means: an enabled node heard from inside the heartbeat window, whose
     sign-in says it works — and for a slot, one somebody holds. A node gone
     quiet says nothing about where its account is now, so it is left out rather
-    than counted twice with wherever that account went.
+    than counted twice with wherever that account went. Quiet only while the
+    server was down is not gone quiet (see _heard), unless it was `silent`
+    already: its no_heartbeat alert was up before the restart.
     """
     by_user = {(r.get("node_id"), r.get("unix_user")): r for r in slot_rows}
     places: dict[str, list[str]] = {}
     for node in nodes:
         beat = latest.get(node["id"]) or {}
-        if not node.get("enabled") or now - (beat.get("ts") or 0) > cfg.heartbeat_max_age_s:
+        heard = _heard(beat.get("ts") or 0, None if node["id"] in silent else listening_since)
+        if not node.get("enabled") or now - heard > cfg.heartbeat_max_age_s:
             continue
         payload = beat.get("payload") or {}
         if payload.get("mode") == slotstates.MACHINE_MODE:
@@ -350,7 +372,8 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
              slot_rows: Sequence[Mapping[str, Any]] = (),
              places: Optional[Places] = None,
              names: Optional[Mapping[str, str]] = None,
-             listening_since: Optional[float] = None) -> tuple[Finding, ...]:
+             listening_since: Optional[float] = None,
+             raised: frozenset[str] = frozenset()) -> tuple[Finding, ...]:
     """Return every finding for one node given its latest two heartbeats.
 
     ``latest`` and ``previous`` are heartbeat rows (``{"ts": ..., "payload": {...}}``).
@@ -358,11 +381,17 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
     ``places`` is where every account in the fleet is live (see account_places),
     and ``names`` what the alerts call those places (see place_names).
     ``listening_since`` is when the server began listening this time, from
-    which a node's silence counts (see _heartbeat_findings).
+    which a node's silence counts (see _heard), and ``raised`` the rules whose
+    alerts are up for it now: one raised before the restart holds until the
+    node says otherwise, rather than closing because the server was down.
     """
     places = places or {}
     names = names or {}
-    findings = _heartbeat_findings(node, latest, now, cfg, listening_since)
+
+    def grace(rule: str) -> Optional[float]:
+        return None if rule in raised else listening_since
+
+    findings = _heartbeat_findings(node, latest, now, cfg, grace("no_heartbeat"))
     if latest is None:
         return tuple(findings)
     payload = latest.get("payload") or {}
@@ -378,9 +407,9 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
         findings += _slot_account_findings(slot_rows, payload, places, names)
         return tuple(findings)
     findings += _claude_findings(node, payload, prev_payload)
-    findings += _credential_findings(payload, now, cfg)
+    findings += _credential_findings(payload, now, cfg, grace("token_stale"))
     findings += _disk_findings(payload, cfg)
-    findings += _quota_findings(payload, now, cfg)
+    findings += _quota_findings(payload, now, cfg, listening_since, raised)
     findings += _egress_findings(payload, prev_payload)
     findings += _remote_control_findings(node, payload)
     findings += _account_findings(node, payload, places, names)

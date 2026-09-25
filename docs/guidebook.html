@@ -1080,8 +1080,13 @@ ccfleetd slot list --machine pool-1</code></pre>
     A machine whose outage was open already stays down until it reports, and an outage
     becomes an email only after five minutes of it seen while listening. So a restart,
     long or short, never tells a holder their slot is down, or back, when it was only the
-    site. The operator's <code>no_heartbeat</code> alert counts the same way, and one
-    already raised holds until the node reports.</li>
+    site. Every other wait on a machine counts the same way: the operator's
+    <code>no_heartbeat</code> and <code>token_stale</code> alerts, a quota reading's age,
+    where an account counts as signed in, a claim still setting up (given up at 30 min),
+    an update not yet answered (15 min), the console's <em>stuck</em> mark and a slot
+    card's <em>may be unreachable</em>. An alert already raised holds until the node says
+    otherwise. Only sign-in attempts keep the wall clock: that is how long a code may sit
+    in the database.</li>
   </ul>
   <h3>One account per slot, enforced</h3>
   <p>The product keeps the rule without relying on anybody to remember it:</p>

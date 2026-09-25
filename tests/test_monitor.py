@@ -194,3 +194,61 @@ def test_an_alarm_raised_before_a_restart_holds_until_the_node_reports(store, cf
     store.insert_heartbeat("node-a", NOW + 1240, heartbeat(NOW + 1240)["payload"])
     clock["now"] = NOW + 1250
     assert [e["event"] for e in monitor.check_all()] == ["closed"]
+
+
+def test_a_claim_is_not_given_up_for_the_servers_own_silence(store, cfg):
+    """No report could say it was set up while the server was down."""
+    from ccfleetd import slots
+    store.add_node("m1", "op", now=NOW - 86400)
+    store.set_machine_capacity("m1", 1)
+    store.add_account("a1", "sub-1", "a@example.com", slot_quota=1, now=NOW)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.apply_slot_report("m1", [{"unix_user": "slot01", "present": False}], now=NOW)
+    store.claim_slot("a1", now=NOW - slots.CLAIM_TIMEOUT_S - 600)
+    store.set_listening_since(NOW - 300)
+    monitor, _, clock = make_monitor(store, cfg)
+    monitor.check_all()
+    assert store.get_slot("s1")["state"] == slots.CLAIMING
+    clock["now"] = NOW - 300 + slots.CLAIM_TIMEOUT_S + 1
+    monitor.check_all()
+    assert store.get_slot("s1")["state"] == slots.RELEASING
+
+
+def test_an_update_is_not_failed_for_the_servers_own_silence(store, cfg):
+    from ccfleetd.monitor import LOGIN_MAX_AGE_S
+    store.add_node("m1", "op", now=NOW - 86400)
+    store.set_machine_capacity("m1", 1)
+    store.add_account("a1", "sub-1", "a@example.com", slot_quota=1, now=NOW)
+    store.add_slot("s1", "m1", "slot01", now=NOW)
+    store.apply_slot_report("m1", [{"unix_user": "slot01", "present": False}], now=NOW)
+    claim = store.claim_slot("a1", now=NOW - 7200)
+    store.apply_slot_report("m1", [{"unix_user": "slot01", "present": True,
+                                    "provisioned_for": claim["claimed_at"]}], now=NOW - 7000)
+    store.request_claude_update("s1", NOW - LOGIN_MAX_AGE_S - 600, held_by="a1")
+    store.set_listening_since(NOW - 60)
+    monitor, _, clock = make_monitor(store, cfg)
+    monitor.check_all()
+    assert store.get_claude_update("s1")["state"] == "pending"
+    clock["now"] = NOW - 60 + LOGIN_MAX_AGE_S + 1
+    monitor.check_all()
+    assert store.get_claude_update("s1")["state"] == "failed"
+
+
+def test_an_account_seen_on_two_nodes_is_not_called_resolved_by_a_restart(store, cfg):
+    """After a long outage every node's last report is old; the alert about
+    one account in two places must not close for that."""
+    for node in ("n1", "n2"):
+        store.add_node(node, "erik", now=NOW - 86400)
+        beat = heartbeat(NOW - 3600, credentials={"present": True, "logged_in": True,
+                                                  "account_fp": "fp1", "store": "file",
+                                                  "mtime": NOW - 3600,
+                                                  "expires_at": (NOW + 7200) * 1000})
+        store.insert_heartbeat(node, NOW - 3600, {**beat["payload"], "node_id": node})
+    monitor, _, clock = make_monitor(store, cfg)
+    clock["now"] = NOW - 3600 + 30
+    opened = {e["alert"]["rule"] for e in monitor.check_all() if e["event"] == "opened"}
+    assert any(rule.startswith("account_") for rule in opened), opened
+    store.set_listening_since(NOW - 30)              # down an hour, and back
+    clock["now"] = NOW
+    closed = [e["alert"]["rule"] for e in monitor.check_all() if e["event"] == "closed"]
+    assert not any(rule.startswith("account_") for rule in closed), closed
