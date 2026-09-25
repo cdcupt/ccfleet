@@ -1074,6 +1074,13 @@ ccfleetd slot list --machine pool-1</code></pre>
     every minute it runs, a check running a little late is forgiven, and a longer gap is
     counted as down when the server comes back. <code>ccfleetd check</code> counts nothing.
     Ninety days are kept, in <code>status_minutes</code>, one row a component a day.</li>
+    <li><strong>The machines are not late for the site's silence.</strong> A report sent
+    while the server was down reached nobody, so a machine's silence counts from when the
+    server began listening again (it notes the moment as <code>listening_since</code>).
+    A machine whose outage was open already stays down until it reports, and an outage
+    becomes an email only after five minutes of it seen while listening. So a restart,
+    long or short, never tells a holder their slot is down, or back, when it was only the
+    site.</li>
   </ul>
   <h3>One account per slot, enforced</h3>
   <p>The product keeps the rule without relying on anybody to remember it:</p>
