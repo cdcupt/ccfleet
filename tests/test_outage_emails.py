@@ -216,7 +216,7 @@ def test_nobody_hears_an_end_without_its_start(store):
     outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
     deliver(store, NOW + 300, sent=False)            # a1's down email has not gone yet
     outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 900)
-    assert [kind for kind, _ in due(store)] == ["down"], "no back before the down went"
+    assert due(store) == [], "no back without its down, and no down once it is back"
 
 
 def test_somebody_who_turned_emails_off_mid_outage_hears_no_end(store):
@@ -430,3 +430,49 @@ def test_the_minute_loop_tells_of_the_sites_own_silence_once_back(store):
     assert "website was down" in monitor._mailer.sent[0].subject
     monitor.record_status(NOW + 60 + 11 * 60)
     assert len(monitor._mailer.sent) == 1
+
+
+def test_a_down_email_never_goes_once_its_outage_is_over(store):
+    """Codex: a down email that kept failing could succeed after the machine
+    came back, saying it is down when it is back."""
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300, sent=False)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 600)
+    assert due(store) == []
+
+
+def test_somebody_who_turned_emails_off_is_sent_nothing_still_owed(store):
+    fleet(store, opted=("a1", "b1"))
+    last = int(NOW // 60) - 1
+    outage.site_back(store, last, NOW + 10 * 60, 2)
+    store.set_outage_emails("b1", False)
+    assert due(store) == [("site", "a1@example.com")]
+
+
+def test_owing_the_same_email_twice_owes_it_once(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    row = store.open_outage("m1")
+    store.queue_outage_emails(row["id"], outage.DOWN, [
+        {"account_id": "a1", "email": "a1@example.com", "slot_name": "x"}])
+    assert due(store) == []
+
+
+def test_every_try_at_one_email_carries_the_same_key(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    [(row, first)] = outage.owed(store, URL)
+    deliver(store, NOW + 300, sent=False)
+    [(_, again)] = outage.owed(store, URL)
+    assert first.key and first.key == again.key == f"ccfleet-outage-{row['outage_id']}-down-a1"
+
+
+def test_the_key_goes_to_resend_and_none_without_one():
+    open_, seen = opener()
+    sender = mail.ResendMailer(KEY, "x <x@example.com>", open_)
+    sender.send(Email(to="a@example.com", subject="s", text="t", html="h", key="k-1"))
+    sender.send(an_email())
+    assert seen[0][0].get_header("Idempotency-key") == "k-1"
+    assert seen[1][0].get_header("Idempotency-key") is None

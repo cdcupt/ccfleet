@@ -1240,13 +1240,18 @@ class Store:
         return [dict(r) for r in rows]
 
     def owed_outage_emails(self, max_tries: int) -> list[dict[str, Any]]:
-        """Every email owed and not yet sent, with its outage's moments."""
+        """Every email owed and not yet sent, with its outage's moments: to
+        somebody who still wants them, and never a machine's "down" once that
+        outage is over, which would say it is down when it is back."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT e.outage_id, e.kind, e.account_id, e.email, e.slot_name, e.tries, "
+                "SELECT e.outage_id, e.kind, e.account_id, a.email, e.slot_name, e.tries, "
                 "o.started_at, o.ended_at FROM outage_emails e "
                 "JOIN outages o ON o.id = e.outage_id "
-                "WHERE e.sent_at IS NULL AND e.tries < ? ORDER BY e.outage_id, e.kind, e.email",
+                "JOIN accounts a ON a.id = e.account_id "
+                "WHERE e.sent_at IS NULL AND e.tries < ? AND a.outage_emails = 1 "
+                "AND NOT (e.kind = 'down' AND o.ended_at IS NOT NULL) "
+                "ORDER BY e.outage_id, e.kind, a.email",
                 (max_tries,)).fetchall()
         return [dict(r) for r in rows]
 

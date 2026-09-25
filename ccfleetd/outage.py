@@ -13,6 +13,7 @@ is back, that it was, and that slots kept working through it.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from html import escape
 from typing import Any, Optional
@@ -122,5 +123,9 @@ def render(row: Mapping[str, Any], url: str) -> Email:
 
 
 def owed(store: Any, url: str) -> list[tuple[Mapping[str, Any], Email]]:
-    """Every email owed and not yet sent, with the row it came from."""
-    return [(row, render(row, url)) for row in store.owed_outage_emails(MAX_TRIES)]
+    """Every email owed and not yet sent, with the row it came from. Each
+    carries a key of its own, the same on every try (see mail.Email.key)."""
+    return [(row, replace(render(row, url),
+                          key=f"ccfleet-outage-{row['outage_id']}-{row['kind']}-"
+                              f"{row['account_id']}"))
+            for row in store.owed_outage_emails(MAX_TRIES)]

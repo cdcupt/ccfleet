@@ -35,6 +35,9 @@ class Email:
     subject: str
     text: str
     html: str
+    #: The same for every try at one message, so Resend sends it once even
+    #: when a try it accepted was never marked sent here (a crash between).
+    key: str = ""
 
 
 class Mailer(Protocol):
@@ -64,10 +67,11 @@ class ResendMailer:
         """True once Resend has accepted it; False, logged, when not."""
         body = json.dumps({"from": self._sender, "to": [email.to], "subject": email.subject,
                            "text": email.text, "html": email.html}).encode("utf-8")
-        request = urllib.request.Request(
-            RESEND_URL, data=body, method="POST",
-            headers={"Authorization": f"Bearer {self._key}",
-                     "Content-Type": "application/json", "User-Agent": USER_AGENT})
+        headers = {"Authorization": f"Bearer {self._key}",
+                   "Content-Type": "application/json", "User-Agent": USER_AGENT}
+        if email.key:
+            headers["Idempotency-Key"] = email.key
+        request = urllib.request.Request(RESEND_URL, data=body, method="POST", headers=headers)
         try:
             with self._open(request, timeout=SEND_TIMEOUT_S) as reply:
                 accepted = 200 <= reply.status < 300
