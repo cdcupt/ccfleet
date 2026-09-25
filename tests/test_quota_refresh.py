@@ -173,6 +173,18 @@ def test_the_holders_page_offers_a_refresh_and_then_says_it_is_reading(site):  #
     assert 'content="4;' in page, "the page comes back soon for the new numbers"
 
 
+def test_a_slot_not_read_yet_can_ask_for_its_first_reading(site):  # noqa: F811
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    report(store, "m1", [{"unix_user": slot["unix_user"], "present": True,
+                          "credentials": {"logged_in": True}}])
+    page = erik.page()
+    assert "No reading of your limits yet." in page
+    assert f'action="/account/slots/{slot["id"]}/quota"' in page
+
+
 def test_the_console_offers_a_refresh_for_a_slot_in_use(console):  # noqa: F811
     store, call = console
     slot = held_slot(store)

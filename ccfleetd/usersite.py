@@ -905,6 +905,9 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "") -> str:
         # when the rest of the week had run on the holder's own laptop.
         bars = ('<div class="usage-nums muted">your Claude account &middot; every device'
                 "</div>" + bars + f'<p class="small muted">{ACCOUNT_WIDE}</p>' + refresh)
+    elif refresh:
+        # Signed in and not read yet: the first reading can be asked for too.
+        bars = '<p class="small muted">No reading of your limits yet.</p>' + refresh
     # The windows beside the trend: what is left now, and how it got there.
     halves = [f'<div class="usage-{name}">{html}</div>'
               for name, html in (("bars", bars), ("trend", spent)) if html]
