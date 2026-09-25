@@ -4,7 +4,9 @@ their slot's machine has been down for five minutes, and again when it is back.
 Decided under the monitor's lock, once a minute, from the states the status
 page counts (ccfleetd/status.py): an email falling due is queued, one per
 person, and sent after the lock. Resend's acceptance is what marks it sent; a
-send that fails is tried again on later minutes, MAX_TRIES times at most. The
+send that fails is tried again on later minutes, MAX_TRIES times at most,
+never once it is stale: a "down" not yet sent when the machine is back is
+dropped, and so is whatever is owed to somebody who turns the emails off. The
 end of an outage is told only to those who heard its start. The site is the
 one thing that cannot say it is down, since it is what sends: it says, once it
 is back, that it was, and that slots kept working through it.

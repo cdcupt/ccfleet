@@ -1265,11 +1265,16 @@ class Store:
                 (now if sent else None, outage_id, kind, account_id))
 
     def set_outage_emails(self, account_id: str, on: bool) -> None:
+        """Turning them off also drops whatever was still owed, so turning them
+        on again later brings back no stale news."""
         with self._write_txn() as conn:
             cur = conn.execute("UPDATE accounts SET outage_emails = ? WHERE id = ?",
                                (1 if on else 0, account_id))
             if cur.rowcount == 0:
                 raise StoreError(f"no account {account_id!r}")
+            if not on:
+                conn.execute("DELETE FROM outage_emails WHERE account_id = ? "
+                             "AND sent_at IS NULL", (account_id,))
 
     def status_minutes(self, since_day: str) -> list[dict[str, Any]]:
         """Every component's counted days from `since_day` (YYYY-MM-DD) on."""

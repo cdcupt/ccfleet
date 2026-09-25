@@ -226,6 +226,39 @@ def test_somebody_who_turned_emails_off_mid_outage_hears_no_end(store):
     store.set_outage_emails("a1", False)
     outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 900)
     assert due(store) == []
+    store.set_outage_emails("a1", True)              # an hour later: no stale "back"
+    assert due(store) == []
+
+
+def test_emails_off_and_on_again_mid_outage_still_hear_the_end(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    store.set_outage_emails("a1", False)
+    store.set_outage_emails("a1", True)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 900)
+    assert due(store) == [("back", "a1@example.com")]
+
+
+def test_turning_emails_off_drops_what_was_still_owed(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300, sent=False)            # Resend failed once
+    store.set_outage_emails("a1", False)
+    store.set_outage_emails("a1", True)
+    assert due(store) == []
+
+
+def test_an_email_owed_just_as_somebody_turned_them_off_is_not_sent(store):
+    """The monitor picks recipients, then owes them: somebody can turn emails
+    off between the two."""
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    store.set_outage_emails("a1", False)
+    store.queue_outage_emails(store.open_outage("m1")["id"], outage.SITE, [
+        {"account_id": "a1", "email": "a1@example.com", "slot_name": None}])
+    assert due(store) == []
 
 
 def test_a_new_outage_is_told_again(store):
