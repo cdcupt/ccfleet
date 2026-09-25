@@ -325,7 +325,10 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "own Claude login too, with your own subscription: <code>ccfleet-connect "
         "--off</code> switches to it, and <code>ccfleet-connect --on</code> back to your "
         "slot&#x27;s account. Connecting again with another token replaces the one it "
-        "had.</li>"
+        "had. A copy of <code>ccfleet-connect</code> installed before 25 September 2026 "
+        "answers <code>--off</code> with <em>unknown option</em>; replace it with the "
+        "current one, and the token stays as it is:"
+        "<pre>curl -fsSL -o ~/.local/bin/ccfleet-connect \\\n  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh</pre></li>"
         '<li><strong>Giving it back.</strong> Tick the box and press '
         '<span class="btnlabel">Give this slot back</span>. Your Linux account and every file '
         "in it are deleted; your Claude account is not touched. Push your work somewhere "

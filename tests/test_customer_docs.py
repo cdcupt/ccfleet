@@ -355,3 +355,19 @@ def test_the_device_token_window_is_the_one_the_code_keeps(monkeypatch):
     assert "for at most 15 minutes, and never kept" in render("/docs/guide")
     monkeypatch.setattr(customer_docs, "LOGIN_MAX_AGE_S", 20 * 60)
     assert "for at most 20 minutes, and never kept" in render("/docs/guide")
+
+
+def test_the_update_line_fetches_what_the_installer_fetches():
+    """An older copy is replaced from the address, and to the path, that the
+    script itself installs from and to: the line cannot drift from it."""
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    script = (root / "laptop" / "ccfleet-connect.sh").read_text()
+    url = re.search(r'^SELF_URL="([^"]+)"$', script, re.M).group(1)
+    assert 'local dest="$HOME/.local/bin/ccfleet-connect"' in script
+    line = f"curl -fsSL -o ~/.local/bin/ccfleet-connect \\\n  {url}"
+    for where, text in (("guide", render("/docs/guide")),
+                        ("README", (root / "README.md").read_text()),
+                        ("guidebook", (root / "docs" / "guidebook.html").read_text())):
+        assert line in text, where
