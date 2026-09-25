@@ -23,6 +23,25 @@ def test_no_heartbeat_when_old_or_absent(cfg):
     assert "min" in stale[0].message
 
 
+def test_silence_while_the_server_was_down_raises_no_alarm(cfg):
+    """A report sent while the server was down reached nobody: a node's silence
+    counts from when the server began listening again, and the alarm, when it
+    comes, still says how old the last report really is."""
+    back = NOW - 60
+    assert rules.evaluate(NODE, heartbeat(NOW - 3600), None, NOW, cfg,
+                          listening_since=back) == ()
+    late = rules.evaluate(NODE, heartbeat(NOW - 3600), None, back + cfg.heartbeat_max_age_s + 1,
+                          cfg, listening_since=back)
+    assert rule_names(late) == ["no_heartbeat"]
+    assert late[0].message == "last heartbeat 1.2 h ago"
+
+
+def test_a_node_never_heard_from_is_not_blamed_for_the_servers_silence_either(cfg):
+    assert rules.evaluate(NODE, None, None, NOW, cfg, listening_since=NOW - 60) == ()
+    assert rule_names(rules.evaluate(NODE, None, None, NOW, cfg,
+                                     listening_since=NOW - 3600)) == ["no_heartbeat"]
+
+
 def test_claude_missing_and_version_mismatch(cfg):
     missing = rules.evaluate(NODE, heartbeat(NOW, claude={"version": None}), None, NOW, cfg)
     assert rule_names(missing) == ["claude_missing"]

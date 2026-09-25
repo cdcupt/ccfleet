@@ -41,14 +41,20 @@ def _fmt_age(seconds: float) -> str:
 
 
 def _heartbeat_findings(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
-                        now: float, cfg: Config) -> list[Finding]:
+                        now: float, cfg: Config,
+                        listening_since: Optional[float] = None) -> list[Finding]:
+    # A report sent while the server was down reached nobody, so given when the
+    # server began listening again, a node's silence counts from then (as in
+    # status.machine_state). The message still says how old the report is.
+    since = listening_since or 0.0
     if latest is None:
-        if now - float(node.get("created_at", now)) > cfg.heartbeat_max_age_s:
+        if now - max(float(node.get("created_at", now)), since) > cfg.heartbeat_max_age_s:
             return [Finding("no_heartbeat", LEVEL_CRITICAL, "no heartbeat received yet")]
         return []
-    age = now - float(latest["ts"])
-    if age > cfg.heartbeat_max_age_s:
-        return [Finding("no_heartbeat", LEVEL_CRITICAL, f"last heartbeat {_fmt_age(age)} ago")]
+    heard = float(latest["ts"])
+    if now - max(heard, since) > cfg.heartbeat_max_age_s:
+        return [Finding("no_heartbeat", LEVEL_CRITICAL,
+                        f"last heartbeat {_fmt_age(now - heard)} ago")]
     return []
 
 
@@ -343,17 +349,20 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
              cfg: Config,
              slot_rows: Sequence[Mapping[str, Any]] = (),
              places: Optional[Places] = None,
-             names: Optional[Mapping[str, str]] = None) -> tuple[Finding, ...]:
+             names: Optional[Mapping[str, str]] = None,
+             listening_since: Optional[float] = None) -> tuple[Finding, ...]:
     """Return every finding for one node given its latest two heartbeats.
 
     ``latest`` and ``previous`` are heartbeat rows (``{"ts": ..., "payload": {...}}``).
     ``slot_rows`` are the slots declared on this node, for a shared machine.
     ``places`` is where every account in the fleet is live (see account_places),
     and ``names`` what the alerts call those places (see place_names).
+    ``listening_since`` is when the server began listening this time, from
+    which a node's silence counts (see _heartbeat_findings).
     """
     places = places or {}
     names = names or {}
-    findings = _heartbeat_findings(node, latest, now, cfg)
+    findings = _heartbeat_findings(node, latest, now, cfg, listening_since)
     if latest is None:
         return tuple(findings)
     payload = latest.get("payload") or {}
