@@ -4,7 +4,8 @@ Anybody may read it, signed in or not, so it says only what anybody may know.
 Never a machine's id or a slot's name: a slot somebody holds is named after
 them (Erik, 2026-09-24), so the machines are one group here, counted, never
 listed. Each holder sees their own slot's machine on their own page instead
-(status.slot_line).
+(status.slot_line). The front page says the banner's words at its top, as a
+pill that links here (Erik, 2026-09-25).
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ SITE_NAME = "Website and account pages"
 MACHINES_NAME = "Slot machines"
 BANNERS = {status.GREEN: "All systems operational", status.YELLOW: "Partial outage",
            status.RED: "Major outage"}
+#: The front page's pill, in the colours of the site's other pills (render.CSS).
+PILL_CLASS = {status.GREEN: "ok", status.YELLOW: "warn", status.RED: "critical"}
 #: A day's colour, as the class its square in the bar takes.
 DAY_CLASS = {status.GREEN: "g", status.YELLOW: "y", status.RED: "r", status.NO_DATA: "n"}
 #: The page comes back for itself as often as the minutes behind it are counted.
@@ -139,11 +142,35 @@ KEY = (
     "This page refreshes itself every minute.</p></div>")
 
 
-def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> str:
-    """The whole page. The site is up whenever it is served, so only the machines
-    can say otherwise now; its own downtime shows in its days."""
+def now_state(store: object, now: float) -> tuple[list[status.State], status.State]:
+    """Every machine that counts, as it is now, and the service as one: what
+    the banner says, on this page and in the front page's pill. The site is up
+    whenever it is served, so only the machines can say otherwise now; its own
+    downtime shows in its days."""
     states = list(status.snapshot(store, now).values())
-    group = status.group_state(states)
+    return states, status.group_state(states)
+
+
+def health(store: object, now: float) -> Optional[str]:
+    """The banner's level, for the front page's pill. None while no machine
+    counts yet: then nothing has been measured to vouch for."""
+    states, group = now_state(store, now)
+    return group.level if states else None
+
+
+def pill(level: Optional[str]) -> str:
+    """The way here from the top of the front page: the banner's words, in its
+    colour. Nothing measured yet, it says only "Status", never a green that
+    nobody saw."""
+    if level is None:
+        return '<a class="pill st-pill" href="/status">Status</a>'
+    return (f'<a class="pill st-pill {PILL_CLASS[level]}" href="/status" '
+            f'aria-label="Status: {BANNERS[level]}">{BANNERS[level]}</a>')
+
+
+def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> str:
+    """The whole page."""
+    states, group = now_state(store, now)
     history = status.history(store, now)
     since = (f'<span class="st-since">since {status.since_html(group.since, now)}</span>'
              if group.since is not None else "")

@@ -334,10 +334,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _docs_page(self, page: Callable[..., str]) -> None:
             """A public page of the product, for whoever is looking, with the
-            price the operator set, if any."""
+            price the operator set, if any. The front page also says at its
+            top whether the service is up, as /status does; only it reads
+            the machines for that."""
             current = ctx.store.get_price()
+            extra = ({"health": statuspage.health(ctx.store, time.time())}
+                     if page is customer_docs.overview else {})
             self._send(200, page(ctx.cfg, viewer=self._viewer(),
-                                 price=current["price"] if current else None).encode("utf-8"),
+                                 price=current["price"] if current else None,
+                                 **extra).encode("utf-8"),
                        HTML_HEADERS)
 
         def _console_corner(self) -> str:

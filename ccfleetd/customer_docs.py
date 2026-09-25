@@ -15,7 +15,7 @@ from __future__ import annotations
 from html import escape
 from typing import Callable, Optional
 
-from . import pricing
+from . import pricing, statuspage
 from .config import Config
 from .monitor import LOGIN_MAX_AGE_S
 from .render import _meter
@@ -36,6 +36,12 @@ align-items:center;padding:18px 0 8px}
 .eyebrow{display:inline-flex;font-size:13px;font-weight:650;color:var(--acc);
 background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;
 padding:4px 12px;margin:0 0 18px}
+/* Above the title: the eyebrow, and whether the service is up (statuspage.pill),
+   side by side while they fit. */
+.hero-top{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0 0 18px}
+.hero-top .eyebrow{margin:0}
+.st-pill{font-size:13px;padding:4px 12px 4px 10px;text-decoration:none;white-space:nowrap}
+.st-pill:hover{border-color:currentColor}
 .hero h1{font-size:clamp(34px,4.6vw,54px);line-height:1.05;letter-spacing:-.034em;
 font-weight:780}
 .hero .lead{font-size:18.5px;margin:20px 0 28px}
@@ -201,9 +207,11 @@ def _demo() -> str:
 
 
 def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
-             price: Optional[pricing.Price] = None) -> str:
+             price: Optional[pricing.Price] = None, health: Optional[str] = None) -> str:
     """The site's front page: the bare address and /docs serve it alike, and
-    it names the bare address as the one to keep."""
+    it names the bare address as the one to keep. At its top, whether the
+    service is up: ``health`` is the status page's banner level
+    (statuspage.health), or None to say only "Status"."""
     # Straight into Google's sign-in when it is set up; otherwise the page that
     # says it is not, rather than a button that goes nowhere. Somebody already
     # signed in is offered their slots instead of a sign-in they have done, and
@@ -225,8 +233,9 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
               "card and no payment." if price is not None else
               "Slots are sold directly by the operator; price and payment are agreed with them.")
     body = (
-        '<section class="hero"><div class="hero-copy">'
+        '<section class="hero"><div class="hero-copy"><div class="hero-top">'
         '<p class="eyebrow">Bring your own Claude plan</p>'
+        + statuspage.pill(health) + "</div>"
         "<h1>Claude Code on a machine that is always on</h1>"
         '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux account on a '
         "machine we run, with Claude Code installed and signed in to <em>your own</em> Claude "
