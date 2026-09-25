@@ -19,6 +19,11 @@ HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)"
                          r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 
 
+# An address, or a display name and an address in angle brackets: what an
+# email's From says.
+_ADDRESS = r"[^\s<>@\"]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
+EMAIL_FROM_RE = re.compile(rf"{_ADDRESS}|[^<>@\r\n]{{1,64}} <{_ADDRESS}>")
+
 class ConfigError(ValueError):
     """Raised when the environment holds an unusable value."""
 
@@ -113,6 +118,16 @@ class Config:
     # the page says to use the support address on Google's sign-in screen, so
     # nobody's address is published unless the operator chose to publish it.
     contact_email: str = ""
+    # Outage emails (see ccfleetd/mail.py): a Resend send-only key and the
+    # address they come from, e.g. "ccfleet <ccfleet@9relay.com>". Either one
+    # empty, nothing is sent and the pages offer no emails.
+    resend_api_key: str = ""
+    email_from: str = ""
+
+    @property
+    def emails_ready(self) -> bool:
+        """Whether outage emails can be sent, and so offered."""
+        return bool(self.resend_api_key and self.email_from)
 
     @property
     def google_ready(self) -> bool:
@@ -168,7 +183,19 @@ class Config:
             cookie_secure=_env_bool(env, "COOKIE_SECURE", True),
             admin_host=env.get(ENV_PREFIX + "ADMIN_HOST", "").strip().lower(),
             contact_email=env.get(ENV_PREFIX + "CONTACT_EMAIL", "").strip(),
+            resend_api_key=env.get(ENV_PREFIX + "RESEND_API_KEY", "").strip(),
+            email_from=env.get(ENV_PREFIX + "EMAIL_FROM", "").strip(),
         )
+        # Outage emails are both settings or neither: one alone would offer
+        # emails nobody sends, or send from an address that is no address.
+        if bool(cfg.resend_api_key) != bool(cfg.email_from):
+            raise ConfigError(
+                f"{ENV_PREFIX}RESEND_API_KEY and {ENV_PREFIX}EMAIL_FROM go together: "
+                "set both for outage emails, or neither")
+        if cfg.email_from and not EMAIL_FROM_RE.fullmatch(cfg.email_from):
+            raise ConfigError(
+                f"{ENV_PREFIX}EMAIL_FROM must be an address, or a name and an address, like "
+                f"ccfleet <status@example.com>; got {cfg.email_from!r}")
         if cfg.contact_email and (len(cfg.contact_email) > 254
                                   or not CONTACT_EMAIL_RE.match(cfg.contact_email)):
             raise ConfigError(

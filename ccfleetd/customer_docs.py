@@ -481,7 +481,10 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "themselves.</li>"
         '<li><strong>Status</strong>: whether this site and the machines are up, now and over '
         'the last 90 days, is on <a href="/status">the status page</a>; your own page says '
-        "how your slot&#x27;s machine is.</li></ul></div>"
+        "how your slot&#x27;s machine is. Turn on <strong>outage emails</strong> there, and we "
+        "email you when your slot&#x27;s machine has been down for five minutes, and again "
+        "when it is back. An outage of this website is told afterwards, since the website "
+        "is what sends them; your slot keeps working through one.</li></ul></div>"
         '<div class="card"><h2>Giving a slot back</h2>'
         "<p>When you give a slot back, the machine stops everything running in it and deletes "
         "your Linux account and every file in it. The slot is offered to anybody else only "

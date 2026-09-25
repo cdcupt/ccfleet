@@ -7,9 +7,10 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from . import claude_versions, rules, status
+from . import claude_versions, outage, rules, status
 from . import slots as slotstates
 from .config import Config
+from .mail import Mailer, NoMailer
 from .notify import Notifier, format_event
 from .store import Store
 
@@ -25,8 +26,11 @@ LOGIN_MAX_AGE_S = 15 * 60
 class Monitor:
     def __init__(self, store: Store, cfg: Config, notifier: Notifier,
                  clock: Optional[Clock] = None,
-                 channel_fetcher: Optional[claude_versions.Fetcher] = None) -> None:
+                 channel_fetcher: Optional[claude_versions.Fetcher] = None,
+                 mailer: Optional[Mailer] = None) -> None:
         self._store = store
+        # Outage emails, from the serving loop only (see record_status).
+        self._mailer: Mailer = mailer or NoMailer()
         # None reads no release channel: the tests, and every command but
         # `serve`, never touch the network.
         self._channel_fetcher = channel_fetcher
@@ -166,8 +170,23 @@ class Monitor:
         well be down. Under the lock, with the checks that read the same
         heartbeats and alerts."""
         now = self._clock() if now is None else now
+        grace = status.grace_minutes(self._cfg.check_interval_s)
         with self._lock:
-            status.record(self._store, now, self._cfg.check_interval_s)
+            # A long gap since the site's last counted minute is the site's own
+            # outage, told now that it is over. Before this minute is counted,
+            # which closes the gap: a crash between the two then tells it at
+            # the next minute (once: see Store.owe_past_outage), not never.
+            outage.site_back(self._store, self._store.status_last_minute(status.SITE), now,
+                             grace)
+            machines = status.record(self._store, now, self._cfg.check_interval_s)
+            outage.machine_outages(self._store, machines, now)
+            owed = outage.owed(self._store, self._cfg.public_url)
+        # Sent outside the lock: a slow send must not hold up a heartbeat. An
+        # email is marked sent only once Resend has it; one that fails is tried
+        # again at the next minute, a few times at most.
+        for row, email in owed:
+            self._store.outage_email_tried(row["outage_id"], row["kind"], row["account_id"],
+                                           self._mailer.send(email), now)
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
