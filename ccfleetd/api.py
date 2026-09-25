@@ -17,7 +17,7 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 
-from . import consoleslots, customer_docs, oauth, sessions, usersite
+from . import consoleslots, customer_docs, oauth, sessions, statuspage, usersite
 from . import slots as slotstates
 from .config import Config
 from .desired import desired_state, machine_hostname
@@ -549,7 +549,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    (path in ("/account", "/privacy") or customer_docs.page_for(path))
+                    (path in ("/account", "/privacy", "/status")
+                     or customer_docs.page_for(path))
                     and not self._product_site()):
                 # Each site answers only for its own audience: the product
                 # never shows a console, the console never plays product.
@@ -573,6 +574,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # Public: Google links here from its sign-in screen.
                 self._send(200, usersite.privacy_page(ctx.cfg, self._viewer()).encode("utf-8"),
                            HTML_HEADERS)
+            elif path == "/status":
+                # Public: whether the site and the machines are up, never who is on them.
+                self._send(200, statuspage.page(ctx.store, ctx.cfg, self._viewer(),
+                                                time.time()).encode("utf-8"), HTML_HEADERS)
             elif customer_docs.page_for(path):
                 # Public, for people deciding whether to buy a slot and then using one.
                 self._docs_page(customer_docs.page_for(path))

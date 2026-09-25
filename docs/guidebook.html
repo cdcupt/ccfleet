@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.9.2 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.0 · 2026-09-24 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -1008,6 +1008,38 @@ ccfleetd slot list --machine pool-1</code></pre>
   <p>For a week after a holder moves their slot to another Claude account, a line under its
   row says <em>changed Claude account &lt;age&gt; ago</em>. It never says which account; that
   is the holder's to see.</p>
+  <h3>The status page</h3>
+  <p><code>/status</code> on the product site is public, and says whether ccfleet is up: an
+  overall line (<em>All systems operational</em>, <em>Partial outage</em> or <em>Major
+  outage</em>), then <em>Website and account pages</em> and <em>Slot machines</em>, each with
+  its last 90 days as a bar of UTC days and its uptime. The machines are one group,
+  counted and never listed: a held slot is named after its holder, so no machine's id or
+  slot's name is ever on the page. Each holder's slot card says how their own machine is,
+  with a link to it.</p>
+  <ul>
+    <li><strong>A machine that counts</strong> is switched on, carries a slot (a shared
+    machine's, or somebody's own node counted as theirs) and has reported at least once.</li>
+    <li><strong>Down</strong>: no report for 5 minutes on a shared machine, which reports
+    every minute, or 15 on somebody's own node, which reports every five; or an open
+    <code>claude_missing</code>, <code>slot_missing</code> or critical
+    <code>disk_high</code>. <strong>Degraded</strong>: a report late by 3 minutes (11 on an
+    own node), a <code>disk_high</code> warning, or a slot the machine cannot offer anybody
+    (<code>slot_wipe_failed</code>, <code>slot_occupied</code>,
+    <code>slot_provision_failed</code>).</li>
+    <li><strong>Never counted against a machine</strong>: the holder's sign-in, tokens,
+    usage limits or account, Remote Control (it needs the holder signed in), a new egress
+    address, or a version behind its pin. Those are on the holder's page and in the
+    console.</li>
+    <li><strong>The group</strong> is yellow when any machine is degraded or some are
+    down, and red only when every one is down. It is counted each minute as a group too,
+    so a red day means every machine down at the same time for 5 minutes or more; two
+    machines down at different times make a yellow day. Its uptime is every machine's
+    minutes together.</li>
+    <li><strong>The site's own downtime</strong> is its silence: the serving loop counts
+    every minute it runs, a check running a little late is forgiven, and a longer gap is
+    counted as down when the server comes back. <code>ccfleetd check</code> counts nothing.
+    Ninety days are kept, in <code>status_minutes</code>, one row a component a day.</li>
+  </ul>
   <h3>One account per slot, enforced</h3>
   <p>The product keeps the rule without relying on anybody to remember it:</p>
   <ul>
