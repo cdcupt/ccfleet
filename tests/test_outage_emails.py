@@ -561,6 +561,13 @@ def test_the_sites_outage_that_cannot_owe_its_news_is_not_recorded(store):
     assert due(store) == [("site", "a1@example.com")]
 
 
+def test_asking_for_emails_after_the_sites_outage_brings_no_news_of_it(store):
+    fleet(store)                                      # a3 has not asked
+    outage.site_back(store, int(NOW // 60) - 1, NOW + 10 * 60, 2)
+    store.set_outage_emails("a3", True)
+    assert due(store) == [("site", "a1@example.com")]
+
+
 def test_the_sites_outage_learned_of_twice_is_told_once(store):
     fleet(store)
     outage.site_back(store, int(NOW // 60) - 1, NOW + 10 * 60, 2)
