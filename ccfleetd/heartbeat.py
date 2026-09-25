@@ -77,6 +77,9 @@ def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return section if isinstance(section, Mapping) else {}
 
 
+#: Beyond any moment a usage window could reset at, in seconds since 1970.
+MAX_INSTANT = 1e11
+
 def _quota(section: Mapping[str, Any]) -> dict[str, Any]:
     """Subscription windows, as /usage on the node reported them.
 
@@ -92,6 +95,11 @@ def _quota(section: Mapping[str, Any]) -> dict[str, Any]:
         if used is None or not 0 <= used <= 100:
             continue
         out[name] = {"used_pct": used, "resets": _str(window.get("resets"), 40)}
+        # The moment itself, from Claude Code's own saved reading; a node that
+        # sends nonsense here gets the words above placed instead.
+        at = _num(window.get("resets_at"))
+        if at is not None and 0 < at < MAX_INSTANT:
+            out[name]["resets_at"] = at
     checked = _num(section.get("checked_at"))
     if checked is not None:
         out["checked_at"] = checked

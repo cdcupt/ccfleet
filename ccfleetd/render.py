@@ -519,6 +519,9 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # Named while somebody holds it: from the claim until the wipe that
             # frees it (see _called).
             "held_name": len(mine) == 1 and bool(mine[0].get("name")),
+            # Its one slot, for the usage card's Refresh (see _quota_refresh).
+            "slot_id": mine[0]["id"] if len(mine) == 1 else None,
+            "quota_wanted_at": mine[0].get("quota_wanted_at") if len(mine) == 1 else None,
             "owner": node["owner"], "region": node["region"],
             "enabled": node["enabled"], "status": level if node["enabled"] else "disabled",
             "last_seen_ts": (hb or {}).get("ts"),
@@ -1161,14 +1164,21 @@ def _sparkline(series: list[Mapping[str, Any]], width: int = 240, height: int = 
             f'<circle class="spark-dot" cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.5"/></svg>')
 
 
-def _reset_foot(text: Any, read_at: Any, now: Optional[float]) -> str:
-    """When a window resets: in the viewer's own zone where the words can be
-    read (see LOCAL_TIMES_JS), and as Claude Code printed them where not."""
-    if not text:
+def _reset_foot(text: Any, read_at: Any, now: Optional[float], exact: Any = None) -> str:
+    """When a window resets: in the viewer's own zone where the moment is
+    known (see LOCAL_TIMES_JS), and as Claude Code printed it where not.
+
+    `exact` is the moment itself, which the agent reads from Claude Code's own
+    saved reading; the printed words are placed only without it.
+    """
+    at = exact if (isinstance(exact, (int, float)) and not isinstance(exact, bool)
+                   and now is not None) else None
+    if at is None and not text:
         return ""
     readable = (isinstance(read_at, (int, float)) and not isinstance(read_at, bool)
                 and now is not None)
-    at = resets.reset_at(text, float(read_at)) if readable else None
+    if at is None:
+        at = resets.reset_at(text, float(read_at)) if readable else None
     if at is None:
         return f"resets {escape(str(text))}"
     return (f'resets <time datetime="{escape(resets.iso(at))}" data-local>'
@@ -1176,7 +1186,7 @@ def _reset_foot(text: Any, read_at: Any, now: Optional[float]) -> str:
 
 
 def _meter(used: Any, label: str, resets: Any, read_at: Any = None,
-           now: Optional[float] = None) -> str:
+           now: Optional[float] = None, resets_at: Any = None) -> str:
     """One quota window as a labelled bar.
 
     Colour carries the same meaning as everywhere else on this page: fine,
@@ -1188,7 +1198,7 @@ def _meter(used: Any, label: str, resets: Any, read_at: Any = None,
         return ""
     pct = max(0.0, min(100.0, float(used)))
     level = "crit" if pct >= 90 else "warn" if pct >= 75 else "ok"
-    foot = _reset_foot(resets, read_at, now)
+    foot = _reset_foot(resets, read_at, now, resets_at)
     return (f'<div class="meter"><div class="meter-head">'
             f'<span>{escape(label)}</span>'
             f'<span class="meter-pct">{pct:.0f}%</span></div>'
@@ -1197,7 +1207,32 @@ def _meter(used: Any, label: str, resets: Any, read_at: Any = None,
             f'<div class="meter-foot">{foot}</div></div>')
 
 
-def _quota_html(row: Mapping[str, Any], now: float) -> str:
+#: How long a usage read asked for is said to be under way; a slot tries it
+#: once, within a minute or two, so a request this old has had its answer.
+QUOTA_READ_WAIT_S = 5 * 60
+
+
+def quota_reading(wanted_at: Any, checked_at: Any, now: float) -> bool:
+    """Whether a read asked for from a page is still to be answered."""
+    if isinstance(wanted_at, bool) or not isinstance(wanted_at, (int, float)):
+        return False
+    read = checked_at if isinstance(checked_at, (int, float)) else 0
+    return wanted_at > read and now - wanted_at < QUOTA_READ_WAIT_S
+
+
+def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) -> str:
+    """The operator's Refresh, for a machine's one slot."""
+    slot_id = row.get("slot_id")
+    if not csrf or not slot_id:
+        return ""
+    if quota_reading(row.get("quota_wanted_at"), checked, now):
+        return '<p class="muted small">reading now&hellip;</p>'
+    return (f'<form class="inline" method="post" action="/actions/slot/{escape(slot_id)}/quota">'
+            f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+            '<button type="submit">Refresh</button></form>')
+
+
+def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
     """The two windows an owner actually asks about: this session, this week.
 
     These belong to the Claude account, not to the node: every device signed
@@ -1207,19 +1242,21 @@ def _quota_html(row: Mapping[str, Any], now: float) -> str:
     """
     quota = row.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
-    if not session and not week:
-        return '<p class="muted small">No window reading yet.</p>'
     checked = quota.get("checked_at")
+    refresh = _quota_refresh(row, checked, now, csrf)
+    if not session and not week:
+        return '<p class="muted small">No window reading yet.</p>' + refresh
     bars = ('<div class="usage-nums muted">Claude account &middot; every device</div>'
             + _meter(session.get("used_pct"), "5-hour session", session.get("resets"),
-                     checked, now)
-            + _meter(week.get("used_pct"), "This week", week.get("resets"), checked, now))
+                     checked, now, session.get("resets_at"))
+            + _meter(week.get("used_pct"), "This week", week.get("resets"), checked, now,
+                     week.get("resets_at")))
     if isinstance(checked, (int, float)) and not isinstance(checked, bool):
         bars += f'<p class="muted small">read {escape(_age(now, checked))} ago</p>'
-    return bars
+    return bars + refresh
 
 
-def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
+def _usage_html(rows: list[Mapping[str, Any]], now: float, csrf: str = "") -> str:
     """Per-node, per-account token use, counted from transcripts on each node."""
     def reporting(row: Mapping[str, Any]) -> bool:
         return bool((row.get("usage") or {}).get("total_tokens") or (row.get("quota") or {}))
@@ -1256,9 +1293,9 @@ def _usage_html(rows: list[Mapping[str, Any]], now: float) -> str:
             f'<div class="usage-meta muted">'
             f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
             f'{escape(share)} cached</div></div>'
-            f'<div class="usage-quota">{_quota_html(row, now)}</div>'
+            f'<div class="usage-quota">{_quota_html(row, now, csrf)}</div>'
             f'<div class="usage-spark">{spark}{caption}</div></div>')
-    return ('<h2>Usage and quota</h2><div class="card">' + "".join(items) + tail +
+    return ('<h2 id="usage">Usage and quota</h2><div class="card">' + "".join(items) + tail +
             '<p class="note">'
             "Windows come from <code>/usage</code> inside a Claude Code session on the node, "
             "or in the slot on a shared machine, "
@@ -1393,7 +1430,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         # press, which is why they get no CSRF token either: there is no form.
         # The sign-in card belongs to whoever owns the node, admin or not: needing
         # the operator to sign you in would only move the bottleneck.
-        + _usage_html(rows, now)
+        + _usage_html(rows, now, csrf if is_admin else "")
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")

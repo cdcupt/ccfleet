@@ -306,6 +306,11 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
             item["login"] = login
         if state in UPGRADE_STATES:
             item.update(_version_request(entry))
+        # A read of its usage asked for from a page: a moment, or nothing.
+        wanted = entry.get("quota_wanted_at")
+        if (state in SIGN_IN_STATES and isinstance(wanted, (int, float))
+                and not isinstance(wanted, bool)):
+            item["quota_wanted_at"] = wanted
         out.append(item)
     return out
 
@@ -442,6 +447,11 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
     if ask:
         login = (state.get("slot_logins") or {}).get(user)
         request: dict[str, Any] = {"refresh_quota": refresh_quota, "login": login}
+        # A read of its usage asked for from a page: the slot tries it once,
+        # on its turn to read (refresh_quota).
+        wanted = (state.get("quota_wanted") or {}).get(user)
+        if wanted is not None:
+            request["quota_wanted_at"] = wanted
         timeout = SLOT_FACTS_TIMEOUT_S
         if (state.get("slot_states") or {}).get(user) in UPGRADE_STATES:
             # The machine's pin, and whether this slot may move to it now: not
@@ -725,6 +735,15 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
             "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s}}
 
 
+def _read_asked(state: Mapping[str, Any], user: str) -> bool:
+    """A read of this slot's usage asked for since the one it last reported."""
+    wanted = (state.get("quota_wanted") or {}).get(user)
+    heard = ((state.get("heard") or {}).get(user) or {}).get("quota") or {}
+    read = heard.get("checked_at") if isinstance(heard, Mapping) else None
+    return (isinstance(wanted, (int, float)) and not isinstance(wanted, bool)
+            and wanted > (read if isinstance(read, (int, float)) else 0))
+
+
 def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
               fast: bool = False, abandoned: Optional[Mapping[str, Any]] = None
               ) -> tuple[int, dict[str, Any], dict[str, Any]]:
@@ -733,7 +752,10 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     turn = int(state.get("quota_turn") or 0)
     # One slot's quota per full run, and none on the fast polls. Each read
     # starts a Claude Code session; six at once on one machine is a spike.
-    refresh_for = users[turn % len(users)] if users and not fast else None
+    # A slot whose holder asked for a read now goes first.
+    asked = [u for u in users if _read_asked(state, u)]
+    refresh_for = ((asked[0] if asked else users[turn % len(users)])
+                   if users and not fast else None)
     payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned)
     # What each slot said, kept for the fast polls to repeat. Never the sign-in
     # progress: that is news once, and a device token must not sit on disk.
@@ -763,6 +785,8 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
                          if k in s}
         for s in wanted_slots(desired) if "claude_version" in s}
     new_state["quota_turn"] = (turn + (0 if fast else 1)) if users else 0
+    new_state["quota_wanted"] = {s["unix_user"]: s["quota_wanted_at"]
+                                 for s in wanted_slots(desired) if "quota_wanted_at" in s}
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state
 

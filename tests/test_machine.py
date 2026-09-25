@@ -1030,3 +1030,44 @@ def test_the_machine_says_when_its_os_wants_a_reboot(cfg, tmp_path, monkeypatch)
     assert machine.machine_payload(cfg, {}, fake.system())["reboot_required"] is False
     flag.write_text("")
     assert machine.machine_payload(cfg, {}, fake.system())["reboot_required"] is True
+
+
+def test_a_slot_asked_to_read_its_usage_goes_first_and_is_told_when(cfg):
+    """Erik, 2026-09-24: a Refresh on a page reaches the slot on the machine's
+    next full run, before the slot whose turn it would be."""
+    fake = Fake(users=["slot01", "slot02"], desired={"slots": [
+        {"unix_user": "slot01", "state": "active"},
+        {"unix_user": "slot02", "state": "active", "quota_wanted_at": 1000.0}]})
+    _, _, state = machine.run_cycle(cfg, {"slots": ["slot01", "slot02"]}, fake.system())
+    assert state["quota_wanted"] == {"slot02": 1000.0}
+    fake.spawned.clear()
+    machine.run_cycle(cfg, state, fake.system())
+    asked = [json.loads(kw["input_text"]) for _, kw in fake.spawned]
+    assert [a["refresh_quota"] for a in asked] == [False, True]
+    assert asked[1]["quota_wanted_at"] == 1000.0 and "quota_wanted_at" not in asked[0]
+
+
+def test_a_request_for_a_slot_nobody_uses_is_not_kept(cfg):
+    fake = Fake(users=["slot01"], desired={"slots": [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM,
+         "quota_wanted_at": 1000.0}]})
+    _, _, state = machine.run_cycle(cfg, {"slots": ["slot01"]}, fake.system())
+    assert state["quota_wanted"] == {}
+
+
+def test_a_request_that_is_no_moment_is_not_kept(cfg):
+    fake = Fake(users=["slot01"], desired={"slots": [
+        {"unix_user": "slot01", "state": "active", "quota_wanted_at": True}]})
+    _, _, state = machine.run_cycle(cfg, {"slots": ["slot01"]}, fake.system())
+    assert state["quota_wanted"] == {}
+
+
+def test_a_read_asked_for_is_answered_by_a_reading_as_new():
+    state = {"quota_wanted": {"slot01": 1000.0},
+             "heard": {"slot01": {"quota": {"checked_at": 999.0}}}}
+    assert machine._read_asked(state, "slot01")
+    state["heard"]["slot01"]["quota"]["checked_at"] = 1000.0
+    assert not machine._read_asked(state, "slot01")
+    assert machine._read_asked({"quota_wanted": {"slot01": 5.0}}, "slot01"), "never read"
+    assert not machine._read_asked({"quota_wanted": {"slot01": True}}, "slot01")
+    assert not machine._read_asked({}, "slot01")

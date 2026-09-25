@@ -315,7 +315,8 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "which count everything the account does: claude.ai, the Claude app, and Claude "
         "Code on any computer, device tokens included. Beside them, the tokens Claude Code "
         "used on this slot itself over the last week; work on your own computer is not in "
-        "that number.</li>"
+        "that number. The limits are read every five minutes; "
+        '<span class="btnlabel">Refresh</span> reads them now.</li>'
         '<li><strong>Device tokens.</strong> <span class="btnlabel">Get a device token</span> '
         "makes a one-year token from your own Claude account, for running Claude Code on "
         "your own computer. It is shown until you press "

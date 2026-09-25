@@ -722,8 +722,20 @@ def _usage_epoch(raw: Any) -> Optional[float]:
 
 QUOTA_TMUX_SOCKET = "ccfleet-quota"
 QUOTA_SESSION = "quota"
-QUOTA_REFRESH_S = 30 * 60
+# Erik, 2026-09-24: every five minutes, and at once when somebody asks from
+# a page (see quota_summary). It was half an hour.
+QUOTA_REFRESH_S = 5 * 60
 QUOTA_TIMEOUT_S = 90.0
+# Claude Code keeps the last /usage answer in its global config, beside the
+# account it was fetched for. Measured on 2.1.281: written whenever it fetches
+# the windows — opening /usage does — at most once a minute, and not by an
+# ordinary request (`claude -p`). Read and never reported: the account ids in
+# it are compared here and dropped.
+QUOTA_CACHE_KEY = "cachedUsageUtilization"
+QUOTA_CACHE_WINDOWS = (("session", "five_hour"), ("week", "seven_day"))
+# A reading Claude Code made this long before a probe began still answers it:
+# it fetches at most once a minute, so the probe could have caused none newer.
+QUOTA_CACHE_SLACK_S = 90.0
 # Labels /usage prints, mapped to the names reported. "Current session" is the
 # five-hour window; the weekly ones reset together.
 QUOTA_LABELS = (
@@ -893,16 +905,87 @@ def read_quota(runner: Runner = subprocess.run,
     return result
 
 
+def _instant(text: Any) -> Optional[float]:
+    """An ISO 8601 time with its offset, as seconds since the epoch."""
+    if not isinstance(text, str):
+        return None
+    try:
+        at = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at.timestamp() if at.tzinfo is not None else None
+
+
+def _percent(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if 0 <= value <= 100 else None
+
+
+def cached_usage(config_dir: Path) -> Optional[dict[str, Any]]:
+    """The windows Claude Code last fetched for the account signed in now.
+
+    Shaped as a report: each window's percentage used and the moment it resets,
+    and when it was fetched. None when there is none, when it was for another
+    account — one from before a change of account, which Claude Code itself
+    throws away — or when it says nothing usable.
+    """
+    try:
+        data = json.loads(global_config_of(config_dir).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    cache = data.get(QUOTA_CACHE_KEY) if isinstance(data, dict) else None
+    account = data.get("oauthAccount") if isinstance(data, dict) else None
+    if not isinstance(cache, dict) or not isinstance(account, dict):
+        return None
+    owner = cache.get("accountUuid")
+    fetched = cache.get("fetchedAtMs")
+    windows = cache.get("utilization")
+    if (not isinstance(owner, str) or owner != account.get("accountUuid")
+            or isinstance(fetched, bool) or not isinstance(fetched, (int, float))
+            or not isinstance(windows, dict)):
+        return None
+    out: dict[str, Any] = {}
+    for name, key in QUOTA_CACHE_WINDOWS:
+        window = windows.get(key)
+        used = _percent(window.get("utilization")) if isinstance(window, dict) else None
+        if used is None:
+            continue
+        at = _instant(window.get("resets_at"))
+        out[name] = {"used_pct": used, **({"resets_at": at} if at is not None else {})}
+    if not out:
+        return None
+    return {**out, "checked_at": fetched / 1000}
+
+
+def _asked(wanted_at: Any, answered: float) -> bool:
+    """A read asked for from a page since the one kept, and not tried yet."""
+    return (isinstance(wanted_at, (int, float)) and not isinstance(wanted_at, bool)
+            and wanted_at > answered)
+
+
 def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
-                  now: Optional[float] = None) -> tuple[Optional[dict[str, Any]],
-                                                        Optional[dict[str, Any]]]:
-    """Cached windows, refreshed on the slow schedule. Returns (report, to_store)."""
+                  now: Optional[float] = None, *, config_dir: Optional[Path] = None,
+                  wanted_at: Any = None) -> tuple[Optional[dict[str, Any]],
+                                                  Optional[dict[str, Any]]]:
+    """The windows: kept for QUOTA_REFRESH_S, read again sooner when a page asks
+    (`wanted_at`, tried once). Returns (report, to_store).
+
+    Claude Code's own reading stands in whenever it is newer than the one
+    kept — its holder opened /usage themselves — and is preferred to the screen
+    after a probe: exact reset moments, and nothing mid-paint to misread.
+    """
     now = time.time() if now is None else now
+    config_dir = Path.home() / ".claude" if config_dir is None else config_dir
     cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
-    if cached:
-        age = now - (cached.get("ts") or 0)
-        if age < QUOTA_REFRESH_S:
-            return _quota_report(cached), None
+    kept = float((cached or {}).get("ts") or 0)
+    asked = _asked(wanted_at, max(kept, float((cached or {}).get("asked") or 0)))
+    theirs = cached_usage(config_dir)
+    if (theirs and theirs["checked_at"] > kept and now - theirs["checked_at"] < QUOTA_REFRESH_S
+            and (not asked or theirs["checked_at"] >= wanted_at)):
+        return theirs, {**theirs, "ts": theirs["checked_at"]}
+    if cached and not asked and now - kept < QUOTA_REFRESH_S:
+        return _quota_report(cached), None
     probe, why = quota_probe_dir()
     if probe is None:
         # Said where it will be seen: in the log, and in the state beside the last
@@ -913,17 +996,23 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
         kept = {k: v for k, v in (cached or {}).items() if k != "skipped"}
         return {**_quota_report(kept), "skipped": why}, {**kept, "skipped": why}
     fresh = read_quota(runner, now)
+    tried = {"asked": wanted_at} if asked else {}
+    theirs = cached_usage(config_dir)
+    if theirs and theirs["checked_at"] >= now - QUOTA_CACHE_SLACK_S:
+        return theirs, {**theirs, "ts": now, **tried}
     if fresh is None:
         # Keep showing the last known answer rather than blanking the card; it is
-        # stamped, so the console can say how old it is.
-        return (_quota_report(cached) if cached else None), None
+        # stamped, so the console can say how old it is. A read asked for is
+        # tried once: a slot that cannot read is not asked every minute.
+        return ((_quota_report(cached) if cached else None),
+                ({**cached, **tried} if cached and tried else None))
     fresh["checked_at"] = now
-    return fresh, {**fresh, "ts": now}
+    return fresh, {**fresh, "ts": now, **tried}
 
 
 def _quota_report(cached: Mapping[str, Any]) -> dict[str, Any]:
-    """A stored reading as it is reported: without its stamp or an old reason."""
-    return {k: v for k, v in cached.items() if k not in ("ts", "skipped")}
+    """A stored reading as it is reported: without its stamps or an old reason."""
+    return {k: v for k, v in cached.items() if k not in ("ts", "skipped", "asked")}
 
 
 # -- the old probe's lines in Claude Code's prompt history -------------------------
@@ -1699,7 +1788,8 @@ def run_cycle(cfg: AgentConfig, state: Mapping[str, Any],
                                          lambda marked: write_state(cfg.state_path, marked))
     # Reading the windows starts a Claude Code session, so it runs on its own slow
     # schedule and the answer is cached between heartbeats.
-    quota, remember = quota_summary(state) if reconcile else (None, None)
+    quota, remember = (quota_summary(state, config_dir=cfg.claude_config_dir) if reconcile
+                       else (None, None))
     if remember is not None:
         state = {**state, "quota": remember}
     payload = build_payload(cfg, state=state, quota=quota)
@@ -2402,12 +2492,13 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # types to reach /usage would land instead. Most slots spend their first
     # minutes exactly there, between being claimed and being signed into.
     if request.get("refresh_quota") is True and credentials.get("logged_in") is True:
-        quota, remember = quota_summary(state, runner, now)
+        quota, remember = quota_summary(state, runner, now, config_dir=config_dir,
+                                        wanted_at=request.get("quota_wanted_at"))
         if remember is not None:
             state = {**state, "quota": remember}
     else:
         cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
-        quota = {k: v for k, v in cached.items() if k != "ts"} if cached else None
+        quota = _quota_report(cached) if cached else None
     upgrade = state.get("upgrade") if isinstance(state.get("upgrade"), Mapping) else {}
     if upgrade or state.get("restart"):
         facts["upgrade"] = {**upgrade, "restart": state.get("restart")}

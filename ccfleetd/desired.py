@@ -176,6 +176,12 @@ def _slot_block(slot: Mapping[str, Any],
     pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None
     if pending:
         block["login"] = pending
+    # A read of its usage asked for now; the slot tries it once, and an agent
+    # from before this reads it on its own schedule.
+    wanted = slot.get("quota_wanted_at")
+    if (slot.get("state") in SLOT_SIGN_IN_STATES and isinstance(wanted, (int, float))
+            and not isinstance(wanted, bool)):
+        block["quota_wanted_at"] = wanted
     # Its own Claude Code, only while somebody holds it set up: a slot being
     # made or wiped has nothing to update. An agent from before this reads the
     # machine's pin above and ignores these, which is the old behaviour.
