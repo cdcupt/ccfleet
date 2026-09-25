@@ -93,6 +93,26 @@ def test_emails_are_sent_only_when_the_operator_set_both_key_and_sender():
     assert not mail.NoMailer().send(an_email())
 
 
+@pytest.mark.parametrize("env", [
+    {"CCFLEET_RESEND_API_KEY": KEY},
+    {"CCFLEET_EMAIL_FROM": "ccfleet <ccfleet@example.com>"},
+    {"CCFLEET_RESEND_API_KEY": KEY, "CCFLEET_EMAIL_FROM": "not an address"},
+    {"CCFLEET_RESEND_API_KEY": KEY, "CCFLEET_EMAIL_FROM": "ccfleet <nobody>"},
+    {"CCFLEET_RESEND_API_KEY": KEY, "CCFLEET_EMAIL_FROM": "a <b@c.com>\nBcc: x@y.com"},
+])
+def test_half_or_wrong_email_settings_stop_the_server(env):
+    from ccfleetd.config import ConfigError
+    with pytest.raises(ConfigError):
+        Config.from_env(env)
+
+
+@pytest.mark.parametrize("sender", ["ccfleet@9relay.com", "ccfleet <ccfleet@9relay.com>",
+                                    "ccfleet status <status@mail.example.co.uk>"])
+def test_an_address_or_a_name_and_an_address_is_a_sender(sender):
+    assert Config.from_env({"CCFLEET_RESEND_API_KEY": KEY,
+                            "CCFLEET_EMAIL_FROM": sender}).emails_ready
+
+
 def test_the_settings_come_from_the_environment():
     cfg = Config.from_env({"CCFLEET_RESEND_API_KEY": f" {KEY} ",
                            "CCFLEET_EMAIL_FROM": " ccfleet <ccfleet@example.com> "})
@@ -124,72 +144,130 @@ def fleet(store, *, opted=("a1",)):
         store.set_outage_emails(account, True)
 
 
+def due(store):
+    """What is owed now, as (kind, to)."""
+    return [(row["kind"], email.to) for row, email in outage.owed(store, URL)]
+
+
+def deliver(store, now, sent=True):
+    """Try every owed email once; Resend accepts them all, or none."""
+    for row, _ in outage.owed(store, URL):
+        store.outage_email_tried(row["outage_id"], row["kind"], row["account_id"], sent, now)
+
+
 def test_a_machine_down_under_five_minutes_is_not_news(store):
     fleet(store)
-    assert outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 299, URL) == []
-    assert outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 330, URL) == []
-    assert store.open_outage("m1") is None
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 299)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 330)
+    assert due(store) == [] and store.open_outage("m1") is None
 
 
-def test_five_minutes_down_tells_the_holders_who_asked_and_only_once(store):
+def test_five_minutes_down_owes_the_holders_who_asked_one_email_each(store):
     fleet(store, opted=("a1", "b1"))
-    sent = outage.machine_outages(store, {"m1": State(RED, NOW), "m2": State(GREEN)},
-                                  NOW + 300, URL)
-    assert [e.to for e in sent] == ["a1@example.com"], "only m1's holder, not m2's"
-    assert "is down" in sent[0].subject and "since 2026-09-21 14:13 UTC" in sent[0].text
-    assert f"{URL}/status" in sent[0].text and f"{URL}/account" in sent[0].text
-    assert outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 600, URL) == []
+    outage.machine_outages(store, {"m1": State(RED, NOW), "m2": State(GREEN)}, NOW + 300)
+    assert due(store) == [("down", "a1@example.com")], "only m1's holder, not m2's"
+    [(row, email)] = outage.owed(store, URL)
+    assert "is down" in email.subject and "since 2026-09-21 14:13 UTC" in email.text
+    assert f"{URL}/status" in email.text and f"{URL}/account" in email.text
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 600)
+    assert due(store) == [("down", "a1@example.com")], "owed once, not again"
 
 
 def test_somebody_who_did_not_ask_is_not_told(store):
     fleet(store, opted=())
-    assert outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 400, URL) == []
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 400)
+    assert due(store) == []
 
 
-def test_back_is_told_once_to_those_told_it_was_down(store):
+def test_a_sent_email_is_owed_no_more(store):
     fleet(store)
-    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300, URL)
-    sent = outage.machine_outages(store, {"m1": State(YELLOW, NOW + 900)}, NOW + 900, URL)
-    assert [e.to for e in sent] == ["a1@example.com"] and "is back" in sent[0].subject
-    assert "after 15 min down" in sent[0].text
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    assert due(store) == []
+
+
+def test_a_failed_send_is_tried_again_and_given_up_after_a_few(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    for attempt in range(outage.MAX_TRIES):
+        assert due(store) == [("down", "a1@example.com")], attempt
+        deliver(store, NOW + 300 + 60 * attempt, sent=False)
+    assert due(store) == []
+
+
+def test_back_is_told_to_those_who_heard_it_was_down(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    outage.machine_outages(store, {"m1": State(YELLOW, NOW + 900)}, NOW + 900)
+    [(row, email)] = outage.owed(store, URL)
+    assert row["kind"] == "back" and email.to == "a1@example.com"
+    assert "is back" in email.subject and "after 15 min down" in email.text
     assert store.open_outage("m1") is None
-    assert outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 960, URL) == []
+    deliver(store, NOW + 900)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 960)
+    assert due(store) == []
+
+
+def test_nobody_hears_an_end_without_its_start(store):
+    """Codex: recipients were chosen afresh at the end. Somebody who asked
+    mid-outage, or whose down email never went, is not told it is back."""
+    fleet(store, opted=("a1",))
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300, sent=False)            # a1's down email has not gone yet
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 900)
+    assert [kind for kind, _ in due(store)] == ["down"], "no back before the down went"
+
+
+def test_somebody_who_turned_emails_off_mid_outage_hears_no_end(store):
+    fleet(store)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    store.set_outage_emails("a1", False)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 900)
+    assert due(store) == []
 
 
 def test_a_new_outage_is_told_again(store):
     fleet(store)
-    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300, URL)
-    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 400, URL)
-    sent = outage.machine_outages(store, {"m1": State(RED, NOW + 1000)}, NOW + 1300, URL)
-    assert [e.to for e in sent] == ["a1@example.com"]
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 400)
+    deliver(store, NOW + 400)
+    outage.machine_outages(store, {"m1": State(RED, NOW + 1000)}, NOW + 1300)
+    assert due(store) == [("down", "a1@example.com")]
 
 
 def test_a_machine_that_stops_counting_ends_its_outage_quietly(store):
     fleet(store)
-    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300, URL)
-    assert outage.machine_outages(store, {}, NOW + 400, URL) == []
-    assert store.open_outage("m1") is None
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    outage.machine_outages(store, {}, NOW + 400)
+    assert due(store) == [] and store.open_outage("m1") is None
 
 
 def test_a_red_with_no_known_start_starts_now(store):
     fleet(store)
-    assert outage.machine_outages(store, {"m1": State(RED)}, NOW, URL) == []
-    assert store.open_outage("m1")["started_at"] == NOW
-    assert len(outage.machine_outages(store, {"m1": State(RED)}, NOW + 300, URL)) == 1
+    outage.machine_outages(store, {"m1": State(RED)}, NOW)
+    assert due(store) == [] and store.open_outage("m1")["started_at"] == NOW
+    outage.machine_outages(store, {"m1": State(RED)}, NOW + 300)
+    assert due(store) == [("down", "a1@example.com")]
 
 
 def test_a_slot_given_back_is_not_told(store):
     fleet(store)
     store.begin_release("m1")
-    assert outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300, URL) == []
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    assert due(store) == []
 
 
 def test_the_email_says_the_slots_own_name_and_a_long_outage_in_hours(store):
     fleet(store)
-    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300, URL)
-    [back] = outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 2 * 3600 + 300, URL)
-    name = store.get_slot("m1")["name"]
-    assert name in back.subject and "after 2h 5m down" in back.text
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
+    outage.machine_outages(store, {"m1": State(GREEN)}, NOW + 2 * 3600 + 300)
+    [(_, back)] = outage.owed(store, URL)
+    assert store.get_slot("m1")["name"] in back.subject and "after 2h 5m down" in back.text
     assert back.html.startswith("<p>") and "<script" not in back.html
 
 
@@ -198,15 +276,18 @@ def test_the_email_says_the_slots_own_name_and_a_long_outage_in_hours(store):
 def test_a_site_that_was_silent_five_minutes_says_so_once_back(store):
     fleet(store, opted=("a1", "b1"))
     last = int(NOW // 60) - 1                       # counted up to the minute before
-    assert outage.site_back(store, last, NOW + 5 * 60, 2, URL) == []   # within grace
-    sent = outage.site_back(store, last, NOW + 7 * 60 + 1, 2, URL)
-    assert sorted(e.to for e in sent) == ["a1@example.com", "b1@example.com"]
-    assert "kept working" in sent[0].text and "was down" in sent[0].subject
+    outage.site_back(store, last, NOW + 5 * 60, 2)     # within grace: a restart
+    assert due(store) == []
+    outage.site_back(store, last, NOW + 7 * 60 + 1, 2)
+    assert sorted(due(store)) == [("site", "a1@example.com"), ("site", "b1@example.com")]
+    [(_, email), _] = outage.owed(store, URL)
+    assert "kept working" in email.text and "was down" in email.subject
 
 
 def test_a_site_never_counted_says_nothing(store):
     fleet(store)
-    assert outage.site_back(store, None, NOW, 2, URL) == []
+    outage.site_back(store, None, NOW, 2)
+    assert due(store) == []
 
 
 def test_the_lasting_words():
@@ -217,12 +298,12 @@ def test_the_lasting_words():
 # -- the monitor ---------------------------------------------------------------------------
 
 class Outbox:
-    def __init__(self):
-        self.sent = []
+    def __init__(self, accept=True):
+        self.sent, self.accept = [], accept
 
     def send(self, email):
         self.sent.append(email)
-        return True
+        return self.accept
 
 
 def test_the_minute_loop_sends_what_is_owed_once(store):
@@ -236,6 +317,20 @@ def test_the_minute_loop_sends_what_is_owed_once(store):
     assert [e.to for e in outbox.sent] == ["a1@example.com"]
     monitor.record_status(NOW + 660)
     assert len(outbox.sent) == 1
+
+
+def test_the_minute_loop_tries_a_failed_send_again(store):
+    fleet(store)
+    store.insert_heartbeat("m1", NOW, {"node_id": "m1", "mode": "machine", "slots": []})
+    outbox = Outbox(accept=False)
+    monitor = Monitor(store, Config(public_url=URL), LogNotifier(), mailer=outbox)
+    monitor.record_status(NOW + 600)
+    monitor.record_status(NOW + 660)
+    assert [e.to for e in outbox.sent] == ["a1@example.com"] * 2
+    outbox.accept = True
+    monitor.record_status(NOW + 720)
+    monitor.record_status(NOW + 780)
+    assert len(outbox.sent) == 3, "sent once it is accepted, and not after"
 
 
 def test_without_a_mailer_nothing_is_sent_and_nothing_breaks(store):
@@ -293,8 +388,8 @@ def test_turning_emails_on_for_nobody_is_refused(store):
 def test_given_back_slots_and_others_do_not_count_as_recipients(store):
     fleet(store, opted=("a1", "b1", "a3"))
     assert [r["email"] for r in store.outage_emails_for("m1")] == ["a1@example.com"]
-    assert store.outage_subscribers() == ["a1@example.com", "a3@example.com",
-                                          "b1@example.com"]
+    assert [r["email"] for r in store.outage_subscribers()] == [
+        "a1@example.com", "a3@example.com", "b1@example.com"]
     assert slots.RELEASING not in (s["state"] for s in store.list_slots(node_id="m1"))
 
 
@@ -302,11 +397,12 @@ def test_an_outage_follows_its_machine_to_a_new_name(store):
     """Renamed mid-outage, the machine is the same one: its holders are told it
     is back once, not that a new outage began."""
     fleet(store)
-    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300, URL)
+    outage.machine_outages(store, {"m1": State(RED, NOW)}, NOW + 300)
+    deliver(store, NOW + 300)
     store.rename_node("m1", "m9")
     assert store.open_outage("m9")["down_sent_at"] is not None
-    sent = outage.machine_outages(store, {"m9": State(GREEN)}, NOW + 900, URL)
-    assert [e.to for e in sent] == ["a1@example.com"] and "is back" in sent[0].subject
+    outage.machine_outages(store, {"m9": State(GREEN)}, NOW + 900)
+    assert due(store) == [("back", "a1@example.com")]
 
 
 def test_a_rename_drops_what_a_removed_machine_left_under_the_new_name(store):
@@ -332,3 +428,5 @@ def test_the_minute_loop_tells_of_the_sites_own_silence_once_back(store):
     monitor.record_status(NOW + 60 + 10 * 60)           # silent for ten minutes
     assert [e.to for e in monitor._mailer.sent] == ["a1@example.com"]
     assert "website was down" in monitor._mailer.sent[0].subject
+    monitor.record_status(NOW + 60 + 11 * 60)
+    assert len(monitor._mailer.sent) == 1

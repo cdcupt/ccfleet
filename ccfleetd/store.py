@@ -263,6 +263,19 @@ CREATE TABLE IF NOT EXISTS outages (
     back_sent_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_outages_open ON outages(component, ended_at);
+-- Each email an outage owes, one per person and kind: queued when it falls
+-- due, sent after the monitor's lock, marked when Resend has it, and tried
+-- again on later minutes until then, a few times at most.
+CREATE TABLE IF NOT EXISTS outage_emails (
+    outage_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    slot_name TEXT NOT NULL DEFAULT '',
+    tries INTEGER NOT NULL DEFAULT 0,
+    sent_at REAL,
+    PRIMARY KEY (outage_id, kind, account_id)
+);
 """
 
 #: Slots whose holders hear of their machine's outage: set up or being set up,
@@ -1190,19 +1203,61 @@ class Store:
         asked for outage emails, their address, and the name the slot goes by."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT a.email, s.id AS slot_id, s.name FROM slots s "
+                "SELECT a.id AS account_id, a.email, s.id AS slot_id, s.name FROM slots s "
                 "JOIN accounts a ON a.id = s.held_by "
                 "WHERE s.node_id = ? AND a.outage_emails = 1 AND s.state IN (?, ?, ?) "
                 "ORDER BY s.id",
                 (node_id, *OUTAGE_TOLD_STATES)).fetchall()
         return [dict(r) for r in rows]
 
-    def outage_subscribers(self) -> list[str]:
-        """Everybody who asked for outage emails, by address."""
+    def outage_subscribers(self) -> list[dict[str, Any]]:
+        """Everybody who asked for outage emails."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT email FROM accounts WHERE outage_emails = 1 ORDER BY email").fetchall()
-        return [r["email"] for r in rows]
+                "SELECT id AS account_id, email FROM accounts WHERE outage_emails = 1 "
+                "ORDER BY email").fetchall()
+        return [dict(r) for r in rows]
+
+    def queue_outage_emails(self, outage_id: int, kind: str,
+                            recipients: list[Mapping[str, Any]]) -> None:
+        """Owe each of them one email of this kind about this outage, once."""
+        with self._write_txn() as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO outage_emails (outage_id, kind, account_id, email, "
+                "slot_name) VALUES (?, ?, ?, ?, ?)",
+                [(outage_id, kind, r["account_id"], r["email"], r.get("slot_name") or "")
+                 for r in recipients])
+
+    def told_down(self, outage_id: int) -> list[dict[str, Any]]:
+        """Who heard this outage begin, and still wants outage emails: those
+        its end is told to, so nobody hears of an end without its start."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT e.account_id, a.email, e.slot_name FROM outage_emails e "
+                "JOIN accounts a ON a.id = e.account_id "
+                "WHERE e.outage_id = ? AND e.kind = 'down' AND e.sent_at IS NOT NULL "
+                "AND a.outage_emails = 1 ORDER BY a.email", (outage_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def owed_outage_emails(self, max_tries: int) -> list[dict[str, Any]]:
+        """Every email owed and not yet sent, with its outage's moments."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT e.outage_id, e.kind, e.account_id, e.email, e.slot_name, e.tries, "
+                "o.started_at, o.ended_at FROM outage_emails e "
+                "JOIN outages o ON o.id = e.outage_id "
+                "WHERE e.sent_at IS NULL AND e.tries < ? ORDER BY e.outage_id, e.kind, e.email",
+                (max_tries,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def outage_email_tried(self, outage_id: int, kind: str, account_id: str, sent: bool,
+                           now: float) -> None:
+        """One try at an owed email: sent, or one try closer to giving up."""
+        with self._write_txn() as conn:
+            conn.execute(
+                "UPDATE outage_emails SET tries = tries + 1, sent_at = ? "
+                "WHERE outage_id = ? AND kind = ? AND account_id = ?",
+                (now if sent else None, outage_id, kind, account_id))
 
     def set_outage_emails(self, account_id: str, on: bool) -> None:
         with self._write_txn() as conn:

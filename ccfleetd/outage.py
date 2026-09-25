@@ -2,9 +2,11 @@
 their slot's machine has been down for five minutes, and again when it is back.
 
 Decided under the monitor's lock, once a minute, from the states the status
-page counts (ccfleetd/status.py), and sent after it: each outage is recorded,
-so each one is told once, whatever the sending does. The site is the one thing
-that cannot say it is down, since it is what sends; it says afterwards, once it
+page counts (ccfleetd/status.py): an email falling due is queued, one per
+person, and sent after the lock. Resend's acceptance is what marks it sent; a
+send that fails is tried again on later minutes, MAX_TRIES times at most. The
+end of an outage is told only to those who heard its start. The site is the
+one thing that cannot say it is down, since it is what sends: it says, once it
 is back, that it was, and that slots kept working through it.
 """
 
@@ -15,12 +17,17 @@ from datetime import datetime, timezone
 from html import escape
 from typing import Any, Optional
 
-from . import names
 from .mail import Email
 from .status import RED, State
 
 #: How long a machine is down before its holders hear of it.
 DOWN_AFTER_S = 5 * 60
+#: Tries at one email before it is given up, a minute or more apart.
+MAX_TRIES = 5
+#: The kinds of email: a machine down, the same machine back, the site's own outage.
+DOWN, BACK, SITE = "down", "back", "site"
+#: The site's outages, beside the machines' (whose component is their id).
+SITE_COMPONENT = "site"
 
 
 def when(at: float) -> str:
@@ -35,6 +42,52 @@ def lasted(seconds: float) -> str:
     return f"{hours}h {minutes}m" if hours else f"{minutes} min"
 
 
+def _recipients(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Whom to tell, each with the name their slot goes by."""
+    return [{"account_id": r["account_id"], "email": r["email"],
+             "slot_name": r.get("name") or r.get("slot_id") or r.get("slot_name") or ""}
+            for r in rows]
+
+
+def machine_outages(store: Any, machines: Mapping[str, State], now: float) -> None:
+    """Each machine's outage as it stands now, and the emails it owes, queued."""
+    for node_id, state in machines.items():
+        outage = store.open_outage(node_id)
+        if state.level == RED:
+            if outage is None:
+                outage = store.begin_outage(node_id, state.since if state.since else now)
+            if outage["down_sent_at"] is None and now - outage["started_at"] >= DOWN_AFTER_S:
+                store.queue_outage_emails(outage["id"], DOWN,
+                                          _recipients(store.outage_emails_for(node_id)))
+                store.mark_outage(outage["id"], "down_sent_at", now)
+        elif outage is not None:
+            store.mark_outage(outage["id"], "ended_at", now)
+            # Only an outage its holders heard of is told as over, and only to
+            # them: one under five minutes was never news.
+            if outage["down_sent_at"] is not None:
+                store.queue_outage_emails(outage["id"], BACK,
+                                          _recipients(store.told_down(outage["id"])))
+                store.mark_outage(outage["id"], "back_sent_at", now)
+    # A machine that stopped counting — switched off, taken away — mid-outage
+    # has nobody left to tell, so its outage just ends.
+    for outage in store.open_outages():
+        if outage["component"] not in machines:
+            store.mark_outage(outage["id"], "ended_at", now)
+
+
+def site_back(store: Any, last_minute: Optional[int], now: float, grace_minutes: int) -> None:
+    """The site's own silence, owed once it is over to everybody who asked for
+    outage emails, when it lasted five minutes or more. A restart is shorter."""
+    if last_minute is None:
+        return
+    down_from = (last_minute + 1) * 60
+    if now - down_from < DOWN_AFTER_S + grace_minutes * 60:
+        return
+    outage = store.begin_outage(SITE_COMPONENT, down_from)
+    store.mark_outage(outage["id"], "ended_at", now)
+    store.queue_outage_emails(outage["id"], SITE, _recipients(store.outage_subscribers()))
+
+
 def _email(to: str, subject: str, lines: list[str], url: str) -> Email:
     """One message, its closing the same for all: where to look, and how to stop."""
     base = url.rstrip("/")
@@ -46,65 +99,28 @@ def _email(to: str, subject: str, lines: list[str], url: str) -> Email:
     return Email(to=to, subject=subject, text=text, html=html)
 
 
-def _down(row: Mapping[str, Any], since: float, url: str) -> Email:
-    name = names.display({"id": row["slot_id"], "name": row.get("name")})
-    return _email(row["email"], f"Your ccfleet slot {name} is down", [
-        f"Your slot {name} has been unreachable since {when(since)}.",
-        "While it is down, claude.ai/code and the Claude app cannot reach it. What is on "
-        "it stays there. We are on it, and will email you when it is back."], url)
+def render(row: Mapping[str, Any], url: str) -> Email:
+    """The email one queued row stands for."""
+    name, start, end = row["slot_name"], row["started_at"], row["ended_at"]
+    if row["kind"] == DOWN:
+        return _email(row["email"], f"Your ccfleet slot {name} is down", [
+            f"Your slot {name} has been unreachable since {when(start)}.",
+            "While it is down, claude.ai/code and the Claude app cannot reach it. What is "
+            "on it stays there. We are on it, and will email you when it is back."], url)
+    if row["kind"] == BACK:
+        return _email(row["email"], f"Your ccfleet slot {name} is back", [
+            f"Your slot {name} is reachable again, since {when(end)}, after "
+            f"{lasted(end - start)} down.",
+            "Remote Control comes back on by itself; a session that was open when it went "
+            "down may need starting again."], url)
+    return _email(row["email"], "ccfleet's website was down", [
+        f"ccfleet's website and account pages were down from {when(start)} to "
+        f"{when(end)}, {lasted(end - start)} in all.",
+        "Your slot kept working all along: you reach it through claude.ai/code or the "
+        "Claude app, not through our website. This could only be said now, since the "
+        "website is what sends these emails."], url)
 
 
-def _back(row: Mapping[str, Any], since: float, now: float, url: str) -> Email:
-    name = names.display({"id": row["slot_id"], "name": row.get("name")})
-    return _email(row["email"], f"Your ccfleet slot {name} is back", [
-        f"Your slot {name} is reachable again, since {when(now)}, after "
-        f"{lasted(now - since)} down.",
-        "Remote Control comes back on by itself; a session that was open when it went "
-        "down may need starting again."], url)
-
-
-def machine_outages(store: Any, machines: Mapping[str, State], now: float,
-                    url: str) -> list[Email]:
-    """Each machine's outage as it stands now, and the emails it is owed."""
-    owed: list[Email] = []
-    for node_id, state in machines.items():
-        outage = store.open_outage(node_id)
-        if state.level == RED:
-            if outage is None:
-                outage = store.begin_outage(node_id, state.since if state.since else now)
-            if outage["down_sent_at"] is None and now - outage["started_at"] >= DOWN_AFTER_S:
-                owed += [_down(row, outage["started_at"], url)
-                         for row in store.outage_emails_for(node_id)]
-                store.mark_outage(outage["id"], "down_sent_at", now)
-        elif outage is not None:
-            store.mark_outage(outage["id"], "ended_at", now)
-            # Only an outage its holders heard of is told as over: one under
-            # five minutes was never news.
-            if outage["down_sent_at"] is not None:
-                owed += [_back(row, outage["started_at"], now, url)
-                         for row in store.outage_emails_for(node_id)]
-                store.mark_outage(outage["id"], "back_sent_at", now)
-    # A machine that stopped counting — switched off, taken away — mid-outage
-    # has nobody left to tell, so its outage just ends.
-    for outage in store.open_outages():
-        if outage["component"] not in machines:
-            store.mark_outage(outage["id"], "ended_at", now)
-    return owed
-
-
-def site_back(store: Any, last_minute: Optional[int], now: float, grace_minutes: int,
-              url: str) -> list[Email]:
-    """The site's own silence, told once it is over: to everybody who asked for
-    outage emails, when it lasted five minutes or more. A restart is shorter."""
-    if last_minute is None:
-        return []
-    down_from = (last_minute + 1) * 60
-    if now - down_from < DOWN_AFTER_S + grace_minutes * 60:
-        return []
-    lines = [f"ccfleet's website and account pages were down from {when(down_from)} to "
-             f"{when(now)}, {lasted(now - down_from)} in all.",
-             "Your slot kept working all along: you reach it through claude.ai/code or "
-             "the Claude app, not through our website. This could only be said now, "
-             "since the website is what sends these emails."]
-    return [_email(to, "ccfleet's website was down", lines, url)
-            for to in store.outage_subscribers()]
+def owed(store: Any, url: str) -> list[tuple[Mapping[str, Any], Email]]:
+    """Every email owed and not yet sent, with the row it came from."""
+    return [(row, render(row, url)) for row in store.owed_outage_emails(MAX_TRIES)]

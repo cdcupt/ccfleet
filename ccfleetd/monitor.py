@@ -176,12 +176,15 @@ class Monitor:
             # site's own outage, told now that it is over.
             last = self._store.status_last_minute(status.SITE)
             machines = status.record(self._store, now, self._cfg.check_interval_s)
-            owed = (outage.machine_outages(self._store, machines, now, self._cfg.public_url)
-                    + outage.site_back(self._store, last, now, grace, self._cfg.public_url))
-        # Sent outside the lock: a slow send must not hold up a heartbeat. Each
-        # outage is already marked told, so a send that fails is not repeated.
-        for email in owed:
-            self._mailer.send(email)
+            outage.machine_outages(self._store, machines, now)
+            outage.site_back(self._store, last, now, grace)
+            owed = outage.owed(self._store, self._cfg.public_url)
+        # Sent outside the lock: a slow send must not hold up a heartbeat. An
+        # email is marked sent only once Resend has it; one that fails is tried
+        # again at the next minute, a few times at most.
+        for row, email in owed:
+            self._store.outage_email_tried(row["outage_id"], row["kind"], row["account_id"],
+                                           self._mailer.send(email), now)
 
     def run_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():

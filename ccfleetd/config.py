@@ -19,6 +19,11 @@ HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)"
                          r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 
 
+# An address, or a display name and an address in angle brackets: what an
+# email's From says.
+_ADDRESS = r"[^\s<>@\"]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
+EMAIL_FROM_RE = re.compile(rf"{_ADDRESS}|[^<>@\r\n]{{1,64}} <{_ADDRESS}>")
+
 class ConfigError(ValueError):
     """Raised when the environment holds an unusable value."""
 
@@ -181,6 +186,16 @@ class Config:
             resend_api_key=env.get(ENV_PREFIX + "RESEND_API_KEY", "").strip(),
             email_from=env.get(ENV_PREFIX + "EMAIL_FROM", "").strip(),
         )
+        # Outage emails are both settings or neither: one alone would offer
+        # emails nobody sends, or send from an address that is no address.
+        if bool(cfg.resend_api_key) != bool(cfg.email_from):
+            raise ConfigError(
+                f"{ENV_PREFIX}RESEND_API_KEY and {ENV_PREFIX}EMAIL_FROM go together: "
+                "set both for outage emails, or neither")
+        if cfg.email_from and not EMAIL_FROM_RE.fullmatch(cfg.email_from):
+            raise ConfigError(
+                f"{ENV_PREFIX}EMAIL_FROM must be an address, or a name and an address, like "
+                f"ccfleet <status@example.com>; got {cfg.email_from!r}")
         if cfg.contact_email and (len(cfg.contact_email) > 254
                                   or not CONTACT_EMAIL_RE.match(cfg.contact_email)):
             raise ConfigError(
