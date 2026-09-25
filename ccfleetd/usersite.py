@@ -45,6 +45,8 @@ from .render import (
     user_menu,
 )
 from .store import (
+    BadName,
+    NameTaken,
     NoSlotAvailable,
     NotYours,
     QuotaExceeded,
@@ -74,6 +76,11 @@ NOTES = {
                        "running; new ones start on the new version."),
     "stable": ("ok", "Back to the stable release. Your slot moves there at its next quiet "
                      "moment."),
+    "renamed": ("ok", "Renamed. Your machine answers to the new name within a minute or two, "
+                      "and Remote Control restarts under it, which ends a session open in it."),
+    "name-bad": ("warn", "A name is 2 to 30 letters, digits and inner hyphens, and not "
+                         "pool- or slot- followed by a number."),
+    "name-taken": ("warn", "That name is taken. Pick another."),
 }
 
 # The pill says the state the way every page says a state: green running,
@@ -96,7 +103,7 @@ ACCOUNT_WIDE = ("These count everything this Claude account does: claude.ai, the
                 "app, and Claude Code on any computer, device tokens included.")
 
 SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "token", "token-show",
-                "token-done", "update", "stable")
+                "token-done", "update", "stable", "rename")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
@@ -241,6 +248,17 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
         if action == "signin":
             store.request_slot_login(slot_id, form.get("email", ""), now, held_by=holder)
             return _back("signin", anchor)
+        if action == "rename":
+            # Lowercase, as a hostname is; the store checks the rest, the
+            # holder included, in one transaction.
+            try:
+                store.name_slot(slot_id, (form.get("name") or "").strip().lower(),
+                                held_by=holder)
+            except BadName:
+                return _back("name-bad", anchor)
+            except NameTaken:
+                return _back("name-taken", anchor)
+            return _back("renamed", anchor)
         if action == "switch":
             # The store holds it to a slot in use and to once a week, in the
             # same transaction as the holder check.
@@ -598,10 +616,11 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "slots you may hold, when you first signed in, and when you last visited.</li>"
         "<li>The slots you hold, when you claimed each one, when a device token was last "
         "handed out for it, and when you last moved it to another Claude account, which a "
-        "slot may do once a week. Each slot you hold is named after you, from the part of "
-        "your address before the @ (or a name the operator chose for you) and a number: "
-        "that name is also the one its machine answers to in claude.ai/code. The name and "
-        "the date go when you give the slot back.</li>"
+        "slot may do once a week. Each slot you hold has a name: a neutral one like "
+        "slot-4821 when you claim it, never anything from your address, or the one you give "
+        "it on your page (or, if you asked, a name the operator set for you). That name is "
+        "also the one its machine answers to in claude.ai/code, so Anthropic sees it too. "
+        "The name and the date go when you give the slot back.</li>"
         "<li>Your sign-in here: a random value in a cookie, of which we store only a hash, "
         "with when it began and when it ends. "
         f"It lasts {_span(cfg.session_ttl_s)}, or until you sign out.</li>"
@@ -814,6 +833,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         parts.append(_sign_in(slot, report, login, csrf, now))
         parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         parts.append(_tokens(slot, login, csrf, now))
+    if slot["state"] in CAN_SIGN_IN and not own:
+        parts.append(_rename(slot, csrf))
     # Never on somebody's own node: giving back means wiping, and nothing
     # there is ours to wipe.
     if slot["state"] in slotstates.RELEASABLE and not own:
@@ -1044,6 +1065,19 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
     return (f'<div class="row-line stacked flow"><div class="row-name">Device token</div>'
             f"{body}</div>")
+
+
+def _rename(slot: Mapping[str, Any], csrf: str) -> str:
+    """The slot's name is its holder's to choose (Erik, 2026-09-24): it is what
+    claude.ai shows, so it is what Anthropic sees, and it starts neutral."""
+    return ('<div class="row-line stacked"><div class="row-name">Name</div>'
+            + _form(f"/account/slots/{escape(slot['id'])}/rename", csrf, "Rename",
+                    '<input type="text" name="name" maxlength="30" autocomplete="off" '
+                    'required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,28}[A-Za-z0-9]" '
+                    f'placeholder="{escape(names.display(slot))}" '
+                    'aria-label="A new name for this slot">')
+            + '<p class="small muted">What claude.ai shows for this machine, so Anthropic '
+            "sees it too: pick anything but your email address.</p></div>")
 
 
 def _release(slot: Mapping[str, Any], csrf: str) -> str:

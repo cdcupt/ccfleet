@@ -18,7 +18,7 @@ from datetime import timedelta
 
 import pytest
 
-from ccfleetd import payments, slots
+from ccfleetd import names, payments, slots
 from ccfleetd.api import Context, build_server, csrf_token
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -112,8 +112,11 @@ def under_manage(row):
 
 
 def holder(store, email="ana@example.com", quota=1):
+    """Somebody with an allowance, their slots named after a handle the
+    operator set from their address, so the rows below have names to read."""
     account = store.upsert_account_from_google(f"sub-{email}", email, now=time.time())
     store.set_slot_quota(account["id"], quota)
+    store.set_account_handle(account["id"], names.handle_from_email(email))
     return account
 
 

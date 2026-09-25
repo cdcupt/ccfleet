@@ -293,6 +293,14 @@ class NotYours(StoreError):
     """The slot is not held by the account acting on it."""
 
 
+class BadName(StoreError):
+    """Not a name a slot may have (see names.valid_nickname)."""
+
+
+class NameTaken(StoreError):
+    """Another slot or machine already answers to that name."""
+
+
 
 def _without_secret(payload: Mapping[str, Any]) -> dict[str, Any]:
     """The payload as it should be kept, which is without the minted token.
@@ -1918,29 +1926,66 @@ class Store:
         return [row["id"] for row in rows]
 
     @staticmethod
-    def _name_for(conn: sqlite3.Connection, account: sqlite3.Row) -> str:
-        """What a slot this account takes is called: "<handle>-<n>".
-
-        Read in the claim's own write transaction, so two claims cannot both
-        pick the same number. Skipped: every slot's id and name and every
-        node's id — the name becomes a hostname, and one that another machine
-        already answers to would be two machines under one name.
-        """
-        handle = account["handle"] or names.handle_from_email(account["email"])
+    def _taken_names(conn: sqlite3.Connection, but: str = "") -> set[str]:
+        """Every name a machine answers to or may: each node's id and each
+        slot's id and name, but the slot `but`'s own. The name becomes a
+        hostname, and one another machine already answers to would be two
+        machines under one name."""
         taken = {r["id"] for r in conn.execute("SELECT id FROM nodes")}
-        for row in conn.execute("SELECT id, name FROM slots"):
+        for row in conn.execute("SELECT id, name FROM slots WHERE id != ?", (but,)):
             taken.add(row["id"])
             if row["name"]:
                 taken.add(row["name"])
-        name = names.next_name(handle, taken)
+        return taken
+
+    @classmethod
+    def _name_for(cls, conn: sqlite3.Connection, account: sqlite3.Row) -> str:
+        """What a slot this account takes is called: a neutral "slot-4821",
+        never anything of theirs (Erik, 2026-09-24), which its holder renames
+        on their page; "<handle>-<n>" only for a handle the operator set.
+
+        Read in the claim's own write transaction, so two claims cannot both
+        pick the same name.
+        """
+        taken = cls._taken_names(conn)
+        handle = account["handle"]
+        name = names.next_name(handle, taken) if handle else names.neutral_name(taken)
         if not names.valid_hostname(name):  # pragma: no cover - names.py guarantees it
             raise StoreError(f"{name!r} is not a hostname")
         return name
 
+    def name_slot(self, slot_id: str, name: Optional[str], *,
+                  held_by: Optional[str] = None) -> str:
+        """Give a machine's slot in use a new name, which is its machine's
+        hostname: its holder's own nickname, or with None a fresh neutral one.
+        Returns the name.
+
+        Checked in one transaction: the holder (None is the operator's side),
+        a machine's slot claimed or in use, and a name nothing else answers
+        to. The machine answers to it at its next run, and Remote Control
+        restarts under it.
+        """
+        with self._write_txn() as conn:
+            # Whose it is first: to anybody else, a slot answers as a missing
+            # one, whatever the name they sent.
+            row = self._held(conn, slot_id, held_by)
+            if name is not None and not names.valid_nickname(name):
+                raise BadName(f"a slot's name is 2-{names.MAX_NICKNAME} lowercase letters, "
+                              "digits and inner hyphens, and not pool-<n> or slot-<n>")
+            if (row["kind"] != slotstates.MACHINE_SLOT
+                    or row["state"] not in (slotstates.CLAIMED, slotstates.ACTIVE)):
+                raise StoreError(f"{slot_id} can be named once it is set up")
+            taken = self._taken_names(conn, but=slot_id)
+            chosen = name if name is not None else names.neutral_name(taken)
+            if chosen in taken:
+                raise NameTaken(f"{chosen} is taken: another slot or machine answers to it")
+            conn.execute("UPDATE slots SET name = ? WHERE id = ?", (chosen, slot_id))
+        return chosen
+
     def set_account_handle(self, account_id: str, handle: Optional[str]) -> None:
-        """What this account's slots are named after; None goes back to the
-        part of their address before the @. Only claims from now on are named
-        by it: a slot already named keeps the name its holder already knows."""
+        """What this account's slots are named after, "<handle>-<n>", when the
+        person asked for it; None goes back to neutral names. Only claims from
+        now on are named by it: a slot already named keeps its name."""
         if handle is not None and not names.valid_handle(handle):
             raise StoreError(
                 f"a handle is 1-{names.MAX_HANDLE} lowercase letters, digits and inner "

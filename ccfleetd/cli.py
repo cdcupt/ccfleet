@@ -90,6 +90,10 @@ def _parser() -> argparse.ArgumentParser:
         "rename", help="give a slot a new id, in any state; the machine never sees it")
     slot_rename.add_argument("slot_id")
     slot_rename.add_argument("new_id")
+    slot_name = slot.add_parser(
+        "name", help="give a held slot a new name, its machine's hostname; none: a neutral one")
+    slot_name.add_argument("slot_id")
+    slot_name.add_argument("name", nargs="?", default=None)
     cap = slot.add_parser("capacity", help="how many slots a machine may hold")
     cap.add_argument("machine")
     cap.add_argument("count", type=int)
@@ -232,6 +236,10 @@ def _slot_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         print(f"renamed {args.slot_id} to {args.new_id}; its holder, state, sign-in and "
               f"requests came along. The machine knows its slots by their Linux user, "
               f"so nothing changes there.")
+    elif args.slot_command == "name":
+        chosen = store.name_slot(args.slot_id, args.name)
+        print(f"{args.slot_id} is now called {chosen}; its machine answers to it at its next "
+              f"run, and Remote Control restarts under it, ending a session open in it.")
     elif args.slot_command == "capacity":
         if args.count > slotstates.MAX_SLOTS_PER_MACHINE:
             print(f"error: {slotstates.ONE_SLOT_WHY}; a machine's capacity is 0 or 1",

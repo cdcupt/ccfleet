@@ -9,6 +9,7 @@ handed out and never told to provision anything.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 
 import pytest
@@ -35,9 +36,16 @@ def machine(st, node_id, *, reserved_for=None):
     return node_id
 
 
-def account(st, account_id, email=None, *, quota=1):
-    return st.add_account(account_id, f"sub-{account_id}", email or f"{account_id}@example.com",
-                          slot_quota=quota, now=NOW)
+def account(st, account_id, email=None, *, quota=1, handle=True):
+    """Somebody who signed in. Their slots are named "<handle>-<n>" after a
+    handle the operator set from their address, as these tests of numbering
+    need; `handle=None` leaves the neutral names every claim gets by default."""
+    email = email or f"{account_id}@example.com"
+    made = st.add_account(account_id, f"sub-{account_id}", email, slot_quota=quota, now=NOW)
+    if handle is not None:
+        st.set_account_handle(account_id,
+                              names.handle_from_email(email) if handle is True else handle)
+    return made
 
 
 def free_again(st, slot_id):
@@ -48,15 +56,23 @@ def free_again(st, slot_id):
                          now=NOW + 60)
 
 
-# -- a slot is named after its holder -------------------------------------------------------
+# -- a slot's name is never its holder's address ----------------------------------------------
 
-def test_a_claimed_slot_is_named_after_its_holder(store):
+def test_a_claimed_slot_gets_a_neutral_name_never_its_holders(store):
+    """Erik, 2026-09-24: the name is the machine's hostname, which claude.ai
+    shows and Anthropic receives, so nothing of the holder's is in it."""
     machine(store, "pool-1")
-    account(store, "a1", "Alice.Smith@example.com")
+    account(store, "a1", "Alice.Smith@example.com", handle=None)
     slot = store.claim_slot("a1", now=NOW)
     assert slot["id"] == "pool-1", "ids never change: sign-ins and pages are keyed on them"
-    assert slot["name"] == "alice-smith-1"
-    assert names.display(slot) == "alice-smith-1"
+    assert re.fullmatch(r"slot-[0-9]{4}", slot["name"])
+    assert names.display(slot) == slot["name"]
+
+
+def test_the_operators_handle_names_a_slot_only_when_set(store):
+    machine(store, "pool-1")
+    account(store, "a1", "Alice.Smith@example.com", handle="alice")
+    assert store.claim_slot("a1", now=NOW)["name"] == "alice-1"
 
 
 def test_the_operators_handle_wins_over_the_address(store):
@@ -66,17 +82,18 @@ def test_the_operators_handle_wins_over_the_address(store):
     assert store.claim_slot("a1", now=NOW)["name"] == "erik-1"
 
 
-def test_clearing_a_handle_goes_back_to_the_address(store):
+def test_clearing_a_handle_goes_back_to_a_neutral_name(store):
     machine(store, "pool-1")
     account(store, "a1", "cdcupt@gmail.com")
     store.set_account_handle("a1", "erik")
     store.set_account_handle("a1", None)
-    assert store.claim_slot("a1", now=NOW)["name"] == "cdcupt-1"
+    name = store.claim_slot("a1", now=NOW)["name"]
+    assert re.fullmatch(r"slot-[0-9]{4}", name) and "cdcupt" not in name
 
 
 @pytest.mark.parametrize("bad", ["Erik", "-erik", "erik-", "er ik", "x" * 21, "erik\n", ""])
 def test_a_handle_that_is_not_hostname_safe_is_refused(store, bad):
-    account(store, "a1")
+    account(store, "a1", handle=None)
     with pytest.raises(StoreError):
         store.set_account_handle("a1", bad)
     assert store.get_account("a1")["handle"] is None
@@ -405,10 +422,10 @@ def test_a_machine_with_two_slots_from_before_answers_to_its_own_id():
         st.apply_slot_report("old-m", [{"unix_user": u, "present": False}
                                        for u in ("slot01", "slot02")], now=NOW)
         st.add_account("a1", "sub-a1", "alice@example.com", slot_quota=1, now=NOW)
-        assert st.claim_slot("a1", now=NOW)["name"] == "alice-1"
+        name = st.claim_slot("a1", now=NOW)["name"]
         rows = st.list_slots(node_id="old-m", kind=slots.MACHINE_SLOT)
         assert machine_hostname("old-m", rows) == "old-m"
-        assert machine_hostname("old-m", rows[:1]) == "alice-1"
+        assert machine_hostname("old-m", rows[:1]) == name
     finally:
         st.close()
 
@@ -479,10 +496,11 @@ def test_the_live_database_behaves(tmp_path):
     live_shaped(path)
     st = Store(path)
     try:
-        # Somebody new claims: they get pool-1, named after them; erik-2 is kept.
+        # Somebody new claims: they get pool-1, under a neutral name that says
+        # nothing of theirs; erik-2 is kept.
         st.add_account("ualice", "g-alice", "alice@example.com", slot_quota=1, now=NOW)
         slot = st.claim_slot("ualice", now=NOW)
-        assert (slot["id"], slot["name"]) == ("pool-1", "alice-1")
+        assert slot["id"] == "pool-1" and re.fullmatch(r"slot-[0-9]{4}", slot["name"])
         # Erik's own node becomes his second slot once his allowance says so.
         st.set_account_handle("uerik", "erik")
         with pytest.raises(QuotaExceeded):

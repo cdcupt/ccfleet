@@ -502,6 +502,7 @@ def test_a_machine_is_told_to_answer_to_its_slots_name(server):
     token = store.add_node("pool-1", "op")
     store.add_slot("pool-1", "pool-1", "slot01", now=1.0)
     store.add_account("a1", "sub-1", "alice@example.com", slot_quota=1, now=1.0)
+    store.set_account_handle("a1", "alice")
     free = [{"unix_user": "slot01", "present": False}]
     assert _post(srv, token, _machine_payload("pool-1", free))["desired"]["hostname"] == "pool-1"
     store.claim_slot("a1", now=time.time())

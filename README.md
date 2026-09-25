@@ -123,16 +123,17 @@ ccfleet-connect --status    # which token, and whether it still works
 ccfleet-connect --remove    # undo it
 ```
 
-### 4. Shared machines: one machine, one slot, named after its holder
+### 4. Shared machines: one machine, one slot, under the name its holder gives it
 
 A shared machine carries one **slot**: its own Linux user, with its own home,
 its own Claude Code and its own Claude sign-in, made by the person who holds it
 with their own Claude account, so no credential is ever shared between people.
 One machine is one slot because claude.ai/code shows a machine by its hostname:
-when somebody claims the slot it is named after them (`alice-1`, from the part
-of their address before the @, or a handle the operator sets with
-`ccfleetd account handle <email> <handle>`), the machine takes that name as its
-hostname, and the name goes when the slot is freed. People sign in to ccfleet with Google, which is asked only for
+when somebody claims the slot it gets a neutral name (`slot-4821`), never
+anything from their address, because Anthropic receives the hostname. They
+rename it on their page (`ccfleetd slot name <slot> [<name>]` does it for them),
+the machine takes that name as its hostname, and the name goes when the slot is
+freed. People sign in to ccfleet with Google, which is asked only for
 the `openid email` scopes: ccfleet keeps the address and Google's stable account
 id, which is what an account is keyed on because addresses change. The operator
 grants each person an allowance of slots, and they claim one, sign it in to
