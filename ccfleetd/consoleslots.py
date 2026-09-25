@@ -151,6 +151,9 @@ class _Look:
     channels: Mapping[str, Any]
     csrf: str
     now: float
+    #: When the serving loop began listening: a claim is not stuck for time
+    #: the server was down (see status.machine_state).
+    listening: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -169,7 +172,8 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                 now: float) -> str:
     """A row a machine, its slot being the row; each row's actions wait under
     its Manage, so nothing that wipes somebody sits out in the open."""
-    look = _Look(accounts, store.open_alerts(), store.get_channel_versions(), csrf, now)
+    look = _Look(accounts, store.open_alerts(), store.get_channel_versions(), csrf, now,
+                 store.listening_since())
     latest = store.latest_heartbeats()
     rows = "".join(_machine_rows(store, node, (latest.get(node["id"]) or {}).get("payload") or {},
                                  look)
@@ -217,7 +221,7 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
               update: Optional[Mapping[str, Any]], look: _Look) -> str:
     node = machine.node
     said = _update_said(slot, node, report, update, look.channels)
-    pills, notes = _problems(slot, report, look.alerts, said, look.now)
+    pills, notes = _problems(slot, report, look.alerts, said, look.now, look.listening)
     shown = names.display(slot)
     sub = _on_machine(slot, node)
     keeper = _kept_for(node, look.accounts)
@@ -240,7 +244,7 @@ def _own_row(slot: Mapping[str, Any], machine: _Machine,
     # owner's own page reads them.
     report = {key: machine.said.get(key) or {} for key in OWN_REPORT}
     said = _update_said(slot, node, report, update, look.channels)
-    pills, notes = _problems(slot, report, look.alerts, said, look.now)
+    pills, notes = _problems(slot, report, look.alerts, said, look.now, look.listening)
     shown = names.display(slot)
     # Always somebody's, so said by its name alone, like a held slot.
     cells = _cells(_name(shown, ["own machine"]), _holder(slot, look.accounts, report),
@@ -413,7 +417,7 @@ def _releases(channels: Mapping[str, Any], now: float) -> str:
 
 def _problems(slot: Mapping[str, Any], report: Mapping[str, Any],
               alerts: list[Mapping[str, Any]], said: Optional[Mapping[str, Any]],
-              now: float) -> tuple[list[str], list[str]]:
+              now: float, listening: Optional[float] = None) -> tuple[list[str], list[str]]:
     """What is wrong with this slot: a pill for each thing, for the eye, and a
     line for each that has more to say. Each is said once."""
     pills, notes = [], []
@@ -428,7 +432,8 @@ def _problems(slot: Mapping[str, Any], report: Mapping[str, Any],
     if slotstates.switch_wait_until(switched, now) is not None:
         notes.append(_note(f"changed Claude account {_age(now, switched)} ago", "muted"))
     # A claiming slot always has claimed_at: the claim writes both at once.
-    if slot["state"] == slotstates.CLAIMING and now - slot["claimed_at"] > STUCK_AFTER_S:
+    if (slot["state"] == slotstates.CLAIMING
+            and now - max(slot["claimed_at"], listening or 0.0) > STUCK_AFTER_S):
         pills.append(_pill("warn", "stuck"))
         notes.append(_note(f"setting up for {_age(now, slot['claimed_at'])}; given up at "
                            f"{slotstates.CLAIM_TIMEOUT_S // 60} min"))

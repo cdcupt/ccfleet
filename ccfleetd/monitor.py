@@ -64,20 +64,21 @@ class Monitor:
         # against where every account is live: its own alert opens as soon as
         # it reports, and the other place's at that place's next check.
         every_slot = self._store.list_slots()
+        # Silence counts from when the serving loop began listening, since no
+        # report could arrive before (see status.machine_state). An alert up
+        # already holds until the node says otherwise (see rules.evaluate).
+        listening = self._store.listening_since()
+        open_alerts = self._store.open_alerts()
+        raised = frozenset(a["rule"] for a in open_alerts if a["node_id"] == node["id"])
+        silent = frozenset(a["node_id"] for a in open_alerts if a["rule"] == "no_heartbeat")
         places = rules.account_places(self._store.list_nodes(), self._store.latest_heartbeats(),
-                                      every_slot, now, self._cfg)
-        # Its silence counts from when the serving loop began listening, since
-        # no report could arrive before (see status.machine_state), unless its
-        # alarm is up already: that holds until the node reports, rather than
-        # saying it resolved after every restart.
-        silent = any(a["rule"] == "no_heartbeat" for a in self._store.open_alerts(node["id"]))
-        listening = None if silent else self._store.listening_since()
+                                      every_slot, now, self._cfg, listening, silent)
         # A machine's own slots: an owner slot is a record, with nothing on the
         # machine's side to judge.
         findings = rules.evaluate(node, latest, previous, now, self._cfg,
                                   self._store.list_slots(node_id=node["id"],
                                                          kind=slotstates.MACHINE_SLOT), places,
-                                  rules.place_names(every_slot), listening)
+                                  rules.place_names(every_slot), listening, raised)
         return self._reconcile(node, findings, now)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:
@@ -101,7 +102,10 @@ class Monitor:
         wiped rather than freed: whatever was half-made on the machine has to be
         cleared before anybody else is handed it.
         """
-        stalled = self._store.expire_claims(older_than=now - slotstates.CLAIM_TIMEOUT_S)
+        # Its time counts from when the serving loop began listening, since the
+        # machine could not say it was done before (see status.machine_state).
+        stalled = self._store.expire_claims(older_than=now - slotstates.CLAIM_TIMEOUT_S,
+                                            listening_since=self._store.listening_since())
         if stalled:
             log.warning("gave up on %d claim(s) still provisioning after %d min: %s",
                         len(stalled), slotstates.CLAIM_TIMEOUT_S // 60, ", ".join(stalled))
@@ -145,7 +149,8 @@ class Monitor:
     def _expire_updates(self, now: float) -> None:
         """An update nobody answered is said to have failed, so the page stops
         saying "updating"; an answered one leaves the page in time."""
-        changed = self._store.expire_claude_updates(now, LOGIN_MAX_AGE_S)
+        changed = self._store.expire_claude_updates(
+            now, LOGIN_MAX_AGE_S, listening_since=self._store.listening_since())
         if changed:
             log.info("aged %d Claude Code update(s)", changed)
 

@@ -334,3 +334,78 @@ def test_a_slot_the_machine_did_not_mention_raises_nothing(cfg):
 def test_a_wipe_error_on_a_slot_not_being_wiped_is_ignored(cfg):
     beat = machine_beat(NOW, [{"unix_user": "slot01", "present": True, "wipe_error": "x"}])
     assert rules.evaluate(NODE, beat, None, NOW, cfg, [slot_row("slot01", "active")]) == ()
+
+
+# -- a node is not stale for the server's own silence (see status.machine_state) ---------------
+
+def creds(mtime=None, fetched_ms=None):
+    # mtime always given: the test heartbeat's own is fresh, and a Keychain
+    # login has none, which is what sends the rule to the profile fetch time.
+    section = {"present": True, "store": "file" if mtime else "keychain", "mtime": mtime,
+               "expires_at": (NOW + 7200) * 1000, "subscription_type": "max"}
+    if fetched_ms is not None:
+        section["profile_fetched_at"] = fetched_ms
+    return section
+
+
+def test_a_login_quiet_only_while_the_server_was_down_is_not_stale(cfg):
+    for section in (creds(mtime=NOW - 30 * 3600), creds(fetched_ms=(NOW - 30 * 3600) * 1000)):
+        beat = heartbeat(NOW, credentials=section)
+        assert "token_stale" in rule_names(rules.evaluate(NODE, beat, None, NOW, cfg))
+        assert "token_stale" not in rule_names(
+            rules.evaluate(NODE, beat, None, NOW, cfg, listening_since=NOW - 3600))
+
+
+def test_a_stale_login_already_raised_holds_through_a_restart(cfg):
+    beat = heartbeat(NOW, credentials=creds(mtime=NOW - 30 * 3600))
+    held = rules.evaluate(NODE, beat, None, NOW, cfg, listening_since=NOW - 3600,
+                          raised=frozenset({"token_stale"}))
+    [stale] = [f for f in held if f.rule == "token_stale"]
+    assert stale.message == "credentials not refreshed for 1.2 d"
+
+
+
+def test_a_stale_login_is_told_by_its_real_age_not_the_forgiven_one(cfg):
+    """Stale even counting from the restart, a day and more ago: the alert
+    says how old the credentials really are."""
+    for section, said in ((creds(mtime=NOW - 50 * 3600), "credentials not refreshed for 2.1 d"),
+                          (creds(fetched_ms=(NOW - 50 * 3600) * 1000),
+                           "login not exercised for 2.1 d")):
+        [stale] = [f for f in rules.evaluate(NODE, heartbeat(NOW, credentials=section), None,
+                                             NOW, cfg, listening_since=NOW - 30 * 3600)
+                   if f.rule == "token_stale"]
+        assert stale.message == said
+
+
+def quota(checked_at, session=95.0):
+    return {"checked_at": checked_at, "session": {"used_pct": session, "resets": "4pm"},
+            "week": {"used_pct": 10.0}}
+
+
+def test_a_quota_reading_old_only_for_the_servers_silence_keeps_a_raised_alarm(cfg):
+    """It never raises one: the number is still old."""
+    beat = heartbeat(NOW, quota=quota(NOW - 3 * 3600))
+    assert not any(f.rule.startswith("quota_high")
+                   for f in rules.evaluate(NODE, beat, None, NOW, cfg))
+    kept = rules.evaluate(NODE, beat, None, NOW, cfg, listening_since=NOW - 600,
+                          raised=frozenset({"quota_high_session"}))
+    assert "quota_high_session" in rule_names(kept)
+    fresh = rules.evaluate(NODE, beat, None, NOW, cfg, listening_since=NOW - 600)
+    assert not any(f.rule.startswith("quota_high") for f in fresh)
+
+
+def test_a_quota_reading_old_by_two_hours_of_listening_keeps_nothing(cfg):
+    beat = heartbeat(NOW, quota=quota(NOW - 5 * 3600))
+    gone = rules.evaluate(NODE, beat, None, NOW, cfg, listening_since=NOW - 3 * 3600,
+                          raised=frozenset({"quota_high_session"}))
+    assert not any(f.rule.startswith("quota_high") for f in gone)
+
+
+def test_a_node_quiet_only_for_the_servers_silence_is_still_where_its_account_is(cfg):
+    node = {"id": "n1", "enabled": True}
+    beat = {"ts": NOW - 1200, "payload": {"credentials": {"logged_in": True, "account_fp": "fp1"}}}
+    assert rules.account_places([node], {"n1": beat}, [], NOW, cfg) == {}
+    assert rules.account_places([node], {"n1": beat}, [], NOW, cfg,
+                                listening_since=NOW - 60) == {"fp1": ["n1"]}
+    assert rules.account_places([node], {"n1": beat}, [], NOW, cfg, listening_since=NOW - 60,
+                                silent=frozenset({"n1"})) == {}, "silent before the restart"

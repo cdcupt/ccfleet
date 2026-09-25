@@ -1767,14 +1767,17 @@ class Store:
     #: Said when a machine never answered an update in time.
     UPDATE_TIMED_OUT = "the machine did not answer in time; try again"
 
-    def expire_claude_updates(self, now: float, max_age_s: float) -> int:
+    def expire_claude_updates(self, now: float, max_age_s: float,
+                              listening_since: Optional[float] = None) -> int:
         """An update nobody answered becomes a failure the page can say; an
-        answered one is forgotten once it has been on the page long enough."""
+        answered one is forgotten once it has been on the page long enough.
+        The wait counts from `listening_since` if later: no machine could
+        answer while the server was down."""
         with self._write_txn() as conn:
             timed_out = conn.execute(
                 "UPDATE claude_updates SET state = 'failed', detail = ?, updated_at = ? "
-                "WHERE state = 'pending' AND requested_at < ?",
-                (self.UPDATE_TIMED_OUT, now, now - max_age_s)).rowcount
+                "WHERE state = 'pending' AND MAX(requested_at, ?) < ?",
+                (self.UPDATE_TIMED_OUT, now, listening_since or 0.0, now - max_age_s)).rowcount
             dropped = conn.execute(
                 "DELETE FROM claude_updates WHERE state != 'pending' AND updated_at < ?",
                 (now - max_age_s,)).rowcount
@@ -2104,17 +2107,20 @@ class Store:
                      move["slot"], move["from"], move["to"])
         return moved
 
-    def expire_claims(self, *, older_than: float) -> list[str]:
+    def expire_claims(self, *, older_than: float,
+                      listening_since: Optional[float] = None) -> list[str]:
         """Give up on claims whose provisioning never finished.
 
         They fail sideways into releasing, never back to free: provisioning
         may have got as far as creating the account before it stalled, and
-        only the wipe that follows can say the slot is empty again.
+        only the wipe that follows can say the slot is empty again. A claim's
+        time counts from `listening_since` if later: no machine could say it
+        was done while the server was down.
         """
         with self._write_txn() as conn:
             rows = conn.execute(
-                "SELECT id FROM slots WHERE state = ? AND claimed_at < ?",
-                (slotstates.CLAIMING, older_than)).fetchall()
+                "SELECT id FROM slots WHERE state = ? AND MAX(claimed_at, ?) < ?",
+                (slotstates.CLAIMING, listening_since or 0.0, older_than)).fetchall()
             for row in rows:
                 conn.execute("UPDATE slots SET state = ? WHERE id = ?",
                              (slotstates.RELEASING, row["id"]))

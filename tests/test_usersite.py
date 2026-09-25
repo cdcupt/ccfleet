@@ -952,3 +952,16 @@ def test_an_avatar_is_the_same_every_time_and_says_whose_it_is():
     assert _tone({"id": "u1"}) == _tone({"id": "u1"})
     tones = {_tone({"id": f"u{n:024x}"}) for n in range(40)}
     assert len(tones) > 1 and tones <= set(range(AVATAR_TONES))
+
+
+def test_a_machine_quiet_only_while_the_server_was_down_is_not_called_unreachable(site):
+    store, sign_in, cfg = site
+    machine(store)
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    report(store, "m1", [{"unix_user": slot["unix_user"], "present": True}],
+           ts=time.time() - cfg.heartbeat_max_age_s - 120)
+    store.set_listening_since(time.time() - 60)
+    assert "may be unreachable" not in erik.page()
+    store.open_alert("m1", "no_heartbeat", "critical", "x", time.time() - 900)
+    assert "may be unreachable" in erik.page(), "silent before the restart too"

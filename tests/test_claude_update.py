@@ -570,3 +570,12 @@ def test_the_console_shows_each_slots_version_and_the_releases(console):  # noqa
     assert "Claude Code 2.1.267 (stable)" in page
     store.request_claude_update(slot["id"], time.time(), held_by="a1")
     assert "Claude Code 2.1.267 (latest)" in text(call_as("GET", "/admin").body)
+
+
+def test_an_ask_waits_for_the_server_to_have_listened_its_whole_time(held):
+    """A machine cannot answer while the server is down."""
+    held.request_claude_update("s1", 100.0, held_by="a1")
+    back = 100.0 + LOGIN_MAX_AGE_S
+    assert held.expire_claude_updates(back + 60, LOGIN_MAX_AGE_S, listening_since=back) == 0
+    assert held.expire_claude_updates(back + LOGIN_MAX_AGE_S + 1, LOGIN_MAX_AGE_S,
+                                      listening_since=back) == 1

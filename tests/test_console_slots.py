@@ -1117,3 +1117,12 @@ def test_names_and_addresses_are_text_in_every_cell(console):
     assert 'class="row-name">&lt;i&gt;ana&lt;/i&gt;<' in row
     assert '<span class="vh"> &lt;i&gt;ana&lt;/i&gt;</span>' in row
     assert "&lt;s&gt;1&lt;/s&gt;" in row and "slot &lt;u&gt;odd&lt;/u&gt;" in row
+
+
+def test_a_claim_is_not_stuck_for_the_servers_own_silence(console):
+    store, call = console
+    shared(store, users=("slot01",))
+    store.claim_slot(holder(store)["id"], now=time.time() - 3600)
+    store.set_listening_since(time.time() - 60)
+    row = on_the_row(row_of(slots_card(call("GET", "/admin").body), "m1"))
+    assert '<span class="pill warn">stuck</span>' not in row

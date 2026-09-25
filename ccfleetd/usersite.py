@@ -532,9 +532,12 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         latest.get(s["node_id"]), store.open_alerts(s["node_id"]),
         s.get("kind") != slotstates.OWNER_SLOT, now, listening(s["node_id"])), now)
         for s in held}
+    since = store.listening_since()
+    silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
-                               updates[s["id"]], channels, machine_line=lines[s["id"]])
+                               updates[s["id"]], channels, machine_line=lines[s["id"]],
+                               listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
         '<div class="pagehead"><h1>Your slots</h1>'
@@ -798,7 +801,7 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                flagged: frozenset[str] = frozenset(),
                update: Optional[Mapping[str, Any]] = None,
                channels: Optional[Mapping[str, Any]] = None, *,
-               machine_line: str = "") -> str:
+               machine_line: str = "", listening: Optional[float] = None) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
     # A sign-in or token that failed, or a change of account that finished, is
@@ -815,7 +818,9 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     heard = (heartbeat or {}).get("ts")
     if heard is None:
         machine = '<span class="bad-text">not heard from yet</span>'
-    elif now - heard > cfg.heartbeat_max_age_s:
+    elif now - max(heard, listening or 0.0) > cfg.heartbeat_max_age_s:
+        # Quiet only while the server was down is not unreachable (see
+        # status.machine_state); `listening` is None for a machine silent before.
         machine = (f'<span class="bad-text">not heard from in {escape(_age(now, heard))}'
                    "</span> &mdash; your slot may be unreachable")
     else:
