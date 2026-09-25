@@ -1204,6 +1204,8 @@ def token_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = N
         "<p class=\"muted\">It asks for the token and hides what you paste. Then "
         "<code>claude</code> runs there with no login. Scope is inference only, which is "
         "Anthropic's limit on long-lived tokens; revoke it from your Claude account.</p>"
-        "<p class=\"muted\">A computer uses one Claude account: running it again with "
-        "another token replaces the one it had.</p></div>"
+        "<p class=\"muted\">The computer keeps its own Claude login too, if it has one: "
+        "<code>ccfleet-connect --off</code> switches it to that, your own subscription, "
+        "and <code>ccfleet-connect --on</code> back to this token. Running it again with "
+        "another token replaces this one.</p></div>"
         "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"), viewer=viewer)

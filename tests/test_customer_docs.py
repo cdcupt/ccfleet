@@ -180,8 +180,9 @@ def test_the_guide_quotes_labels_the_user_site_really_shows():
 
 def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
     """Like a button, a flag a page names has to exist: the script's own usage
-    lines say so. And a computer uses one Claude account, so no page tells
-    anybody to keep several on one and switch between them."""
+    lines say so. The script keeps one token, so no page tells anybody to keep
+    several and switch between them; the switch it has is to the computer's
+    own login, and both pages that hand out a token say how."""
     from pathlib import Path
 
     script = (Path(__file__).parents[1] / "laptop" / "ccfleet-connect.sh").read_text()
@@ -193,7 +194,7 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
             assert any(f"ccfleet-connect {flag}" in line for line in usage), (where, flag)
         for gone in ("--add", "--use", "--list"):
             assert f"ccfleet-connect {gone}" not in page, (where, gone)
-        assert "one Claude account" in page, where
+        assert "ccfleet-connect --off" in page and "ccfleet-connect --on" in page, where
 
 
 def test_the_guide_names_the_line_a_slot_really_starts_with():

@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.3 · 2026-09-24 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.4 · 2026-09-25 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -140,7 +140,7 @@ html{scroll-behavior:smooth}
     <li><a href="#before"><span class="n">02</span>Before you start</a></li>
     <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
     <li><a href="#node"><span class="n">04</span>A node per owner</a></li>
-    <li><a href="#laptop"><span class="n">05</span>One account per computer</a></li>
+    <li><a href="#laptop"><span class="n">05</span>Your computer: the slot&rsquo;s account or its own</a></li>
     <li><a href="#accounts"><span class="n">06</span>Daily use &amp; accounts</a></li>
     <li><a href="#ops"><span class="n">07</span>Operations</a></li>
     <li><a href="#gateway"><span class="n">08</span>Optional gateway</a></li>
@@ -532,9 +532,14 @@ CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
 </section>
 
 <section id="laptop">
-  <h2><span class="n">05</span>One account per computer</h2>
-  <p>A computer uses one Claude account, connected with that account's token through <code>ccfleet-connect</code>; several accounts means several slots, one for each.</p>
-  <p>The same account can be on as many of your own computers as you like, each with the same token. What a computer never does is keep a second account on the side to switch to: connecting again with another account's token <strong>replaces</strong> the one it had, and says so. The <code>--add</code>, <code>--use</code> and <code>--list</code> of an earlier version are refused. On a computer that saved several tokens under names, the first run keeps the one in use and removes the rest, telling you how many went so you can revoke them in your Claude account. <a href="#daily">Section 00</a> has the setup.</p>
+  <h2><span class="n">05</span>Your computer: the slot&rsquo;s account or its own</h2>
+  <p><code>ccfleet-connect</code> puts your slot&rsquo;s Claude account on a computer of yours, through a device token (<a href="#daily">section 00</a> has the setup). The same account can be on as many of your computers as you like, each with the same token.</p>
+  <p>One Claude account per slot is ccfleet&rsquo;s rule for its own machines. Your computer is yours, and it can also have its own Claude login, with your own subscription: the slot&rsquo;s account or another one. Switching between them is one command each way:</p>
+  <pre><code>ccfleet-connect --off      <span class="c"># this computer's own Claude login</span>
+ccfleet-connect --on       <span class="c"># back to your slot's account</span>
+ccfleet-connect --status   <span class="c"># which one is in use</span></code></pre>
+  <p><code>--off</code> parks the token beside where it was, as <code>token.off</code>. The line in your shell&rsquo;s rc file only exports a token that is there, so new shells stop using it at once, and the shell <code>--off</code> hands you starts without it. It also says whether the computer has a login of its own; if not, <code>claude auth login</code> signs it in. <code>--on</code> checks the parked token against Anthropic first: one revoked or expired while parked stays parked, and the computer keeps working on its own login. One is in use at a time, and each is yours to use under Anthropic&rsquo;s terms.</p>
+  <p>Connecting again with another token <strong>replaces</strong> the one the computer had, parked or not, and says so. The <code>--add</code>, <code>--use</code> and <code>--list</code> of an earlier version, which kept several tokens under names, are refused. On a computer that saved several that way, the first run keeps the one in use and removes the rest, telling you how many went so you can revoke them in your Claude account.</p>
 </section>
 
 <section id="use">
@@ -791,7 +796,7 @@ claude
       <tr><td>node</td><td><code>ccfleet-backup</code></td><td>Archive state without credentials</td></tr>
       <tr><td>node</td><td><code>ccfleet-upgrade-claude [version]</code></td><td>Staged upgrade via the official installer</td></tr>
       <tr><td>node</td><td><code>exitip</code></td><td>Print the public egress IP</td></tr>
-      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use an account on this device with no login; one account per computer, and connecting again replaces it. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--status</code>, <code>--remove</code></td></tr>
+      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use your slot&rsquo;s account on this device with no login; connecting again replaces the token. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--off</code> (the computer&rsquo;s own login), <code>--on</code>, <code>--status</code>, <code>--remove</code></td></tr>
     </tbody>
   </table></div>
 
@@ -809,7 +814,7 @@ claude
       <tr><td><code>~/backups/ccfleet/</code></td><td>node</td><td>Nightly archives</td></tr>
       <tr><td><code>deploy/ccfleetd.env</code></td><td>server</td><td>Server settings, mode 0600</td></tr>
       <tr><td><code>/data/ccfleet.db</code> (Docker) or <code>data/ccfleet.db</code></td><td>server</td><td>SQLite database</td></tr>
-      <tr><td><code>~/.config/ccfleet/token</code></td><td>any device</td><td>The one account's device token, from <code>ccfleet-connect</code>, mode 0600</td></tr>
+      <tr><td><code>~/.config/ccfleet/token</code></td><td>any device</td><td>The slot&rsquo;s device token, from <code>ccfleet-connect</code>, mode 0600; <code>token.off</code> beside it while switched off</td></tr>
     </tbody>
   </table></div>
 </section>
