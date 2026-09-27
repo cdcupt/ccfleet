@@ -432,6 +432,29 @@ The honest summary: the hosting idea is the same, one account per isolated
 machine with its own address. Everything about what sits in front of it is
 opposite. A pooled endpoint is the shape this project exists not to be.
 
+### Several ways into the same slot
+
+“Use it anywhere” changes the access path, never the account binding. Remote
+Control reaches the slot through Anthropic from a browser or app. Holder-managed
+SSH reaches the same Linux account directly from a terminal or Claude Desktop,
+and Mutagen can synchronize a project over that SSH route in `two-way-safe`
+mode. All three end at the same slot and its one Claude login.
+
+The management server stores one public key per held slot, with the comment
+discarded; it never receives the private key. The machine replaces the managed
+`authorized_keys` file with that one key, applies `no-agent-forwarding`,
+`no-port-forwarding`, `no-X11-forwarding` and `no-user-rc` on the key, and
+repeats the forwarding restrictions in sshd for the slot group. A release
+clears the desired key immediately, then the ordinary wipe removes the account
+and home. Root opens the home and `.ssh` by directory file descriptor with
+symlink following disabled, because those paths are controlled by the holder.
+
+The sync helper ignores VCS metadata, dependency trees, build output and dotenv
+files by default. Mutagen's conflict-safe mode surfaces simultaneous edits
+instead of choosing a copy and losing work. None of this supplies account
+failover: if the one Claude account on the slot is unavailable, the slot says
+so rather than borrowing another account.
+
 ## What was left out on purpose
 
 | Feature seen elsewhere | Decision | Reason |

@@ -52,6 +52,7 @@ class Fake:
         self.spawned = []
         self.scripts = []
         self.posted = []
+        self.ssh_keys = {}
 
     def lookup(self, name):
         return self.users.get(name)
@@ -81,9 +82,19 @@ class Fake:
             raise urllib.error.HTTPError(request.full_url, self.status, "no", {}, io.BytesIO(b"{}"))
         return Reply(json.dumps({"ok": True, "desired": self.desired}).encode())
 
+    def install_ssh_key(self, acct, key):
+        self.ssh_keys[acct.pw_name] = key
+        return True, ""
+
+    def ssh_key_fingerprint(self, acct):
+        key = self.ssh_keys.get(acct.pw_name, "")
+        return machine.ssh_key_fingerprint(key) if key else ""
+
     def system(self):
         return machine.System(lookup=self.lookup, groups_of=self.groups_of, spawn=self.spawn,
-                              runner=self.runner, opener=self.opener, clock=lambda: NOW)
+                              runner=self.runner, opener=self.opener, clock=lambda: NOW,
+                              install_ssh_key=self.install_ssh_key,
+                              ssh_key_fingerprint=self.ssh_key_fingerprint)
 
 
 @pytest.fixture
@@ -135,7 +146,8 @@ def test_the_servers_slots_are_checked_before_anything_runs_as_root():
     ]})
     assert wanted == [
         {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
-        {"unix_user": "slot02", "state": "releasing", "claimed_at": None},
+        {"unix_user": "slot02", "state": "releasing", "claimed_at": None,
+         "ssh_public_key": ""},
     ]
 
 

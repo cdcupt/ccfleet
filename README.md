@@ -174,6 +174,17 @@ never charged, and the allowance stays the only thing that grants a slot.
 The guidebook's chapter 11 covers the same ground for the operator, step by
 step.
 
+The access model is **many devices, one private slot, one Claude account**.
+Remote Control works from claude.ai/code and the Claude apps. A holder may add
+one SSH public key from their slot page for terminal and Claude Desktop access;
+the matching private key never leaves their device. The page then shows an
+optional `ccfleet-sync` command for conflict-safe folder sync through that same
+SSH identity. Removing the key revokes SSH without changing the slot, and
+release clears the key before the Linux account and files are wiped. There is
+no common API endpoint, account selection, credential routing or failover to a
+different account: this is CC Host-like remote convenience, not an account
+pool.
+
 ```bash
 # fleet server: Google sign-in needs an OAuth "Web application" client whose
 # redirect URI is <CCFLEET_PUBLIC_URL>/auth/google/callback, and in ccfleetd.env
@@ -209,6 +220,10 @@ The rules the rest depends on:
   asks for the slot's id to be typed.
 - **Nothing acts as a user.** The console can take a slot back; it cannot sign
   in on anybody's behalf, type their code, or read their device token.
+- **SSH is holder-controlled and deliberately narrow.** The server keeps only
+  one public key (with its comment discarded); the machine disables agent,
+  port and X11 forwarding and tunnels for slot accounts. Ordinary SSH security
+  logs still contain the connecting address. Private keys never reach ccfleet.
 - **Payments are a record, not a gate.** The console shows who is paid through
   when, and marks a lapse in red while that person still holds or may claim
   slots. A lapse takes no slot and stops no claim; what to do about it is yours.

@@ -41,6 +41,7 @@ MAX_EMAIL = 254
 # A Claude account's fingerprint: the first 16 hex digits of a digest of its id,
 # the same on every node it is on. Nothing else is one.
 ACCOUNT_FP_RE = re.compile(r"^[0-9a-f]{16}$")
+SSH_FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 
 
 class HeartbeatError(ValueError):
@@ -178,6 +179,14 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ssh_access(section: Mapping[str, Any]) -> dict[str, Any]:
+    """Whether root actually installed the holder's public key, and which."""
+    value = section.get("fingerprint")
+    fingerprint = value if isinstance(value, str) and SSH_FP_RE.match(value) else ""
+    configured = section.get("configured") is True and bool(fingerprint)
+    return {"configured": configured, "fingerprint": fingerprint if configured else ""}
+
+
 #: What a slot says about restarting Remote Control onto a new version.
 RESTART_STATES = ("waiting", "done")
 
@@ -250,6 +259,7 @@ def _slots(value: Any) -> list[dict[str, Any]]:
             "credentials": _slot_credentials(_section(entry, "credentials")),
             "remote_control": {"state": _str(_section(entry, "remote_control").get("state"),
                                              40)},
+            "ssh": _ssh_access(_section(entry, "ssh")),
             "quota": _quota(_section(entry, "quota")),
             "usage": _usage(_section(entry, "usage")),
         })

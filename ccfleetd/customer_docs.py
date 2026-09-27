@@ -22,7 +22,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, _span
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-09-24"
+DOCS_UPDATED = "2026-09-27"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -320,6 +320,18 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "Everything runs on the machine, in your slot, with your files.</p></li>"
         "</ol>"
         '<div class="card"><h2>Also on your page</h2><ul>'
+        "<li><strong>Terminal and desktop access.</strong> Add one SSH public key on your "
+        "slot card. When it says Ready, the card shows the exact <code>ssh</code> command. "
+        "The private key stays on your device; use the same SSH connection from a terminal "
+        "or add it to Claude Desktop. Removing the key closes this route without changing "
+        "your files or Claude sign-in.</li>"
+        "<li><strong>Folder sync.</strong> Install Mutagen and <code>ccfleet-sync</code> on "
+        "your computer, then run the command on your slot card. It uses conflict-safe "
+        "two-way sync and leaves git metadata, dependency folders, build output and "
+        "<code>.env</code> files out by default:<pre>mkdir -p ~/.local/bin\n"
+        "curl -fsSL -o ~/.local/bin/ccfleet-sync \\\n"
+        "  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-sync.sh\n"
+        "chmod 755 ~/.local/bin/ccfleet-sync</pre></li>"
         "<li><strong>Your usage.</strong> Your Claude account&#x27;s 5-hour and weekly limits, "
         "which count everything the account does: claude.ai, the Claude app, and Claude "
         "Code on any computer, device tokens included. Beside them, the tokens Claude Code "
@@ -467,6 +479,12 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "never receives or keeps the credential. Claude Code in your slot talks to Anthropic "
         "directly. ccfleet does not relay, pool or rewrite anybody&#x27;s requests, and no "
         "Claude account is ever shared between people.</p></div>"
+        '<div class="card"><h2>Use it from anywhere</h2>'
+        "<p>Remote Control reaches the slot from claude.ai/code and the Claude app. If you "
+        "add your own SSH public key, a terminal or Claude Desktop can reach the same Linux "
+        "account directly. Optional folder sync uses that same key. These are several doors "
+        "to one private slot, not several accounts behind one door: the slot still holds one "
+        "Claude account and ccfleet never chooses or fails over to another one.</p></div>"
         '<div class="card"><h2>What we can and cannot see</h2>'
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
         "signed in, the email address and plan of the Claude account signed in on it, how "

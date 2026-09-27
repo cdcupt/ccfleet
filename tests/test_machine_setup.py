@@ -28,17 +28,22 @@ def sandbox(tmp_path, monkeypatch):
     root = tmp_path / "system"
     for name, var in (("lib", "CCFLEET_LIB_DIR"), ("etc", "CCFLEET_ETC_DIR"),
                       ("state", "CCFLEET_STATE_DIR"), ("units", "CCFLEET_UNIT_DIR"),
-                      ("home", "CCFLEET_HOME_ROOT")):
+                      ("home", "CCFLEET_HOME_ROOT"),
+                      ("sshd", "CCFLEET_SSHD_DROPIN_DIR")):
         monkeypatch.setenv(var, str(root / name))
     (root / "units").mkdir(parents=True)
     (root / "home").mkdir()
+    (root / "sshd").mkdir()
+    sshd_config = root / "sshd_config"
+    sshd_config.write_text(f"Include {root / 'sshd'}/*.conf\n")
+    monkeypatch.setenv("CCFLEET_SSHD_CONFIG", str(sshd_config))
     monkeypatch.setenv("CCFLEET_SOURCE_DIR", str(REPO))
     # If anything tried to fetch, it would fail loudly rather than reach GitHub.
     monkeypatch.setenv("CCFLEET_REPO_RAW", "http://127.0.0.1:9/never")
     return root
 
 
-def fakebin(tmp_path, *, timer_state="active", first_run_ok=True):
+def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True):
     """Root's view of the world: `id -u` is 0, and the rest just logs."""
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
@@ -49,6 +54,7 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True):
         "apt-get": 'echo "apt-get $*" >> "__LOG__"',
         "chown": 'echo "chown $*" >> "__LOG__"',
         "curl": 'echo "curl $*" >> "__LOG__"; exit 1',
+        "sshd": 'echo "sshd $*" >> "__LOG__"; exit __SSHD__',
         "systemctl": textwrap.dedent("""\
             echo "systemctl $*" >> "__LOG__"
             case "$1" in
@@ -61,7 +67,8 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True):
         path = bindir / name
         path.write_text("#!/bin/sh\n" + body.replace("__LOG__", str(calls))
                         .replace("__TIMER__", timer_state)
-                        .replace("__START__", "0" if first_run_ok else "1") + "\n")
+                        .replace("__START__", "0" if first_run_ok else "1")
+                        .replace("__SSHD__", "0" if sshd_ok else "1") + "\n")
         path.chmod(0o755)
     return bindir, calls
 
@@ -191,13 +198,46 @@ def test_it_turns_the_timer_on_and_runs_once(tmp_path):
     assert run(GOOD, bindir).returncode == 0
     log = calls.read_text().splitlines()
     systemctl = [line for line in log if line.startswith("systemctl")]
-    assert systemctl == ["systemctl daemon-reload",
+    assert systemctl == ["systemctl reload ssh",
+                         "systemctl daemon-reload",
                          "systemctl enable --now ccfleet-machine.timer",
                          "systemctl start ccfleet-machine.service",
                          "systemctl is-active ccfleet-machine.timer"]
     install = next(line for line in log if " install " in line)
-    for package in ("python3", "tmux", "sudo", "adduser", "libpam-systemd"):
+    for package in ("python3", "tmux", "sudo", "adduser", "libpam-systemd",
+                    "git", "gh", "rsync"):
         assert package in install.split(), f"{package} not installed"
+
+
+def test_it_restricts_slot_ssh_and_validates_before_reload(tmp_path, sandbox):
+    bindir, calls = fakebin(tmp_path)
+    assert run(GOOD, bindir).returncode == 0
+    dropin = sandbox / "sshd" / "02-ccfleet-slots.conf"
+    assert dropin.read_text() == textwrap.dedent("""\
+        # A customer's key opens only their slot shell and file-transfer commands.
+        # The same restrictions are repeated on authorized_keys as defense in depth.
+        Match Group ccfleet-slots
+            AllowAgentForwarding no
+            AllowTcpForwarding no
+            X11Forwarding no
+            PermitTunnel no
+            PermitUserRC no
+        Match all
+        """)
+    lines = calls.read_text().splitlines()
+    assert lines.index(f"sshd -t -f {sandbox / 'sshd_config'}") < lines.index(
+        "systemctl reload ssh")
+
+
+def test_rejected_slot_ssh_config_is_restored_and_not_reloaded(tmp_path, sandbox):
+    dropin = sandbox / "sshd" / "02-ccfleet-slots.conf"
+    dropin.write_text("old configuration\n\n")
+    bindir, calls = fakebin(tmp_path, sshd_ok=False)
+    result = run(GOOD, bindir)
+    assert result.returncode != 0
+    assert "configuration was restored" in result.stderr
+    assert dropin.read_text() == "old configuration\n\n"
+    assert not any("reload ssh" in line for line in calls.read_text().splitlines())
 
 
 def test_a_first_run_that_fails_is_a_failed_setup(tmp_path):

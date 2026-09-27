@@ -134,8 +134,9 @@ def test_a_machines_heartbeat_moves_its_slots_and_the_reply_says_so(server):
         {"unix_user": "slot02", "present": False}]), auth)[1])
     assert store.get_slot("s1")["state"] == slots.CLAIMED
     assert store.get_slot("s2")["state"] == slots.FREE
-    assert reply["desired"]["slots"] == [{"unix_user": "slot01", "state": "claimed"},
-                                         {"unix_user": "slot02", "state": "free"}]
+    assert reply["desired"]["slots"] == [{"unix_user": "slot01", "state": "claimed",
+                                           "ssh_public_key": ""},
+                                          {"unix_user": "slot02", "state": "free"}]
     # And nothing about an owner login was raised against a machine with none.
     assert reply["open_alerts"] == []
 

@@ -34,7 +34,10 @@ last run did and what the machine looks like now, then acts on the reply.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import grp
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +46,7 @@ import re
 import selectors
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -51,7 +55,7 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 try:
     from ccfleet_agent import agent as core
@@ -113,6 +117,21 @@ SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "
 # only ones whose Claude Code follows the machine's pin. A claiming slot is
 # still being made, and a releasing one is about to be deleted.
 UPGRADE_STATES = SIGN_IN_STATES
+
+# One holder-supplied public key. The server already validates it; root checks
+# it again before it reaches authorized_keys because a compromised server or a
+# mixed-version rollout must not turn an arbitrary line into an SSH option.
+SSH_KEY_TYPES = frozenset({
+    "ssh-ed25519",
+    "sk-ssh-ed25519@openssh.com",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+    "ssh-rsa",
+})
+MAX_SSH_KEY_CHARS = 16 * 1024
+AUTHORIZED_KEY_OPTIONS = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc"
 
 
 @dataclass(frozen=True)
@@ -254,6 +273,157 @@ def set_hostname_now(name: str) -> bool:
 
 
 
+def normalize_ssh_public_key(value: Any) -> Optional[str]:
+    """Canonical public key from desired state, or None when it is invalid."""
+    if not isinstance(value, str) or len(value) > MAX_SSH_KEY_CHARS:
+        return None
+    if value == "":
+        return ""
+    if "\n" in value or "\r" in value:
+        return None
+    parts = value.strip().split()
+    if len(parts) != 2 or parts[0] not in SSH_KEY_TYPES:
+        return None
+    key_type, encoded = parts
+    try:
+        blob = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, binascii.Error):
+        return None
+    if len(blob) < 8:
+        return None
+    size = struct.unpack(">I", blob[:4])[0]
+    try:
+        embedded = blob[4:4 + size].decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    if size <= 0 or 4 + size > len(blob) or embedded != key_type:
+        return None
+    return f"{key_type} {base64.b64encode(blob).decode('ascii')}"
+
+
+def ssh_key_fingerprint(key: str) -> str:
+    """OpenSSH-style fingerprint for a normalized public key."""
+    blob = base64.b64decode(key.split()[1].encode("ascii"), validate=True)
+    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+    return f"SHA256:{digest}"
+
+
+def _open_dir(path: Union[str, Path], *, dir_fd: Optional[int] = None) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    return os.open(path, flags, dir_fd=dir_fd)
+
+
+def install_authorized_key(account: pwd.struct_passwd, key: str) -> tuple[bool, str]:
+    """Make this key the slot's sole SSH key without following holder symlinks.
+
+    The holder owns every path under their home and may replace one between two
+    ordinary path checks. Directory file descriptors plus ``O_NOFOLLOW`` keep
+    every create, replace and remove inside the home and ``.ssh`` directories
+    that root actually opened.
+    """
+    normalized = normalize_ssh_public_key(key)
+    if normalized is None:
+        return False, "server supplied an invalid SSH public key"
+    home_fd: Optional[int] = None
+    ssh_fd: Optional[int] = None
+    try:
+        home_fd = _open_dir(account.pw_dir)
+        try:
+            ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
+        except FileNotFoundError:
+            if not normalized:
+                return True, ""
+            os.mkdir(".ssh", mode=0o700, dir_fd=home_fd)
+            ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
+        os.fchmod(ssh_fd, 0o700)
+        os.fchown(ssh_fd, account.pw_uid, account.pw_gid)
+        if not normalized:
+            try:
+                os.unlink("authorized_keys", dir_fd=ssh_fd)
+            except FileNotFoundError:
+                pass
+            return True, ""
+        content = f"{AUTHORIZED_KEY_OPTIONS} {normalized}\n".encode("ascii")
+        try:
+            current_fd = os.open(
+                "authorized_keys",
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=ssh_fd,
+            )
+        except OSError:
+            current = b""
+        else:
+            try:
+                current = os.read(current_fd, MAX_SSH_KEY_CHARS + 512)
+            finally:
+                os.close(current_fd)
+        if current == content:
+            return True, ""
+        temporary = f".authorized_keys.ccfleet.{os.getpid()}"
+        try:
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=ssh_fd,
+            )
+        except FileExistsError:
+            os.unlink(temporary, dir_fd=ssh_fd)
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=ssh_fd,
+            )
+        try:
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(fd, remaining)
+                remaining = remaining[written:]
+            os.fchmod(fd, 0o600)
+            os.fchown(fd, account.pw_uid, account.pw_gid)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(temporary, "authorized_keys", src_dir_fd=ssh_fd, dst_dir_fd=ssh_fd)
+        return True, ""
+    except OSError as exc:
+        return False, f"could not update authorized_keys ({exc.__class__.__name__})"
+    finally:
+        if ssh_fd is not None:
+            os.close(ssh_fd)
+        if home_fd is not None:
+            os.close(home_fd)
+
+
+def authorized_key_fingerprint(account: pwd.struct_passwd) -> str:
+    """Fingerprint of the managed key actually on disk, or empty."""
+    home_fd: Optional[int] = None
+    ssh_fd: Optional[int] = None
+    key_fd: Optional[int] = None
+    try:
+        home_fd = _open_dir(account.pw_dir)
+        ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
+        key_fd = os.open("authorized_keys", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                         dir_fd=ssh_fd)
+        text = os.read(key_fd, MAX_SSH_KEY_CHARS + 512).decode("ascii", "strict")
+        tokens = text.strip().split()
+        for index, token in enumerate(tokens[:-1]):
+            if token in SSH_KEY_TYPES:
+                normalized = normalize_ssh_public_key(f"{token} {tokens[index + 1]}")
+                return ssh_key_fingerprint(normalized) if normalized else ""
+    except (OSError, UnicodeError, ValueError, IndexError):
+        return ""
+    finally:
+        if key_fd is not None:
+            os.close(key_fd)
+        if ssh_fd is not None:
+            os.close(ssh_fd)
+        if home_fd is not None:
+            os.close(home_fd)
+    return ""
+
+
 @dataclass(frozen=True)
 class System:
     """Everything this agent reaches outside itself, so a test can stand in."""
@@ -269,6 +439,8 @@ class System:
     # The machine's own name, and where it is kept.
     hostname: Callable[[], str] = socket.gethostname
     set_hostname: Callable[[str], bool] = set_hostname_now
+    install_ssh_key: Callable[[pwd.struct_passwd, str], tuple[bool, str]] = install_authorized_key
+    ssh_key_fingerprint: Callable[[pwd.struct_passwd], str] = authorized_key_fingerprint
     hosts_path: Path = HOSTS_FILE
     cloud_cfg_dir: Path = CLOUD_CFG_DIR
 
@@ -306,6 +478,15 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
             item["login"] = login
         if state in UPGRADE_STATES:
             item.update(_version_request(entry))
+        if state in SIGN_IN_STATES and "ssh_public_key" in entry:
+            key = normalize_ssh_public_key(entry.get("ssh_public_key"))
+            if key is not None:
+                item["ssh_public_key"] = key
+        elif state == "releasing":
+            # Revoke the login even if the wipe itself fails and has to retry.
+            # This does not depend on a new server field, so a newer agent also
+            # closes SSH while rolling back against an older server.
+            item["ssh_public_key"] = ""
         # A read of its usage asked for from a page: a moment, or nothing.
         wanted = entry.get("quota_wanted_at")
         if (state in SIGN_IN_STATES and isinstance(wanted, (int, float))
@@ -472,6 +653,8 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
     else:
         heard = dict((state.get("heard") or {}).get(user) or {})
     entry.update(heard)
+    fingerprint = system.ssh_key_fingerprint(account)
+    entry["ssh"] = {"configured": bool(fingerprint), "fingerprint": fingerprint}
     if abandoned and user in abandoned:
         entry["login"] = {"state": "failed", "requested_at": abandoned[user],
                           "detail": f"not completed within {int(core.LOGIN_WINDOW_S)}s"}
@@ -735,6 +918,19 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
             "slot_logins": {s["unix_user"]: s["login"] for s in slots if "login" in s}}
 
 
+def converge_ssh_access(slots: list[dict[str, Any]], system: System) -> None:
+    """Apply holder keys after lifecycle actions, every run and idempotently."""
+    for slot in slots:
+        if slot["state"] not in (*SIGN_IN_STATES, "releasing") or "ssh_public_key" not in slot:
+            continue
+        account = system.lookup(slot["unix_user"])
+        if account is None or not is_slot_account(account, system.groups_of(account)):
+            continue
+        ok, why = system.install_ssh_key(account, slot["ssh_public_key"])
+        if not ok:
+            log.error("%s: %s", account.pw_name, why)
+
+
 def _moment(value: Any) -> Optional[float]:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -780,7 +976,9 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     # Before provisioning, so a claim's Remote Control first registers under
     # its holder's name.
     state = _take_name(desired, cfg, state, system)
-    new_state = act_on_slots(wanted_slots(desired), state, cfg, system)
+    wanted = wanted_slots(desired)
+    new_state = act_on_slots(wanted, state, cfg, system)
+    converge_ssh_access(wanted, system)
     # The version this machine's slots should run, checked the way the owner
     # agent checks its own before it reaches an installer. Empty: leave them be.
     new_state["claude_version"] = core.installable_version(desired.get("claude_version")) or ""
@@ -789,12 +987,12 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     new_state["slot_versions"] = {
         s["unix_user"]: {k: s[k] for k in ("claude_version", "channel_version", "update_now")
                          if k in s}
-        for s in wanted_slots(desired) if "claude_version" in s}
+        for s in wanted if "claude_version" in s}
     # A read asked for goes out of turn, and the slot whose turn it took has
     # it next.
     new_state["quota_turn"] = (turn + (0 if fast or asked else 1)) if users else 0
     new_state["quota_wanted"] = {s["unix_user"]: s["quota_wanted_at"]
-                                 for s in wanted_slots(desired) if "quota_wanted_at" in s}
+                                 for s in wanted if "quota_wanted_at" in s}
     # The request each slot has been handed, so it is handed once.
     passed = {u: t for u, t in (state.get("quota_passed") or {}).items() if u in users}
     handed = _moment((state.get("quota_wanted") or {}).get(refresh_for)) if refresh_for else None

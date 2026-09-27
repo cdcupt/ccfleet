@@ -91,6 +91,9 @@ spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.
    slot and wipes it when they give it back.
 8. *root*:
    `curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh | bash -s -- --server <fleet url> --node <machine> --token <token>`.
+   This also installs `git`, `gh` and `rsync`, and validates an sshd match block
+   that disables agent, port and X11 forwarding, tunnels and user rc files for
+   the `ccfleet-slots` group before reloading SSH.
 9. *server*: within a couple of minutes `ccfleetd slot list --machine <machine>`
    shows its slot `free` and `on machine` `no`: the machine itself has
    confirmed it is empty, which is what makes it claimable.
@@ -100,7 +103,17 @@ Prove the machine is closed before anyone is given a slot on it:
 - *laptop*: `ssh -o PubkeyAuthentication=no root@<machine>` is refused with
   `Permission denied (publickey)`.
 - *root*: `sshd -T` reports `pubkeyauthentication yes` and `passwordauthentication no`.
+- *root*: `sshd -T -C user=slot01,host=localhost,addr=127.0.0.1` (after the first
+  slot has been provisioned) reports `allowagentforwarding no`,
+  `allowtcpforwarding no`, `x11forwarding no`, `permittunnel no` and
+  `permituserrc no`.
 - *root*: `ufw status` reports `Status: active`, and `systemctl is-active ccfleet-machine.timer` says `active`.
+
+For a holder testing SSH, add their public key on `/account`, wait for the card
+to say **Ready**, then run the exact command it shows. Removing access must make
+a new SSH connection fail within the next machine-agent cycle. `ccfleet-sync`
+uses the same route; `ccfleet-sync status <name>` shows any conflict, and
+`ccfleet-sync stop <name>` removes only that named CC Fleet sync session.
 
 These steps are deliberately mechanical. An operator can put exactly them in a
 private script that takes an address and a name, reads the root password once

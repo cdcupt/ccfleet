@@ -120,7 +120,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.10.4 · 2026-09-25 · live</p>
+  <p class="eyebrow">ccfleet · setup and usage guide · v0.11.0 · 2026-09-27 · live</p>
   <h1>ccfleet Guidebook</h1>
   <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
   <div class="meta">
@@ -855,6 +855,12 @@ claude
   account of theirs with <em>Change account</em>, at most once a week, and keeps its files.
   Its account can be used from wherever its holder likes: claude.ai/code and the Claude app on
   any device, or a device token on each of their own computers.</p>
+  <p>The holder can also add one SSH public key on their page. That opens the same private
+  Linux account to a terminal or Claude Desktop and enables optional two-way-safe project
+  sync with <code>ccfleet-sync</code>. The private key stays on their device; ccfleet stores
+  only the public key without its comment, and release revokes it before the account is
+  wiped. These are several ways into one slot, not a pool: there is no shared endpoint,
+  credential routing or failover to another Claude account.</p>
   <div class="two">
     <div>
       <h3>Selling a slot</h3>

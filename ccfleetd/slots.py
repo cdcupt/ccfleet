@@ -69,6 +69,10 @@ HELD: frozenset[str] = frozenset({CLAIMING, CLAIMED, ACTIVE, RELEASING})
 #: wipe and a releasing slot is already being wiped.
 RELEASABLE: frozenset[str] = frozenset({CLAIMING, CLAIMED, ACTIVE})
 
+#: A Linux account exists and belongs to its holder. Sign-in, SSH access and
+#: interactive work are meaningful only in these states.
+ACCESSIBLE: frozenset[str] = frozenset({CLAIMED, ACTIVE})
+
 #: What a shared machine's heartbeat says it is. Its agent runs as root and
 #: reports its slots rather than an owner login, which it does not have.
 MACHINE_MODE = "machine"

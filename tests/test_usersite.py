@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import http.client
 import re
+import struct
 import threading
 import time
 import urllib.parse
@@ -18,7 +19,7 @@ from datetime import timedelta
 
 import pytest
 
-from ccfleetd import oauth, payments, sessions, slots, usersite
+from ccfleetd import oauth, payments, sessions, slots, sshkeys, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -30,6 +31,12 @@ from tests.conftest import next_load, refresh_of
 SECRET = "0123456789abcdef0123456789abcdef"
 URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y"
 TOKEN = "sk-ant-oat01-" + "Q" * 40
+
+
+def ssh_public_key(comment="person@example.com"):
+    kind = b"ssh-ed25519"
+    blob = struct.pack(">I", len(kind)) + kind + struct.pack(">I", 32) + b"k" * 32
+    return f"ssh-ed25519 {base64.b64encode(blob).decode()} {comment}"
 
 
 def handle_of(email):
@@ -518,6 +525,35 @@ def test_a_machine_nobody_has_heard_from_says_so(site):
     report(store, "m1", [{"unix_user": slot["unix_user"], "present": True}],
            ts=time.time() - cfg.heartbeat_max_age_s - 120)
     assert "may be unreachable" in erik.page()
+
+
+def test_holder_adds_one_ssh_key_and_gets_commands_only_after_it_is_applied(site):
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    erik = sign_in(quota=1)
+    slot = claimed(store, erik)
+    before = erik.page()
+    assert "Add SSH key" in before and "ssh slot01@" not in before
+
+    supplied = ssh_public_key("private-address@example.com")
+    response = erik.press(f"/account/slots/{slot['id']}/ssh-key", public_key=supplied)
+    assert response.status == 303
+    stored = store.get_slot(slot["id"])["ssh_public_key"]
+    assert "private-address@example.com" not in stored
+    fingerprint = sshkeys.fingerprint(stored)
+    store.insert_heartbeat("m1", time.time(), {
+        "node_id": "m1", "mode": "machine", "egress": {"ip": "203.0.113.10"},
+        "slots": [{"unix_user": "slot01", "present": True,
+                   "ssh": {"configured": True, "fingerprint": fingerprint}}],
+    })
+    ready = erik.page()
+    assert "Ready" in ready and fingerprint in ready
+    assert "ssh slot01@203.0.113.10" in ready
+    assert "ccfleet-sync start ./project slot01@203.0.113.10" in ready
+    assert supplied.split()[1] not in ready, "the page should not echo the whole public key"
+
+    assert erik.press(f"/account/slots/{slot['id']}/ssh-remove").status == 303
+    assert store.get_slot(slot["id"])["ssh_public_key"] == ""
 
 
 # -- signing out -------------------------------------------------------------------

@@ -24,6 +24,8 @@ ETC_DIR="${CCFLEET_ETC_DIR:-/etc/ccfleet}"
 STATE_DIR="${CCFLEET_STATE_DIR:-/var/lib/ccfleet}"
 UNIT_DIR="${CCFLEET_UNIT_DIR:-/etc/systemd/system}"
 HOME_ROOT="${CCFLEET_HOME_ROOT:-/home}"
+SSHD_DROPIN_DIR="${CCFLEET_SSHD_DROPIN_DIR:-/etc/ssh/sshd_config.d}"
+SSHD_CONFIG="${CCFLEET_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 # A checkout to copy from instead of fetching: offline installs, and tests.
 SOURCE_DIR="${CCFLEET_SOURCE_DIR:-}"
 
@@ -87,16 +89,44 @@ fetch() {  # fetch <path in the repo> <destination> <mode>
   mv -f "$tmp" "$2"
 }
 
-step "1/5  packages"
+restrict_slot_sshd() {
+  local dropin="$SSHD_DROPIN_DIR/02-ccfleet-slots.conf"
+  local had=no was=""
+  if [ -f "$dropin" ]; then
+    had=yes; was="$(cat "$dropin"; printf x)"; was="${was%x}"
+  fi
+  mkdir -p "$SSHD_DROPIN_DIR"
+  cat > "$dropin" <<'SSHD'
+# A customer's key opens only their slot shell and file-transfer commands.
+# The same restrictions are repeated on authorized_keys as defense in depth.
+Match Group ccfleet-slots
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PermitUserRC no
+Match all
+SSHD
+  if ! sshd -t -f "$SSHD_CONFIG"; then
+    if [ "$had" = yes ]; then printf '%s' "$was" > "$dropin"; else rm -f "$dropin"; fi
+    die "sshd rejected the slot restrictions; its configuration was restored"
+  fi
+  if ! systemctl reload ssh 2>/dev/null && ! systemctl reload sshd 2>/dev/null; then
+    if [ "$had" = yes ]; then printf '%s' "$was" > "$dropin"; else rm -f "$dropin"; fi
+    die "could not reload sshd; its configuration was restored"
+  fi
+}
+
+step "1/6  packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q >/dev/null
 # sudo and adduser: slot-add.sh creates each slot with adduser and drops into it
 # with sudo -u. libpam-systemd: without it no slot gets its own systemd manager,
 # and its work session and Remote Control have nowhere to run.
-apt-get install -y -q python3 tmux curl sudo adduser ca-certificates libpam-systemd >/dev/null
-note "installed: python3, tmux, curl, sudo, adduser, libpam-systemd"
+apt-get install -y -q python3 tmux curl sudo adduser ca-certificates libpam-systemd git gh rsync >/dev/null
+note "installed: python3, tmux, curl, sudo, adduser, libpam-systemd, git, gh, rsync"
 
-step "2/5  the agent and the slot scripts"
+step "2/6  the agent and the slot scripts"
 mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 fetch ccfleet_agent/__init__.py "$LIB_DIR/ccfleet_agent/__init__.py" 644
 fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
@@ -112,7 +142,7 @@ chown -R root:root "$LIB_DIR"
 chmod 755 "$LIB_DIR" "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 note "in $LIB_DIR, owned by root"
 
-step "3/5  its configuration"
+step "3/6  its configuration"
 mkdir -p "$ETC_DIR" "$STATE_DIR"
 # The directory closes first, so the token is never reachable by anyone else,
 # not even for the moment between writing the file and setting its mode.
@@ -124,7 +154,11 @@ printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_D
 chmod 600 "$ETC_DIR/agent.env"
 note "$ETC_DIR/agent.env, readable by root only"
 
-step "4/5  the timer"
+step "4/6  slot SSH restrictions"
+restrict_slot_sshd
+note "slot logins cannot forward agents, ports, X11 or tunnels"
+
+step "5/6  the timer"
 for unit in ccfleet-machine.service ccfleet-machine.timer; do
   fetch "node/systemd/$unit" "$UNIT_DIR/$unit" 644
 done
@@ -136,7 +170,7 @@ rm -f "$UNIT_DIR/ccfleet-machine.service.orig"
 systemctl daemon-reload
 systemctl enable --now ccfleet-machine.timer >/dev/null 2>&1 || die "could not enable ccfleet-machine.timer"
 
-step "5/5  first report"
+step "6/6  first report"
 # A oneshot: this returns when the run has finished, so its result is real.
 if ! systemctl start ccfleet-machine.service; then
   die "the machine agent's first run failed. Look at: journalctl -u ccfleet-machine.service -n 50"

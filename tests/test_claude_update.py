@@ -287,6 +287,7 @@ def test_a_slot_on_latest_is_told_the_number_and_to_install_now():
     desired = desired_state(node, slots=[slot], hostname="erik-1", channels=channels_at(1.0),
                             slot_updates={"s1": pending})
     assert desired["slots"][0] == {"unix_user": "slot01", "state": slots.ACTIVE,
+                                   "ssh_public_key": "",
                                    "claude_version": "latest", "channel_version": LATEST,
                                    "update_now": {"requested_at": 100.0}}
     assert desired["claude_version"] == "stable", "the machine's own pin, unchanged"
@@ -303,6 +304,7 @@ def test_a_held_slot_is_told_the_hold_and_nothing_else():
     desired = desired_state(node, slots=[slot], hostname="erik-1", channels=channels_at(1.0),
                             slot_updates={"s1": {"state": "pending", "requested_at": 1.0}})
     assert desired["slots"][0] == {"unix_user": "slot01", "state": slots.ACTIVE,
+                                   "ssh_public_key": "",
                                    "claude_version": "2.1.278"}
 
 

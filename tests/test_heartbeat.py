@@ -198,6 +198,19 @@ def test_a_machine_reports_each_slot_by_its_user():
     assert "surprise" not in slot and "home" not in slot and "path" not in slot["claude"]
 
 
+def test_a_machine_reports_only_a_well_formed_applied_ssh_fingerprint():
+    fingerprint = "SHA256:" + "A" * 43
+    [slot] = _machine([{"unix_user": "slot01", "ssh": {
+        "configured": True, "fingerprint": fingerprint,
+        "public_key": "must-not-pass",
+    }}])["slots"]
+    assert slot["ssh"] == {"configured": True, "fingerprint": fingerprint}
+    for malformed in ("", "SHA256:short", "SHA256:" + "!" * 43, 42, None):
+        [slot] = _machine([{"unix_user": "slot01", "ssh": {
+            "configured": True, "fingerprint": malformed}}])["slots"]
+        assert slot["ssh"] == {"configured": False, "fingerprint": ""}
+
+
 @pytest.mark.parametrize("user", ["", "Slot01", "1slot", "root user", "x" * 33,
                                   "../etc", None, 7])
 def test_a_slot_with_no_usable_name_is_dropped(user):
