@@ -230,13 +230,9 @@ json.dump(d, open(tmp, 'w'), indent=2)
 os.replace(tmp, p)
 os.chmod(p, 0o600)
 PY"
-# Opus at max effort, what every slot starts on. Written only where the holder
-# has not chosen for themselves, so running this again never takes a choice
-# back. The model is a default that /model changes. The effort cannot be one:
-# the settings file's own effort field stops at xhigh and drops max without a
-# word, so max goes in the env block, which Claude Code applies to every
-# session and which /effort then cannot lower. A holder who wants less edits
-# that line, as the guide tells them.
+# Opus is the default model for a manually launched Claude session. The hosted
+# ccfleet session passes both --model opus and --effort max at launch, so its
+# native /model and /effort controls remain free to change the running session.
 #
 # And nothing optional leaves for Anthropic that a slot can do without: Claude
 # Code's error reports, bug reports and feedback surveys are off, by its own
@@ -251,7 +247,6 @@ d = json.load(open(p)) if os.path.exists(p) else {}
 d.setdefault('model', 'opus')
 d['skipDangerousModePermissionPrompt'] = True
 env = d.setdefault('env', {})
-env.setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')
 for key in ('DISABLE_ERROR_REPORTING', 'DISABLE_BUG_COMMAND',
             'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY'):
     env.setdefault(key, '1')

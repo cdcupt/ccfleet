@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import pty
 import runpy
 import socket
 import subprocess
@@ -166,9 +167,58 @@ def test_slot_entry_forces_the_persistent_original_claude_session():
     assert "ccfleet-session" in text and "eval" not in text
     for mode in ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"):
         assert mode in text
+    for effort in ("low", "medium", "high", "xhigh", "max", "ultracode"):
+        assert effort in text
     assert 'tmux new-session -A -s "$SESSION"' in text
     assert '"$HOME/.local/bin/claude"' in text
     assert "--dangerously-skip-permissions" in text
+    assert '--model "$MODEL"' in text and '--effort "$EFFORT"' in text
+    assert "MODEL=${MODEL:-default}" in text and "EFFORT=${EFFORT:-default}" in text
+    assert 'if [ "$SESSION" = ccfleet ]' not in text, \
+        "restarting the default must honor the requested launch choices too"
+
+
+def run_slot_entry(tmp_path, request):
+    home = tmp_path / "home"
+    fakebin = tmp_path / "bin"
+    home.mkdir()
+    fakebin.mkdir()
+    log = tmp_path / "tmux-args"
+    tmux = fakebin / "tmux"
+    tmux.write_text("""#!/bin/sh
+if [ "$1" = has-session ]; then
+  [ "$3" = ccfleet ] && exit 0
+  exit 1
+fi
+printf '%s\\n' "$@" > "$CCFLEET_TEST_TMUX_ARGS"
+""")
+    tmux.chmod(0o755)
+    entry = Path(__file__).parents[1] / "node" / "slot-entry.sh"
+    pid, fd = pty.fork()
+    if pid == 0:
+        env = {**os.environ, "HOME": str(home),
+               "PATH": str(fakebin) + os.pathsep + os.environ["PATH"],
+               "SSH_ORIGINAL_COMMAND": request,
+               "CCFLEET_TEST_TMUX_ARGS": str(log)}
+        os.execve(entry, [str(entry)], env)
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return os.waitstatus_to_exitcode(status), log.read_text().splitlines()
+
+
+def test_slot_entry_passes_validated_model_and_effort_as_separate_arguments(tmp_path):
+    code, args = run_slot_entry(
+        tmp_path, "ccfleet-session new research bypassPermissions fable ultracode")
+    assert code == 0
+    assert args[-5:] == [
+        "--dangerously-skip-permissions", "--model", "fable", "--effort", "ultracode"]
+
+
+def test_slot_entry_keeps_the_previous_four_field_client_protocol_working(tmp_path):
+    code, args = run_slot_entry(tmp_path, "ccfleet-session new legacy plan")
+    assert code == 0
+    assert args[-2:] == ["--permission-mode", "plan"]
+    assert "--model" not in args and "--effort" not in args
 
 
 @pytest.fixture
@@ -198,7 +248,7 @@ def test_a_long_lived_session_gets_a_fresh_reconnect_window(local_client, monkey
 
     result = local_client["cmd_attach"](
         SimpleNamespace(slot="", session="ccfleet", mode="bypassPermissions", action="open",
-                        no_reconnect=False, reconnect_for=600))
+                        model="opus", effort="max", no_reconnect=False, reconnect_for=600))
 
     assert result == 0 and len(calls) == 2
 
@@ -212,19 +262,35 @@ def test_local_ssh_command_disables_every_forwarding_path(local_client, monkeypa
     for option in ("ClearAllForwardings=yes", "ForwardAgent=no", "ForwardX11=no",
                    "PermitLocalCommand=no", "StrictHostKeyChecking=yes", "UpdateHostKeys=no"):
         assert option in joined
-    assert command[-4:] == ["ccfleet-session", "open", "ccfleet", "bypassPermissions"]
+    assert command[-6:] == ["ccfleet-session", "open", "ccfleet", "bypassPermissions",
+                            "opus", "max"]
 
 
-def test_named_session_and_permission_mode_are_a_fixed_remote_protocol(local_client, monkeypatch):
+def test_named_session_choices_are_a_fixed_remote_protocol(local_client, monkeypatch):
     monkeypatch.setattr(local_client["shutil"], "which", lambda _name: "/usr/bin/ssh")
     device = {"device_id": "d1", "host_alias": "ccfleet-s1", "known_hosts": "/k",
               "key": "/i", "user": "slot01"}
-    command = local_client["ssh_command"](device, "research_1", "plan", "new")
-    assert command[-4:] == ["ccfleet-session", "new", "research_1", "plan"]
+    command = local_client["ssh_command"](
+        device, "research_1", "plan", "new", "fable", "ultracode")
+    assert command[-6:] == [
+        "ccfleet-session", "new", "research_1", "plan", "fable", "ultracode"]
 
 
 def test_bad_session_names_are_refused_before_reading_local_config(local_client):
     assert local_client["main"](["new", "../shell"]) == 2
+
+
+def test_bad_model_names_are_refused_before_reading_local_config(local_client):
+    assert local_client["main"](["new", "research", "--model", "opus;touch-pwned"]) == 2
+
+
+def test_real_claude_effort_levels_are_offered_by_the_client(local_client):
+    parser = local_client["parser"]()
+    args = parser.parse_args([
+        "new", "research", "--model", "fable", "--effort", "ultracode"])
+    assert (args.model, args.effort, args.mode) == ("fable", "ultracode", "bypassPermissions")
+    with pytest.raises(SystemExit):
+        parser.parse_args(["new", "research", "--effort", "extreme-max"])
 
 
 def test_device_secrets_are_never_sent_over_plaintext_websockets(local_client):

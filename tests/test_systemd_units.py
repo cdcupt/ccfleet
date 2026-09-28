@@ -61,6 +61,7 @@ def test_the_shell_unit_creates_the_forced_entrypoints_claude_session():
     assert "new-session -d -s ccfleet" in svc["ExecStart"]
     assert "%h/.local/bin/claude" in svc["ExecStart"]
     assert "--dangerously-skip-permissions" in svc["ExecStart"]
+    assert "--model opus --effort max" in svc["ExecStart"]
     assert "ConditionPathExists=%h/.claude/.credentials.json" in SHELL.read_text()
 
 

@@ -98,13 +98,14 @@ therefore assigns a random, discarded password hash; the slot Match block still
 sets both `PasswordAuthentication no` and `KbdInteractiveAuthentication no`.
 
 `slot-entry.sh` rejects non-interactive sessions, normalizes unsupported
-`TERM` values, and accepts only a fixed `ccfleet-session ACTION NAME MODE`
-request from the forced key. Names and modes are allow-listed; arbitrary SSH
+`TERM` values, and accepts only a fixed
+`ccfleet-session ACTION NAME MODE MODEL EFFORT` request from the forced key.
+Names, modes, model syntax and effort levels are validated; arbitrary SSH
 commands remain impossible. The default changes to `~/workspace` and executes:
 
 ```bash
 tmux new-session -A -s ccfleet -c "$HOME/workspace" \
-  "$HOME/.local/bin/claude" --dangerously-skip-permissions
+  "$HOME/.local/bin/claude" --dangerously-skip-permissions --model opus --effort max
 ```
 
 This gives the original Claude Code interface while preventing the transport
@@ -116,10 +117,13 @@ does not grant sudo or cross the slot's Linux-user boundary, but it does allow
 Claude to act without confirmation on every file and network capability the
 slot user already has.
 
-Users may create named tmux sessions in `acceptEdits`, `auto`,
-`bypassPermissions`, `manual`, `dontAsk`, or `plan` mode. `open` is idempotent
-for reconnect, `new` refuses an existing name, and `restart` explicitly ends a
-session before changing its mode. Every action remains inside the forced entrypoint.
+Users may create named tmux sessions with a supported permission mode, a safe
+model token and an effort of `low`, `medium`, `high`, `xhigh`, `max`, or
+`ultracode`. The original Claude interface's `/model` and `/effort` controls can
+change a running conversation. `open` is idempotent for reconnect, `new` refuses
+an existing name, and `restart` explicitly ends the current Claude process.
+Every action remains inside the forced entrypoint. Four-field requests from the
+previous client remain valid and use the slot defaults.
 
 ## Reconnection
 

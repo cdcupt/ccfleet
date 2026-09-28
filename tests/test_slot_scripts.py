@@ -395,17 +395,16 @@ def _settings(slot_home):
     return json.loads((slot_home / ".claude" / "settings.json").read_text())
 
 
-def test_a_new_slot_starts_on_opus_at_max_effort(tmp_path):
-    """Max goes in the env block, never in the settings file's own effort
-    field: that field stops at xhigh and drops max without a word, so a slot
-    set up that way would quietly run at the default instead."""
+def test_a_new_slot_leaves_effort_free_for_each_session(tmp_path):
+    """The persistent session's launch arguments set max. An environment lock
+    here would stop the holder changing it with Claude Code's /effort picker."""
     slot_home = tmp_path / "slothome"
     slot_home.mkdir()
     result = _add_slot(tmp_path, slot_home)
     assert result.returncode == 0, result.stderr
     settings = _settings(slot_home)
     assert settings["model"] == "opus"
-    assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+    assert "CLAUDE_CODE_EFFORT_LEVEL" not in settings["env"]
     assert settings["skipDangerousModePermissionPrompt"] is True
     assert "effortLevel" not in settings
 
@@ -434,7 +433,7 @@ def test_what_a_holder_chose_for_themselves_is_kept(tmp_path):
     assert settings["permissions"] == {"allow": ["Bash(ls)"]}
 
 
-def test_the_effort_joins_an_env_block_the_holder_already_has(tmp_path):
+def test_the_optional_reporting_switches_join_an_env_block_the_holder_already_has(tmp_path):
     slot_home = tmp_path / "slothome"
     _holders_settings(slot_home, {"env": {"TZ": "Asia/Shanghai"}})
     result = _add_slot(tmp_path, slot_home)
@@ -442,7 +441,7 @@ def test_the_effort_joins_an_env_block_the_holder_already_has(tmp_path):
     settings = _settings(slot_home)
     assert settings["model"] == "opus"
     assert settings["env"]["TZ"] == "Asia/Shanghai"
-    assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+    assert "CLAUDE_CODE_EFFORT_LEVEL" not in settings["env"]
 
 
 OPTIONAL_REPORTING = ("DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",

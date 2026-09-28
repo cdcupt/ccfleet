@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Forced entry point for a ccfleet CLI device key. The key cannot run arbitrary
 # commands: it may only open, create or restart a validated Claude Code session
-# under one of Claude Code's supported permission modes.
+# with validated session, permission, model and effort choices.
 
 set -euo pipefail
 
@@ -21,12 +21,18 @@ fi
 SESSION=ccfleet
 ACTION=open
 MODE=bypassPermissions
+MODEL=default
+EFFORT=default
 if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
-  read -r PROTOCOL ACTION SESSION MODE EXTRA <<EOF
+  read -r PROTOCOL ACTION SESSION MODE MODEL EFFORT EXTRA <<EOF
 $SSH_ORIGINAL_COMMAND
 EOF
   [ "$PROTOCOL" = ccfleet-session ] && [ -z "${EXTRA:-}" ] \
     || { printf 'unsupported CC Fleet session request\n' >&2; exit 2; }
+  # Clients released before per-session model/effort selection sent only the
+  # first four fields. Keep them working while new clients send all six.
+  MODEL=${MODEL:-default}
+  EFFORT=${EFFORT:-default}
 fi
 
 [[ "$SESSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$ ]] \
@@ -35,6 +41,12 @@ case "$ACTION" in open|new|restart) ;; *) printf 'invalid CC Fleet session actio
 case "$MODE" in
   acceptEdits|auto|bypassPermissions|manual|dontAsk|plan) ;;
   *) printf 'invalid Claude permission mode\n' >&2; exit 2 ;;
+esac
+[[ "$MODEL" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$ ]] \
+  || { printf 'invalid Claude model name\n' >&2; exit 2; }
+case "$EFFORT" in
+  default|low|medium|high|xhigh|max|ultracode) ;;
+  *) printf 'invalid Claude effort level\n' >&2; exit 2 ;;
 esac
 
 mkdir -p "$HOME/workspace"
@@ -50,6 +62,12 @@ if [ "$MODE" = bypassPermissions ]; then
 else
   CLAUDE+=(--permission-mode "$MODE")
 fi
+if [ "$MODEL" != default ]; then
+  CLAUDE+=(--model "$MODEL")
+fi
+if [ "$EFFORT" != default ]; then
+  CLAUDE+=(--effort "$EFFORT")
+fi
 
 case "$ACTION" in
   open)
@@ -64,10 +82,6 @@ case "$ACTION" in
     ;;
   restart)
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    if [ "$SESSION" = ccfleet ]; then
-      systemctl --user restart ccfleet-shell.service >/dev/null 2>&1 || true
-      exec tmux attach-session -t ccfleet
-    fi
     exec tmux new-session -s "$SESSION" -c "$HOME/workspace" "${CLAUDE[@]}"
     ;;
 esac

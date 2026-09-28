@@ -76,19 +76,21 @@ The old setup is touched only after new pairing succeeds. The user must still
 revoke an old Anthropic setup-token in their Anthropic account if it is no
 longer used anywhere.
 
-The default `ccfleet` session uses `bypassPermissions`. Users can also create
-and resume named sessions in any permission mode supported by the deployed
-Claude Code:
+The default `ccfleet` session uses Opus, max effort and `bypassPermissions`.
+Users can also create and resume named sessions with a model, effort and any
+permission mode supported by the deployed Claude Code:
 
 ```bash
-ccfleet new research --mode plan
+ccfleet new research --model fable --effort xhigh --mode plan
 ccfleet attach --session research
-ccfleet restart --session research --mode auto
+ccfleet restart --session research --model opus --effort max --mode auto
 ```
 
 Supported modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
-`dontAsk`, and `plan`. A running session keeps its current mode; `restart`
-deliberately ends that named session before replacing it under another mode.
+`dontAsk`, and `plan`. Effort choices are `low`, `medium`, `high`, `xhigh`,
+`max`, and `ultracode`. Inside the original Claude Code interface, `/model`
+and `/effort` change the running session without losing its conversation.
+`restart` deliberately ends the current Claude process before replacing it.
 
 ## What runs where
 

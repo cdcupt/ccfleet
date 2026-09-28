@@ -1858,15 +1858,28 @@ def retire_slot_remote_control(runner: Runner = subprocess.run) -> None:
 
 
 def ensure_slot_bypass_warning_is_accepted() -> None:
-    """Suppress Claude Code's one-time warning for the operator-chosen mode."""
+    """Keep the hosted default usable while restoring per-session effort control."""
     path = Path("~/.claude/settings.json").expanduser()
     try:
         current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, ValueError):
         return
-    if not isinstance(current, dict) or current.get("skipDangerousModePermissionPrompt") is True:
+    if not isinstance(current, dict):
         return
+    changed = current.get("skipDangerousModePermissionPrompt") is not True
     current["skipDangerousModePermissionPrompt"] = True
+    env = current.get("env")
+    # Older CC Fleet releases forced max through an environment variable. That
+    # made Claude Code's native /effort picker unable to change this session.
+    # Only migrate the exact old platform default; preserve a holder's other
+    # environment choices, including another explicitly selected effort.
+    if isinstance(env, dict) and env.get("CLAUDE_CODE_EFFORT_LEVEL") == "max":
+        env.pop("CLAUDE_CODE_EFFORT_LEVEL")
+        changed = True
+        if not env:
+            current.pop("env")
+    if not changed:
+        return
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _atomic_write(path, json.dumps(current, indent=2) + "\n")
 

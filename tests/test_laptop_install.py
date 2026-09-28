@@ -98,4 +98,5 @@ def test_customer_docs_publish_the_one_command_transition():
 
     page = guide(Config())
     assert "laptop/install.sh | bash -s -- --migrate" in page
+    assert "<pre><code>curl -fsSL" in page
     assert "pairs the new client first" in page

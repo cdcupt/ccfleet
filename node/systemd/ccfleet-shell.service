@@ -25,7 +25,7 @@ Environment=DISABLE_AUTOUPDATER=1
 # could never repair it. tmux -c sets the session's directory instead, which is
 # what actually matters here.
 ExecStartPre=/bin/mkdir -p %h/workspace
-ExecStart=/bin/sh -c '/usr/bin/tmux has-session -t ccfleet 2>/dev/null || /usr/bin/tmux new-session -d -s ccfleet -c %h/workspace %h/.local/bin/claude --dangerously-skip-permissions'
+ExecStart=/bin/sh -c '/usr/bin/tmux has-session -t ccfleet 2>/dev/null || /usr/bin/tmux new-session -d -s ccfleet -c %h/workspace %h/.local/bin/claude --dangerously-skip-permissions --model opus --effort max'
 # Deliberately no ExecStop. This unit only pre-warms the session; stopping or
 # restarting it must never destroy work someone is in the middle of. The
 # session outlives the unit on purpose. Kill it by hand if you really mean to.

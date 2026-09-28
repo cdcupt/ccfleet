@@ -2370,6 +2370,28 @@ def test_a_slot_accepts_the_operator_chosen_bypass_warning_once(slot_home):
     assert saved == {"model": "opus", "skipDangerousModePermissionPrompt": True}
 
 
+def test_a_slot_removes_only_the_old_platform_max_effort_lock(slot_home):
+    path = slot_home / ".claude" / "settings.json"
+    path.write_text(json.dumps({
+        "model": "opus",
+        "skipDangerousModePermissionPrompt": True,
+        "env": {"CLAUDE_CODE_EFFORT_LEVEL": "max", "TZ": "UTC"},
+    }))
+    agent.slot_facts({}, slot_runner([]))
+    saved = json.loads(path.read_text())
+    assert saved["env"] == {"TZ": "UTC"}
+
+
+def test_a_slot_preserves_a_holder_selected_nondefault_effort(slot_home):
+    path = slot_home / ".claude" / "settings.json"
+    path.write_text(json.dumps({
+        "skipDangerousModePermissionPrompt": True,
+        "env": {"CLAUDE_CODE_EFFORT_LEVEL": "high"},
+    }))
+    agent.slot_facts({}, slot_runner([]))
+    assert json.loads(path.read_text())["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+
+
 def test_a_slot_does_not_start_a_quota_read_unless_asked(slot_home, monkeypatch):
     """Each read opens a Claude Code session. The machine agent spreads them
     across its slots, and a slot that started its own on every run would
