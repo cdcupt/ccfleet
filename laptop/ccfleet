@@ -145,7 +145,7 @@ def cmd_login(args: argparse.Namespace) -> int:
         answer = api_json(
             server + "/api/cli/register", pairing,
             {"public_key": public_key,
-             "device_name": args.name or socket.gethostname().split(".", 1)[0] or "computer"})
+             "device_name": args.name or "computer"})
         needed = ("device_id", "device_token", "endpoint", "slot_id", "slot_name",
                   "user", "host_key")
         if any(not isinstance(answer.get(key), str) or not answer[key] for key in needed):

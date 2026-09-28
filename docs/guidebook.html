@@ -46,6 +46,12 @@ and paste its code back. The resulting credential is written on the slot only.</
 <pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash
 ccfleet login</code></pre>
 <p>Paste the single-use code from the page. It expires after ten minutes.</p>
+<p>On a computer that used the old <code>ccfleet-connect</code> token flow, replace both
+commands above with the migration command below. It installs and pairs first, then removes the
+old local setup only after pairing succeeds:</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh \
+  | bash -s -- --migrate</code></pre>
+<p>Revoke the old setup-token in the Anthropic account if nothing else uses it.</p>
 <ol start="5"><li>Run <code>ccfleet</code>. The original Claude Code interface opens in the
 terminal. Run it again after a disconnect to resume the same session.</li></ol>
 

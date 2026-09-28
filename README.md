@@ -59,6 +59,18 @@ The server stores the public key and only a hash of the access token. A customer
 can remove one computer from the slot page without changing the slot's Claude
 sign-in. Network interruptions reattach to the same tmux session.
 
+Existing users of the removed `ccfleet-connect` token flow can install, pair,
+and retire that local setup in one transaction-like command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh \
+  | bash -s -- --migrate
+```
+
+The old setup is touched only after new pairing succeeds. The user must still
+revoke an old Anthropic setup-token in their Anthropic account if it is no
+longer used anywhere.
+
 ## What runs where
 
 - `ccfleetd/` is the web app, broker, desired-state service, operator console,

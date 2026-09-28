@@ -128,6 +128,15 @@ no-forwarding options. The slot's own `~/.ssh/authorized_keys` is not an sshd
 key source. Remove the device from the page and confirm the managed file is
 removed on the next machine-agent cycle.
 
+For a computer configured by the old `ccfleet-connect` flow, have the holder create a fresh
+pairing code and run:
+
+`curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --migrate`
+
+The migration pairs first and calls the installed legacy command's `--remove` only after
+success. It cannot revoke the Anthropic setup-token; the holder does that in their Anthropic
+account if the token is no longer used anywhere.
+
 These steps are deliberately mechanical. An operator can put exactly them in a
 private script that takes an address and a name, reads the root password once
 from a prompt, and re-runs safely, so the next machine is one command.
