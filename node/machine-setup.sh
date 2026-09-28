@@ -103,6 +103,9 @@ restrict_slot_sshd() {
 Match Group ccfleet-slots
     AuthorizedKeysFile $ETC_DIR/authorized_keys/%u
     ForceCommand $LIB_DIR/slot-entry.sh
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
     AllowAgentForwarding no
     AllowTcpForwarding no
     X11Forwarding no
@@ -118,6 +121,23 @@ SSHD
     if [ "$had" = yes ]; then printf '%s' "$was" > "$dropin"; else rm -f "$dropin"; fi
     die "could not reload sshd; its configuration was restored"
   fi
+}
+
+make_existing_slots_key_eligible() {
+  local members user state secret changed=0
+  members="$(getent group ccfleet-slots 2>/dev/null | cut -d: -f4 | tr ',' ' ')"
+  for user in $members; do
+    printf '%s' "$user" | grep -qE '^[a-z][a-z0-9_-]{1,31}$' || continue
+    state="$(passwd -S "$user" 2>/dev/null | awk '{print $2}')"
+    [ "$state" = P ] && continue
+    secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    printf '%s:%s\n' "$user" "$secret" | chpasswd
+    unset secret
+    [ "$(passwd -S "$user" 2>/dev/null | awk '{print $2}')" = P ] \
+      || die "could not make an existing slot eligible for public-key SSH"
+    changed=$((changed + 1))
+  done
+  [ "$changed" -eq 0 ] || note "made $changed existing slot account(s) public-key eligible"
 }
 
 step "1/6  packages"
@@ -161,6 +181,7 @@ chown root:root "$ETC_DIR/agent.env"
 note "$ETC_DIR/agent.env, readable by root only"
 
 step "4/6  slot SSH restrictions"
+make_existing_slots_key_eligible
 restrict_slot_sshd
 note "slot keys are root-managed and can only open the forced CC Fleet terminal"
 

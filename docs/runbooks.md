@@ -110,8 +110,10 @@ Prove the machine is closed before anyone is given a slot on it:
 - *root*: `sshd -T -C user=slot01,host=localhost,addr=127.0.0.1` (after the first
   slot has been provisioned) reports the forced `slot-entry.sh`, the
   root-controlled `authorizedkeysfile`, `allowagentforwarding no`,
-  `allowtcpforwarding no`, `x11forwarding no`, `permittunnel no` and
-  `permituserrc no`.
+  `passwordauthentication no`, `kbdinteractiveauthentication no`,
+  `allowtcpforwarding no`, `x11forwarding no`, `permittunnel no` and `permituserrc no`.
+- *root*: `passwd -S slot01` reports `P`, not `L`. The password is random and
+  discarded; the sshd checks above are what keep password login impossible.
 - *root*: `ufw status` reports `Status: active`, and `systemctl is-active ccfleet-machine.timer` says `active`.
 
 Slot holders are not given an SSH workflow or the node address. They install

@@ -114,6 +114,20 @@ fi
 adduser "$SLOT" "$SLOT_GROUP" >/dev/null 2>&1 || usermod -aG "$SLOT_GROUP" "$SLOT"
 note "marked as a slot (member of $SLOT_GROUP)"
 
+# `adduser --disabled-password` leaves a shadow marker (`!` or `*`) that some
+# OpenSSH/PAM combinations reject before public-key authentication is tried.
+# Give the account an unguessable, discarded password so it is not shadow-
+# locked; sshd's slot Match block independently disables every password path.
+PASSWORD_STATE="$(passwd -S "$SLOT" 2>/dev/null | awk '{print $2}')"
+if [ "$PASSWORD_STATE" != P ]; then
+  RANDOM_PASSWORD="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '%s:%s\n' "$SLOT" "$RANDOM_PASSWORD" | chpasswd
+  unset RANDOM_PASSWORD
+fi
+[ "$(passwd -S "$SLOT" 2>/dev/null | awk '{print $2}')" = P ] \
+  || die "could not make $SLOT eligible for public-key SSH"
+note "password login remains disabled; public-key authentication is eligible"
+
 HOME_DIR="$(getent passwd "$SLOT" | cut -d: -f6)"
 [ -n "$HOME_DIR" ] || die "could not find a home directory for $SLOT"
 # 0700 rather than the distro default. On a shared machine the default 0755

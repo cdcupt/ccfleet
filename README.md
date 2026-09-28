@@ -163,6 +163,9 @@ The public site documents the current product at `/`, `/docs/guide`,
 - Device keys live outside holder-writable home directories. Both sshd and each
   key enforce the forced entrypoint, with no agent forwarding, port forwarding,
   X11 forwarding or user-supplied SSH command.
+- Slot accounts receive a discarded random password only so OpenSSH/PAM will
+  evaluate public keys; the slot sshd policy explicitly disables password and
+  keyboard-interactive authentication.
 - Pairing codes are random, single-use, stored only as hashes and expire after
   ten minutes.
 - Device access tokens are random and stored only as hashes. Device removal or

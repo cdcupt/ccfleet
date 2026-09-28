@@ -81,6 +81,7 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
     # always says "exists" makes that check look like a bug; one that notices
     # the deletion is what tests it.
     gone = bindir / "gone.marker"
+    password_set = bindir / "password-set.marker"
     groupfile = bindir / "groups.txt"
     (bindir / "id").write_text(textwrap.dedent("""\
         #!/bin/sh
@@ -121,6 +122,21 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
         exit 0
         """).replace("__HOME__", home))
     (bindir / "pgrep").write_text("#!/bin/sh\nexit 1\n")   # nothing running
+    (bindir / "passwd").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        if [ "$1" = "-S" ]; then
+          if [ -f "__SET__" ]; then echo "$2 P 01/01/1970 0 99999 7 -1";
+          else echo "$2 L 01/01/1970 0 99999 7 -1"; fi
+          exit 0
+        fi
+        exit 1
+        """).replace("__SET__", str(password_set)))
+    (bindir / "chpasswd").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        IFS=: read -r user secret
+        [ "$user" = slot01 ] && [ ${#secret} -ge 64 ] || exit 1
+        touch "__SET__"
+        """).replace("__SET__", str(password_set)))
     # The OS answering "who owns this directory", in the same way `id` above
     # answers "what groups is this account in". slot-remove's own decision
     # still runs for real against the answer; only the answer is supplied here,
@@ -391,6 +407,15 @@ def test_a_new_slot_starts_on_opus_at_max_effort(tmp_path):
     assert settings["model"] == "opus"
     assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
     assert "effortLevel" not in settings
+
+
+def test_a_new_slot_is_public_key_eligible_without_a_known_password(tmp_path):
+    slot_home = tmp_path / "slothome"
+    slot_home.mkdir()
+    result = _add_slot(tmp_path, slot_home)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "fakebin" / "password-set.marker").exists()
+    assert "password login remains disabled" in result.stdout
 
 
 def test_what_a_holder_chose_for_themselves_is_kept(tmp_path):

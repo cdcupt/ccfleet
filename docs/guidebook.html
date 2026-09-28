@@ -129,6 +129,8 @@ over an authenticated operator channel, then:</p>
 <li>After pairing, <code>/etc/ccfleet/authorized_keys/slot01</code> contains a forced
 <code>slot-entry.sh</code> command. The sshd slot-group policy independently forces that
 entrypoint and disables agent, port and X11 forwarding and user rc.</li>
+<li>The slot account is public-key eligible, while effective sshd policy still reports
+<code>passwordauthentication no</code> and <code>kbdinteractiveauthentication no</code>.</li>
 <li><code>ccfleet</code> opens Claude Code without asking for a Claude login on the local
 computer.</li>
 <li>Stopping BWH breaks a new connection; restarting it allows the same local profile to

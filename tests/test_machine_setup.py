@@ -49,11 +49,29 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True):
     bindir.mkdir()
     calls = tmp_path / "calls.log"
     calls.write_text("")
+    password_set = tmp_path / "password-set.marker"
     stubs = {
         "id": 'if [ "$1" = "-u" ]; then echo 0; exit 0; fi; exit 1',
         "apt-get": 'echo "apt-get $*" >> "__LOG__"',
         "chown": 'echo "chown $*" >> "__LOG__"',
         "curl": 'echo "curl $*" >> "__LOG__"; exit 1',
+        "getent": textwrap.dedent("""\
+            if [ "$1" = group ] && [ "$2" = ccfleet-slots ] && [ -n "${FAKE_SLOT_MEMBERS:-}" ]; then
+              echo "ccfleet-slots:x:999:$FAKE_SLOT_MEMBERS"
+            fi"""),
+        "passwd": textwrap.dedent("""\
+            if [ "$1" = -S ]; then
+              if [ -f "__PASSWORD_SET__" ]; then echo "$2 P 01/01/1970 0 99999 7 -1";
+              else echo "$2 L 01/01/1970 0 99999 7 -1"; fi
+              exit 0
+            fi
+            exit 1"""),
+        "chpasswd": textwrap.dedent("""\
+            IFS=: read -r user secret
+            [ "$user" = slot01 ] && [ ${#secret} -ge 64 ] || exit 1
+            echo "chpasswd slot01:<redacted>" >> "__LOG__"
+            touch "__PASSWORD_SET__"
+            """),
         "sshd": 'echo "sshd $*" >> "__LOG__"; exit __SSHD__',
         "systemctl": textwrap.dedent("""\
             echo "systemctl $*" >> "__LOG__"
@@ -66,6 +84,7 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True):
     for name, body in stubs.items():
         path = bindir / name
         path.write_text("#!/bin/sh\n" + body.replace("__LOG__", str(calls))
+                        .replace("__PASSWORD_SET__", str(password_set))
                         .replace("__TIMER__", timer_state)
                         .replace("__START__", "0" if first_run_ok else "1")
                         .replace("__SSHD__", "0" if sshd_ok else "1") + "\n")
@@ -225,6 +244,9 @@ def test_it_restricts_slot_ssh_and_validates_before_reload(tmp_path, sandbox):
         Match Group ccfleet-slots
             AuthorizedKeysFile {sandbox / "etc" / "authorized_keys"}/%u
             ForceCommand {sandbox / "lib"}/slot-entry.sh
+            PubkeyAuthentication yes
+            PasswordAuthentication no
+            KbdInteractiveAuthentication no
             AllowAgentForwarding no
             AllowTcpForwarding no
             X11Forwarding no
@@ -235,6 +257,15 @@ def test_it_restricts_slot_ssh_and_validates_before_reload(tmp_path, sandbox):
     lines = calls.read_text().splitlines()
     assert lines.index(f"sshd -t -f {sandbox / 'sshd_config'}") < lines.index(
         "systemctl reload ssh")
+
+
+def test_it_makes_existing_locked_slots_public_key_eligible(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_SLOT_MEMBERS", "slot01")
+    bindir, calls = fakebin(tmp_path)
+    result = run(GOOD, bindir)
+    assert result.returncode == 0, result.stderr
+    assert "chpasswd slot01:<redacted>" in calls.read_text()
+    assert "public-key eligible" in result.stdout
 
 
 def test_rejected_slot_ssh_config_is_restored_and_not_reloaded(tmp_path, sandbox):

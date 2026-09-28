@@ -87,6 +87,11 @@ The sshd `Match Group ccfleet-slots` block independently sets the same
 directory. A slot can use shell tools through Claude Code but cannot replace
 its own SSH authorization or escape device revocation.
 
+Debian treats the shadow marker created by `adduser --disabled-password` as a
+locked account and may reject it before public-key authentication. Provisioning
+therefore assigns a random, discarded password hash; the slot Match block still
+sets both `PasswordAuthentication no` and `KbdInteractiveAuthentication no`.
+
 `slot-entry.sh` rejects non-interactive sessions, normalizes unsupported
 `TERM` values, ignores `SSH_ORIGINAL_COMMAND`, changes to `~/workspace` and
 executes:
