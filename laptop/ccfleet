@@ -679,8 +679,14 @@ def local_environment(device: dict[str, Any], port: int, secret: str) -> dict[st
     profile.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(profile, 0o700)
     env.update({"ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
-                "ANTHROPIC_AUTH_TOKEN": secret, "CLAUDE_CONFIG_DIR": str(profile),
-                "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"})
+                "ANTHROPIC_AUTH_TOKEN": secret, "CLAUDE_CONFIG_DIR": str(profile)})
+    # Keep the user's other proxy exclusions (for example internal services)
+    # while ensuring the local model endpoint never traverses an HTTP proxy.
+    fallback = env.get("no_proxy") or env.get("NO_PROXY", "")
+    for name in ("NO_PROXY", "no_proxy"):
+        excluded = [part.strip() for part in (env.get(name) or fallback).split(",")
+                    if part.strip()]
+        env[name] = ",".join(dict.fromkeys([*excluded, "127.0.0.1", "localhost"]))
     return env
 
 

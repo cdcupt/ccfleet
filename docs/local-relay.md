@@ -80,7 +80,11 @@ requests; the original Claude client may implement its own retry behavior.
 Local paths, file contents and tool output can be part of the model request.
 This architecture cannot promise that Anthropic sees only slot information.
 The slot relay and root on its host can inspect plaintext requests, responses
-and credentials. BWH cannot decrypt the inner SSH connection.
+and credentials, and can influence local tool actions by altering responses;
+local Claude permissions still apply. BWH cannot decrypt the inner SSH connection.
+Only supported model requests traverse this relay. Other native CLI connections,
+such as update, feature-flag or telemetry traffic, are not guaranteed to use the
+slot. This is not a whole-device network tunnel or an anonymity service.
 
 The request-authentication substitution is subject to Anthropic's published
 restrictions on subscription credential intermediation. Successful technical
@@ -96,6 +100,7 @@ half-second policy check. Enabling a slot is distinct from deploying the code.
 Validation includes synthetic-account isolation, immutable client identity,
 framing limits, loopback authentication, browser-origin rejection, streaming
 and truncation, expired credentials, old terminal compatibility and a real
-local-file probe through operator SSH to the owner canary. The complete
-customer WSS/pairing path and a token-expiry cycle remain release checks for
-this experimental mode.
+local-file probes through both operator SSH and the complete paired-device
+WSS/SSH path. Live revocation closed an open paired relay, and a new remote
+terminal still opened and detached normally. A complete native token-expiry
+cycle and the intended provider arrangement remain checks before general rollout.

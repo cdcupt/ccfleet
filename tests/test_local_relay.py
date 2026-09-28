@@ -325,14 +325,25 @@ def test_local_profile_is_separate_and_does_not_inherit_other_provider_credentia
     monkeypatch.setenv("ANTHROPIC_API_KEY", "other-account-key")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "other-account-token")
     monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+    monkeypatch.setenv("NO_PROXY", "internal.example,localhost")
+    monkeypatch.setenv("no_proxy", "private.example")
     env = local_client["local_environment"]({"slot_id": "slot1"}, 12345, "launch-only-token")
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:12345"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "launch-only-token"
     assert "ANTHROPIC_API_KEY" not in env and "CLAUDE_CODE_OAUTH_TOKEN" not in env
     assert "CLAUDE_CODE_USE_BEDROCK" not in env
     assert "/local/" in env["CLAUDE_CONFIG_DIR"]
+    assert env["NO_PROXY"] == "internal.example,localhost,127.0.0.1"
+    assert env["no_proxy"] == "private.example,127.0.0.1,localhost"
     assert os.environ["ANTHROPIC_API_KEY"] == "other-account-key", "parent shell was modified"
     assert list(Path(env["CLAUDE_CONFIG_DIR"]).iterdir()) == []
+
+
+def test_adding_lowercase_no_proxy_keeps_uppercase_only_exclusions(local_client, monkeypatch):
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setenv("NO_PROXY", "internal.example")
+    env = local_client["local_environment"]({"slot_id": "slot1"}, 12345, "nonce")
+    assert env["no_proxy"] == env["NO_PROXY"] == "internal.example,127.0.0.1,localhost"
 
 
 def test_laptop_permissions_do_not_silently_inherit_hosted_bypass(local_client):
