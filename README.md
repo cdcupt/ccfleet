@@ -175,14 +175,13 @@ The guidebook's chapter 11 covers the same ground for the operator, step by
 step.
 
 The access model is **many devices, one private slot, one Claude account**.
-Remote Control works from claude.ai/code and the Claude apps. A holder may add
-one SSH public key from their slot page for terminal and Claude Desktop access;
-the matching private key never leaves their device. The page then shows an
-optional `ccfleet-sync` command for conflict-safe folder sync through that same
-SSH identity. Removing the key revokes SSH without changing the slot, and
-release clears the key before the Linux account and files are wiped. There is
-no common API endpoint, account selection, credential routing or failover to a
-different account: this is CC Host-like remote convenience, not an account
+Remote Control works from claude.ai/code and the official Claude desktop and
+mobile apps. `ccfleet-connect` puts an Anthropic device token for that same
+account on a user's own computer, where the unmodified Claude Code CLI works on
+local files and talks directly to Anthropic. Customer slots do not expose SSH,
+mount a local filesystem or provide a common API endpoint. There is no account
+selection, credential routing or failover to a different account: this copies
+the convenient local/cloud/client experience, not CC Host's proxy or account
 pool.
 
 ```bash
@@ -220,10 +219,10 @@ The rules the rest depends on:
   asks for the slot's id to be typed.
 - **Nothing acts as a user.** The console can take a slot back; it cannot sign
   in on anybody's behalf, type their code, or read their device token.
-- **SSH is holder-controlled and deliberately narrow.** The server keeps only
-  one public key (with its comment discarded); the machine disables agent,
-  port and X11 forwarding and tunnels for slot accounts. Ordinary SSH security
-  logs still contain the connecting address. Private keys never reach ccfleet.
+- **Customers do not SSH into slots.** Cloud work uses Remote Control; local
+  work uses the ordinary Claude Code CLI with an Anthropic device token. Git or
+  client attachments move files into a cloud slot when needed. Operator SSH is
+  infrastructure access and is never handed to a slot holder.
 - **Payments are a record, not a gate.** The console shows who is paid through
   when, and marks a lapse in red while that person still holds or may claim
   slots. A lapse takes no slot and stops no claim; what to do about it is yours.

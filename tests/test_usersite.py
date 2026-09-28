@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import http.client
 import re
-import struct
 import threading
 import time
 import urllib.parse
@@ -19,7 +18,7 @@ from datetime import timedelta
 
 import pytest
 
-from ccfleetd import oauth, payments, sessions, slots, sshkeys, usersite
+from ccfleetd import oauth, payments, sessions, slots, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -31,12 +30,6 @@ from tests.conftest import next_load, refresh_of
 SECRET = "0123456789abcdef0123456789abcdef"
 URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y"
 TOKEN = "sk-ant-oat01-" + "Q" * 40
-
-
-def ssh_public_key(comment="person@example.com"):
-    kind = b"ssh-ed25519"
-    blob = struct.pack(">I", len(kind)) + kind + struct.pack(">I", 32) + b"k" * 32
-    return f"ssh-ed25519 {base64.b64encode(blob).decode()} {comment}"
 
 
 def handle_of(email):
@@ -427,10 +420,10 @@ def test_a_device_token_from_the_page(site):
     erik = sign_in(quota=1)
     slot = claimed(store, erik)
     key = slot_login_key(slot["id"])
-    # Before any token exists the row says it is optional, not a status to act on.
+    # Before any token exists the row describes the local, native path.
     before = erik.page()
-    assert "None yet &middot; optional, for using this account from your own computer" in before
-    assert "last issued" not in before
+    assert "Run Claude Code normally on this computer" in before
+    assert "last set up" not in before
     erik.press(f"/account/slots/{slot['id']}/token")
     row = store.get_login(key)
     assert row["kind"] == "token"
@@ -446,7 +439,7 @@ def test_a_device_token_from_the_page(site):
     assert store.get_login(key) is None
     assert "Nothing to show" in erik.press(f"/account/slots/{slot['id']}/token-show").body
     after = erik.page()
-    assert "last issued" in after and "None yet" not in after
+    assert "last set up" in after
 
 
 def test_one_flow_at_a_time_on_a_slot(site):
@@ -527,32 +520,23 @@ def test_a_machine_nobody_has_heard_from_says_so(site):
     assert "may be unreachable" in erik.page()
 
 
-def test_holder_adds_one_ssh_key_and_gets_commands_only_after_it_is_applied(site):
+def test_slot_holders_are_not_offered_ssh_or_sync(site):
     store, sign_in, _ = site
     machine(store, users=("slot01",))
     erik = sign_in(quota=1)
     slot = claimed(store, erik)
-    before = erik.page()
-    assert "Add SSH key" in before and "ssh slot01@" not in before
-
-    supplied = ssh_public_key("private-address@example.com")
-    response = erik.press(f"/account/slots/{slot['id']}/ssh-key", public_key=supplied)
-    assert response.status == 303
-    stored = store.get_slot(slot["id"])["ssh_public_key"]
-    assert "private-address@example.com" not in stored
-    fingerprint = sshkeys.fingerprint(stored)
-    store.insert_heartbeat("m1", time.time(), {
-        "node_id": "m1", "mode": "machine", "egress": {"ip": "203.0.113.10"},
-        "slots": [{"unix_user": "slot01", "present": True,
-                   "ssh": {"configured": True, "fingerprint": fingerprint}}],
-    })
-    ready = erik.page()
-    assert "Ready" in ready and fingerprint in ready
-    assert "ssh slot01@203.0.113.10" in ready
-    assert "ccfleet-sync start ./project slot01@203.0.113.10" in ready
-    assert supplied.split()[1] not in ready, "the page should not echo the whole public key"
-
-    assert erik.press(f"/account/slots/{slot['id']}/ssh-remove").status == 303
+    report(store, "m1", [{"unix_user": slot["unix_user"], "present": True,
+                            "credentials": {"logged_in": True},
+                            "remote_control": {"state": "active"}}])
+    shown = erik.page()
+    assert "Add SSH key" not in shown
+    assert "ccfleet-sync" not in shown
+    assert "On this computer" in shown
+    assert "In the cloud" in shown
+    assert "In a Claude client" in shown
+    response = erik.call("POST", f"/account/slots/{slot['id']}/ssh-key",
+                         form={"csrf": erik.token(), "public_key": "not-used"})
+    assert response.status == 404
     assert store.get_slot(slot["id"])["ssh_public_key"] == ""
 
 

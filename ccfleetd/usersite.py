@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import ipaddress
 from collections.abc import Mapping
 from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, oauth, payments, plans, resets, sshkeys, status
+from . import claude_versions, names, oauth, payments, plans, resets, status
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -48,7 +47,6 @@ from .render import (
 )
 from .store import (
     BadName,
-    BadSSHKey,
     NameTaken,
     NoSlotAvailable,
     NotYours,
@@ -88,10 +86,6 @@ NOTES = {
     "emails-on": ("ok", "Outage emails on: we email you when your slot's machine has been "
                         "down for five minutes, and again when it is back."),
     "emails-off": ("ok", "Outage emails off."),
-    "ssh-set": ("ok", "SSH access is updating on your slot. It normally takes under a minute."),
-    "ssh-removed": ("ok", "SSH access is being removed from your slot."),
-    "ssh-bad": ("warn", "That is not one supported SSH public key. Paste the single line "
-                         "from a .pub file."),
 }
 
 # The pill says the state the way every page says a state: green running,
@@ -114,8 +108,7 @@ ACCOUNT_WIDE = ("These count everything this Claude account does: claude.ai, the
                 "app, and Claude Code on any computer, device tokens included.")
 
 SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "token", "token-show",
-                "token-done", "update", "stable", "rename", "quota", "ssh-key",
-                "ssh-remove")
+                "token-done", "update", "stable", "rename", "quota")
 # What a slot can do, by state. Sign-in and tokens need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
@@ -280,15 +273,6 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
             # both, and the holder, in one transaction.
             store.request_quota_read(slot_id, now, held_by=holder)
             return _back("reading", anchor)
-        if action == "ssh-key":
-            try:
-                store.set_slot_ssh_key(slot_id, form.get("public_key", ""), held_by=holder)
-            except BadSSHKey:
-                return _back("ssh-bad", anchor)
-            return _back("ssh-set", anchor)
-        if action == "ssh-remove":
-            store.clear_slot_ssh_key(slot_id, held_by=holder)
-            return _back("ssh-removed", anchor)
         if action == "switch":
             # The store holds it to a slot in use and to once a week, in the
             # same transaction as the holder check.
@@ -420,13 +404,10 @@ background:var(--acc-soft);border-radius:12px}
 .row-line.flow .login-url{background:var(--panel)}
 .row-line.flow input[type=text]{max-width:280px}
 .row-line.flow .flow-why{margin:0 0 10px;font-size:14px;max-width:64ch}
-.row-line.ssh textarea{display:block;width:100%;min-height:76px;resize:vertical;
-font:12.5px/1.45 var(--mono);padding:9px 11px;border-radius:10px;border:1px solid var(--rule);
-background:var(--inset);color:var(--ink);margin:8px 0}
-.row-line.ssh textarea:focus{border-color:var(--acc);outline:3px solid var(--acc-soft)}
-.ssh-command{display:block;font-family:var(--mono);font-size:12.5px;overflow-wrap:anywhere;
-padding:9px 11px;margin:8px 0;border:1px solid var(--rule-soft);border-radius:9px;
-background:var(--inset);user-select:all;-webkit-user-select:all}
+.ways{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0 2px}
+.way{padding:14px;border:1px solid var(--rule-soft);border-radius:11px;background:var(--inset)}
+.way b{display:block;margin-bottom:5px}
+.way p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}
 /* Claude Code on the slot: the version it runs, and one press to the newest. */
 .cc-say{font-size:14px;overflow-wrap:anywhere}
 .cc-say b{font-family:var(--mono);font-size:13.5px;font-weight:650}
@@ -456,6 +437,7 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 .card.slot{scroll-margin-top:124px}
 .slot-head,.slot-body{padding-left:16px;padding-right:16px}
 .usage{grid-template-columns:minmax(0,1fr);padding:14px}
+.ways{grid-template-columns:minmax(0,1fr)}
 .door{padding:22px 20px 20px}
 .sitefoot-in{padding-left:16px;padding-right:16px}}
 """ + status.LINE_CSS
@@ -671,10 +653,6 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "it on your page (or, if you asked, a name the operator set for you). That name is "
         "also the one its machine answers to in claude.ai/code, so Anthropic sees it too. "
         "The name and the date go when you give the slot back.</li>"
-        "<li>If you turn on terminal access, the one SSH public key you paste, without its "
-        "comment (which can contain an address or device name), and its SHA-256 fingerprint. "
-        "The private key never leaves your device. The public key is removed when you remove "
-        "SSH access or give the slot back.</li>"
         "<li>Your sign-in here: a random value in a cookie, of which we store only a hash, "
         "with when it began and when it ends. "
         f"It lasts {_span(cfg.session_ttl_s)}, or until you sign out.</li>"
@@ -712,9 +690,6 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "ccfleet does this and we do not look, but no setting can make it impossible, so "
         "please keep nothing on a slot that you could not accept an administrator being "
         "able to read.</p>"
-        "<p>If you use SSH, the machine&#x27;s ordinary security log records connection facts "
-        "such as the time, your slot&#x27;s Linux name and the connecting IP address. Port, "
-        "agent and X11 forwarding are disabled for slot accounts.</p>"
         "<p>In the console, the operator sees your email address, your allowance, the slots "
         "you hold, when you last visited, and the payments recorded for you.</p></div>"
         '<div class="card"><h2>Cookies</h2>'
@@ -886,6 +861,7 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     if (signed_in if own else slot["state"] == slotstates.ACTIVE):
         parts.append(_in_use(report, now, "" if own else _quota_refresh(slot, report, csrf,
                                                                           now)))
+        parts.append(_ways_to_use(report))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
@@ -897,7 +873,6 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         parts.append(_tokens(slot, login, csrf, now))
     if slot["state"] in CAN_SIGN_IN and not own:
-        parts.append(_ssh_access(slot, report, heartbeat, csrf))
         parts.append(_rename(slot, csrf))
     # Never on somebody's own node: giving back means wiping, and nothing
     # there is ours to wipe.
@@ -975,6 +950,22 @@ def _sign_in_left(expires: Any, now: float) -> str:
     if days >= 2:
         return f"good for {days} more days"
     return "good for 1 more day" if days == 1 else "ends within a day"
+
+
+def _ways_to_use(report: Mapping[str, Any]) -> str:
+    """The three supported native doors, none of which is a ccfleet relay."""
+    remote = (report.get("remote_control") or {}).get("state")
+    cloud = ('Open <a href="https://claude.ai/code" target="_blank" '
+             'rel="noopener noreferrer">claude.ai/code</a> and choose this slot. Its files '
+             'and work keep running here.' if remote == "active" else
+             'Remote Control is starting. This becomes available when it is on.')
+    return (
+        '<div class="ways" aria-label="Ways to use this Claude account">'
+        '<div class="way"><b>On this computer</b><p>Run the unmodified Claude Code CLI on '
+        'your own files. Set it up under <em>Local Claude Code</em> below.</p></div>'
+        f'<div class="way"><b>In the cloud</b><p>{cloud}</p></div>'
+        '<div class="way"><b>In a Claude client</b><p>Use the official Claude desktop or '
+        'mobile app with the same account and choose this slot.</p></div></div>')
 
 
 def _ended(login: Mapping[str, Any]) -> str:
@@ -1108,19 +1099,20 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
         if login.get("state"):
             return ""                     # a sign-in is in flight; one thing at a time
         issued = slot.get("device_token_at") or 0
-        said = (f'<span class="pill ok">last issued {escape(_age(now, issued))} ago</span> '
+        said = (f'<span class="pill ok">last set up {escape(_age(now, issued))} ago</span> '
                 if issued else
-                '<span class="muted small">None yet &middot; optional, for using this '
-                'account from your own computer</span> ')
-        return ('<div class="row-line"><div class="row-name">Device token</div>'
+                '<span class="muted small">Run Claude Code normally on this computer, '
+                'using its own files</span> ')
+        return ('<div class="row-line"><div class="row-name">Local Claude Code</div>'
                 f'<div class="actions">{said}'
-                + _form(f"{base}/token", csrf, "Get another" if issued else "Get a device token")
+                + _form(f"{base}/token", csrf,
+                        "Set up another computer" if issued else "Set up this computer")
                 + "</div></div>")
     if state == "ready":
         body = (f'<span class="pill ok">{escape(TOKEN_WORDS["ready"])}</span> '
                 + _form(f"{base}/token-show", csrf, "Show it", cls="primary") + " "
                 + _form(f"{base}/token-done", csrf, "Done with it"))
-        return (f'<div class="row-line"><div class="row-name">Device token</div>'
+        return (f'<div class="row-line"><div class="row-name">Local Claude Code</div>'
                 f'<div class="actions">{body}</div></div>')
     body = f'<span class="login-say">{escape(TOKEN_WORDS.get(state, state))}</span>'
     url = login.get("url") or ""
@@ -1132,7 +1124,7 @@ def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: f
                       '<input type="text" name="code" placeholder="paste the code" '
                       'autocomplete="off" required>', "primary")
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
-    return (f'<div class="row-line stacked flow"><div class="row-name">Device token</div>'
+    return (f'<div class="row-line stacked flow"><div class="row-name">Local Claude Code</div>'
             f"{body}</div>")
 
 
@@ -1165,63 +1157,6 @@ def _outage_emails(account: Mapping[str, Any], csrf: str) -> str:
             "your slot's name go to it, and only when there is an outage to tell you about. "
             "The status page says the same for everybody.</p></div>"
             f"{button}</div>")
-
-
-def _ssh_access(slot: Mapping[str, Any], report: Mapping[str, Any],
-                heartbeat: Optional[Mapping[str, Any]], csrf: str) -> str:
-    """Holder-only SSH setup and the two commands it enables."""
-    key = str(slot.get("ssh_public_key") or "")
-    wanted = ""
-    if key:
-        try:
-            wanted = sshkeys.fingerprint(key)
-        except sshkeys.PublicKeyError:  # a damaged old row should not break the page
-            wanted = ""
-    said = report.get("ssh") or {}
-    applied = str(said.get("fingerprint") or "")
-    ready = bool(wanted and applied == wanted and said.get("configured") is True)
-    raw_host = (((heartbeat or {}).get("payload") or {}).get("egress") or {}).get("ip")
-    host = ""
-    if isinstance(raw_host, str):
-        try:
-            parsed_host = ipaddress.ip_address(raw_host)
-            host = f"[{parsed_host}]" if parsed_host.version == 6 else str(parsed_host)
-        except ValueError:
-            pass
-    address = f"{slot['unix_user']}@{host}" if host else ""
-    if key:
-        state = ('<span class="pill ok">Ready</span>' if ready else
-                 '<span class="pill busy">Updating</span>')
-        connection = ""
-        if address:
-            connection = (f'<code class="ssh-command">ssh {escape(address)}</code>'
-                          f'<code class="ssh-command">ccfleet-sync start ./project '
-                          f'{escape(address)}</code>')
-        else:
-            connection = '<p class="small muted">The machine address is not available yet.</p>'
-        controls = (
-            _form(f"/account/slots/{escape(slot['id'])}/ssh-key", csrf, "Replace key",
-                  '<textarea name="public_key" required spellcheck="false" '
-                  'autocomplete="off" aria-label="A replacement SSH public key" '
-                  'placeholder="ssh-ed25519 AAAA…"></textarea>')
-            + _form(f"/account/slots/{escape(slot['id'])}/ssh-remove", csrf,
-                    "Remove SSH access", cls="danger")
-        )
-        body = (f'<p>{state} <code>{escape(wanted)}</code></p>{connection}'
-                '<p class="small muted">Use the matching private key on your device. '
-                'Port, agent and X11 forwarding are disabled; the server records the '
-                'connecting IP in its ordinary SSH log.</p>' + controls)
-    else:
-        body = (_form(f"/account/slots/{escape(slot['id'])}/ssh-key", csrf,
-                      "Add SSH key",
-                      '<textarea name="public_key" required spellcheck="false" '
-                      'autocomplete="off" aria-label="SSH public key" '
-                      'placeholder="ssh-ed25519 AAAA…"></textarea>', "primary")
-                + '<p class="small muted">Only the public key is stored; its comment is '
-                  'discarded and the private key never leaves your device. Once ready, use '
-                  'a terminal or add this machine as an SSH connection in the Claude app.</p>')
-    return ('<div class="row-line stacked ssh"><div class="row-name">Terminal, Claude app '
-            f'and file sync</div>{body}</div>')
 
 
 def _rename(slot: Mapping[str, Any], csrf: str) -> str:
@@ -1286,18 +1221,21 @@ def token_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = N
                       "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p></div>",
                       viewer=viewer)
     return _shell("device token", (
-        "<div class=\"pagehead\"><h1>Device token</h1><p class=\"sub\">Minted on <strong>"
+        "<div class=\"pagehead\"><h1>Use Claude Code locally</h1>"
+        "<p class=\"sub\">Created on <strong>"
         f"{escape(slot['id'])}</strong>, for the Claude account you approved. Good for one "
         "year.</p></div>"
         "<div class=\"ok-banner\">You can come back and show this again while the request "
         "lasts. Press <strong>Done with it</strong> on your slots page when you have "
         "finished, or leave it and it expires on its own.</div>"
         f'<pre class="token">{escape(token)}</pre>'
-        "<div class=\"card\"><h2>Put it on a machine</h2>"
+        "<div class=\"card\"><h2>Set up a computer</h2>"
         "<pre>bash -c \"$(curl -fsSL https://raw.githubusercontent.com/cdcupt/"
         "ccfleet/main/laptop/ccfleet-connect.sh)\"</pre>"
-        "<p class=\"muted\">It asks for the token and hides what you paste. Then "
-        "<code>claude</code> runs there with no login. Scope is inference only, which is "
+        "<p class=\"muted\">It asks for the token and hides what you paste. Then run "
+        "<code>claude</code> normally on that computer and its local files. Requests go "
+        "directly from the unmodified Claude Code client to Anthropic: ccfleet is not a "
+        "proxy and no base URL is changed. The token is inference-only, which is "
         "Anthropic's limit on long-lived tokens; revoke it from your Claude account.</p>"
         "<p class=\"muted\">The computer keeps its own Claude login too, if it has one: "
         "<code>ccfleet-connect --off</code> switches it to that, your own subscription, "

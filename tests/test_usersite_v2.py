@@ -91,7 +91,7 @@ def test_an_owners_node_is_their_slot_on_their_page(site):  # noqa: F811
     assert "your own machine" in body
     assert "Max plan" in body and "Remote Control is on" in body
     assert "This week" in body, "the account's usage, from the node's own report"
-    assert "Sign in again" in body and "Get a device token" in body
+    assert "Sign in again" in body and "Set up this computer" in body
 
 
 def test_an_owners_node_has_no_give_it_back(site):  # noqa: F811
@@ -151,7 +151,7 @@ def test_a_token_handed_over_for_an_owners_node_is_remembered_on_its_card(site):
         store._conn.execute("UPDATE nodes SET device_token_at = ? WHERE id = 'erik-1'",
                             (time.time() - 3600,))
         store._conn.commit()
-    assert "last issued" in whole_card(erik.page(), "erik-1")
+    assert "last set up" in whole_card(erik.page(), "erik-1")
 
 
 def test_an_owners_node_signed_in_elsewhere_too_says_so_on_its_card(site):  # noqa: F811

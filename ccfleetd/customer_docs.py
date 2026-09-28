@@ -251,8 +251,9 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<p>A home directory only you can read, and room for your projects and tools.</p></div>"
         f'<div class="feature">{ICONS["machine"]}<h3>Claude Code, always on</h3>'
         "<p>Installed, with Remote Control on, and kept up to date for you.</p></div>"
-        f'<div class="feature">{ICONS["usage"]}<h3>Your own page</h3>'
-        "<p>Your slot, and how much of your Claude usage limits is used.</p></div>"
+        f'<div class="feature">{ICONS["usage"]}<h3>Local, cloud or client</h3>'
+        "<p>Use the ordinary local CLI, claude.ai/code, or an official Claude app with "
+        "the same account.</p></div>"
         "</div></section>"
         '<section class="band two">'
         '<div class="card"><h2>What you need</h2><ul>'
@@ -319,26 +320,29 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "top of your slot card: slot-4821 until you rename it. Start a session there. "
         "Everything runs on the machine, in your slot, with your files.</p></li>"
         "</ol>"
-        '<div class="card"><h2>Also on your page</h2><ul>'
-        "<li><strong>Terminal and desktop access.</strong> Add one SSH public key on your "
-        "slot card. When it says Ready, the card shows the exact <code>ssh</code> command. "
-        "The private key stays on your device; use the same SSH connection from a terminal "
-        "or add it to Claude Desktop. Removing the key closes this route without changing "
-        "your files or Claude sign-in.</li>"
-        "<li><strong>Folder sync.</strong> Install Mutagen and <code>ccfleet-sync</code> on "
-        "your computer, then run the command on your slot card. It uses conflict-safe "
-        "two-way sync and leaves git metadata, dependency folders, build output and "
-        "<code>.env</code> files out by default:<pre>mkdir -p ~/.local/bin\n"
-        "curl -fsSL -o ~/.local/bin/ccfleet-sync \\\n"
-        "  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-sync.sh\n"
-        "chmod 755 ~/.local/bin/ccfleet-sync</pre></li>"
+        '<div class="card"><h2>Three native ways to work</h2><ul>'
+        "<li><strong>On your computer.</strong> Under <span class=\"btnlabel\">Local Claude "
+        "Code</span>, press <span class=\"btnlabel\">Set up this computer</span>. The slot "
+        "creates an Anthropic device token for your own account. Install it with the command "
+        "shown, then run the ordinary <code>claude</code> command on your local files. The "
+        "unmodified client talks directly to Anthropic; ccfleet is not a proxy.</li>"
+        "<li><strong>In the cloud.</strong> Open <a href=\"https://claude.ai/code\" "
+        "target=\"_blank\" rel=\"noopener noreferrer\">claude.ai/code</a>, choose your "
+        "slot, and work on its files while your computer is off.</li>"
+        "<li><strong>In a Claude client.</strong> Use the official Claude desktop or mobile "
+        "app, signed in to the same account, and choose your slot. It reaches the same cloud "
+        "workspace through Remote Control; no SSH setup is needed.</li>"
+        "<li><strong>Moving files.</strong> Keep local projects local. For cloud projects, "
+        "attach individual files in Claude or use Git to clone, commit and push from the "
+        "slot. ccfleet does not mount or synchronize your computer in the background.</li>"
         "<li><strong>Your usage.</strong> Your Claude account&#x27;s 5-hour and weekly limits, "
         "which count everything the account does: claude.ai, the Claude app, and Claude "
         "Code on any computer, device tokens included. Beside them, the tokens Claude Code "
         "used on this slot itself over the last week; work on your own computer is not in "
         "that number. The limits are read every five minutes; "
         '<span class="btnlabel">Refresh</span> reads them now.</li>'
-        '<li><strong>Device tokens.</strong> <span class="btnlabel">Get a device token</span> '
+        '<li><strong>Local Claude Code.</strong> '
+        '<span class="btnlabel">Set up this computer</span> '
         "makes a one-year token from your own Claude account, for running Claude Code on "
         "your own computer. It is shown until you press "
         '<span class="btnlabel">Done with it</span>, for at most '
@@ -480,11 +484,12 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "directly. ccfleet does not relay, pool or rewrite anybody&#x27;s requests, and no "
         "Claude account is ever shared between people.</p></div>"
         '<div class="card"><h2>Use it from anywhere</h2>'
-        "<p>Remote Control reaches the slot from claude.ai/code and the Claude app. If you "
-        "add your own SSH public key, a terminal or Claude Desktop can reach the same Linux "
-        "account directly. Optional folder sync uses that same key. These are several doors "
-        "to one private slot, not several accounts behind one door: the slot still holds one "
-        "Claude account and ccfleet never chooses or fails over to another one.</p></div>"
+        "<p>Remote Control reaches the slot from claude.ai/code and the official Claude "
+        "desktop and mobile apps. For local work, an Anthropic device token lets the "
+        "unmodified Claude Code CLI run directly on a computer and its own files. ccfleet "
+        "does not offer customer SSH, mount a local folder, proxy model traffic, choose an "
+        "account or fail over to another one. These are native ways to use the same account, "
+        "not several accounts behind one door.</p></div>"
         '<div class="card"><h2>What we can and cannot see</h2>'
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
         "signed in, the email address and plan of the Claude account signed in on it, how "

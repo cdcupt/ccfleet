@@ -171,7 +171,7 @@ def test_the_guide_quotes_labels_the_user_site_really_shows():
     for label in ("Setting up", "Ready to sign in", "In use"):
         assert label in states and f">{label}</span>" in guide
     source = inspect.getsource(usersite)
-    for label in ("Claim a slot", "Sign in to Claude", "Send code", "Get a device token",
+    for label in ("Claim a slot", "Sign in to Claude", "Send code", "Set up this computer",
                   "Done with it", "Give this slot back", "Sign in again", "Back to Stable",
                   "Change account"):
         assert f'"{label}"' in source, f"the user site has no button {label!r}"

@@ -283,7 +283,7 @@ def test_a_change_to_the_same_account_says_so_and_can_be_made_again(site):
     ended(store, slot, slots.SAME_ACCOUNT)
     page = erik.page()
     assert "That is the account this slot already had; nothing changed." in page
-    assert CHANGE.format(slot["id"]) in page and "Get a device token" in page
+    assert CHANGE.format(slot["id"]) in page and "Set up this computer" in page
 
 
 def test_a_finished_row_with_any_other_word_says_nothing(site):

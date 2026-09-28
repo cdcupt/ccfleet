@@ -434,26 +434,20 @@ opposite. A pooled endpoint is the shape this project exists not to be.
 
 ### Several ways into the same slot
 
-“Use it anywhere” changes the access path, never the account binding. Remote
-Control reaches the slot through Anthropic from a browser or app. Holder-managed
-SSH reaches the same Linux account directly from a terminal or Claude Desktop,
-and Mutagen can synchronize a project over that SSH route in `two-way-safe`
-mode. All three end at the same slot and its one Claude login.
+“Use it anywhere” changes where the unmodified Claude Code client runs, never
+the account binding. Remote Control reaches the cloud slot through Anthropic
+from claude.ai/code or an official Claude app. On a user's computer,
+`ccfleet-connect` installs an Anthropic device token and the local Claude Code
+CLI reads local files and talks directly to Anthropic. The local path does not
+pass through the slot or ccfleet's server.
 
-The management server stores one public key per held slot, with the comment
-discarded; it never receives the private key. The machine replaces the managed
-`authorized_keys` file with that one key, applies `no-agent-forwarding`,
-`no-port-forwarding`, `no-X11-forwarding` and `no-user-rc` on the key, and
-repeats the forwarding restrictions in sshd for the slot group. A release
-clears the desired key immediately, then the ordinary wipe removes the account
-and home. Root opens the home and `.ssh` by directory file descriptor with
-symlink following disabled, because those paths are controlled by the holder.
-
-The sync helper ignores VCS metadata, dependency trees, build output and dotenv
-files by default. Mutagen's conflict-safe mode surfaces simultaneous edits
-instead of choosing a copy and losing work. None of this supplies account
-failover: if the one Claude account on the slot is unavailable, the slot says
-so rather than borrowing another account.
+Customer slots do not accept SSH. CC Fleet also does not mount, mirror or keep
+a standing connection into a user's computer. Individual files can be attached
+in a Claude client; repositories move through Git. The legacy empty
+`ssh_public_key` desired-state field is sent temporarily so machines revoke any
+key from the short-lived SSH experiment during rollout. None of these paths
+supplies account failover: if the one Claude account is unavailable, ccfleet
+says so rather than borrowing another account.
 
 ## What was left out on purpose
 
@@ -463,6 +457,7 @@ so rather than borrowing another account.
 | Header, fingerprint or `metadata.user_id` rewriting | out | misrepresents the client |
 | Account pools, failover across accounts, share links, seats | out | pooling shape; you said no sharing, Anthropic's terms say the same |
 | Rotating proxies | out | exists only to defeat risk controls |
+| Customer SSH or background folder sync | out | local work stays local; cloud work uses Remote Control, attachments or Git |
 | Reading usage windows from Anthropic's OAuth endpoints | out | uses the token outside Claude Code; use `/usage` in a session |
 
 ## Extending

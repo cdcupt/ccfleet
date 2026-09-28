@@ -109,11 +109,12 @@ Prove the machine is closed before anyone is given a slot on it:
   `permituserrc no`.
 - *root*: `ufw status` reports `Status: active`, and `systemctl is-active ccfleet-machine.timer` says `active`.
 
-For a holder testing SSH, add their public key on `/account`, wait for the card
-to say **Ready**, then run the exact command it shows. Removing access must make
-a new SSH connection fail within the next machine-agent cycle. `ccfleet-sync`
-uses the same route; `ccfleet-sync status <name>` shows any conflict, and
-`ccfleet-sync stop <name>` removes only that named CC Fleet sync session.
+Slot holders are not given SSH access. Their supported paths are Remote Control
+from claude.ai/code or an official Claude app, and local Claude Code through an
+Anthropic device token created on `/account`. The machine agent continues to
+receive an empty legacy SSH-key field during this rollout so a key from the
+short-lived holder-SSH experiment is removed. Verify a slot has no
+`~/.ssh/authorized_keys` after the next machine-agent cycle.
 
 These steps are deliberately mechanical. An operator can put exactly them in a
 private script that takes an address and a name, reads the root password once

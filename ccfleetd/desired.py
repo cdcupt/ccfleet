@@ -176,12 +176,11 @@ def _slot_block(slot: Mapping[str, Any],
     pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None
     if pending:
         block["login"] = pending
-    # The public half only. Empty is still an instruction: remove access after
-    # the holder presses Remove. Older agents ignore the field and keep Remote
-    # Control working while the rollout catches up.
+    # Customer SSH was removed from the product. Keep sending the empty legacy
+    # field while machines converge so any key from the short-lived feature is
+    # revoked; Remote Control and local device tokens are the supported doors.
     if slot.get("state") in SLOT_SIGN_IN_STATES:
-        key = slot.get("ssh_public_key")
-        block["ssh_public_key"] = key if isinstance(key, str) else ""
+        block["ssh_public_key"] = ""
     # A read of its usage asked for now; the slot tries it once, and an agent
     # from before this reads it on its own schedule.
     wanted = slot.get("quota_wanted_at")

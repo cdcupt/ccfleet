@@ -385,7 +385,7 @@ def test_a_token_that_failed_says_so_and_offers_another(site):
     slot = in_use(store, erik)
     refuse(store, slot, kind="token")
     page = erik.page()
-    assert "The device token was not made:" in page and ">Get a device token<" in page
+    assert "The device token was not made:" in page and ">Set up this computer<" in page
 
 
 def test_the_reason_is_escaped(site):

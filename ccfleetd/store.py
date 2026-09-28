@@ -25,8 +25,6 @@ from . import claude_versions, names, payments, pricing
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
-from .sshkeys import PublicKeyError
-from .sshkeys import normalize as normalize_ssh_public_key
 
 log = logging.getLogger("ccfleetd.store")
 
@@ -175,9 +173,8 @@ CREATE TABLE IF NOT EXISTS slots (
     -- 'machine': a Linux user the machine agent makes and wipes. 'owner': a
     -- person's own node counted as their slot, a record and nothing more.
     kind TEXT NOT NULL DEFAULT 'machine',
-    -- The holder's public half only. Comments are stripped before storage so
-    -- an address or laptop name does not become fleet data. The private key
-    -- never leaves the holder's device.
+    -- Reserved legacy column. Customer SSH was removed; it remains only so a
+    -- rolling downgrade cannot revive an old value, and is always cleared.
     ssh_public_key TEXT NOT NULL DEFAULT '',
     UNIQUE (node_id, unix_user)
 );
@@ -347,11 +344,6 @@ class NameTaken(StoreError):
     """Another slot or machine already answers to that name."""
 
 
-class BadSSHKey(StoreError):
-    """A holder supplied something that is not one supported public key."""
-
-
-
 def _without_secret(payload: Mapping[str, Any]) -> dict[str, Any]:
     """The payload as it should be kept, which is without the minted token.
 
@@ -511,6 +503,11 @@ class Store:
             self._add_missing_columns("slots", {
                 "ssh_public_key": "TEXT NOT NULL DEFAULT ''",
             })
+            # Customer SSH was tried briefly and then removed. Erase any
+            # surviving public half on every startup; desired state also sends
+            # an empty value until every machine has converged and removed it.
+            self._conn.execute("UPDATE slots SET ssh_public_key = '' "
+                               "WHERE ssh_public_key != ''")
             # When its holder last moved the slot to another Claude account
             # (see request_slot_login): NULL for never, which every slot before
             # this is. The slot's own, so it goes when the slot is freed.
@@ -2384,39 +2381,6 @@ class Store:
             if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
                 raise NoSlotAvailable("the free slot was taken; try again")
         return self.get_slot(candidate["id"])  # type: ignore[return-value]
-
-    def set_slot_ssh_key(self, slot_id: str, public_key: str, *, held_by: str) -> str:
-        """Set the public key for this holder's shared-machine slot.
-
-        The key opens the holder's Linux account, never their Claude account.
-        Only a provisioned slot can take one, and owner nodes keep using their
-        existing SSH setup.
-        """
-        with self._write_txn() as conn:
-            row = self._held(conn, slot_id, held_by)
-            if row["kind"] == slotstates.OWNER_SLOT:
-                raise StoreError("an owner node keeps its existing SSH access")
-            if row["state"] not in slotstates.ACCESSIBLE:
-                raise StoreError("wait until the slot has been set up before adding SSH")
-            # Validate only after the holder check. Otherwise an invalid key
-            # submitted against another person's slot returns a different
-            # answer from a missing slot and turns validation into an id oracle.
-            try:
-                normalized = normalize_ssh_public_key(public_key)
-            except PublicKeyError as exc:
-                raise BadSSHKey(str(exc)) from exc
-            conn.execute("UPDATE slots SET ssh_public_key = ? WHERE id = ?",
-                         (normalized, slot_id))
-        return normalized
-
-    def clear_slot_ssh_key(self, slot_id: str, *, held_by: str) -> None:
-        """Remove SSH access while leaving the holder's files and login alone."""
-        with self._write_txn() as conn:
-            row = self._held(conn, slot_id, held_by)
-            if row["kind"] == slotstates.OWNER_SLOT:
-                raise StoreError("an owner node keeps its existing SSH access")
-            conn.execute("UPDATE slots SET ssh_public_key = '' WHERE id = ?",
-                         (slot_id,))
 
     # -- signing in --------------------------------------------------------
 
