@@ -92,6 +92,14 @@ Supported modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
 and `/effort` change the running session without losing its conversation.
 `restart` deliberately ends the current Claude process before replacing it.
 
+## Experimental local projects
+
+There is also an operator-gated `ccfleet local` prototype for
+running the original Claude Code against laptop files with the assigned slot
+handling model requests. It is off by default and is not the hosted terminal
+workflow above. See [the implementation and release limits](docs/local-relay.md)
+before enabling it; technical operation does not establish provider permission.
+
 ## What runs where
 
 - `ccfleetd/` is the web app, broker, desired-state service, operator console,

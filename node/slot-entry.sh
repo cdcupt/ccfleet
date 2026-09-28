@@ -5,6 +5,16 @@
 
 set -euo pipefail
 
+# This exact non-PTY protocol is separately gated by an operator-owned policy
+# file. It cannot select a command, destination, another user or a credential.
+if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-relay-v1 ]; then
+  if [ -t 0 ] || [ -t 1 ]; then
+    printf 'the local relay does not accept a terminal\n' >&2
+    exit 2
+  fi
+  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/local_relay.py"
+fi
+
 if [ ! -t 0 ] || [ ! -t 1 ]; then
   printf 'ccfleet needs an interactive terminal\n' >&2
   exit 2

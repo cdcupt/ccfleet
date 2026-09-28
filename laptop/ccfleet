@@ -5,6 +5,9 @@ The local process owns no Claude credential. It opens an authenticated WSS
 byte path through the ccfleet broker, then OpenSSH provides end-to-end
 encryption and host verification to the assigned slot. A forced remote entry
 attaches to a persistent tmux session whose program is the original ``claude``.
+The experimental, separately enabled ``local`` command instead runs the original
+CLI on the laptop, carrying message requests to the assigned slot over that same
+encrypted transport. It never imports a Claude credential onto the laptop.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import argparse
 import base64
 import getpass
 import hashlib
+import hmac
+import io
 import json
 import os
 import re
@@ -30,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,6 +46,10 @@ SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
+RELAY_MAX_HEADER = 32 * 1024
+RELAY_MAX_BODY = 20 * 1024 * 1024
+RELAY_PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true",
+                         "/v1/messages/count_tokens", "/v1/messages/count_tokens?beta=true"})
 
 
 class CliError(RuntimeError):
@@ -370,16 +380,14 @@ def proxy(device: dict[str, Any]) -> int:
     return 0
 
 
-def ssh_command(device: dict[str, Any], session: str = "ccfleet",
-                mode: str = "bypassPermissions", action: str = "open",
-                model: str = "opus", effort: str = "max") -> list[str]:
+def ssh_transport_command(device: dict[str, Any], *, tty: bool) -> list[str]:
     if shutil.which("ssh") is None:
         raise CliError("OpenSSH is required (missing ssh)")
     executable = str(Path(__file__).resolve())
     proxy_command = (f"{shlex.quote(sys.executable)} {shlex.quote(executable)} "
                      f"proxy --device {shlex.quote(device['device_id'])}")
     return [
-        "ssh", "-tt",
+        "ssh", "-tt" if tty else "-T",
         "-o", f"ProxyCommand={proxy_command}",
         "-o", f"HostKeyAlias={device['host_alias']}",
         "-o", f"UserKnownHostsFile={device['known_hosts']}",
@@ -399,8 +407,14 @@ def ssh_command(device: dict[str, Any], session: str = "ccfleet",
         "-o", "ServerAliveCountMax=2",
         "-o", "ConnectTimeout=10",
         f"{device['user']}@{device['host_alias']}",
-        "ccfleet-session", action, session, mode, model, effort,
     ]
+
+
+def ssh_command(device: dict[str, Any], session: str = "ccfleet",
+                mode: str = "bypassPermissions", action: str = "open",
+                model: str = "opus", effort: str = "max") -> list[str]:
+    return [*ssh_transport_command(device, tty=True),
+            "ccfleet-session", action, session, mode, model, effort]
 
 
 def cmd_attach(args: argparse.Namespace) -> int:
@@ -434,6 +448,280 @@ def cmd_attach(args: argparse.Namespace) -> int:
             time.sleep(delay)
         except KeyboardInterrupt:
             return 130
+
+
+def relay_ssh_command(device: dict[str, Any]) -> list[str]:
+    return [*ssh_transport_command(device, tty=False), "ccfleet-relay-v1"]
+
+
+def relay_read_exact(stream: Any, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        part = stream.read(size - len(data))
+        if not part:
+            raise CliError("slot relay connection ended before the response completed")
+        data.extend(part)
+    return bytes(data)
+
+
+def relay_metadata(stream: Any) -> dict[str, Any]:
+    size = struct.unpack("!I", relay_read_exact(stream, 4))[0]
+    if not 0 < size <= RELAY_MAX_HEADER:
+        raise CliError("invalid slot relay response")
+    try:
+        meta = json.loads(relay_read_exact(stream, size))
+    except (ValueError, UnicodeError) as exc:
+        raise CliError("invalid slot relay response") from exc
+    if (not isinstance(meta, dict) or type(meta.get("version")) is not int
+            or meta["version"] != 1
+            or type(meta.get("status")) is not int or not 200 <= meta["status"] <= 599
+            or not isinstance(meta.get("headers"), dict)):
+        raise CliError("invalid slot relay response")
+    for name, value in meta["headers"].items():
+        if (name not in ("content-type", "request-id", "retry-after")
+                or not isinstance(value, str) or len(value) > 8192
+                or not value.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
+            raise CliError("invalid slot relay response header")
+    return meta
+
+
+def relay_chunk(stream: Any) -> bytes:
+    size = struct.unpack("!I", relay_read_exact(stream, 4))[0]
+    if size > 64 * 1024:
+        raise CliError("oversized slot relay response frame")
+    return relay_read_exact(stream, size)
+
+
+def relay_preamble(meta: dict[str, Any]) -> bytes:
+    body = json.dumps({"version": 1, **meta}).encode()
+    if len(body) > RELAY_MAX_HEADER:
+        raise CliError("request headers exceed the slot relay limit")
+    return struct.pack("!I", len(body)) + body
+
+
+def check_local_relay(device: dict[str, Any]) -> None:
+    try:
+        result = subprocess.run(relay_ssh_command(device),
+                                input=relay_preamble({"operation": "status"}),
+                                capture_output=True, timeout=25, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise CliError("slot relay readiness check timed out") from exc
+    stream = io.BytesIO(result.stdout)
+    meta = relay_metadata(stream)
+    body = relay_chunk(stream)
+    if relay_chunk(stream) != b"":
+        raise CliError("invalid relay readiness response")
+    try:
+        answer = json.loads(body)
+    except (ValueError, UnicodeError) as exc:
+        raise CliError("invalid relay readiness response") from exc
+    if (not isinstance(answer, dict) or meta["status"] != 200
+            or result.returncode != 0 or answer.get("ready") is not True):
+        raise CliError("local relay is unavailable: the operator must enable it and "
+                       "your slot must have a current Claude sign-in")
+
+
+class LocalRelayServer(ThreadingHTTPServer):
+    """A launch-scoped, authenticated loopback listener for one paired slot."""
+
+    daemon_threads = True
+    allow_reuse_address = False
+
+    def __init__(self, device: dict[str, Any], secret: str):
+        self.device, self.secret = device, secret
+        self.workers = threading.BoundedSemaphore(4)
+        self.processes: set[Any] = set()
+        self.process_lock = threading.Lock()
+        self.stopping = threading.Event()
+        super().__init__(("127.0.0.1", 0), LocalRelayHandler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if self.stopping.is_set() or not self.workers.acquire(blocking=False):
+            request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n")
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.workers.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.workers.release()
+
+    def stop_connections(self) -> None:
+        self.stopping.set()
+        with self.process_lock:
+            for process in self.processes:
+                if process.poll() is None:
+                    process.terminate()
+
+    def handle_error(self, _request: Any, _address: Any) -> None:
+        # Never let BaseServer print request handlers, headers or payloads.
+        pass
+
+
+class LocalRelayHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "ccfleet"
+    sys_version = ""
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(20)
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        pass
+
+    def fail(self, status: int, message: str) -> None:
+        body = json.dumps({"type": "error", "error": {
+            "type": "ccfleet_relay_error", "message": message}}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
+
+    def do_POST(self) -> None:
+        server = self.server
+        self.close_connection = True
+        allowed_host = f"127.0.0.1:{server.server_port}"
+        if self.headers.get_all("Host") != [allowed_host] or self.headers.get("Origin"):
+            self.fail(403, "loopback CLI requests only")
+            return
+        auth = self.headers.get_all("Authorization", [])
+        expected = "Bearer " + server.secret
+        if len(auth) != 1 or not hmac.compare_digest(auth[0].encode(), expected.encode()):
+            self.fail(401, "invalid local relay token")
+            return
+        lengths = self.headers.get_all("Content-Length", [])
+        if (self.path not in RELAY_PATHS or self.headers.get("Transfer-Encoding")
+                or len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdigit()):
+            self.fail(400, "invalid Claude request")
+            return
+        size = int(lengths[0])
+        if not 0 < size <= RELAY_MAX_BODY:
+            self.fail(413, "Claude request exceeds the local relay limit")
+            return
+        process = None
+        timer = None
+        began = False
+        try:
+            body = relay_read_exact(self.rfile, size)
+            meta = {"method": "POST", "path": self.path, "body_size": size,
+                    "headers": {name: value for name, value in self.headers.items()
+                                if name.lower() not in ("authorization", "x-api-key",
+                                                       "cookie", "proxy-authorization")}}
+            preamble = relay_preamble(meta)
+            with server.process_lock:
+                if server.stopping.is_set():
+                    raise CliError("local relay is closing")
+                process = subprocess.Popen(relay_ssh_command(server.device),
+                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                           stderr=subprocess.DEVNULL)
+                server.processes.add(process)
+            timer = threading.Timer(300, process.kill)
+            timer.daemon = True
+            timer.start()
+            process.stdin.write(preamble + body)
+            process.stdin.flush()
+            answer = relay_metadata(process.stdout)
+            self.send_response(answer["status"])
+            for name, value in answer["headers"].items():
+                self.send_header(name, value)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            began = True
+            while True:
+                chunk = relay_chunk(process.stdout)
+                if not chunk:
+                    break
+                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                self.wfile.flush()
+            process.stdin.close()
+            exit_code = process.wait(timeout=5)
+            if exit_code != 0 and not (exit_code == 2 and answer["status"] >= 400):
+                raise CliError("slot relay ended unexpectedly")
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (CliError, OSError, subprocess.SubprocessError):
+            if not began:
+                self.fail(502, "slot relay failed; the relay did not retry this request")
+            # After streaming starts, close without the terminal HTTP chunk.
+            # Claude must see truncation, never a fabricated successful result.
+        finally:
+            if timer is not None:
+                timer.cancel()
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+                for stream in (process.stdin, process.stdout):
+                    if stream is not None:
+                        stream.close()
+                with server.process_lock:
+                    server.processes.discard(process)
+
+
+def local_environment(device: dict[str, Any], port: int, secret: str) -> dict[str, str]:
+    env = dict(os.environ)
+    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS",
+                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        env.pop(name, None)
+    profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
+    profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(profile, 0o700)
+    env.update({"ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
+                "ANTHROPIC_AUTH_TOKEN": secret, "CLAUDE_CONFIG_DIR": str(profile),
+                "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"})
+    return env
+
+
+def cmd_local(args: argparse.Namespace) -> int:
+    device = choose_device(load_config(), args.slot)
+    claude = shutil.which("claude")
+    if claude is None:
+        raise CliError("install the original Claude Code CLI on this computer first")
+    project = Path(args.project).expanduser().resolve()
+    if not project.is_dir():
+        raise CliError("--project must be an existing local directory")
+    check_local_relay(device)
+    server = LocalRelayServer(device, secrets.token_urlsafe(32))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        env = local_environment(device, server.server_port, server.secret)
+        command = [claude, "--model", args.model, "--effort", args.effort]
+        if args.mode == "bypassPermissions":
+            command.append("--dangerously-skip-permissions")
+        else:
+            command.extend(["--permission-mode", args.mode])
+        if args.resume:
+            command.extend(["--resume", args.resume])
+        elif args.continue_session:
+            command.append("--continue")
+        if args.print_prompt is not None:
+            command.extend(["--print", args.print_prompt])
+        print(f"Local project: {project}\nAccount: assigned slot {device['slot_name']}\n"
+              "Files, tools and conversation history stay on this computer.\n"
+              "Selected file contents and tool output may be sent to Anthropic.",
+              file=sys.stderr, flush=True)
+        try:
+            return subprocess.call(command, cwd=project, env=env)
+        except KeyboardInterrupt:
+            return 130
+    finally:
+        server.stop_connections()
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
 
 
 def cmd_list(_args: argparse.Namespace) -> int:
@@ -514,6 +802,17 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--model", default="opus", help="fable, opus, sonnet, or a model id")
     restart.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
+    local = sub.add_parser("local", help="experimental: run local Claude using your slot relay")
+    local.add_argument("--slot", default="", help="paired slot id or name")
+    local.add_argument("--project", default=".", help="local project directory (default: current)")
+    local.add_argument("--model", default="opus")
+    local.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
+    local.add_argument("--mode", choices=PERMISSION_MODES, default="manual",
+                       help="local tool permissions (default: manual; no slot isolation on laptop)")
+    local.add_argument("-p", "--print", dest="print_prompt", help="one non-interactive prompt")
+    history = local.add_mutually_exclusive_group()
+    history.add_argument("--resume", default="", metavar="SESSION_ID")
+    history.add_argument("--continue", dest="continue_session", action="store_true")
     sub.add_parser("list", help="list slots connected on this computer")
     use = sub.add_parser("use", help="choose the default slot")
     use.add_argument("slot")
@@ -546,6 +845,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_attach(args)
         if args.command == "login":
             return cmd_login(args)
+        if args.command == "local":
+            if not MODEL_RE.fullmatch(args.model):
+                raise CliError("invalid model name")
+            return cmd_local(args)
         if args.command == "list":
             return cmd_list(args)
         if args.command == "use":

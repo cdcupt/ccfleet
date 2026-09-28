@@ -148,13 +148,13 @@ def test_revocation_closes_an_already_open_websocket_relay():
         upstream.close()
 
 
-def test_the_installed_client_never_mentions_an_anthropic_credential(tmp_path):
+def test_the_installed_terminal_client_does_not_read_an_anthropic_credential(tmp_path):
     root = Path(__file__).parents[1]
     client = root / "laptop" / "ccfleet"
     text = client.read_text()
-    assert "ANTHROPIC_BASE_URL" not in text
-    assert "ANTHROPIC_AUTH_TOKEN" not in text
-    assert "CLAUDE_CODE_OAUTH_TOKEN" not in text
+    assert ".credentials.json" not in text
+    assert "refreshToken" not in text
+    assert "accessToken" not in text
     env = {**os.environ, "CCFLEET_HOME": str(tmp_path / "ccfleet")}
     result = subprocess.run([str(client), "list"], env=env, capture_output=True, text=True,
                             timeout=10)

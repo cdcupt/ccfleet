@@ -28,6 +28,11 @@ agreed.
 
 ## How CC Fleet maps to those constraints
 
+This mapping describes the deployed remote-terminal path. The experimental
+`ccfleet local` relay reads a slot credential and substitutes upstream
+authentication, so it does **not** inherit this mapping. Its production use
+needs a permitted authentication arrangement; see [local-relay.md](local-relay.md).
+
 - A slot installs and runs the original Claude Code distribution.
 - The customer completes Anthropic's own browser sign-in. The resulting
   credential is written by Claude Code in that customer's slot.

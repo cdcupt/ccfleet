@@ -1,5 +1,9 @@
 # CC Fleet design
 
+This document describes the default hosted-terminal path. The separately gated
+local-project relay has different execution and privacy boundaries, documented
+in [local-relay.md](local-relay.md); it is not an automatic customer migration.
+
 ## Product invariant
 
 CC Fleet provides remote Claude Code slots without an account pool:

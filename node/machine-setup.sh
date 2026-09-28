@@ -154,6 +154,7 @@ mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 fetch ccfleet_agent/__init__.py "$LIB_DIR/ccfleet_agent/__init__.py" 644
 fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
 fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
+fetch ccfleet_agent/local_relay.py "$LIB_DIR/ccfleet_agent/local_relay.py" 644
 fetch node/slot-add.sh          "$LIB_DIR/slot-add.sh" 755
 fetch node/slot-remove.sh       "$LIB_DIR/slot-remove.sh" 755
 fetch node/slot-entry.sh        "$LIB_DIR/slot-entry.sh" 755
@@ -188,7 +189,7 @@ note "$ETC_DIR/agent.env, readable by root only"
 step "4/6  slot SSH restrictions"
 make_existing_slots_key_eligible
 restrict_slot_sshd
-note "slot keys are root-managed and can only open the forced CC Fleet terminal"
+note "slot keys are root-managed; local relay stays off without a separate operator policy"
 
 step "5/6  the timer"
 for unit in ccfleet-machine.service ccfleet-machine.timer; do
