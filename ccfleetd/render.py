@@ -108,6 +108,7 @@ code,.mono,td.num,.v{font-family:var(--mono);font-variant-numeric:tabular-nums}
 code{font-size:.88em;background:var(--inset);border:1px solid var(--rule-soft);
 border-radius:6px;padding:.08em .4em;white-space:nowrap;
 -webkit-box-decoration-break:clone;box-decoration-break:clone}
+code.code-wrap{white-space:normal;overflow-wrap:anywhere}
 pre code{font-size:inherit;background:none;border:0;padding:0;white-space:inherit}
 h1{font-size:30px;line-height:1.15;letter-spacing:-.024em;margin:0;font-weight:720;
 text-wrap:balance}

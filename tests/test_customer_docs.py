@@ -197,6 +197,7 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
     assert "ccfleet new research --model fable --effort xhigh" in pages["guide"]
     assert "<code>/model</code>" in pages["guide"]
     assert "<code>/effort</code>" in pages["guide"]
+    assert pages["guide"].count('class="code-wrap"') >= 4
 
 
 def test_the_guide_matches_the_session_defaults_and_native_controls():
