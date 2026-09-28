@@ -14,9 +14,8 @@ What it does as root, and nothing else:
   provision a slot somebody has claimed        node/slot-add.sh --slot <user>
   wipe a slot somebody has released            node/slot-remove.sh --slot <user>
   ask each slot about itself                   agent.py --slot-facts, as <user>
-  answer to the name the server gives it       hostnamectl, /etc/hosts; then, as
-                                               each slot's user, restart its
-                                               Remote Control to take the name
+  answer to the name the server gives it       hostnamectl and /etc/hosts
+  install paired terminal device keys          root-controlled sshd key files
 
 The third is the one to be careful with. Everything under a slot's home belongs
 to whoever holds it — every file and every symlink — so root never opens
@@ -70,6 +69,7 @@ log = logging.getLogger("ccfleet-machine")
 DEFAULT_ENV_FILE = "/etc/ccfleet/agent.env"
 DEFAULT_STATE_PATH = "/var/lib/ccfleet/machine.json"
 DEFAULT_LIB_DIR = "/usr/local/lib/ccfleet"
+DEFAULT_AUTHORIZED_KEYS_DIR = "/etc/ccfleet/authorized_keys"
 # Where slot homes live, for the disk reading. Slots fill /home, not /.
 SLOT_HOMES = "/home"
 
@@ -118,9 +118,9 @@ SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "
 # still being made, and a releasing one is about to be deleted.
 UPGRADE_STATES = SIGN_IN_STATES
 
-# One holder-supplied public key. The server already validates it; root checks
-# it again before it reaches authorized_keys because a compromised server or a
-# mixed-version rollout must not turn an arbitrary line into an SSH option.
+# Holder device public keys. The server already validates them; root checks
+# them again before they reach authorized_keys because a compromised server or
+# a mixed-version rollout must not turn an arbitrary line into an SSH option.
 SSH_KEY_TYPES = frozenset({
     "ssh-ed25519",
     "sk-ssh-ed25519@openssh.com",
@@ -131,7 +131,14 @@ SSH_KEY_TYPES = frozenset({
     "ssh-rsa",
 })
 MAX_SSH_KEY_CHARS = 16 * 1024
-AUTHORIZED_KEY_OPTIONS = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-user-rc"
+MAX_CLI_KEYS = 10
+_LIB_ROOT = Path(__file__).resolve().parents[1]
+SLOT_ENTRY = str((_LIB_ROOT / "slot-entry.sh") if (_LIB_ROOT / "slot-entry.sh").is_file()
+                 else (_LIB_ROOT / "node" / "slot-entry.sh"))
+AUTHORIZED_KEY_OPTIONS = (
+    f'command="{SLOT_ENTRY}",no-agent-forwarding,no-port-forwarding,'
+    "no-X11-forwarding,no-user-rc"
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +150,7 @@ class MachineConfig:
     slot_add: Path
     slot_remove: Path
     slot_agent: Path
+    authorized_keys_dir: Path
     egress_targets: tuple[str, ...] = core.DEFAULT_EGRESS_TARGETS
     timeout_s: float = 10.0
 
@@ -156,6 +164,8 @@ class MachineConfig:
                    # The agent that ships beside this file, so a slot is always
                    # asked by the same version that is doing the asking.
                    slot_agent=Path(__file__).resolve().with_name("agent.py"),
+                   authorized_keys_dir=Path(env.get("CCFLEET_AUTHORIZED_KEYS_DIR")
+                                            or DEFAULT_AUTHORIZED_KEYS_DIR),
                    egress_targets=base.egress_targets, timeout_s=base.timeout_s)
 
 
@@ -253,12 +263,7 @@ CLOUD_CFG_NAME = "99-ccfleet.cfg"
 # cloud-init puts the provider's name back at boot unless told to leave the
 # hostname, and /etc/hosts, alone.
 CLOUD_CFG = "preserve_hostname: true\nmanage_etc_hosts: false\n"
-RC_UNIT = "claude-remote-control.service"
-SYSTEMCTL_TIMEOUT_S = 60
 HOSTNAMECTL_TIMEOUT_S = 30
-# A Remote Control restart the machine still owes its slots after a rename,
-# kept in its state until every running one has restarted onto the name.
-RC_OWED_KEY = "remote_control_owes_the_name"
 
 
 def set_hostname_now(name: str) -> bool:
@@ -308,87 +313,38 @@ def ssh_key_fingerprint(key: str) -> str:
     return f"SHA256:{digest}"
 
 
+def normalize_ssh_public_keys(value: Any) -> Optional[list[str]]:
+    """A bounded, duplicate-free list of keys, or None when any entry is bad."""
+    if not isinstance(value, list) or len(value) > MAX_CLI_KEYS:
+        return None
+    out: list[str] = []
+    for raw in value:
+        key = normalize_ssh_public_key(raw)
+        if not key:
+            return None
+        if key not in out:
+            out.append(key)
+    return out
+
+
 def _open_dir(path: Union[str, Path], *, dir_fd: Optional[int] = None) -> int:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     return os.open(path, flags, dir_fd=dir_fd)
 
 
-def install_authorized_key(account: pwd.struct_passwd, key: str) -> tuple[bool, str]:
-    """Make this key the slot's sole SSH key without following holder symlinks.
-
-    The holder owns every path under their home and may replace one between two
-    ordinary path checks. Directory file descriptors plus ``O_NOFOLLOW`` keep
-    every create, replace and remove inside the home and ``.ssh`` directories
-    that root actually opened.
-    """
-    normalized = normalize_ssh_public_key(key)
-    if normalized is None:
-        return False, "server supplied an invalid SSH public key"
+def _remove_legacy_home_key(account: pwd.struct_passwd) -> None:
+    """Delete the superseded holder-writable key file when it is reachable."""
     home_fd: Optional[int] = None
     ssh_fd: Optional[int] = None
     try:
         home_fd = _open_dir(account.pw_dir)
-        try:
-            ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
-        except FileNotFoundError:
-            if not normalized:
-                return True, ""
-            os.mkdir(".ssh", mode=0o700, dir_fd=home_fd)
-            ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
-        os.fchmod(ssh_fd, 0o700)
-        os.fchown(ssh_fd, account.pw_uid, account.pw_gid)
-        if not normalized:
-            try:
-                os.unlink("authorized_keys", dir_fd=ssh_fd)
-            except FileNotFoundError:
-                pass
-            return True, ""
-        content = f"{AUTHORIZED_KEY_OPTIONS} {normalized}\n".encode("ascii")
-        try:
-            current_fd = os.open(
-                "authorized_keys",
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                dir_fd=ssh_fd,
-            )
-        except OSError:
-            current = b""
-        else:
-            try:
-                current = os.read(current_fd, MAX_SSH_KEY_CHARS + 512)
-            finally:
-                os.close(current_fd)
-        if current == content:
-            return True, ""
-        temporary = f".authorized_keys.ccfleet.{os.getpid()}"
-        try:
-            fd = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-                dir_fd=ssh_fd,
-            )
-        except FileExistsError:
-            os.unlink(temporary, dir_fd=ssh_fd)
-            fd = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-                dir_fd=ssh_fd,
-            )
-        try:
-            remaining = memoryview(content)
-            while remaining:
-                written = os.write(fd, remaining)
-                remaining = remaining[written:]
-            os.fchmod(fd, 0o600)
-            os.fchown(fd, account.pw_uid, account.pw_gid)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.rename(temporary, "authorized_keys", src_dir_fd=ssh_fd, dst_dir_fd=ssh_fd)
-        return True, ""
+        ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
+        os.unlink("authorized_keys", dir_fd=ssh_fd)
+    except FileNotFoundError:
+        pass
     except OSError as exc:
-        return False, f"could not update authorized_keys ({exc.__class__.__name__})"
+        log.warning("%s: could not remove legacy authorized_keys (%s)",
+                    account.pw_name, exc.__class__.__name__)
     finally:
         if ssh_fd is not None:
             os.close(ssh_fd)
@@ -396,17 +352,107 @@ def install_authorized_key(account: pwd.struct_passwd, key: str) -> tuple[bool, 
             os.close(home_fd)
 
 
-def authorized_key_fingerprint(account: pwd.struct_passwd) -> str:
+def install_authorized_key(account: pwd.struct_passwd, key: Any,
+                           directory: Path = Path(DEFAULT_AUTHORIZED_KEYS_DIR)
+                           ) -> tuple[bool, str]:
+    """Make these the slot's sole SSH keys in a root-controlled directory.
+
+    Slot users can run shell tools through Claude Code. A key file below their
+    home would therefore be replaceable by the holder, defeating device
+    revocation and the forced command. sshd reads this file from `/etc` instead.
+    """
+    if isinstance(key, list):
+        normalized_keys = normalize_ssh_public_keys(key)
+    else:
+        one = normalize_ssh_public_key(key)
+        normalized_keys = None if one is None else ([one] if one else [])
+    if normalized_keys is None:
+        return False, "server supplied invalid SSH public keys"
+    if not UNIX_USER_RE.fullmatch(account.pw_name):
+        return False, "slot account has an invalid login name"
+    _remove_legacy_home_key(account)
+    keys_fd: Optional[int] = None
+    try:
+        try:
+            keys_fd = _open_dir(directory)
+        except FileNotFoundError:
+            if not normalized_keys:
+                return True, ""
+            return False, "managed authorized-keys directory is missing"
+        if os.fstat(keys_fd).st_uid != os.geteuid():
+            return False, "managed authorized-keys directory is not owned by the agent"
+        os.fchmod(keys_fd, 0o700)
+        filename = account.pw_name
+        if not normalized_keys:
+            try:
+                os.unlink(filename, dir_fd=keys_fd)
+            except FileNotFoundError:
+                pass
+            return True, ""
+        content = "".join(
+            f"{AUTHORIZED_KEY_OPTIONS} {normalized}\n" for normalized in normalized_keys
+        ).encode("ascii")
+        try:
+            current_fd = os.open(
+                filename,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=keys_fd,
+            )
+        except OSError:
+            current = b""
+        else:
+            try:
+                current = os.read(current_fd, MAX_SSH_KEY_CHARS * MAX_CLI_KEYS + 4096)
+            finally:
+                os.close(current_fd)
+        if current == content:
+            return True, ""
+        temporary = f".{filename}.ccfleet.{os.getpid()}"
+        try:
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=keys_fd,
+            )
+        except FileExistsError:
+            os.unlink(temporary, dir_fd=keys_fd)
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=keys_fd,
+            )
+        try:
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(fd, remaining)
+                remaining = remaining[written:]
+            os.fchmod(fd, 0o600)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(temporary, filename, src_dir_fd=keys_fd, dst_dir_fd=keys_fd)
+        os.fsync(keys_fd)
+        return True, ""
+    except OSError as exc:
+        return False, f"could not update managed authorized keys ({exc.__class__.__name__})"
+    finally:
+        if keys_fd is not None:
+            os.close(keys_fd)
+
+
+def authorized_key_fingerprint(account: pwd.struct_passwd,
+                               directory: Path = Path(DEFAULT_AUTHORIZED_KEYS_DIR)) -> str:
     """Fingerprint of the managed key actually on disk, or empty."""
-    home_fd: Optional[int] = None
-    ssh_fd: Optional[int] = None
+    keys_fd: Optional[int] = None
     key_fd: Optional[int] = None
     try:
-        home_fd = _open_dir(account.pw_dir)
-        ssh_fd = _open_dir(".ssh", dir_fd=home_fd)
-        key_fd = os.open("authorized_keys", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                         dir_fd=ssh_fd)
-        text = os.read(key_fd, MAX_SSH_KEY_CHARS + 512).decode("ascii", "strict")
+        keys_fd = _open_dir(directory)
+        key_fd = os.open(account.pw_name,
+                         os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=keys_fd)
+        text = os.read(key_fd, MAX_SSH_KEY_CHARS * MAX_CLI_KEYS + 4096).decode(
+            "ascii", "strict")
         tokens = text.strip().split()
         for index, token in enumerate(tokens[:-1]):
             if token in SSH_KEY_TYPES:
@@ -417,10 +463,8 @@ def authorized_key_fingerprint(account: pwd.struct_passwd) -> str:
     finally:
         if key_fd is not None:
             os.close(key_fd)
-        if ssh_fd is not None:
-            os.close(ssh_fd)
-        if home_fd is not None:
-            os.close(home_fd)
+        if keys_fd is not None:
+            os.close(keys_fd)
     return ""
 
 
@@ -439,7 +483,7 @@ class System:
     # The machine's own name, and where it is kept.
     hostname: Callable[[], str] = socket.gethostname
     set_hostname: Callable[[str], bool] = set_hostname_now
-    install_ssh_key: Callable[[pwd.struct_passwd, str], tuple[bool, str]] = install_authorized_key
+    install_ssh_key: Callable[[pwd.struct_passwd, Any], tuple[bool, str]] = install_authorized_key
     ssh_key_fingerprint: Callable[[pwd.struct_passwd], str] = authorized_key_fingerprint
     hosts_path: Path = HOSTS_FILE
     cloud_cfg_dir: Path = CLOUD_CFG_DIR
@@ -478,15 +522,19 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
             item["login"] = login
         if state in UPGRADE_STATES:
             item.update(_version_request(entry))
-        if state in SIGN_IN_STATES and "ssh_public_key" in entry:
+        if state in (*SIGN_IN_STATES, "releasing") and "ssh_public_keys" in entry:
+            keys = normalize_ssh_public_keys(entry.get("ssh_public_keys"))
+            if keys is not None:
+                item["ssh_public_keys"] = keys
+        elif state in (*SIGN_IN_STATES, "releasing") and "ssh_public_key" in entry:
             key = normalize_ssh_public_key(entry.get("ssh_public_key"))
             if key is not None:
                 item["ssh_public_key"] = key
-        elif state == "releasing":
-            # Revoke the login even if the wipe itself fails and has to retry.
-            # This does not depend on a new server field, so a newer agent also
-            # closes SSH while rolling back against an older server.
-            item["ssh_public_key"] = ""
+        elif state in ("free", "claiming", "releasing"):
+            # A newly created Linux user must never inherit a managed key file
+            # left by an interrupted older wipe. Releasing also revokes access
+            # before a wipe that may fail and retry.
+            item["ssh_public_keys"] = []
         # A read of its usage asked for from a page: a moment, or nothing.
         wanted = entry.get("quota_wanted_at")
         if (state in SIGN_IN_STATES and isinstance(wanted, (int, float))
@@ -777,59 +825,17 @@ def converge_name(name: str, cfg: MachineConfig, system: System) -> bool:
     return renamed
 
 
-def _systemctl(account: pwd.struct_passwd, system: System, *args: str) -> Optional[int]:
-    """`systemctl --user` as the slot's own user, in its own environment."""
-    code, _ = system.spawn(["systemctl", "--user", *args], input_text="", limit=4096,
-                           timeout=SYSTEMCTL_TIMEOUT_S, user=account.pw_uid,
-                           group=account.pw_gid, extra_groups=[],
-                           env=slot_env(account), cwd="/")
-    return code
-
-
-def _follow_the_name(account: pwd.struct_passwd, system: System) -> bool:
-    """One slot, after a rename: its manager re-reads its units — Remote
-    Control's `--name %H` is fixed when a unit loads — and a Remote Control
-    already running restarts, so claude.ai/code shows the machine's new name.
-    One that is not running is left stopped; it starts under the new name.
-    True when nothing more is owed."""
-    if _systemctl(account, system, "daemon-reload") != 0:
-        log.warning("%s: could not reload its units; tried again next run", account.pw_name)
-        return False
-    running = _systemctl(account, system, "is-active", "--quiet", RC_UNIT)
-    if running == 0:
-        if _systemctl(account, system, "restart", RC_UNIT) != 0:
-            log.warning("%s: Remote Control did not restart; tried again next run",
-                        account.pw_name)
-            return False
-        log.info("%s: Remote Control restarted under the machine's new name", account.pw_name)
-    # Not running starts under the new name by itself; not known is asked again.
-    return running is not None
-
-
 def _take_name(desired: Mapping[str, Any], cfg: MachineConfig, state: Mapping[str, Any],
                system: System) -> dict[str, Any]:
-    """Answer to the name the server gives, and have every slot's Remote
-    Control follow it. Returns the state, carrying a restart still owed, so a
-    Remote Control that did not restart this run is tried again the next."""
-    owed = bool(state.get(RC_OWED_KEY))
-    rest = {k: v for k, v in state.items() if k != RC_OWED_KEY}
-    still = {**rest, RC_OWED_KEY: True}
+    """Answer to the name the server gives and drop obsolete RC retry state."""
+    rest = {k: v for k, v in state.items() if k != "remote_control_owes_the_name"}
     name = wanted_hostname(desired)
-    renamed = False
     if name is not None:
         try:
-            renamed = converge_name(name, cfg, system)
+            converge_name(name, cfg, system)
         except OSError as exc:
             log.error("could not rename this machine (%s)", exc.__class__.__name__)
-    if name is None or not (renamed or owed) or system.hostname() != name:
-        return still if owed else rest
-    followed = True
-    for user in [u for u in state.get("slots") or [] if isinstance(u, str)]:
-        account = system.lookup(user)
-        if account is None or not is_slot_account(account, system.groups_of(account)):
-            continue
-        followed = _follow_the_name(account, system) and followed
-    return rest if followed else still
+    return rest
 
 
 # -- acting ----------------------------------------------------------------------
@@ -921,12 +927,17 @@ def act_on_slots(slots: list[dict[str, Any]], state: Mapping[str, Any],
 def converge_ssh_access(slots: list[dict[str, Any]], system: System) -> None:
     """Apply holder keys after lifecycle actions, every run and idempotently."""
     for slot in slots:
-        if slot["state"] not in (*SIGN_IN_STATES, "releasing") or "ssh_public_key" not in slot:
+        keys: Any
+        if "ssh_public_keys" in slot:
+            keys = slot["ssh_public_keys"]
+        elif "ssh_public_key" in slot:
+            keys = slot["ssh_public_key"]
+        else:
             continue
         account = system.lookup(slot["unix_user"])
         if account is None or not is_slot_account(account, system.groups_of(account)):
             continue
-        ok, why = system.install_ssh_key(account, slot["ssh_public_key"])
+        ok, why = system.install_ssh_key(account, keys)
         if not ok:
             log.error("%s: %s", account.pw_name, why)
 
@@ -977,7 +988,10 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     # its holder's name.
     state = _take_name(desired, cfg, state, system)
     wanted = wanted_slots(desired)
+    converge_ssh_access(wanted, system)
     new_state = act_on_slots(wanted, state, cfg, system)
+    # A claiming account did not exist for the first pass. Clear any managed
+    # key file left by an interrupted old release as soon as it is created.
     converge_ssh_access(wanted, system)
     # The version this machine's slots should run, checked the way the owner
     # agent checks its own before it reaches an installer. Empty: leave them be.
@@ -1108,7 +1122,12 @@ def main(argv: Optional[Sequence[str]] = None, system: Optional[System] = None) 
         print("error: the machine agent runs as root: it creates and removes slot users",
               file=sys.stderr)
         return 2
-    system = system or System()
+    if system is None:
+        system = System(
+            install_ssh_key=lambda account, keys: install_authorized_key(
+                account, keys, cfg.authorized_keys_dir),
+            ssh_key_fingerprint=lambda account: authorized_key_fingerprint(
+                account, cfg.authorized_keys_dir))
     if args.print_only:
         print(json.dumps(machine_payload(cfg, core.read_state(cfg.state_path), system),
                          indent=2, sort_keys=True))

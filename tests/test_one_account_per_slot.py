@@ -231,19 +231,19 @@ def test_the_guide_says_one_account_per_slot_and_what_to_do_instead():
     guide = customer_docs.page_for("/docs/guide")(Config())
     assert "<h2>One Claude account per slot</h2>" in guide
     assert "To use two accounts at once, hold two slots." in guide
-    assert "each account sees only its own machine" in guide
+    assert "Each local CC Fleet profile is bound to exactly one slot." in guide
 
 
 @pytest.mark.parametrize("path", ["/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms"])
 def test_no_document_offers_switching(path):
     page = customer_docs.page_for(path)(Config())
     for gone in ("Switch accounts", "Add another account", "Use this one",
-                 "Up to three", "ccfleet-connect --add", "Claude accounts"):
+                 "Up to three", "ccfleet-connect --add"):
         assert gone not in page, (path, gone)
 
 
-def test_the_token_page_does_not_suggest_several_accounts_on_one_computer():
-    page = usersite.token_page({"id": "m1-a"}, "sk-ant-oat01-x")
+def test_the_pairing_page_does_not_suggest_several_accounts_on_one_computer():
+    page = usersite.cli_pairing_page({"id": "m1-a"}, "ccf_pair_x")
     assert "--add" not in page and "--use" not in page
 
 

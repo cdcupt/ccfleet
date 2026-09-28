@@ -7,9 +7,7 @@ Commands marked *node* run as the owner on the node; *server* runs where
 ## Naming machines and slots
 
 One machine is one slot, and one name per machine, used everywhere: its node
-id, its slot's id, its hostname, and so the name Remote Control shows in the
-claude.ai/code machine picker, which shows a machine by its hostname. Named by
-role:
+id, its slot's id and its hostname. Named by role:
 
 - `<operator>-N` for the operator's own machines, owner nodes and shared
   machines kept for their own account alike: `erik-1`, `erik-2`;
@@ -18,14 +16,13 @@ role:
 A shared machine's one slot takes the machine's name (`pool-1` on `pool-1`),
 and its Linux user is `slot01`. When somebody claims it, the slot gets a
 neutral name, `slot-4821` (random digits nobody answers to yet), never anything
-from their address: the hostname is what claude.ai shows and Anthropic receives
+from their address: Claude Code can report the hostname to Anthropic
 (Erik, 2026-09-24). The holder renames it on their page, and
 `ccfleetd slot name <slot> [<name>]` does it for them (no name: a fresh neutral
 one). A handle set with `ccfleetd account handle <email> <handle>`, only at the
 person's request, names their slots `<handle>-<n>` instead (`alice-1`, then
-`alice-2`). The machine takes the name as its hostname on its next run, so
-claude.ai/code shows it, and Remote Control restarts under it; the console marks the machine "hostname
-pending" until it has. When the wipe that frees the slot completes, the name
+`alice-2`). The machine takes the name as its hostname on its next run; the
+console marks the machine "hostname pending" until it has. When the wipe that frees the slot completes, the name
 goes and the slot is called by its id again.
 
 Set the hostname when the machine is added, the way step 4 of
@@ -48,12 +45,12 @@ moves onto these with [Rename a machine](#rename-a-machine), held slots included
 
 A shared machine carries one slot: its own Linux user with its own Claude
 sign-in, under a name its holder chooses. *root* here means root on the new
-machine; *laptop* is wherever your SSH key lives.
+machine; *laptop* is wherever your operator SSH key lives.
 
 **Pick the box.** A KVM VPS running Debian or Ubuntu with at least 2 GiB of RAM.
 LXC and OpenVZ containers are unsuitable: every slot needs its own systemd user
 manager. Size it from what a slot really uses (measured 2026-09-23 on a
-signed-in slot with Remote Control on): about 420 MiB idle, about 665 MiB while
+signed-in slot): about 420 MiB idle, about 665 MiB while
 a session runs, and about 225 MB of disk for Claude Code; the OS and the machine
 agent take about 400 MiB. So a 2 GiB box carries its one slot with room to
 spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.
@@ -85,16 +82,23 @@ spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.
    machine's slots are meant to follow. Slots start on `opus`, which is the
    newest Opus only on a Claude Code that knows it.
 7. *server*: `ccfleetd slot add <machine> --machine <machine> --unix-user slot01`.
-   Its capacity stays 1: a second slot is refused, because claude.ai/code shows
-   a machine by its hostname and two holders would share one name there. Do not
+   Its capacity stays 1: a second slot is refused because the machine has one
+   hostname and one advertised access endpoint. Do not
    create the Linux user yourself: the machine makes it when somebody claims the
    slot and wipes it when they give it back.
 8. *root*:
    `curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh | bash -s -- --server <fleet url> --node <machine> --token <token>`.
-   This also installs `git`, `gh` and `rsync`, and validates an sshd match block
-   that disables agent, port and X11 forwarding, tunnels and user rc files for
-   the `ccfleet-slots` group before reloading SSH.
-9. *server*: within a couple of minutes `ccfleetd slot list --machine <machine>`
+   This also installs `git`, `gh`, `rsync` and the forced CC Fleet entrypoint,
+   creates the root-controlled `/etc/ccfleet/authorized_keys` directory, and
+   validates an sshd match block that forces that entrypoint and disables
+   agent, port and X11 forwarding, tunnels and user rc files for the
+   `ccfleet-slots` group before reloading SSH.
+9. *root*: copy `/etc/ssh/ssh_host_ed25519_key.pub` to a root-owned file on the
+   BWH server over an authenticated operator channel. *server*: configure the
+   endpoint that only BWH uses:
+   `ccfleetd node access <machine> --host <address-reachable-from-bwh> --port 22 --host-key-file <copied-public-host-key>`.
+   Do not put the node address on the customer page.
+10. *server*: within a couple of minutes `ccfleetd slot list --machine <machine>`
    shows its slot `free` and `on machine` `no`: the machine itself has
    confirmed it is empty, which is what makes it claimable.
 
@@ -104,17 +108,20 @@ Prove the machine is closed before anyone is given a slot on it:
   `Permission denied (publickey)`.
 - *root*: `sshd -T` reports `pubkeyauthentication yes` and `passwordauthentication no`.
 - *root*: `sshd -T -C user=slot01,host=localhost,addr=127.0.0.1` (after the first
-  slot has been provisioned) reports `allowagentforwarding no`,
+  slot has been provisioned) reports the forced `slot-entry.sh`, the
+  root-controlled `authorizedkeysfile`, `allowagentforwarding no`,
   `allowtcpforwarding no`, `x11forwarding no`, `permittunnel no` and
   `permituserrc no`.
 - *root*: `ufw status` reports `Status: active`, and `systemctl is-active ccfleet-machine.timer` says `active`.
 
-Slot holders are not given SSH access. Their supported paths are Remote Control
-from claude.ai/code or an official Claude app, and local Claude Code through an
-Anthropic device token created on `/account`. The machine agent continues to
-receive an empty legacy SSH-key field during this rollout so a key from the
-short-lived holder-SSH experiment is removed. Verify a slot has no
-`~/.ssh/authorized_keys` after the next machine-agent cycle.
+Slot holders are not given an SSH workflow or the node address. They install
+the `ccfleet` command, pair a device from `/account`, and run `ccfleet`. Under
+the surface the client opens SSH through the BWH WebSocket broker. Every key
+has a forced command and forwarding disabled. After a test pairing, inspect
+`/etc/ccfleet/authorized_keys/slot01`: it must name `slot-entry.sh` and the
+no-forwarding options. The slot's own `~/.ssh/authorized_keys` is not an sshd
+key source. Remove the device from the page and confirm the managed file is
+removed on the next machine-agent cycle.
 
 These steps are deliberately mechanical. An operator can put exactly them in a
 private script that takes an address and a name, reads the root password once
@@ -137,15 +144,16 @@ so `pam_systemd.so` is absent and `XDG_RUNTIME_DIR` is never set.
 
 The owner needs to sign in again; nobody else can do it for them.
 
-1. *node*: log in over SSH (you land in the `cc` session automatically), then `claude`, `/login`.
-2. If the CLI says the login expired, the same command renews it.
-3. *node*: `systemctl --user start ccfleet-agent.service`; the alert closes on
-   the next heartbeat.
+1. The holder opens `/account`, presses **Sign in again**, completes Anthropic's
+   browser flow and pastes the code back into the page.
+2. The machine applies the result to the slot; nobody else handles the
+   credential.
+3. The alert closes on the next heartbeat.
 
 ## `token_stale`
 
-Usually the node was simply idle for a day (Claude Code refreshes on use). Open
-a session; if the warning persists after use, treat it as `token_expired`.
+Usually the slot was simply idle for a day (Claude Code refreshes on use). Run
+`ccfleet`; if the warning persists after use, treat it as `token_expired`.
 
 ## `no_heartbeat`
 
@@ -203,23 +211,15 @@ it, check the VPS console for a rebuild or migration.
 rotate automatically (`CCFLEET_BACKUP_KEEP`); `~/.claude/debug` and
 `~/.claude/cache` are safe to delete.
 
-## `remote_control_down`
+## `remote_control_down` (legacy owner nodes only)
 
 *node*: `systemctl --user restart claude-remote-control.service`, then
 `tmux -L ccfleet-rc attach -t remote-control` to read the reason. Remote Control needs a
 valid login; if it complains about eligibility, do the re-login runbook. The
 very first start must be interactive to accept the one-time prompt.
 
-On a shared machine's slot, as root, with `u` its Linux user:
-`sudo -u $u XDG_RUNTIME_DIR=/run/user/$(id -u $u) systemctl --user show -p ActiveState,SubState claude-remote-control.service`.
-`activating` with `auto-restart` is a crash loop, not a start in progress. While
-it is failing, run it once in the foreground to read why:
-`sudo -iu $u script -qc 'claude remote-control' /dev/null`, then Ctrl-C. If it
-says *Remote Control requires feature-flag evaluation, which is disabled because
-DISABLE_TELEMETRY is set*, take `DISABLE_TELEMETRY` and
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (which includes it) out of the `env`
-block of the slot's `~/.claude/settings.json` and restart the unit. Never set
-either on a slot.
+Hosted customer slots disable and stop this legacy unit. Do not turn it back on;
+the supported customer path is the local `ccfleet` terminal.
 
 ## `slot_wipe_failed:<user>`
 
@@ -307,8 +307,9 @@ slot is their own Linux account, so ccfleet detects this; it cannot prevent it.
 
 It is theirs to do: *Change account* on their page, on a slot in use. The new
 account signs in to a scratch directory while the old one keeps working, and
-replaces it only once that sign-in has finished; the files stay. Remote Control
-restarts on the new account, which ends any session open in it.
+replaces it only once that sign-in has finished; the files and paired CC Fleet
+devices stay. At that point the persistent terminal is restarted so no running
+Claude process keeps the previous account; the holder runs `ccfleet` again.
 
 - **Once a week.** The next change can come seven days after one that moved the
   account; signing in with the account the slot already has does not count.
@@ -362,8 +363,8 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
    On a shared machine, stop here: steps 4 and 5 happen by themselves. The
    machine agent answers to its slot's name (its holder's while held, its own
    id while free): on its next run it rewrites `/etc/hosts`, runs `hostnamectl`,
-   writes the cloud-init drop-in, and restarts the slot's Remote Control if it
-   is running. The console says "hostname pending" until it has. An owner's
+   writes the cloud-init drop-in, and restarts any legacy Remote Control service
+   if it is running. The console says "hostname pending" until it has. An owner's
    node is never renamed for you; go on with step 4 there.
 4. *root*: the host. Put the new name in `/etc/hosts` before the hostname
    changes, so `sudo` never runs on a name it cannot resolve: the line
@@ -371,7 +372,7 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
    address's line instead; replace it there). Then `hostnamectl set-hostname <new>`,
    and keep cloud-init from putting the provider's name back at the next boot:
    `printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' > /etc/cloud/cloud.cfg.d/99-ccfleet.cfg`.
-5. Remote Control takes its name from the hostname (`--name %H`), which systemd
+5. On a legacy owner node, Remote Control takes its name from the hostname (`--name %H`), which systemd
    fills in when it loads the unit. So, as each user running it (the owner on
    an owner's node, the signed-in slot on a shared machine):
    `systemctl --user daemon-reload && systemctl --user restart claude-remote-control`,
@@ -383,7 +384,7 @@ restarts nothing on one), so the gap costs a report or two, not a slot.
 6. *server*: `ccfleetd node list` shows the new id with a fresh `last seen`, and
    `ccfleetd slot list --machine <new>` the renamed slots in their old states.
 
-## Count an owner's own node as their slot
+## Count an owner's own node as their slot (legacy)
 
 An owner's own node can count as a slot they hold, so everything a person
 uses is one list on their page and in the console: one account, one slot.
@@ -395,8 +396,9 @@ never hands it out, provisions it or wipes it.
 2. *server*: `ccfleetd node hold <node> <email>`. Their Linux login on it is
    taken as the node's owner; name another with `--unix-user <login>`.
 3. Their page shows the node as their slot, from the node's own heartbeat:
-   signed in or not, the plan, Remote Control, usage. Signing in again and a
-   device token run the node's own sign-in, for them alone. There is no
+   signed in or not, the plan and usage. Signing in again runs the node's own
+   sign-in, for them alone. CLI pairing is only offered for hosted machine
+   slots. There is no
    "Give it back": that would mean wiping somebody's own machine.
 
 Let go of the record with `ccfleetd node hold <node> --none`; the node, its

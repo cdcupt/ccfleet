@@ -5,9 +5,11 @@ import re
 import threading
 import time
 import urllib.parse
+from dataclasses import replace
 
 import pytest
 
+from ccfleetd import cli_access, slots
 from ccfleetd.api import Context, build_server
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -40,6 +42,66 @@ def call(srv, method, path, body=None, headers=None):
 
 def basic(token):
     return {"Authorization": "Basic " + base64.b64encode(f"admin:{token}".encode()).decode()}
+
+
+def _ssh_key(byte=1):
+    kind = b"ssh-ed25519"
+    blob = len(kind).to_bytes(4, "big") + kind + (32).to_bytes(4, "big") + bytes([byte]) * 32
+    return "ssh-ed25519 " + base64.b64encode(blob).decode()
+
+
+def _active_cli_slot(store):
+    store.add_node("cli-1", "op", now=1.0)
+    store.set_node_access("cli-1", "192.0.2.44", 2222, _ssh_key(9))
+    store.add_account("cli-a", "sub-cli", "cli@example.com", slot_quota=1, now=1.0)
+    store.add_slot("cli-1", "cli-1", "slot01", now=1.0)
+    store.apply_slot_report("cli-1", [{"unix_user": "slot01", "present": False}], now=2.0)
+    slot = store.claim_slot("cli-a", now=3.0)
+    store.move_slot(slot["id"], slots.CLAIMED)
+    store.move_slot(slot["id"], slots.ACTIVE)
+    return store.get_slot(slot["id"])
+
+
+def test_cli_registration_returns_only_the_fixed_client_configuration(cfg):
+    configured = replace(cfg, public_url="https://fleet.example.com")
+    store = Store(":memory:", max_slots_per_machine=8)
+    srv = build_server(Context(store, configured, Monitor(store, configured, LogNotifier())),
+                       host="127.0.0.1", port=0)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        slot = _active_cli_slot(store)
+        code = store.request_cli_pairing(slot["id"], "cli-a", now=time.time())
+        status, body, _ = call(
+            srv, "POST", "/api/cli/register",
+            {"public_key": _ssh_key(), "device_name": "laptop"},
+            {"Authorization": f"Bearer {code}", "Content-Type": "application/json"})
+        answer = json.loads(body)
+        assert status == 201
+        assert answer["endpoint"] == "wss://fleet.example.com/api/cli/connect"
+        assert answer["device_token"].startswith(cli_access.DEVICE_PREFIX)
+        assert answer["host_key"] == _ssh_key(9) and answer["user"] == "slot01"
+        assert "192.0.2.44" not in body.decode(), "the private node endpoint stays on BWH"
+        assert call(srv, "POST", "/api/cli/register",
+                    {"public_key": _ssh_key(2), "device_name": "replay"},
+                    {"Authorization": f"Bearer {code}"})[0] == 400
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=5)
+        store.close()
+
+
+def test_an_unconfigured_public_url_does_not_consume_the_pairing_code(server):
+    srv, store = server
+    slot = _active_cli_slot(store)
+    code = store.request_cli_pairing(slot["id"], "cli-a", now=time.time())
+    status, _, _ = call(
+        srv, "POST", "/api/cli/register",
+        {"public_key": _ssh_key(), "device_name": "laptop"},
+        {"Authorization": f"Bearer {code}", "Content-Type": "application/json"})
+    assert status == 503
+    assert store.register_cli_device(code, _ssh_key(), "laptop", now=time.time())
 
 
 def test_healthz_and_unknown_paths(server):
@@ -135,7 +197,7 @@ def test_a_machines_heartbeat_moves_its_slots_and_the_reply_says_so(server):
     assert store.get_slot("s1")["state"] == slots.CLAIMED
     assert store.get_slot("s2")["state"] == slots.FREE
     assert reply["desired"]["slots"] == [{"unix_user": "slot01", "state": "claimed",
-                                           "ssh_public_key": ""},
+                                           "ssh_public_key": "", "ssh_public_keys": []},
                                           {"unix_user": "slot02", "state": "free"}]
     # And nothing about an owner login was raised against a machine with none.
     assert reply["open_alerts"] == []

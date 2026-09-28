@@ -135,6 +135,7 @@ def test_a_shared_machine_is_told_what_each_slot_should_be():
     ]
     assert desired_state(_node(), slots=rows)["slots"] == [
         {"unix_user": "slot01", "state": "claiming", "claimed_at": 12.5},
-        {"unix_user": "slot02", "state": "releasing"},
+        {"unix_user": "slot02", "state": "releasing",
+         "ssh_public_key": "", "ssh_public_keys": []},
         {"unix_user": "slot03", "state": "free"},
     ]

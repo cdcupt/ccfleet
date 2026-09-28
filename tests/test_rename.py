@@ -372,7 +372,8 @@ def test_a_sign_in_or_request_left_under_the_new_name_is_dropped_not_adopted(st)
 NEITHER = {("accounts", "id"), ("payments", "id"), ("payments", "account_id"),
            ("sessions", "account_id"), ("heartbeats", "id"), ("alerts", "id"),
            ("outages", "id"), ("outage_emails", "outage_id"),
-           ("outage_emails", "account_id")}
+           ("outage_emails", "account_id"), ("cli_pairings", "account_id"),
+           ("cli_devices", "id"), ("cli_devices", "account_id")}
 
 
 def test_every_id_column_in_the_schema_is_known_to_the_renames(st):

@@ -378,14 +378,15 @@ def test_the_holder_reads_why_a_sign_in_was_not_kept_and_can_start_again(site):
     assert ">Sign in again<" in page and "Cancel" not in page
 
 
-def test_a_token_that_failed_says_so_and_offers_another(site):
+def test_a_legacy_token_failure_is_explained_without_offering_the_removed_flow(site):
     store, sign_in, _ = site
     machine(store)
     erik = sign_in(quota=1)
     slot = in_use(store, erik)
     refuse(store, slot, kind="token")
     page = erik.page()
-    assert "The device token was not made:" in page and ">Set up this computer<" in page
+    assert "The previous local setup did not finish:" in page
+    assert ">Set up this computer<" not in page and ">Sign in again<" in page
 
 
 def test_the_reason_is_escaped(site):

@@ -1,6 +1,6 @@
 """The holder's page under slot model v2: names, and an owner's own node.
 
-A slot is shown by the name it answers to in claude.ai/code — its holder's —
+A slot is shown by the name its holder chose,
 and an owner's own node, counted as their slot, sits in the same list, built
 from the node's own heartbeat. Nothing on that card can wipe it.
 """
@@ -41,7 +41,7 @@ def test_a_claimed_slot_is_shown_by_its_holders_name(site):  # noqa: F811
     erik = sign_in(quota=1)
     assert erik.press("/account/claim").status == 303
     title = card(erik.page(), "pool-1")
-    assert "<h2>erik-1 " in title, "the name claude.ai shows the holder"
+    assert "<h2>erik-1 " in title, "the name every paired client shows the holder"
     shown = re.sub(r"<[^>]+>", " ", title[title.index(">") + 1:])   # past the card's own tag
     assert "pool-1" not in shown, "and nothing of the machine it is on (Erik, 2026-09-24)"
 
@@ -89,9 +89,9 @@ def test_an_owners_node_is_their_slot_on_their_page(site):  # noqa: F811
     body = whole_card(page, "erik-1")
     assert "<h2>erik-1 " in body and "In use" in body
     assert "your own machine" in body
-    assert "Max plan" in body and "Remote Control is on" in body
+    assert "Max plan" in body and "Remote Control" not in body
     assert "This week" in body, "the account's usage, from the node's own report"
-    assert "Sign in again" in body and "Set up this computer" in body
+    assert "Sign in again" in body and "Connect this computer" not in body
 
 
 def test_an_owners_node_has_no_give_it_back(site):  # noqa: F811
@@ -112,7 +112,7 @@ def test_an_owners_node_not_heard_from_claims_nothing(site):  # noqa: F811
     erik = held_own_node(store, sign_in)
     body = whole_card(erik.page(), "erik-1")
     assert "not heard from yet" in body and "Not signed in" in body
-    assert "Signed in" not in body and "Remote Control is on" not in body
+    assert "Signed in" not in body and "Remote Control" not in body
 
 
 def test_an_owners_node_that_is_signed_out_says_so(site):  # noqa: F811
@@ -121,7 +121,7 @@ def test_an_owners_node_that_is_signed_out_says_so(site):  # noqa: F811
     owner_said(store, logged_in=False)
     body = whole_card(erik.page(), "erik-1")
     assert "Not signed in" in body and "Sign in to Claude" in body
-    assert "Remote Control is on" not in body
+    assert "Remote Control" not in body
 
 
 def test_signing_in_from_the_page_runs_the_nodes_own_sign_in(site):  # noqa: F811
@@ -143,7 +143,7 @@ def test_somebody_else_cannot_sign_in_on_an_owners_node(site):  # noqa: F811
     assert store.get_login("erik-1") is None
 
 
-def test_a_token_handed_over_for_an_owners_node_is_remembered_on_its_card(site):  # noqa: F811
+def test_a_legacy_owner_device_token_date_is_not_promoted_on_the_customer_page(site):  # noqa: F811
     store, sign_in, _ = site
     erik = held_own_node(store, sign_in)
     owner_said(store, logged_in=True)
@@ -151,7 +151,8 @@ def test_a_token_handed_over_for_an_owners_node_is_remembered_on_its_card(site):
         store._conn.execute("UPDATE nodes SET device_token_at = ? WHERE id = 'erik-1'",
                             (time.time() - 3600,))
         store._conn.commit()
-    assert "last set up" in whole_card(erik.page(), "erik-1")
+    body = whole_card(erik.page(), "erik-1")
+    assert "last set up" not in body and "device token" not in body
 
 
 def test_an_owners_node_signed_in_elsewhere_too_says_so_on_its_card(site):  # noqa: F811
@@ -181,23 +182,23 @@ def test_another_nodes_alert_is_not_this_owner_slots(site):  # noqa: F811
 # -- what the page says it keeps ---------------------------------------------------------
 
 def test_the_privacy_page_says_a_slots_name_is_never_from_your_address(site):  # noqa: F811
-    """Erik, 2026-09-24: the name is what claude.ai shows, so Anthropic sees it."""
+    """The slot hostname is visible to Anthropic but is not derived from email."""
     store, sign_in, _ = site
     erik = sign_in()
     page = erik.call("GET", "/privacy").body
     assert "never anything from your address" in page and "slot-4821" in page
-    assert "Anthropic sees it too" in page
+    assert "Anthropic can see it too" in page
     assert "named after you" not in page and "before the @" not in page
 
 
-def test_the_docs_say_a_slot_is_a_whole_machine_under_a_name_you_choose():
+def test_the_docs_say_a_slot_is_an_isolated_linux_account_under_a_name_you_choose():
     from ccfleetd import customer_docs
     from ccfleetd.config import Config
     for path in ("/docs", "/docs/guide", "/docs/how-it-works"):
         page = customer_docs.page_for(path)(Config())
-        assert "a whole machine" in page, path
+        assert "Linux account" in page, path
         assert "named after you" not in page and "before the @" not in page, path
     assert "pick anything but your email address" in customer_docs.page_for(
         "/docs/guide")(Config())
-    assert "Several slots share a machine" not in customer_docs.page_for(
-        "/docs/how-it-works")(Config()), "one machine is one slot now"
+    assert "Other slots on the same machine" in customer_docs.page_for(
+        "/docs/how-it-works")(Config())

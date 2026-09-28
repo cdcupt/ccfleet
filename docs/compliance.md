@@ -1,78 +1,89 @@
 # Compliance notes
 
-ccfleet is built only from arrangements Anthropic describes in its own
-documentation. This page quotes the passages the design rests on (fetched
-2026-09-16) so you can re-check them when the documents change.
+Last re-verified against Anthropic's published documentation: 2026-09-28.
 
-## What ccfleet relies on
+This is an engineering constraint record, not legal advice. Re-check the linked
+terms before a production launch and obtain the commercial agreement or written
+approval required for the actual business.
 
-From [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance),
-"Authentication and credential use":
+## Hosted Claude Code
 
-> OAuth authentication is intended exclusively for purchasers of Claude Free,
-> Pro, Max, Team, and Enterprise subscription plans and is designed to support
-> ordinary use of Claude Code and other native Anthropic applications.
+Anthropic's current [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
+page has a specific section for offering Claude Code inside products and hosted
+agent infrastructure. Its conditions include:
 
-> Nor does it prevent an end user from signing in to the unmodified Claude Code
-> binary with their own Claude subscription, including where a platform hosts
-> Claude Code …
+- use the unmodified Claude Code binary as Anthropic publishes it;
+- do not remove, disable or restrict the authentication methods built into it;
+- do not pay for, resell or intermediate Claude usage for end users;
+- require every end user to authenticate with their own Claude subscription,
+  Anthropic API key or supported provider credential;
+- do not collect, store or intermediate Claude.ai credentials or session
+  tokens; subscription sign-in must complete through Anthropic's flow.
 
-That is the node: the unmodified binary, the owner's own subscription, the
-owner completing sign-in through Anthropic's flow.
+The same page states that an end user may sign in to the unmodified Claude Code
+binary with their own subscription when a platform hosts Claude Code under
+those conditions. It also says that preinstalling or running Claude Code in a
+product or service requires Anthropic's Commercial Terms unless otherwise
+agreed.
 
-From [Remote Control](https://code.claude.com/docs/en/remote-control): available
-on Pro, Max, Team and Enterprise; the session keeps running on the machine
-where it was started and is continued from claude.ai/code or the Claude app.
-That is how an owner drives their node from a phone or a browser.
+## How CC Fleet maps to those constraints
 
-## What ccfleet avoids
+- A slot installs and runs the original Claude Code distribution.
+- The customer completes Anthropic's own browser sign-in. The resulting
+  credential is written by Claude Code in that customer's slot.
+- CC Fleet does not return that credential to BWH, the local `ccfleet` command,
+  an operator page or another slot.
+- One holder's slot keeps one holder-provided account. There is no account pool,
+  automatic selection, credential fallback or shared inference endpoint.
+- The customer's subscription relationship and Claude usage remain directly
+  between that customer and Anthropic. CC Fleet charges only for its hosted
+  Linux slot and operation.
+- The local command transports a terminal to the slot. It does not make model
+  requests, imitate Anthropic authentication or proxy Claude HTTPS traffic.
+- Claude Code on the slot connects to Anthropic with the credential the end
+  user supplied through Anthropic's flow.
 
-Same legal page:
+## Important distinction: terminal broker, not model gateway
 
-> Anthropic does not permit third-party developers to offer Claude.ai login
-> into their own applications, or to route requests through Free, Pro, or Max
-> plan credentials on behalf of their users. Moreover, developers may not
-> collect, store, or intermediate Claude.ai credentials or session tokens —
-> sign-in to a Claude account must complete through Anthropic's own flow.
+The BWH service is in the network path from the user's terminal to the slot,
+but not in the Claude-to-Anthropic path:
 
-> Anthropic reserves the right to take measures to enforce these restrictions
-> and may do so without prior notice.
+```text
+user ── WSS carrying SSH ── BWH ── SSH ── slot ── Claude HTTPS ── Anthropic
+```
 
-So ccfleet has no token store, no header or body rewriting, no account pool,
-no sharing. The agent parses the credentials file only to extract the token
-expiry and plan type; token values never leave the process, and its tests
-enforce that. The optional gateway below is a pass-through: it forwards the
-owner's own request, OAuth header included, and keeps nothing.
+The SSH layer is end-to-end between the user device and slot. BWH authenticates
+the CC Fleet device and relays opaque bytes to a fixed, operator-configured
+endpoint. It never receives the Claude OAuth token and does not inspect or
+rewrite Claude model requests.
 
-## The optional gateway
+The legacy `gateway/` experiment is not part of the CC Fleet customer product.
+Do not configure `ANTHROPIC_BASE_URL` for this flow.
 
-From [Other LLM gateways](https://code.claude.com/docs/en/llm-gateway):
+## Branding
 
-> `ANTHROPIC_BASE_URL` is the variable that points Claude Code at the gateway.
-> Setting only that variable, without a gateway credential, doesn't replace the
-> subscription. Requests still route through the gateway, but a saved claude.ai
-> login remains the active credential … Gateways that pass this traffic on to
-> Anthropic must forward the OAuth capability in `anthropic-beta`.
+Anthropic's page permits accurately stating in plain text that a product has
+Claude Code preinstalled or runs Claude Code, but restricts use of Anthropic or
+Claude names and logos as a product/company name or implied partnership. CC
+Fleet therefore uses its own name and mark and describes Claude Code only as
+the third-party software that runs in a slot. Public pages state that CC Fleet
+is independent and not endorsed by Anthropic.
 
-> While a gateway credential variable or `apiKeyHelper` is active, a
-> developer's claude.ai subscription isn't used.
+## Regions and policies
 
-Hence `gateway/Caddyfile.example` preserves the body and those headers, and authenticates with a
-private header rather than `ANTHROPIC_AUTH_TOKEN`. The
-[gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol)
-adds: forward `anthropic-version` and `anthropic-beta` unchanged, stream, keep
-SSE pings flowing, inspect without modifying.
+Customers remain responsible for Anthropic's terms, usage policy and supported
+region rules. Moving the slot's egress address does not change the user's legal
+location or eligibility. CC Fleet must not advertise itself as bypassing a
+regional or account restriction.
 
-## Regions
+## Launch gate
 
-[Supported countries and regions](https://www.anthropic.com/supported-countries)
-does not list mainland China, Hong Kong or Macau. Hosting a node elsewhere
-changes where requests leave from, not where the person is, and the login flow
-still runs in the owner's browser. ccfleet cannot make an unsupported-region
-user compliant; that decision is the user's.
+Before public commercial operation:
 
-## Disclaimer
-
-ccfleet is an independent open-source project, not affiliated with or endorsed
-by Anthropic. Terms change; re-read the pages above before relying on any of
-this, and treat community write-ups about "ban mechanisms" as unverified.
+1. confirm the deployment uses the unmodified Claude Code binary;
+2. confirm every user authenticates their own account through Anthropic;
+3. confirm BWH and the local client never receive Claude credential values;
+4. confirm pricing is for the hosted slot, not resold Claude usage;
+5. review the then-current Commercial Terms and hosted-product conditions;
+6. contact Anthropic sales when the intended arrangement needs written
+   confirmation.

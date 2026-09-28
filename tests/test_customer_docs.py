@@ -114,7 +114,7 @@ def test_the_plan_requirement_is_said_where_people_decide():
     pays, and the terms say it again."""
     overview = render("/docs")
     assert "Pro, Max, Team or Enterprise" in overview
-    assert "API keys don&#x27;t work" in overview
+    assert "API keys do not replace" in overview
     assert "ccfleet sells the machine, not Claude" in overview
     assert "does not provide access to Claude" in render("/docs/terms")
 
@@ -171,30 +171,27 @@ def test_the_guide_quotes_labels_the_user_site_really_shows():
     for label in ("Setting up", "Ready to sign in", "In use"):
         assert label in states and f">{label}</span>" in guide
     source = inspect.getsource(usersite)
-    for label in ("Claim a slot", "Sign in to Claude", "Send code", "Set up this computer",
-                  "Done with it", "Give this slot back", "Sign in again", "Back to Stable",
+    for label in ("Claim a slot", "Sign in to Claude", "Send code",
+                  "Connect this computer", "Connect another computer",
+                  "Give this slot back", "Sign in again", "Back to Stable",
                   "Change account"):
         assert f'"{label}"' in source, f"the user site has no button {label!r}"
         assert f">{label}</span>" in guide
 
 
-def test_the_connect_commands_the_pages_quote_are_ones_the_script_has():
-    """Like a button, a flag a page names has to exist: the script's own usage
-    lines say so. The script keeps one token, so no page tells anybody to keep
-    several and switch between them; the switch it has is to the computer's
-    own login, and both pages that hand out a token say how."""
+def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
+    """The public guide and pairing page describe the one supported CLI path."""
     from pathlib import Path
 
-    script = (Path(__file__).parents[1] / "laptop" / "ccfleet-connect.sh").read_text()
-    usage = [line for line in script.splitlines() if line.startswith("#   ccfleet-connect")]
+    root = Path(__file__).parents[1]
+    script = (root / "laptop" / "ccfleet").read_text()
     pages = {"guide": render("/docs/guide"),
-             "token page": usersite.token_page({"id": "s1"}, "sk-ant-oat01-" + "x" * 20)}
+             "pairing page": usersite.cli_pairing_page(
+                 {"id": "s1", "name": "slot-1"}, "ccf_pair_" + "x" * 40)}
     for where, page in pages.items():
-        for flag in re.findall(r"ccfleet-connect (--[a-z-]+)", page):
-            assert any(f"ccfleet-connect {flag}" in line for line in usage), (where, flag)
-        for gone in ("--add", "--use", "--list"):
-            assert f"ccfleet-connect {gone}" not in page, (where, gone)
-        assert "ccfleet-connect --off" in page and "ccfleet-connect --on" in page, where
+        assert "ccfleet login" in page and ">ccfleet<" in page, where
+        assert "login" in script and "attach" in script
+        assert "ANTHROPIC_BASE_URL" not in page and "CLAUDE_CODE_OAUTH_TOKEN" not in page
 
 
 def test_the_guide_names_the_line_a_slot_really_starts_with():
@@ -222,17 +219,17 @@ def test_how_it_works_says_what_slot_add_switches_off():
         assert f"'{key}'" in script, key
     page = render("/docs/how-it-works")
     assert "error reports, bug reports and feedback surveys are switched off" in page
-    # And no claim the slot cannot keep: telemetry stays on, for Remote Control.
+    # The page makes no claim that telemetry is disabled; it only names the
+    # controls slot-add actually sets.
     assert "'DISABLE_TELEMETRY'" not in script
-    assert "telemetry stays on, because Remote Control" in page
     switched_off = page.split("are switched off")[0].rsplit(":", 1)[-1]
     assert "telemetry" not in switched_off, "the list of what is off must not name it"
 
 
 def test_the_guide_says_what_the_usage_numbers_count():
     guide = render("/docs/guide")
-    assert "Claude Code on any computer, device tokens included" in guide
-    assert "work on your own computer is not in that number" in guide
+    assert "bars cover the whole Claude account" in guide
+    assert "token count covers what Claude Code used on this slot" in guide
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
@@ -351,23 +348,26 @@ def test_every_user_site_page_links_the_docs(one_site):
         assert target in body
 
 
-def test_the_device_token_window_is_the_one_the_code_keeps(monkeypatch):
-    assert "for at most 15 minutes, and never kept" in render("/docs/guide")
-    monkeypatch.setattr(customer_docs, "LOGIN_MAX_AGE_S", 20 * 60)
-    assert "for at most 20 minutes, and never kept" in render("/docs/guide")
+def test_the_pairing_window_is_the_one_the_code_keeps(monkeypatch):
+    from ccfleetd import cli_access
+
+    page = usersite.cli_pairing_page({"id": "s1", "name": "slot-1"},
+                                     "ccf_pair_" + "x" * 40)
+    assert "expires in 10 minutes" in page
+    monkeypatch.setattr(cli_access, "PAIRING_TTL_S", 20 * 60)
+    page = usersite.cli_pairing_page({"id": "s1", "name": "slot-1"},
+                                     "ccf_pair_" + "x" * 40)
+    assert "expires in 20 minutes" in page
 
 
 def test_the_update_line_fetches_what_the_installer_fetches():
-    """An older copy is replaced from the address, and to the path, that the
-    script itself installs from and to: the line cannot drift from it."""
+    """The pairing page quotes the repository's CLI installer."""
     from pathlib import Path
 
     root = Path(__file__).parents[1]
-    script = (root / "laptop" / "ccfleet-connect.sh").read_text()
-    url = re.search(r'^SELF_URL="([^"]+)"$', script, re.M).group(1)
-    assert 'local dest="$HOME/.local/bin/ccfleet-connect"' in script
-    line = f"curl -fsSL -o ~/.local/bin/ccfleet-connect \\\n  {url}"
-    for where, text in (("guide", render("/docs/guide")),
-                        ("README", (root / "README.md").read_text()),
-                        ("guidebook", (root / "docs" / "guidebook.html").read_text())):
-        assert line in text, where
+    installer = (root / "laptop" / "install.sh").read_text()
+    line = ("curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/"
+            "laptop/install.sh | bash")
+    assert "laptop/ccfleet" in installer
+    assert line in usersite.cli_pairing_page(
+        {"id": "s1", "name": "slot-1"}, "ccf_pair_" + "x" * 40)

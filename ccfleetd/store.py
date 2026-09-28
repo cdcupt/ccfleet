@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from . import claude_versions, names, payments, pricing
+from . import claude_versions, cli_access, names, payments, pricing
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -56,7 +56,13 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- When a device token was last handed over for this node. The time only;
     -- the credential itself lives in `logins` for the life of the request and
     -- nowhere else.
-    device_token_at REAL NOT NULL DEFAULT 0
+    device_token_at REAL NOT NULL DEFAULT 0,
+    -- The server-side hop used by the CLI byte broker. These are operator
+    -- supplied and never returned to a client; the client receives only the
+    -- slot's pinned SSH host key.
+    access_host TEXT NOT NULL DEFAULT '',
+    access_port INTEGER NOT NULL DEFAULT 22,
+    ssh_host_key TEXT NOT NULL DEFAULT ''
 );
 -- One in-flight sign-in per node. A row exists only while a login is being
 -- driven from the console; it is deleted when the login finishes, so an absent
@@ -180,6 +186,32 @@ CREATE TABLE IF NOT EXISTS slots (
 );
 CREATE INDEX IF NOT EXISTS ix_slots_state ON slots(state);
 CREATE INDEX IF NOT EXISTS ix_slots_held_by ON slots(held_by);
+-- A short-lived code copied from the signed-in page into `ccfleet login`.
+-- Only its hash is stored, and consuming it deletes it in the same transaction
+-- that creates the device.
+CREATE TABLE IF NOT EXISTS cli_pairings (
+    token_hash TEXT PRIMARY KEY,
+    slot_id TEXT NOT NULL REFERENCES slots(id),
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_cli_pairings_expires ON cli_pairings(expires_at);
+-- One local ccfleet installation. The token authorizes only the BWH byte
+-- broker; the public key independently authorizes the end-to-end SSH session
+-- on the slot. Neither is a Claude credential.
+CREATE TABLE IF NOT EXISTS cli_devices (
+    id TEXT PRIMARY KEY,
+    slot_id TEXT NOT NULL REFERENCES slots(id),
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    last_seen_at REAL NOT NULL DEFAULT 0,
+    revoked_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_cli_devices_slot ON cli_devices(slot_id, revoked_at);
 -- What somebody paid, as the operator wrote it down. A record, never an
 -- enforcer: nothing about slots or claiming reads this table (see
 -- ccfleetd/payments.py). A mistake is voided, not deleted, so the record
@@ -413,6 +445,9 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
         "capacity": row["capacity"],
         # The account this machine's free slots are kept for; None for anybody.
         "reserved_for": row["reserved_for"],
+        "access_host": row["access_host"],
+        "access_port": row["access_port"],
+        "ssh_host_key": row["ssh_host_key"],
     }
 
 
@@ -464,6 +499,9 @@ class Store:
                 # exactly as it does now.
                 "capacity": "INTEGER NOT NULL DEFAULT 1",
                 "tier": "TEXT NOT NULL DEFAULT 'dedicated'",
+                "access_host": "TEXT NOT NULL DEFAULT ''",
+                "access_port": "INTEGER NOT NULL DEFAULT 22",
+                "ssh_host_key": "TEXT NOT NULL DEFAULT ''",
             })
             # The account a shared machine is kept for, or NULL for anybody —
             # which every machine written before this column is.
@@ -965,6 +1003,38 @@ class Store:
 
     def set_rc_expected(self, node_id: str, expected: bool) -> None:
         self._update_node(node_id, "rc_expected", int(expected))
+
+    def set_node_access(self, node_id: str, host: str, port: int,
+                        host_key: str) -> None:
+        """Set the private broker destination and the SSH host key clients pin.
+
+        The destination is operator-owned configuration.  It is never accepted
+        from a browser or returned to one, which keeps the byte broker from
+        becoming a user-directed TCP proxy.
+        """
+        host = host.strip()
+        if (not host or len(host) > 253 or any(ch.isspace() for ch in host)
+                or any(ch in "/\\?#@" for ch in host)):
+            raise StoreError("access host must be one hostname or IP address")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise StoreError("access port must be from 1 to 65535")
+        normalized = cli_access.normalize_public_key(host_key)
+        if normalized is None:
+            raise StoreError("SSH host key must be one OpenSSH public key")
+        with self._write_txn() as conn:
+            changed = conn.execute(
+                "UPDATE nodes SET access_host = ?, access_port = ?, ssh_host_key = ? "
+                "WHERE id = ?", (host, port, normalized, node_id)).rowcount
+            if not changed:
+                raise StoreError(f"unknown node {node_id!r}")
+
+    def clear_node_access(self, node_id: str) -> None:
+        with self._write_txn() as conn:
+            changed = conn.execute(
+                "UPDATE nodes SET access_host = '', access_port = 22, ssh_host_key = '' "
+                "WHERE id = ?", (node_id,)).rowcount
+            if not changed:
+                raise StoreError(f"unknown node {node_id!r}")
 
     def _update_node(self, node_id: str, column: str, value: Any) -> None:
         if column not in {"token_hash", "pinned_version", "enabled", "rc_expected"}:
@@ -1874,13 +1944,16 @@ class Store:
             # this write transaction, so nothing can have changed it. A pin
             # would read as a safeguard while being unreachable, which is
             # worse than not having one.
+            conn.execute("DELETE FROM cli_pairings WHERE slot_id = ?", (slot_id,))
+            conn.execute("DELETE FROM cli_devices WHERE slot_id = ?", (slot_id,))
             conn.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
 
     # Every column that holds a slot's id, beside its sign-in row, which
     # `logins` keeps under "slot:<id>" and which moves with it. Guarded by the
     # same schema test as NODE_ID_COLUMNS.
     SLOT_ID_COLUMNS = (("slots", "id"), ("account_intents", "slot_id"),
-                       ("claude_updates", "slot_id"))
+                       ("claude_updates", "slot_id"), ("cli_pairings", "slot_id"),
+                       ("cli_devices", "slot_id"))
 
     def rename_slot(self, old: str, new: str) -> None:
         """Give a slot a new id, in any state — held and in use included.
@@ -1913,6 +1986,8 @@ class Store:
             conn.execute("DELETE FROM logins WHERE node_id = ?", (slot_login_key(new),))
             conn.execute("DELETE FROM account_intents WHERE slot_id = ?", (new,))
             conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (new,))
+            conn.execute("DELETE FROM cli_pairings WHERE slot_id = ?", (new,))
+            conn.execute("DELETE FROM cli_devices WHERE slot_id = ?", (new,))
             for table, column in self.SLOT_ID_COLUMNS:
                 conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
                              (new, old))
@@ -1948,6 +2023,163 @@ class Store:
                 "SELECT * FROM slots" + clause + " ORDER BY node_id, unix_user",  # noqa: S608
                 args).fetchall()
         return [dict(r) for r in rows]
+
+    # -- local ccfleet CLI ------------------------------------------------
+
+    def request_cli_pairing(self, slot_id: str, account_id: str, *, now: float) -> str:
+        """Mint a ten-minute, single-use code for one held, ready slot."""
+        token = cli_access.PAIR_PREFIX + secrets.token_urlsafe(32)
+        with self._write_txn() as conn:
+            row = self._held(conn, slot_id, account_id)
+            if row["state"] != slotstates.ACTIVE:
+                raise StoreError(f"{slot_id} can connect once it is signed in and in use")
+            if row["kind"] != slotstates.MACHINE_SLOT:
+                raise StoreError("CLI pairing is enabled for hosted slots")
+            endpoint = conn.execute(
+                "SELECT access_host, access_port, ssh_host_key FROM nodes WHERE id = ?",
+                (row["node_id"],)).fetchone()
+            if (endpoint is None or not endpoint["access_host"]
+                    or not endpoint["ssh_host_key"]):
+                raise StoreError(f"{slot_id} is not ready for CLI access")
+            active = int(conn.execute(
+                "SELECT COUNT(*) AS n FROM cli_devices WHERE slot_id = ? "
+                "AND account_id = ? AND revoked_at IS NULL",
+                (slot_id, account_id)).fetchone()["n"])
+            if active >= cli_access.MAX_DEVICES_PER_SLOT:
+                raise StoreError(f"{slot_id} already has {active} connected devices; "
+                                 "remove one before adding another")
+            conn.execute("DELETE FROM cli_pairings WHERE expires_at <= ?", (now,))
+            conn.execute(
+                "INSERT INTO cli_pairings "
+                "(token_hash, slot_id, account_id, created_at, expires_at) "
+                "VALUES (?,?,?,?,?)",
+                (cli_access.token_hash(token), slot_id, account_id, now,
+                 now + cli_access.PAIRING_TTL_S))
+        return token
+
+    def register_cli_device(self, pairing_token: str, public_key: str,
+                            device_name: str, *, now: float) -> dict[str, Any]:
+        """Consume a pairing code and return the new device secret once."""
+        if not cli_access.token_has_prefix(pairing_token, cli_access.PAIR_PREFIX):
+            raise StoreError("that pairing code is not valid")
+        normalized = cli_access.normalize_public_key(public_key)
+        if normalized is None:
+            raise StoreError("public_key must be one OpenSSH public key")
+        device_name = " ".join(device_name.strip().split())[:cli_access.MAX_DEVICE_NAME]
+        if not device_name or any(ord(ch) < 32 for ch in device_name):
+            raise StoreError("device_name is required")
+        digest = cli_access.token_hash(pairing_token)
+        secret = cli_access.DEVICE_PREFIX + secrets.token_urlsafe(32)
+        device_id = "d" + secrets.token_hex(8)
+        with self._write_txn() as conn:
+            row = conn.execute(
+                "SELECT p.token_hash, p.slot_id, p.account_id, p.expires_at, "
+                "s.node_id, s.unix_user, "
+                "s.name, s.state, s.held_by, n.enabled, n.access_host, n.access_port, "
+                "n.ssh_host_key FROM cli_pairings p "
+                "JOIN slots s ON s.id = p.slot_id JOIN nodes n ON n.id = s.node_id "
+                "WHERE p.token_hash = ?", (digest,)).fetchone()
+            if row is None or not hmac.compare_digest(row["token_hash"], digest):
+                raise StoreError("that pairing code is invalid or has already been used")
+            # Single-use even when it expired or the slot changed while the
+            # page was open: a retry starts with a fresh code.
+            conn.execute("DELETE FROM cli_pairings WHERE token_hash = ?", (digest,))
+            if row["expires_at"] <= now:
+                raise StoreError("that pairing code expired; create another from your slot")
+            if (row["state"] != slotstates.ACTIVE or row["held_by"] != row["account_id"]
+                    or not row["enabled"]):
+                raise StoreError("that slot is no longer available to this account")
+            if not row["access_host"] or not row["ssh_host_key"]:
+                raise StoreError("that slot is not ready for CLI access")
+            active = int(conn.execute(
+                "SELECT COUNT(*) AS n FROM cli_devices WHERE slot_id = ? "
+                "AND account_id = ? AND revoked_at IS NULL",
+                (row["slot_id"], row["account_id"])).fetchone()["n"])
+            if active >= cli_access.MAX_DEVICES_PER_SLOT:
+                raise StoreError("this slot has too many connected devices")
+            conn.execute(
+                "INSERT INTO cli_devices "
+                "(id, slot_id, account_id, token_hash, public_key, name, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (device_id, row["slot_id"], row["account_id"],
+                 cli_access.token_hash(secret), normalized, device_name, now))
+            answer = dict(row)
+        return {**answer, "device_id": device_id, "device_token": secret,
+                "public_key": normalized}
+
+    def list_cli_devices(self, slot_id: str, *,
+                         held_by: Optional[str] = None) -> list[dict[str, Any]]:
+        with self._write_txn() as conn:
+            self._held(conn, slot_id, held_by)
+            rows = conn.execute(
+                "SELECT id, name, public_key, created_at, last_seen_at FROM cli_devices "
+                "WHERE slot_id = ? AND revoked_at IS NULL ORDER BY created_at",
+                (slot_id,)).fetchall()
+        return [{**dict(row), "fingerprint": cli_access.key_fingerprint(row["public_key"])}
+                for row in rows]
+
+    def revoke_cli_device(self, slot_id: str, device_id: str, *,
+                          held_by: Optional[str] = None) -> bool:
+        with self._write_txn() as conn:
+            self._held(conn, slot_id, held_by)
+            changed = conn.execute(
+                "DELETE FROM cli_devices WHERE id = ? AND slot_id = ?",
+                (device_id, slot_id)).rowcount
+        return changed > 0
+
+    def cli_public_keys(self, slot_id: str) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT public_key FROM cli_devices WHERE slot_id = ? "
+                "AND revoked_at IS NULL ORDER BY created_at", (slot_id,)).fetchall()
+        return [str(row["public_key"]) for row in rows]
+
+    def resolve_cli_device(self, device_token: str, *, now: float) -> Optional[dict[str, Any]]:
+        """Authenticate one broker connection and resolve its fixed slot endpoint."""
+        if not cli_access.token_has_prefix(device_token, cli_access.DEVICE_PREFIX):
+            return None
+        digest = cli_access.token_hash(device_token)
+        with self._write_txn() as conn:
+            row = conn.execute(
+                "SELECT d.id AS device_id, d.token_hash, d.slot_id, d.account_id, "
+                "s.unix_user, s.name, s.state, s.held_by, n.id AS node_id, n.enabled, "
+                "n.access_host, n.access_port, n.ssh_host_key "
+                "FROM cli_devices d JOIN slots s ON s.id = d.slot_id "
+                "JOIN nodes n ON n.id = s.node_id "
+                "WHERE d.token_hash = ? AND d.revoked_at IS NULL", (digest,)).fetchone()
+            if row is None or not hmac.compare_digest(row["token_hash"], digest):
+                return None
+            if (row["state"] != slotstates.ACTIVE or row["held_by"] != row["account_id"]
+                    or not row["enabled"] or not row["access_host"]
+                    or not row["ssh_host_key"]):
+                return None
+            conn.execute("UPDATE cli_devices SET last_seen_at = ? WHERE id = ?",
+                         (now, row["device_id"]))
+            return dict(row)
+
+    def cli_device_is_active(self, device_id: str) -> bool:
+        """Whether an open broker stream is still authorized right now."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM cli_devices d JOIN slots s ON s.id = d.slot_id "
+                "JOIN nodes n ON n.id = s.node_id "
+                "WHERE d.id = ? AND d.revoked_at IS NULL AND s.state = ? "
+                "AND s.held_by = d.account_id AND n.enabled = 1 "
+                "AND n.access_host != '' AND n.ssh_host_key != ''",
+                (device_id, slotstates.ACTIVE)).fetchone()
+        return row is not None
+
+    def revoke_cli_token(self, device_token: str) -> bool:
+        if not cli_access.token_has_prefix(device_token, cli_access.DEVICE_PREFIX):
+            return False
+        digest = cli_access.token_hash(device_token)
+        with self._write_txn() as conn:
+            row = conn.execute("SELECT token_hash FROM cli_devices WHERE token_hash = ?",
+                               (digest,)).fetchone()
+            if row is None or not hmac.compare_digest(row["token_hash"], digest):
+                return False
+            conn.execute("DELETE FROM cli_devices WHERE token_hash = ?", (digest,))
+        return True
 
     def move_slot(self, slot_id: str, to: str) -> bool:
         """Move a slot to `to`, or raise if the lifecycle forbids it.
@@ -2015,6 +2247,8 @@ class Store:
                          (slotstates.RELEASING, slot_id))
             conn.execute("DELETE FROM logins WHERE node_id = ?",
                          (slot_login_key(slot_id),))
+            conn.execute("DELETE FROM cli_pairings WHERE slot_id = ?", (slot_id,))
+            conn.execute("DELETE FROM cli_devices WHERE slot_id = ?", (slot_id,))
         return True
 
     def slot_on_machine(self, node_id: str, unix_user: str) -> dict[str, Any] | None:
@@ -2065,6 +2299,8 @@ class Store:
         if cur.rowcount > 0:
             # Nor their update: the next holder starts on the machine's pin.
             conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (slot_id,))
+            conn.execute("DELETE FROM cli_pairings WHERE slot_id = ?", (slot_id,))
+            conn.execute("DELETE FROM cli_devices WHERE slot_id = ?", (slot_id,))
         return cur.rowcount > 0
 
     def apply_slot_report(self, node_id: str, reports: Any, *,
@@ -2299,6 +2535,12 @@ class Store:
         """Stop counting somebody's own node as their slot. Forgets the record
         and nothing else: the node, its history and its own sign-in stay."""
         with self._write_txn() as conn:
+            held = [r["id"] for r in conn.execute(
+                "SELECT id FROM slots WHERE node_id = ? AND kind = ?",
+                (node_id, slotstates.OWNER_SLOT))]
+            for slot_id in held:
+                conn.execute("DELETE FROM cli_pairings WHERE slot_id = ?", (slot_id,))
+                conn.execute("DELETE FROM cli_devices WHERE slot_id = ?", (slot_id,))
             conn.execute("DELETE FROM claude_updates WHERE slot_id IN "
                          "(SELECT id FROM slots WHERE node_id = ? AND kind = ?)",
                          (node_id, slotstates.OWNER_SLOT))

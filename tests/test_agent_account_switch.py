@@ -76,7 +76,7 @@ def test_a_change_of_account_moves_the_slot_to_the_other_one(home):
     assert state(home)["bound_fp"] == fp_of(THEIRS)
     assert not scratch(home).exists()
     assert fake.logouts() == [], "the account it moved to was signed out"
-    assert len(fake.restarts()) == 1, "Remote Control stayed on the old account"
+    assert len(fake.restarts()) == 1, "persistent terminal stayed on the old account"
     # And from then on it reports the one account, kept and had alike.
     creds = agent.slot_facts({}, fake, now=NOW)["credentials"]
     assert creds["account_fp"] == creds["bound_fp"] == fp_of(THEIRS)
@@ -94,7 +94,7 @@ def test_the_account_block_is_replaced_whole_and_everything_else_kept(home):
 
 
 class CutShort(Exception):
-    """The run dying while Remote Control restarts."""
+    """The run dying while the persistent terminal restarts."""
 
 
 @pytest.mark.parametrize("theirs,word", [(THEIRS, agent.SWITCHED), (MINE, agent.SAME_ACCOUNT)])

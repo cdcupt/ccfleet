@@ -124,6 +124,7 @@ def test_by_default_everything_lives_where_only_root_can_change_it():
     assert cfg.state_path == Path("/var/lib/ccfleet/machine.json")
     assert cfg.slot_add == Path("/usr/local/lib/ccfleet/slot-add.sh")
     assert cfg.slot_remove == Path("/usr/local/lib/ccfleet/slot-remove.sh")
+    assert cfg.authorized_keys_dir == Path("/etc/ccfleet/authorized_keys")
     # A slot is asked by the agent that ships beside this one, never another copy.
     assert cfg.slot_agent == Path(machine.__file__).resolve().with_name("agent.py")
 
@@ -145,9 +146,10 @@ def test_the_servers_slots_are_checked_before_anything_runs_as_root():
         "slot08", None,
     ]})
     assert wanted == [
-        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM,
+         "ssh_public_keys": []},
         {"unix_user": "slot02", "state": "releasing", "claimed_at": None,
-         "ssh_public_key": ""},
+         "ssh_public_keys": []},
     ]
 
 

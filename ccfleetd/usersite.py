@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, oauth, payments, plans, resets, status
+from . import claude_versions, cli_access, names, oauth, payments, plans, resets, status
 from . import slots as slotstates
 from .config import Config
 from .desired import is_login_url
@@ -34,7 +34,6 @@ from .render import (
     LOGIN_WORDS,
     MARK,
     SIGN_IN_LINK,
-    TOKEN_WORDS,
     _age,
     _human_tokens,
     _meter,
@@ -67,18 +66,17 @@ NOTES = {
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
     "signin": ("ok", "Starting the sign-in on your slot…"),
     "switch": ("ok", "Starting the change of account on your slot…"),
-    "token": ("ok", "Starting a device token on your slot…"),
+    "cli-revoked": ("ok", "That computer can no longer connect to this slot."),
     "code": ("ok", "Code sent to your slot."),
     "cancelled": ("ok", "Cancelled."),
-    "done": ("ok", "Done. The token is no longer kept here."),
     "not-now": ("warn", "Your slot cannot do that right now. It may still be setting up, "
                         "or being given back."),
     "updating": ("ok", "Updating Claude Code on your slot. Sessions already open keep "
                        "running; new ones start on the new version."),
     "stable": ("ok", "Back to the stable release. Your slot moves there at its next quiet "
                      "moment."),
-    "renamed": ("ok", "Renamed. Your machine answers to the new name within a minute or two, "
-                      "and Remote Control restarts under it, which ends a session open in it."),
+    "renamed": ("ok", "Renamed. Your slot answers to the new name within a minute or two; "
+                      "paired computers keep working."),
     "name-bad": ("warn", "A name is 2 to 30 letters, digits and inner hyphens, and not "
                          "pool- or slot- followed by a number."),
     "name-taken": ("warn", "That name is taken. Pick another."),
@@ -104,12 +102,11 @@ STATE_WORDS = {
 }
 
 #: What the two windows count, said wherever they are shown beside a slot's own tokens.
-ACCOUNT_WIDE = ("These count everything this Claude account does: claude.ai, the Claude "
-                "app, and Claude Code on any computer, device tokens included.")
+ACCOUNT_WIDE = ("These count everything this Claude account does, wherever you use it.")
 
-SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "token", "token-show",
-                "token-done", "update", "stable", "rename", "quota")
-# What a slot can do, by state. Sign-in and tokens need the account to exist
+SLOT_ACTIONS = ("release", "signin", "switch", "code", "cancel", "cli", "cli-revoke",
+                "update", "stable", "rename", "quota")
+# What a slot can do, by state. Sign-in and CLI pairing need the account to exist
 # on the machine and the slot not to be on its way out.
 CAN_SIGN_IN = (slotstates.CLAIMED, slotstates.ACTIVE)
 IDLE_REFRESH_S = 60
@@ -278,15 +275,15 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
             # same transaction as the holder check.
             store.request_slot_login(slot_id, "", now, kind="switch", held_by=holder)
             return _back("switch", anchor)
-        if action == "token":
-            store.request_slot_login(slot_id, "", now, kind="token", held_by=holder)
-            return _back("token", anchor)
+        if action == "cli":
+            token = store.request_cli_pairing(slot_id, holder, now=now)
+            return Outcome(200, body=cli_pairing_page(slot, token, viewer))
+        if action == "cli-revoke":
+            store.revoke_cli_device(slot_id, form.get("device_id", ""), held_by=holder)
+            return _back("cli-revoked", anchor)
         if action == "code":
             store.submit_slot_login_code(slot_id, form.get("code", ""), now, held_by=holder)
             return _back("code", anchor)
-        if action == "token-show":
-            return Outcome(200, body=token_page(
-                slot, store.read_slot_secret(slot_id, now, held_by=holder), viewer))
         if action == "update":
             # The number it is going to, as the page showed it, so the row can
             # say "Updating to 2.1.281…" while the machine works.
@@ -296,9 +293,9 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
         if action == "stable":
             store.choose_stable(slot_id, held_by=holder)
             return _back("stable", anchor)
-        # cancel, token-done: whichever flow is in flight on this slot ends here.
+        # Cancel: whichever Claude sign-in flow is in flight on this slot ends here.
         store.clear_slot_login(slot_id, held_by=holder)
-        return _back("done" if action == "token-done" else "cancelled", anchor)
+        return _back("cancelled", anchor)
     except NotYours:
         raise
     except (StoreError, slotstates.TransitionError):
@@ -380,8 +377,7 @@ animation:ccfleet-slide 1.6s ease-in-out infinite}
 @keyframes ccfleet-slide{from{transform:translateX(-100%)}to{transform:translateX(280%)}}
 @media (prefers-reduced-motion:reduce){.progress i{animation:none;width:100%;opacity:.4}}
 .signed{margin:14px 0 4px;font-size:15px}
-/* Remote Control's state as a light beside the sentence; the sentence itself
-   stays ordinary running text, link and all. */
+/* A small state light used beside a short connection sentence. */
 .rc{position:relative;padding-left:18px;margin:4px 0 14px}
 .rc::before{content:"";position:absolute;left:0;top:.55em;width:8px;height:8px;
 border-radius:50%;background:var(--off)}
@@ -404,10 +400,14 @@ background:var(--acc-soft);border-radius:12px}
 .row-line.flow .login-url{background:var(--panel)}
 .row-line.flow input[type=text]{max-width:280px}
 .row-line.flow .flow-why{margin:0 0 10px;font-size:14px;max-width:64ch}
-.ways{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0 2px}
+.ways{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:12px 0 2px}
 .way{padding:14px;border:1px solid var(--rule-soft);border-radius:11px;background:var(--inset)}
 .way b{display:block;margin-bottom:5px}
 .way p{margin:0;color:var(--muted);font-size:13px;line-height:1.45}
+.cli-access .device{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:10px 0;border-bottom:1px solid var(--rule-soft)}
+.cli-access .device span{min-width:0}.cli-access .device b,.cli-access .device small{display:block}
+.cli-access .device small{color:var(--muted);overflow-wrap:anywhere;margin-top:2px}
 /* Claude Code on the slot: the version it runs, and one press to the newest. */
 .cc-say{font-size:14px;overflow-wrap:anywhere}
 .cc-say b{font-family:var(--mono);font-size:13.5px;font-weight:650}
@@ -425,7 +425,7 @@ border-radius:12px;background:var(--panel)}
 .door .btn.big{width:100%;margin:8px 0 4px}
 .door-alt{max-width:520px;margin:16px auto 0}
 
-/* A device token: the one string on its page, selected whole with one click. */
+/* A pairing code: selected whole with one click. */
 pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:all;
 -webkit-user-select:all;background:var(--panel);border-color:var(--acc-line)}
 
@@ -508,6 +508,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     # asked for on this page, for each slot's Claude Code row.
     channels = store.get_channel_versions()
     updates = {s["id"]: store.get_claude_update(s["id"]) or {} for s in held}
+    cli_devices = {s["id"]: store.list_cli_devices(s["id"], held_by=account["id"])
+                   for s in held}
     csrf = csrf_for(session_id, cfg.cookie_secret)
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for s in held if s["state"] in slotstates.HELD)
@@ -541,7 +543,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
-                               updates[s["id"]], channels, machine_line=lines[s["id"]],
+                               updates[s["id"]], channels, cli_devices[s["id"]],
+                               machine_line=lines[s["id"]],
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
@@ -607,7 +610,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-09-27"
+PRIVACY_UPDATED = "2026-09-28"
 
 
 def _span(seconds: int) -> str:
@@ -646,12 +649,12 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "<li>Your account: the address and id above, whether you are an operator, how many "
         "slots you may hold, when you first signed in, when you last visited, and whether "
         "you asked for outage emails.</li>"
-        "<li>The slots you hold, when you claimed each one, when a device token was last "
-        "handed out for it, and when you last moved it to another Claude account, which a "
+        "<li>The slots you hold, when you claimed each one, and when you last moved it to "
+        "another Claude account, which a "
         "slot may do once a week. Each slot you hold has a name: a neutral one like "
         "slot-4821 when you claim it, never anything from your address, or the one you give "
         "it on your page (or, if you asked, a name the operator set for you). That name is "
-        "also the one its machine answers to in claude.ai/code, so Anthropic sees it too. "
+        "also becomes its machine hostname, so Anthropic can see it too. "
         "The name and the date go when you give the slot back.</li>"
         "<li>Your sign-in here: a random value in a cookie, of which we store only a hash, "
         "with when it began and when it ends. "
@@ -666,8 +669,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "cannot be turned back into the id or your address) and of the account the slot "
         "keeps, so we can tell when one account is signed in on two machines, or a slot on "
         "another account than its own, which ccfleet does not allow, that "
-        "plan&#x27;s rate-limit tier, when that sign-in expires, whether Remote Control is "
-        "running, how much of your Claude usage limits is used and when they reset, and how "
+        "plan&#x27;s rate-limit tier, when that sign-in expires, how much of your Claude usage "
+        "limits is used and when they reset, and how "
         "many tokens were used each hour over the last week. The token counts are worked "
         "out on the machine, from Claude Code&#x27;s own records in your slot; only the "
         "numbers leave it. We keep these reports for "
@@ -680,8 +683,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         f"it. While a sign-in is in progress, its link, the code you paste and its progress "
         f"are held here for at most {attempt}. If one does not go through, why is kept for "
         f"your page, and nothing else of it, for at most {attempt}, and so is how a change "
-        f"of account ended. A device token you ask for is held here until you say you are "
-        f"done with it, and for at most {attempt}.</p>"
+        f"of account ended.</p>"
+        "<p>When you connect the CC Fleet CLI, a single-use pairing code is kept only as a "
+        "hash for ten minutes. Each connected computer has its own public SSH key and a "
+        "random CC Fleet access token; only hashes of access tokens are kept here. These "
+        "authorize the encrypted path to your slot, not Anthropic or Claude. The broker sees "
+        "when a device connects and which slot it is assigned to, but the inner SSH encryption "
+        "prevents it from reading terminal contents.</p>"
         "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
         "Anthropic&#x27;s own terms and privacy policy.</p></div>"
         '<div class="card"><h2>What the operator can see</h2>'
@@ -766,7 +774,7 @@ SWITCH_ENDED = {
                                         "nothing changed."),
 }
 #: What a flow that did not go through was, by its kind.
-NOT_DONE = {"token": "The device token was not made",
+NOT_DONE = {"token": "The previous local setup did not finish",
             "switch": "The change of account did not go through"}
 
 
@@ -805,11 +813,12 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                csrf: str, cfg: Config, now: float,
                flagged: frozenset[str] = frozenset(),
                update: Optional[Mapping[str, Any]] = None,
-               channels: Optional[Mapping[str, Any]] = None, *,
+               channels: Optional[Mapping[str, Any]] = None,
+               cli_devices: Optional[list[Mapping[str, Any]]] = None, *,
                machine_line: str = "", listening: Optional[float] = None) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
-    # A sign-in or token that failed, or a change of account that finished, is
+    # A sign-in that failed, or a change of account that finished, is
     # over: it is said once, below, and the buttons come back as if nothing
     # were in flight.
     ended = login if login.get("state") in ("failed", "done") else {}
@@ -833,8 +842,7 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     region = f" · {escape(node['region'])}" if node.get("region") else ""
     claimed = (f" · claimed {escape(_age(now, slot['claimed_at']))} ago"
                if slot.get("claimed_at") else "")
-    # The name claude.ai/code shows them, and nothing about the machine it is
-    # on: while they hold it, the name is theirs (Erik, 2026-09-24).
+    # The holder sees the slot by this name on every paired computer.
     name = names.display(slot)
     about = f"{region}{claimed}".lstrip(" ·")
     # Somebody's own node, said beside its name rather than lost in the small
@@ -861,7 +869,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     if (signed_in if own else slot["state"] == slotstates.ACTIVE):
         parts.append(_in_use(report, now, "" if own else _quota_refresh(slot, report, csrf,
                                                                           now)))
-        parts.append(_ways_to_use(report))
+        if not own:
+            parts.append(_ways_to_use(report))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
@@ -871,7 +880,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     if slot["state"] in CAN_SIGN_IN:
         parts.append(_sign_in(slot, report, login, csrf, now))
         parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
-        parts.append(_tokens(slot, login, csrf, now))
+        if not own:
+            parts.append(_cli_access(slot, node, cli_devices or [], csrf, now))
     if slot["state"] in CAN_SIGN_IN and not own:
         parts.append(_rename(slot, csrf))
     # Never on somebody's own node: giving back means wiping, and nothing
@@ -893,20 +903,12 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "") -> str:
     creds = report.get("credentials") or {}
     if creds.get("logged_in") is False:
         return "<p>Not signed in to Claude right now. Sign in below to use your slot.</p>"
-    remote = (report.get("remote_control") or {}).get("state")
     plan = plans.label(creds.get("subscription_type"), creds.get("plan"))
     who = f" as {escape(str(creds['email']))}" if creds.get("email") else ""
     left = _sign_in_left(creds.get("refresh_expires_at"), now)
     lines = [f'<p class="signed">Signed in{who}'
              f"{(' · ' + escape(str(plan)) + ' plan') if plan else ''}"
              f"{' · sign-in ' + left if left else ''}.</p>"]
-    if remote == "active":
-        lines.append('<p class="rc on">Remote Control is on: open <a href="https://claude.ai/code" '
-                     'target="_blank" rel="noopener noreferrer">claude.ai/code</a> or the '
-                     "Claude app, signed in as the same account, and pick this machine.</p>")
-    else:
-        lines.append('<p class="rc">Remote Control is starting; it comes on within a '
-                     "minute of signing in.</p>")
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     read = quota.get("checked_at")
@@ -952,20 +954,14 @@ def _sign_in_left(expires: Any, now: float) -> str:
     return "good for 1 more day" if days == 1 else "ends within a day"
 
 
-def _ways_to_use(report: Mapping[str, Any]) -> str:
-    """The three supported native doors, none of which is a ccfleet relay."""
-    remote = (report.get("remote_control") or {}).get("state")
-    cloud = ('Open <a href="https://claude.ai/code" target="_blank" '
-             'rel="noopener noreferrer">claude.ai/code</a> and choose this slot. Its files '
-             'and work keep running here.' if remote == "active" else
-             'Remote Control is starting. This becomes available when it is on.')
+def _ways_to_use(_report: Mapping[str, Any]) -> str:
+    """The primary product: a local command driving Claude Code on the slot."""
     return (
-        '<div class="ways" aria-label="Ways to use this Claude account">'
-        '<div class="way"><b>On this computer</b><p>Run the unmodified Claude Code CLI on '
-        'your own files. Set it up under <em>Local Claude Code</em> below.</p></div>'
-        f'<div class="way"><b>In the cloud</b><p>{cloud}</p></div>'
-        '<div class="way"><b>In a Claude client</b><p>Use the official Claude desktop or '
-        'mobile app with the same account and choose this slot.</p></div></div>')
+        '<div class="ways" aria-label="How to use this slot">'
+        '<div class="way"><b>Claude Code CLI</b><p>Run <code>ccfleet</code> on your '
+        'computer. It opens the original Claude Code CLI on this slot, where your files, '
+        'tools and model connection stay. A dropped network connection resumes the same '
+        'session.</p></div></div>')
 
 
 def _ended(login: Mapping[str, Any]) -> str:
@@ -982,12 +978,14 @@ def _ended(login: Mapping[str, Any]) -> str:
 def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
              login: Mapping[str, Any], csrf: str, now: float) -> str:
     base = f"/account/slots/{escape(slot['id'])}"
+    if login.get("kind") == "token" and login.get("state"):
+        return ('<div class="row-line stacked flow"><div class="row-name">Claude</div>'
+                '<p class="muted small">A previous local setup is still pending. Cancel it '
+                'before signing in again.</p>'
+                + _form(f"{base}/cancel", csrf, "Cancel old setup", cls="danger") + "</div>")
     state = login.get("state") if login.get("kind") != "token" else None
     if not state:
         signed_in = (report.get("credentials") or {}).get("logged_in") is True
-        if login.get("state"):
-            return ('<p class="muted small">Finish or cancel the device token below before '
-                    "signing in again.</p>")
         field = ("" if signed_in else
                  '<input type="email" name="email" placeholder="your Claude email (optional)">')
         return ('<div class="row-line"><div class="row-name">Claude</div>'
@@ -1076,8 +1074,7 @@ def _claude_line(said: Mapping[str, Any]) -> str:
         return (f"Updating to <b>{escape(to)}</b>&hellip;" if to
                 else "Updating to the latest release&hellip;")
     if kind == "updated":
-        return (f"Updated to <b>{escape(said['to'])}</b> {SEP} Remote Control switches over "
-                "once no session is open")
+        return f"Updated to <b>{escape(said['to'])}</b> {SEP} new sessions use it"
     if kind == "failed":
         return f"Update failed: {escape(said.get('detail') or 'no reason given')}"
     if said["channel"] == "latest":
@@ -1092,40 +1089,34 @@ def _claude_line(said: Mapping[str, Any]) -> str:
     return line + (f" {SEP} up to date" if latest else "")
 
 
-def _tokens(slot: Mapping[str, Any], login: Mapping[str, Any], csrf: str, now: float) -> str:
+def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
+                devices: list[Mapping[str, Any]], csrf: str, now: float) -> str:
+    """Pair and revoke local ccfleet installations. No Claude token is involved."""
     base = f"/account/slots/{escape(slot['id'])}"
-    state = login.get("state") if login.get("kind") == "token" else None
-    if not state:
-        if login.get("state"):
-            return ""                     # a sign-in is in flight; one thing at a time
-        issued = slot.get("device_token_at") or 0
-        said = (f'<span class="pill ok">last set up {escape(_age(now, issued))} ago</span> '
-                if issued else
-                '<span class="muted small">Run Claude Code normally on this computer, '
-                'using its own files</span> ')
-        return ('<div class="row-line"><div class="row-name">Local Claude Code</div>'
-                f'<div class="actions">{said}'
-                + _form(f"{base}/token", csrf,
-                        "Set up another computer" if issued else "Set up this computer")
-                + "</div></div>")
-    if state == "ready":
-        body = (f'<span class="pill ok">{escape(TOKEN_WORDS["ready"])}</span> '
-                + _form(f"{base}/token-show", csrf, "Show it", cls="primary") + " "
-                + _form(f"{base}/token-done", csrf, "Done with it"))
-        return (f'<div class="row-line"><div class="row-name">Local Claude Code</div>'
-                f'<div class="actions">{body}</div></div>')
-    body = f'<span class="login-say">{escape(TOKEN_WORDS.get(state, state))}</span>'
-    url = login.get("url") or ""
-    if is_login_url(url) and state in ("url_ready", "code_sent"):
-        body += (f'<a class="login-url" href="{escape(url)}" target="_blank" '
-                 f'rel="noopener noreferrer">{escape(url)}</a>')
-    if state == "url_ready":
-        body += _form(f"{base}/code", csrf, "Send code",
-                      '<input type="text" name="code" placeholder="paste the code" '
-                      'autocomplete="off" required>', "primary")
-    body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
-    return (f'<div class="row-line stacked flow"><div class="row-name">Local Claude Code</div>'
-            f"{body}</div>")
+    configured = bool(node.get("access_host") and node.get("ssh_host_key"))
+    ready = configured and slot.get("state") == slotstates.ACTIVE
+    rows = []
+    for device in devices:
+        seen = device.get("last_seen_at") or 0
+        when = f"used {_age(now, seen)} ago" if seen else "not used yet"
+        rows.append('<div class="device"><span><b>' + escape(str(device["name"]))
+                    + f'</b><small>{escape(when)} · {escape(str(device["fingerprint"]))}</small>'
+                    + '</span>' + _form(f"{base}/cli-revoke", csrf, "Remove",
+                                        '<input type="hidden" name="device_id" value="'
+                                        + escape(str(device["id"])) + '">', "quiet") + '</div>')
+    if ready:
+        button = _form(f"{base}/cli", csrf,
+                       "Connect another computer" if devices else "Connect this computer",
+                       cls="primary")
+    elif configured:
+        button = ('<span class="muted small">Finish signing in to Claude on this slot, then '
+                  'connect this computer.</span>')
+    else:
+        button = '<span class="muted small">CLI access is being prepared for this slot.</span>'
+    return ('<div class="row-line stacked cli-access"><div class="row-name">CC Fleet CLI</div>'
+            '<p class="small muted">The local command opens Claude Code on this slot. Its '
+            'access key is not your Claude credential.</p>' + ''.join(rows)
+            + f'<div class="actions">{button}</div></div>')
 
 
 def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
@@ -1212,33 +1203,22 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
                   door=True)
 
 
-def token_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = None) -> str:
-    """The minted token, for as long as its request lasts."""
-    if not token:
-        return _shell("device token", f'<div class="card door">{MARK}<h1>Nothing to show</h1>'
-                      "<p>No token is waiting on this slot. Either you were done with it, or "
-                      "the request expired. Start a new one from your slots.</p>"
-                      "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p></div>",
-                      viewer=viewer)
-    return _shell("device token", (
-        "<div class=\"pagehead\"><h1>Use Claude Code locally</h1>"
-        "<p class=\"sub\">Created on <strong>"
-        f"{escape(slot['id'])}</strong>, for the Claude account you approved. Good for one "
-        "year.</p></div>"
-        "<div class=\"ok-banner\">You can come back and show this again while the request "
-        "lasts. Press <strong>Done with it</strong> on your slots page when you have "
-        "finished, or leave it and it expires on its own.</div>"
-        f'<pre class="token">{escape(token)}</pre>'
-        "<div class=\"card\"><h2>Set up a computer</h2>"
-        "<pre>bash -c \"$(curl -fsSL https://raw.githubusercontent.com/cdcupt/"
-        "ccfleet/main/laptop/ccfleet-connect.sh)\"</pre>"
-        "<p class=\"muted\">It asks for the token and hides what you paste. Then run "
-        "<code>claude</code> normally on that computer and its local files. Requests go "
-        "directly from the unmodified Claude Code client to Anthropic: ccfleet is not a "
-        "proxy and no base URL is changed. The token is inference-only, which is "
-        "Anthropic's limit on long-lived tokens; revoke it from your Claude account.</p>"
-        "<p class=\"muted\">The computer keeps its own Claude login too, if it has one: "
-        "<code>ccfleet-connect --off</code> switches it to that, your own subscription, "
-        "and <code>ccfleet-connect --on</code> back to this token. Running it again with "
-        "another token replaces this one.</p></div>"
+def cli_pairing_page(slot: Mapping[str, Any], token: str,
+                     viewer: Optional[Viewer] = None) -> str:
+    """The single-use code that binds one local key to this held slot."""
+    return _shell("connect a computer", (
+        "<div class=\"pagehead\"><h1>Connect a computer</h1>"
+        f"<p class=\"sub\">The original Claude Code CLI will run on "
+        f"<strong>{escape(str(slot.get('name') or slot['id']))}</strong>.</p></div>"
+        "<div class=\"card\"><h2>1. Install CC Fleet</h2>"
+        "<pre>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/"
+        "laptop/install.sh | bash</pre></div>"
+        "<div class=\"card\"><h2>2. Pair it</h2><pre>ccfleet login</pre>"
+        f"<p>Paste this code when asked. It works once and expires in "
+        f"{_span(cli_access.PAIRING_TTL_S)}.</p>"
+        f'<pre class="token">{escape(token)}</pre></div>'
+        "<div class=\"card\"><h2>3. Open Claude Code</h2><pre>ccfleet</pre>"
+        "<p class=\"muted\">The command is a terminal window into this slot. The original "
+        "<code>claude</code> process, files, tools and Anthropic connection all stay on the "
+        "slot. If your network changes, it reconnects to the same session.</p></div>"
         "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"), viewer=viewer)

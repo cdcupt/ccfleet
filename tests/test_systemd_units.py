@@ -55,10 +55,12 @@ def test_the_shell_unit_does_not_kill_the_session_it_warmed():
     assert "ExecStop" not in svc, "this unit must never tear the session down"
 
 
-def test_the_shell_unit_still_creates_the_session_the_login_expects():
+def test_the_shell_unit_creates_the_forced_entrypoints_claude_session():
     svc = _service(SHELL)
-    assert "has-session -t cc" in svc["ExecStart"] and "new-session -d -s cc" in svc["ExecStart"], \
-        "node/attach.sh attaches logins to this exact session name"
+    assert "has-session -t ccfleet" in svc["ExecStart"]
+    assert "new-session -d -s ccfleet" in svc["ExecStart"]
+    assert "%h/.local/bin/claude" in svc["ExecStart"]
+    assert "ConditionPathExists=%h/.claude/.credentials.json" in SHELL.read_text()
 
 
 def test_the_two_units_do_not_share_a_tmux_server():

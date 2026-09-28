@@ -4,10 +4,9 @@ One Claude account, one node — and on a shared machine the node is the slot.
 The agent keeps it in ~/.claude, where Claude Code always keeps it, and never
 points Claude Code anywhere else. What it adds to what an owner node reports is
 the account's address and how long its sign-in lasts, for the holder's page.
-Two behaviours from the short-lived several-accounts agent stay, because they
-are about any sign-in: Remote Control moves onto a sign-in the moment it
-finishes, and a sign-in only counts as finished once the credential it writes
-is really there.
+One behavior from the short-lived several-accounts agent stays because it is
+about any sign-in: a sign-in counts as finished only once the credential it
+writes is really there. The persistent terminal then restarts onto that login.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ class SlotFake:
     """The commands a slot's agent runs, answered the way a slot answers them.
 
     tmux serves a pane, `claude auth status` whatever `auth` says, and
-    systemctl what Remote Control is doing. Typing a code into the sign-in
+    systemctl answers for the managed user services. Typing a code into the sign-in
     pane writes a new credential — what Claude Code does when a code works.
     """
 
@@ -150,32 +149,28 @@ def test_a_sign_in_is_finished_only_once_its_credential_is_written(slot_home):
     assert done["login"] == {"state": "done", "requested_at": 100.0}
 
 
-def test_remote_control_moves_onto_a_finished_sign_in_even_while_running(slot_home):
-    """It used to be started only when it was not running, so signing in again
-    under a running one left it serving the sign-in from before."""
+def test_persistent_terminal_moves_onto_a_finished_sign_in(slot_home):
     fake = SlotFake(slot_home, rc="active")
     wanted, _ = walk_to_code_sent(fake)
     assert fake.restarts() == []
     agent.slot_facts({"login": {**wanted, "code": "the-code"}}, fake, now=NOW)
     assert fake.restarts() == [["systemctl", "--user", "restart",
-                                agent.DEFAULT_RC_SERVICE]]
+                                agent.DEFAULT_SHELL_SERVICE]]
 
 
-def test_a_finished_sign_in_drops_the_old_windows_and_counts_as_the_owed_restart(slot_home):
-    """A restart owed to a new Claude Code version stays owed only while there
-    is a pin (see reconcile_slot_version), so the pin rides along here."""
+def test_a_finished_sign_in_drops_old_windows_and_legacy_restart_debt(slot_home):
     state_file(slot_home).parent.mkdir(parents=True)
     state_file(slot_home).write_text(json.dumps({
         "quota": {"session": {"used_pct": 90}, "ts": NOW}, "restart": "waiting"}))
     fake = SlotFake(slot_home)
     pin = {"claude_version": "2.1.278"}
     wanted, _ = walk_to_code_sent(fake, **pin)
-    assert json.loads(state_file(slot_home).read_text())["restart"] == "waiting"
+    assert "restart" not in json.loads(state_file(slot_home).read_text())
     facts = agent.slot_facts({**pin, "login": {**wanted, "code": "the-code"}}, fake, now=NOW)
     kept = json.loads(state_file(slot_home).read_text())
     assert "quota" not in kept, "windows read before the sign-in were kept"
-    assert facts["upgrade"]["restart"] == "done", "the sign-in's restart was not counted"
-    assert "restart" not in kept, "a version restart stayed owed after one happened"
+    assert facts.get("upgrade", {}).get("restart") is None
+    assert "restart" not in kept
 
 
 def test_a_restart_that_fails_is_owed_and_tried_again(slot_home):
@@ -189,16 +184,16 @@ def test_a_restart_that_fails_is_owed_and_tried_again(slot_home):
     assert "account_restart" not in json.loads(state_file(slot_home).read_text())
 
 
-def test_remote_control_switched_off_and_stopped_is_left_that_way(slot_home):
+def test_terminal_refresh_is_independent_of_legacy_remote_control_state(slot_home):
     fake = SlotFake(slot_home, rc="inactive", enabled="disabled")
     wanted, _ = walk_to_code_sent(fake)
     agent.slot_facts({"login": {**wanted, "code": "the-code"}}, fake, now=NOW)
-    assert fake.restarts() == []
+    assert fake.restarts() == [["systemctl", "--user", "restart",
+                                agent.DEFAULT_SHELL_SERVICE]]
     assert "account_restart" not in json.loads(state_file(slot_home).read_text())
 
 
-def test_switched_off_but_still_running_is_restarted_all_the_same(slot_home):
-    """Disabling a unit does not stop it."""
+def test_running_legacy_remote_control_does_not_change_the_terminal_refresh(slot_home):
     fake = SlotFake(slot_home, rc="active", enabled="disabled")
     wanted, _ = walk_to_code_sent(fake)
     agent.slot_facts({"login": {**wanted, "code": "the-code"}}, fake, now=NOW)
@@ -234,13 +229,13 @@ def other_account(home):
     return place, env
 
 
-def test_remote_control_is_taken_off_another_directory_and_back_onto_claude(slot_home):
+def test_legacy_remote_control_directory_override_is_removed(slot_home):
     place, env = other_account(slot_home)
     fake = SlotFake(slot_home)
     facts = agent.slot_facts({}, fake, now=NOW)
     assert env.read_text() == "CCFLEET_RC_ARGS=--verbose\n", "the other lines must stay"
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
-    assert len(fake.restarts()) == 1, "Remote Control went on as the other account"
+    assert fake.restarts() == [], "a legacy override restarted a removed product mode"
     assert facts["credentials"]["email"] == "holder@example.com"
 
 

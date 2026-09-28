@@ -1,12 +1,4 @@
-"""A shared machine answers to its slot's name (slot model v2, I2).
-
-One machine is one slot, and claude.ai/code shows a machine by its hostname,
-so the server tells the machine what to call itself — its holder's name while
-the slot is held, its own id while it is free — and the machine agent, as
-root, makes it so: before it provisions a claim, so the holder's Remote
-Control first registers under their name, and for a slot already running
-Remote Control, by restarting it so the new name takes.
-"""
+"""A shared machine answers to its one slot's holder-chosen name."""
 
 from __future__ import annotations
 
@@ -15,7 +7,7 @@ import os
 import pytest
 
 from ccfleet_agent import machine
-from tests.test_machine import Fake, account
+from tests.test_machine import Fake
 
 HOSTS = ("127.0.0.1\tlocalhost\n"
          "10.1.2.3 C202608222119842.local C202608222119842\n"
@@ -178,16 +170,14 @@ def test_without_cloud_init_there_is_no_cloud_file_and_nothing_to_warn_about(
     assert not [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
 
 
-def test_a_name_that_took_is_followed_even_when_tidying_up_after_it_fails(cfg, tmp_path):
-    """The rename has happened once hostnamectl says so: Remote Control must
-    follow it whatever goes wrong after, or claude.ai keeps the old name."""
+def test_a_name_that_took_stays_taken_even_when_later_tidying_fails(cfg, tmp_path):
     host = Host(tmp_path, users=("slot01",), rc_active=("slot01",),
                 desired={"hostname": "alice-2", "slots": [
                     {"unix_user": "slot01", "state": "active"}]})
     (host.cloud / ".99-ccfleet.cfg.ccfleet-tmp").mkdir()      # the write there will fail
     cycle(cfg, host, {"slots": ["slot01"]})
     assert host.name == "alice-2"
-    assert ("slot01", ("restart", "claude-remote-control.service")) in host.systemctl
+    assert host.systemctl == []
 
 
 def test_a_name_it_already_answers_to_is_not_taken_again(cfg, tmp_path):
@@ -206,84 +196,6 @@ def test_no_name_asked_for_changes_nothing(cfg, tmp_path):
     cycle(cfg, host)
     assert host.order == [] and host.hosts.read_text() == HOSTS
     assert not (host.cloud / "99-ccfleet.cfg").exists()
-
-
-# -- anything left undone is done on a later run ----------------------------------------------
-
-def test_a_restart_that_failed_is_tried_again_until_it_works(cfg, tmp_path):
-    host = Host(tmp_path, users=("slot01",), rc_active=("slot01",), scripted={"restart": [1]},
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]})
-    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
-    restarts = [c for c in host.systemctl if c[1][0] == "restart"]
-    assert len(restarts) == 1 and state.get(machine.RC_OWED_KEY) is True
-    _, _, state = cycle(cfg, host, state)          # already on the name: only the restart
-    assert len([c for c in host.systemctl if c[1][0] == "restart"]) == 2
-    assert machine.RC_OWED_KEY not in state
-    before = len(host.systemctl)
-    cycle(cfg, host, state)                         # done: nothing more
-    assert len(host.systemctl) == before
-
-
-def slot_host(tmp_path, **kwargs):
-    return Host(tmp_path, users=("slot01",), rc_active=("slot01",),
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]}, **kwargs)
-
-
-def restarts(host):
-    return [c for c in host.systemctl if c[1][0] == "restart"]
-
-
-def test_a_reload_that_failed_is_tried_again(cfg, tmp_path):
-    host = slot_host(tmp_path, scripted={"daemon-reload": [1]})
-    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
-    assert restarts(host) == [] and state.get(machine.RC_OWED_KEY) is True
-    _, _, state = cycle(cfg, host, state)
-    assert len(restarts(host)) == 1 and machine.RC_OWED_KEY not in state
-
-
-def test_a_remote_control_in_an_unknown_state_is_asked_again(cfg, tmp_path):
-    host = slot_host(tmp_path, scripted={"is-active": [None]})
-    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
-    assert restarts(host) == [] and state.get(machine.RC_OWED_KEY) is True
-    _, _, state = cycle(cfg, host, state)
-    assert len(restarts(host)) == 1 and machine.RC_OWED_KEY not in state
-
-
-def test_a_restart_owed_waits_out_a_reply_without_a_name(cfg, tmp_path):
-    host = slot_host(tmp_path, scripted={"restart": [1]})
-    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
-    host.desired = {"slots": [{"unix_user": "slot01", "state": "active"}]}
-    _, _, state = cycle(cfg, host, state)
-    assert state.get(machine.RC_OWED_KEY) is True, "kept while the server names nothing"
-    host.desired = {"hostname": "alice-2", "slots": [{"unix_user": "slot01", "state": "active"}]}
-    _, _, state = cycle(cfg, host, state)
-    assert len(restarts(host)) == 2 and machine.RC_OWED_KEY not in state
-
-
-def test_an_owed_restart_waits_for_the_machine_to_be_on_its_name(cfg, tmp_path):
-    """Owed for a name the machine could not take after all: restarting now
-    would register the old one again, and would wrongly call the debt paid."""
-    host = slot_host(tmp_path, scripted={"restart": [1]})
-    _, _, state = cycle(cfg, host, {"slots": ["slot01"]})
-    host.desired = {"hostname": "carol-1", "slots": [{"unix_user": "slot01", "state": "active"}]}
-    host.hostnamectl_works = False
-    _, _, state = cycle(cfg, host, state)
-    assert len(restarts(host)) == 1 and state.get(machine.RC_OWED_KEY) is True
-
-
-def test_every_slot_is_followed_even_after_one_fails(cfg, tmp_path):
-    """A machine from before one slot per machine: one slot's failed restart
-    does not leave the next one on the old name."""
-    host = Host(tmp_path, users=("slot01", "slot02"), rc_active=("slot01", "slot02"),
-                scripted={"restart": [1]},
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"},
-                    {"unix_user": "slot02", "state": "active"}]})
-    _, _, state = cycle(cfg, host, {"slots": ["slot01", "slot02"]})
-    assert {user for user, call in restarts(host)} == {"slot01", "slot02"}
-    assert state.get(machine.RC_OWED_KEY) is True
 
 
 def test_a_run_with_nothing_to_change_writes_nothing(cfg, tmp_path):
@@ -345,76 +257,8 @@ def test_a_name_that_is_no_hostname_is_never_applied(cfg, tmp_path, bad):
 # -- order --------------------------------------------------------------------------------
 
 def test_the_name_is_taken_before_a_claim_is_provisioned(cfg, tmp_path):
-    """So the holder's Remote Control first registers under their name."""
+    """Provisioning sees the final machine identity from its first process."""
     host = Host(tmp_path, desired={"hostname": "alice-1", "slots": [
         {"unix_user": "slot01", "state": "claiming", "claimed_at": 1700000000.0}]})
     cycle(cfg, host)
     assert host.order[:2] == ["hostname alice-1", "script slot-add.sh slot01"]
-
-
-# -- Remote Control follows the name -------------------------------------------------------
-
-def test_a_running_remote_control_restarts_under_the_new_name(cfg, tmp_path):
-    host = Host(tmp_path, users=("slot01",), rc_active=("slot01",),
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]})
-    cycle(cfg, host, {"slots": ["slot01"]})
-    assert host.systemctl == [
-        ("slot01", ("daemon-reload",)),
-        ("slot01", ("is-active", "--quiet", "claude-remote-control.service")),
-        ("slot01", ("restart", "claude-remote-control.service"))]
-
-
-def test_a_remote_control_that_is_not_running_is_not_started(cfg, tmp_path):
-    """Reloaded, so it starts under the new name whenever it does; not started."""
-    host = Host(tmp_path, users=("slot01",), rc_active=(),
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "claimed"}]})
-    cycle(cfg, host, {"slots": ["slot01"]})
-    assert ("slot01", ("daemon-reload",)) in host.systemctl
-    assert not [c for c in host.systemctl if c[1][0] == "restart"]
-
-
-def test_no_rename_restarts_nothing(cfg, tmp_path):
-    host = Host(tmp_path, hostname="alice-2", users=("slot01",), rc_active=("slot01",),
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]})
-    cycle(cfg, host, {"slots": ["slot01"]})
-    assert host.systemctl == []
-
-
-def test_a_rename_that_failed_restarts_nothing(cfg, tmp_path):
-    host = Host(tmp_path, users=("slot01",), rc_active=("slot01",), hostnamectl_works=False,
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]})
-    cycle(cfg, host, {"slots": ["slot01"]})
-    assert host.systemctl == [] and host.name == "pool-1"
-
-
-def test_only_slot_users_are_touched(cfg, tmp_path):
-    """A login on the machine that is not a slot's is nobody this agent acts as."""
-    host = Host(tmp_path, users=("slot01", "erik"), rc_active=("slot01", "erik"),
-                groups={"slot01": {"ccfleet-slots"}, "erik": {"sudo"}},
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]})
-    cycle(cfg, host, {"slots": ["slot01", "erik"]})
-    assert {user for user, _ in host.systemctl} == {"slot01"}
-
-
-def test_the_agent_runs_as_the_slot_user_with_its_own_environment(cfg, tmp_path):
-    host = Host(tmp_path, users=("slot01",), rc_active=("slot01",),
-                desired={"hostname": "alice-2", "slots": [
-                    {"unix_user": "slot01", "state": "active"}]})
-    seen = []
-    real = host.spawn
-
-    def spy(argv, **kwargs):
-        if argv[:2] == ["systemctl", "--user"]:
-            seen.append(kwargs)
-        return real(argv, **kwargs)
-    host.spawn = spy
-    cycle(cfg, host, {"slots": ["slot01"]})
-    slot = account("slot01", host.users["slot01"].pw_uid)
-    assert seen and all(k["user"] == slot.pw_uid and k["extra_groups"] == [] and
-                        k["env"]["XDG_RUNTIME_DIR"] == f"/run/user/{slot.pw_uid}" and
-                        "CCFLEET_NODE_TOKEN" not in k["env"] for k in seen)

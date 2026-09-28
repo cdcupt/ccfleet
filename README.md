@@ -1,333 +1,208 @@
-# ccfleet
+# CC Fleet
 
-**Own-account Claude Code fleet manager: one owner, one account, one node.**
+CC Fleet gives each customer a private Linux slot running the original Claude
+Code CLI under that customer's own Claude subscription.
 
-ccfleet is for a small group of people who each pay for their own Claude
-subscription and want to run the unmodified Claude Code CLI on a hosted node
-they control, with someone keeping an eye on the whole fleet. It gives you:
+The product rule is simple: **one holder, one slot, one Claude account**. CC
+Fleet does not pool accounts, substitute credentials, rotate a request between
+accounts, or expose a shared model API.
 
-- **Node scripts** that turn a fresh Ubuntu VPS into a hardened, single-owner
-  Claude Code host (keys-only SSH, firewall, unattended upgrades, auto-updater
-  off so upgrades are staged, tmux, optional Claude Code Remote Control).
-- **A heartbeat agent** on each node that reports public facts (Claude Code
-  version, uptime, disk, load, egress IP, whether a login exists and when it
-  was last refreshed). It parses the credentials file only to extract the
-  token expiry and plan type, and `~/.claude.json` only for whether an account
-  is signed in, when its profile was last fetched and the rate-limit tier. The
-  latter is the only way to report a login on macOS, where the credential lives
-  in the Keychain and this agent will not read it. Token values are dropped in
-  memory and never sent, logged or stored, and neither are the email address,
-  name, account uuid or organisation name that sit in the same file. From the
-  uuid it derives one thing: a fingerprint (the first 16 hex digits of its
-  SHA-256), the same on every node the account is on, so the server can flag one
-  account signed in on two nodes. (A slot on a shared machine reports one thing
-  more, for its holder's own page: the email address of the one Claude account
-  signed in on it. See section 4.)
-- **A fleet server** with a dashboard and Telegram alerts: missing heartbeat,
-  Claude Code missing or drifted from the pinned version, login missing, stale
-  or expired, disk high, egress IP changed, Remote Control service down.
+The customer experience is also one path: install `ccfleet`, pair it from the
+slot page, then run `ccfleet` in a normal terminal. Customers never type an SSH
+command and no Claude credential is copied to their computer.
 
-What it deliberately does **not** do: proxy model traffic, store anyone's
-credentials, substitute a credential, alter the client's identity, pool or share accounts, or
-fail over one session across accounts. Every request goes from the unmodified
-Claude Code binary, signed in by its owner through Anthropic's own flow,
-straight to Anthropic. The one optional component that sits on the request
-path, the pass-through gateway in `gateway/`, forwards an owner's own requests
-unchanged (including their own OAuth header, in transit) and stores nothing.
-See [docs/compliance.md](docs/compliance.md) for the reasoning and the exact
-passages of Anthropic's documentation it follows.
-
-```
- Owner A ──ssh / Remote Control──▶ Node A (unmodified claude, login A) ──▶ api.anthropic.com
- Owner B ──ssh / Remote Control──▶ Node B (unmodified claude, login B) ──▶ api.anthropic.com
-                                       │ heartbeat (facts only, no secrets)
-                                       ▼
-                               ccfleetd: dashboard + alerts (read-only)
+```text
+customer terminal
+    │  ccfleet (TLS WebSocket containing an encrypted SSH stream)
+    ▼
+CC Fleet broker on BWH
+    │  opaque bytes; device is bound to one held slot
+    ▼
+assigned slot
+    │  forced entrypoint → persistent tmux → original claude
+    ▼
+Anthropic
 ```
 
-## Quickstart
+The broker authenticates the CC Fleet device token, but SSH remains encrypted
+between the customer's computer and the slot. The broker cannot read the
+terminal stream. Claude Code, project files, tools, model requests and responses
+all remain on the slot. Anthropic receives Claude traffic from that slot, under
+the single Claude account signed in there.
 
-Full walkthrough with diagrams and the output to expect: **[docs/guidebook.html](docs/guidebook.html)**.
+## Customer flow
 
-### 1. Fleet server (any small box, behind TLS)
+1. Sign in to the CC Fleet website with Google and claim an allowed slot.
+2. Use the website's **Sign in to Claude** flow once. The resulting Claude
+   credential is written only in that slot.
+3. When the slot says **In use**, press **Connect this computer**.
+4. Install the client and pair with the ten-minute, single-use code:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash
+   ccfleet login
+   ```
+
+5. Open or resume Claude Code:
+
+   ```bash
+   ccfleet
+   ```
+
+`ccfleet` is a thin terminal client. It does not run a second Claude process on
+the customer's computer. Projects live in `~/workspace` on the slot; clone them
+with Git or retrieve them from inside the slot. CC Fleet does not silently mount
+or synchronize the customer's local directory.
+
+Each paired computer gets its own Ed25519 key and random CC Fleet access token.
+The server stores the public key and only a hash of the access token. A customer
+can remove one computer from the slot page without changing the slot's Claude
+sign-in. Network interruptions reattach to the same tmux session.
+
+## What runs where
+
+- `ccfleetd/` is the web app, broker, desired-state service, operator console,
+  public documentation and status page.
+- `ccfleet_agent/machine.py` provisions and wipes Linux slot users, installs
+  their device keys in a root-controlled sshd key directory and reports health facts.
+- `node/slot-entry.sh` is the forced SSH entrypoint. It accepts only an
+  interactive terminal and attaches to the slot's persistent Claude Code
+  session.
+- `laptop/ccfleet` is the local client. It wraps OpenSSH behind the WebSocket
+  broker, pins the slot's SSH host key and reconnects after ordinary network
+  failures.
+
+The server receives operational facts such as versions, login state, account
+fingerprints, quota percentages and hourly token counts. It does not receive a
+slot's prompts, files, conversations or Claude credential. Machine
+administrators have root and can technically read slot data; the public privacy
+page states this boundary directly.
+
+## Server quickstart
+
+Run the server behind TLS:
 
 ```bash
-git clone https://github.com/cdcupt/ccfleet.git && cd ccfleet
-cp deploy/ccfleetd.env.example deploy/ccfleetd.env   # set CCFLEET_ADMIN_TOKEN (openssl rand -hex 32)
+git clone https://github.com/cdcupt/ccfleet.git
+cd ccfleet
+cp deploy/ccfleetd.env.example deploy/ccfleetd.env
+# Set CCFLEET_ADMIN_TOKEN, CCFLEET_PUBLIC_URL, Google OAuth and cookie secrets.
 docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node add node-a --owner alice --region us-west
-
-# optional: give alice her own console login, so she can see her node's health
-docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd user add alice --owner alice
 ```
 
-`node add` prints the node's token once, plus the three lines to put in the
-node's `agent.env`. Put a TLS proxy in front of `127.0.0.1:8110`
-(`deploy/Caddyfile.example`) and open `/admin` on it with user `admin` and the admin
-token; the bare address is the product's front page, the same for everybody. To give an owner a read-only view of their own nodes, add a named account with `ccfleetd user add NAME --owner OWNER`.
-If you would rather not expose a public endpoint at all, nodes can report over an
-SSH tunnel instead: see [docs/tunnel.md](docs/tunnel.md).
+The bare public URL serves the product website. `/account` is the customer
+page; `/admin` is the operator console. `CCFLEET_ADMIN_HOST` can move the
+console to a separate hostname.
 
-Without Docker: `pip install git+https://github.com/cdcupt/ccfleet` gives you
-`ccfleetd` and `ccfleet-agent`; `deploy/ccfleetd.service` is a systemd unit.
-
-### 2. Node (one VPS per owner, in a supported region)
-
-Add the person in the console. It hands you one command carrying their node's
-identity. Run it on a fresh server as root:
+Create a shared machine and its slots:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \
+ccfleetd node add pool-1 --owner ops --region us-west
+ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
+```
+
+On a fresh Ubuntu machine, first install base hardening and then the shared
+machine agent:
+
+```bash
+git clone https://github.com/cdcupt/ccfleet.git
+sudo ./ccfleet/node/bootstrap.sh ops "ssh-ed25519 AAAA... operator"
+sudo hostnamectl set-hostname pool-1
+sudo timedatectl set-timezone Etc/UTC
+
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
   | sudo bash -s -- \
       --server https://fleet.example.com \
-      --node alice-node --token <from the console> \
-      --owner alice --ssh-key "ssh-ed25519 AAAA... alice"
+      --node pool-1 \
+      --token <node-token>
 ```
 
-It installs packages, creates the owner, hardens SSH and the firewall, installs
-Claude Code, pre-answers the two setup prompts, starts the agent and the
-persistent work session, and sends a first heartbeat. Then it stops. It enables
-Remote Control but cannot start it, because that needs a login that does not
-exist yet; the owner starts it below.
-
-Without `--ssh-key` it skips SSH hardening rather than risk locking everyone out.
-On a machine already running other services, add `--skip-harden`.
-
-The owner finishes it themselves, on that machine:
+Configure the fixed endpoint the BWH server uses to reach that machine. Copy
+the node's public SSH host key to a file on the server first:
 
 ```bash
-claude          # choose the claude.ai login, approve in a browser, paste the code back
-/status         # confirms their account, no base URL, no auth token
-systemctl --user start claude-remote-control.service   # once, to enable claude.ai access
+ccfleetd node access pool-1 \
+  --host <address-reachable-from-bwh> \
+  --port 22 \
+  --host-key-file /secure/path/pool-1-ssh_host_ed25519_key.pub
 ```
 
-Nobody else can do that step: a subscription login must complete through
-Anthropic's own flow. After it, they work from a terminal (`ssh` lands them in a
-live session) or from claude.ai/code and the phone app with nothing installed.
+Only the broker needs network access to the node's SSH port. The customer uses
+the public HTTPS/WSS service and never receives the node address.
 
-### 3. Laptop (optional): your slot's account, or the computer's own login
-
-With a device token (inference only, so no Remote Control), `ccfleet-connect`
-wires a computer to the Claude account on your slot, which you can use from as
-many of your own computers as you like. ccfleet's one-account rule is about its
-own machines, one account per slot; a computer of yours can also have its own
-Claude login, with your own subscription, the slot's account or another one.
-`--off` parks the token so new shells use that login, and `--on` brings the
-token back after checking it still works. One is in use at a time. Connecting
-again with another token replaces the one the computer had. A computer that
-saved several under names with an earlier version keeps the one in use and has
-the others wiped, the first time it runs.
+Grant a signed-in customer an allowance:
 
 ```bash
-ccfleet-connect             # paste the token from `claude setup-token` (input hidden)
-ccfleet-connect --off       # use this computer's own Claude login instead
-ccfleet-connect --on        # back to your slot's account
-ccfleet-connect --status    # which one is in use, and whether it still works
-ccfleet-connect --remove    # undo it
+ccfleetd account quota alice@example.com 1
+ccfleetd account role you@example.com admin
 ```
 
-A copy installed before `--off` and `--on` existed answers them with `unknown
-option`, and the installer never overwrites a copy that is already there.
-Replace it with the current one; the token and the rc line stay as they are:
+## Lifecycle rules
 
-```bash
-curl -fsSL -o ~/.local/bin/ccfleet-connect \
-  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh
-```
+- A slot is offered only after its machine confirms the previous Linux user is
+  absent.
+- Releasing a slot immediately revokes all paired CC Fleet devices, stops its
+  processes and deletes the Linux user and files. The slot becomes free only
+  after the machine confirms the wipe.
+- A slot keeps one Claude account. **Sign in again** accepts only that account;
+  **Change account** replaces it deliberately and at most once a week.
+- One Claude account detected on two live fleet slots raises an alert.
+- Lowering an allowance does not seize an existing slot.
+- Payments are records for the operator; the allowance remains the grant.
+- Claude Code updates are staged and never interrupt the running persistent
+  session. New sessions use the installed version.
 
-### 4. Shared machines: one machine, one slot, under the name its holder gives it
+The public site documents the current product at `/`, `/docs/guide`,
+`/docs/how-it-works`, `/docs/terms` and `/privacy`.
 
-A shared machine carries one **slot**: its own Linux user, with its own home,
-its own Claude Code and its own Claude sign-in, made by the person who holds it
-with their own Claude account, so no credential is ever shared between people.
-One machine is one slot because claude.ai/code shows a machine by its hostname:
-when somebody claims the slot it gets a neutral name (`slot-4821`), never
-anything from their address, because Anthropic receives the hostname. They
-rename it on their page (`ccfleetd slot name <slot> [<name>]` does it for them),
-the machine takes that name as its hostname, and the name goes when the slot is
-freed. People sign in to ccfleet with Google, which is asked only for
-the `openid email` scopes: ccfleet keeps the address and Google's stable account
-id, which is what an account is keyed on because addresses change. The operator
-grants each person an allowance of slots, and they claim one, sign it in to
-their own Claude account and give it back from `/account`. One Claude account
-per slot: somebody with two accounts holds two slots. Their page shows which
-account each slot is signed in to, so the slot reports that account's email
-address; the console never shows it. A slot keeps its account: signing in
-again happens in a scratch directory and is kept only if it is that same
-account. That keeps a sign-in with the wrong account from
-landing by accident; it is not a wall against the holder, whose home the slot
-is and who can change its files. So a slot found signed in to another account
-some other way raises `account_changed` once Claude Code's profile says so.
-The way to move a slot to another Claude account is *Change account* on its
-holder's page, at most once a week: the new account signs in to the scratch
-directory while the old one stays, and replaces it only once that has worked,
-files kept, so the slot never holds two. And an account signed in on two live places at once (two
-slots, or a slot and a node) raises `account_elsewhere` on both. The holder's
-card says so either way. An owner's own node can count as a slot they hold,
-`ccfleetd node hold <node> <email>`, so everything a person uses is one list
-on their page: a record only, never handed out or wiped. A shared machine can
-be kept for one account, `ccfleetd node reserve <machine> <email>`: its free
-slot then goes to that account and nobody else, and `--none` opens it again.
-The operator sets the price of a slot for a month in the console's Price card,
-or with `ccfleetd price set 20 USD`, and the public pages show it; it is shown,
-never charged, and the allowance stays the only thing that grants a slot.
-The guidebook's chapter 11 covers the same ground for the operator, step by
-step.
+## Security and privacy boundary
 
-The access model is **many devices, one private slot, one Claude account**.
-Remote Control works from claude.ai/code and the official Claude desktop and
-mobile apps. `ccfleet-connect` puts an Anthropic device token for that same
-account on a user's own computer, where the unmodified Claude Code CLI works on
-local files and talks directly to Anthropic. Customer slots do not expose SSH,
-mount a local filesystem or provide a common API endpoint. There is no account
-selection, credential routing or failover to a different account: this copies
-the convenient local/cloud/client experience, not CC Host's proxy or account
-pool.
+- The outer connection is TLS/WSS to the broker.
+- The inner OpenSSH connection is encrypted end-to-end and pins the slot host
+  key returned at pairing.
+- Device keys live outside holder-writable home directories. Both sshd and each
+  key enforce the forced entrypoint, with no agent forwarding, port forwarding,
+  X11 forwarding or user-supplied SSH command.
+- Pairing codes are random, single-use, stored only as hashes and expire after
+  ten minutes.
+- Device access tokens are random and stored only as hashes. Device removal or
+  slot release revokes them immediately.
+- The broker chooses the node endpoint from operator configuration; the client
+  cannot use it as an arbitrary TCP proxy.
+- The local client stores its private key and access token under
+  `~/.config/ccfleet` with mode `0600`.
+- The slot administrator still has root. End-to-end transport encryption does
+  not protect data from the machine that intentionally runs Claude Code.
 
-```bash
-# fleet server: Google sign-in needs an OAuth "Web application" client whose
-# redirect URI is <CCFLEET_PUBLIC_URL>/auth/google/callback, and in ccfleetd.env
-#   CCFLEET_GOOGLE_CLIENT_ID=...  CCFLEET_GOOGLE_CLIENT_SECRET=...
-#   CCFLEET_COOKIE_SECRET=<openssl rand -hex 32>
-ccfleetd node add pool-1 --owner ops --region us-west            # prints the machine's token once
-ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01     # its one slot, named after it
+## Operations
 
-# the machine, as root. Harden it first with bootstrap.sh: keys-only SSH, the
-# firewall, unattended upgrades, and a login for you, but no agent. Not install.sh,
-# which turns the box into one owner's node, and machine-setup.sh refuses to run
-# beside that node's agent.
-git clone https://github.com/cdcupt/ccfleet.git && sudo ./ccfleet/node/bootstrap.sh ops "ssh-ed25519 AAAA... you"
-# its name, and a clock that says nothing about where its holder is
-sudo hostnamectl set-hostname pool-1 && sudo timedatectl set-timezone Etc/UTC
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
-  | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token <64-hex>
+Agents report heartbeat facts and the server raises alerts for missing nodes,
+missing or stale Claude login, version drift, disk pressure and changed egress.
+Legacy owner-node and Remote Control monitoring remains in the code for owner
+installations. Hosted customer slots actively disable the old Remote Control
+unit; it is not an alternative product mode.
 
-# once somebody has signed in with Google
-ccfleetd account quota alice@example.com 1                        # their allowance; zero until granted
-ccfleetd account role you@example.com admin                       # an operator, who signs in with Google
-ccfleetd payment add alice@example.com 30 USD 2026-10-31          # a record for you; it enforces nothing
-```
+Useful paths:
 
-The rules the rest depends on:
-
-- **A slot is only handed out once the machine has confirmed its Linux user is
-  absent**, and it is free again only after the machine confirms the wipe.
-  Giving a slot back deletes everything in it; the person's Claude account
-  itself is untouched.
-- **Lowering an allowance takes nothing away.** It only stops more claiming.
-  Taking a held slot back is a release, with the wipe that implies; the console
-  asks for the slot's id to be typed.
-- **Nothing acts as a user.** The console can take a slot back; it cannot sign
-  in on anybody's behalf, type their code, or read their device token.
-- **Customers do not SSH into slots.** Cloud work uses Remote Control; local
-  work uses the ordinary Claude Code CLI with an Anthropic device token. Git or
-  client attachments move files into a cloud slot when needed. Operator SSH is
-  infrastructure access and is never handed to a slot holder.
-- **Payments are a record, not a gate.** The console shows who is paid through
-  when, and marks a lapse in red while that person still holds or may claim
-  slots. A lapse takes no slot and stops no claim; what to do about it is yours.
-  The form that records one suggests the next paid-through day: a month on from
-  what they have paid for, or from today.
-- **The console is at `/admin`; the bare address is the product's.** It is the
-  front page, the same page for everybody (and at `/docs` too): what ccfleet is
-  and how to start. Only its buttons follow who is looking: sign in, or your
-  slots once you are signed in, and the console as well for an operator.
-  `CCFLEET_ADMIN_HOST=admin.fleet.example.com` moves the console to its own
-  hostname instead, with its own Google redirect URI and its own sessions;
-  every other hostname is then only the product, and the admin host's bare
-  address goes to the console. The mark at the top left of every page, the
-  console's included, goes to the front page.
-- **A slot tells Anthropic about the machine, not the person.** Machines keep
-  their clocks on UTC, and the pages show times in the viewer's own zone.
-  Slots start with Claude Code's error reports, bug reports and feedback
-  surveys off; its usage telemetry stays on, because Remote Control will not
-  start without it. Nothing rewrites what Claude Code reports about where it
-  runs.
-
-What to send the people who buy slots: the product site serves public pages
-for them — the bare address (what it is, what they need, how to buy; also at
-`/docs`), `/docs/guide`, `/docs/how-it-works`, `/docs/terms` and `/privacy`.
-Set `CCFLEET_CONTACT_EMAIL` to publish an address on them; without it they say
-to ask whoever sent the link.
-
-Keeping it up to date:
-
-- **Claude Code in slots** follows the machine's pin, which the server sends
-  with every reply: `ccfleetd node pin <machine> latest` (or `stable`) tracks
-  that Anthropic channel, and an exact version holds the whole machine back.
-  The machine agent installs a new release in each slot at a quiet moment and
-  never interrupts a running session. Holders move their own slot between the
-  two channels from their page (*Update to …*, *Back to Stable*); an exact pin
-  overrides them.
-- **Slots start on Opus at max effort.** `slot-add.sh` writes `"model": "opus"`
-  and `CLAUDE_CODE_EFFORT_LEVEL=max` (in `env`, the only place Claude Code keeps
-  max) into the slot's `~/.claude/settings.json`, wherever the holder has not
-  chosen already.
-- **The agents** change only when ccfleet does. Roll them out after deploying
-  the server: owner nodes re-fetch `ccfleet_agent/agent.py`, shared machines
-  re-run `machine-setup.sh` pointed at the same commit
-  (`CCFLEET_REPO_RAW=https://raw.githubusercontent.com/cdcupt/ccfleet/<commit>`).
-  One node first, then the rest.
-- **The OS** installs security updates daily; a machine that needs a reboot says
-  so in the console.
-
-Adding another machine is the runbook [Add a shared machine](docs/runbooks.md).
-
-## Layout
-
-
-> Nodes need a working per-user systemd manager for the agent timer. On a minimal
-> Debian or Ubuntu image that means `libpam-systemd` must be installed; `setup-owner.sh`
-> checks for this and stops with instructions rather than enabling a timer that never runs.
-
-| Path | What |
+| Path | Purpose |
 | --- | --- |
-| `ccfleetd/` | fleet server (standard library only): API, store, rules, monitor, notifier, dashboard, user site, customer docs, payments ledger, CLI |
-| `ccfleet_agent/agent.py` | single-file heartbeat agent for nodes |
-| `ccfleet_agent/machine.py` | the shared machine's agent: runs as root, adds and wipes slot users, reports every slot |
-| `node/` | bootstrap, owner setup, backup, egress probe, staged upgrade, systemd user units; `machine-setup.sh`, `slot-add.sh`, `slot-remove.sh` for shared machines |
-| `gateway/` | optional pass-through gateway (Caddy), for owners who must keep files local |
-| `docs/tunnel.md` | reporting over an SSH tunnel when the server has no public endpoint |
-| `deploy/` | Dockerfile, compose, systemd unit, Caddy TLS example, CI workflow |
-| `docs/` | guidebook, design, compliance notes, runbooks |
-| `tests/` | pytest suite (`uv run --with pytest --with pytest-cov pytest --cov`) |
-
-## Alert rules
-
-| Rule | Level | Fires when |
-| --- | --- | --- |
-| `no_heartbeat` | critical | no heartbeat for 15 min (`CCFLEET_HEARTBEAT_MAX_AGE_S`) |
-| `claude_missing` | critical | `claude` not found on the owner's PATH |
-| `version_mismatch` | warn | running version differs from `ccfleetd node pin` |
-| `credentials_missing` | critical | no login on the node: owner must run `claude` and `/login` |
-| `token_stale` | warn | credentials file not refreshed for 24 h (`CCFLEET_TOKEN_STALE_S`) |
-| `token_expired` | warn | access token expired over an hour ago and was not refreshed |
-| `disk_high` | warn / critical | disk at 85% / 95% |
-| `egress_changed` | warn | public IP differs from the previous heartbeat |
-| `remote_control_down` | warn | node has Remote Control alerting on and the service is not active (`node add --rc-expected`, or `node rc-expected <id> on\|off` later) |
-
-Alerts open once, close when the condition clears, and re-open on level change.
-Each transition is logged and, when configured, sent to Telegram.
+| `docs/design.md` | architecture and trust boundaries |
+| `docs/runbooks.md` | operator procedures |
+| `docs/compliance.md` | account and credential constraints |
+| `docs/tunnel.md` | optional heartbeat reporting tunnel |
+| `deploy/` | container, systemd and TLS examples |
+| `tests/` | unit and integration test suite |
 
 ## Development
 
 ```bash
-uv run --python 3.12 --with pytest --with pytest-cov --with ruff --no-project -- ruff check .
+uv run --python 3.12 --with ruff --no-project -- ruff check .
 uv run --python 3.12 --with pytest --with pytest-cov --no-project -- pytest --cov
-uvx --from shellcheck-py shellcheck -S warning node/*.sh node/attach.sh
+uvx --from shellcheck-py shellcheck -S warning node/*.sh laptop/*.sh
 ```
 
-Python 3.9+, no runtime dependencies. CI runs on every push and pull request
-(`.github/workflows/ci.yml`): the test suite on 3.9, 3.12 and 3.13 with coverage
-held above 80%, shellcheck and `bash -n` over every shell file, and a parse check
-of the systemd units and the launchd plist. The unit check is there because
-several of this project's real bugs were unit-file mistakes.
-
-The shell job selects files by shebang **or** by a `# shellcheck shell=`
-directive, so `node/attach.sh`, which is sourced rather than executed and has no
-shebang, is still checked.
+Python 3.9+; the runtime server uses only the standard library.
 
 ## License
 
-MIT. Not affiliated with or endorsed by Anthropic. You are responsible for
-using Claude within Anthropic's terms, including the supported-regions policy.
+MIT — see [LICENSE](LICENSE).

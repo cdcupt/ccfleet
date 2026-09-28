@@ -1,469 +1,216 @@
-# ccfleet design
+# CC Fleet design
 
-## Goal
+## Product invariant
 
-Let a handful of people each run their own Claude subscription on their own
-hosted node, and give one operator visibility over the whole fleet, while
-staying inside the shapes Anthropic documents as permitted: the unmodified
-Claude Code binary, signed in by its owner, talking to Anthropic directly.
+CC Fleet provides remote Claude Code slots without an account pool:
 
-The one-line rule everything derives from: **one owner, one account, one node.**
+> one holder → one slot → one Claude account
 
-## Components
+A holder may pair several personal computers with that slot. Pairing authorizes
+transport to the slot; it never exports the Claude credential. Every model
+request is created by the original Claude Code process running in the assigned
+slot and goes from that slot to Anthropic.
 
-```mermaid
-flowchart LR
-  subgraph laptop [Owner's devices]
-    T[terminal / VS Code / phone]
-  end
-  subgraph node [Node, one per owner]
-    C[unmodified claude<br/>own /login]
-    A[ccfleet-agent<br/>systemd timer, 5 min]
-    B[ccfleet-backup<br/>nightly, no credentials]
-  end
-  subgraph server [Fleet server]
-    D[ccfleetd<br/>heartbeat API, store, rules]
-    W[dashboard + JSON]
-    N[Telegram / log]
-  end
-  I[node/install.sh<br/>one command from the console] -.provisions.-> node
-  T -- ssh / mosh / Remote Control --> C
-  C -- HTTPS, own OAuth --> API[(api.anthropic.com)]
-  A -- POST /api/heartbeat<br/>bearer node token --> D
-  D --> W
-  D -- alert transitions --> N
-```
-
-### Deployment topology
-
-The default shape: three roles, and only the node sits in a model-request path.
-Two supported variants change that, and both are called out below.
+## Data path
 
 ```mermaid
 flowchart LR
-  U[Owner<br/>laptop · phone · any browser]
-  subgraph N [Node · its own VPS · its own public address]
-    CC[unmodified claude<br/>owner's own /login]
-    AG[ccfleet-agent]
-  end
-  FS[Fleet server<br/>ccfleetd + console]
-  API[(api.anthropic.com)]
+  U[User terminal<br/>ccfleet]
+  B[BWH<br/>CC Fleet HTTPS/WSS broker]
+  S[Assigned Linux slot<br/>forced entry → tmux → original claude]
+  A[Anthropic]
 
-  U -- claude.ai / Remote Control --> CC
-  U -- ssh / mosh --> CC
-  CC == model traffic, own OAuth, direct ==> API
-  AG -- heartbeat: HTTPS to the server --> FS
-  AG -. or to its own loopback,<br/>through an SSH tunnel .-> FS
-  U -- console: HTTPS, token or account --> FS
-  U -. or the operator's own ssh -L,<br/>when the server is loopback-only .-> FS
+  U == TLS/WSS<br/>inner SSH stream ==> B
+  B == opaque SSH bytes ==> S
+  S == Claude HTTPS<br/>slot's own account ==> A
 ```
 
-By default the agent posts to the server's public HTTPS URL, which is the value
-the installer writes into `agent.env`. Where you would rather not expose the
-server at all, `ccfleet-tunnel.service` forwards a loopback port on the node to
-the server's loopback port and the agent posts to `127.0.0.1` instead, with SSH
-providing the encryption. The installer ships that unit but does not enable it;
-`docs/tunnel.md` covers the setup and what it costs, namely that the server then
-needs a reachable SSH port.
+The local command is a terminal transport, not a second Claude client. The
+outer layer is TLS/WSS between the computer and BWH. Inside it, OpenSSH is
+authenticated and encrypted between the computer and the slot. BWH selects the
+operator-configured node endpoint and relays bytes; it does not terminate SSH
+and therefore cannot inspect prompts or terminal output.
 
-The console follows the same choice. With a public server it is an HTTPS entry,
-authenticated by the operator's admin token or by a named account (see
-[Console accounts](#console-accounts)). With a loopback-only server nothing outside can reach
-ccfleetd at all, so the operator forwards the port themselves with `ssh -L` and
-browses `127.0.0.1`.
+The slot host key is returned at pairing and written to a device-specific
+`known_hosts` file. OpenSSH uses `StrictHostKeyChecking=yes`, so a later machine
+or routing substitution fails closed.
 
-In this shape nothing belonging to the operator sits between a node and
-Anthropic. A node's public address is its own, which is the point of one VPS per
-owner: several nodes on one host would share that host's address and stop being
-independent.
+## Pairing
 
-The one supported exception is the optional pass-through gateway in `gateway/`,
-and it is a different situation: it exists for an owner who must keep files on
-their laptop and cannot work on a hosted node at all. There Claude Code runs on
-the laptop, `ANTHROPIC_BASE_URL` points at the gateway, and the gateway does sit
-in the model-request path. It passes the body and Anthropic's required headers
-through unchanged, including the owner's own bearer, and stores nothing. Like any
-reverse proxy it sets `Host` and adds `X-Forwarded-*`; what keeps it a gateway
-rather than a relay is that it never substitutes a credential and never alters
-who the client says it is. It is still an operator-owned hop and worth knowing
-about before you reach for it.
+1. A signed-in holder requests a pairing code for a held, active slot.
+2. The server creates a high-entropy `ccf_pair_…` value, stores only its
+   SHA-256 hash, and expires it after ten minutes.
+3. `ccfleet login` generates a local Ed25519 key pair and exchanges the code
+   and public key at `/api/cli/register`.
+4. Registration consumes the pairing code atomically and returns:
+   - a random `ccf_dev_…` access token;
+   - the assigned slot id, display name and Unix user;
+   - the public WSS endpoint;
+   - the slot machine's SSH host key.
+5. The server stores only the device-token hash, public key, label,
+   fingerprint and timestamps. The private key remains on the paired computer.
+6. Machine desired state contains public keys only. The agent installs them in
+   `/etc/ccfleet/authorized_keys/<unix-user>`, outside the holder-writable home.
 
-### Node
+A slot supports at most ten paired devices. Pairing codes are single-use.
+Removing a device deletes its server row, closes an already-open broker stream
+and removes its public key at the next machine convergence. Releasing,
+unholding or removing the slot deletes all pairings and devices immediately on
+the server; releasing sends an empty key set before a wipe attempt.
 
-A small VPS in a supported region with its own public address, one Linux user
-per owner, one owner per machine. Several nodes may belong to one person, each
-with its own subscription; what never happens is two people on one account, or
-several accounts behind one endpoint.
+## Connection
 
-`node/install.sh` is the supported path. The console prints it, filled in, when
-you add a node, and it takes a blank server to ready-for-sign-in in one command:
-packages, the owner account with lingering enabled, SSH and firewall hardening,
-Claude Code via Anthropic's installer, the two one-time setup prompts
-pre-answered, the agent and its units, the work session, and a first heartbeat.
-It refuses to report the machine ready if a service did not come up.
+`ccfleet` chooses the active local profile and starts OpenSSH with a
+`ProxyCommand` that invokes `ccfleet proxy`. The proxy performs an authenticated
+WebSocket upgrade to `/api/cli/connect` and carries binary SSH bytes.
 
-Two things it deliberately does not do:
+The broker:
 
-- **Sign in.** A subscription login must complete through Anthropic's own flow,
-  so the owner does that themselves, once.
-- **Start Remote Control.** That needs an authenticated session, which does not
-  exist until the sign-in. The unit is enabled so it returns after a reboot, and
-  the owner starts it once by hand. It cannot usefully retry either: the unit is
-  `Type=forking` around a detached tmux session, so systemd sees the launch
-  succeed the moment tmux detaches and never learns the session failed to
-  authenticate.
+- hashes and resolves the device token;
+- verifies the device, slot, holder, slot state, node state and fixed endpoint;
+- never accepts a host or port from the client;
+- opens one TCP connection to the configured node endpoint;
+- forwards complete, bounded, unfragmented binary WebSocket frames;
+- handles ping, pong and close frames;
+- stops both directions when either side closes.
 
-The command omits `--ssh-key`, because the console cannot know the owner's
-public key. Without that flag the installer skips SSH, firewall and fail2ban
-hardening rather than disable password logins on a machine with no key on it.
+The client asks OpenSSH for a PTY and authenticates as the assigned slot Unix
+user. Each installed key has these restrictions:
 
-`node/bootstrap.sh` plus `node/setup-owner.sh` remain for machines managed by
-hand. They are **not** equivalent: they install no fail2ban at all, leave the
-setup prompts unanswered, leave `agent.env` as a template, do not enable Remote
-Control, and neither re-checks the units nor sends a first heartbeat.
+```text
+command="/usr/local/lib/ccfleet/slot-entry.sh",no-agent-forwarding,
+no-port-forwarding,no-X11-forwarding,no-user-rc
+```
 
-#### Two tmux servers, deliberately
+The sshd `Match Group ccfleet-slots` block independently sets the same
+`ForceCommand`, disables forwarding and reads keys only from the root-controlled
+directory. A slot can use shell tools through Claude Code but cannot replace
+its own SSH authorization or escape device revocation.
 
-The work session `cc` lives on the default tmux server; Remote Control runs on
-its own socket, `tmux -L ccfleet-rc`. This is load-bearing rather than tidy. A
-tmux server belongs to whichever systemd unit started it, and the default
-`KillMode=control-group` kills every process in a unit's control group when it
-stops. Sharing one server meant restarting Remote Control destroyed the owner's
-work. `ccfleet-shell.service` also carries `KillMode=process` so that stopping
-it leaves the session it pre-warmed alone. Attach to Remote Control with
-`tmux -L ccfleet-rc attach -t remote-control`.
+`slot-entry.sh` rejects non-interactive sessions, normalizes unsupported
+`TERM` values, ignores `SSH_ORIGINAL_COMMAND`, changes to `~/workspace` and
+executes:
 
-#### Landing in the work session
+```bash
+tmux new-session -A -s ccfleet -c "$HOME/workspace" "$HOME/.local/bin/claude"
+```
 
-`node/attach.sh`, appended to the owner's `~/.bashrc`, attaches an interactive
-login to `cc` so `ssh` alone puts them where their work is. The guards matter:
-it fires only when `TMUX` is empty, `PS1` is set, `$-` contains `i`, stdout is a
-terminal, and `CCFLEET_NO_ATTACH` is unset. The terminal check is what protects
-scp, rsync and git over ssh, which pipe their output and would be corrupted by a
-multiplexer writing into it; `CCFLEET_NO_ATTACH` is the escape hatch for anyone
-who wants a plain shell.
+This gives the original Claude Code interface while preventing the transport
+key from becoming a general-purpose SSH key. Shell commands remain available
+through Claude Code's ordinary tool execution inside the slot.
 
-Two things it learned the hard way. It does not `exec`, because that turned any
-tmux failure into a disconnect rather than a degraded login; `tmux ... && exit`
-keeps the same outcome on success while leaving a shell on failure. And it
-replaces a `TERM` the node has no terminfo for, since a stock Debian knows none
-of ghostty, kitty, wezterm or alacritty, and an unusable `TERM` is exactly what
-made tmux refuse. Unset, `dumb` and option-shaped values are replaced too:
-`TERM` arrives from the ssh client, so it is not trusted input.
+## Reconnection
 
-Where the terminal cannot be checked in advance, because `infocmp` is absent,
-tmux is simply tried and then retried once with `xterm-256color` rather than
-guessing why it failed. If that second attempt fails too, the terminal was never
-the problem, so the owner's original `TERM` is handed back rather than leaving a
-speculative downgrade in their shell. A terminal the node genuinely cannot use is
-replaced permanently, because giving that back would break the fallback shell as
-well.
+The tmux session belongs to the slot, not the network connection. On an SSH
+transport failure, the local client retries for up to ten minutes with bounded
+backoff. A new connection attaches to the same `ccfleet` session. Intentional
+Claude exit returns normally and is not turned into a reconnect loop.
 
-#### Permission posture
+## Trust boundaries
 
-Prompts are on by default. `--bypass-permissions` turns them off for that node,
-in the terminal and in sessions driven from claude.ai, and is opt-in because the
-owner has passwordless sudo. Tool calls run as the owner rather than as root, but
-with prompts off nothing stands between a command and root, because the owner can
-take it without being asked again.
+### User computer
 
-It writes two halves, because they are separate mechanisms: `CCFLEET_RC_ARGS` in
-an env file the Remote Control unit reads, since remote clients cannot select
-bypass for themselves, and `permissions.defaultMode` for sessions the owner
-starts by typing `claude`. A later run without the flag undoes both, and restarts a
-running Remote Control so the change actually lands.
+Stores, mode `0600`:
 
-The two halves are undone differently, because one file is ccfleet's and the
-other is not. `remote-control.env` belongs to the installer and is rewritten
-whole on every run, so a hand edit to it does not survive.
-`~/.claude/settings.json` belongs to the owner, so only the keys a previous run
-set are removed, their prior values come back from a snapshot, and a value the
-owner has changed since is left alone.
+- one private SSH key per paired profile;
+- the pinned host key;
+- the CC Fleet device access token and slot metadata.
 
-### Agent
+It stores no Claude OAuth credential and does not set `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
 
-`ccfleet_agent/agent.py` is one file with no dependencies so it can be copied
-to a node without packaging. Every five minutes it collects:
+### BWH broker
 
-| Field | Source | Why |
-| --- | --- | --- |
-| `claude.version`, `claude.path` | `claude --version` | version pinning and drift |
-| `credentials.present`, `store` | existence of `~/.claude/.credentials.json` | login missing → owner must `/login` |
-| `credentials.mtime`, `expires_at`, `subscription_type` | file stat, plus two non-secret fields parsed from the JSON | stale or expired login; the parsed token values are discarded and never enter the payload |
-| `disk`, `mem`, `load`, `uptime_s`, `hostname` | `shutil.disk_usage`, `/proc` | capacity and health |
-| `egress.ip`, `egress.source` | first well-formed answer from several public echo services | the node's public identity, alerts on change |
-| `remote_control.state` | `systemctl --user is-active claude-remote-control.service` | phone/browser access up or down |
-| `tmux_sessions` | `tmux ls` | is anyone working on the node |
+Can observe that a device connected, which slot it resolved to and the traffic
+timing/volume available to any relay. It stores device metadata and token
+hashes. Because SSH is the inner layer, it cannot read the terminal content.
 
-The payload is posted with a per-node bearer token; the server stores only the
-whitelisted, type-checked subset (`ccfleetd/heartbeat.py`). Network errors and
-5xx responses are retried with backoff; 4xx are not.
+BWH is still trusted for availability and routing: it can refuse a connection
+or point a slot at the wrong endpoint. Host-key pinning turns endpoint
+substitution into a visible connection failure rather than silently exposing a
+session.
 
-### Server
+### Slot machine
 
-`ccfleetd` is standard-library Python: `ThreadingHTTPServer`, `sqlite3`,
-`urllib`. Modules:
+Intentionally decrypts the terminal because it runs Claude Code. It holds the
+Claude credential, project files and tool processes. The machine administrator
+has root and can technically inspect them; no transport design can hide data
+from the computer that executes it.
 
-- `config.py`: immutable settings from `CCFLEET_*` environment variables.
-- `store.py`: nodes (token hashes only), heartbeats, alerts; WAL mode; one lock.
-- `heartbeat.py`: payload validation and whitelisting.
-- `rules.py`: pure functions from (node, latest, previous, now) to findings.
-- `monitor.py`: reconciles findings against open alerts, notifies on
-  transitions, runs the periodic loop and retention pruning.
-- `notify.py`: log and Telegram notifiers; failures are logged, never raised.
-- `render.py`: server-rendered dashboard, everything HTML-escaped, no scripts.
-- `api.py`: routes, auth, body limits, security headers.
-- `cli.py`: `serve`, `check`, `alert-test`, `node …`.
+Linux users isolate ordinary slot processes from one another, but they are not
+a boundary against root or a kernel compromise.
 
-Authentication: agents use `Authorization: Bearer <64-hex token>`; the token
-is generated with `secrets.token_hex(32)` and stored as SHA-256. Operators use
-HTTP Basic (any user name, admin token as password) or a Bearer admin token.
-Comparisons are constant-time. The server binds to loopback by default and
-expects a TLS proxy in front.
+### Anthropic
 
-### Alert lifecycle
+Receives the ordinary traffic emitted by the original Claude Code process on
+the slot under the account signed in there. Network, host and application
+metadata generated by Claude Code are therefore the slot's. The user's browser
+is still involved when the user completes Anthropic's login flow, and Anthropic
+handles that browser interaction under its own policies.
+
+## Control plane
+
+Machine agents post authenticated heartbeats and request desired state. The
+server responds with per-slot lifecycle, version, sign-in operations and the
+public keys of currently paired devices. Node bearer tokens and device tokens
+are stored as SHA-256 hashes.
+
+The customer website provides:
+
+- Google sign-in to CC Fleet;
+- claim, release, rename and account-change lifecycle;
+- the Claude sign-in link/code exchange;
+- CLI pairing and per-device revocation;
+- quota and health summaries;
+- public product, privacy, terms and status pages.
+
+The operator console manages accounts, allowances, payments, nodes, slots and
+alerts. It does not expose Claude credentials or pairing secrets.
+
+## Slot lifecycle
 
 ```mermaid
 stateDiagram-v2
-  [*] --> clear
-  clear --> open: finding appears (notify "opened")
-  open --> clear: finding gone (notify "resolved")
-  open --> open: same rule, same level (silent)
-  open --> reopened: same rule, new level (close + open, notify)
-  reopened --> clear: finding gone
+  [*] --> free
+  free --> claiming: holder claims
+  claiming --> claimed: machine creates user
+  claimed --> active: Claude login succeeds
+  active --> releasing: holder/operator releases
+  releasing --> free: machine confirms user absent
 ```
 
-Rules are evaluated on every heartbeat for that node and once a minute for all
-nodes (which is how `no_heartbeat` fires without any heartbeat arriving).
+- Pairing is allowed only in `active`.
+- A slot's accepted Claude account fingerprint is bound after first login.
+- “Sign in again” keeps that fingerprint; “Change account” deliberately
+  replaces it and is rate-limited.
+- Releasing closes device transports and revokes keys before the asynchronous
+  wipe completes, including when that wipe fails and must retry.
+- A free slot has no holder, pairings, devices or account binding.
 
-One rule deliberately waits. `claude_missing` needs two consecutive misses
-before it fires, because the installed binary is a symlink that Anthropic's
-installer replaces, and a probe landing in that window finds nothing. A node
-that genuinely loses Claude Code still alerts one interval later; a node that
-never had it alerts immediately, since there is then no earlier heartbeat that
-found one.
+## Persistence and schema
 
-### Backups
+Relevant tables:
 
-`node/backup.sh` archives the Claude Code state directory nightly, excludes
-`.credentials.json`, `debug/` and `cache/`, refuses to keep an archive that
-contains the credentials file, keeps the last 14 archives locally and uploads
-to an rclone remote when configured. Archive paths are relative to `/`
-(`home/<owner>/.claude/...`), so restore with `tar -xzf <archive> -C /`.
-Restoring a node never restores a credentials file: the owner logs in again.
+- `nodes`: fixed BWH-reachable access host, port and SSH host key;
+- `slots`: holder, Unix user, lifecycle, display name and Claude-account
+  binding;
+- `cli_pairings`: pairing-token hash, holder, slot and expiry;
+- `cli_devices`: token hash, public key, fingerprint, label and timestamps;
+- `heartbeats`, `alerts`, `slot_logins`, `claude_updates`, accounts and payment
+  records for the existing control plane.
 
-## Security model
+SQLite writes use the store transaction lock. Pairing consumption and device
+creation occur in one write transaction, which prevents replay races.
 
-- No ccfleet component stores or logs a token. The agent parses the credentials
-  file in memory to extract the expiry and plan type, discards the rest, and its
-  tests assert no token material reaches the payload. The server never receives
-  token values. The optional gateway forwards an owner's own requests, OAuth
-  header included, in transit only and keeps nothing.
-- The server stores node token hashes, validates every heartbeat field, caps
-  body size, and escapes every value it renders.
-- Nodes are single-owner machines: keys-only SSH, firewall, unattended security
-  upgrades, user services with `NoNewPrivileges`.
-- The agent and backup run as the owner's user; the fleet server runs as an
-  unprivileged user (Docker or the provided systemd unit).
-- The owner has passwordless sudo on their own node, which is why
-  `--bypass-permissions` is opt-in and says so out loud when used: with prompts
-  off nothing stands between a command and root: tool calls run as the owner, and
-  the owner can take root without being asked again.
-- The console takes the operator's admin token, and optionally named accounts.
-  An `owner` account sees only the nodes assigned to that owner and is given no
-  management controls; an `admin` account is equivalent to the token. Passwords
-  are stored as PBKDF2-SHA256 hashes and cannot be recovered, only reset.
-  The token is checked before any account, so a login cannot shadow the operator
-  by choosing the name `admin`.
+## Non-goals
 
-## Working on your own machine
+- No account pool or automatic account selection.
+- No model API compatible endpoint for customers.
+- No Claude credential on BWH or the local computer.
+- No local-project mount or implicit background synchronization.
+- No customer-visible SSH workflow.
+- No promise that a slot is private from its root administrator.
 
-The hosted node is not the only shape. Someone who cannot work on a remote
-filesystem can run Claude Code locally and still be part of the fleet, and both
-halves of that now work.
-
-### The login, and keeping it alive
-
-A laptop has no credentials file to watch: on macOS Claude Code keeps the
-credential in the Keychain, and this agent will not read a secret out of it. It
-does not need to. `~/.claude.json` carries a non-secret account block on every
-platform, and `profileFetchedAt` inside it only advances when a profile fetch
-succeeded against the live login, so it reports liveness rather than merely a
-time. The agent reads presence, that timestamp and the rate-limit tier, and
-nothing else; the email address, full name, account uuid and organisation name in
-the same file are never collected. The one thing derived from them is a
-fingerprint of the account uuid (the first 16 hex digits of its SHA-256): the
-same on every node the account is on, so the server can raise
-`account_elsewhere` when one account is signed in on two live nodes or slots.
-A slot also reports the fingerprint of the account it keeps, the first signed
-in on it until its holder moves it with Change account (at most once a week,
-signed in to scratch and moved in only once that has finished): its page signs
-in again only as that account, and a slot found on another one anyway raises
-`account_changed`. Know the limit: the agent runs
-as the slot's own Unix user and the files are the holder's, and nothing in them
-ties a token to an account, so a holder can pair another account's credential
-with the kept account's profile directly. No check running as them can stop
-that; it shows once Claude Code refreshes the profile with the token in use,
-and it breaks the terms. The binding keeps the page from switching accounts by
-accident, Change account is the one way it moves, and the fingerprints make any
-other switch visible. That is the rule
-this project keeps, one account on one node, checked rather than trusted.
-
-`token_stale` falls back to that timestamp when there is no file to stat, so a
-laptop whose login has gone cold raises the same alert a node does. Version
-pinning and `version_mismatch` work unchanged, which is what makes upgrades
-happen on your schedule rather than Anthropic's. `laptop/com.ccfleet.agent.plist`
-runs the agent every five minutes under launchd, since a Mac has no systemd, and
-it deliberately carries no configuration: the agent reads its own env file.
-
-### The traffic, and a stable address
-
-`ANTHROPIC_BASE_URL` alone points Claude Code at a gateway without replacing the
-credential, which is the arrangement Anthropic documents. `gateway/` implements
-it: a private header to authenticate, that header stripped before forwarding,
-the body and Anthropic's required headers passed through unchanged, streaming
-preserved, nothing stored. It is a proxy, so it does set `Host` and adds the
-usual `X-Forwarded-*`; what it never does is substitute a credential or rewrite
-who the client is. The owner gets a consistent egress address without anyone
-holding their login.
-
-### What this cannot do, and why
-
-It cannot let two people work under one Pro or Max subscription. For a local
-Claude Code to speak as somebody else's personal account there are two
-mechanisms and no third: give them that account's credentials, which is sharing,
-or have a server hold the token and swap it into their requests, which is
-intermediation. A product built around "use the personal account we provide,
-locally" needs the second, and that is what this design will not do.
-
-That is a narrower statement than it first sounds, and the difference matters if
-you are trying to hand access to a team.
-
-**Seats are the supported way to provide access centrally.** On Team or
-Enterprise, an organisation holds the plan and provisions a seat per person, and
-each of them signs in as themselves. Nobody shares a credential and nothing
-intermediates one, so it sits comfortably inside this design: the seat holder
-runs Claude Code locally or on their own node, and the fleet watches it the same
-way. If what you want is "we provide the account", this is the shape that does
-it, rather than a relay.
-
-**Bedrock and Vertex are a different credential model again**, authenticating
-with cloud IAM rather than a subscription. They are out of scope here because
-this project is about subscription logins, not because anything is wrong with
-them.
-
-So the local path works whenever the credential belongs to the person using it,
-whether that is their own subscription or a seat you issued them. You can still
-procure, pay for, administer and monitor it. What you give up against a pooled
-endpoint is real: no failover when someone hits a limit, no single base URL to
-point every tool at, and each person needing their own seat or subscription
-rather than a share of yours.
-
-## Console accounts
-
-The console has two kinds of caller.
-
-The **admin token** is the operator's, works over Basic with any user name or as
-a Bearer token, and is checked first so nothing can displace it.
-
-**Named accounts** are created with `ccfleetd user add`. An `owner` account is
-scoped to one node owner: the dashboard, `/api/nodes` and `/api/alerts` all show
-only that owner's nodes, and the management forms are absent. `admin` accounts
-behave like the token.
-
-The absent forms are not the control. An owner is handed no CSRF token, and every
-write route checks the role, so a hand-built POST is answered **403 rather than
-401**: the credentials were fine, the action was not theirs. That distinction is
-deliberate, because 401 would invite the owner to go looking for better
-credentials.
-
-Passwords use PBKDF2-HMAC-SHA256 at OWASP's iteration floor, salted per user, in
-a self-describing format so the cost can be raised later without invalidating
-existing hashes. Not argon2 or bcrypt, because this project has no runtime
-dependencies and this was not the place to acquire one; the threat is narrow,
-since these accounts read a private dashboard and no node token derives from
-them. An unknown user name costs the same work as a known one, so response time
-does not reveal which accounts exist.
-
-What this does not yet do: there are no sessions, so the browser holds the
-credentials for the realm, and there is no self-service password change.
-
-## How this differs from a hosted-account relay
-
-Products exist that host a Claude account per seat on an isolated machine with
-its own egress address, and the resemblance to this design is real. The
-difference is what sits in front of the account.
-
-```mermaid
-flowchart TB
-  subgraph R [Relay shape]
-    direction LR
-    RU[Several clients] --> AP[Access point<br/>one Base URL + API key<br/>session affinity, failover]
-    AP --> RA[(account A)]
-    AP --> RB[(account B)]
-  end
-  subgraph C [ccfleet]
-    direction LR
-    CU1[Owner A] --> CN1[Node A<br/>claude, A's own login] --> CAPI[(api.anthropic.com)]
-    CU2[Owner B] --> CN2[Node B<br/>claude, B's own login] --> CAPI
-  end
-```
-
-In the relay shape a server holds each account's OAuth token, chooses which
-account answers a given request, and rewrites the request so it looks as though
-it came from that account's own client. That is three separable things: storing
-someone's credential, pooling accounts behind one endpoint, and
-misrepresenting the client.
-
-ccfleet does none of them, and the reason is not squeamishness. Each of the
-three is the thing that makes a fleet look like account sharing rather than
-several people each using their own subscription.
-
-| | Relay / pooled access point | ccfleet |
-| --- | --- | --- |
-| What answers a request | whichever account the pool picks | the one node you are working on |
-| Who holds the OAuth token | the relay | Claude Code on the node, as always |
-| Request headers and client identity | rewritten to match the captured account | not rewritten; the real client stays the real client |
-| Adding a second person | another seat behind the same endpoint | another machine with their own login |
-| What the management plane can see | the traffic | facts about nodes, never a request |
-| Failover between accounts | a feature | absent on purpose |
-
-The honest summary: the hosting idea is the same, one account per isolated
-machine with its own address. Everything about what sits in front of it is
-opposite. A pooled endpoint is the shape this project exists not to be.
-
-### Several ways into the same slot
-
-“Use it anywhere” changes where the unmodified Claude Code client runs, never
-the account binding. Remote Control reaches the cloud slot through Anthropic
-from claude.ai/code or an official Claude app. On a user's computer,
-`ccfleet-connect` installs an Anthropic device token and the local Claude Code
-CLI reads local files and talks directly to Anthropic. The local path does not
-pass through the slot or ccfleet's server.
-
-Customer slots do not accept SSH. CC Fleet also does not mount, mirror or keep
-a standing connection into a user's computer. Individual files can be attached
-in a Claude client; repositories move through Git. The legacy empty
-`ssh_public_key` desired-state field is sent temporarily so machines revoke any
-key from the short-lived SSH experiment during rollout. None of these paths
-supplies account failover: if the one Claude account is unavailable, ccfleet
-says so rather than borrowing another account.
-
-## What was left out on purpose
-
-| Feature seen elsewhere | Decision | Reason |
-| --- | --- | --- |
-| Relay that swaps in a stored OAuth token | out | credential intermediation |
-| Header, fingerprint or `metadata.user_id` rewriting | out | misrepresents the client |
-| Account pools, failover across accounts, share links, seats | out | pooling shape; you said no sharing, Anthropic's terms say the same |
-| Rotating proxies | out | exists only to defeat risk controls |
-| Customer SSH or background folder sync | out | local work stays local; cloud work uses Remote Control, attachments or Git |
-| Reading usage windows from Anthropic's OAuth endpoints | out | uses the token outside Claude Code; use `/usage` in a session |
-
-## Extending
-
-- New rule: add a function in `rules.py`, register it in `evaluate`, add a
-  test in `tests/test_rules.py`, document it in the README table.
-- New notifier: implement `Notifier.send`, add it in `build_notifier`.
-- New agent field: collect it in `agent.py`, whitelist it in `heartbeat.py`,
-  render it in `render.py`.
+Legacy owner-node, Remote Control and pass-through gateway code remains for
+owner deployments. Hosted customer slots disable the old Remote Control unit;
+none of it is presented as an alternative product mode.

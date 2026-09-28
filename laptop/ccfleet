@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""ccfleet CLI: the original Claude Code interface, running on your slot.
+
+The local process owns no Claude credential. It opens an authenticated WSS
+byte path through the ccfleet broker, then OpenSSH provides end-to-end
+encryption and host verification to the assigned slot. A forced remote entry
+attaches to a persistent tmux session whose program is the original ``claude``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import hashlib
+import json
+import os
+import secrets
+import shlex
+import shutil
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Optional
+
+DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
+WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_FRAME = 2 * 1024 * 1024
+
+
+class CliError(RuntimeError):
+    def __init__(self, message: str, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def home() -> Path:
+    return Path(os.environ.get("CCFLEET_HOME") or Path.home() / ".config" / "ccfleet")
+
+
+def config_path() -> Path:
+    return home() / "config.json"
+
+
+def ensure_home() -> None:
+    home().mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(home(), 0o700)
+
+
+def load_config() -> dict[str, Any]:
+    try:
+        data = json.loads(config_path().read_text())
+    except FileNotFoundError:
+        return {"version": 1, "active": "", "devices": {}}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CliError(f"cannot read {config_path()}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("devices"), dict):
+        raise CliError(f"{config_path()} is not a ccfleet configuration")
+    return data
+
+
+def save_config(config: dict[str, Any]) -> None:
+    ensure_home()
+    fd, temporary = tempfile.mkstemp(prefix=".config.", dir=home())
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            json.dump(config, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, config_path())
+        os.chmod(config_path(), 0o600)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
+             method: str = "POST") -> dict[str, Any]:
+    body = json.dumps(payload).encode() if payload is not None else b""
+    request = urllib.request.Request(
+        url, data=body, method=method,
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read(256 * 1024).decode())
+    except urllib.error.HTTPError as exc:
+        try:
+            why = json.loads(exc.read(64 * 1024).decode()).get("error")
+        except (ValueError, UnicodeError):
+            why = None
+        raise CliError(str(why or f"server returned HTTP {exc.code}"), exc.code) from exc
+    except (OSError, ValueError) as exc:
+        raise CliError(f"could not reach ccfleet: {exc}") from exc
+    if not isinstance(result, dict):
+        raise CliError("ccfleet returned an invalid response")
+    return result
+
+
+def generate_key() -> tuple[Path, str]:
+    if shutil.which("ssh-keygen") is None:
+        raise CliError("OpenSSH is required (missing ssh-keygen)")
+    ensure_home()
+    path = home() / (".pairing-" + secrets.token_hex(8))
+    proc = subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "ccfleet", "-f", str(path)],
+        capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise CliError(proc.stderr.strip() or "ssh-keygen failed")
+    os.chmod(path, 0o600)
+    return path, path.with_suffix(".pub").read_text().strip()
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    server = args.server.rstrip("/")
+    parsed_server = urllib.parse.urlsplit(server)
+    local_http = (parsed_server.scheme == "http"
+                  and parsed_server.hostname in ("127.0.0.1", "::1", "localhost"))
+    if parsed_server.scheme != "https" and not local_http:
+        raise CliError("--server must use https:// (http:// is allowed only on localhost)")
+    pairing = args.code or getpass.getpass("Pairing code from your slot page: ").strip()
+    if not pairing.startswith("ccf_pair_"):
+        raise CliError("that does not look like a ccfleet pairing code")
+    key_path, public_key = generate_key()
+    public_path = key_path.with_suffix(".pub")
+    answer: Optional[dict[str, Any]] = None
+    final_key: Optional[Path] = None
+    known_hosts: Optional[Path] = None
+    old_profiles: list[dict[str, Any]] = []
+    try:
+        answer = api_json(
+            server + "/api/cli/register", pairing,
+            {"public_key": public_key,
+             "device_name": args.name or socket.gethostname().split(".", 1)[0] or "computer"})
+        needed = ("device_id", "device_token", "endpoint", "slot_id", "slot_name",
+                  "user", "host_key")
+        if any(not isinstance(answer.get(key), str) or not answer[key] for key in needed):
+            raise CliError("ccfleet returned an incomplete device configuration")
+        device_id = answer["device_id"]
+        final_key = home() / f"id_{device_id}"
+        known_hosts = home() / f"known_hosts_{device_id}"
+        alias = "ccfleet-" + answer["slot_id"]
+        os.replace(key_path, final_key)
+        os.chmod(final_key, 0o600)
+        public_path.unlink(missing_ok=True)
+        known_hosts.write_text(f"{alias} {answer['host_key']}\n")
+        os.chmod(known_hosts, 0o600)
+
+        config = load_config()
+        # One active local installation per slot. Re-pairing this computer
+        # replaces its local profile and best-effort revokes the superseded
+        # device after the new profile is safely on disk.
+        for old_id, old in list(config["devices"].items()):
+            if old.get("slot_id") == answer["slot_id"]:
+                if isinstance(old, dict):
+                    old_profiles.append(old)
+                config["devices"].pop(old_id)
+        config["devices"][device_id] = {
+            "device_id": device_id,
+            "device_token": answer["device_token"],
+            "endpoint": answer["endpoint"],
+            "slot_id": answer["slot_id"],
+            "slot_name": answer["slot_name"],
+            "user": answer["user"],
+            "key": str(final_key),
+            "known_hosts": str(known_hosts),
+            "host_alias": alias,
+            "server": server,
+        }
+        config["active"] = device_id
+        save_config(config)
+    except BaseException:
+        if answer is not None:
+            try:
+                api_json(server + "/api/cli/revoke", answer.get("device_token", ""), {})
+            except (CliError, TypeError):
+                pass
+        for path in (key_path, public_path, final_key, known_hosts):
+            if path is not None:
+                path.unlink(missing_ok=True)
+        raise
+    for old in old_profiles:
+        try:
+            api_json(str(old.get("server") or server) + "/api/cli/revoke",
+                     str(old.get("device_token") or ""), {})
+        except CliError:
+            pass
+        for field in ("key", "known_hosts"):
+            raw_path = str(old.get(field) or "")
+            if not raw_path:
+                continue
+            old_path = Path(raw_path)
+            if old_path not in (final_key, known_hosts):
+                try:
+                    old_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    print(f"Warning: could not remove old {field}: {exc}", file=sys.stderr)
+    print(f"Connected to {answer['slot_name']}. Run ccfleet to open Claude Code.")
+    return 0
+
+
+def choose_device(config: dict[str, Any], wanted: str = "") -> dict[str, Any]:
+    devices = config["devices"]
+    device_id = wanted or config.get("active") or ""
+    if wanted and wanted not in devices:
+        matches = [key for key, value in devices.items()
+                   if wanted in (value.get("slot_id"), value.get("slot_name"))]
+        device_id = matches[0] if len(matches) == 1 else ""
+    device = devices.get(device_id)
+    if not isinstance(device, dict):
+        raise CliError("not connected; run ccfleet login with a code from your slot page")
+    return device
+
+
+def frame(payload: bytes, opcode: int = 2) -> bytes:
+    mask = os.urandom(4)
+    body = bytearray(payload)
+    for index in range(len(body)):
+        body[index] ^= mask[index & 3]
+    length = len(body)
+    if length < 126:
+        size = bytes((0x80 | length,))
+    elif length <= 0xFFFF:
+        size = bytes((0x80 | 126,)) + struct.pack(">H", length)
+    else:
+        size = bytes((0x80 | 127,)) + struct.pack(">Q", length)
+    return bytes((0x80 | opcode,)) + size + mask + bytes(body)
+
+
+class FrameReader:
+    def __init__(self, sock: socket.socket, initial: bytes = b"") -> None:
+        self.sock, self.buffer = sock, bytearray(initial)
+
+    def take(self, size: int) -> bytes:
+        while len(self.buffer) < size:
+            data = self.sock.recv(max(64 * 1024, size - len(self.buffer)))
+            if not data:
+                raise EOFError
+            self.buffer.extend(data)
+        answer = bytes(self.buffer[:size])
+        del self.buffer[:size]
+        return answer
+
+    def read(self) -> tuple[int, bytes]:
+        first, second = self.take(2)
+        if not first & 0x80 or first & 0x70 or second & 0x80:
+            raise CliError("broker sent an invalid WebSocket frame")
+        opcode, length = first & 0x0F, second & 0x7F
+        if length == 126:
+            length = struct.unpack(">H", self.take(2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", self.take(8))[0]
+        if length > MAX_FRAME or (opcode >= 8 and length > 125):
+            raise CliError("broker sent an oversized WebSocket frame")
+        return opcode, self.take(length)
+
+
+def open_websocket(endpoint: str, token: str) -> tuple[socket.socket, bytes]:
+    parsed = urllib.parse.urlsplit(endpoint)
+    local_ws = (parsed.scheme == "ws"
+                and parsed.hostname in ("127.0.0.1", "::1", "localhost"))
+    if (parsed.scheme != "wss" and not local_ws) or not parsed.hostname:
+        raise CliError("saved broker endpoint is invalid")
+    sock: Optional[socket.socket] = None
+    try:
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        raw = socket.create_connection((parsed.hostname, port), timeout=15)
+        sock = raw
+        if parsed.scheme == "wss":
+            sock = ssl.create_default_context().wrap_socket(raw, server_hostname=parsed.hostname)
+        sock.settimeout(None)
+        key = base64.b64encode(os.urandom(16)).decode()
+        path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        host_name = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        host = host_name if parsed.port is None else f"{host_name}:{parsed.port}"
+        request = (f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n"
+                   f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                   f"Sec-WebSocket-Version: 13\r\nAuthorization: Bearer {token}\r\n\r\n")
+        sock.sendall(request.encode("ascii"))
+        response = bytearray()
+        while b"\r\n\r\n" not in response:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise CliError("broker closed during WebSocket handshake")
+            response.extend(chunk)
+            if len(response) > 64 * 1024:
+                raise CliError("broker sent an oversized WebSocket handshake")
+        header, initial = bytes(response).split(b"\r\n\r\n", 1)
+        lines = header.decode("iso-8859-1").split("\r\n")
+        if not lines[0].startswith("HTTP/1.1 101 "):
+            raise CliError("broker refused this device (" + lines[0] + ")")
+        headers = {line.split(":", 1)[0].strip().lower(): line.split(":", 1)[1].strip()
+                   for line in lines[1:] if ":" in line}
+        expected = base64.b64encode(hashlib.sha1(key.encode() + WS_GUID).digest()).decode()
+        if headers.get("sec-websocket-accept") != expected:
+            raise CliError("broker WebSocket identity check failed")
+        return sock, initial
+    except CliError:
+        if sock is not None:
+            sock.close()
+        raise
+    except (OSError, UnicodeError, ValueError) as exc:
+        if sock is not None:
+            sock.close()
+        raise CliError(f"could not open the broker connection: {exc}") from exc
+
+
+def proxy(device: dict[str, Any]) -> int:
+    sock, initial = open_websocket(device["endpoint"], device["device_token"])
+    lock, stopped = threading.Lock(), threading.Event()
+
+    def send(payload: bytes, opcode: int = 2) -> None:
+        with lock:
+            sock.sendall(frame(payload, opcode))
+
+    def input_loop() -> None:
+        try:
+            while not stopped.is_set():
+                data = os.read(0, 64 * 1024)
+                if not data:
+                    send(b"", 8)
+                    return
+                send(data)
+        except OSError:
+            pass
+        finally:
+            stopped.set()
+
+    worker = threading.Thread(target=input_loop, name="ccfleet-proxy-input", daemon=True)
+    worker.start()
+    reader = FrameReader(sock, initial)
+    try:
+        while not stopped.is_set():
+            opcode, payload = reader.read()
+            if opcode == 2:
+                os.write(1, payload)
+            elif opcode == 8:
+                break
+            elif opcode == 9:
+                send(payload, 10)
+            elif opcode != 10:
+                raise CliError("broker sent non-binary data")
+    except EOFError:
+        pass
+    finally:
+        stopped.set()
+        try:
+            sock.close()
+        except OSError:
+            pass
+    return 0
+
+
+def ssh_command(device: dict[str, Any]) -> list[str]:
+    if shutil.which("ssh") is None:
+        raise CliError("OpenSSH is required (missing ssh)")
+    executable = str(Path(__file__).resolve())
+    proxy_command = (f"{shlex.quote(sys.executable)} {shlex.quote(executable)} "
+                     f"proxy --device {shlex.quote(device['device_id'])}")
+    return [
+        "ssh", "-tt",
+        "-o", f"ProxyCommand={proxy_command}",
+        "-o", f"HostKeyAlias={device['host_alias']}",
+        "-o", f"UserKnownHostsFile={device['known_hosts']}",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "UpdateHostKeys=no",
+        "-o", "IdentitiesOnly=yes",
+        "-o", f"IdentityFile={device['key']}",
+        "-o", "PasswordAuthentication=no",
+        "-o", "KbdInteractiveAuthentication=no",
+        "-o", "BatchMode=yes",
+        "-o", "ClearAllForwardings=yes",
+        "-o", "ForwardAgent=no",
+        "-o", "ForwardX11=no",
+        "-o", "PermitLocalCommand=no",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=2",
+        "-o", "ConnectTimeout=10",
+        f"{device['user']}@{device['host_alias']}",
+    ]
+
+
+def cmd_attach(args: argparse.Namespace) -> int:
+    device = choose_device(load_config(), args.slot)
+    failed_since: Optional[float] = None
+    attempt = 0
+    while True:
+        run_started = time.monotonic()
+        try:
+            code = subprocess.call(ssh_command(device))
+        except KeyboardInterrupt:
+            return 130
+        if code == 0 or args.no_reconnect or code != 255:
+            return code
+        now = time.monotonic()
+        # A connection that stayed up for a minute starts a fresh retry window
+        # when it is later lost. Measuring from the original `ccfleet` launch
+        # made every session older than ten minutes skip reconnection entirely.
+        if failed_since is None or now - run_started >= 60:
+            failed_since = now
+            attempt = 0
+        if args.reconnect_for <= 0 or now - failed_since >= args.reconnect_for:
+            return code
+        delay = min(10, 1 + attempt * 2,
+                    max(0, args.reconnect_for - (now - failed_since)))
+        attempt += 1
+        print(f"\nConnection lost; reconnecting to {device['slot_name']} in {delay}s "
+              "(Ctrl-C to stop)…", file=sys.stderr)
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            return 130
+
+
+def cmd_list(_args: argparse.Namespace) -> int:
+    config = load_config()
+    if not config["devices"]:
+        print("No slots connected. Run ccfleet login.")
+        return 0
+    for device_id, device in config["devices"].items():
+        active = "*" if device_id == config.get("active") else " "
+        print(f"{active} {device['slot_name']} ({device['slot_id']})")
+    return 0
+
+
+def cmd_use(args: argparse.Namespace) -> int:
+    config = load_config()
+    device = choose_device(config, args.slot)
+    config["active"] = device["device_id"]
+    save_config(config)
+    print(f"Using {device['slot_name']}.")
+    return 0
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    config = load_config()
+    device = choose_device(config, args.slot)
+    try:
+        api_json(device["server"] + "/api/cli/revoke", device["device_token"], {})
+    except CliError as exc:
+        if exc.status != 401 and not args.local_only:
+            raise
+        if exc.status != 401:
+            print(f"Warning: server revocation failed: {exc}", file=sys.stderr)
+    for key in ("key", "known_hosts"):
+        try:
+            Path(device[key]).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise CliError(f"could not remove local {key}: {exc}") from exc
+    config["devices"].pop(device["device_id"], None)
+    config["active"] = next(iter(config["devices"]), "")
+    save_config(config)
+    print(f"Disconnected {device['slot_name']} from this computer.")
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="ccfleet",
+                                   description="Open Claude Code on your ccfleet slot.")
+    sub = root.add_subparsers(dest="command")
+    login = sub.add_parser("login", help="pair this computer with a slot")
+    login.add_argument("code", nargs="?", help=argparse.SUPPRESS)
+    login.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER))
+    login.add_argument("--name", default="", help="name shown in Connected devices")
+    attach = sub.add_parser("attach", help="open the persistent Claude Code session")
+    attach.add_argument("--slot", default="", help="slot id or name")
+    attach.add_argument("--no-reconnect", action="store_true")
+    attach.add_argument("--reconnect-for", type=int, default=600, metavar="SECONDS")
+    sub.add_parser("list", help="list slots connected on this computer")
+    use = sub.add_parser("use", help="choose the default slot")
+    use.add_argument("slot")
+    logout = sub.add_parser("logout", help="revoke this computer and remove its local key")
+    logout.add_argument("--slot", default="", help="slot id or name")
+    logout.add_argument("--local-only", action="store_true", help=argparse.SUPPRESS)
+    hidden = sub.add_parser("proxy", help=argparse.SUPPRESS)
+    hidden.add_argument("--device", required=True)
+    return root
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        if args.command in (None, "attach"):
+            if args.command is None:
+                args.slot, args.no_reconnect, args.reconnect_for = "", False, 600
+            return cmd_attach(args)
+        if args.command == "login":
+            return cmd_login(args)
+        if args.command == "list":
+            return cmd_list(args)
+        if args.command == "use":
+            return cmd_use(args)
+        if args.command == "logout":
+            return cmd_logout(args)
+        if args.command == "proxy":
+            return proxy(choose_device(load_config(), args.device))
+        raise CliError("unknown command")
+    except (CliError, OSError) as exc:
+        print(f"ccfleet: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

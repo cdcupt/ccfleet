@@ -17,12 +17,11 @@ from typing import Callable, Optional
 
 from . import pricing, statuspage
 from .config import Config
-from .monitor import LOGIN_MAX_AGE_S
 from .render import _meter
-from .usersite import NAV, Viewer, _shell, _span
+from .usersite import NAV, Viewer, _shell
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-09-27"
+DOCS_UPDATED = "2026-09-28"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -198,7 +197,7 @@ def _demo() -> str:
         '<p class="demo-meta">machine last heard 12s ago</p>'
         '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
         'Max 20x plan.</p>'
-        '<p class="rc on">Remote Control is on: pick slot-4821 in claude.ai/code.</p>'
+        '<p class="rc on">CC Fleet CLI is ready: run <strong>ccfleet</strong> anywhere.</p>'
         '<div class="demo-usage">'
         + _meter(34, "5-hour session", "at 11:40pm") + _meter(61, "This week", "on Friday")
         + "</div></div></div>"
@@ -239,9 +238,9 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<h1>Claude Code on a machine that is always on</h1>"
         '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux account on a '
         "machine we run, with Claude Code installed and signed in to <em>your own</em> Claude "
-        "account. Your slot is a whole machine, under a name you choose. Open claude.ai/code "
-        "or the Claude app on any device, pick it by that name, and Claude works there, on "
-        "your files and with your tools, while your laptop is closed.</p>"
+        "account. Install the small <code>ccfleet</code> terminal client on any computer and "
+        "run one command. The original Claude Code CLI, your files and its connection to "
+        "Anthropic all remain on your slot, even when your laptop disconnects.</p>"
         + way_in + "</div>" + _demo() + "</section>"
         '<section class="band"><h2>What you get</h2>'
         '<p class="band-lead">For anybody with a Claude plan that includes Claude Code who '
@@ -250,16 +249,17 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         f'<div class="feature">{ICONS["account"]}<h3>Your own Linux account</h3>'
         "<p>A home directory only you can read, and room for your projects and tools.</p></div>"
         f'<div class="feature">{ICONS["machine"]}<h3>Claude Code, always on</h3>'
-        "<p>Installed, with Remote Control on, and kept up to date for you.</p></div>"
-        f'<div class="feature">{ICONS["usage"]}<h3>Local, cloud or client</h3>'
-        "<p>Use the ordinary local CLI, claude.ai/code, or an official Claude app with "
-        "the same account.</p></div>"
+        "<p>Installed on the slot, kept up to date, and resumed after a dropped "
+        "connection.</p></div>"
+        f'<div class="feature">{ICONS["usage"]}<h3>One command anywhere</h3>'
+        "<p>Run <code>ccfleet</code> from your terminal. No SSH command, proxy setting or "
+        "Claude credential is installed on your computer.</p></div>"
         "</div></section>"
         '<section class="band two">'
         '<div class="card"><h2>What you need</h2><ul>'
         "<li>Your own paid Claude plan that includes Claude Code: <strong>Pro, Max, Team or "
-        "Enterprise</strong>. On Team and Enterprise, your organisation&#x27;s owner must "
-        "turn Remote Control on. API keys don&#x27;t work.</li>"
+        "Enterprise</strong>. You sign that account in to your slot once; API keys do not "
+        "replace that subscription sign-in.</li>"
         "<li>A Google account, to sign in here.</li></ul>"
         '<p class="callout">ccfleet sells the machine, not Claude. Nobody else&#x27;s Claude '
         "account is ever shared with you, and yours is never shared with anybody.</p></div>"
@@ -312,48 +312,31 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "with your own Claude account, copy the code Claude gives you, paste it into the box "
         'and press <span class="btnlabel">Send code</span>. The card turns '
         '<span class="pill ok">In use</span>.</p></li>'
-        "<li><h3>Use it</h3>"
-        "<p>Remote Control comes on within a minute. Open "
-        '<a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">'
-        "claude.ai/code</a> in any browser, or the Claude app on iOS or Android, signed in to "
-        "the same Claude account. Your slot appears there under its name, the one at the "
-        "top of your slot card: slot-4821 until you rename it. Start a session there. "
-        "Everything runs on the machine, in your slot, with your files.</p></li>"
+        "<li><h3>Connect this computer</h3>"
+        '<p>On the active slot, press <span class="btnlabel">Connect this computer</span>. '
+        "Install the CC Fleet command shown there, run <code>ccfleet login</code>, and paste "
+        "the single-use pairing code. Then run <code>ccfleet</code>.</p></li>"
         "</ol>"
-        '<div class="card"><h2>Three native ways to work</h2><ul>'
-        "<li><strong>On your computer.</strong> Under <span class=\"btnlabel\">Local Claude "
-        "Code</span>, press <span class=\"btnlabel\">Set up this computer</span>. The slot "
-        "creates an Anthropic device token for your own account. Install it with the command "
-        "shown, then run the ordinary <code>claude</code> command on your local files. The "
-        "unmodified client talks directly to Anthropic; ccfleet is not a proxy.</li>"
-        "<li><strong>In the cloud.</strong> Open <a href=\"https://claude.ai/code\" "
-        "target=\"_blank\" rel=\"noopener noreferrer\">claude.ai/code</a>, choose your "
-        "slot, and work on its files while your computer is off.</li>"
-        "<li><strong>In a Claude client.</strong> Use the official Claude desktop or mobile "
-        "app, signed in to the same account, and choose your slot. It reaches the same cloud "
-        "workspace through Remote Control; no SSH setup is needed.</li>"
-        "<li><strong>Moving files.</strong> Keep local projects local. For cloud projects, "
-        "attach individual files in Claude or use Git to clone, commit and push from the "
-        "slot. ccfleet does not mount or synchronize your computer in the background.</li>"
-        "<li><strong>Your usage.</strong> Your Claude account&#x27;s 5-hour and weekly limits, "
-        "which count everything the account does: claude.ai, the Claude app, and Claude "
-        "Code on any computer, device tokens included. Beside them, the tokens Claude Code "
-        "used on this slot itself over the last week; work on your own computer is not in "
-        "that number. The limits are read every five minutes; "
-        '<span class="btnlabel">Refresh</span> reads them now.</li>'
-        '<li><strong>Local Claude Code.</strong> '
-        '<span class="btnlabel">Set up this computer</span> '
-        "makes a one-year token from your own Claude account, for running Claude Code on "
-        "your own computer. It is shown until you press "
-        '<span class="btnlabel">Done with it</span>, for at most '
-        f"{_span(LOGIN_MAX_AGE_S)}, and never kept after that. Your computer keeps its "
-        "own Claude login too, with your own subscription: <code>ccfleet-connect "
-        "--off</code> switches to it, and <code>ccfleet-connect --on</code> back to your "
-        "slot&#x27;s account. Connecting again with another token replaces the one it "
-        "had. A copy of <code>ccfleet-connect</code> installed before 25 September 2026 "
-        "answers <code>--off</code> with <em>unknown option</em>; replace it with the "
-        "current one, and the token stays as it is:"
-        "<pre>curl -fsSL -o ~/.local/bin/ccfleet-connect \\\n  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh</pre></li>"
+        '<div class="card"><h2>The CLI experience</h2><ul>'
+        "<li><strong>The command.</strong> Run <code>ccfleet</code> in a normal terminal. It "
+        "opens the original Claude Code interface running in your slot. You never type an "
+        "SSH command and your computer receives no Claude credential.</li>"
+        "<li><strong>Where work runs.</strong> Claude Code, its shell tools, project files, "
+        "model requests and Anthropic responses all run on the slot. The local command is a "
+        "thin encrypted terminal client.</li>"
+        "<li><strong>Projects.</strong> Keep projects in <code>~/workspace</code> on the slot. "
+        "Clone with Git or fetch them from another service from inside Claude Code. CC Fleet "
+        "does not silently upload or mount files from the computer where you run the client.</li>"
+        "<li><strong>Reconnect.</strong> Claude Code runs inside a persistent session. If "
+        "Wi-Fi changes, the laptop sleeps or the terminal closes, run <code>ccfleet</code> "
+        "again and it reattaches to the same session.</li>"
+        "<li><strong>More computers.</strong> Press <span class=\"btnlabel\">Connect another "
+        "computer</span> for each device. Each receives its own key and can be removed from "
+        "your slot page without changing your Claude sign-in.</li>"
+        "<li><strong>Your usage.</strong> The 5-hour and weekly bars cover the whole Claude "
+        "account. Beside them, the token count covers what Claude Code used on this slot. "
+        "The limits are read every five minutes; <span class=\"btnlabel\">Refresh</span> "
+        "reads them now.</li>"
         '<li><strong>Giving it back.</strong> Tick the box and press '
         '<span class="btnlabel">Give this slot back</span>. Your Linux account and every file '
         "in it are deleted; your Claude account is not touched. Push your work somewhere "
@@ -363,15 +346,14 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<span class="btnlabel">Sign in again</span> works with that account only. To move '
         "your slot to another Claude account of yours, press "
         '<span class="btnlabel">Change account</span> (once a week). To use two accounts at '
-        "once, hold two slots. In claude.ai/code each account sees only its own "
-        "machine.</p>"
+        "once, hold two slots. Each local CC Fleet profile is bound to exactly one slot.</p>"
         "<p>One account also stays on one machine: signed in on two at once, it is flagged "
         "to you and to the operator.</p>"
-        "<p>Your slot is a whole machine with a name of its own: a neutral one like "
+        "<p>Your slot is a Linux account with a name of its own: a neutral one like "
         "slot-4821 when you claim it, never anything from your address, and whatever you "
-        "rename it to on your page. claude.ai/code shows it by that name, so Anthropic sees "
-        "it too: pick anything but your email address. When you give it back, the name goes "
-        "with it.</p></div>"
+        "rename it to on your page. CC Fleet shows that name on every paired computer, and "
+        "the slot uses it as its hostname, so Anthropic can see it: pick anything but your "
+        "email address. When you give it back, the name goes with it.</p></div>"
         '<div class="card"><h2>Changing to another Claude account</h2>'
         '<p>On a slot in use, <span class="btnlabel">Change account</span> moves it to '
         "another Claude account of yours. Open the link it shows, sign in with the account "
@@ -379,9 +361,10 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "Your files and settings stay; only the Claude sign-in changes.</p>"
         "<p>Until that sign-in finishes, the slot keeps its current account; if it does not "
         "go through, or you sign in with the account the slot already has, the account does "
-        "not change. Once it finishes, Remote Control restarts on the new account, which "
-        "ends any session open in it, and the slot appears in claude.ai/code under the new "
-        "account instead of the old one.</p>"
+        "not change. Once it finishes, any open terminal session ends so no process keeps "
+        "the old account; run <code>ccfleet</code> again and the new session uses the new "
+        "account. Connected computers stay paired because their CC Fleet keys are separate "
+        "from the Claude credential.</p>"
         "<p>A slot can change account once a week; after a change, your slot card says when "
         "it can change again. The operator sees that the account changed, never which "
         "account it is.</p></div>"
@@ -391,8 +374,7 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "it, <strong>Update to</strong> and that number, installs it now. Your slot then "
         "follows Anthropic&#x27;s latest release and keeps itself current from then on.</p>"
         "<p>A session that is open keeps running on the version it started with; new "
-        "sessions start on the new one. Remote Control switches over by itself once no "
-        "session is open.</p>"
+        "sessions start on the new one.</p>"
         '<p>To go back to Anthropic&#x27;s stable release, press <span class="btnlabel">'
         "Back to Stable</span>. A version <strong>held by the operator</strong> has been "
         "fixed on purpose, for example while a release misbehaves, and there is nothing to "
@@ -414,47 +396,47 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "(sudo) in a slot.</li>"
         "<li>If Claude asks you to sign in again, your slot card offers "
         '<span class="btnlabel">Sign in again</span>.</li>'
-        "<li>Your slot does not show up in claude.ai/code? Give Remote Control a minute after "
-        "signing in, check you are signed in to the same Claude account there, then "
-        "reload.</li>"
+        "<li><code>ccfleet</code> cannot connect? Check that the slot says "
+        '<span class="pill ok">In use</span>, then remove and pair that computer again. '
+        "A disconnected session continues on the slot.</li>"
         f"<li>Anything else: ask {contact(cfg)}.</li></ul></div>")
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
 # -- how it works -----------------------------------------------------------------------
 
-#: Portrait, so it stays legible at phone width: you at the top, Anthropic in
-#: the middle, your slot at the bottom, and ccfleet's server off to the side,
-#: outside the path your work takes.
+#: Portrait, so it stays legible at phone width. The broker is in the network
+#: path, but the SSH session inside its WebSocket tunnel is encrypted through
+#: to the slot.
 PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img" aria-labelledby="diag-t diag-d">
 <title id="diag-t">Where your work runs</title>
-<desc id="diag-d">Your browser or the Claude app talks to Anthropic; Anthropic talks to Claude Code
-in your slot on our machine. ccfleet's server only receives facts from the machine and is not in
-that path.</desc>
+<desc id="diag-d">The ccfleet command on your computer opens an encrypted terminal through the
+CC Fleet broker to the original Claude Code process in your slot. Only the slot talks to
+Anthropic.</desc>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
 orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
 <marker id="af" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
 orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="box you" x="20" y="14" width="320" height="70" rx="12"/>
 <text x="180" y="44" text-anchor="middle">You</text>
-<text class="sub" x="180" y="66" text-anchor="middle">claude.ai/code or the Claude app</text>
-<path class="arrow" d="M180,88 L180,146" marker-start="url(#ah)" marker-end="url(#ah)"/>
-<text class="sub" x="190" y="122">Remote Control</text>
-<rect class="box" x="20" y="150" width="320" height="70" rx="12"/>
-<text x="180" y="180" text-anchor="middle">Anthropic</text>
-<text class="sub" x="180" y="202" text-anchor="middle">Claude, under your own account</text>
-<path class="arrow" d="M180,224 L180,282" marker-start="url(#ah)" marker-end="url(#ah)"/>
-<text class="sub" x="190" y="258">direct, not through ccfleet</text>
-<rect class="slot" x="20" y="286" width="320" height="104" rx="12"/>
-<text x="180" y="316" text-anchor="middle">Your slot, on our machine</text>
-<text class="sub" x="180" y="340" text-anchor="middle">your Linux account and files</text>
-<text class="sub" x="180" y="360" text-anchor="middle">Claude Code, signed in as you</text>
-<text class="sub" x="180" y="380" text-anchor="middle">your Claude sign-in stays here</text>
-<path class="faint" d="M180,394 L180,442" marker-end="url(#af)"/>
-<text class="sub" x="190" y="424">health facts only</text>
-<rect class="side" x="60" y="446" width="240" height="60" rx="12"/>
-<text x="180" y="472" text-anchor="middle">ccfleet&#x27;s server</text>
-<text class="sub" x="180" y="492" text-anchor="middle">no code, prompts or credentials</text>
+<text class="sub" x="180" y="66" text-anchor="middle">the ccfleet command in your terminal</text>
+<path class="arrow" d="M180,88 L180,126" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text class="sub" x="190" y="111">TLS + encrypted SSH</text>
+<rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
+<text x="180" y="160" text-anchor="middle">CC Fleet broker</text>
+<text class="sub" x="180" y="182" text-anchor="middle">authenticates device; relays bytes</text>
+<path class="arrow" d="M180,204 L180,242" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text class="sub" x="190" y="227">encrypted through to the slot</text>
+<rect class="slot" x="20" y="246" width="320" height="114" rx="12"/>
+<text x="180" y="276" text-anchor="middle">Your slot, on our machine</text>
+<text class="sub" x="180" y="300" text-anchor="middle">your Linux account, files and tools</text>
+<text class="sub" x="180" y="322" text-anchor="middle">original Claude Code, signed in as you</text>
+<text class="sub" x="180" y="344" text-anchor="middle">session survives disconnects</text>
+<path class="arrow" d="M180,364 L180,408" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text class="sub" x="190" y="392">Claude traffic from the slot</text>
+<rect class="box" x="20" y="412" width="320" height="82" rx="12"/>
+<text x="180" y="444" text-anchor="middle">Anthropic</text>
+<text class="sub" x="180" y="468" text-anchor="middle">sees slot and its one Claude account</text>
 </svg>"""
 
 
@@ -464,42 +446,41 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
     the same way."""
     body = (
         '<div class="dochead"><h1>How it works</h1>'
-        '<p class="lead">Your work runs in your slot, on our machine. Your conversations go '
-        "between you, Anthropic and your slot; ccfleet&#x27;s own server is not in that "
-        "path.</p></div>"
+        '<p class="lead">Your terminal reaches the original Claude Code process in your slot. '
+        "CC Fleet brokers the connection, but the terminal stream is encrypted through to "
+        "the slot; only Claude Code on the slot talks to Anthropic.</p></div>"
         f'<div class="how"><figure class="card diagram">{PICTURE}</figure>'
         '<div class="how-text">'
         '<div class="card"><h2>Your slot</h2>'
-        "<p>Your slot is a whole machine under the name you give it, and claude.ai/code shows it "
-        "by that name. On it you have a Linux account of your own: a home directory only you can "
-        "read, your own Claude Code, and two services that run while nobody is logged in: a work "
-        "session, and Remote Control, which is what claude.ai/code and the Claude app connect to. "
-        "There is no administrator access in a slot, and it is the only slot on its "
-        "machine.</p></div>"
+        "<p>Your slot is a Linux account under the name you give it. You have a home directory "
+        "only your account can read, the original Claude Code, "
+        "and a persistent terminal session that keeps running when your computer disconnects. "
+        "There is no administrator access inside a slot. Other slots on the same machine use "
+        "different operating-system accounts and Claude sign-ins.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
         "<p>You sign in to Claude yourself, through Anthropic&#x27;s own sign-in. The "
         "credential that creates is written on the machine, in your slot, and nowhere else: "
         "ccfleet&#x27;s server passes along the sign-in link and the code you paste, and "
-        "never receives or keeps the credential. Claude Code in your slot talks to Anthropic "
-        "directly. ccfleet does not relay, pool or rewrite anybody&#x27;s requests, and no "
-        "Claude account is ever shared between people.</p></div>"
+        "never receives or keeps the resulting credential. Claude Code in your slot talks "
+        "to Anthropic directly. CC Fleet never substitutes, rotates or pools Claude accounts: "
+        "one slot keeps one account for one holder.</p></div>"
         '<div class="card"><h2>Use it from anywhere</h2>'
-        "<p>Remote Control reaches the slot from claude.ai/code and the official Claude "
-        "desktop and mobile apps. For local work, an Anthropic device token lets the "
-        "unmodified Claude Code CLI run directly on a computer and its own files. ccfleet "
-        "does not offer customer SSH, mount a local folder, proxy model traffic, choose an "
-        "account or fail over to another one. These are native ways to use the same account, "
-        "not several accounts behind one door.</p></div>"
+        "<p>Install <code>ccfleet</code> on each computer you use. It creates a device key, "
+        "pairs once with your held slot, and opens a terminal without exposing an SSH command. "
+        "The broker accepts an authenticated WebSocket and passes the already encrypted SSH "
+        "stream to that slot. It cannot read the terminal contents. A forced entrypoint on the "
+        "slot can only attach to its Claude Code session; it cannot open a general remote shell "
+        "before Claude gives one through its normal tools.</p></div>"
         '<div class="card"><h2>What we can and cannot see</h2>'
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
         "signed in, the email address and plan of the Claude account signed in on it, how "
-        "much of your usage limits is used, and token counts per hour. Never your prompts, "
-        "conversations, files or credential. "
+        "much of your usage limits is used, token counts per hour, and which CC Fleet devices "
+        "are paired. It does not receive your prompts, conversations, files or Claude "
+        "credential. "
         '<a href="/privacy">The privacy page</a> lists everything, and for how long.</p>'
         "<p>Claude Code on your slot sends Anthropic less than it would by default: its "
-        "error reports, bug reports and feedback surveys are switched off. Its usage "
-        "telemetry stays on, because Remote Control, which is how you reach your slot, "
-        "does not work without it. The machines keep their clocks on UTC, so your slot "
+        "error reports, bug reports and feedback surveys are switched off. The machines "
+        "keep their clocks on UTC, so your slot "
         "says nothing about where you are; your page shows times in your own time "
         "zone.</p>"
         "<p>One limit is worth saying plainly: the machines are ours, and their "
@@ -551,7 +532,8 @@ def terms(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<div class="card"><h2>The service</h2>'
         "<p>A slot is a Linux account on a machine the operator runs, for one person, with "
         "Claude Code installed. You bring your own Claude plan and sign in to it yourself; "
-        "ccfleet does not provide access to Claude.</p></div>"
+        "ccfleet does not provide access to Claude. CC Fleet is independent and is not "
+        "affiliated with or endorsed by Anthropic.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
         "<p>Use your own Claude account in your slot, and only yours. You are responsible for "
         "following Anthropic&#x27;s terms and usage policy, as you would on your own "

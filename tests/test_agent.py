@@ -2346,6 +2346,21 @@ def test_a_slot_reports_what_an_owner_node_would_and_names_only_its_one_account(
         assert private not in elsewhere, f"{private} left the slot"
 
 
+def test_a_slot_migrates_the_persistent_terminal_unit_as_its_own_user(slot_home):
+    target = slot_home / ".config" / "systemd" / "user" / "ccfleet-shell.service"
+    target.parent.mkdir(parents=True)
+    target.write_text("old pre-terminal unit\n")
+    calls = []
+
+    agent.slot_facts({}, slot_runner(calls))
+
+    source = Path(__file__).parents[1] / "node" / "systemd" / "ccfleet-shell.service"
+    assert target.read_text() == source.read_text()
+    assert ["tmux", "kill-session", "-t", "cc"] in calls
+    assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert ["systemctl", "--user", "enable", "ccfleet-shell.service"] in calls
+
+
 def test_a_slot_does_not_start_a_quota_read_unless_asked(slot_home, monkeypatch):
     """Each read opens a Claude Code session. The machine agent spreads them
     across its slots, and a slot that started its own on every run would
@@ -2438,23 +2453,25 @@ def rc_runner(calls, *, rc="inactive", enabled="enabled"):
     return run
 
 
-def test_a_signed_in_slots_remote_control_is_started(slot_home):
-    """It is the only way in for a slot's holder: no SSH key, no shell."""
+def test_a_hosted_slot_retires_the_legacy_remote_control_mode(slot_home):
     calls = []
-    agent.slot_facts({}, rc_runner(calls))
-    assert ["systemctl", "--user", "start", "claude-remote-control.service"] in calls
+    agent.slot_facts({}, rc_runner(calls, rc="active", enabled="enabled"))
+    assert ["systemctl", "--user", "disable", "--now",
+            "claude-remote-control.service"] in calls
+    assert ["systemctl", "--user", "start", "claude-remote-control.service"] not in calls
 
 
-@pytest.mark.parametrize("rc,enabled,logged_in", [
-    ("active", "enabled", True),       # already running
-    ("inactive", "disabled", True),    # somebody turned it off on purpose
-    ("inactive", "enabled", False),    # nobody signed in: it would only fail
+@pytest.mark.parametrize("rc,enabled,disabled", [
+    ("active", "enabled", True),
+    ("inactive", "disabled", False),
+    ("inactive", "enabled", True),
 ])
-def test_remote_control_is_left_alone_otherwise(slot_home, monkeypatch, rc, enabled, logged_in):
-    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": logged_in})
+def test_only_a_present_legacy_remote_control_is_retired(slot_home, rc, enabled, disabled):
     calls = []
     agent.slot_facts({}, rc_runner(calls, rc=rc, enabled=enabled))
-    assert ["systemctl", "--user", "start", "claude-remote-control.service"] not in calls
+    command = ["systemctl", "--user", "disable", "--now",
+               "claude-remote-control.service"]
+    assert (command in calls) is disabled
 
 
 
@@ -2528,62 +2545,23 @@ def test_a_held_slot_moves_to_its_machines_pin_and_says_so(slot_home):
     assert facts["upgrade"]["ok"] is True
 
 
-def test_remote_control_moves_to_the_new_version_when_nobody_is_using_it(slot_home):
+def test_an_upgrade_does_not_restart_the_running_persistent_session(slot_home):
     calls = []
     facts = agent.slot_facts(FOLLOW, moving_claude(calls, session=1), now=1_000.0)
-    assert RC_RESTART in calls
-    assert facts["upgrade"]["restart"] == "done"
-
-
-def test_a_session_in_use_is_never_cut_short(slot_home):
-    """Somebody is working through Remote Control: the new version waits for
-    the next quiet run rather than restarting the session under them."""
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, session=0), now=1_000.0)
-    assert RC_RESTART not in calls
-    assert facts["upgrade"]["restart"] == "waiting"
-    # Later, the session is over.
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300", session=1),
-                             now=1_060.0)
-    assert installs(calls) == [], "installed again what was already there"
-    assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"
-    # And once done, it is not done again, nor reported again.
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300", session=1),
-                             now=1_120.0)
-    assert RC_RESTART not in calls
-    assert "upgrade" not in facts, "kept announcing a restart that already happened"
-
-
-@pytest.mark.parametrize("session,raises", [(2, False), (3, False), (1, True)])
-def test_when_it_cannot_tell_it_waits(slot_home, session, raises):
-    """pgrep failing is not a quiet moment. Only a clear "no session" restarts."""
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, session=session, pgrep_raises=raises),
-                             now=1_000.0)
-    assert RC_RESTART not in calls
-    assert facts["upgrade"]["restart"] == "waiting"
-
-
-def test_remote_control_started_now_already_runs_the_new_version(slot_home):
-    """Not running, and the holder is signed in: it is started, from the
-    version just installed, and then it needs no restart at all."""
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, rc="inactive"), now=1_000.0)
-    assert ["systemctl", "--user", "start", "claude-remote-control.service"] in calls
     assert RC_RESTART not in calls
     assert facts["upgrade"]["restart"] is None
     assert "restart" not in slot_state(slot_home)
 
 
-def test_remote_control_stopped_needs_no_restart(slot_home, monkeypatch):
-    """Nobody signed in, so nothing runs the old version to be restarted."""
-    monkeypatch.setattr(agent, "auth_status", lambda runner=None: {"logged_in": False})
+def test_an_upgrade_clears_legacy_remote_control_restart_debt(slot_home):
+    state = slot_home / ".config" / "ccfleet" / "slot-state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"restart": "waiting"}))
     calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, rc="inactive"), now=1_000.0)
+    facts = agent.slot_facts(FOLLOW, moving_claude(calls), now=1_000.0)
     assert RC_RESTART not in calls
     assert facts["upgrade"]["restart"] is None
+    assert "restart" not in slot_state(slot_home)
 
 
 def test_a_slot_being_signed_into_is_not_moved(slot_home):
@@ -2673,60 +2651,12 @@ def test_an_install_that_changed_nothing_restarts_nothing(slot_home):
     assert facts["upgrade"]["restart"] is None
 
 
-def test_a_restart_owed_waits_while_its_holder_signs_in(slot_home):
-    agent.slot_facts(FOLLOW, moving_claude([], session=0), now=1_000.0)
-    assert slot_state(slot_home)["restart"] == "waiting"
+def test_a_sign_in_never_restarts_the_removed_remote_control_mode(slot_home, monkeypatch):
+    monkeypatch.setattr(agent, "reconcile_slot_login",
+                        lambda *a, **k: ({"state": "done"}, {"restart": "waiting"}, True))
     calls = []
-    agent.slot_facts({"claude_version": "2.1.300", "may_upgrade": False},
-                     moving_claude(calls, before="2.1.300", session=1), now=1_060.0)
-    assert RC_RESTART not in calls, "restarted Remote Control in the middle of a sign-in"
-    assert slot_state(slot_home)["restart"] == "waiting"
-
-
-def test_a_pin_taken_away_cancels_a_restart_it_was_owed(slot_home):
-    agent.slot_facts(FOLLOW, moving_claude([], session=0), now=1_000.0)
-    assert slot_state(slot_home)["restart"] == "waiting"
-    calls = []
-    facts = agent.slot_facts({"claude_version": "", "may_upgrade": True},
-                             moving_claude(calls, before="2.1.300", session=1), now=1_060.0)
-    assert RC_RESTART not in calls and "upgrade" not in facts
+    agent.slot_facts({}, moving_claude(calls), now=1_000.0)
+    assert RC_RESTART not in calls
+    assert ["tmux", "kill-session", "-t", "ccfleet"] in calls
+    assert ["systemctl", "--user", "restart", "ccfleet-shell.service"] in calls
     assert "restart" not in slot_state(slot_home)
-
-
-
-# What runs in a signed-in slot with Remote Control on, as ps shows it.
-IDLE_SLOT = ["/home/slot01/.local/bin/claude remote-control --permission-mode bypassPermissions",
-             "/usr/bin/tmux -L ccfleet-rc new-session -d -s remote-control",
-             "-bash", "/usr/lib/systemd/systemd --user"]
-SESSION_WORKER = ("/home/slot01/.local/share/claude/versions/2.1.278 --print "
-                  "--sdk-url https://api.anthropic.com/v1/code/sessions/cse_01Vx")
-
-
-def test_remote_control_itself_running_is_not_somebody_working(slot_home):
-    """Remote Control is always there once a slot is signed in; only a
-    session opened through it means somebody is using the slot."""
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, procs=IDLE_SLOT), now=1_000.0)
-    assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"
-
-
-def test_a_session_worker_is_somebody_working(slot_home):
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, procs=IDLE_SLOT + [SESSION_WORKER]),
-                             now=1_000.0)
-    assert RC_RESTART not in calls and facts["upgrade"]["restart"] == "waiting"
-
-
-
-@pytest.mark.parametrize("restart_rc,raises", [(1, False), (0, True)])
-def test_a_restart_that_failed_is_tried_again(slot_home, restart_rc, raises):
-    """systemctl refusing, or hanging, leaves Remote Control on the old version:
-    the restart stays owed rather than being forgotten as done."""
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, restart_rc=restart_rc,
-                                                   restart_raises=raises), now=1_000.0)
-    assert RC_RESTART in calls
-    assert facts["upgrade"]["restart"] == "waiting"
-    calls = []
-    facts = agent.slot_facts(FOLLOW, moving_claude(calls, before="2.1.300"), now=1_060.0)
-    assert RC_RESTART in calls and facts["upgrade"]["restart"] == "done"

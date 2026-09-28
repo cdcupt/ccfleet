@@ -143,7 +143,7 @@ def test_an_update_never_cuts_an_open_session_short(slot_home):
     facts = agent.slot_facts({**LATEST, "update_now": ask()},
                              moving_claude(calls, session=0), now=1_000.0)
     assert len(installs(calls)) == 1 and RC_RESTART not in calls
-    assert facts["upgrade"]["restart"] == "waiting"
+    assert facts["upgrade"]["restart"] is None
     assert facts["claude_update"]["state"] == "done"
 
 

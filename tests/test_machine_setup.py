@@ -152,12 +152,14 @@ def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
     lib = sandbox / "lib"
     for rel in ("ccfleet_agent/__init__.py", "ccfleet_agent/agent.py",
                 "ccfleet_agent/machine.py", "slot-add.sh", "slot-remove.sh",
-                "systemd/ccfleet-shell.service", "systemd/claude-remote-control.service"):
+                "slot-entry.sh",
+                "systemd/ccfleet-shell.service"):
         installed = lib / rel
         source = REPO / ("node/" + rel if rel.endswith(".sh") or rel.startswith("systemd")
                          else rel)
         assert installed.read_bytes() == source.read_bytes(), rel
     assert mode(lib / "slot-add.sh") == 0o755 and mode(lib / "slot-remove.sh") == 0o755
+    assert mode(lib / "slot-entry.sh") == 0o755
     assert mode(lib / "ccfleet_agent" / "agent.py") == 0o644
     # Root runs these and every slot's user runs agent.py: nobody else may write.
     for directory in (lib, lib / "ccfleet_agent", lib / "systemd"):
@@ -173,11 +175,14 @@ def test_the_token_lives_in_one_file_only_root_can_read(tmp_path, sandbox):
     env_file = sandbox / "etc" / "agent.env"
     assert mode(env_file) == 0o600
     assert mode(sandbox / "etc") == 0o700 and mode(sandbox / "state") == 0o700
+    assert mode(sandbox / "etc" / "authorized_keys") == 0o700
     values = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
     assert values == {"CCFLEET_URL": "https://fleet.example.com",
                       "CCFLEET_NODE_ID": "shared-1", "CCFLEET_NODE_TOKEN": TOKEN,
                       "CCFLEET_LIB_DIR": str(sandbox / "lib"),
-                      "CCFLEET_STATE_FILE": str(sandbox / "state" / "machine.json")}
+                      "CCFLEET_STATE_FILE": str(sandbox / "state" / "machine.json"),
+                      "CCFLEET_AUTHORIZED_KEYS_DIR":
+                          str(sandbox / "etc" / "authorized_keys")}
     for unit in (sandbox / "units").iterdir():
         assert TOKEN not in unit.read_text(), f"the token leaked into {unit.name}"
 
@@ -213,10 +218,13 @@ def test_it_restricts_slot_ssh_and_validates_before_reload(tmp_path, sandbox):
     bindir, calls = fakebin(tmp_path)
     assert run(GOOD, bindir).returncode == 0
     dropin = sandbox / "sshd" / "02-ccfleet-slots.conf"
-    assert dropin.read_text() == textwrap.dedent("""\
-        # A customer's key opens only their slot shell and file-transfer commands.
-        # The same restrictions are repeated on authorized_keys as defense in depth.
+    assert dropin.read_text() == textwrap.dedent(f"""\
+        # Slot keys live outside holder-writable homes. ForceCommand is repeated on
+        # each key as defense in depth, but sshd enforces it here even if a slot tries
+        # to create its own ~/.ssh/authorized_keys.
         Match Group ccfleet-slots
+            AuthorizedKeysFile {sandbox / "etc" / "authorized_keys"}/%u
+            ForceCommand {sandbox / "lib"}/slot-entry.sh
             AllowAgentForwarding no
             AllowTcpForwarding no
             X11Forwarding no

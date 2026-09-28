@@ -32,6 +32,16 @@ URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=y"
 TOKEN = "sk-ant-oat01-" + "Q" * 40
 
 
+def ssh_key(byte=1):
+    kind = b"ssh-ed25519"
+    blob = len(kind).to_bytes(4, "big") + kind + (32).to_bytes(4, "big") + bytes([byte]) * 32
+    return "ssh-ed25519 " + base64.b64encode(blob).decode()
+
+
+def enable_cli(store, node="m1"):
+    store.set_node_access(node, "192.0.2.10", 22, ssh_key(9))
+
+
 def handle_of(email):
     """A handle as an operator might set one from somebody's address, for tests
     that need a slot's name to read; the product never makes one this way."""
@@ -153,6 +163,14 @@ def claimed(store, browser, node="m1"):
               if s["state"] == slots.CLAIMING]
     report(store, node, [{"unix_user": slot["unix_user"], "present": True,
                           "provisioned_for": slot["claimed_at"]}])
+    return store.get_slot(slot["id"])
+
+
+def active(store, slot, node="m1", **credentials):
+    """Let a claimed slot report the Claude account it will keep."""
+    report(store, node, [{"unix_user": slot["unix_user"], "present": True,
+                          "credentials": {"logged_in": True, **credentials},
+                          "remote_control": {"state": "inactive"}}])
     return store.get_slot(slot["id"])
 
 
@@ -403,7 +421,7 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     assert store.get_slot(slot["id"])["state"] == slots.ACTIVE
     shown = erik.page()
     assert "In use" in shown and "Max plan" in shown
-    assert 'href="https://claude.ai/code"' in shown
+    assert "Claude Code CLI" in shown and "claude.ai/code" not in shown
     assert "900</b> tokens run on this slot itself" in shown
     # The windows are the account's, used anywhere; said under them, so a week
     # at 30% beside 900 tokens here does not read as a mistake.
@@ -412,45 +430,32 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     assert "Sign in again" in shown
 
 
-# -- device tokens -----------------------------------------------------------------
+# -- local CLI ----------------------------------------------------------------------
 
-def test_a_device_token_from_the_page(site):
+def test_a_cli_pairing_code_from_the_page(site):
     store, sign_in, _ = site
     machine(store)
+    enable_cli(store)
     erik = sign_in(quota=1)
-    slot = claimed(store, erik)
-    key = slot_login_key(slot["id"])
-    # Before any token exists the row describes the local, native path.
+    slot = active(store, claimed(store, erik))
     before = erik.page()
-    assert "Run Claude Code normally on this computer" in before
-    assert "last set up" not in before
-    erik.press(f"/account/slots/{slot['id']}/token")
-    row = store.get_login(key)
-    assert row["kind"] == "token"
-    store.record_login_progress(key, "ready", "", "", time.time(), row["requested_at"],
-                                secret=TOKEN)
-    assert "Show it" in erik.page()
-
-    shown = erik.press(f"/account/slots/{slot['id']}/token-show")
-    assert shown.status == 200 and TOKEN in shown.body
-    assert store.get_slot(slot["id"])["device_token_at"] > 0
-
-    erik.press(f"/account/slots/{slot['id']}/token-done")
-    assert store.get_login(key) is None
-    assert "Nothing to show" in erik.press(f"/account/slots/{slot['id']}/token-show").body
-    after = erik.page()
-    assert "last set up" in after
+    assert "Connect this computer" in before
+    shown = erik.press(f"/account/slots/{slot['id']}/cli")
+    assert shown.status == 200
+    assert "ccfleet login" in shown.body and "ccf_pair_" in shown.body
+    assert "ANTHROPIC_BASE_URL" not in shown.body
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in shown.body
 
 
-def test_one_flow_at_a_time_on_a_slot(site):
+def test_pairing_does_not_start_a_claude_login_flow(site):
     store, sign_in, _ = site
     machine(store)
+    enable_cli(store)
     erik = sign_in(quota=1)
-    slot = claimed(store, erik)
-    erik.press(f"/account/slots/{slot['id']}/token")
-    shown = erik.page()
-    assert "Finish or cancel the device token" in shown
-    assert "Sign in to Claude" not in shown
+    slot = active(store, claimed(store, erik))
+    erik.press(f"/account/slots/{slot['id']}/cli")
+    assert store.get_login(slot_login_key(slot["id"])) is None
+    assert "Sign in again" in erik.page()
 
 
 # -- what the page says --------------------------------------------------------------
@@ -531,9 +536,9 @@ def test_slot_holders_are_not_offered_ssh_or_sync(site):
     shown = erik.page()
     assert "Add SSH key" not in shown
     assert "ccfleet-sync" not in shown
-    assert "On this computer" in shown
-    assert "In the cloud" in shown
-    assert "In a Claude client" in shown
+    assert "Claude Code CLI" in shown
+    assert "In the cloud" not in shown
+    assert "In a Claude client" not in shown
     response = erik.call("POST", f"/account/slots/{slot['id']}/ssh-key",
                          form={"csrf": erik.token(), "public_key": "not-used"})
     assert response.status == 404
@@ -573,49 +578,44 @@ def test_a_cookie_that_names_no_session_is_simply_cleared(site):
     assert "Max-Age=0" in (reply.getheader("Set-Cookie") or "")
 
 
-def test_a_token_is_shown_as_text_whatever_a_machine_sent(site):
-    """The token rides up from the machine. A machine that has been tampered
-    with could send markup instead, and this page is shown to its holder."""
+def test_a_cli_device_name_is_shown_as_text(site):
     store, sign_in, _ = site
     machine(store)
+    enable_cli(store)
     erik = sign_in(quota=1)
-    slot = claimed(store, erik)
-    erik.press(f"/account/slots/{slot['id']}/token")
-    key = slot_login_key(slot["id"])
-    store.record_login_progress(key, "ready", "", "", time.time(),
-                                store.get_login(key)["requested_at"],
-                                secret="<script>steal()</script>")
-    shown = erik.press(f"/account/slots/{slot['id']}/token-show").body
+    slot = active(store, claimed(store, erik))
+    pairing = store.request_cli_pairing(slot["id"], erik.account["id"], now=time.time())
+    store.register_cli_device(pairing, ssh_key(), "<script>steal()</script>", now=time.time())
+    shown = erik.page()
     assert "<script>steal()" not in shown
     assert "&lt;script&gt;steal()" in shown
 
 
-def test_the_way_in_is_offered_only_once_it_is_open(site):
+def test_the_cli_is_independent_of_remote_control(site):
     store, sign_in, _ = site
     machine(store)
+    enable_cli(store)
     erik = sign_in(quota=1)
-    slot = claimed(store, erik)
+    slot = active(store, claimed(store, erik))
     report(store, "m1", [{"unix_user": slot["unix_user"], "present": True,
                           "credentials": {"logged_in": True},
                           "remote_control": {"state": "inactive"}}])
     shown = erik.page()
-    assert 'href="https://claude.ai/code"' not in shown
-    assert "Remote Control is starting" in shown
+    assert "Connect this computer" in shown
+    assert "claude.ai/code" not in shown
 
 
-def test_a_device_token_flow_shows_its_link_and_takes_its_code(site):
+def test_a_pairing_code_is_single_use(site):
     store, sign_in, _ = site
     machine(store)
+    enable_cli(store)
     erik = sign_in(quota=1)
-    slot = claimed(store, erik)
-    erik.press(f"/account/slots/{slot['id']}/token")
-    key = slot_login_key(slot["id"])
-    store.record_login_progress(key, "url_ready", URL, "", time.time(),
-                                store.get_login(key)["requested_at"])
-    shown = erik.page()
-    assert f'href="{URL.replace("&", "&amp;")}"' in shown and 'name="code"' in shown
-    erik.press(f"/account/slots/{slot['id']}/code", code="c0de")
-    assert store.get_login(key)["state"] == "code_sent"
+    slot = active(store, claimed(store, erik))
+    code = store.request_cli_pairing(slot["id"], erik.account["id"], now=time.time())
+    made = store.register_cli_device(code, ssh_key(), "laptop", now=time.time())
+    assert made["device_token"].startswith("ccf_dev_")
+    with pytest.raises(usersite.StoreError):
+        store.register_cli_device(code, ssh_key(2), "other", now=time.time())
 
 
 def test_a_machine_with_nothing_on_record_says_so(site):
@@ -782,7 +782,6 @@ def test_the_policy_lists_every_field_kept_about_a_person():
     for kept in ("whether you are an operator",               # accounts.role
                  "when you first signed in",                  # accounts.created_at
                  "when you last visited",                     # accounts.last_seen_at
-                 "when a device token was last handed out",   # slots.device_token_at
                  # slots.account_switched_at
                  "when you last moved it to another Claude account",
                  "with when it began and when it ends",       # sessions.created_at/expires_at
@@ -874,15 +873,16 @@ def test_reading_a_public_page_writes_nothing(site):
     assert store._conn.total_changes > before
 
 
-def test_the_account_page_the_token_page_and_not_found_show_the_menu(site):
+def test_the_account_pairing_and_not_found_pages_show_the_menu(site):
     store, sign_in, _ = site
     machine(store)
+    enable_cli(store)
     erik = sign_in(quota=1)
-    slot = claimed(store, erik)
-    token_page = erik.press(f"/account/slots/{slot['id']}/token-show")
-    missing = erik.press("/account/slots/nobody-01/token")
-    assert token_page.status == 200 and missing.status == 404
-    for body in (erik.page(), token_page.body, missing.body):
+    slot = active(store, claimed(store, erik))
+    pairing_page = erik.press(f"/account/slots/{slot['id']}/cli")
+    missing = erik.press("/account/slots/nobody-01/cli")
+    assert pairing_page.status == 200 and missing.status == 404
+    for body in (erik.page(), pairing_page.body, missing.body):
         mine = corner(body)
         assert '<details class="usermenu">' in mine and "erik@example.com" in mine
         assert SIGN_IN not in mine

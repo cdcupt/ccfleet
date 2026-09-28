@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import signal
+import socket
 import threading
 import time
 import urllib.parse
@@ -17,7 +18,7 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 
-from . import consoleslots, customer_docs, oauth, sessions, statuspage, usersite
+from . import cli_access, consoleslots, customer_docs, oauth, sessions, statuspage, usersite
 from . import slots as slotstates
 from .config import Config
 from .desired import desired_state, machine_hostname
@@ -167,6 +168,16 @@ def _bearer_token(header: Optional[str]) -> Optional[str]:
     scheme, _, value = header.partition(" ")
     value = value.strip()
     if scheme.lower() != "bearer" or not NODE_TOKEN_RE.match(value):
+        return None
+    return value
+
+
+def _prefixed_bearer(header: Optional[str], prefix: str) -> Optional[str]:
+    if not header:
+        return None
+    scheme, _, value = header.partition(" ")
+    value = value.strip()
+    if scheme.lower() != "bearer" or not cli_access.token_has_prefix(value, prefix):
         return None
     return value
 
@@ -547,8 +558,102 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- routes --------------------------------------------------------
 
+        def _cli_register(self) -> None:
+            token = _prefixed_bearer(self.headers.get("Authorization"),
+                                     cli_access.PAIR_PREFIX)
+            if token is None:
+                self._json(401, {"error": "invalid pairing code"})
+                return
+            public = urllib.parse.urlsplit(ctx.cfg.public_url)
+            if public.scheme not in ("http", "https") or not public.netloc:
+                self._json(503, {"error": "CLI access is not configured on this server"})
+                return
+            body = self._read_body()
+            if body is None:
+                return
+            try:
+                supplied = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._json(400, {"error": "body must be UTF-8 JSON"})
+                return
+            if not isinstance(supplied, dict):
+                self._json(400, {"error": "body must be a JSON object"})
+                return
+            try:
+                device = ctx.store.register_cli_device(
+                    token, str(supplied.get("public_key") or ""),
+                    str(supplied.get("device_name") or ""), now=time.time())
+            except StoreError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            ws_scheme = "wss" if public.scheme == "https" else "ws"
+            self._json(201, {
+                "version": 1,
+                "device_id": device["device_id"],
+                "device_token": device["device_token"],
+                "endpoint": f"{ws_scheme}://{public.netloc}/api/cli/connect",
+                "slot_id": device["slot_id"],
+                "slot_name": device["name"] or device["slot_id"],
+                "user": device["unix_user"],
+                "host_key": device["ssh_host_key"],
+            })
+
+        def _cli_connect(self) -> None:
+            """Upgrade to WebSocket, then relay one end-to-end SSH stream."""
+            if not self._product_site():
+                self._json(404, {"error": "not found"})
+                return
+            token = _prefixed_bearer(self.headers.get("Authorization"),
+                                     cli_access.DEVICE_PREFIX)
+            device = ctx.store.resolve_cli_device(token or "", now=time.time())
+            if device is None:
+                self._json(401, {"error": "device is not authorized"})
+                return
+            if (self.headers.get("Upgrade", "").lower() != "websocket"
+                    or "upgrade" not in self.headers.get("Connection", "").lower()
+                    or self.headers.get("Sec-WebSocket-Version") != "13"):
+                self._json(426, {"error": "WebSocket upgrade required"},
+                           {"Upgrade": "websocket", "Sec-WebSocket-Version": "13"})
+                return
+            accept = cli_access.websocket_accept(self.headers.get("Sec-WebSocket-Key", ""))
+            if accept is None:
+                self._json(400, {"error": "invalid WebSocket key"})
+                return
+            try:
+                upstream = socket.create_connection(
+                    (device["access_host"], int(device["access_port"])), timeout=10)
+                upstream.settimeout(None)
+            except OSError:
+                log.warning("CLI broker could not reach node %s", device["node_id"])
+                self._json(502, {"error": "slot is temporarily unreachable"})
+                return
+            try:
+                self.send_response(101)
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept)
+                self.end_headers()
+                self.wfile.flush()
+                self.close_connection = True
+                cli_access.relay_websocket(
+                    self.connection, upstream,
+                    lambda: ctx.store.cli_device_is_active(device["device_id"]))
+            finally:
+                upstream.close()
+
+        def _cli_revoke(self) -> None:
+            token = _prefixed_bearer(self.headers.get("Authorization"),
+                                     cli_access.DEVICE_PREFIX)
+            if token is None or not ctx.store.revoke_cli_token(token):
+                self._json(401, {"error": "device is not authorized"})
+                return
+            self._json(200, {"ok": True})
+
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/api/cli/connect":
+                self._cli_connect()
+                return
             admin_only = (path in ("/api/nodes", "/api/alerts", "/auth/basic")
                           or path.rstrip("/") == CONSOLE_PATH)
             if path == "/healthz":
@@ -658,6 +763,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/api/cli/register":
+                if not self._product_site():
+                    self._json(404, {"error": "not found"})
+                else:
+                    self._cli_register()
+                return
+            if path == "/api/cli/revoke":
+                if not self._product_site():
+                    self._json(404, {"error": "not found"})
+                else:
+                    self._cli_revoke()
+                return
             if path == "/auth/signout":
                 self._sign_out()
                 return
@@ -731,7 +848,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     {s["id"]: ctx.store.get_login(slot_login_key(s["id"])) for s in slots},
                     hostname=hostname, channels=ctx.store.get_channel_versions(),
                     slot_updates={s["id"]: ctx.store.get_claude_update(s["id"]) for s in slots},
-                    own_update=ctx.store.get_claude_update(owned[0]["id"]) if owned else None),
+                    own_update=ctx.store.get_claude_update(owned[0]["id"]) if owned else None,
+                    slot_cli_keys={s["id"]: ctx.store.cli_public_keys(s["id"])
+                                   for s in slots}),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
 

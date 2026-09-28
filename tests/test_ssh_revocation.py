@@ -45,8 +45,29 @@ def test_machine_removes_a_legacy_authorized_keys_file(tmp_path):
     keys.write_text("a legacy key\n")
     acct = pwd.struct_passwd(("slot01", "x", os.getuid(), os.getgid(), "", str(home),
                               "/bin/bash"))
+    managed = tmp_path / "managed"
+    managed.mkdir()
 
-    ok, why = machine.install_authorized_key(acct, "")
+    ok, why = machine.install_authorized_key(acct, "", managed)
 
     assert ok, why
     assert not keys.exists()
+
+
+def test_machine_keeps_device_keys_outside_the_holder_writable_home(tmp_path):
+    home = tmp_path / "slot01"
+    (home / ".ssh").mkdir(parents=True)
+    acct = pwd.struct_passwd(("slot01", "x", os.getuid(), os.getgid(), "", str(home),
+                              "/bin/bash"))
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+    ok, why = machine.install_authorized_key(acct, [key], managed)
+
+    assert ok, why
+    assert not (home / ".ssh" / "authorized_keys").exists()
+    installed = (managed / "slot01").read_text()
+    assert machine.AUTHORIZED_KEY_OPTIONS in installed
+    assert installed.endswith(f" {key}\n")
+    assert machine.authorized_key_fingerprint(acct, managed).startswith("SHA256:")

@@ -65,6 +65,7 @@ DEFAULT_STATE_PATH = "~/.config/ccfleet/reconcile.json"
 DEFAULT_EGRESS_TARGETS = ("https://api.ipify.org", "https://ifconfig.me/ip",
                           "https://icanhazip.com", "https://checkip.amazonaws.com")
 DEFAULT_RC_SERVICE = "claude-remote-control.service"
+DEFAULT_SHELL_SERVICE = "ccfleet-shell.service"
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 RETRY_DELAYS_S = (2.0, 4.0, 8.0)
 MAX_EGRESS_BYTES = 64
@@ -1847,38 +1848,56 @@ SLOT_STATE_PATH = "~/.config/ccfleet/slot-state.json"
 MAX_SLOT_REQUEST = 64 * 1024
 
 
-def start_remote_control(runner: Runner = subprocess.run) -> None:
-    """Start a signed-in slot's Remote Control, if it is enabled and not running.
+def retire_slot_remote_control(runner: Runner = subprocess.run) -> None:
+    """Stop the superseded Cloud/client path on a hosted customer slot."""
+    enabled = _rc_enabled(runner)
+    active = remote_control_state(DEFAULT_RC_SERVICE, runner).get("state") == "active"
+    if enabled or active:
+        _run(runner, ["systemctl", "--user", "disable", "--now", DEFAULT_RC_SERVICE],
+             timeout=60)
 
-    It is how the slot's holder reaches it at all: a slot has no SSH key and no
-    shell anybody can open. slot-add.sh enables the unit but cannot start it,
-    because Remote Control needs a login that does not exist until the holder
-    signs in — so the first report after they do starts it. The unit runs
-    under the slot's own systemd manager, not under whoever asked.
-    """
-    if not _rc_enabled(runner):
+
+def sync_slot_terminal_unit(runner: Runner = subprocess.run) -> None:
+    """Install the packaged persistent-session unit as the slot user."""
+    root = Path(__file__).resolve().parents[1]
+    source = root / "systemd" / DEFAULT_SHELL_SERVICE
+    if not source.is_file():
+        source = root / "node" / "systemd" / DEFAULT_SHELL_SERVICE
+    try:
+        wanted = source.read_text(encoding="utf-8")
+    except OSError:
         return
-    _run(runner, ["systemctl", "--user", "start", DEFAULT_RC_SERVICE], timeout=60)
+    target = Path("~/.config/systemd/user").expanduser() / DEFAULT_SHELL_SERVICE
+    try:
+        current = target.read_text(encoding="utf-8")
+    except OSError:
+        current = ""
+    if current == wanted:
+        return
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if _atomic_write(target, wanted, mode=0o644):
+        # The superseded unit pre-warmed a general shell named `cc`. It has no
+        # customer path now and could retain a process under the previous
+        # account, so retire it during the same one-time migration.
+        _run(runner, ["tmux", "kill-session", "-t", "cc"], timeout=15)
+        _run(runner, ["systemctl", "--user", "daemon-reload"], timeout=30)
+        _run(runner, ["systemctl", "--user", "enable", DEFAULT_SHELL_SERVICE], timeout=30)
+
+
+def restart_slot_terminal(runner: Runner = subprocess.run) -> bool:
+    """Make an explicitly refreshed Claude login take effect in the CLI session."""
+    _run(runner, ["tmux", "kill-session", "-t", "ccfleet"], timeout=15)
+    try:
+        proc = runner(["systemctl", "--user", "restart", DEFAULT_SHELL_SERVICE],
+                      capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
 
 
 def _rc_enabled(runner: Runner) -> bool:
     return _run(runner, ["systemctl", "--user", "is-enabled", DEFAULT_RC_SERVICE],
                 timeout=10) == "enabled"
-
-
-def rc_session_running(runner: Runner = subprocess.run) -> Optional[bool]:
-    """Whether this user has a Remote Control session open right now.
-
-    A session somebody opened from claude.ai runs as a Claude Code worker
-    started with `--sdk-url`. None when it cannot be told — and that is treated
-    like a session in progress: a restart is only ever made on a clear "no".
-    """
-    try:
-        proc = runner(["pgrep", "-u", str(os.getuid()), "-f", "claude.*--sdk-url"],
-                      capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return {0: True, 1: False}.get(proc.returncode)
 
 
 def reconcile_slot_version(request: Mapping[str, Any], state: Mapping[str, Any],
@@ -1891,18 +1910,15 @@ def reconcile_slot_version(request: Mapping[str, Any], state: Mapping[str, Any],
     in. The installing is the owner agent's own, back-off and channels
     included: this only decides whether to ask. Installing never touches a
     session that is already running; it leaves the old version where it is.
-    What is still running the old one is Remote Control, which is restarted
-    later, at a quiet moment (see finish_restart).
+    A running persistent terminal keeps the old process until its holder exits;
+    the next session uses the installed version.
     """
     pin = {"claude_version": request.get("claude_version"),
            "channel_version": request.get("channel_version")}
-    # prune_state drops a success once it is satisfied, which is right for the
-    # record and wrong for the restart it may still owe: that is kept until
-    # done, and only forgotten when there is no pin left at all.
+    # Any restart debt came from the removed Remote Control slot mode.
     state = prune_state(state, pin, installed)
+    state.pop("restart", None)
     state = settle_update(state, request.get("update_now"))
-    if installable_version(pin["claude_version"]) is None:
-        state.pop("restart", None)
     if request.get("may_upgrade") is not True:
         # Its holder is signing in: an update asked for waits with the rest.
         return state, installed
@@ -1918,36 +1934,12 @@ def reconcile_slot_version(request: Mapping[str, Any], state: Mapping[str, Any],
     if channel is not None:
         state["channel"] = channel
     if result["ok"] and result["to"] != installed:
-        state["restart"] = "waiting"
+        # A running CC Fleet tmux session keeps its current process. The next
+        # session starts the newly installed binary; no Cloud/RC process is
+        # restarted behind the holder's back.
+        state.pop("restart", None)
         return state, result["to"]
     return state, installed
-
-
-def finish_restart(state: Mapping[str, Any], remote: Mapping[str, Any],
-                   runner: Runner = subprocess.run) -> dict[str, Any]:
-    """Restart Remote Control onto a new version once nobody is using it.
-
-    Only when it is running (a start picks up the new version by itself) and
-    only on a clear "no session open"; otherwise it waits for a later run.
-    """
-    state = dict(state)
-    if state.get("restart") != "waiting":
-        return state
-    if remote.get("state") != "active":
-        state.pop("restart", None)
-        return state
-    if rc_session_running(runner) is not False:
-        return state
-    # Done only on systemctl's own clean exit. A restart that failed leaves
-    # Remote Control on the old version, so it stays owed and is tried again.
-    try:
-        proc = runner(["systemctl", "--user", "restart", DEFAULT_RC_SERVICE],
-                      capture_output=True, text=True, timeout=60, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return state
-    if proc.returncode == 0:
-        state["restart"] = "done"
-    return state
 
 
 # -- one Claude account, in ~/.claude ------------------------------------------------
@@ -2317,47 +2309,10 @@ def _to_say(progress: Mapping[str, Any]) -> dict[str, Any]:
     return {"requested_at": progress.get("requested_at"), "said": dict(progress)}
 
 
-def restart_remote_control(runner: Runner = subprocess.run) -> bool:
-    """Put Remote Control onto the sign-in on the slot now, whatever it is doing.
-
-    Only ever at the holder's word — a sign-in — so a session open in it does
-    not hold this back the way it holds back an upgrade. True when it
-    restarted, or when it is switched off on purpose and not running: it starts
-    on the right sign-in whenever it is turned back on. Disabling a unit does
-    not stop it, so one still running is restarted all the same.
-    """
-    if (not _rc_enabled(runner)
-            and remote_control_state(DEFAULT_RC_SERVICE, runner).get("state") != "active"):
-        return True
-    try:
-        proc = runner(["systemctl", "--user", "restart", DEFAULT_RC_SERVICE],
-                      capture_output=True, text=True, timeout=60, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
-
-
 def _moved_on(state: Mapping[str, Any]) -> dict[str, Any]:
-    """What a fresh sign-in makes stale: the windows read before it, and any
-    restart still owed to Remote Control, which has just had one."""
-    state = {k: v for k, v in state.items() if k not in ("quota", "account_restart")}
-    if state.get("restart") == "waiting":
-        state["restart"] = "done"
-    return state
-
-
-def follow_sign_in(state: Mapping[str, Any], runner: Runner) -> dict[str, Any]:
-    """The sign-in on the slot changed: Remote Control moves onto it straight away.
-
-    After a sign-in finishes, above all. Remote Control used to be started
-    only when it was not running, so a sign-in under a running one left the
-    slot serving what it was signed in with before. A restart that fails is
-    owed, and tried again on the next run.
-    """
-    state = _moved_on(state)
-    if not restart_remote_control(runner):
-        state["account_restart"] = "owed"
-    return state
+    """What a fresh sign-in makes stale, including legacy RC bookkeeping."""
+    return {k: v for k, v in state.items()
+            if k not in ("quota", "account_restart", "restart")}
 
 
 def _atomic_write(path: Path, text: str | bytes, mode: int = 0o600) -> bool:
@@ -2424,8 +2379,9 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     """What this slot looks like, collected as its own user.
 
     The same facts an owner node reports about its owner, and no more: the
-    version, whether the login works and on which plan, Remote Control's
-    state, token counts and the quota windows. The quota read starts a Claude
+    version, whether the login works and on which plan, token counts and the
+    quota windows. A legacy Remote Control state may be reported while the old
+    unit is being retired. The quota read starts a Claude
     Code session, so it is only refreshed when the machine agent asks —
     it spreads those across its slots rather than starting six at once.
 
@@ -2444,6 +2400,8 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # First, so a sign-in that completes in this step already reads as signed
     # in below — and the slot is active in the same heartbeat, not the next.
     moved = drop_config_dir_line()
+    sync_slot_terminal_unit(runner)
+    retire_slot_remote_control(runner)
     # Bound before the sign-in step, so a slot signed in before it kept its
     # account is held to that account from its very next sign-in. A first
     # sign-in binds here too, on the run that finds its credential: the code is
@@ -2456,10 +2414,20 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
         request.get("login"), state, runner, save=lambda moved: write_state(state_path, moved))
     if "login" not in state:
         discard_scratch()                   # a sign-in cancelled, abandoned or over
+    if finished:
+        # Durable before touching the session: if this run dies while stopping
+        # the old Claude process, the next run still owes the restart and no
+        # process can remain indefinitely on the previous credential.
+        state = {**state, "account_restart": "owed"}
+        write_state(state_path, state)
+    restart_owed = state.get("account_restart") == "owed"
     if moved or finished:
-        state = follow_sign_in(state, runner)
-    elif state.get("account_restart") == "owed" and restart_remote_control(runner):
-        state.pop("account_restart")
+        state = _moved_on(state)
+    if finished or restart_owed:
+        if restart_slot_terminal(runner):
+            state.pop("account_restart", None)
+        else:
+            state["account_restart"] = "owed"
     config_dir = Path.home() / ".claude"
     credentials = credentials_summary(config_dir)
     credentials.update(slot_account_labels(config_dir))
@@ -2475,13 +2443,6 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     state, installed = reconcile_slot_version(request, state,
                                               claude_info(runner).get("version"), runner, now)
     remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
-    if credentials.get("logged_in") is True and remote.get("state") != "active":
-        start_remote_control(runner)
-        remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
-        # Whatever starts now runs the version installed now: nothing to restart.
-        state.pop("restart", None)
-    elif request.get("may_upgrade") is True:
-        state = finish_restart(state, remote, runner)
     facts: dict[str, Any] = {
         "claude": {"version": installed},
         "credentials": credentials,

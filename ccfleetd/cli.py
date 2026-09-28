@@ -71,6 +71,14 @@ def _parser() -> argparse.ArgumentParser:
     holder.add_argument("--none", action="store_true", help="stop counting it as a slot")
     hold.add_argument("--unix-user", default=None,
                       help="their Linux login on it; defaults to the node's owner")
+    access = node.add_parser(
+        "access", help="set the BWH-to-slot SSH endpoint used by the local ccfleet CLI")
+    access.add_argument("node_id")
+    access.add_argument("--host", default="", help="hostname or IP reachable from the server")
+    access.add_argument("--port", type=int, default=22)
+    access.add_argument("--host-key-file", default="",
+                        help="public SSH host key file copied from the node")
+    access.add_argument("--off", action="store_true", help="disable CLI access on this node")
 
     slot = sub.add_parser("slot", help="manage slots on a machine").add_subparsers(
         dest="slot_command", required=True)
@@ -404,7 +412,7 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         emails = {a["id"]: a["email"] for a in store.list_accounts()}
         # Reserved goes last: scripts read the id off the front of each row.
         print(f"{'id':<20} {'owner':<14} {'region':<12} {'pinned':<10} {'enabled':<8} "
-              f"{'rc':<4} {'last seen':<16} reserved")
+              f"{'rc':<4} {'cli':<4} {'last seen':<16} reserved")
         for node in store.list_nodes():
             hb = latest.get(node["id"])
             seen = time.strftime("%Y-%m-%d %H:%M", time.localtime(hb["ts"])) if hb else "never"
@@ -412,7 +420,9 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
             kept_for = emails.get(kept, "(account gone)") if kept else "-"
             print(f"{node['id']:<20} {node['owner']:<14} {node['region'] or '-':<12} "
                   f"{node['pinned_version'] or '-':<10} {'yes' if node['enabled'] else 'no':<8} "
-                  f"{'on' if node['rc_expected'] else 'off':<4} {seen:<16} {kept_for}")
+                  f"{'on' if node['rc_expected'] else 'off':<4} "
+                  f"{'on' if node['access_host'] and node['ssh_host_key'] else 'off':<4} "
+                  f"{seen:<16} {kept_for}")
     elif args.node_command == "remove":
         store.remove_node(args.node_id)
         print(f"removed {args.node_id}")
@@ -476,6 +486,24 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         print(f"{args.node_id}: counted as {holder['email']}'s slot (their Linux login "
               f"{slot['unix_user']}). A record only: nothing on it changes, and it is "
               "never handed out or wiped.")
+    elif args.node_command == "access":
+        if args.off:
+            store.clear_node_access(args.node_id)
+            print(f"{args.node_id}: CLI access disabled")
+            return EXIT_OK
+        if not args.host or not args.host_key_file:
+            print("error: --host and --host-key-file are required unless --off is used",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            with open(args.host_key_file, encoding="ascii") as stream:
+                host_key = stream.read()
+        except OSError as exc:
+            print(f"error: could not read host key: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        store.set_node_access(args.node_id, args.host, args.port, host_key)
+        print(f"{args.node_id}: CLI access goes through the broker to "
+              f"{args.host}:{args.port}; clients pin the supplied SSH host key")
     return EXIT_OK
 
 

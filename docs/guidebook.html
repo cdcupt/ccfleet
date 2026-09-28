@@ -2,1189 +2,168 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<style>:root{color-scheme:light dark}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
-<title>ccfleet Guidebook</title>
-</head>
-<body>
-
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Fleet Guidebook</title>
 <style>
-:root{
-  --bg:#F7F8FA;--panel:#FFFFFF;--ink:#131820;--ink-2:#4E5966;--rule:#D7DDE5;--rule-2:#E9EDF2;
-  --accent:#1747C7;--accent-ink:#0F3399;--accent-soft:#E6ECFB;
-  --ok:#157F3B;--ok-soft:#E3F4E8;--warn:#A85B00;--warn-soft:#FBEEDB;--bad:#B42318;--bad-soft:#FBE4E1;
-  --code-bg:#EEF1F5;--code-ink:#1E2936;
-  --display:"Avenir Next","Helvetica Neue","Segoe UI","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
-  --body:"Helvetica Neue","Segoe UI","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
-  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"JetBrains Mono",monospace;
-  color-scheme:light dark;
-}
-@media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]){
-    --bg:#0E1217;--panel:#151B23;--ink:#E7EBF1;--ink-2:#A3ADBA;--rule:#2B3440;--rule-2:#1F2731;
-    --accent:#8FB0FF;--accent-ink:#B7CBFF;--accent-soft:#1B2B4F;
-    --ok:#5AD08A;--ok-soft:#12321F;--warn:#F2B35B;--warn-soft:#3A2A0E;--bad:#FF8A80;--bad-soft:#3E1714;
-    --code-bg:#1C242E;--code-ink:#DCE3EC;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0E1217;--panel:#151B23;--ink:#E7EBF1;--ink-2:#A3ADBA;--rule:#2B3440;--rule-2:#1F2731;
-  --accent:#8FB0FF;--accent-ink:#B7CBFF;--accent-soft:#1B2B4F;
-  --ok:#5AD08A;--ok-soft:#12321F;--warn:#F2B35B;--warn-soft:#3A2A0E;--bad:#FF8A80;--bad-soft:#3E1714;
-  --code-bg:#1C242E;--code-ink:#DCE3EC;
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
-a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
-a:hover{color:var(--accent-ink)}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.wrap{max-width:1180px;margin:0 auto;padding-block:28px 72px;padding-inline:20px}
-@media (max-width:480px){.wrap{padding-inline:16px}ul,ol{padding-left:18px}}
-.mast{border-bottom:1px solid var(--rule);padding-bottom:22px;margin-bottom:26px}
-.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin:0 0 10px}
-h1{font-family:var(--display);font-weight:800;font-size:clamp(34px,5vw,54px);line-height:1.04;letter-spacing:-.02em;margin:0 0 14px;text-wrap:balance;max-width:22ch}
-.dek{font-size:clamp(17px,1.6vw,20px);line-height:1.45;color:var(--ink-2);max-width:62ch;margin:0 0 18px}
-.meta{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--mono);font-size:12.5px;color:var(--ink-2)}
-.meta b{color:var(--ink);font-weight:500}
-.grid{display:grid;grid-template-columns:230px minmax(0,1fr);gap:40px;align-items:start}
-.toc{position:sticky;top:env(safe-area-inset-top,0px);padding-top:6px;min-width:0}
-.toc ol{list-style:none;margin:0;padding:0;border-left:1px solid var(--rule)}
-.toc li a{display:block;padding:6px 0 6px 14px;color:var(--ink-2);text-decoration:none;font-size:14px;line-height:1.35;border-left:2px solid transparent;margin-left:-1px}
-.toc li a:hover{color:var(--ink);border-left-color:var(--accent)}
-.toc .n{font-family:var(--mono);font-size:11.5px;color:var(--accent);margin-right:6px}
-.toc-title{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin:0 0 8px}
-main{min-width:0}
-@media (max-width:1000px){
-  .grid{grid-template-columns:minmax(0,1fr);gap:18px}
-  .toc{position:static}
-  .toc ol{display:flex;max-width:100%;gap:6px;overflow-x:auto;border-left:0;padding-bottom:6px;-webkit-overflow-scrolling:touch}
-  .toc li a{white-space:nowrap;border:1px solid var(--rule);border-radius:999px;padding:6px 12px;margin:0;background:var(--panel)}
-}
-section{margin:0 0 44px}
-h2{font-family:var(--display);font-weight:700;font-size:clamp(24px,2.6vw,30px);line-height:1.12;letter-spacing:-.015em;margin:0 0 14px;text-wrap:balance;padding-top:6px}
-h2 .n{font-family:var(--mono);font-weight:500;font-size:14px;color:var(--accent);display:block;margin-bottom:6px;letter-spacing:.04em}
-h3{font-family:var(--display);font-weight:700;font-size:19px;line-height:1.25;margin:26px 0 8px;letter-spacing:-.01em}
-p{margin:0 0 14px;max-width:72ch}
-ul,ol{margin:0 0 14px;padding-left:22px;max-width:72ch}
-li{margin:0 0 6px}
-li::marker{color:var(--ink-2)}
-strong{font-weight:600}
-code{font-family:var(--mono);font-size:.86em;background:var(--code-bg);color:var(--code-ink);padding:1px 6px;border-radius:5px;white-space:nowrap;-webkit-box-decoration-break:clone;box-decoration-break:clone}
-code.long{display:inline-block;max-width:100%;overflow-x:auto;vertical-align:-0.3em}
-pre{font-family:var(--mono);font-size:13px;line-height:1.55;background:var(--code-bg);color:var(--code-ink);padding:14px 16px;border-radius:8px;overflow-x:auto;margin:0 0 16px;max-width:100%}
-pre code{background:none;padding:0;white-space:pre;font-size:inherit;color:inherit}
-pre .c{color:var(--ink-2)}
-.step{display:grid;grid-template-columns:44px minmax(0,1fr);gap:0 14px;margin:0 0 18px}
-.step .num{font-family:var(--mono);font-size:13px;color:var(--accent);border:1px solid var(--accent);border-radius:999px;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-weight:600;margin-top:2px}
-.step h3{margin:4px 0 6px}
-.step>*{grid-column:2}
-.step>.num{grid-column:1;grid-row:1}
-.note{border:1px solid var(--rule);border-radius:10px;padding:14px 18px;margin:0 0 18px;background:var(--panel);max-width:76ch}
-.note.warn{border-color:var(--warn);background:var(--warn-soft)}
-.note.bad{border-color:var(--bad);background:var(--bad-soft)}
-.note.ok{border-color:var(--ok);background:var(--ok-soft)}
-.note .t{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px;color:var(--accent)}
-.note.warn .t{color:var(--warn)}.note.bad .t{color:var(--bad)}.note.ok .t{color:var(--ok)}
-.note p:last-child{margin-bottom:0}
-.table-wrap{overflow-x:auto;margin:0 0 18px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
-table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
-th,td{padding:10px 12px;border-bottom:1px solid var(--rule-2);vertical-align:top;text-align:left}
-th{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);font-weight:500;background:var(--bg)}
-tr:last-child td{border-bottom:0}
-td code{white-space:nowrap}
-.pill{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:999px;border:1px solid;white-space:nowrap}
-.pill.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)}
-.pill.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)}
-.pill.bad{color:var(--bad);border-color:var(--bad);background:var(--bad-soft)}
-figure{margin:18px 0 22px;padding:0}
-figure .fig-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--panel);padding:14px}
-figure svg{display:block;width:100%;height:auto;min-width:560px;max-width:100%;color:var(--ink)}
-figcaption{font-size:13.5px;color:var(--ink-2);margin:8px 2px 0;max-width:80ch}
-figcaption b{color:var(--ink);font-weight:600}
-svg text{font-family:var(--mono);fill:currentColor}
-svg .t12{font-size:12px}svg .t11{font-size:11px}svg .t13{font-size:13px;font-weight:500}svg .t10{font-size:10.5px}
-svg .box{fill:var(--panel);stroke:currentColor;stroke-width:1.2}
-svg .box-acc{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4}
-svg .box-soft{fill:var(--bg);stroke:var(--rule);stroke-width:1}
-svg .ln{stroke:currentColor;stroke-width:1.3;fill:none}
-svg .ln-acc{stroke:var(--accent);stroke-width:1.6;fill:none}
-svg .ln-dash{stroke:currentColor;stroke-width:1.2;fill:none;stroke-dasharray:4 4}
-svg .mute{fill:var(--ink-2)}svg .acc{fill:var(--accent)}
-.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 28px}
-@media (max-width:760px){.two{grid-template-columns:minmax(0,1fr)}}
-.small{font-size:13.5px;color:var(--ink-2)}
-kbd{font-family:var(--mono);font-size:.85em;border:1px solid var(--rule);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--panel)}
-html{scroll-behavior:smooth}
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+:root{color-scheme:light dark;--bg:#f6f8fb;--panel:#fff;--ink:#17202b;--muted:#5c6876;
+--line:#d8dee8;--accent:#1747c7;--code:#eef2f7}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1319;--panel:#161d25;--ink:#e8edf4;
+--muted:#a4afbc;--line:#303a47;--accent:#8fb0ff;--code:#202a35}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6
+system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{max-width:920px;margin:auto;padding:42px 20px 80px}
+h1{font-size:clamp(38px,7vw,64px);line-height:1.02;letter-spacing:-.04em;margin:0 0 16px}
+h2{margin:42px 0 12px;font-size:27px}h3{margin:24px 0 8px}p,li{max-width:75ch}
+.eyebrow{font:12px ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase;
+color:var(--accent)}.lead{font-size:20px;color:var(--muted)}.card{background:var(--panel);
+border:1px solid var(--line);border-radius:14px;padding:20px 24px;margin:16px 0}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code)}
+code{padding:2px 6px;border-radius:5px}pre{padding:15px 18px;border-radius:10px;overflow:auto}
+.flow{white-space:pre-wrap;font:14px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}
+.note{border-left:4px solid var(--accent)}a{color:var(--accent)}table{border-collapse:collapse;
+width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);
+padding:10px 8px}th{font-size:13px;color:var(--muted)}
 </style>
+</head>
+<body><main class="wrap">
+<p class="eyebrow">CC Fleet · guidebook · 2026-09-28</p>
+<h1>Claude Code anywhere, one account per slot</h1>
+<p class="lead">CC Fleet hosts the original Claude Code CLI in a private Linux slot. A
+small local command connects your terminal to it; the Claude credential and model traffic
+stay on the slot.</p>
 
-<div class="wrap">
-<header class="mast">
-  <p class="eyebrow">ccfleet · setup and usage guide · v0.11.1 · 2026-09-27 · live</p>
-  <h1>ccfleet Guidebook</h1>
-  <p class="dek">How to stand up the fleet server, turn a fresh VPS into a single-owner Claude Code node or a one-slot shared machine, sign in with your own account, watch the fleet from one dashboard, and keep it healthy. One owner, one account, one node.</p>
-  <div class="meta">
-    <span>Repo <b>github.com/cdcupt/ccfleet</b></span>
-    <span>Runtime <b>Python 3.9+, no dependencies</b></span>
-    <span>Nodes <b>Debian 12, Ubuntu 22.04 / 24.04</b></span>
-    <span>Time to first node <b>about 40 minutes</b></span>
-  </div>
-</header>
+<div class="card note"><strong>The invariant</strong><p>One holder, one slot, one Claude
+account. CC Fleet never pools accounts, chooses an account for a request, or exposes a shared
+Claude API.</p></div>
 
-<div class="grid">
-<nav class="toc" aria-label="Sections">
-  <p class="toc-title">Contents</p>
-  <ol>
-    <li><a href="#daily"><span class="n">00</span>Every day</a></li>
-    <li><a href="#what"><span class="n">01</span>What you get</a></li>
-    <li><a href="#before"><span class="n">02</span>Before you start</a></li>
-    <li><a href="#server"><span class="n">03</span>Fleet server</a></li>
-    <li><a href="#node"><span class="n">04</span>A node per owner</a></li>
-    <li><a href="#laptop"><span class="n">05</span>Your computer: the slot&rsquo;s account or its own</a></li>
-    <li><a href="#accounts"><span class="n">06</span>Daily use &amp; accounts</a></li>
-    <li><a href="#ops"><span class="n">07</span>Operations</a></li>
-    <li><a href="#gateway"><span class="n">08</span>Optional gateway</a></li>
-    <li><a href="#reference"><span class="n">09</span>Reference</a></li>
-    <li><a href="#trouble"><span class="n">10</span>Troubleshooting</a></li>
-    <li><a href="#shared"><span class="n">11</span>Shared machines</a></li>
-  </ol>
-</nav>
+<h2 id="daily">Customer experience</h2>
+<ol>
+<li>Sign in to the CC Fleet website with Google and claim a slot.</li>
+<li>On the slot card, press <strong>Sign in to Claude</strong>. Complete Anthropic's own flow
+and paste its code back. The resulting credential is written on the slot only.</li>
+<li>Wait for <strong>In use</strong>, then press <strong>Connect this computer</strong>.</li>
+<li>Install and pair:</li>
+</ol>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash
+ccfleet login</code></pre>
+<p>Paste the single-use code from the page. It expires after ten minutes.</p>
+<ol start="5"><li>Run <code>ccfleet</code>. The original Claude Code interface opens in the
+terminal. Run it again after a disconnect to resume the same session.</li></ol>
 
-<main>
+<div class="card"><h3>Projects and tools</h3><p>Projects live in <code>~/workspace</code> on
+the slot. Clone with Git or retrieve them from inside the slot. Shell tools run there through
+Claude Code. The local client does not mount or silently copy the computer's current directory.</p></div>
 
-<section id="daily">
-  <h2><span class="n">00</span>Every day</h2>
-  <p>You open a web page. That is the whole thing. Claude Code runs on your node, not on the machine in front of you, so there is nothing to install, nothing to configure and no terminal.</p>
+<h2 id="path">Connection path</h2>
+<div class="card flow">user terminal: ccfleet
+        │ TLS/WSS containing encrypted SSH
+        ▼
+BWH: CC Fleet broker
+        │ opaque SSH bytes; fixed assigned endpoint
+        ▼
+slot: forced entry → persistent tmux → original claude
+        │ ordinary Claude HTTPS under this slot's one account
+        ▼
+Anthropic</div>
+<p>BWH authenticates the CC Fleet device token and chooses the operator-configured slot
+endpoint. It does not terminate the inner SSH session, so it cannot read terminal contents.
+The client pins the slot machine's SSH host key.</p>
 
-  <div class="two">
-    <div>
-      <h3>To work</h3>
-      <p>Open <code class="long">https://claude.ai/code</code>, or the Code tab in the Claude mobile app, and pick your node's session. It is named after the node.</p>
-      <p>Work exactly as you would locally. Files, tools and git all live on the node.</p>
-    </div>
-    <div>
-      <h3>To check your node</h3>
-      <p>Open your console, the address your operator gave you. It shows status, Claude Code version, egress address, disk, login freshness and any alerts.</p>
-      <p>What you see depends on the login you were given. An <strong>owner</strong> login shows your own nodes and one thing you can act on: signing your own node in. Everything else &mdash; adding, disabling, pinning, removing &mdash; stays with the operator. The operator's own login, or the admin token, shows the whole fleet. <a href="#accounts">Section 06</a> has the detail.</p>
-    </div>
-  </div>
+<h2 id="privacy">Privacy boundary</h2>
+<table><thead><tr><th>Place</th><th>What it holds or can observe</th></tr></thead><tbody>
+<tr><td>User computer</td><td>A CC Fleet device token, private SSH key, pinned host key and
+terminal data. No Claude credential.</td></tr>
+<tr><td>BWH broker</td><td>The device-to-slot mapping and connection metadata. It relays the
+inner encrypted stream and cannot read it.</td></tr>
+<tr><td>Slot</td><td>The Claude credential, files, tools, prompts and responses. This is where
+Claude Code runs.</td></tr>
+<tr><td>Anthropic</td><td>The ordinary traffic and metadata sent by Claude Code on the slot, under
+the customer's own account.</td></tr>
+</tbody></table>
+<p>The slot machine's administrator has root and can technically inspect slot files or
+processes. Transport encryption does not hide data from the computer that executes it.</p>
 
-  <div class="note ok">
-    <p class="t">Nothing depends on your laptop</p>
-    <p>The session runs on the node under a service that starts at boot. Close the browser, shut the laptop, change country, pick it up on your phone. The conversation is still there. The heartbeat agent, the tunnel and the nightly backup run the same way.</p>
-  </div>
-
-  <h3>The one thing you do yourself</h3>
-  <p>Signing in. Nobody can do it for you, by design: your subscription login must complete through Anthropic's own flow. It happens once per node, during setup, and after that the node refreshes its own credentials. The dashboard raises <code>credentials_missing</code> or <code>token_expired</code> if it ever needs doing again.</p>
-
-  <h3>The CLI on your own machines</h3>
-  <p>If you would rather run Claude Code locally &mdash; your own files, your own editor &mdash; you can, without signing in on each machine.</p>
-  <p><strong>From the console, with no terminal.</strong> Open the dashboard, find your node under
-  <em>Device tokens</em>, and press <em>Get a device token</em>. Your node mints one from the account
-  it is already signed in as: a link appears, you approve it, you paste the code back, and the token
-  is shown. You can show it again while the request lasts, so a second machine can have the same
-  token; press <em>Done with it</em> when you have finished and it goes at once.</p>
-  <div class="note ok">
-    <p class="t">How long it stays readable</p>
-    <p>Until you press <em>Done with it</em>, or fifteen minutes pass and the attempt expires on its
-    own &mdash; whichever comes first. Show it as often as you need in that window, which is what
-    makes putting the same token on a second machine possible without minting another.</p>
-    <p>It was shown exactly once at first. That was stricter than anything required: the credential
-    sits in the database from the moment the node reports it until the attempt expires either way, so
-    reading it twice adds no exposure the first read did not. The window is what bounds this, not the
-    reading. Press <em>Done with it</em> when you have finished and it goes at once.</p>
-  </div>
-  <p>Then, on each machine you want it on:</p>
-  <pre><code>bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
-  <p>That is the whole setup on a new machine. It asks for the token, hides what you
-  paste, and checks the token against Anthropic <strong>before writing anything at
-  all</strong> &mdash; a refused token leaves the machine exactly as it was. Once the
-  token is accepted it also installs itself to <code>~/.local/bin</code>, so
-  <code>ccfleet-connect --status</code> and <code>--remove</code> work later; if that
-  part fails it says so rather than leaving you with a command that is not there.
-  Run through <code>bash -c</code> rather than piped into a shell: a pipe takes the
-  keyboard away from the prompt.</p>
-  <p>When it finishes it hands you a fresh shell with the token already in it, so
-  <code>claude</code> works in that same window. A program cannot put a variable into
-  the shell that started it &mdash; that is what a child process is &mdash; so the
-  choice was between an export line to type by hand and a new shell that has read the
-  line just written. Pass <code>--no-exec</code> first if you are scripting this and
-  want your own shell back.</p>
-  <p>After that <code>claude</code> simply works there, on that machine&rsquo;s own files. Nothing is
-  proxied and no base URL is set: Claude Code reads the token from the environment exactly as
-  Anthropic documents.</p>
-  <p><strong>Or generate it yourself</strong>, on a machine already signed in as that account &mdash;
-  same credential, no console involved:</p>
-  <pre><code><span class="c"># once, on a machine already signed in as you</span>
-claude setup-token
-
-<span class="c"># then once per device &mdash; it asks for the token and hides it</span>
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
-  <p>After that <code>claude</code> simply works there. The token is Anthropic's own long-lived credential, it lasts a year, and it lives only on the device you put it on. <code>ccfleet-connect --status</code> says whether it still works and <code>--remove</code> undoes it.</p>
-  <div class="note warn">
-    <p class="t">One thing a token cannot do</p>
-    <p><strong>Remote Control.</strong> Driving a machine from claude.ai/code or the phone app needs a full-scope login, and Anthropic limits long-lived tokens to inference deliberately &mdash; the CLI refuses in as many words. So a node keeps its own sign-in for that, and tokens are for the command line. The two sit side by side; neither replaces the other.</p>
-  </div>
-
-  <h3>If you prefer a terminal on the node</h3>
-  <p>A terminal is optional, not required. If you want one, connect over SSH and attach to a persistent session so that closing the window does not end your work:</p>
-  <pre><code>ssh &lt;owner&gt;@&lt;node&gt;
-claude            # logging in already attached you to the persistent session</code></pre>
-  <p>Detach with <kbd>Ctrl</kbd>+<kbd>b</kbd> then <kbd>d</kbd>, or just close the window. The session survives a disconnect. A reboot clears whatever was running inside it, but you do not have to create one again: the node re-creates the session at boot, so your next <code>ssh</code> still lands in it. Remote Control is enabled at boot too, so it comes back on its own.</p>
-</section>
-
-<section id="what">
-  <h2><span class="n">01</span>What you get</h2>
-  <p>ccfleet manages several personal Claude Code installations without proxying their traffic or holding their logins. Each person gets a small hosted machine (a <em>node</em>) running the unmodified Claude Code CLI, signed in with their own subscription through Anthropic's normal login flow. A tiny agent on each node reports public facts to one fleet server, which draws a dashboard and sends alerts. That is the whole system.</p>
-
-  <figure>
-    <div class="fig-wrap">
-    <svg viewBox="0 0 980 370" role="img" aria-label="Owners connect to their own node over SSH or Remote Control; each node runs unmodified Claude Code with its owner's login and talks to api.anthropic.com directly; a heartbeat agent on each node reports facts to the fleet server, which renders a dashboard and sends Telegram alerts">
-      <defs>
-        <marker id="g-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
-        <marker id="g-arr-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
-      </defs>
-      <rect x="14" y="40" width="160" height="66" rx="8" class="box"/>
-      <text x="94" y="66" text-anchor="middle" class="t13">Owner A</text>
-      <text x="94" y="84" text-anchor="middle" class="t11 mute">laptop, VS Code, phone</text>
-      <rect x="14" y="150" width="160" height="66" rx="8" class="box"/>
-      <text x="94" y="176" text-anchor="middle" class="t13">Owner B</text>
-      <text x="94" y="194" text-anchor="middle" class="t11 mute">own devices</text>
-      <line x1="174" y1="73" x2="286" y2="73" class="ln" marker-end="url(#g-arr)"/>
-      <text x="230" y="64" text-anchor="middle" class="t10 mute">ssh / mosh</text>
-      <text x="230" y="90" text-anchor="middle" class="t10 mute">or Remote Control</text>
-      <line x1="174" y1="183" x2="286" y2="183" class="ln" marker-end="url(#g-arr)"/>
-      <text x="230" y="174" text-anchor="middle" class="t10 mute">ssh or Remote Control</text>
-      <rect x="288" y="26" width="300" height="94" rx="8" class="box-acc"/>
-      <text x="438" y="48" text-anchor="middle" class="t13">Node A · one VPS · own egress IP</text>
-      <text x="304" y="70" class="t11">unmodified claude, /login as Owner A</text>
-      <text x="304" y="86" class="t11">tmux · Remote Control service (optional)</text>
-      <text x="304" y="102" class="t11">ccfleet-agent every 5 min · nightly backup</text>
-      <rect x="288" y="136" width="300" height="94" rx="8" class="box-acc"/>
-      <text x="438" y="158" text-anchor="middle" class="t13">Node B · one VPS · own egress IP</text>
-      <text x="304" y="180" class="t11">unmodified claude, /login as Owner B</text>
-      <text x="304" y="196" class="t11">same image, separate machine</text>
-      <text x="304" y="212" class="t11">nothing shared with Node A</text>
-      <line x1="588" y1="73" x2="700" y2="73" class="ln-acc" marker-end="url(#g-arr-acc)"/>
-      <line x1="588" y1="183" x2="700" y2="183" class="ln-acc" marker-end="url(#g-arr-acc)"/>
-      <text x="644" y="64" text-anchor="middle" class="t10 acc">direct, own OAuth</text>
-      <text x="644" y="174" text-anchor="middle" class="t10 acc">direct, own OAuth</text>
-      <rect x="702" y="90" width="264" height="76" rx="8" class="box"/>
-      <text x="834" y="118" text-anchor="middle" class="t13">api.anthropic.com</text>
-      <text x="834" y="136" text-anchor="middle" class="t11 mute">sees the real client on each node</text>
-      <text x="834" y="151" text-anchor="middle" class="t11 mute">nothing proxied or rewritten</text>
-      <rect x="14" y="262" width="952" height="92" rx="8" class="box"/>
-      <text x="30" y="286" class="t13">Fleet server (ccfleetd) · dashboard, JSON, Telegram alerts</text>
-      <text x="30" y="306" class="t11">receives: version · uptime · disk · load · egress IP · login present? · last refresh · token expiry · remote-control state</text>
-      <text x="30" y="322" class="t11">alerts: no heartbeat · claude missing · version drift · login missing/stale/expired · disk · egress change · RC down</text>
-      <text x="30" y="338" class="t11 mute">never receives or stores a token value · never proxies traffic · read-only view of the fleet</text>
-      <path d="M438 230 L438 262" class="ln-dash"/>
-      <text x="452" y="252" class="t10 mute">heartbeat, facts only</text>
-    </svg>
-    </div>
-    <figcaption><b>Figure 1.</b> The three parts: owner devices, one node per owner, one fleet server. Model traffic never leaves the straight line from a node to Anthropic.</figcaption>
-  </figure>
-
-  <div class="two">
-    <div>
-      <h3>Included</h3>
-      <ul>
-        <li><strong>Node install</strong>: one command takes a blank server to ready-for-sign-in, hardened, with the agent reporting. The older bootstrap and owner-setup scripts remain for machines you manage by hand.</li>
-        <li><strong>Node upkeep</strong>: staged upgrades and backups that exclude credentials.</li>
-        <li><strong>Agent</strong>: one Python file, standard library only, systemd timer every five minutes.</li>
-        <li><strong>Fleet server</strong>: dashboard, JSON API, alert rules, Telegram, node token management.</li>
-      </ul>
-    </div>
-    <div>
-      <h3>Deliberately absent</h3>
-      <ul>
-        <li>No relay or proxy for model traffic.</li>
-        <li>No storage of anyone's credentials; the optional gateway forwards an owner's own requests unchanged and keeps nothing.</li>
-        <li>No header or request rewriting, no fingerprint games.</li>
-        <li>No account pools, share links, seats or automatic failover between accounts.</li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<section id="before">
-  <h2><span class="n">02</span>Before you start</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>You need</th><th>Details</th></tr></thead>
-    <tbody>
-      <tr><td>One Claude subscription per owner</td><td>Pro or Max. Each owner signs in themselves. Nobody shares an account.</td></tr>
-      <tr><td>One small VPS per owner</td><td>Debian 12, or Ubuntu 22.04 or 24.04. 1 vCPU, 1–2 GB RAM, 20 GB disk, in a region Anthropic supports. About $5–12 per month. The installer is verified end to end on a blank Debian 12.</td></tr>
-      <tr><td>One box for the fleet server</td><td>Anything that runs Docker or Python 3.9+. It can be one of your existing servers. It must sit behind TLS.</td></tr>
-      <tr><td>SSH keys</td><td>Each owner has an SSH key pair; nodes accept keys only.</td></tr>
-      <tr><td>Optional</td><td>A Telegram bot for alerts, an rclone remote for off-node backups, a domain for the dashboard.</td></tr>
-    </tbody>
-  </table></div>
-  <div class="note bad">
-    <p class="t">Read this once</p>
-    <p>ccfleet keeps you inside the arrangements Anthropic documents: the unmodified Claude Code binary, signed in by its owner, hosted or not. It cannot change where <em>you</em> are. Anthropic's supported-regions list does not include mainland China, Hong Kong or Macau, and a node abroad does not alter that. The compliance notes in the repo quote the exact passages.</p>
-  </div>
-</section>
-
-<section id="server">
-  <h2><span class="n">03</span>Fleet server</h2>
-  <p>The server is a single process: <code>ccfleetd serve</code>. It listens on loopback, stores everything in one SQLite file, and needs one secret, the admin token. Docker is the quickest path; a plain systemd unit is provided too.</p>
-
-  <div class="step">
-    <div class="num">1</div>
-    <h3>Get the code and set the admin token</h3>
-    <pre><code>git clone https://github.com/cdcupt/ccfleet.git
+<h2 id="server">Server and machine setup</h2>
+<h3>1. Deploy BWH</h3>
+<pre><code>git clone https://github.com/cdcupt/ccfleet.git
 cd ccfleet
 cp deploy/ccfleetd.env.example deploy/ccfleetd.env
-chmod 600 deploy/ccfleetd.env
-openssl rand -hex 32        <span class="c"># paste as CCFLEET_ADMIN_TOKEN in deploy/ccfleetd.env</span></code></pre>
-    <p>Set <code>CCFLEET_PUBLIC_URL</code> to the address you will put in front of it, so alerts can link to the dashboard.</p>
-  </div>
+docker compose -f deploy/docker-compose.yml up -d --build</code></pre>
+<p>Configure the public URL, Google OAuth, cookie secret and admin token. Put TLS in front of
+the service. The product is at the bare URL, customers use <code>/account</code>, and operators
+use <code>/admin</code>.</p>
+<p><code>CCFLEET_BYPASS_BY_DEFAULT</code> stays off for hosted customer slots. Turning it on
+adds <code>--bypass-permissions</code> to legacy owner-node install instructions; because those
+owners also have passwordless sudo, use it only on a fleet you personally control.</p>
 
-  <div class="step">
-    <div class="num">2</div>
-    <h3>Start it</h3>
-    <pre><code><span class="c"># Docker</span>
-docker compose -f deploy/docker-compose.yml up -d --build
-curl -s http://127.0.0.1:8110/healthz      <span class="c"># {"ok": true}</span>
-
-<span class="c"># or plain Python</span>
-pip install git+https://github.com/cdcupt/ccfleet
-set -a; . deploy/ccfleetd.env; set +a
-ccfleetd serve</code></pre>
-    <p>For a permanent plain install, <code>deploy/ccfleetd.service</code> runs it as an unprivileged user under systemd; its header comment lists the four commands to set that up.</p>
-  </div>
-
-  <div class="step">
-    <div class="num">3</div>
-    <h3>Put TLS in front</h3>
-    <pre><code><span class="c"># deploy/Caddyfile.example</span>
-fleet.example.com {
-    reverse_proxy 127.0.0.1:8110
-}</code></pre>
-    <p>Open <code>/admin</code> at that address in a browser. User name <code>admin</code>, password the admin token. The bare address is the product's front page, the same for everybody: what ccfleet is and how to start. Once you have signed in there with Google as an operator, it offers you the console too. You will see an empty fleet with the hint to add a node. That token is the operator's way in and always works; named logins for owners come later, in <a href="#accounts">section 06</a>.</p>
-    <div class="note">
-      <p class="t">No public endpoint?</p>
-      <p>You can skip the hostname, the DNS record and the certificate entirely. A node can reach the server through an SSH tunnel instead: a user service forwards a loopback port on the node to this server's loopback port, and the agent posts to its own <code>127.0.0.1</code> with SSH providing the encryption. ccfleetd's HTTP endpoint stays private, though the server does still need a reachable SSH port, which is the one surface this design depends on. See <code>docs/tunnel.md</code> in the repo.</p>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">4</div>
-    <h3>Register each owner's node</h3>
-    <p>Do this from the console once it is up: add the node, and the page that follows gives you an install command with the server URL, node id and token already in it. <strong>Append the owner's <code>--ssh-key</code> before you run it</strong>, or the installer skips SSH, firewall and fail2ban hardening rather than risk locking everyone out. <a href="#node">Section 04</a> has the detail.</p>
-    <p>The token is shown <strong>once</strong>. Send it to the owner over a private channel, or run the install yourself. Lost it? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</p>
-    <p>If that owner should be able to check their own node's health, give them a console login as well. Without one they have a node and no way to see whether it is alive:</p>
-    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
-  ccfleetd user add alice --owner alice</code></pre>
-    <p>The password is generated and printed <strong>once</strong>. See <a href="#accounts">section 06</a> for what that login can and cannot do.</p>
-  </div>
-
-  <div class="step">
-    <div class="num">5</div>
-    <h3>Optional: Telegram alerts</h3>
-    <p>Create a bot with @BotFather, send it one message, read your chat id from @userinfobot, then set <code>CCFLEET_TELEGRAM_BOT_TOKEN</code> and <code>CCFLEET_TELEGRAM_CHAT_ID</code> in the env file and restart. Test with:</p>
-    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd alert-test</code></pre>
-  </div>
-</section>
-
-<section id="node">
-  <h2><span class="n">04</span>A node per owner</h2>
-  <p>One command, then one sign-in. The console prints a ready-made install line when you add the node; you run it once on a blank server as root and it takes the machine all the way to the sign-in. It cannot do the sign-in itself, because a subscription login has to complete through Anthropic's own flow, so the owner does that part and nobody else can.</p>
-
-  <figure>
-    <div class="fig-wrap">
-    <svg viewBox="0 0 980 200" role="img" aria-label="Node setup: the console prints one command, that command hardens the server and installs everything, it stops at the sign-in which only the owner can do, and the node then heartbeats and turns green on the dashboard">
-      <defs><marker id="g-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
-
-      <rect x="8" y="55" width="150" height="72" rx="8" class="box"/>
-      <text x="83" y="86" text-anchor="middle" class="t12">console</text>
-      <text x="83" y="105" text-anchor="middle" class="t10 mute">add node</text>
-
-      <text x="201" y="84" text-anchor="middle" class="t10 mute">copy line</text>
-      <line x1="158" y1="91" x2="240" y2="91" class="ln" marker-end="url(#g-arr2)"/>
-
-      <rect x="244" y="34" width="230" height="114" rx="8" class="box"/>
-      <text x="359" y="58" text-anchor="middle" class="t12">install.sh, as root</text>
-      <text x="359" y="80" text-anchor="middle" class="t10 mute">hardening, firewall, fail2ban</text>
-      <text x="359" y="97" text-anchor="middle" class="t10 mute">Claude Code, unmodified</text>
-      <text x="359" y="114" text-anchor="middle" class="t10 mute">agent, timers, work session</text>
-      <text x="359" y="131" text-anchor="middle" class="t10 mute">Remote Control: on, not started</text>
-
-      <text x="517" y="84" text-anchor="middle" class="t10 mute">hands off</text>
-      <line x1="474" y1="91" x2="556" y2="91" class="ln" marker-end="url(#g-arr2)"/>
-
-      <rect x="560" y="48" width="200" height="86" rx="8" class="box-acc"/>
-      <text x="660" y="76" text-anchor="middle" class="t12">the owner</text>
-      <text x="660" y="95" text-anchor="middle" class="t10 mute">claude, then /login</text>
-      <text x="660" y="112" text-anchor="middle" class="t10 mute">starts Remote Control</text>
-
-      <text x="803" y="84" text-anchor="middle" class="t10 mute">heartbeat</text>
-      <line x1="760" y1="91" x2="842" y2="91" class="ln" marker-end="url(#g-arr2)"/>
-
-      <rect x="846" y="55" width="126" height="72" rx="8" class="box"/>
-      <text x="909" y="86" text-anchor="middle" class="t12">dashboard</text>
-      <text x="909" y="105" text-anchor="middle" class="t10 mute">row goes green</text>
-
-      <text x="8" y="180" class="t11 mute">Everything left of the accent box runs unattended. What is inside it only the owner can do.</text>
-    </svg>
-    </div>
-    <figcaption><b>Figure 2.</b> Blank server to a green row. The single install command replaces what used to be two scripts and four manual steps.</figcaption>
-  </figure>
-
-  <div class="step">
-    <div class="num">1</div>
-    <h3>Add the node and copy the command</h3>
-    <p>Open the console, fill in the node id and the owner, and submit. The page that follows shows the token <strong>once</strong>, and an install command with the server URL, node id, token and owner already filled in. Copy it.</p>
-    <div class="note bad">
-      <p class="t">The copied command is missing one thing on purpose</p>
-      <p>The console cannot know the owner's public key, so the command it prints has no <code>--ssh-key</code>. Run it as-is and step 2 will <strong>skip SSH, firewall and fail2ban hardening altogether</strong>, on purpose, rather than disable password logins on a machine with no key on it and lock everyone out. Add the flag before you run it, or add a key and re-run afterwards.</p>
-    </div>
-    <p>If you prefer the terminal, the CLI does the same thing and prints the same three identity lines:</p>
-    <pre><code>docker compose -f deploy/docker-compose.yml exec ccfleetd \
-  ccfleetd node add node-a --owner alice --region us-west --rc-expected</code></pre>
-    <ul>
-      <li><code>--rc-expected</code> makes the dashboard alert when the owner's Remote Control service is not running. Leave it out for owners who only use SSH.</li>
-      <li><code>--pinned-version 2.1.92</code> can be given now or set later with <code>ccfleetd node pin</code>.</li>
-      <li>Lost the token? <code class="long">ccfleetd node rotate-token node-a</code> mints a new one and revokes the old one.</li>
-    </ul>
-  </div>
-
-  <div class="step">
-    <div class="num">2</div>
-    <h3>Run it on the blank server, as root</h3>
-    <pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/install.sh \
-  | sudo bash -s -- \
-      --server https://fleet.example.com \
-      --node node-a \
-      --token &lt;the 64-character token&gt; \
-      --owner alice \
-      --ssh-key "ssh-ed25519 AAAA... alice"</code></pre>
-    <p>It installs packages, creates the owner with a lingering session so their timers survive logout, hardens SSH and the firewall, installs Claude Code, pre-answers the two setup prompts that are not about anyone's account, installs the agent and its units, starts the work session and the timers, and posts a first heartbeat. It prints each step and refuses to call the machine ready if a service did not come up.</p>
-    <ul>
-      <li><code>--ssh-key</code> takes the owner's public key. <strong>Without it, SSH hardening is skipped on purpose</strong> rather than risk locking everyone out, and you must add a key yourself.</li>
-      <li><code>--skip-harden</code> leaves the firewall and sshd alone. Use it on a box already carrying other services.</li>
-      <li><code>--no-remote-control</code> sets up everything else and leaves Remote Control off.</li>
-    </ul>
-    <div class="note ok">
-      <p class="t">Rerunning it is safe</p>
-      <p>Every step checks before it acts, so a second run repairs a half-finished install rather than duplicating it. If a service fails to start, the script exits non-zero and names the unit instead of reporting success.</p>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">3</div>
-    <h3>The owner signs in</h3>
-    <p><strong>From the console, with no SSH at all.</strong> Open the dashboard, find your node under
-    <em>Sign in</em>, and press it. The node starts Claude Code's own login, and within a few seconds
-    the card shows the verification link: open it, approve, and paste the code back into the box on the
-    same card. The card confirms when the node reports the sign-in worked.</p>
-    <div class="note ok">
-      <p class="t">What passes through the server, and what does not</p>
-      <p>Only the verification URL and the code you paste, and both are discarded the moment the
-      sign-in finishes. The credential itself is written by Claude Code into your own home directory on
-      your own node and never reaches the server &mdash; the same guarantee as signing in over SSH,
-      without needing SSH.</p>
-    </div>
-    <p>The terminal route still works, and is the one to use before a node can reach the server:</p>
-    <pre><code>ssh alice@&lt;node&gt;     <span class="c"># you land straight in the persistent work session</span>
-claude</code></pre>
-    <p>Choose the claude.ai login. Over SSH the browser cannot call back into the node, so Claude Code shows a URL: open it on your laptop, approve, copy the code the page shows, paste it into the terminal. Either way, check afterwards:</p>
-    <pre><code>/status</code></pre>
-    <p>The Login row must show your account. There must be no <em>Anthropic base URL</em> line and no <em>Auth token</em> or <em>API key</em> line. If there is, an environment variable is set that should not be; unset it and restart <code>claude</code>.</p>
-    <div class="note ok">
-      <p class="t">Where the login lives</p>
-      <p>On Linux, Claude Code keeps it in <code class="long">~/.claude/.credentials.json</code> with mode 0600 and refreshes it by itself. The agent asks <code>claude auth status</code> whether the login actually works &mdash; the CLI's own answer, rather than an inference from a file existing &mdash; and keeps only whether you are signed in, the method, the plan and the expiry. That command also returns your email address and organisation; none of it is copied, and tests on both the agent and the server assert so.</p>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">4</div>
-    <h3>The owner turns on Remote Control, once</h3>
-    <pre><code>systemctl --user start claude-remote-control.service</code></pre>
-    <p>After this, claude.ai/code and the Claude phone app can drive this node with nothing installed on the machine you are sitting at. <code class="long">tmux -L ccfleet-rc attach -t remote-control</code> shows the URL and QR code.</p>
-    <div class="note">
-      <p class="t">Why the installer does not do this for you</p>
-      <p>Remote Control needs an authenticated session, and there is none until the sign-in above. The installer therefore <em>enables</em> the service, so it returns by itself after a reboot, but does not start it. It cannot usefully retry either: the unit runs Claude inside a detached tmux session, so systemd sees the launch succeed the moment tmux detaches and never learns that the session failed to authenticate. One command by the owner is honest; an automatic retry would not work.</p>
-    </div>
-  </div>
-
-  <div class="step">
-    <div class="num">5</div>
-    <h3>Optional: off-node backups</h3>
-    <p>The nightly backup already runs locally (<code>~/backups/ccfleet</code>, last 14 kept, credentials excluded). To copy archives elsewhere, install rclone, configure a remote, and create <code>~/.config/ccfleet/backup.env</code>:</p>
-    <pre><code>CCFLEET_BACKUP_REMOTE=r2:my-bucket/ccfleet/node-a
-CCFLEET_BACKUP_EXTRA=/home/alice/projects</code></pre>
-  </div>
-
-  <div class="note bad">
-    <p class="t">The long way round is still there, but it is not equivalent</p>
-    <p>If you would rather not paste a token into a command, the console also prints the three <code>agent.env</code> lines on their own. Run <code>node/bootstrap.sh</code> as root, then <code>node/setup-owner.sh</code> as the owner, and place those lines in <code class="long">~/.config/ccfleet/agent.env</code> afterwards. That order is not optional: the owner's account and home directory do not exist until the first script has run.</p>
-    <p>Those two scripts cover the packages, the owner account, sudo, the firewall, lingering, the helper binaries and the agent, backup and work-session timers. They do <strong>not</strong> do the rest, and you are taking it on yourself:</p>
-    <ul>
-      <li><strong>No fail2ban.</strong> <code>bootstrap.sh</code> does not install or configure it, so the node has no SSH brute-force protection until you add it.</li>
-      <li>Claude Code's two setup prompts are not pre-answered, so the owner meets them interactively.</li>
-      <li><code>agent.env</code> is created, but from a template. The URL, node id and token in it are placeholders you replace by hand.</li>
-      <li>Remote Control is not enabled by the script. Its closing message tells the owner to do it, so until they do it will not return after a reboot.</li>
-      <li>Both scripts run under <code>set -euo pipefail</code>, so a unit that fails to start does abort them. Neither re-checks the units afterwards nor sends a first heartbeat, so a service that starts and then dies goes unnoticed until the dashboard misses it.</li>
-    </ul>
-    <p>Section 04 above is the supported path. Reach for this one only on a machine you are managing by hand, and close those gaps deliberately.</p>
-  </div>
-</section>
-
-<section id="laptop">
-  <h2><span class="n">05</span>Your computer: the slot&rsquo;s account or its own</h2>
-  <p><code>ccfleet-connect</code> puts your slot&rsquo;s Claude account on a computer of yours, through a device token (<a href="#daily">section 00</a> has the setup). The same account can be on as many of your computers as you like, each with the same token.</p>
-  <p>One Claude account per slot is ccfleet&rsquo;s rule for its own machines. Your computer is yours, and it can also have its own Claude login, with your own subscription: the slot&rsquo;s account or another one. Switching between them is one command each way:</p>
-  <pre><code>ccfleet-connect --off      <span class="c"># this computer's own Claude login</span>
-ccfleet-connect --on       <span class="c"># back to your slot's account</span>
-ccfleet-connect --status   <span class="c"># which one is in use</span></code></pre>
-  <p>A copy installed before <span class="nw">2026-09-25</span> answers <code>--off</code> with <em>unknown option</em>, since the one-line install never overwrites a copy that is already there. Replace it with the current one; the token and the rc line stay as they are:</p>
-  <pre><code>curl -fsSL -o ~/.local/bin/ccfleet-connect \
-  https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh</code></pre>
-  <p><code>--off</code> parks the token beside where it was, as <code>token.off</code>. The line in your shell&rsquo;s rc file only exports a token that is there, so new shells stop using it at once, and the shell <code>--off</code> hands you starts without it. It also says whether the computer has a login of its own; if not, <code>claude auth login</code> signs it in. <code>--on</code> checks the parked token against Anthropic first: one revoked or expired while parked stays parked, and the computer keeps working on its own login. One is in use at a time, and each is yours to use under Anthropic&rsquo;s terms.</p>
-  <p>Connecting again with another token <strong>replaces</strong> the one the computer had, parked or not, and says so. The <code>--add</code>, <code>--use</code> and <code>--list</code> of an earlier version, which kept several tokens under names, are refused. On a computer that saved several that way, the first run keeps the one in use and removes the rest, telling you how many went so you can revoke them in your Claude account.</p>
-</section>
-
-<section id="use">
-  <h2><span class="n">06</span>Daily use</h2>
-  <h3 id="accounts">Who can sign in</h3>
-  <p>The console takes two kinds of credential.</p>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Credential</th><th>Sees</th><th>Can manage nodes</th></tr></thead>
-    <tbody>
-      <tr><td>The admin token<br><span class="small">user name <code>admin</code>, or any name at all</span></td><td>the whole fleet</td><td>yes</td></tr>
-      <tr><td><code>ccfleetd user add NAME --role admin</code></td><td>the whole fleet</td><td>yes</td></tr>
-      <tr><td><code>ccfleetd user add NAME --owner OWNER</code></td><td>only that owner's nodes</td><td>no &mdash; except signing their own node in</td></tr>
-    </tbody>
-  </table></div>
-  <p>An owner login can do exactly one thing: start a sign-in on a node they already own. That is the whole point &mdash; needing the operator to sign you in would only move the bottleneck. Everything else is refused, and the missing forms are only the cosmetic half: every write route checks the role and the node's owner, so a hand-built request is answered <strong>403 rather than 401</strong>. Their credentials were fine; the action was not theirs. An owner is given a CSRF token so their own form works, and the tests state plainly that a CSRF token is not authorisation: <code>disable</code>, <code>rc-off</code>, <code>rotate-token</code> and <code>remove</code> are all still refused to an owner holding a valid one.</p>
-  <p>Manage them with <code>ccfleetd user list</code>, <code>ccfleetd user passwd NAME</code> and <code>ccfleetd user remove NAME</code>. Passwords are stored as salted PBKDF2 hashes and cannot be recovered, only reset.</p>
-  <div class="note">
-    <p class="t">What this is not, yet</p>
-    <p>There are no sessions, so the browser holds the credentials for the realm until it is closed, and there is no self-service password change: resetting one is the operator's job.</p>
-  </div>
-
-  <h3>Reading the dashboard</h3>
-  <p>Four tiles sit above the table &mdash; healthy, warning, critical, disabled &mdash;
-  so the first question ("is anything wrong?") is answered before you read a row. A
-  tile at zero stays grey rather than competing with the one that is not. Below it,
-  each row carries a coloured rail on its left edge in the same three levels, so
-  scanning the column finds trouble without parsing any number.</p>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Column</th><th>Meaning</th><th>Good looks like</th></tr></thead>
-    <tbody>
-      <tr><td>Status</td><td>Worst open alert for the node, also drawn as a rail down the row's left edge</td><td><span class="pill ok">ok</span></td></tr>
-      <tr><td>Last seen</td><td>Age of the newest heartbeat</td><td>under 6 min</td></tr>
-      <tr><td>Claude Code</td><td>Running version, and the pin when set</td><td>version equals pin; no "≠ pinned"</td></tr>
-      <tr><td>Egress IP</td><td>Public address the node answers from</td><td>stable from day to day</td></tr>
-      <tr><td>Disk / Load</td><td>Home filesystem usage and 1-minute load</td><td>disk under 85%</td></tr>
-      <tr><td>Login</td><td>The Claude plan (Pro, Max 5x, Max 20x&hellip;), whether a login exists, when Claude Code last refreshed it, and when the access token expires</td><td>"Max 20x · refreshed &lt;1h ago", token "in Nh"</td></tr>
-      <tr><td>Remote Control</td><td>State of the optional service</td><td>active, when expected</td></tr>
-
-    </tbody>
-  </table></div>
-  <p><strong>A shared machine's row is its slot.</strong> Root on a shared machine runs no
-  Claude Code and is signed in to nothing, so the row shows the slot's version, sign-in,
-  Remote Control and usage, and goes by the slot's name: the machine's hostname, which is
-  what claude.ai shows. While somebody holds the slot, that is their name, said alone: not
-  the machine's id nor its owner, here, in the Slots card or on the holder's own page;
-  <code>ccfleetd slot list</code> says which machine a name is on. Once the slot is given
-  back, the machine answers to its pool name again. Login says <em>no slot yet</em> on a machine with none declared, and <em>2 slots, see
-  Slots</em> on one from before one slot per machine, where no single slot can speak for it.
-  Remote Control is the slot's to run, so a machine is never judged on it and its row has no
-  switch for that alert. The sign-in and device-token cards list owners' nodes only: a slot is
-  signed in, and gets its device tokens, on its holder's page, and the server refuses a
-  console sign-in on a shared machine.</p>
-  <h3>Usage and quota</h3>
-  <p>Under the fleet table, one row per node, answering two different questions.</p>
-  <p><strong>How much is left.</strong> Two bars: the five-hour session window and
-  the week. This is the number an owner actually asks for, and it exists in exactly
-  one place &mdash; <code>/usage</code>, inside a running Claude Code session. So the
-  agent opens one every five minutes, in a throwaway tmux session in a directory of its
-  own, and sends the percentages and reset times up with the heartbeat. Claude Code
-  reporting on itself; there is no usage endpoint behind this. A reading takes about
-  nine seconds, and the console says how old the one it is showing is.</p>
-  <p><strong>Claude Code's own saved reading.</strong> Opening <code>/usage</code> makes
-  Claude Code save what it fetched in <code>~/.claude.json</code>
-  (<code>cachedUsageUtilization</code>), with each window's exact reset moment. The agent
-  takes the numbers from there rather than off the screen, which it reads only when that
-  is missing, and a reading the holder made by opening <code>/usage</code> themselves
-  stands in without a probe. The account id stored beside it is compared with the one
-  signed in, so another account's reading is never used, and is never sent.</p>
-  <p><strong>Refresh.</strong> The holder's slot card and the console's usage card have a
-  <em>Refresh</em> button that asks for a read now. The slot tries it once, within a
-  minute or two, and the page says it is reading until the new numbers arrive; pressed
-  twice within a minute, it asks once.</p>
-  <p><strong>How much was spent.</strong> A sparkline of daily tokens and the totals
-  behind it, counted from the transcripts Claude Code writes on the node. Different
-  question, different source: this is what the account <strong>consumed</strong>, and
-  it says nothing about the window. A node with a single day of history says so
-  rather than drawing a chart of one point.</p>
-  <p><strong>What each counts.</strong> The bars are the whole Claude account's: claude.ai,
-  the Claude app, and Claude Code on any computer, device tokens included. The tokens are only
-  what ran on this node, or in the slot on a shared machine. Somebody who works mostly from
-  their own computer with a device token can see a quarter of the week gone beside a small
-  token count, and both are right; the console and the holder's page each say so under the
-  numbers.</p>
-  <p><strong>When a window resets.</strong> Claude Code prints a reset in the machine's own
-  clock, and the machines keep theirs on UTC. The server places those words at a moment, and
-  the page shows it in the viewer's own time zone with how long is left beside it:
-  <em>Thu 10:00 AM GMT+2 (in 2d 5h)</em>. One small script does that, the only script ccfleet's
-  pages carry, and their Content-Security-Policy allows it by its SHA-256 and nothing else.
-  Without it the page still says how long is left, and words the server cannot place stay as
-  Claude Code printed them.</p>
-  <p>Conversation content never leaves the node; only counts do. The server
-  whitelists the quota block the way it whitelists everything else a node sends:
-  two named windows, an integer from 0 to 100 or nothing at all, and a short reset
-  string. A node cannot widen that by sending more.</p>
-
-  <p>The page refreshes itself every minute. <code>GET /api/nodes</code> and <code>GET /api/alerts</code> return the same data as JSON with the same Basic auth, or with <code>Authorization: Bearer &lt;admin token&gt;</code>, for scripts and status pages. They are scoped the same way the page is, so an owner account gets only its own nodes.</p>
-
-  <h3 id="alerts">What the alerts mean and who acts</h3>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Alert</th><th>Level</th><th>Meaning</th><th>Who acts</th></tr></thead>
-    <tbody>
-      <tr><td><code>no_heartbeat</code></td><td><span class="pill bad">critical</span></td><td>No report for 15 min: node down, agent broken, or token rotated without updating the node. Counted from when the server began listening, so a restart raises none</td><td>operator</td></tr>
-      <tr><td><code>claude_missing</code></td><td><span class="pill bad">critical</span></td><td><code>claude</code> not found for the owner user</td><td>re-run the install command; it repairs rather than duplicates</td></tr>
-      <tr><td><code>credentials_missing</code></td><td><span class="pill bad">critical</span></td><td>No login on the node</td><td>owner: <code>claude</code>, <code>/login</code></td></tr>
-      <tr><td><code>token_expired</code></td><td><span class="pill warn">warn</span></td><td>Access token expired over an hour ago and was not refreshed</td><td>owner opens a session; <code>/login</code> if asked</td></tr>
-      <tr><td><code>token_stale</code></td><td><span class="pill warn">warn</span></td><td>Credentials untouched for a day; usually just an idle node</td><td>owner, when convenient</td></tr>
-      <tr><td><code>version_mismatch</code></td><td><span class="pill warn">warn</span></td><td>Running version differs from the pin</td><td>operator pins or owner upgrades</td></tr>
-      <tr><td><code>disk_high</code></td><td><span class="pill warn">warn</span> / <span class="pill bad">critical</span></td><td>85% / 95% used</td><td>owner</td></tr>
-      <tr><td><code>quota_high_session</code><br><code>quota_high_week</code></td><td><span class="pill warn">warn</span> / <span class="pill bad">critical</span></td><td>75% / 90% of that Claude usage window used. The two windows alert separately, so a fresh session cannot hide a full week. A reading older than two hours is ignored rather than reported as current</td><td>owner &mdash; slow down, or wait for the reset the message names</td></tr>
-      <tr><td><code>egress_changed</code></td><td><span class="pill warn">warn</span></td><td>Public IP differs from the previous heartbeat</td><td>operator checks the provider</td></tr>
-      <tr><td><code>remote_control_down</code></td><td><span class="pill warn">warn</span></td><td>Expected service not active. Turn the expectation on or off any time with <code>ccfleetd node rc-expected &lt;id&gt; on|off</code></td><td>owner restarts it</td></tr>
-      <tr><td><code>slot_wipe_failed:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>Removing a given-back slot's Linux user failed. The slot stays out of the pool, and the machine tries again by itself</td><td>operator, if the retry keeps failing</td></tr>
-      <tr><td><code>slot_occupied:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A free slot's Linux user exists on the machine, so the slot is not handed out</td><td>operator: look before removing it</td></tr>
-      <tr><td><code>slot_missing:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot's Linux user is gone from the machine, and its files with it</td><td>operator takes it back; the person claims again</td></tr>
-      <tr><td><code>slot_provision_failed:&lt;user&gt;</code></td><td><span class="pill warn">warn</span></td><td>Setting up a claimed slot failed; the claim was given up and the slot is being wiped</td><td>the person claims again; operator if it repeats</td></tr>
-      <tr><td><code>account_elsewhere</code><br><code>account_elsewhere:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>One Claude account is signed in on two live places at once: two slots, or a slot and a node. Raised on each of them</td><td>sign it out of one of them</td></tr>
-      <tr><td><code>account_changed:&lt;user&gt;</code></td><td><span class="pill bad">critical</span></td><td>A held slot is signed in to another Claude account than the one it keeps. Only <em>Change account</em> moves a slot to another</td><td>holder signs its own account in again, moves the slot to the other one with <em>Change account</em>, or gives it back</td></tr>
-    </tbody>
-  </table></div>
-  <p>An alert is sent once when it opens, once when it resolves, and again if its level changes. Between those, nothing repeats. Messages name the node and owner and, when <code>CCFLEET_PUBLIC_URL</code> is set, link to the dashboard. A shared machine's slot alerts carry the slot's Linux user after the colon, so two slots in trouble are two alerts; an owner's node has <code>account_elsewhere</code> with nothing after it. <code>docs/runbooks.md</code> has a short procedure for each.</p>
-
-  <h3>Working on a node</h3>
-  <ul>
-    <li><strong>Terminal</strong>: <code>ssh alice@node</code> or <code>mosh alice@node</code>. You land in the persistent session automatically, with no tmux command to remember. mosh survives laptop sleep and roaming.</li>
-    <li><strong>VS Code</strong>: Remote-SSH to the node; the Claude Code extension runs there with the node's login.</li>
-    <li><strong>Phone or any browser</strong>: claude.ai/code, pick the node's session (it carries the node's hostname).</li>
-    <li><strong>Usage windows</strong>: type <code>/usage</code> inside a session on the node. Windows are per account; a second account is a second window, not a bigger one.</li>
-  </ul>
-</section>
-
-<section id="ops">
-  <h2><span class="n">07</span>Operations</h2>
-  <div class="two">
-    <div>
-      <h3>Staged upgrades</h3>
-      <p>Auto-update is off on nodes on purpose, and the pin is authoritative: a node that
-      finds itself on a different version installs the pinned one and reports the result. So an
-      upgrade is driven from the server, one node at a time.</p>
-      <pre><code><span class="c"># on the server — pin one node first</span>
-ccfleetd node pin node-a 2.1.92
-<span class="c"># confirm the row shows it with no failure, work a day, then pin the rest</span>
-ccfleetd node pin node-b 2.1.92
-<span class="c"># or track a channel, latest or stable; a channel pin never reports drift</span>
-ccfleetd node pin node-a latest</code></pre>
-      <p>A channel follows Anthropic's own release numbers, which the server reads about
-      hourly from the files the official installer reads, and sends with every reply. A node
-      installs a new release at its next quiet moment, never while somebody is signing in.
-      Without a number from the server it resolves the channel itself, once a day.</p>
-      <p class="muted"><strong>Upgrading on the node no longer sticks.</strong> While a pin is
-      set, the next heartbeat installs the pinned version over whatever
-      <code>ccfleet-upgrade-claude</code> just put there. Change the pin instead, or run that
-      node's agent with <code>--no-reconcile</code> to work outside it.</p>
-      <h3>Give someone the CLI on their own machines</h3>
-      <p>The account owner does this themselves; you cannot do it for them, and
-      should not be handed the result:</p>
-      <pre><code><span class="c"># the OWNER runs this, on a machine signed in as their account</span>
-claude setup-token
-
-<span class="c"># then on each of their devices</span>
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet-connect.sh)"</code></pre>
-      <p><strong>Do not ask them to send you the token.</strong> It is their account's
-      credential for a year; the point of this route is that it never passes through
-      anyone else, including you.</p>
-      <p>One year, inference scope, and it never touches this server. There is
-      nothing to revoke here because nothing is stored here; revocation is in
-      their Claude account.</p>
-
-      <h3>Rotate a node token</h3>
-      <pre><code>ccfleetd node rotate-token node-a
-<span class="c"># then update the node's agent.env</span></code></pre>
-      <p>The old token stops working immediately.</p>
-    </div>
-    <div>
-      <h3>Rebuild a node</h3>
-      <ol>
-        <li>New VPS, then the one install command from the console (rotate the token first, so the command carries a valid one).</li>
-        <li>Restore the latest <code>claude-state-*.tar.gz</code> with <code class="long">tar -xzf claude-state-&lt;stamp&gt;.tar.gz -C /</code> (archive paths are relative to <code>/</code>). It contains settings, projects and history, never credentials.</li>
-        <li>Owner runs <code>claude</code> and <code>/login</code>.</li>
-      </ol>
-      <h3>Remove an owner</h3>
-      <pre><code>ccfleetd node disable node-b   <span class="c"># keep history</span>
-ccfleetd node remove node-b    <span class="c"># delete it all</span></code></pre>
-      <p>The owner runs <code>/logout</code> on the node before it is destroyed.</p>
-    </div>
-  </div>
-  <p>The repo's <code>docs/runbooks.md</code> has one short procedure per alert, plus the quarterly reminder to re-read Anthropic's terms and gateway pages.</p>
-</section>
-
-<section id="gateway">
-  <h2><span class="n">08</span>Optional pass-through gateway</h2>
-  <p>For an owner who cannot work on a remote filesystem, Anthropic's gateway docs describe a second permitted arrangement: Claude Code runs and logs in on the laptop, only <code>ANTHROPIC_BASE_URL</code> points at a gateway, and the saved claude.ai login stays the active credential. <code>gateway/Caddyfile.example</code> implements it: it requires a private header, drops that header, passes the body and Anthropic's required headers through unchanged with streaming on, and stores nothing. Like any reverse proxy it does set <code>Host</code> and add <code>X-Forwarded-*</code>; what it never does is substitute a credential or alter who the client says it is.</p>
-  <pre><code><span class="c"># laptop</span>
-export ANTHROPIC_BASE_URL=https://gw-a.example.com
-export ANTHROPIC_CUSTOM_HEADERS="X-Gw-Key: &lt;secret shared with the gateway&gt;"
-claude
-/status      <span class="c"># base URL shows the gateway; Login row still shows your account</span></code></pre>
-  <div class="note warn">
-    <p class="t">Two cautions</p>
-    <p>Never authenticate the gateway with <code>ANTHROPIC_AUTH_TOKEN</code>: that variable replaces the subscription as the credential. The Caddyfile has now been exercised against a live session: a real session completed through it, and stopping the gateway made the same command fail while restarting it made it work again, so it was genuinely in the path. That test ran over a loopback port through an SSH tunnel, so TLS termination and a public hostname are still unexercised; run a long streamed session over the real hostname before depending on it. One gateway, one owner, one account.</p>
-  </div>
-</section>
-
-<section id="reference">
-  <h2><span class="n">09</span>Reference</h2>
-  <h3>Server environment variables</h3>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
-    <tbody>
-      <tr><td><code>CCFLEET_ADMIN_TOKEN</code></td><td>required</td><td>Dashboard and API password; 16+ characters</td></tr>
-      <tr><td><code>CCFLEET_BIND</code></td><td><code>127.0.0.1:8110</code></td><td>Listen address; Docker image uses <code>0.0.0.0:8110</code> inside the container</td></tr>
-      <tr><td><code>CCFLEET_DB</code></td><td><code>data/ccfleet.db</code></td><td>SQLite file</td></tr>
-      <tr><td><code>CCFLEET_PUBLIC_URL</code></td><td>empty</td><td>Link appended to alerts</td></tr>
-      <tr><td><code>CCFLEET_TELEGRAM_BOT_TOKEN</code>, <code>CCFLEET_TELEGRAM_CHAT_ID</code></td><td>empty</td><td>Telegram delivery; alerts are always logged</td></tr>
-      <tr><td><code>CCFLEET_RESEND_API_KEY</code>, <code>CCFLEET_EMAIL_FROM</code></td><td>empty</td><td>Outage emails to holders who ask for them: a Resend send-only key and the sender, e.g. <code>ccfleet &lt;ccfleet@your-domain&gt;</code>; both empty, none are sent or offered</td></tr>
-      <tr><td><code>CCFLEET_HEARTBEAT_MAX_AGE_S</code></td><td>900</td><td>Silence before <code>no_heartbeat</code></td></tr>
-      <tr><td><code>CCFLEET_TOKEN_STALE_S</code></td><td>86400</td><td>Age of the credentials file before <code>token_stale</code></td></tr>
-      <tr><td><code>CCFLEET_TOKEN_EXPIRED_GRACE_S</code></td><td>3600</td><td>Grace after token expiry before <code>token_expired</code></td></tr>
-      <tr><td><code>CCFLEET_DISK_WARN_PCT</code>, <code>CCFLEET_DISK_CRIT_PCT</code></td><td>85, 95</td><td>Disk thresholds</td></tr>
-      <tr><td><code>CCFLEET_CHECK_INTERVAL_S</code></td><td>60</td><td>Periodic evaluation interval</td></tr>
-      <tr><td><code>CCFLEET_RETENTION_DAYS</code></td><td>30</td><td>Heartbeat history kept</td></tr>
-      <tr><td><code>CCFLEET_BYPASS_BY_DEFAULT</code></td><td>off</td><td>On: the printed install command carries <code>--bypass-permissions</code>, so new nodes run with no permission prompts. The owner also has passwordless sudo, so nothing then stands between a tool call and root &mdash; turn it on only for a fleet you own.</td></tr>
-    </tbody>
-  </table></div>
-
-  <h3>Agent environment (agent.env)</h3>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Variable</th><th>Purpose</th></tr></thead>
-    <tbody>
-      <tr><td><code>CCFLEET_URL</code></td><td>Fleet server base URL (https)</td></tr>
-      <tr><td><code>CCFLEET_NODE_ID</code>, <code>CCFLEET_NODE_TOKEN</code></td><td>Identity printed by <code>ccfleetd node add</code></td></tr>
-      <tr><td><code>CCFLEET_CLAUDE_CONFIG_DIR</code></td><td>Where Claude Code keeps its state, default <code>~/.claude</code></td></tr>
-      <tr><td><code>CCFLEET_RC_SERVICE</code></td><td>User service checked for Remote Control, default <code>claude-remote-control.service</code></td></tr>
-      <tr><td><code>CCFLEET_EGRESS_TARGETS</code></td><td>Comma-separated echo services for the public IP</td></tr>
-      <tr><td><code>CCFLEET_TIMEOUT_S</code></td><td>HTTP timeout, default 10</td></tr>
-    </tbody>
-  </table></div>
-
-  <h3>Commands</h3>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Where</th><th>Command</th><th>Does</th></tr></thead>
-    <tbody>
-      <tr><td>server</td><td><code>ccfleetd serve</code></td><td>Run the HTTP server and periodic checks</td></tr>
-      <tr><td>server</td><td><code>ccfleetd node add|list|pin|rc-expected|rotate-token|enable|disable|remove</code></td><td>Node registry</td></tr>
-      <tr><td>server</td><td><code>ccfleetd node rename|reserve|hold</code></td><td>Give a node a new id with everything on it; keep a shared machine's free slot for one account; count an owner's own node as their slot</td></tr>
-      <tr><td>server</td><td><code>ccfleetd slot add|list|release|remove|rename|capacity</code></td><td>A shared machine's one slot: declare it, see who holds it, take it back (a wipe), rename it. Capacity is 0 or 1</td></tr>
-      <tr><td>server</td><td><code>ccfleetd account list|quota|role|handle</code></td><td>People who signed in with Google: their allowance, operator or not, and the name their slots take</td></tr>
-      <tr><td>server</td><td><code>ccfleetd payment add|list|void</code></td><td>A record of who paid through when; it enforces nothing</td></tr>
-      <tr><td>server</td><td><code>ccfleetd price show|set|clear</code></td><td>What the public pages say a slot costs for a month; shown, never charged</td></tr>
-      <tr><td>server</td><td><code>ccfleetd user add|list|passwd|remove</code></td><td>Console logins with a password, for owners and operators</td></tr>
-      <tr><td>server</td><td><code>ccfleetd check</code></td><td>Evaluate every node once and print transitions</td></tr>
-      <tr><td>server</td><td><code>ccfleetd alert-test</code></td><td>Send a test notification</td></tr>
-      <tr><td>node</td><td><code>node/install.sh</code></td><td>Blank server to ready-for-sign-in, in one command</td></tr>
-      <tr><td>node</td><td><code>ccfleet-agent [--print]</code></td><td>Post one heartbeat, or print it</td></tr>
-      <tr><td>node</td><td><code>ccfleet-backup</code></td><td>Archive state without credentials</td></tr>
-      <tr><td>node</td><td><code>ccfleet-upgrade-claude [version]</code></td><td>Staged upgrade via the official installer</td></tr>
-      <tr><td>node</td><td><code>exitip</code></td><td>Print the public egress IP</td></tr>
-      <tr><td>any device</td><td><code>ccfleet-connect</code></td><td>Use your slot&rsquo;s account on this device with no login; connecting again replaces the token. Install from <code>laptop/ccfleet-connect.sh</code> in the repo. <code>--off</code> (the computer&rsquo;s own login), <code>--on</code>, <code>--status</code>, <code>--remove</code></td></tr>
-    </tbody>
-  </table></div>
-
-  <h3>Alerts</h3>
-  <p>Every rule the server raises, with its level and who acts, is the table in section 06: <a href="#alerts">What the alerts mean and who acts</a>.</p>
-
-  <h3>Files and paths</h3>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Path</th><th>On</th><th>What</th></tr></thead>
-    <tbody>
-      <tr><td><code>~/.config/ccfleet/agent.env</code></td><td>node</td><td>Agent identity, mode 0600</td></tr>
-      <tr><td><code>~/.config/ccfleet/backup.env</code></td><td>node</td><td>Optional backup settings</td></tr>
-      <tr><td><code>~/.config/systemd/user/ccfleet-*.timer</code></td><td>node</td><td>Agent (5 min) and backup (03:30) timers</td></tr>
-      <tr><td><code>~/.claude/</code></td><td>node</td><td>Claude Code state; credentials inside are Claude Code's, not ccfleet's</td></tr>
-      <tr><td><code>~/backups/ccfleet/</code></td><td>node</td><td>Nightly archives</td></tr>
-      <tr><td><code>deploy/ccfleetd.env</code></td><td>server</td><td>Server settings, mode 0600</td></tr>
-      <tr><td><code>/data/ccfleet.db</code> (Docker) or <code>data/ccfleet.db</code></td><td>server</td><td>SQLite database</td></tr>
-      <tr><td><code>~/.config/ccfleet/token</code></td><td>any device</td><td>The slot&rsquo;s device token, from <code>ccfleet-connect</code>, mode 0600; <code>token.off</code> beside it while switched off</td></tr>
-    </tbody>
-  </table></div>
-</section>
-
-<section id="trouble">
-  <h2><span class="n">10</span>Troubleshooting</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
-    <tbody>
-      <tr><td><code>heartbeat rejected: status=401</code></td><td>Wrong or rotated token, or node disabled</td><td>Compare <code>agent.env</code> with <code>ccfleetd node list</code>; rotate if unsure</td></tr>
-      <tr><td><code>status=0 body=unreachable</code></td><td>URL wrong, TLS proxy down, firewall</td><td><code>curl -s $CCFLEET_URL/healthz</code> from the node</td></tr>
-      <tr><td>Timer never fires after reboot</td><td>Linger not enabled for the owner</td><td>root: <code>loginctl enable-linger alice</code></td></tr>
-      <tr><td><code>credentials_missing</code> right after setup</td><td>Login not done yet, or done as a different user</td><td>Owner runs <code>claude</code> and <code>/login</code> as their own user</td></tr>
-      <tr><td><code>/status</code> shows a base URL on a node</td><td>Leftover <code>ANTHROPIC_*</code> variable</td><td><code>env | grep ANTHROPIC</code>, remove it from the shell profile</td></tr>
-      <tr><td>Remote Control exits with an eligibility error</td><td>No valid login, or Team/Enterprise toggle off</td><td>Re-login; on Team/Enterprise an admin enables Remote Control</td></tr>
-      <tr><td>Dashboard asks for a password repeatedly</td><td>Token typed with spaces or changed</td><td>For the admin token the password must be exact and the user name is ignored. For a named account both matter</td></tr>
-      <tr><td>Egress IP shows "-"</td><td>Echo services blocked from the node</td><td>Set <code>CCFLEET_EGRESS_TARGETS</code> to reachable ones</td></tr>
-      <tr><td><code>version_mismatch</code> after an intended upgrade</td><td>Pin not updated</td><td><code>ccfleetd node pin &lt;id&gt; &lt;version&gt;</code></td></tr>
-    </tbody>
-  </table></div>
-  <p class="small">ccfleet is an independent open-source project (MIT), not affiliated with or endorsed by Anthropic. Terms change; the repo's <code>docs/compliance.md</code> quotes the passages this design rests on so you can re-check them.</p>
-</section>
-
-<section id="shared">
-  <h2><span class="n">11</span>Shared machines</h2>
-  <p>A shared machine carries one <strong>slot</strong>: one Linux user for one person, with
-  its own Claude Code signed in to that person's own Claude account, so no credential is ever
-  shared. One machine is one slot because claude.ai/code shows a machine by its hostname:
-  claimed, the slot gets a neutral name (<code>slot-4821</code>) that its holder can rename,
-  and the machine takes that name. Nothing in it comes from the holder's address, because
-  Anthropic receives the hostname. People sign in to the product with Google, you set how many slots each may hold, and
-  they do everything else themselves at <code>/account</code>.</p>
-  <p>One Claude account, one slot: a slot is signed in to one account at a time, and somebody
-  who wants two accounts at once holds two slots. Its holder can move it to another Claude
-  account of theirs with <em>Change account</em>, at most once a week, and keeps its files.
-  Its account can be used from wherever its holder likes: claude.ai/code and the Claude app on
-  any device, or a device token on each of their own computers.</p>
-  <p>The holder chooses a native way to work. <strong>Local:</strong> <code>ccfleet-connect</code>
-  installs an Anthropic device token and the ordinary Claude Code CLI works on that computer's
-  files, directly with Anthropic. <strong>Cloud:</strong> claude.ai/code reaches the slot through
-  Remote Control. <strong>Client:</strong> the official Claude desktop or mobile app, signed in to
-  the same account, selects that same slot. Customers do not SSH into slots. Files stay local
-  for local work; cloud work receives files through attachments or Git. There is no shared
-  endpoint, credential routing or failover to another Claude account.</p>
-  <div class="two">
-    <div>
-      <h3>Selling a slot</h3>
-      <ol>
-        <li>The person signs in once at <code>/account</code>. That creates the account you
-        switch on; an address that has never signed in cannot be given anything.</li>
-        <li>They pay you, however you arrange it.</li>
-        <li>You record the payment and set their allowance in the console's Accounts card.
-        The payment's date comes filled in with one more month: from the day after what they
-        have already paid for, or from today when that has passed or nothing is paid yet, so
-        a first payment on 24 September suggests 23 October. That is all you do. The same
-        card says, beside how many slots each person holds, the Claude plans on them:
-        <em>holds 2 (Max 20x, Pro)</em>.</li>
-        <li>They claim a slot, sign in to Claude with their own account, and use it from
-        claude.ai/code or the Claude app.</li>
-      </ol>
-      <p>The price of a slot for a month is yours to set, in the console's Price card or with
-      <code>ccfleetd price set 20 USD</code>, and the public pages show it. It is shown, never
-      charged: people still pay you directly, the allowance is still the only thing that lets
-      somebody claim a slot, and the payments you record stay a record. With no price set, the
-      pages say price and payment are agreed with you.</p>
-      <p>Send them the bare address (<code>/docs</code> is the same page). It says what ccfleet
-      is, what they must bring (their own Pro, Max, Team or Enterprise plan; API keys do not
-      work) and how to start, and links
-      <code>/docs/guide</code>, <code>/docs/how-it-works</code>, <code>/docs/terms</code> and
-      <code>/privacy</code>. It is the same page for everybody; only its buttons follow whoever
-      is looking: <em>Sign in with Google</em> for a visitor, <em>Your slots</em> once signed in,
-      and <em>Console</em> as well for an operator. Set <code>CCFLEET_CONTACT_EMAIL</code> to
-      publish an address on them.</p>
-      <p>Every page shares one top bar. Signed in, a round avatar at the top right opens a menu
-      with the person's address, <em>Your slots</em> with how many they hold, <em>Console</em>
-      for operators, and <em>Sign out</em>; signed out, the same spot is <em>Sign in</em>.
-      The mark at the top left goes to the front page from every page, the console's
-      included, and the console's <em>back to the fleet</em> links go to the console.</p>
-      <h3>Sizing</h3>
-      <p>Measured on a real slot: signed in with Remote Control, about 420 MiB idle and 665 MiB
-      in use, plus 225 MB of disk. The OS and the agent take about 400 MiB, so a 2 GiB
-      machine carries its one slot with room to spare. Under 4 GiB, add a 2 GiB swap file as
-      a cushion.</p>
-    </div>
-    <div>
-      <h3>Adding a machine</h3>
-      <p>A KVM VPS running Debian or Ubuntu; LXC and OpenVZ cannot run per-user systemd
-      reliably. <code>docs/runbooks.md</code> has every step and check; in short:</p>
-      <pre><code><span class="c"># your key first — and prove key login works before anything turns passwords off</span>
-sudo ./bootstrap.sh you "ssh-ed25519 AAAA&hellip; you"
-<span class="c"># on the server</span>
-ccfleetd node add pool-1 --owner you --region us-west
-ccfleetd node pin pool-1 latest
+<h3>2. Register one shared machine and slot</h3>
+<pre><code>ccfleetd node add pool-1 --owner ops --region us-west
 ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
-<span class="c"># on the machine, as root: its name, its clock on UTC, then the agent</span>
-hostnamectl set-hostname pool-1 &amp;&amp; timedatectl set-timezone Etc/UTC
+ccfleetd node pin pool-1 latest</code></pre>
+<p>Keep the node token printed by the first command for installation.</p>
+
+<h3>3. Prepare the machine</h3>
+<pre><code>git clone https://github.com/cdcupt/ccfleet.git
+sudo ./ccfleet/node/bootstrap.sh ops "ssh-ed25519 AAAA... operator"
+sudo hostnamectl set-hostname pool-1
+sudo timedatectl set-timezone Etc/UTC
+
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
-  | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token &lt;64-hex&gt;
-<span class="c"># back on the server: its slot free, and "on machine: no"</span>
-ccfleetd slot list --machine pool-1</code></pre>
-      <p>Set the machine's hostname to its id first: it is the name the claude.ai machine
-      picker shows until somebody claims its slot. Put its clock on UTC as well: Claude Code
-      can tell Anthropic the machine's time zone, and UTC says nothing about where the slot's
-      holder is, while every page shows times in the viewer's own zone. Machines are named by role,
-      <code>&lt;you&gt;-N</code> for your own and <code>pool-N</code> for the ones offered to
-      customers, and a free slot by its machine.</p>
-      <ul>
-        <li><strong>Names are the holder's.</strong> A claimed slot is named
-        <code>slot-4821</code>, random digits, never anything from the holder's address:
-        claude.ai shows the hostname, so Anthropic receives it. The holder renames it on their
-        page (2&ndash;30 letters, digits and hyphens, not <code>pool-N</code> or
-        <code>slot-N</code>); <code>ccfleetd slot name &lt;slot&gt; [&lt;name&gt;]</code> does
-        it for them, a fresh neutral name when none is given. A handle set with
-        <code>ccfleetd account handle</code>, at the person's request, names their slots
-        <code>&lt;handle&gt;-&lt;n&gt;</code> instead. The machine takes the name as its
-        hostname at its next run, Remote Control restarts under it, and the machine answers
-        to its own id again once the wipe that frees the slot completes.</li>
-        <li><strong>Renaming a running fleet</strong>: <code>ccfleetd node rename</code> and
-        <code>ccfleetd slot rename</code>, held slots included. The runbook <em>Rename a
-        machine</em> in <code>docs/runbooks.md</code> has the order.</li>
-        <li><strong>A machine kept for one account</strong>:
-        <code>ccfleetd node reserve &lt;machine&gt; &lt;email&gt;</code> hands its free slot to
-        that account and nobody else; <code>--none</code> opens it again. Customers never see a
-        reservation.</li>
-        <li><strong>Somebody's own node</strong> counts as one of their slots with
-        <code>ccfleetd node hold &lt;node&gt; &lt;email&gt;</code>: a record only, never handed
-        out or wiped.</li>
-      </ul>
-      <h3>Keeping it current</h3>
-      <ul>
-        <li><strong>Claude Code in slots</strong> follows the machine's pin:
-        <code>latest</code> or <code>stable</code> tracks that Anthropic channel, and an exact
-        version holds the whole machine back. The machine agent installs a new release at a
-        quiet moment, never during a sign-in, and never interrupts a running session; Remote
-        Control moves over once no session is open.</li>
-        <li><strong>Holders choose for their own slot.</strong> The Claude Code row on their
-        card shows the version and, once a newer one is out, <em>Update to</em> that number:
-        it switches the slot to <code>latest</code> and installs now. <em>Back to Stable</em>
-        goes back. An exact pin on the machine overrides both, and the row says <em>held by
-        the operator</em>. On somebody's own node the buttons set that node's pin, which is
-        theirs and never a hold.</li>
-        <li><strong>The agents</strong>: after a release that changes them, update one node
-        first, then the rest. Owner nodes re-fetch the agent; machines re-run
-        <code>machine-setup.sh</code> pointed at that commit with
-        <code>CCFLEET_REPO_RAW</code>.</li>
-        <li><strong>The OS</strong> installs security updates daily; a machine that needs a
-        reboot says so in the console.</li>
-      </ul>
-    </div>
-  </div>
-  <h3>What a slot starts with</h3>
-  <p>Claude Code on a new slot starts on <strong>Opus at max effort</strong>, and sends
-  Anthropic <strong>nothing optional that a slot can do without</strong>. Setting a slot up
-  writes these keys into its <code>~/.claude/settings.json</code>, and only keys the holder
-  has not set, so setting it up again never takes a choice back:</p>
-  <pre><code>{ "model": "opus",
-  "env": { "CLAUDE_CODE_EFFORT_LEVEL": "max",
-           "DISABLE_ERROR_REPORTING": "1",
-           "DISABLE_BUG_COMMAND": "1",
-           "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1" } }</code></pre>
-  <ul>
-    <li><strong>Max goes in <code>env</code>.</strong> The settings file's own
-    <code>effortLevel</code> stops at <code>xhigh</code> and drops <code>max</code> without a
-    word. The variable pins every session at max, so <code>/effort</code> cannot lower it; a
-    holder who wants less edits that line, and <code>/docs/guide</code> tells them how.
-    <code>/model</code> still changes the model for a session.</li>
-    <li><strong><code>opus</code> is the newest Opus that the installed Claude Code
-    knows.</strong> Opus 5.5 needs Claude Code 2.1.280 or later. On
-    2026-09-24 only <code>latest</code> had that, and a slot on
-    <code>stable</code> got Opus 5, which is why machines are pinned to
-    <code>latest</code>.</li>
-    <li><strong>It costs the holder.</strong> Max effort uses their plan's limits fastest,
-    and the guide says so.</li>
-    <li><strong>Error reports, bug reports and feedback surveys are off</strong>, by Claude
-    Code's own documented switches. What still goes is what Claude needs to answer, and its
-    usage telemetry, which Remote Control needs (below).</li>
-    <li><strong>A slot is the machine, not the person.</strong> Nothing rewrites what Claude
-    Code says about where it runs: no faked location, time zone or device. Anthropic sees the
-    machine, with its own address and its UTC clock, and the holder's own Claude account. The
-    holder's browser or Claude app, driving the slot, talks to Anthropic as it always
-    would.</li>
-  </ul>
-  <div class="note warn">
-    <p class="t">Never switch telemetry off on a slot</p>
-    <p>Remote Control needs the feature-flag evaluation that <code>DISABLE_TELEMETRY</code>
-    turns off, and <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC</code> includes it. With
-    either one set, Remote Control refuses to start: <em>Remote Control requires feature-flag
-    evaluation, which is disabled because DISABLE_TELEMETRY is set</em>. Set on live slots
-    once, it stopped Remote Control on every one of them until it came out; a test now keeps
-    both out of what a slot starts with.</p>
-  </div>
-  <h3>The console's Slots card</h3>
-  <p>One line on top gives Anthropic's release numbers, for example <em>Claude Code releases:
-  Latest 2.1.281 &middot; Stable 2.1.273 &middot; checked 5m ago</em>. Under it, one row per
-  machine, and the machine's slot is the row:</p>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Column</th><th>Says</th></tr></thead>
-    <tbody>
-      <tr><td>Slot</td><td>Its name, which is its holder's while they hold it; under it <em>own machine</em> or <em>kept for &lt;email&gt;</em>, and <em>on &lt;machine&gt;</em> only for a free slot whose id is not its machine's</td></tr>
-      <tr><td>Holder</td><td>Their address and, under it, the Claude plan of the account signed in on the slot (Pro, Max 5x, Max 20x&hellip;), or <em>free</em></td></tr>
-      <tr><td>State</td><td>The words the holder's own page uses: In use, Ready to sign in, Setting up, Being wiped, or Free. An own machine reads In use or Not signed in</td></tr>
-      <tr><td>Claude Code</td><td>The version and what it follows (stable, latest, pinned, held at), then <em>update available</em>, <em>updating to &hellip;</em> or <em>restart pending</em></td></tr>
-      <tr><td>Held</td><td>How long it has been held</td></tr>
-      <tr><td>Attention</td><td>A pill for each open alert on the slot or its account, a claim stuck setting up, a failed update, a reboot needed, a hostname still pending, or more than one slot; the details go on a line under the row</td></tr>
-    </tbody>
-  </table></div>
-  <p><strong>Manage &#9662;</strong> on each row holds every action, so nothing that wipes sits
-  on the row itself:</p>
-  <ul>
-    <li><em>Take back</em>: the slot's name, as the row shows it, has to be typed to
-    confirm. A slot given back and claimed by somebody else since the page was drawn has
-    another name by then, so the old one is refused.</li>
-    <li><em>Remove</em>, for a free slot.</li>
-    <li><em>Keep for somebody</em>, or <em>Clear reservation</em> on a kept machine.</li>
-    <li><em>Advanced</em>, only where it can do something: declaring the slot of a machine
-    that has none yet, or the capacity of a machine from before one slot per machine.</li>
-  </ul>
-  <p>An own machine has no forms; the one command that stops counting it is inside its
-  Manage. At 960&nbsp;px and narrower, phones included, the rows become cards.</p>
-  <p>For a week after a holder moves their slot to another Claude account, a line under its
-  row says <em>changed Claude account &lt;age&gt; ago</em>. It never says which account; that
-  is the holder's to see.</p>
-  <h3>The status page</h3>
-  <p><code>/status</code> on the product site is public, and says whether ccfleet is up: an
-  overall line (<em>All systems operational</em>, <em>Partial outage</em> or <em>Major
-  outage</em>), then <em>Website and account pages</em> and <em>Slot machines</em>, each with
-  its last 90 days as a bar of UTC days and its uptime. The machines are one group,
-  counted and never listed: a held slot's name is its holder's, so no machine's id or
-  slot's name is ever on the page. Each holder's slot card says how their own machine is,
-  with a link to it. The front page carries the same overall line at its top, as a pill
-  that links to the page; while no machine has been counted yet it just says
-  <em>Status</em>.</p>
-  <p><strong>Outage emails.</strong> A holder who turns them on, on their page, gets an email
-  when their slot's machine has been down for five minutes, and another when it is back if
-  they got the first; an outage shorter than that is never news, and each is told once. A
-  send that fails is tried again a few times, and turning the emails off drops any not yet
-  sent. The site cannot email about itself while it is down, so its own outage of five
-  minutes or more is told to everybody who asked once it is back. They go through Resend with
-  <code>CCFLEET_RESEND_API_KEY</code> and <code>CCFLEET_EMAIL_FROM</code>; without both,
-  the pages offer none. Only the holder's address and their slot's name go to Resend.</p>
-  <ul>
-    <li><strong>A machine that counts</strong> is switched on, carries a slot (a shared
-    machine's, or somebody's own node counted as theirs) and has reported at least once.</li>
-    <li><strong>Down</strong>: no report for 5 minutes on a shared machine, which reports
-    every minute, or 15 on somebody's own node, which reports every five; or an open
-    <code>claude_missing</code>, <code>slot_missing</code> or critical
-    <code>disk_high</code>. <strong>Degraded</strong>: a report late by 3 minutes (11 on an
-    own node), a <code>disk_high</code> warning, or a slot the machine cannot offer anybody
-    (<code>slot_wipe_failed</code>, <code>slot_occupied</code>,
-    <code>slot_provision_failed</code>).</li>
-    <li><strong>Never counted against a machine</strong>: the holder's sign-in, tokens,
-    usage limits or account, Remote Control (it needs the holder signed in), a new egress
-    address, or a version behind its pin. Those are on the holder's page and in the
-    console.</li>
-    <li><strong>The group</strong> is yellow when any machine is degraded or some are
-    down, and red only when every one is down. It is counted each minute as a group too,
-    so a red day means every machine down at the same time for 5 minutes or more; two
-    machines down at different times make a yellow day. Its uptime is every machine's
-    minutes together.</li>
-    <li><strong>The site's own downtime</strong> is its silence: the serving loop counts
-    every minute it runs, a check running a little late is forgiven, and a longer gap is
-    counted as down when the server comes back. <code>ccfleetd check</code> counts nothing.
-    Ninety days are kept, in <code>status_minutes</code>, one row a component a day.</li>
-    <li><strong>The machines are not late for the site's silence.</strong> A report sent
-    while the server was down reached nobody, so a machine's silence counts from when the
-    server began listening again (it notes the moment as <code>listening_since</code>).
-    A machine whose outage was open already stays down until it reports, and an outage
-    becomes an email only after five minutes of it seen while listening. So a restart,
-    long or short, never tells a holder their slot is down, or back, when it was only the
-    site. Every other wait on a machine counts the same way: the operator's
-    <code>no_heartbeat</code> and <code>token_stale</code> alerts, a quota reading's age,
-    where an account counts as signed in, a claim still setting up (given up at 30 min),
-    an update not yet answered (15 min), the console's <em>stuck</em> mark and a slot
-    card's <em>may be unreachable</em>. An alert already raised holds until the node says
-    otherwise. Only sign-in attempts keep the wall clock: that is how long a code may sit
-    in the database.</li>
-  </ul>
-  <h3>One account per slot, enforced</h3>
-  <p>The product keeps the rule without relying on anybody to remember it:</p>
-  <ul>
-    <li><strong>A slot binds to its account.</strong> The first Claude account signed in on a
-    slot is the one it keeps, until its holder moves it with <em>Change account</em>. The
-    binding lives in the slot's own state, so it goes with the slot's wipe.</li>
-    <li><strong><em>Sign in again</em> only takes that account.</strong> It signs in to one
-    side, in a scratch directory, and keeps the result only if it is the same account. Any other
-    account is thrown away with <em>this slot stays with its own Claude account; to move it to
-    another, use Change account</em>, and the sign-in the slot already had is left as it
-    was.</li>
-    <li><strong><em>Change account</em> moves it, at most once a week.</strong> It is offered on
-    a shared machine's slot in use, never on somebody's own node. The new account signs in to
-    the scratch directory while the old one keeps working, and only a finished sign-in is moved
-    in, in order: the account block of <code>~/.claude.json</code> (every other key stays),
-    then the credential, then the binding. A step that fails puts back the ones before it, so a
-    change that fails leaves the slot as it was; should putting back fail too, the holder's page
-    says it stopped halfway, and changing account again finishes it. There is only ever one
-    credential on the slot, so it never holds two accounts. Remote Control then restarts on the new account, which ends any session open in
-    it, and the slot shows in claude.ai/code under that account instead. Signing in with the
-    account the slot already has is not a change; the week starts only when the account really
-    moved. The files stay throughout.</li>
-    <li><strong>One account is in one place.</strong> Every node and slot reports a fingerprint
-    of its account: the first 16 hex characters of a SHA-256 of Claude's account id, never the
-    id itself, and never an owner node's address. One account live in two places raises
-    <code>account_elsewhere</code> on both; a held slot signed in to another account than its
-    own raises <code>account_changed</code>. The holder's card says so too, without naming the
-    other place.</li>
-  </ul>
-  <figure>
-    <div class="fig-wrap">
-    <svg viewBox="0 0 980 232" role="img" aria-label="Change account. The holder presses Change account on a slot in use, a week after any last change. The new account signs in to a scratch directory while the old one keeps working. Only a finished sign-in is moved in, in order: the account block, then the credential, then the binding, and a failed step puts back the ones before it. Remote Control then restarts on the new account, and the next change can come a week later. A sign-in that fails, is cancelled, or is the same account changes nothing.">
-      <defs><marker id="c-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker></defs>
+  | sudo bash -s -- --server https://fleet.example.com --node pool-1 --token &lt;node-token&gt;</code></pre>
 
-      <rect x="8" y="40" width="180" height="88" rx="8" class="box"/>
-      <text x="98" y="68" text-anchor="middle" class="t12">holder's page</text>
-      <text x="98" y="89" text-anchor="middle" class="t10 mute">Change account</text>
-      <text x="98" y="106" text-anchor="middle" class="t10 mute">a slot in use, a week on</text>
+<h3>4. Configure the BWH-to-machine endpoint</h3>
+<p>Copy the node's <code>/etc/ssh/ssh_host_ed25519_key.pub</code> to a root-owned file on BWH
+over an authenticated operator channel, then:</p>
+<pre><code>ccfleetd node access pool-1 \
+  --host &lt;address reachable from BWH&gt; \
+  --port 22 \
+  --host-key-file /secure/path/pool-1-host-key.pub</code></pre>
+<p>The customer never receives the node address. Only BWH needs network access to this port.</p>
 
-      <line x1="188" y1="84" x2="222" y2="84" class="ln" marker-end="url(#c-arr)"/>
+<h3>5. Grant a customer</h3>
+<pre><code>ccfleetd account quota alice@example.com 1</code></pre>
+<p>The customer must have signed in to the website once before the account exists.</p>
 
-      <rect x="226" y="40" width="240" height="88" rx="8" class="box"/>
-      <text x="346" y="68" text-anchor="middle" class="t12">scratch sign-in</text>
-      <text x="346" y="89" text-anchor="middle" class="t10 mute">the new account signs in beside</text>
-      <text x="346" y="106" text-anchor="middle" class="t10 mute">the old one keeps working</text>
+<h2 id="verify">Verification checklist</h2>
+<ul>
+<li>The slot is not claimable until the machine heartbeat reports its Linux user absent.</li>
+<li>After pairing, <code>/etc/ccfleet/authorized_keys/slot01</code> contains a forced
+<code>slot-entry.sh</code> command. The sshd slot-group policy independently forces that
+entrypoint and disables agent, port and X11 forwarding and user rc.</li>
+<li><code>ccfleet</code> opens Claude Code without asking for a Claude login on the local
+computer.</li>
+<li>Stopping BWH breaks a new connection; restarting it allows the same local profile to
+reattach.</li>
+<li>Removing the device on the slot page closes its open broker connection, rejects new ones
+and removes its public key on the next agent cycle.</li>
+<li>Releasing the slot revokes every device immediately and the slot is not free until the
+machine confirms the user and files are gone.</li>
+<li>No customer documentation offers Remote Control, a Claude app mode, a device-token mode
+or an SSH command.</li>
+</ul>
 
-      <line x1="466" y1="84" x2="500" y2="84" class="ln" marker-end="url(#c-arr)"/>
+<h2 id="commands">Daily commands</h2>
+<table><thead><tr><th>Command</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>ccfleet</code></td><td>Open or resume the active slot.</td></tr>
+<tr><td><code>ccfleet login</code></td><td>Pair this computer with a code from the slot page.</td></tr>
+<tr><td><code>ccfleet list</code></td><td>List locally paired slots.</td></tr>
+<tr><td><code>ccfleet use NAME</code></td><td>Choose the default when this computer has more than one slot.</td></tr>
+<tr><td><code>ccfleet logout</code></td><td>Revoke this computer and remove its local key.</td></tr>
+</tbody></table>
 
-      <rect x="504" y="40" width="252" height="88" rx="8" class="box-acc"/>
-      <text x="630" y="68" text-anchor="middle" class="t12">moved in, in order</text>
-      <text x="630" y="89" text-anchor="middle" class="t10 mute">account block, credential, binding</text>
-      <text x="630" y="106" text-anchor="middle" class="t10 mute">a failed step is put back</text>
+<h2 id="recovery">Recovery</h2>
+<ul>
+<li><strong>Claude sign-in expired:</strong> use <strong>Sign in again</strong> on the slot
+page. Do not send credentials to the operator.</li>
+<li><strong>Computer lost:</strong> remove that device from the slot page. Pair a new device
+with a new code.</li>
+<li><strong>Host-key mismatch:</strong> stop. Verify the machine was intentionally rebuilt,
+update its access configuration with the new public host key, and pair again.</li>
+<li><strong>BWH unavailable:</strong> the Claude/tmux process continues on the slot. Restore
+the broker and reconnect.</li>
+<li><strong>Slot machine unavailable:</strong> the broker returns a temporary-unreachable
+error; inspect the machine and its SSH reachability from BWH.</li>
+</ul>
 
-      <line x1="756" y1="84" x2="790" y2="84" class="ln" marker-end="url(#c-arr)"/>
-
-      <rect x="794" y="40" width="178" height="88" rx="8" class="box"/>
-      <text x="883" y="68" text-anchor="middle" class="t12">Remote Control</text>
-      <text x="883" y="89" text-anchor="middle" class="t10 mute">restarts, new account</text>
-      <text x="883" y="106" text-anchor="middle" class="t10 mute">next change in a week</text>
-
-      <path d="M346 128 L346 166" class="ln-dash" marker-end="url(#c-arr)"/>
-      <rect x="146" y="170" width="400" height="34" rx="8" class="box-soft"/>
-      <text x="346" y="192" text-anchor="middle" class="t10 mute">fails, cancelled, or the same account: nothing changes</text>
-
-      <text x="8" y="226" class="t11 mute">Until the credential is moved in, the slot signs in exactly as before, and it only ever holds one.</text>
-    </svg>
-    </div>
-    <figcaption><b>Figure 3.</b> Changing a slot's Claude account. The files stay throughout; only the sign-in and the binding move.</figcaption>
-  </figure>
-  <div class="note warn">
-    <p class="t">What it cannot stop</p>
-    <p>A slot is its holder's own Linux account, and they can change its files: sign in there by
-    hand, or put another account's credential in place. ccfleet notices with
-    <code>account_changed</code> &mdash; a hand sign-in at the next report, a swapped credential
-    once Claude Code next refreshes its profile &mdash; but cannot prevent it. That is detection,
-    not prevention. The terms say one account per slot, and taking the slot back is yours to
-    decide.</p>
-  </div>
-  <div class="note warn">
-    <p class="t">Key login before hardening</p>
-    <p>Some provider images ship with <code>PubkeyAuthentication no</code>. Turning passwords
-    off on such a machine leaves nothing but the provider's console. <code>bootstrap.sh</code>
-    and <code>install.sh</code> refuse to turn passwords off unless key login is in force, but
-    prove it yourself before you close the session you are in.</p>
-  </div>
-</section>
-
-</main>
-</div>
-</div>
-
-</body>
-</html>
+<p class="lead">Detailed architecture lives in <a href="design.md">design.md</a>; operator
+procedures live in <a href="runbooks.md">runbooks.md</a>.</p>
+</main></body></html>

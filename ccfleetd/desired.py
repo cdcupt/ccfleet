@@ -1,9 +1,9 @@
 """The desired state a node is handed on every heartbeat.
 
-The server never opens a connection to a node: nodes are single-owner machines on
-residential addresses behind NAT, and a management plane that dials into them is
-the shape this project exists not to be. So intent travels the only way it can —
-down the response to a request the node itself made.
+Lifecycle intent travels in the heartbeat response, so it remains declarative
+and retryable. The separate CLI broker may open a data-plane TCP connection to
+an operator-configured node SSH endpoint, but it never uses that connection for
+management intent.
 
 It is declarative rather than a command queue. Each heartbeat carries the whole
 desired state, the agent compares it against reality and acts on the difference,
@@ -159,7 +159,8 @@ def _slot_block(slot: Mapping[str, Any],
                 login: Optional[Mapping[str, Any]] = None,
                 node: Optional[Mapping[str, Any]] = None,
                 channels: Optional[Mapping[str, Any]] = None,
-                update: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                update: Optional[Mapping[str, Any]] = None,
+                cli_keys: Optional[list[str]] = None) -> dict[str, Any]:
     """What a shared machine should do about one of its slots.
 
     The state is the whole instruction: `claiming` means provision it,
@@ -176,11 +177,14 @@ def _slot_block(slot: Mapping[str, Any],
     pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None
     if pending:
         block["login"] = pending
-    # Customer SSH was removed from the product. Keep sending the empty legacy
-    # field while machines converge so any key from the short-lived feature is
-    # revoked; Remote Control and local device tokens are the supported doors.
-    if slot.get("state") in SLOT_SIGN_IN_STATES:
+    # Clear the old unrestricted customer-SSH field while installing only keys
+    # whose authorized-key options force the CC Fleet CLI entrypoint.
+    if slot.get("state") in (*SLOT_SIGN_IN_STATES, "releasing"):
         block["ssh_public_key"] = ""
+        # Device keys open only the forced ccfleet CLI entry point. They are
+        # independent of the Claude login and may be several because one user
+        # can work from several computers.
+        block["ssh_public_keys"] = list(cli_keys or ())
     # A read of its usage asked for now; the slot tries it once, and an agent
     # from before this reads it on its own schedule.
     wanted = slot.get("quota_wanted_at")
@@ -199,9 +203,8 @@ def _slot_block(slot: Mapping[str, Any],
 def machine_hostname(node_id: str, slots: list[Mapping[str, Any]]) -> str:
     """What a shared machine should call itself: its one slot's name.
 
-    One machine is one slot, and claude.ai/code shows a machine by its
-    hostname, so the machine answers to whatever the slot is called — its
-    name while held (neutral, or what its holder chose), its id while free.
+    One machine is one slot, so the machine answers to whatever that slot is
+    called — its holder-chosen name while held, and its id while free.
     With no slot, or a slot id that is no hostname, the machine keeps its own
     id, which always is one.
     """
@@ -221,7 +224,8 @@ def desired_state(node: Mapping[str, Any],
                   hostname: Optional[str] = None,
                   channels: Optional[Mapping[str, Any]] = None,
                   slot_updates: Optional[Mapping[str, Mapping[str, Any]]] = None,
-                  own_update: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                  own_update: Optional[Mapping[str, Any]] = None,
+                  slot_cli_keys: Optional[Mapping[str, list[str]]] = None) -> dict[str, Any]:
     """What this node should look like, derived from its stored row.
 
     `slot_logins` maps a slot's id to its sign-in row, for a shared machine.
@@ -243,8 +247,10 @@ def desired_state(node: Mapping[str, Any],
     if slots:
         logins = slot_logins or {}
         updates = slot_updates or {}
+        cli_keys = slot_cli_keys or {}
         desired["slots"] = [_slot_block(s, logins.get(s.get("id")), node, channels or {},
-                                        updates.get(s.get("id"))) for s in slots]
+                                        updates.get(s.get("id")),
+                                        cli_keys.get(s.get("id"))) for s in slots]
     elif hostname is None:
         # An owner's own node: its pin is its owner's, so it is never a hold.
         own = claude_versions.slot_target({"kind": "owner"}, node)

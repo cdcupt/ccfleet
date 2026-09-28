@@ -435,10 +435,8 @@ def test_a_new_slot_sends_anthropic_nothing_optional(tmp_path):
         assert env.get(key) == "1", key
 
 
-def test_telemetry_is_never_switched_off_because_remote_control_needs_it(tmp_path):
-    """Remote Control refuses to start with DISABLE_TELEMETRY set: it needs the
-    feature-flag evaluation that switch turns off. Set on the live slots, it
-    took Remote Control down on all three within minutes."""
+def test_telemetry_is_not_changed_by_slot_provisioning(tmp_path):
+    """The terminal-only product does not rewrite unrelated Claude telemetry."""
     slot_home = tmp_path / "slothome"
     slot_home.mkdir()
     result = _add_slot(tmp_path, slot_home)
@@ -459,15 +457,7 @@ def test_a_holder_who_turned_reporting_back_on_keeps_it(tmp_path):
 
 
 def test_a_slot_is_given_a_way_in(tmp_path):
-    """Password login is disabled and no SSH key is installed, on purpose. If
-    Remote Control is not installed too, the script provisions an account
-    nobody can reach — which is not a slot, it is a dead user.
-
-    Watched through the commands the script runs rather than by looking for
-    words in it: the first version of this test searched the source for
-    "claude-remote-control.service", which still appears in the enable line
-    even when nothing installs the unit at all.
-    """
+    """The persistent Claude tmux unit is installed without a Cloud mode."""
     slot_home = tmp_path / "slothome"
     slot_home.mkdir()
     bindir = fake_system(tmp_path, slot_home=slot_home)
@@ -486,34 +476,23 @@ def test_a_slot_is_given_a_way_in(tmp_path):
     assert result.returncode == 0, result.stderr
     ran = log.read_text() if log.exists() else ""
 
-    # Per line, not per file. Both unit names appear in the single `enable`
-    # line, so a substring check passes even when nothing installs anything —
-    # which is exactly how the first two versions of this test let a gutted
-    # install loop through.
     placed = [ln for ln in ran.splitlines() if ln.startswith(("install ", "curl "))]
-    for unit in ("ccfleet-shell.service", "claude-remote-control.service"):
-        assert any(unit in ln for ln in placed), \
-            f"{unit} was never put on the machine; only saw: {placed}"
-    assert "enable ccfleet-shell.service claude-remote-control.service" in ran, \
-        "both are enabled, so they come back after a reboot"
-    assert "start ccfleet-shell.service" in ran, "the work session is started now"
-    assert "start claude-remote-control" not in ran, \
-        "Remote Control needs a sign-in first, and Type=forking means it will not retry"
+    assert any("ccfleet-shell.service" in line for line in placed)
+    assert not any("claude-remote-control.service" in line for line in placed)
+    assert "enable ccfleet-shell.service" in ran, "the session returns after a reboot"
+    assert "start ccfleet-shell.service" in ran, "the credential condition gates the start"
 
 
 def test_the_units_it_installs_exist_in_the_repo():
     """Fetching a unit that is not there would fail on a real machine long after
     this script said the slot was ready."""
-    for unit in ("ccfleet-shell.service", "claude-remote-control.service"):
+    for unit in ("ccfleet-shell.service",):
         assert (NODE / "systemd" / unit).exists(), f"{unit} is missing from node/systemd"
 
 
-def test_the_closing_message_does_not_promise_what_is_not_installed():
-    """It told people to reach the slot through the console and Remote Control
-    while installing neither. The message and the script have to agree."""
+def test_the_slot_script_does_not_install_or_offer_remote_control():
     text = ADD.read_text()
-    promises_rc = "Remote Control" in text or "remote-control" in text
-    assert not promises_rc or "claude-remote-control.service" in text
+    assert "claude-remote-control.service" not in text
 
 
 def test_the_harness_never_touches_the_home_of_whoever_runs_it(tmp_path):

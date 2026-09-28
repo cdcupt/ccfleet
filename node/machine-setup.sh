@@ -96,10 +96,13 @@ restrict_slot_sshd() {
     had=yes; was="$(cat "$dropin"; printf x)"; was="${was%x}"
   fi
   mkdir -p "$SSHD_DROPIN_DIR"
-  cat > "$dropin" <<'SSHD'
-# A customer's key opens only their slot shell and file-transfer commands.
-# The same restrictions are repeated on authorized_keys as defense in depth.
+  cat > "$dropin" <<SSHD
+# Slot keys live outside holder-writable homes. ForceCommand is repeated on
+# each key as defense in depth, but sshd enforces it here even if a slot tries
+# to create its own ~/.ssh/authorized_keys.
 Match Group ccfleet-slots
+    AuthorizedKeysFile $ETC_DIR/authorized_keys/%u
+    ForceCommand $LIB_DIR/slot-entry.sh
     AllowAgentForwarding no
     AllowTcpForwarding no
     X11Forwarding no
@@ -133,9 +136,9 @@ fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
 fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
 fetch node/slot-add.sh          "$LIB_DIR/slot-add.sh" 755
 fetch node/slot-remove.sh       "$LIB_DIR/slot-remove.sh" 755
+fetch node/slot-entry.sh        "$LIB_DIR/slot-entry.sh" 755
 # slot-add.sh installs these into each new slot from the directory beside it.
 fetch node/systemd/ccfleet-shell.service         "$LIB_DIR/systemd/ccfleet-shell.service" 644
-fetch node/systemd/claude-remote-control.service "$LIB_DIR/systemd/claude-remote-control.service" 644
 # Root runs these, and every slot's user runs agent.py: owned by root and
 # writable by nobody else, or one slot could change what root runs next.
 chown -R root:root "$LIB_DIR"
@@ -143,20 +146,23 @@ chmod 755 "$LIB_DIR" "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 note "in $LIB_DIR, owned by root"
 
 step "3/6  its configuration"
-mkdir -p "$ETC_DIR" "$STATE_DIR"
+mkdir -p "$ETC_DIR" "$STATE_DIR" "$ETC_DIR/authorized_keys"
 # The directory closes first, so the token is never reachable by anyone else,
 # not even for the moment between writing the file and setting its mode.
-chmod 700 "$ETC_DIR" "$STATE_DIR"
-printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_DIR=%s\nCCFLEET_STATE_FILE=%s\n' \
-  "$SERVER" "$NODE_ID" "$TOKEN" "$LIB_DIR" "$STATE_DIR/machine.json" > "$ETC_DIR/agent.env"
+chown root:root "$ETC_DIR" "$STATE_DIR" "$ETC_DIR/authorized_keys"
+chmod 700 "$ETC_DIR" "$STATE_DIR" "$ETC_DIR/authorized_keys"
+printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_DIR=%s\nCCFLEET_STATE_FILE=%s\nCCFLEET_AUTHORIZED_KEYS_DIR=%s\n' \
+  "$SERVER" "$NODE_ID" "$TOKEN" "$LIB_DIR" "$STATE_DIR/machine.json" \
+  "$ETC_DIR/authorized_keys" > "$ETC_DIR/agent.env"
 # Set, not left to the umask: over an existing file the old mode survives, and
 # a hand-made agent.env left world-readable would stay that way.
 chmod 600 "$ETC_DIR/agent.env"
+chown root:root "$ETC_DIR/agent.env"
 note "$ETC_DIR/agent.env, readable by root only"
 
 step "4/6  slot SSH restrictions"
 restrict_slot_sshd
-note "slot logins cannot forward agents, ports, X11 or tunnels"
+note "slot keys are root-managed and can only open the forced CC Fleet terminal"
 
 step "5/6  the timer"
 for unit in ccfleet-machine.service ccfleet-machine.timer; do

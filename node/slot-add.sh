@@ -17,9 +17,10 @@
 #   a support request rather than a command. That is the price of several
 #   people to a box.
 #
-#   An authorized_keys entry. Slots are reached through the console and Remote
-#   Control, not SSH. Adding a key would hand somebody a shell on a machine
-#   other people's work is sitting on.
+#   An operator or unrestricted authorized_keys entry. The machine agent may
+#   install CC Fleet device keys later; every such key is forced into the
+#   persistent Claude Code entrypoint and cannot select a command or forward
+#   ports, agents or X11.
 
 set -euo pipefail
 
@@ -225,12 +226,9 @@ PY"
 #
 # And nothing optional leaves for Anthropic that a slot can do without: Claude
 # Code's error reports, bug reports and feedback surveys are off, by its own
-# documented switches (Erik, 2026-09-24). The same rule as above: a holder who
-# turned one back on keeps it. NOT DISABLE_TELEMETRY: Remote Control needs the
-# feature-flag evaluation it turns off, and refuses to start without it ("Remote
-# Control requires feature-flag evaluation, which is disabled because
-# DISABLE_TELEMETRY is set"). Set on the live slots for a few minutes, it took
-# Remote Control down on all three.
+# documented switches. The same rule as above: a holder who turned one back on
+# keeps it. Core telemetry and feature-flag behavior stays at Claude Code's
+# published defaults; this script does not modify authentication behavior.
 as_slot "python3 - <<'PY'
 import json, os
 p = os.path.expanduser('~/.claude/settings.json')
@@ -248,31 +246,27 @@ os.replace(tmp, p)
 PY"
 note "Claude Code starts on Opus at max effort, with its optional reporting off"
 
-step "5/5  a way in"
-# Without this the slot has no access path at all: password login is disabled,
-# no SSH key is installed on purpose, and Remote Control is how somebody is
-# meant to reach it. Provisioning an account nobody can use is not a slot.
+step "5/5  the persistent CLI session"
+# The unit starts only after a Claude credential exists. slot-entry.sh starts
+# it on the first paired connection; enabling it brings the same session back
+# after a reboot. No Remote Control or alternate customer mode is installed.
 REPO_RAW="${CCFLEET_REPO_RAW:-https://raw.githubusercontent.com/cdcupt/ccfleet/main}"
-for unit in ccfleet-shell.service claude-remote-control.service; do
-  if [ -f "$LOCAL_UNITS/$unit" ]; then
-    install -m 644 -o "$SLOT" -g "$SLOT" "$LOCAL_UNITS/$unit" \
-      "$HOME_DIR/.config/systemd/user/$unit"
-  else
-    as_slot "curl -fsSL '$REPO_RAW/node/systemd/$unit' -o ~/.config/systemd/user/$unit" \
-      || die "could not fetch $unit; the slot would have no way in"
-  fi
-done
+unit=ccfleet-shell.service
+if [ -f "$LOCAL_UNITS/$unit" ]; then
+  install -m 644 -o "$SLOT" -g "$SLOT" "$LOCAL_UNITS/$unit" \
+    "$HOME_DIR/.config/systemd/user/$unit"
+else
+  as_slot "curl -fsSL '$REPO_RAW/node/systemd/$unit' -o ~/.config/systemd/user/$unit" \
+    || die "could not fetch $unit; the slot would have no way in"
+fi
 user_systemctl daemon-reload
-# Enabled, not started. Remote Control needs an authenticated session and there
-# is none until whoever holds this slot signs in — and it cannot usefully retry,
-# because Type=forking means systemd sees tmux detach and never learns the
-# session inside failed to authenticate. Enabling it means it returns after a
-# reboot once they have.
-user_systemctl enable ccfleet-shell.service claude-remote-control.service >/dev/null 2>&1 \
-  || die "could not enable the slot's services"
+# A start before the first sign-in is deliberately skipped by the unit's
+# ConditionPathExists. The first `ccfleet` connection starts it again.
+user_systemctl enable ccfleet-shell.service >/dev/null 2>&1 \
+  || die "could not enable the slot's persistent session"
 user_systemctl start ccfleet-shell.service >/dev/null 2>&1 || true
-note "work session started; Remote Control enabled, to be started after they sign in"
+note "persistent Claude Code session installed; it starts after sign-in"
 
-printf '\nslot %s is ready. It has no sudo and no SSH key, by design.\n' "$SLOT"
+printf '\nslot %s is ready. It has no sudo and no unrestricted SSH key.\n' "$SLOT"
 printf 'Whoever holds it signs into their own Claude account from the console;\n'
-printf 'nobody else can do that step for them.\n'
+printf 'then each of their computers pairs its own forced CC Fleet device key.\n'
