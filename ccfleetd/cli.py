@@ -497,7 +497,7 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
             return EXIT_USAGE
         try:
             with open(args.host_key_file, encoding="ascii") as stream:
-                host_key = stream.read()
+                host_key = stream.read().strip()
         except OSError as exc:
             print(f"error: could not read host key: {exc}", file=sys.stderr)
             return EXIT_USAGE

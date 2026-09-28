@@ -1,3 +1,4 @@
+import base64
 import re
 
 import pytest
@@ -25,6 +26,30 @@ def test_node_lifecycle(db, capsys):
     assert cli.main(["--db", db, "node", "enable", "node-a"]) == 0
     assert cli.main(["--db", db, "node", "remove", "node-a"]) == 0
     assert cli.main(["--db", db, "node", "remove", "node-a"]) == 2
+
+
+def test_node_access_accepts_a_normal_newline_terminated_host_key(db, tmp_path, capsys):
+    from ccfleetd.store import Store
+
+    assert cli.main(["--db", db, "node", "add", "node-a", "--owner", "erik"]) == 0
+    kind = b"ssh-ed25519"
+    blob = len(kind).to_bytes(4, "big") + kind + (32).to_bytes(4, "big") + b"x" * 32
+    key = "ssh-ed25519 " + base64.b64encode(blob).decode()
+    path = tmp_path / "ssh_host_ed25519_key.pub"
+    path.write_text(key + " node-host\n")
+
+    assert cli.main(["--db", db, "node", "access", "node-a", "--host", "192.0.2.4",
+                     "--port", "2222", "--host-key-file", str(path)]) == 0
+    store = Store(db)
+    try:
+        node = store.get_node("node-a")
+        assert node["access_host"] == "192.0.2.4" and node["access_port"] == 2222
+        assert node["ssh_host_key"] == key
+    finally:
+        store.close()
+    assert cli.main(["--db", db, "node", "list"]) == 0
+    assert " on " in capsys.readouterr().out
+    assert cli.main(["--db", db, "node", "access", "node-a", "--off"]) == 0
 
 
 def test_check_and_serve_guard(db, capsys):
