@@ -87,6 +87,11 @@ The sshd `Match Group ccfleet-slots` block independently sets the same
 directory. A slot can use shell tools through Claude Code but cannot replace
 its own SSH authorization or escape device revocation.
 
+sshd reads an `AuthorizedKeysFile` using the target account's credentials, so
+the path is traversable/readable (`/etc/ccfleet` 0711, key directory 0755,
+public-key files 0644) but root-owned and never holder-writable. The adjacent
+machine token is atomically replaced as a root-only 0600 file.
+
 Debian treats the shadow marker created by `adduser --disabled-password` as a
 locked account and may reject it before public-key authentication. Provisioning
 therefore assigns a random, discarded password hash; the slot Match block still

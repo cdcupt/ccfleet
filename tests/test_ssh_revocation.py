@@ -68,6 +68,8 @@ def test_machine_keeps_device_keys_outside_the_holder_writable_home(tmp_path):
     assert ok, why
     assert not (home / ".ssh" / "authorized_keys").exists()
     installed = (managed / "slot01").read_text()
+    assert (managed.stat().st_mode & 0o777) == 0o755
+    assert ((managed / "slot01").stat().st_mode & 0o777) == 0o644
     assert machine.AUTHORIZED_KEY_OPTIONS in installed
     assert installed.endswith(f" {key}\n")
     assert machine.authorized_key_fingerprint(acct, managed).startswith("SHA256:")

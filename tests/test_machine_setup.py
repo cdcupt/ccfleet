@@ -193,8 +193,8 @@ def test_the_token_lives_in_one_file_only_root_can_read(tmp_path, sandbox):
     assert run(GOOD, bindir).returncode == 0
     env_file = sandbox / "etc" / "agent.env"
     assert mode(env_file) == 0o600
-    assert mode(sandbox / "etc") == 0o700 and mode(sandbox / "state") == 0o700
-    assert mode(sandbox / "etc" / "authorized_keys") == 0o700
+    assert mode(sandbox / "etc") == 0o711 and mode(sandbox / "state") == 0o700
+    assert mode(sandbox / "etc" / "authorized_keys") == 0o755
     values = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
     assert values == {"CCFLEET_URL": "https://fleet.example.com",
                       "CCFLEET_NODE_ID": "shared-1", "CCFLEET_NODE_TOKEN": TOKEN,
@@ -319,7 +319,8 @@ def test_a_loose_umask_does_not_leave_roots_code_writable(tmp_path, sandbox):
     for script in ("slot-add.sh", "slot-remove.sh"):
         assert mode(lib / script) == 0o755
     assert mode(lib / "ccfleet_agent" / "machine.py") == 0o644
-    assert mode(sandbox / "etc") == 0o700 and mode(sandbox / "state") == 0o700
+    assert mode(sandbox / "etc") == 0o711 and mode(sandbox / "state") == 0o700
+    assert mode(sandbox / "etc" / "authorized_keys") == 0o755
 
 
 def test_the_last_words_declare_its_one_slot_the_way_the_server_takes_it(tmp_path):

@@ -114,6 +114,9 @@ Prove the machine is closed before anyone is given a slot on it:
   `allowtcpforwarding no`, `x11forwarding no`, `permittunnel no` and `permituserrc no`.
 - *root*: `passwd -S slot01` reports `P`, not `L`. The password is random and
   discarded; the sshd checks above are what keep password login impossible.
+- *root*: `/etc/ccfleet` is root-owned `0711`, its `authorized_keys` directory
+  `0755`, and each public-key file `0644`; none is holder-writable.
+  `/etc/ccfleet/agent.env` remains root-owned `0600`.
 - *root*: `ufw status` reports `Status: active`, and `systemctl is-active ccfleet-machine.timer` says `active`.
 
 Slot holders are not given an SSH workflow or the node address. They install

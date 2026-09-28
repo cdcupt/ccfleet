@@ -163,6 +163,9 @@ The public site documents the current product at `/`, `/docs/guide`,
 - Device keys live outside holder-writable home directories. Both sshd and each
   key enforce the forced entrypoint, with no agent forwarding, port forwarding,
   X11 forwarding or user-supplied SSH command.
+- The public-key path is root-owned but readable by slot users (`0711` parent,
+  `0755` key directory, `0644` files); the node token remains in an atomically
+  written root-only `0600` file.
 - Slot accounts receive a discarded random password only so OpenSSH/PAM will
   evaluate public keys; the slot sshd policy explicitly disables password and
   keyboard-interactive authentication.

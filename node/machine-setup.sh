@@ -167,17 +167,22 @@ note "in $LIB_DIR, owned by root"
 
 step "3/6  its configuration"
 mkdir -p "$ETC_DIR" "$STATE_DIR" "$ETC_DIR/authorized_keys"
-# The directory closes first, so the token is never reachable by anyone else,
-# not even for the moment between writing the file and setting its mode.
+# sshd reads public keys as the target slot account: the configuration parent
+# is traverse-only and the key directory readable, while root ownership and no
+# write bits keep holders from replacing either. The state directory stays shut.
 chown root:root "$ETC_DIR" "$STATE_DIR" "$ETC_DIR/authorized_keys"
-chmod 700 "$ETC_DIR" "$STATE_DIR" "$ETC_DIR/authorized_keys"
-printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_DIR=%s\nCCFLEET_STATE_FILE=%s\nCCFLEET_AUTHORIZED_KEYS_DIR=%s\n' \
-  "$SERVER" "$NODE_ID" "$TOKEN" "$LIB_DIR" "$STATE_DIR/machine.json" \
-  "$ETC_DIR/authorized_keys" > "$ETC_DIR/agent.env"
-# Set, not left to the umask: over an existing file the old mode survives, and
-# a hand-made agent.env left world-readable would stay that way.
-chmod 600 "$ETC_DIR/agent.env"
-chown root:root "$ETC_DIR/agent.env"
+chmod 711 "$ETC_DIR"
+chmod 700 "$STATE_DIR"
+chmod 755 "$ETC_DIR/authorized_keys"
+ENV_TMP="$ETC_DIR/.agent.env.$$"
+( umask 077
+  printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_DIR=%s\nCCFLEET_STATE_FILE=%s\nCCFLEET_AUTHORIZED_KEYS_DIR=%s\n' \
+    "$SERVER" "$NODE_ID" "$TOKEN" "$LIB_DIR" "$STATE_DIR/machine.json" \
+    "$ETC_DIR/authorized_keys" > "$ENV_TMP"
+)
+chmod 600 "$ENV_TMP"
+chown root:root "$ENV_TMP"
+mv -f "$ENV_TMP" "$ETC_DIR/agent.env"
 note "$ETC_DIR/agent.env, readable by root only"
 
 step "4/6  slot SSH restrictions"

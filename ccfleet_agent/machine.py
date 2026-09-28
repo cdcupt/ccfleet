@@ -381,7 +381,10 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
             return False, "managed authorized-keys directory is missing"
         if os.fstat(keys_fd).st_uid != os.geteuid():
             return False, "managed authorized-keys directory is not owned by the agent"
-        os.fchmod(keys_fd, 0o700)
+        # sshd checks the file while using the target account's credentials,
+        # so the public-key path must be readable/traversable by that account.
+        # Root ownership and no write bits are the revocation boundary.
+        os.fchmod(keys_fd, 0o755)
         filename = account.pw_name
         if not normalized_keys:
             try:
@@ -400,19 +403,22 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
             )
         except OSError:
             current = b""
+            current_owned = False
         else:
             try:
                 current = os.read(current_fd, MAX_SSH_KEY_CHARS * MAX_CLI_KEYS + 4096)
+                os.fchmod(current_fd, 0o644)
+                current_owned = os.fstat(current_fd).st_uid == os.geteuid()
             finally:
                 os.close(current_fd)
-        if current == content:
+        if current == content and current_owned:
             return True, ""
         temporary = f".{filename}.ccfleet.{os.getpid()}"
         try:
             fd = os.open(
                 temporary,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
+                0o644,
                 dir_fd=keys_fd,
             )
         except FileExistsError:
@@ -420,7 +426,7 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
             fd = os.open(
                 temporary,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
+                0o644,
                 dir_fd=keys_fd,
             )
         try:
@@ -428,7 +434,7 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
             while remaining:
                 written = os.write(fd, remaining)
                 remaining = remaining[written:]
-            os.fchmod(fd, 0o600)
+            os.fchmod(fd, 0o644)
             os.fsync(fd)
         finally:
             os.close(fd)
