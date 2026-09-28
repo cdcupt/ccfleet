@@ -1857,6 +1857,20 @@ def retire_slot_remote_control(runner: Runner = subprocess.run) -> None:
              timeout=60)
 
 
+def ensure_slot_bypass_warning_is_accepted() -> None:
+    """Suppress Claude Code's one-time warning for the operator-chosen mode."""
+    path = Path("~/.claude/settings.json").expanduser()
+    try:
+        current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return
+    if not isinstance(current, dict) or current.get("skipDangerousModePermissionPrompt") is True:
+        return
+    current["skipDangerousModePermissionPrompt"] = True
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _atomic_write(path, json.dumps(current, indent=2) + "\n")
+
+
 def sync_slot_terminal_unit(runner: Runner = subprocess.run) -> None:
     """Install the packaged persistent-session unit as the slot user."""
     root = Path(__file__).resolve().parents[1]
@@ -1880,6 +1894,10 @@ def sync_slot_terminal_unit(runner: Runner = subprocess.run) -> None:
         # customer path now and could retain a process under the previous
         # account, so retire it during the same one-time migration.
         _run(runner, ["tmux", "kill-session", "-t", "cc"], timeout=15)
+        # A unit change may alter the launch mode. Do not leave an already-open
+        # Claude process on the old mode indefinitely; the next `ccfleet`
+        # connection starts the packaged unit and reattaches from then on.
+        _run(runner, ["tmux", "kill-session", "-t", "ccfleet"], timeout=15)
         _run(runner, ["systemctl", "--user", "daemon-reload"], timeout=30)
         _run(runner, ["systemctl", "--user", "enable", DEFAULT_SHELL_SERVICE], timeout=30)
 
@@ -2400,6 +2418,7 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # First, so a sign-in that completes in this step already reads as signed
     # in below — and the slot is active in the same heartbeat, not the next.
     moved = drop_config_dir_line()
+    ensure_slot_bypass_warning_is_accepted()
     sync_slot_terminal_unit(runner)
     retire_slot_remote_control(runner)
     # Bound before the sign-in step, so a slot signed in before it kept its

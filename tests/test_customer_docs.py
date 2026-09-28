@@ -192,6 +192,8 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
         assert "ccfleet login" in page and ">ccfleet<" in page, where
         assert "login" in script and "attach" in script
         assert "ANTHROPIC_BASE_URL" not in page and "CLAUDE_CODE_OAUTH_TOKEN" not in page
+    assert "ccfleet new research --mode plan" in pages["guide"]
+    assert "ccfleet restart --session research --mode auto" in pages["guide"]
 
 
 def test_the_guide_names_the_line_a_slot_really_starts_with():

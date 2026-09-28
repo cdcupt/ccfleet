@@ -162,9 +162,13 @@ def test_the_installed_client_never_mentions_an_anthropic_credential(tmp_path):
 
 def test_slot_entry_forces_the_persistent_original_claude_session():
     text = (Path(__file__).parents[1] / "node" / "slot-entry.sh").read_text()
-    assert "SSH_ORIGINAL_COMMAND" not in text, "a device must not choose a remote command"
-    assert "tmux new-session -A -s ccfleet" in text
+    assert "SSH_ORIGINAL_COMMAND" in text
+    assert "ccfleet-session" in text and "eval" not in text
+    for mode in ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"):
+        assert mode in text
+    assert 'tmux new-session -A -s "$SESSION"' in text
     assert '"$HOME/.local/bin/claude"' in text
+    assert "--dangerously-skip-permissions" in text
 
 
 @pytest.fixture
@@ -186,14 +190,15 @@ def test_a_long_lived_session_gets_a_fresh_reconnect_window(local_client, monkey
     globals_ = local_client["cmd_attach"].__globals__
     monkeypatch.setitem(globals_, "load_config", lambda: {"devices": {}})
     monkeypatch.setitem(globals_, "choose_device", lambda *_: {"slot_name": "slot-1"})
-    monkeypatch.setitem(globals_, "ssh_command", lambda _device: ["ssh"])
+    monkeypatch.setitem(globals_, "ssh_command", lambda *_args: ["ssh"])
     monkeypatch.setattr(subprocess, "call", ssh_call)
     monkeypatch.setattr(local_client["time"], "monotonic", lambda: clock["now"])
     monkeypatch.setattr(local_client["time"], "sleep",
                         lambda seconds: clock.__setitem__("now", clock["now"] + seconds))
 
     result = local_client["cmd_attach"](
-        SimpleNamespace(slot="", no_reconnect=False, reconnect_for=600))
+        SimpleNamespace(slot="", session="ccfleet", mode="bypassPermissions", action="open",
+                        no_reconnect=False, reconnect_for=600))
 
     assert result == 0 and len(calls) == 2
 
@@ -207,6 +212,19 @@ def test_local_ssh_command_disables_every_forwarding_path(local_client, monkeypa
     for option in ("ClearAllForwardings=yes", "ForwardAgent=no", "ForwardX11=no",
                    "PermitLocalCommand=no", "StrictHostKeyChecking=yes", "UpdateHostKeys=no"):
         assert option in joined
+    assert command[-4:] == ["ccfleet-session", "open", "ccfleet", "bypassPermissions"]
+
+
+def test_named_session_and_permission_mode_are_a_fixed_remote_protocol(local_client, monkeypatch):
+    monkeypatch.setattr(local_client["shutil"], "which", lambda _name: "/usr/bin/ssh")
+    device = {"device_id": "d1", "host_alias": "ccfleet-s1", "known_hosts": "/k",
+              "key": "/i", "user": "slot01"}
+    command = local_client["ssh_command"](device, "research_1", "plan", "new")
+    assert command[-4:] == ["ccfleet-session", "new", "research_1", "plan"]
+
+
+def test_bad_session_names_are_refused_before_reading_local_config(local_client):
+    assert local_client["main"](["new", "../shell"]) == 2
 
 
 def test_device_secrets_are_never_sent_over_plaintext_websockets(local_client):

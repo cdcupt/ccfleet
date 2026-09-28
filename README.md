@@ -54,6 +54,11 @@ the customer's computer. Projects live in `~/workspace` on the slot; clone them
 with Git or retrieve them from inside the slot. CC Fleet does not silently mount
 or synchronize the customer's local directory.
 
+Hosted sessions start Claude Code with `--dangerously-skip-permissions`, so tool
+calls run without approval prompts as the slot Linux user. The slot has no sudo
+or privileged groups, but Claude can still read, change, delete or transmit
+anything that user can access inside the slot.
+
 Each paired computer gets its own Ed25519 key and random CC Fleet access token.
 The server stores the public key and only a hash of the access token. A customer
 can remove one computer from the slot page without changing the slot's Claude
@@ -70,6 +75,20 @@ curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.
 The old setup is touched only after new pairing succeeds. The user must still
 revoke an old Anthropic setup-token in their Anthropic account if it is no
 longer used anywhere.
+
+The default `ccfleet` session uses `bypassPermissions`. Users can also create
+and resume named sessions in any permission mode supported by the deployed
+Claude Code:
+
+```bash
+ccfleet new research --mode plan
+ccfleet attach --session research
+ccfleet restart --session research --mode auto
+```
+
+Supported modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
+`dontAsk`, and `plan`. A running session keeps its current mode; `restart`
+deliberately ends that named session before replacing it under another mode.
 
 ## What runs where
 

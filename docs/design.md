@@ -98,16 +98,28 @@ therefore assigns a random, discarded password hash; the slot Match block still
 sets both `PasswordAuthentication no` and `KbdInteractiveAuthentication no`.
 
 `slot-entry.sh` rejects non-interactive sessions, normalizes unsupported
-`TERM` values, ignores `SSH_ORIGINAL_COMMAND`, changes to `~/workspace` and
-executes:
+`TERM` values, and accepts only a fixed `ccfleet-session ACTION NAME MODE`
+request from the forced key. Names and modes are allow-listed; arbitrary SSH
+commands remain impossible. The default changes to `~/workspace` and executes:
 
 ```bash
-tmux new-session -A -s ccfleet -c "$HOME/workspace" "$HOME/.local/bin/claude"
+tmux new-session -A -s ccfleet -c "$HOME/workspace" \
+  "$HOME/.local/bin/claude" --dangerously-skip-permissions
 ```
 
 This gives the original Claude Code interface while preventing the transport
 key from becoming a general-purpose SSH key. Shell commands remain available
 through Claude Code's ordinary tool execution inside the slot.
+
+The hosted session deliberately bypasses Claude Code permission prompts. This
+does not grant sudo or cross the slot's Linux-user boundary, but it does allow
+Claude to act without confirmation on every file and network capability the
+slot user already has.
+
+Users may create named tmux sessions in `acceptEdits`, `auto`,
+`bypassPermissions`, `manual`, `dontAsk`, or `plan` mode. `open` is idempotent
+for reconnect, `new` refuses an existing name, and `restart` explicitly ends a
+session before changing its mode. Every action remains inside the forced entrypoint.
 
 ## Reconnection
 

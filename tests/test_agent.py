@@ -2357,8 +2357,17 @@ def test_a_slot_migrates_the_persistent_terminal_unit_as_its_own_user(slot_home)
     source = Path(__file__).parents[1] / "node" / "systemd" / "ccfleet-shell.service"
     assert target.read_text() == source.read_text()
     assert ["tmux", "kill-session", "-t", "cc"] in calls
+    assert ["tmux", "kill-session", "-t", "ccfleet"] in calls
     assert ["systemctl", "--user", "daemon-reload"] in calls
     assert ["systemctl", "--user", "enable", "ccfleet-shell.service"] in calls
+
+
+def test_a_slot_accepts_the_operator_chosen_bypass_warning_once(slot_home):
+    path = slot_home / ".claude" / "settings.json"
+    path.write_text('{"model":"opus"}\n')
+    agent.slot_facts({}, slot_runner([]))
+    saved = json.loads(path.read_text())
+    assert saved == {"model": "opus", "skipDangerousModePermissionPrompt": True}
 
 
 def test_a_slot_does_not_start_a_quota_read_unless_asked(slot_home, monkeypatch):

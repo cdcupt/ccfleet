@@ -15,6 +15,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -35,6 +36,8 @@ from typing import Any, Optional
 DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_FRAME = 2 * 1024 * 1024
+SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
+PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 
 
 class CliError(RuntimeError):
@@ -365,7 +368,8 @@ def proxy(device: dict[str, Any]) -> int:
     return 0
 
 
-def ssh_command(device: dict[str, Any]) -> list[str]:
+def ssh_command(device: dict[str, Any], session: str = "ccfleet",
+                mode: str = "bypassPermissions", action: str = "open") -> list[str]:
     if shutil.which("ssh") is None:
         raise CliError("OpenSSH is required (missing ssh)")
     executable = str(Path(__file__).resolve())
@@ -392,6 +396,7 @@ def ssh_command(device: dict[str, Any]) -> list[str]:
         "-o", "ServerAliveCountMax=2",
         "-o", "ConnectTimeout=10",
         f"{device['user']}@{device['host_alias']}",
+        "ccfleet-session", action, session, mode,
     ]
 
 
@@ -402,7 +407,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
     while True:
         run_started = time.monotonic()
         try:
-            code = subprocess.call(ssh_command(device))
+            code = subprocess.call(ssh_command(device, args.session, args.mode, args.action))
         except KeyboardInterrupt:
             return 130
         if code == 0 or args.no_reconnect or code != 255:
@@ -481,8 +486,22 @@ def parser() -> argparse.ArgumentParser:
     login.add_argument("--name", default="", help="name shown in Connected devices")
     attach = sub.add_parser("attach", help="open the persistent Claude Code session")
     attach.add_argument("--slot", default="", help="slot id or name")
+    attach.add_argument("--session", default="ccfleet", help="remote session name")
+    attach.add_argument("--mode", choices=PERMISSION_MODES, default="bypassPermissions",
+                        help="mode used only if the session must be created")
     attach.add_argument("--no-reconnect", action="store_true")
     attach.add_argument("--reconnect-for", type=int, default=600, metavar="SECONDS")
+    attach.set_defaults(action="open")
+    new = sub.add_parser("new", help="start a new named Claude Code session")
+    new.add_argument("session", help="letters, digits, underscore or hyphen; max 32")
+    new.add_argument("--slot", default="", help="slot id or name")
+    new.add_argument("--mode", choices=PERMISSION_MODES, default="bypassPermissions")
+    new.set_defaults(action="new", no_reconnect=True, reconnect_for=0)
+    restart = sub.add_parser("restart", help="restart a session under a chosen permission mode")
+    restart.add_argument("--session", default="ccfleet", help="remote session name")
+    restart.add_argument("--slot", default="", help="slot id or name")
+    restart.add_argument("--mode", choices=PERMISSION_MODES, default="bypassPermissions")
+    restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
     sub.add_parser("list", help="list slots connected on this computer")
     use = sub.add_parser("use", help="choose the default slot")
     use.add_argument("slot")
@@ -499,7 +518,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         if args.command in (None, "attach"):
             if args.command is None:
-                args.slot, args.no_reconnect, args.reconnect_for = "", False, 600
+                args.slot, args.session, args.mode = "", "ccfleet", "bypassPermissions"
+                args.action, args.no_reconnect, args.reconnect_for = "open", False, 600
+            if not SESSION_RE.fullmatch(args.session):
+                raise CliError("session names use 1-32 letters, digits, underscores or hyphens")
+            return cmd_attach(args)
+        if args.command in ("new", "restart"):
+            if not SESSION_RE.fullmatch(args.session):
+                raise CliError("session names use 1-32 letters, digits, underscores or hyphens")
             return cmd_attach(args)
         if args.command == "login":
             return cmd_login(args)

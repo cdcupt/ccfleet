@@ -249,6 +249,7 @@ p = os.path.expanduser('~/.claude/settings.json')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 d = json.load(open(p)) if os.path.exists(p) else {}
 d.setdefault('model', 'opus')
+d['skipDangerousModePermissionPrompt'] = True
 env = d.setdefault('env', {})
 env.setdefault('CLAUDE_CODE_EFFORT_LEVEL', 'max')
 for key in ('DISABLE_ERROR_REPORTING', 'DISABLE_BUG_COMMAND',
@@ -258,7 +259,7 @@ tmp = p + '.tmp'
 json.dump(d, open(tmp, 'w'), indent=2)
 os.replace(tmp, p)
 PY"
-note "Claude Code starts on Opus at max effort, with its optional reporting off"
+note "Claude Code starts on Opus at max effort with permission prompts and optional reporting off"
 
 step "5/5  the persistent CLI session"
 # The unit starts only after a Claude credential exists. slot-entry.sh starts

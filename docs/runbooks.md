@@ -128,6 +128,14 @@ no-forwarding options. The slot's own `~/.ssh/authorized_keys` is not an sshd
 key source. Remove the device from the page and confirm the managed file is
 removed on the next machine-agent cycle.
 
+The packaged `ccfleet-shell.service` and `slot-entry.sh` both launch Claude with
+`--dangerously-skip-permissions`. On rollout, the slot agent replaces an older unit and ends the
+old `ccfleet` tmux session once; the holder's next `ccfleet` command creates the bypass session.
+Verify the slot still has no sudo or privileged group before calling that safe enough to operate.
+The forced entrypoint also accepts only `ccfleet-session` with an allow-listed action, session
+name and Claude permission mode. Test that arbitrary commands are rejected, then test `ccfleet
+new research --mode plan`, `ccfleet attach --session research`, and an explicit `restart`.
+
 For a computer configured by the old `ccfleet-connect` flow, have the holder create a fresh
 pairing code and run:
 

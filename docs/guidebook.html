@@ -58,6 +58,16 @@ terminal. Run it again after a disconnect to resume the same session.</li></ol>
 <div class="card"><h3>Projects and tools</h3><p>Projects live in <code>~/workspace</code> on
 the slot. Clone with Git or retrieve them from inside the slot. Shell tools run there through
 Claude Code. The local client does not mount or silently copy the computer's current directory.</p></div>
+<div class="card note"><strong>Permission mode</strong><p>Hosted sessions start Claude Code
+with permission prompts off. The slot has no sudo, but Claude may read, change, delete or send
+anything the slot user can access without asking first. Users can create a separate session in a
+different mode:</p>
+<pre><code>ccfleet new research --mode plan
+ccfleet attach --session research
+ccfleet restart --session research --mode auto</code></pre>
+<p>The supported modes are <code>acceptEdits</code>, <code>auto</code>,
+<code>bypassPermissions</code>, <code>manual</code>, <code>dontAsk</code> and
+<code>plan</code>. Restart deliberately ends that named session.</p></div>
 
 <h2 id="path">Connection path</h2>
 <div class="card flow">user terminal: ccfleet
@@ -158,6 +168,9 @@ or an SSH command.</li>
 <tr><td><code>ccfleet list</code></td><td>List locally paired slots.</td></tr>
 <tr><td><code>ccfleet use NAME</code></td><td>Choose the default when this computer has more than one slot.</td></tr>
 <tr><td><code>ccfleet logout</code></td><td>Revoke this computer and remove its local key.</td></tr>
+<tr><td><code>ccfleet new NAME --mode MODE</code></td><td>Start a separate named session.</td></tr>
+<tr><td><code>ccfleet attach --session NAME</code></td><td>Resume a named session.</td></tr>
+<tr><td><code>ccfleet restart --session NAME --mode MODE</code></td><td>Replace a session under another permission mode.</td></tr>
 </tbody></table>
 
 <h2 id="recovery">Recovery</h2>

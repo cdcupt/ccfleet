@@ -1223,5 +1223,7 @@ def cli_pairing_page(slot: Mapping[str, Any], token: str,
         "<div class=\"card\"><h2>3. Open Claude Code</h2><pre>ccfleet</pre>"
         "<p class=\"muted\">The command is a terminal window into this slot. The original "
         "<code>claude</code> process, files, tools and Anthropic connection all stay on the "
-        "slot. If your network changes, it reconnects to the same session.</p></div>"
+        "slot. If your network changes, it reconnects to the same session.</p>"
+        "<p class=\"muted\">The default session bypasses permission prompts. For a separate "
+        "session and another mode: <code>ccfleet new research --mode plan</code>.</p></div>"
         "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"), viewer=viewer)

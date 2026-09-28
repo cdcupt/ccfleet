@@ -406,6 +406,7 @@ def test_a_new_slot_starts_on_opus_at_max_effort(tmp_path):
     settings = _settings(slot_home)
     assert settings["model"] == "opus"
     assert settings["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+    assert settings["skipDangerousModePermissionPrompt"] is True
     assert "effortLevel" not in settings
 
 
