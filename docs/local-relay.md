@@ -233,6 +233,23 @@ general activation must be verified separately after a canary; this guide assert
 no deployed revision or provider approval. See [compliance notes](compliance.md)
 for the historical source record and the distinction from hosted terminal use.
 
+On an upgraded single-slot machine, root can opt into automatic relay access by
+creating `/etc/ccfleet/inference-enabled` containing exactly `enabled` followed
+by a newline (root-owned, mode 0644). This policy is separate from `agent.env`
+and survives installer upgrades. The machine agent then grants access only to
+the current claimed/active, held, unprivileged managed slot. Free, releasing,
+absent and orphaned slots lose their gates before wipe/retry work; a later clean
+claim receives a new gate automatically. Native sign-in and device pairing are
+still required. No other account is used as a fallback.
+
+Removing the opt-in immediately denies automatically managed gates, and the next
+successful reconciliation removes them. To disable **all** inference gates,
+including older manually created empty markers, set the policy to exactly
+`disabled` followed by a newline. An absent policy preserves those legacy manual
+markers for upgrade compatibility; it never creates new access. Do not recreate
+per-user gates manually on an opted-in machine. These are operator actions, not
+commands customers need to run.
+
 Validate with synthetic settings and controlled upstreams: endpoint/auth override
 precedence, removal of selected metadata, native session/history preservation,
 streaming/truncation/cancellation, account binding, device revocation, native

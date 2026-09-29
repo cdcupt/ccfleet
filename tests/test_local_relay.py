@@ -6,7 +6,6 @@ import io
 import json
 import os
 import socket
-import stat
 import struct
 import subprocess
 import sys
@@ -204,27 +203,25 @@ def test_missing_operator_policy_fails_closed(tmp_path):
     assert error.value.status == 403
 
 
-@pytest.mark.parametrize("parent_mode,parent_uid,mode,uid,nlink,allowed", [
-    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o644, 0, 1, True),
-    (stat.S_IFDIR | 0o777, 0, stat.S_IFREG | 0o644, 0, 1, False),
-    (stat.S_IFDIR | 0o755, 1000, stat.S_IFREG | 0o644, 0, 1, False),
-    (stat.S_IFLNK | 0o755, 0, stat.S_IFREG | 0o644, 0, 1, False),
-    (stat.S_IFDIR | 0o755, 0, stat.S_IFLNK | 0o644, 0, 1, False),
-    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o666, 0, 1, False),
-    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o644, 1000, 1, False),
-    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o644, 0, 2, False),
-])
-def test_gate_is_root_owned_regular_nonwritable_and_not_a_link(monkeypatch, parent_mode, parent_uid,
-                                                             mode, uid, nlink, allowed):
+@pytest.mark.parametrize("allowed", [True, False])
+def test_gate_delegates_to_shared_policy_and_reports_safe_denial(monkeypatch, allowed):
     directory = Path("/gate")
-    monkeypatch.setattr(Path, "lstat", lambda path: SimpleNamespace(
-        st_mode=parent_mode if path == directory else mode,
-        st_uid=parent_uid if path == directory else uid, st_nlink=nlink))
+    calls = []
+    monkeypatch.setattr(relay.pwd, "getpwuid", lambda _: SimpleNamespace(pw_name="slot01"))
+
+    def policy(path, user):
+        calls.append((path, user))
+        if not allowed:
+            raise relay.inference_policy.PolicyError("private operator detail")
+
+    monkeypatch.setattr(relay.inference_policy, "require_enabled", policy)
     if allowed:
         relay.require_enabled(directory)
     else:
-        with pytest.raises(relay.RelayError):
+        with pytest.raises(relay.RelayError) as error:
             relay.require_enabled(directory)
+        assert error.value.status == 403 and "private" not in str(error.value)
+    assert calls == [(directory, "slot01")]
 
 
 @pytest.mark.parametrize("changes", [
@@ -304,6 +301,41 @@ def test_native_token_rotation_is_observed_without_writes_by_relay(slot):
     assert first.calls[0][1]["headers"]["authorization"] == "Bearer slot-test-token"
     assert second.calls[0][1]["headers"]["authorization"] == "Bearer new-native-slot-token"
     assert path.stat().st_mtime_ns == stamp
+
+
+@pytest.mark.parametrize("change", ["renewed", "expired", "missing", "malformed"])
+def test_credential_is_reread_after_connect_before_the_only_post(slot, change):
+    upstream = Upstream()
+
+    def connect():
+        path = slot / ".claude/.credentials.json"
+        if change == "renewed":
+            write_credentials(slot, token="rotated-during-connect")
+        elif change == "expired":
+            write_credentials(slot, expiry=(time.time() - 1) * 1000)
+        elif change == "missing":
+            path.unlink()
+        else:
+            path.write_text("{bad")
+
+    upstream.connect = connect
+    code, raw, _ = run(slot, upstream=upstream)
+    if change == "renewed":
+        assert code == 0 and len(upstream.calls) == 1
+        assert upstream.calls[0][1]["headers"]["authorization"] == "Bearer rotated-during-connect"
+    else:
+        assert code == 2 and response(raw)[0]["status"] == 401
+        assert upstream.calls == []
+
+
+def test_existing_stream_uses_zero_expiry_margin_but_new_requests_keep_thirty_seconds(slot):
+    now = time.time()
+    write_credentials(slot, expiry=(now + 10) * 1000)
+    assert relay.credential(slot, now, minimum_remaining=0)[0] == "slot-test-token"
+    with pytest.raises(relay.RelayError):
+        relay.credential(slot, now)
+    with pytest.raises(relay.RelayError):
+        relay.credential(slot, now + 10, minimum_remaining=0)
 
 
 @pytest.mark.parametrize("account", ["", "\ud800", "bad\naccount", "x" * 257])
@@ -532,7 +564,8 @@ def test_invalid_or_informational_upstream_status_is_not_a_final_response(slot, 
     assert len(upstream.calls) == 1
 
 
-@pytest.mark.parametrize("reason", ["disconnect", "policy", "account", "deadline", "expiry"])
+@pytest.mark.parametrize("reason", ["disconnect", "policy", "account", "deadline", "expiry",
+                                    "credential_missing", "credential_malformed"])
 def test_inflight_stream_is_cancelled_on_revocation_account_change_or_timeout(slot, monkeypatch, reason):
     read_side, write_side = socket.socketpair()
     source = read_side.makefile("rb")
@@ -570,6 +603,10 @@ def test_inflight_stream_is_cancelled_on_revocation_account_change_or_timeout(sl
         elif reason == "expiry":
             now = time.time()
             monkeypatch.setattr(relay.time, "time", lambda: now + 7200)
+        elif reason == "credential_missing":
+            (slot / ".claude/.credentials.json").unlink()
+        elif reason == "credential_malformed":
+            (slot / ".claude/.credentials.json").write_text("{bad")
         worker.join(timeout=4)
         assert not worker.is_alive() and result == [2]
         assert upstream.closed and len(upstream.calls) == 1
@@ -577,6 +614,150 @@ def test_inflight_stream_is_cancelled_on_revocation_account_change_or_timeout(sl
             response(output.getvalue())
     finally:
         write_side.close()
+        source.close()
+        read_side.close()
+
+
+def test_same_account_native_renewal_preserves_stream_past_original_expiry(slot, monkeypatch):
+    now = [time.time()]
+    old_expiry = now[0] + 60
+    write_credentials(slot, expiry=old_expiry * 1000)
+    monkeypatch.setattr(relay.time, "time", lambda: now[0])
+    checked = threading.Event()
+    original_credential = relay.credential
+
+    def credential(*args, **kwargs):
+        result = original_credential(*args, **kwargs)
+        if kwargs.get("minimum_remaining") == 0 and now[0] > old_expiry:
+            checked.set()
+        return result
+
+    monkeypatch.setattr(relay, "credential", credential)
+    read_side, write_side = socket.socketpair()
+    source = read_side.makefile("rb")
+    entered, release = threading.Event(), threading.Event()
+    upstream, output, result = Upstream(), io.BytesIO(), []
+    original_read = upstream.read1
+
+    def read(size):
+        entered.set()
+        assert release.wait(3)
+        return original_read(size)
+
+    upstream.read1 = read
+    worker = threading.Thread(target=lambda: result.append(relay.serve_one(
+        source, output, slot, policy=lambda: None, connect=lambda: upstream, watch=True)))
+    write_side.sendall(request())
+    worker.start()
+    try:
+        assert entered.wait(2)
+        # Native writers replace atomically: no transient malformed file is part
+        # of this test of a valid same-account renewal.
+        target = slot / ".claude/.credentials.json"
+        temporary = target.with_suffix(".new")
+        temporary.write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "renewed-native-token", "expiresAt": (old_expiry + 3600) * 1000}}))
+        temporary.replace(target)
+        now[0] = old_expiry + 10
+        assert checked.wait(2)
+        assert not upstream.sock.cancelled.is_set()
+        release.set()
+        worker.join(timeout=3)
+        assert not worker.is_alive() and result == [0]
+        assert response(output.getvalue())[0]["status"] == 200
+        assert len(upstream.calls) == 1
+        assert upstream.calls[0][1]["headers"]["authorization"] == "Bearer slot-test-token"
+        assert b"renewed-native-token" not in output.getvalue()
+    finally:
+        release.set()
+        write_side.close()
+        worker.join(timeout=3)
+        source.close()
+        read_side.close()
+
+
+def test_connection_close_response_keeps_cancellation_socket_while_read_is_blocked(slot):
+    read_side, write_side = socket.socketpair()
+    source = read_side.makefile("rb")
+    server, peer = socket.socketpair()
+    reply = http.client.HTTPResponse(server)
+    peer.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                 b"Connection: close\r\n\r\n")
+    reply.begin()
+    upstream, output, result = Upstream(), io.BytesIO(), []
+    upstream.sock = server
+    entered, allowed = threading.Event(), threading.Event()
+    allowed.set()
+
+    def policy():
+        if not allowed.is_set():
+            raise relay.RelayError(403, "disabled")
+
+    def getresponse():
+        # HTTPConnection releases its socket reference for will_close responses;
+        # the HTTPResponse file still owns that live, blocking stream.
+        assert reply.will_close
+        server.close()
+        upstream.sock = None
+        return reply
+
+    original_read = reply.read1
+
+    def read(size):
+        entered.set()
+        return original_read(size)
+
+    reply.read1 = read
+    upstream.getresponse = getresponse
+    worker = threading.Thread(target=lambda: result.append(relay.serve_one(
+        source, output, slot, policy=policy, connect=lambda: upstream, watch=True)))
+    write_side.sendall(request())
+    worker.start()
+    try:
+        assert entered.wait(2)
+        allowed.clear()
+        worker.join(timeout=2)
+        assert not worker.is_alive() and result == [2]
+        assert len(upstream.calls) == 1 and upstream.closed
+        with pytest.raises(EOFError):
+            response(output.getvalue())
+    finally:
+        peer.close()
+        worker.join(timeout=3)
+        reply.close()
+        server.close()
+        write_side.close()
+        source.close()
+        read_side.close()
+
+
+def test_cancelled_buffered_chunk_is_not_forwarded_after_blocking_read(slot):
+    read_side, write_side = socket.socketpair()
+    source = read_side.makefile("rb")
+    upstream, output, result = Upstream(), io.BytesIO(), []
+    entered = threading.Event()
+
+    def read(size):
+        entered.set()
+        assert upstream.sock.cancelled.wait(3)
+        return b"buffered-after-cancellation"
+
+    upstream.read1 = read
+    worker = threading.Thread(target=lambda: result.append(relay.serve_one(
+        source, output, slot, policy=lambda: None, connect=lambda: upstream, watch=True)))
+    write_side.sendall(request())
+    worker.start()
+    try:
+        assert entered.wait(2)
+        write_side.shutdown(socket.SHUT_WR)
+        worker.join(timeout=3)
+        assert not worker.is_alive() and result == [2]
+        assert b"buffered-after-cancellation" not in output.getvalue()
+        with pytest.raises(EOFError):
+            response(output.getvalue())
+    finally:
+        write_side.close()
+        worker.join(timeout=3)
         source.close()
         read_side.close()
 

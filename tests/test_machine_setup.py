@@ -171,6 +171,7 @@ def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
     lib = sandbox / "lib"
     for rel in ("ccfleet_agent/__init__.py", "ccfleet_agent/agent.py",
                 "ccfleet_agent/machine.py", "ccfleet_agent/local_relay.py",
+                "ccfleet_agent/inference_policy.py",
                 "slot-add.sh", "slot-remove.sh",
                 "slot-entry.sh",
                 "systemd/ccfleet-shell.service"):
@@ -202,7 +203,9 @@ def test_the_token_lives_in_one_file_only_root_can_read(tmp_path, sandbox):
                       "CCFLEET_LIB_DIR": str(sandbox / "lib"),
                       "CCFLEET_STATE_FILE": str(sandbox / "state" / "machine.json"),
                       "CCFLEET_AUTHORIZED_KEYS_DIR":
-                          str(sandbox / "etc" / "authorized_keys")}
+                          str(sandbox / "etc" / "authorized_keys"),
+                      "CCFLEET_INFERENCE_POLICY_DIR":
+                          str(sandbox / "etc" / "local-relay")}
     for unit in (sandbox / "units").iterdir():
         assert TOKEN not in unit.read_text(), f"the token leaked into {unit.name}"
 
@@ -331,3 +334,37 @@ def test_the_last_words_declare_its_one_slot_the_way_the_server_takes_it(tmp_pat
     out = run(GOOD, bindir).stdout
     assert "ccfleetd slot add shared-1 --machine shared-1 --unix-user slot01" in out
     assert "slot capacity" not in out and "shared-1-01" not in out
+
+
+@pytest.mark.parametrize("contents", [None, b"enabled\n", b"disabled\n"])
+def test_setup_preserves_explicit_inference_policy_without_implicitly_enabling(tmp_path, sandbox,
+                                                                            contents):
+    policy = sandbox / "etc" / "inference-enabled"
+    policy.parent.mkdir(parents=True)
+    if contents is not None:
+        policy.write_bytes(contents)
+        policy.chmod(0o644)
+    bindir, _ = fakebin(tmp_path)
+    assert run(GOOD, bindir).returncode == 0
+    if contents is None:
+        assert not policy.exists()
+    else:
+        assert policy.read_bytes() == contents
+        assert mode(policy) == 0o644
+
+
+def test_missing_new_dependency_does_not_replace_existing_machine_agent(tmp_path, sandbox,
+                                                                       monkeypatch):
+    source = tmp_path / "incomplete-source"
+    (source / "ccfleet_agent").mkdir(parents=True)
+    for name in ("__init__.py", "agent.py", "machine.py"):
+        (source / "ccfleet_agent" / name).write_bytes((REPO / "ccfleet_agent" / name).read_bytes())
+    monkeypatch.setenv("CCFLEET_SOURCE_DIR", str(source))
+    installed = sandbox / "lib" / "ccfleet_agent" / "machine.py"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("previous working machine agent\n")
+    bindir, _ = fakebin(tmp_path)
+    result = run(GOOD, bindir)
+    assert result.returncode != 0
+    assert "inference_policy.py" in result.stderr
+    assert installed.read_text() == "previous working machine agent\n"

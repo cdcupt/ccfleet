@@ -172,6 +172,12 @@ def _slot_block(slot: Mapping[str, Any],
     """
     block: dict[str, Any] = {"unix_user": slot.get("unix_user"),
                              "state": slot.get("state")}
+    # The root machine agent still requires its own explicit operator opt-in.
+    # Send only permission, never the holder's identity, and do not infer a
+    # managed assignment from an active-looking legacy/owner slot alone.
+    if (slot.get("kind") == "machine" and slot.get("state") in SLOT_SIGN_IN_STATES
+            and isinstance(slot.get("held_by"), str) and slot["held_by"].strip()):
+        block["inference_allowed"] = True
     if slot.get("state") == "claiming":
         block["claimed_at"] = slot.get("claimed_at")
     pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None

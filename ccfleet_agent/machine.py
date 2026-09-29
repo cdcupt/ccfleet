@@ -58,11 +58,13 @@ from typing import Any, Callable, Optional, Union
 
 try:
     from ccfleet_agent import agent as core
+    from ccfleet_agent import inference_policy
 except ImportError:  # installed as plain files side by side, not as a package
     # Run with -I, which keeps even this script's own directory off the path.
     # Put it back explicitly: it is root's, and nothing else on it is trusted.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import agent as core  # type: ignore[no-redef]
+    import inference_policy  # type: ignore[no-redef]
 
 log = logging.getLogger("ccfleet-machine")
 
@@ -70,6 +72,7 @@ DEFAULT_ENV_FILE = "/etc/ccfleet/agent.env"
 DEFAULT_STATE_PATH = "/var/lib/ccfleet/machine.json"
 DEFAULT_LIB_DIR = "/usr/local/lib/ccfleet"
 DEFAULT_AUTHORIZED_KEYS_DIR = "/etc/ccfleet/authorized_keys"
+DEFAULT_INFERENCE_POLICY_DIR = "/etc/ccfleet/local-relay"
 # Where slot homes live, for the disk reading. Slots fill /home, not /.
 SLOT_HOMES = "/home"
 
@@ -153,6 +156,7 @@ class MachineConfig:
     authorized_keys_dir: Path
     egress_targets: tuple[str, ...] = core.DEFAULT_EGRESS_TARGETS
     timeout_s: float = 10.0
+    inference_policy_dir: Path = Path(DEFAULT_INFERENCE_POLICY_DIR)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> MachineConfig:
@@ -166,6 +170,8 @@ class MachineConfig:
                    slot_agent=Path(__file__).resolve().with_name("agent.py"),
                    authorized_keys_dir=Path(env.get("CCFLEET_AUTHORIZED_KEYS_DIR")
                                             or DEFAULT_AUTHORIZED_KEYS_DIR),
+                   inference_policy_dir=Path(env.get("CCFLEET_INFERENCE_POLICY_DIR")
+                                             or DEFAULT_INFERENCE_POLICY_DIR),
                    egress_targets=base.egress_targets, timeout_s=base.timeout_s)
 
 
@@ -512,7 +518,7 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(entry, Mapping):
             continue
         user, state = entry.get("unix_user"), entry.get("state")
-        if not isinstance(user, str) or not UNIX_USER_RE.match(user) or user in seen:
+        if not isinstance(user, str) or not UNIX_USER_RE.fullmatch(user) or user in seen:
             continue
         if state not in SLOT_STATES:
             continue
@@ -523,6 +529,8 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
         seen.add(user)
         item: dict[str, Any] = {"unix_user": user, "state": state,
                                 "claimed_at": claimed_at if state == "claiming" else None}
+        if state in SIGN_IN_STATES and entry.get("inference_allowed") is True:
+            item["inference_allowed"] = True
         login = _login_request(entry.get("login")) if state in SIGN_IN_STATES else None
         if login is not None:
             item["login"] = login
@@ -948,6 +956,31 @@ def converge_ssh_access(slots: list[dict[str, Any]], system: System) -> None:
             log.error("%s: %s", account.pw_name, why)
 
 
+def converge_inference_access(desired: Mapping[str, Any], slots: list[dict[str, Any]],
+                              cfg: MachineConfig, system: System) -> None:
+    """Grant one held managed slot, revoke stale gates before any wipe retries."""
+    eligible: set[str] = set()
+    declared = desired.get("slots")
+    # Count raw declarations too: dropping a malformed or duplicate declaration
+    # must not turn a legacy multi-slot machine into an eligible single slot.
+    if isinstance(declared, list) and len(declared) == 1 and len(slots) == 1:
+        slot = slots[0]
+        user = slot["unix_user"]
+        if slot.get("inference_allowed") is True and slot["state"] in SIGN_IN_STATES:
+            account = system.lookup(user)
+            if account is not None and account.pw_name == user:
+                groups = system.groups_of(account)
+                privileged = {"sudo", "admin", "wheel", "root", "docker", "lxd", "libvirt",
+                              "kvm", "adm", "disk", "shadow", "staff"}
+                if (is_slot_account(account, groups) and account.pw_gid != 0
+                        and not groups.intersection(privileged)):
+                    eligible.add(user)
+    try:
+        inference_policy.reconcile(cfg.inference_policy_dir, eligible)
+    except inference_policy.PolicyError as exc:
+        log.error("could not reconcile inference access: %s", str(exc))
+
+
 def _moment(value: Any) -> Optional[float]:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -1021,6 +1054,7 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     # its holder's name.
     state = _take_name(desired, cfg, state, system)
     wanted = wanted_slots(desired)
+    converge_inference_access(desired, wanted, cfg, system)
     converge_ssh_access(wanted, system)
     new_state = act_on_slots(wanted, state, cfg, system)
     # A claiming account did not exist for the first pass. Clear any managed

@@ -103,6 +103,7 @@ def cfg(tmp_path):
         "CCFLEET_URL": "https://fleet.example", "CCFLEET_NODE_ID": "shared-1",
         "CCFLEET_NODE_TOKEN": "t" * 64, "CCFLEET_LIB_DIR": str(tmp_path / "lib"),
         "CCFLEET_STATE_FILE": str(tmp_path / "state" / "machine.json"),
+        "CCFLEET_INFERENCE_POLICY_DIR": str(tmp_path / "etc" / "local-relay"),
         "CCFLEET_EGRESS_TARGETS": "https://egress.invalid"})
 
 
@@ -125,6 +126,7 @@ def test_by_default_everything_lives_where_only_root_can_change_it():
     assert cfg.slot_add == Path("/usr/local/lib/ccfleet/slot-add.sh")
     assert cfg.slot_remove == Path("/usr/local/lib/ccfleet/slot-remove.sh")
     assert cfg.authorized_keys_dir == Path("/etc/ccfleet/authorized_keys")
+    assert cfg.inference_policy_dir == Path("/etc/ccfleet/local-relay")
     # A slot is asked by the agent that ships beside this one, never another copy.
     assert cfg.slot_agent == Path(machine.__file__).resolve().with_name("agent.py")
 
@@ -582,7 +584,8 @@ def test_renewal_priority_respects_lifecycle_login_and_backoff(extra, renewal):
 def _env_file(tmp_path, cfg):
     path = tmp_path / "agent.env"
     path.write_text(f"CCFLEET_URL={cfg.url}\nCCFLEET_NODE_ID={cfg.node_id}\n"
-                    f"CCFLEET_NODE_TOKEN={cfg.token}\nCCFLEET_STATE_FILE={cfg.state_path}\n")
+                    f"CCFLEET_NODE_TOKEN={cfg.token}\nCCFLEET_STATE_FILE={cfg.state_path}\n"
+                    f"CCFLEET_INFERENCE_POLICY_DIR={cfg.inference_policy_dir}\n")
     return path
 
 
@@ -633,7 +636,7 @@ def test_the_installed_layout_imports_without_the_package(tmp_path):
     lib = tmp_path / "ccfleet_agent"
     lib.mkdir()
     src = Path(machine.__file__).resolve().parent
-    for name in ("agent.py", "machine.py"):
+    for name in ("agent.py", "machine.py", "inference_policy.py"):
         (lib / name).write_text((src / name).read_text())
     proc = subprocess.run([PY, "-I", str(lib / "machine.py"), "--help"], capture_output=True,
                           text=True, timeout=30, cwd=tmp_path)

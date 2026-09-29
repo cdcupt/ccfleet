@@ -153,6 +153,7 @@ step "2/6  the agent and the slot scripts"
 mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 fetch ccfleet_agent/__init__.py "$LIB_DIR/ccfleet_agent/__init__.py" 644
 fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
+fetch ccfleet_agent/inference_policy.py "$LIB_DIR/ccfleet_agent/inference_policy.py" 644
 fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
 fetch ccfleet_agent/local_relay.py "$LIB_DIR/ccfleet_agent/local_relay.py" 644
 fetch ccfleet_agent/project_access.py "$LIB_DIR/ccfleet_agent/project_access.py" 644
@@ -180,14 +181,16 @@ chmod 700 "$STATE_DIR"
 chmod 755 "$ETC_DIR/authorized_keys"
 ENV_TMP="$ETC_DIR/.agent.env.$$"
 ( umask 077
-  printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_DIR=%s\nCCFLEET_STATE_FILE=%s\nCCFLEET_AUTHORIZED_KEYS_DIR=%s\n' \
+  printf 'CCFLEET_URL=%s\nCCFLEET_NODE_ID=%s\nCCFLEET_NODE_TOKEN=%s\nCCFLEET_LIB_DIR=%s\nCCFLEET_STATE_FILE=%s\nCCFLEET_AUTHORIZED_KEYS_DIR=%s\nCCFLEET_INFERENCE_POLICY_DIR=%s\n' \
     "$SERVER" "$NODE_ID" "$TOKEN" "$LIB_DIR" "$STATE_DIR/machine.json" \
-    "$ETC_DIR/authorized_keys" > "$ENV_TMP"
+    "$ETC_DIR/authorized_keys" "$ETC_DIR/local-relay" > "$ENV_TMP"
 )
 chmod 600 "$ENV_TMP"
 chown root:root "$ENV_TMP"
 mv -f "$ENV_TMP" "$ETC_DIR/agent.env"
 note "$ETC_DIR/agent.env, readable by root only"
+# A separate root-owned inference-enabled policy survives upgrades. Never
+# create it implicitly: existing owner/legacy machines must not gain access.
 
 step "4/6  slot SSH restrictions"
 make_existing_slots_key_eligible

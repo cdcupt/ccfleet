@@ -69,6 +69,13 @@ account policy, expired refresh credentials or a changed native CLI can still
 require the holder to use **Sign in again**. No implementation can guarantee that
 a subscription will remain usable indefinitely without user involvement.
 
+An in-flight stream rechecks the current credential and bound account. A native
+same-account token rotation can extend validity beyond the old token's expiry;
+missing, invalid or expired credentials cancel the stream. Immediately before
+the sole upstream POST, the relay rereads the credential after connecting TLS.
+It does not retry a POST to recover from an authentication race. Every request
+still has a fixed overall deadline.
+
 ## 4. Keep individually revocable, pinned client transport
 
 The local bridge uses an ephemeral authentication nonce. Each computer has its
@@ -82,6 +89,15 @@ unrequested negotiation, and applies a shrinking network-handshake timeout.
 Partial pipe writes are completed; zero progress fails. A disconnected client
 cancels the SSH child even while a large request is still uploading.
 CC Fleet does not replay an ambiguous inference POST or silently switch accounts.
+Cancellation retains the connected upstream socket even when HTTP
+`Connection: close` detaches it from the connection object. It interrupts blocked
+reads and checks cancellation again before forwarding another response chunk.
+
+On explicitly opted-in machines, inference gates follow the one held managed
+slot through claim, release and reassignment. Revocation precedes wipe retries;
+operator opt-out denies managed gates immediately. Legacy manual gates remain
+compatible until explicitly disabled or taken under managed policy. See
+[operator activation](local-relay.md#operator-verification).
 
 ## Boundaries and acceptance evidence
 

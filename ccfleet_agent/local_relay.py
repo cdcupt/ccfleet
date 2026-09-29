@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import importlib.util
 import json
 import math
 import os
@@ -27,6 +28,17 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Optional
+
+try:
+    from . import inference_policy
+except ImportError:
+    # Python -I excludes cwd and PYTHONPATH. Load the sibling installed in the
+    # same root-owned agent directory, never a module from a holder's project.
+    _spec = importlib.util.spec_from_file_location(
+        "ccfleet_inference_policy", Path(__file__).with_name("inference_policy.py"))
+    assert _spec is not None and _spec.loader is not None
+    inference_policy = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(inference_policy)
 
 POLICY_DIR = Path("/etc/ccfleet/local-relay")
 UPSTREAM_HOST = "api.anthropic.com"
@@ -217,14 +229,9 @@ def send_upstream_error(stream: BinaryIO, status: int, headers: dict[str, str], 
 def require_enabled(policy_dir: Path = POLICY_DIR) -> None:
     name = pwd.getpwuid(os.getuid()).pw_name
     try:
-        parent = policy_dir.lstat()
-        marker = (policy_dir / name).lstat()
-    except OSError as exc:
+        inference_policy.require_enabled(policy_dir, name)
+    except inference_policy.PolicyError as exc:
         raise RelayError(403, "local inference is not enabled for this slot") from exc
-    if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != 0 or parent.st_mode & 0o022
-            or not stat.S_ISREG(marker.st_mode) or marker.st_uid != 0
-            or marker.st_mode & 0o022 or marker.st_nlink != 1):
-        raise RelayError(403, "invalid operator inference policy")
 
 
 def read_object(path: Path, limit: int = 64 * 1024) -> dict[str, Any]:
@@ -273,7 +280,7 @@ def bound_account(home: Path) -> str:
     return fingerprint
 
 
-def credential(home: Path, now: float) -> tuple[str, float]:
+def credential(home: Path, now: float, *, minimum_remaining: float = 30) -> tuple[str, float]:
     bound_account(home)
     oauth = read_object(home / ".claude/.credentials.json").get("claudeAiOauth")
     if not isinstance(oauth, dict):
@@ -286,7 +293,7 @@ def credential(home: Path, now: float) -> tuple[str, float]:
         seconds = expiry / 1000 if type(expiry) in (int, float) else float("nan")
     except OverflowError:
         seconds = float("nan")
-    if not math.isfinite(seconds) or seconds <= now + 30:
+    if not math.isfinite(seconds) or seconds <= now + minimum_remaining:
         raise RelayError(401, "slot sign-in needs renewal by native Claude Code")
     return token, seconds
 
@@ -378,7 +385,7 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
               connect: Callable[[], Any] = connect_upstream,
               request_ready: Callable[[], None] = lambda: None,
               watch: bool = False) -> int:
-    connection = None
+    connection = upstream_socket = None
     began = False
     finished, cancelled = threading.Event(), threading.Event()
     try:
@@ -396,30 +403,33 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             return 0
         path, headers, size = validate_request(meta)
         body = sanitize_body(read_exact(input_, size))
-        token, expiry = credential(home, time.time())
+        credential(home, time.time())
         policy()
         if bound_account(home) != account:
             raise RelayError(409, "slot account changed while opening inference")
         request_ready()
         connection = connect()
-        headers["authorization"] = "Bearer " + token
         deadline = time.monotonic() + REQUEST_TIMEOUT
 
         def stop_if_revoked() -> None:
             while not finished.wait(0.25):
                 try:
                     policy()
-                    valid = bound_account(home) == account and time.time() < expiry
+                    # Native Claude can rotate this account's credential during
+                    # a long response. Observe the current file, including
+                    # logout/removal, instead of pinning the original expiry.
+                    credential(home, time.time(), minimum_remaining=0)
+                    valid = bound_account(home) == account
                     disconnected = bool(select.select([input_], [], [], 0)[0])
                 except (RelayError, OSError, ValueError):
                     valid, disconnected = False, True
                 if valid and not disconnected and time.monotonic() < deadline:
                     continue
                 cancelled.set()
-                upstream_socket = getattr(connection, "sock", None)
-                if upstream_socket is not None:
+                socket_to_close = upstream_socket or getattr(connection, "sock", None)
+                if socket_to_close is not None:
                     try:
-                        upstream_socket.shutdown(socket.SHUT_RDWR)
+                        socket_to_close.shutdown(socket.SHUT_RDWR)
                     except OSError:
                         pass
                 return
@@ -427,17 +437,21 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
         if watch:
             threading.Thread(target=stop_if_revoked, daemon=True).start()
         connection.connect()
-        if cancelled.is_set() or bound_account(home) != account or time.time() >= expiry:
+        # HTTPConnection clears .sock for Connection: close responses, while
+        # HTTPResponse still owns a blocking stream. Keep its cancellation handle.
+        upstream_socket = getattr(connection, "sock", None)
+        if cancelled.is_set() or bound_account(home) != account:
             raise RelayError(409, "slot inference was cancelled before sending")
+        token, _ = credential(home, time.time())
         policy()
-        if getattr(connection, "sock", None) is not None:
-            connection.sock.settimeout(READ_TIMEOUT)
+        if cancelled.is_set() or bound_account(home) != account:
+            raise RelayError(409, "slot inference was cancelled before sending")
+        headers["authorization"] = "Bearer " + token
+        if upstream_socket is not None:
+            upstream_socket.settimeout(READ_TIMEOUT)
         # Exactly one upstream POST. No retry, redirect following or alternative
         # account exists, including after an ambiguous connection failure.
         connection.request("POST", path, body=body, headers=headers)
-        # Retain the socket even if HTTPConnection clears its reference after a
-        # Connection: close response; its response file still owns the stream.
-        upstream_socket = getattr(connection, "sock", None)
         response = connection.getresponse()
         if cancelled.is_set():
             raise OSError("inference cancelled")
@@ -456,8 +470,10 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             if cancelled.is_set():
                 raise OSError("inference cancelled")
             data = response.read1(CHUNK_SIZE)
+            if cancelled.is_set():
+                raise OSError("inference cancelled")
             if not data:
-                if cancelled.is_set() or getattr(response, "length", None) not in (None, 0):
+                if getattr(response, "length", None) not in (None, 0):
                     raise OSError("incomplete upstream response")
                 break
             write_chunk(output, data)

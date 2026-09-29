@@ -21,6 +21,7 @@ def cfg(tmp_path):
         "CCFLEET_URL": "https://fleet.example", "CCFLEET_NODE_ID": "pool-1",
         "CCFLEET_NODE_TOKEN": "t" * 64, "CCFLEET_LIB_DIR": str(tmp_path / "lib"),
         "CCFLEET_STATE_FILE": str(tmp_path / "state" / "machine.json"),
+        "CCFLEET_INFERENCE_POLICY_DIR": str(tmp_path / "etc" / "local-relay"),
         "CCFLEET_EGRESS_TARGETS": "https://egress.invalid"})
 
 
