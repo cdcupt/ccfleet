@@ -352,10 +352,18 @@ def test_concurrency_is_resource_bounded_before_starting_extra_ssh(peer):
                        "{").encode())
         try:
             wait_until(lambda: len(bridge.server.connections) == 1)
-            connection, response = post(bridge)
-            assert response.status == 503
-            response.read()
-            connection.close()
+            # Admission rejects at accept(), before reading any HTTP bytes.
+            # Sending headers then a body races the intentional close on Linux
+            # and can legitimately raise BrokenPipeError in the test client.
+            with socket.create_connection(("127.0.0.1", bridge.port), timeout=3) as connection:
+                response = http.client.HTTPResponse(connection)
+                try:
+                    response.begin()
+                    assert response.status == 503
+                    assert response.getheader("Connection") == "close"
+                    assert response.read() == b""
+                finally:
+                    response.close()
             assert calls == []
         finally:
             first.close()

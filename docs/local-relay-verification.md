@@ -3,7 +3,83 @@
 Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 `ccfleet local` launches; it does not terminate existing user sessions.
 
-## Latest lifecycle and streaming follow-up
+## Latest native client platform release
+
+Runtime `9e52e29deb439a5fc2991076af42024790ee03da` was verified on BWH and
+the two reachable managed hosted nodes on 2026-09-29 UTC. Client **0.2.0** uses
+that immutable source revision. The manifest was published at `58141f4`, and
+the signed stable channel at `c7621d6`; these publication commits do not change
+runtime bytes. The third, free node is unreachable and was not upgraded.
+
+- Required completed macOS/Python3.12 suite: **4,168 passed, 2 skipped,
+  91.75% coverage**. The skips are Linux-only traversal and the opt-in real
+  OpenSSH fixture, which was separately exercised in an isolated container.
+- [Exact-runtime CI](https://github.com/cdcupt/ccfleet/actions/runs/36637460729)
+  passed all five jobs. Linux Python3.9, 3.12 and 3.13 each reported
+  **4,169 passed, 1 skipped**, at least **91.79% coverage**. Ruff, Bash and
+  changed-script ShellCheck passed. A later publication rerun exposed a
+  Linux test-client race sending a body after the concurrency admission
+  guard had already closed the socket; its regression now reads the early
+  503 without sending request bytes. The production guard was not changed.
+  The corrected check passed 40 repetitions in a network-disabled Linux
+  container, and a private disabled-guard mutation was detected. The completed
+  follow-up macOS full run again passed 4,168 tests at 91.75% coverage.
+- Eight actual public immutable client/helper files matched the signed manifest
+  and the pinned Ed25519 key. Public fresh installation and repeated setup
+  verified the signed release and preserved pairing, keys and startup settings.
+  The shell launcher starts Python with isolation before any startup imports;
+  hostile `PYTHONPATH`, tamper, downgrade and rollback cases are covered.
+- The installed public client passed status, private diagnostics/export,
+  create-new export protection, and private project preferences without a
+  project scan or model request. Desktop and 390px guide/account layouts were
+  inspected; the guide had no page-wide horizontal overflow.
+- Supervised local work passed a synthetic stop/log/archive check with no
+  model request. Two original-Claude invocations then proved background
+  Read/Write on the local filesystem and foreground continuation of the same
+  native session through reused transport. This is not a claim of exactly two
+  HTTP requests: native tool turns made four completed transfers.
+- Idle upload revocation closed the connection and refused a new one. The
+  canary device was removed locally; its synthetic history was retained. The
+  pre-existing ordinary remote tmux session remained unchanged, and no occupied
+  customer slot was released or reassigned.
+- Live WSS readiness measurements, three samples per mode: cold median
+  **1,332.03ms**, reused median **441.36ms**, master startup **957.18ms**.
+  These are connection/readiness timings, not model latency. Reuse remains
+  experimental and off by default; targeted hard-kill residue is disclosed.
+- Fresh, validated numeric heartbeat aggregates were observed. Readiness did
+  not count as inference. The owner canary produced four completed transfers
+  and one deliberately interrupted upload; counts are not subscription quota
+  or proof of model-task success.
+- Online database backups passed integrity checking. Runtime rollback images
+  and node libraries were retained. Migration/privacy website checks and all
+  17 shared-tenant HTTP baselines passed after rollout.
+- The internal secondary broker uses the primary's exact image and database
+  file and passed restricted-route checks. A separate zero-model canary proved
+  matching device/account generations, secondary revocation rejected by both
+  brokers, closure of the primary SSH stream, and autonomous background-job
+  shutdown with confirmed cleanup. Both synthetic profiles were unpaired and
+  recoverably archived; no user data was deleted.
+  **Public failover is not active**:
+  reloading the shared edge could close unrelated active WebSockets. A
+  same-host replica is not physical-host redundancy.
+
+Direct secondary WebSocket transport was not verified: its backend sends an
+HTTP/1.0 upgrade response while the client correctly requires HTTP/1.1. A local
+reproduction confirmed that incompatibility. The existing public Caddy path
+normalizes the frontend response and passed the actual client canary. Backend
+upgrade compliance needs a separately tested fix before completing the broker
+activation gate; no client TLS or protocol checks were weakened for testing.
+
+Outstanding operational work: restore the free node's SSH reachability before
+its upgrade, and arrange a safe shared-edge activation window. Its existing
+outage alert remains visible; stale nodes are excluded from customer claims.
+The stable channel expires **2026-12-27 22:16 UTC** and must be renewed or
+replaced before then. Keep the private release signer in protected operator
+storage with an offline recovery backup; it is never published in the repository.
+Long-term account availability still requires observation and can require native
+sign-in. None of this establishes exact CC Host parity or zero metadata disclosure.
+
+## Earlier lifecycle and streaming follow-up
 
 Runtime revision `e1b1abc6378bb24611bcea8c67a505f790b65723` was deployed to
 BWH and all three managed hosted nodes on 2026-09-29 UTC, canary first. The
