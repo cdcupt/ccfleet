@@ -5,27 +5,66 @@ from pathlib import Path
 from ccfleet_agent import project_files
 from ccfleetd.config import Config
 from ccfleetd.customer_docs import guide, how_it_works
-from ccfleetd.usersite import privacy_page
+from ccfleetd.usersite import cli_pairing_page, privacy_page
 
 ROOT = Path(__file__).parents[1]
+SETUP_COMMAND = ("curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/"
+                 "laptop/install.sh | bash -s -- --setup")
 
 
-def test_guide_has_a_linkable_migration_section_for_each_existing_user_path():
+def test_guide_has_one_linkable_setup_path_for_new_paired_and_legacy_computers():
     page = guide(Config())
     assert 'href="#migration"' in page
     assert 'id="migration"' in page
     migration = page.split('id="migration"', 1)[1].split('id="project-workspaces"', 1)[0]
-    assert "You still use ccfleet-connect" in migration
-    assert "laptop/install.sh | bash -s -- --migrate" in migration
-    assert "pairs the new client first" in migration
-    assert "only after pairing succeeds" in migration
-    assert "This computer is already paired" in migration
-    assert "do not pair again or repeat" in migration
-    assert "laptop/install.sh | bash</code>" in migration
-    assert "You used the local-agent relay preview" in migration
+    assert "One-command setup and migration" in migration
+    assert "New computer, already paired, or still using <code>ccfleet-connect</code>" in migration
+    assert "You do not need to choose a migration mode" in migration
+    assert migration.count(SETUP_COMMAND) == 1
+    assert "reuses its existing pairing; do not pair again" in migration
+    assert "Only if this computer is not paired" in migration
+    assert "paste one fresh pairing code when asked" in migration
+    assert "only after readiness succeeds" in migration
+    assert "If readiness fails, the legacy setup is left in place" in migration
+    assert "waits for a new device key to reach the slot" in migration
+    assert "without uploading project files or making a model request" in migration
+    assert "Open a new terminal, then choose your project" in migration
+    assert "cd ~/code/my-project\nccfleet local</code>" in migration
+    assert "Setup itself does not share files or start a model session" in migration
+    assert "legacy <code>--migrate</code> remain compatibility options" in migration
+    assert "laptop/install.sh | bash -s -- --migrate" not in migration
+    assert "laptop/install.sh | bash</code>" not in migration
+    assert "Exit any running local-agent preview session before updating" in migration
+    assert "does not stop or convert an already-running process" in migration
     assert "Old local conversation history stays on this computer" in migration
     assert "not imported into the slot" in migration
     assert "existing remote workspace stay in place" in migration
+
+
+def test_setup_guide_preserves_configuration_and_leaves_provider_revocation_to_user():
+    page = guide(Config())
+    for text in ("verifies its digest-pinned helper", "pairing, configuration, slot sign-in",
+                 "PATH changes preserve existing shell settings", "keep a backup",
+                 'add <code>--name "Personal Mac"</code>', "<code>--slot SLOT</code>",
+                 "No Claude password, token, or SSH command is needed",
+                 "does not automatically revoke an Anthropic credential",
+                 "Revoke an old setup-token yourself only if nothing else uses it"):
+        assert text in page
+
+
+def test_readme_and_workspace_guide_use_the_same_unified_setup_command():
+    for relative in ("README.md", "docs/project-workspaces.md"):
+        document = (ROOT / relative).read_text()
+        normalized = " ".join(document.split())
+        assert SETUP_COMMAND in document
+        assert "--name \"Personal Mac\"" in document
+        assert "--slot SLOT" in document
+        assert "ccfleet local" in document
+        assert "no longer used anywhere else" in normalized
+        assert "--migrate" in document  # retained only as a compatibility option
+        assert "| bash -s -- --migrate" not in document
+        assert "without uploading" in normalized
+        assert "making a model request" in normalized
 
 
 def test_guide_introduces_explicit_project_sharing_with_a_non_inference_readiness_check():
@@ -127,3 +166,15 @@ def test_privacy_policy_discloses_explicit_project_transfers_and_retained_copies
                  "relevant shared content is sent to Anthropic", "operator console"):
         assert text in page
     assert '/docs/guide#migration' in page
+
+
+def test_slot_pairing_page_uses_the_same_setup_command_without_embedding_the_code():
+    token = "ccf_pair_FAKE_DISPLAY_ONLY"
+    page = cli_pairing_page({"id": "slot-test", "name": "test-slot"}, token)
+    assert "laptop/install.sh | bash -s -- --setup</pre>" in page
+    assert "--migrate" not in page
+    assert "Enter this code only if asked" in page
+    assert "Setup keeps your existing connection" in page
+    assert page.count(token) == 1 and f'class="token">{token}</pre>' in page
+    assert "No project is uploaded during setup" in page
+    assert "ccfleet login" in page and "ccfleet local" in page

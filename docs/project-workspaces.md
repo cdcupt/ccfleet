@@ -13,36 +13,58 @@ without transferring project files, making a model request or enabling access.
 Plain `ccfleet` remains the ordinary remote-terminal workflow. Legacy owner
 nodes without hosted CLI access are outside this project-access rollout.
 
-## Migrate an existing computer
+## One-command setup and migration
 
-If you still use the legacy `ccfleet-connect` token setup, obtain a fresh pairing
-code from the slot page and run:
+Use the same command for a new computer, an already-paired computer, or the
+legacy `ccfleet-connect` setup. You do not need to choose a migration mode.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh \
-  | bash -s -- --migrate
-```
+1. If a retired local-agent preview session is still running, finish it and exit
+   that session first. The installer does not stop or convert an already-running
+   process.
+2. Run:
 
-Pairing must succeed before the installer removes the old setup. Open a new
-terminal afterward. Revoke an old Anthropic setup-token only if nothing else
-uses it.
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --setup
+   ```
 
-If this computer is already paired, update without pairing again or repeating
-`--migrate`:
+3. Follow the setup prompt. An already-paired computer reuses its existing pairing;
+   do not generate another code or pair again. Only if this computer is not paired,
+   open [your slot page](https://ccfleet.daichenlab.com/account), choose **Connect
+   this computer**, and paste one fresh pairing code when asked. No Claude password,
+   token, local Claude installation, or SSH command is needed.
+4. Wait for the readiness result. Setup waits for a new device key to reach the
+   slot and verifies project access without uploading files or making a model
+   request. The legacy `ccfleet-connect` setup is cleaned up only after readiness
+   succeeds. If readiness fails, the legacy setup is left in place; resolve the
+   reported issue and rerun the same command.
+5. Open a new terminal, choose your project, and start:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash
-```
+   ```bash
+   cd ~/code/my-project
+   ccfleet local
+   ```
 
-The installer verifies a digest-pinned project helper, installs it before the
-matching client, and retains earlier helper versions. It does not remove pairing
-configuration, local conversation history or remote files, and it installs no
-local Claude agent.
+   Review the selected file list and confirm the first share. Setup itself never
+   shares a project or starts a model session.
 
-For users of the retired local-agent preview, the command name is familiar but
-the execution location changes. Exit any running preview session before updating;
-the installer does not stop or convert an already-running process. Local conversation
-history stays local and is
+The installer checks the downloaded client and verifies its digest-pinned project
+helper before replacing the client. Earlier helper versions, existing pairing
+configuration, local conversation history, slot sign-in, and remote files are
+preserved. PATH configuration preserves existing shell settings and keeps a backup
+when modifying them. Open a new terminal to pick up PATH changes. Existing shells
+keep their old environment; custom token exports outside the managed setup are not removed.
+
+Optional setup flags are `--name "Personal Mac"` for a new device label and
+`--slot SLOT` to select an existing paired slot. Add them after `--setup`; they are
+not required for ordinary setup. The install-only command (omit `--setup`), manual
+`ccfleet login`, and legacy `--migrate` option remain available for compatibility.
+
+Setup does **not** automatically revoke an Anthropic credential. If an old
+setup-token is no longer used anywhere else, revoke it yourself in your Anthropic
+account; do not revoke a credential that another workflow still needs.
+
+For users of the retired local-agent preview, the execution location changes:
+Claude now runs on the slot. Old local conversation history stays local and is
 not imported into the slot. Existing ordinary remote files are not automatically
 moved into a project workspace. `--print` and `--fork-session` from the preview
 are retired; use the original slot Claude interface's conversation controls.

@@ -38,6 +38,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
@@ -51,12 +52,14 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 PROJECT_RE = re.compile(r"^[0-9a-f]{32}$")
 PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
+SETUP_WAIT_SECONDS = 180
 
 
 class CliError(RuntimeError):
-    def __init__(self, message: str, status: Optional[int] = None) -> None:
+    def __init__(self, message: str, status: Optional[int] = None, *, code: str = "") -> None:
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def home() -> Path:
@@ -104,6 +107,13 @@ def save_config(config: dict[str, Any]) -> None:
         raise
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # A pairing/device secret belongs only to its configured endpoint.
+        # urllib otherwise preserves Authorization when following redirects.
+        return None
+
+
 def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
              method: str = "POST") -> dict[str, Any]:
     body = json.dumps(payload).encode() if payload is not None else b""
@@ -112,7 +122,7 @@ def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": "application/json", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.build_opener(_NoRedirect()).open(request, timeout=20) as response:
             result = json.loads(response.read(256 * 1024).decode())
     except urllib.error.HTTPError as exc:
         try:
@@ -141,6 +151,24 @@ def generate_key() -> tuple[Path, str]:
     return path, path.with_suffix(".pub").read_text().strip()
 
 
+def prompt_pairing_code() -> str:
+    message = "Run setup in an interactive terminal to enter a hidden pairing code."
+    try:
+        # stdin is the installation script when invoked with curl | bash.
+        # Probe the controlling terminal, not stdin, and forbid getpass fallback.
+        descriptor = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+        try:
+            if not os.isatty(descriptor):
+                raise CliError(message)
+        finally:
+            os.close(descriptor)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            return getpass.getpass("Pairing code from your slot page: ").strip()
+    except (OSError, EOFError, getpass.GetPassWarning) as exc:
+        raise CliError(message) from exc
+
+
 def cmd_login(args: argparse.Namespace) -> int:
     server = args.server.rstrip("/")
     parsed_server = urllib.parse.urlsplit(server)
@@ -148,7 +176,7 @@ def cmd_login(args: argparse.Namespace) -> int:
                   and parsed_server.hostname in ("127.0.0.1", "::1", "localhost"))
     if parsed_server.scheme != "https" and not local_http:
         raise CliError("--server must use https:// (http:// is allowed only on localhost)")
-    pairing = args.code or getpass.getpass("Pairing code from your slot page: ").strip()
+    pairing = args.code or prompt_pairing_code()
     if not pairing.startswith("ccf_pair_"):
         raise CliError("that does not look like a ccfleet pairing code")
     key_path, public_key = generate_key()
@@ -484,7 +512,10 @@ def project_environment() -> dict[str, str]:
     return env
 
 
-def project_rpc(device: dict[str, Any], operation: str, **fields: Any) -> dict[str, Any]:
+def project_rpc(device: dict[str, Any], operation: str, *, _timeout: float = 90,
+                **fields: Any) -> dict[str, Any]:
+    if not 0 < _timeout <= 90:
+        raise CliError("invalid project connection timeout")
     payload = json.dumps({"version": 1, "operation": operation, **fields},
                          ensure_ascii=False, separators=(",", ":")).encode()
     if len(payload) > PROJECT_MAX_FRAME:
@@ -499,7 +530,7 @@ def project_rpc(device: dict[str, Any], operation: str, **fields: Any) -> dict[s
         if process.poll() is None:
             process.kill()
 
-    timer = threading.Timer(90, timeout)
+    timer = threading.Timer(_timeout, timeout)
     timer.daemon = True
     timer.start()
 
@@ -524,7 +555,7 @@ def project_rpc(device: dict[str, Any], operation: str, **fields: Any) -> dict[s
             chunk = process.stdout.read(size - len(data))
             if not chunk:
                 raise CliError("project connection ended; check your network, pairing, "
-                               "and that the node has been upgraded")
+                               "and that the node has been upgraded", code="connection")
             data.extend(chunk)
         return bytes(data)
 
@@ -561,9 +592,10 @@ def project_rpc(device: dict[str, Any], operation: str, **fields: Any) -> dict[s
             }
             error = answer.get("error")
             raise CliError(messages.get(error, "project operation failed safely")
-                           if isinstance(error, str) else "project operation failed safely")
+                           if isinstance(error, str) else "project operation failed safely",
+                           code=error if isinstance(error, str) else "invalid")
         if code != 0:
-            raise CliError("project connection ended without a confirmed result")
+            raise CliError("project connection ended without a confirmed result", code="connection")
         allowed = {"status": {"ready", "protocol"}, "list": {"projects"},
                    "read": {"files", "manifest"}, "write": {"files", "manifest", "backup"}}
         if set(answer) - {"version", "ok"} - allowed[operation]:
@@ -579,7 +611,79 @@ def project_rpc(device: dict[str, Any], operation: str, **fields: Any) -> dict[s
         writer.join(timeout=2)
         process.stdout.close()
         if expired.is_set():
-            raise CliError("project connection timed out; retry after checking your network")
+            raise CliError("project connection timed out; retry after checking your network",
+                           code="connection")
+
+
+def require_project_readiness(answer: dict[str, Any]) -> None:
+    if (answer.get("ready") is not True or type(answer.get("protocol")) is not int
+            or answer["protocol"] != 1):
+        raise CliError("slot project access is not ready or uses an unsupported protocol")
+
+
+def wait_for_setup(device: dict[str, Any], *, newly_paired: bool) -> None:
+    deadline = time.monotonic() + (SETUP_WAIT_SECONDS if newly_paired else 25)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CliError("paired, but slot readiness is not yet confirmed; your pairing is "
+                           "saved. Rerun the same setup command; do not pair again")
+        try:
+            answer = project_rpc(device, "status", _timeout=min(25, remaining))
+            require_project_readiness(answer)
+            return
+        except CliError as exc:
+            if not newly_paired or exc.code != "connection":
+                raise CliError(f"pairing kept; readiness check failed: {exc}. "
+                               "The old setup has not been removed") from exc
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            print("Paired. Waiting for the slot to accept this computer's key...",
+                  file=sys.stderr, flush=True)
+            time.sleep(min(5, remaining))
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    for executable in ("ssh", "ssh-keygen"):
+        if shutil.which(executable) is None:
+            raise CliError(f"OpenSSH is required (missing {executable})")
+    project_files()  # Verify the installed helper; never scan a project here.
+    config = load_config()
+    newly_paired = not config["devices"]
+    if newly_paired:
+        if args.slot:
+            raise CliError("--slot selects an already paired slot; omit it for first setup. "
+                           "Your pairing code determines the new slot")
+        print("Open your CC Fleet slot page and choose Connect this computer.\n"
+              f"{args.server.rstrip('/')}/account\n"
+              "Paste the fresh pairing code below; it will not be displayed.", flush=True)
+        # Register once only. A lost response can consume a single-use code;
+        # never retry registration or silently replace a paired computer.
+        cmd_login(argparse.Namespace(server=args.server, code="", name=args.name))
+        config = load_config()
+    device = choose_device(config, args.slot)
+    required = ("device_id", "device_token", "endpoint", "slot_id", "slot_name", "user",
+                "key", "known_hosts", "host_alias", "server")
+    if any(not isinstance(device.get(name), str) or not device[name] for name in required):
+        raise CliError("saved pairing is incomplete; configuration was left unchanged. "
+                       "Check Connected devices on your slot page before pairing again")
+    if any(not Path(device[name]).is_file() for name in ("key", "known_hosts")):
+        raise CliError("a saved pairing key or host pin is missing; configuration was left "
+                       "unchanged. Check Connected devices before pairing again")
+    if not newly_paired:
+        print(f"Already paired with {device['slot_name']}; keeping this device and its history.")
+    print("Checking the slot without uploading files or making a model request...", flush=True)
+    wait_for_setup(device, newly_paired=newly_paired)
+    if args.slot and config.get("active") != device["device_id"]:
+        # Persist an explicitly selected default only after it has passed checks.
+        config = load_config()
+        if device["device_id"] not in config["devices"]:
+            raise CliError("pairing changed during setup; rerun setup")
+        config["active"] = device["device_id"]
+        save_config(config)
+    print(f"Ready: {device['slot_name']}. Pairing and project access verified.\n"
+          "No project was uploaded and no Claude session was started.")
+    return 0
 
 
 @contextlib.contextmanager
@@ -860,8 +964,7 @@ def cmd_local(args: argparse.Namespace) -> int:
     device = choose_device(load_config(), args.slot)
     root = selected_project(args.project)
     answer = project_rpc(device, "status")
-    if answer.get("ready") is not True or answer.get("protocol") != 1:
-        raise CliError("slot project access is not ready")
+    require_project_readiness(answer)
     if args.check:
         print("Ready: project connector and slot-native Claude access.\n"
               "No project files, laptop environment, or model request were sent.")
@@ -979,6 +1082,11 @@ def parser() -> argparse.ArgumentParser:
     login.add_argument("code", nargs="?", help=argparse.SUPPRESS)
     login.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER))
     login.add_argument("--name", default="", help="name shown in Connected devices")
+    setup = sub.add_parser("setup", help="pair only if needed and verify slot readiness")
+    setup.add_argument("--name", default="computer", help="label for a newly paired computer")
+    setup.add_argument("--slot", default="", help="paired slot to check and use by default")
+    setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
+                       help="server used only when pairing a new computer")
     attach = sub.add_parser("attach", help="open the persistent Claude Code session")
     attach.add_argument("--slot", default="", help="slot id or name")
     attach.add_argument("--session", default="ccfleet", help="remote session name")
@@ -1072,6 +1180,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_attach(args)
         if args.command == "login":
             return cmd_login(args)
+        if args.command == "setup":
+            return cmd_setup(args)
         if args.command == "local":
             return cmd_local(args)
         if args.command == "project":

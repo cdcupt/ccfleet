@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -20,9 +21,11 @@ def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
                 helper_source: str = HELPER_SOURCE, helper_missing: bool = False,
                 digest_assignment: str | None = None, client_prelude: str = "",
                 existing_client: str | None = None, download_url: str | None = None,
-                helper_url_override: bool = True, python_setup: str = ""):
+                helper_url_override: bool = True, python_setup: str = "",
+                setup_rc: int = 0, shell: str = "/bin/zsh",
+                extra_env: dict[str, str] | None = None, install_dir: Path | None = None):
     home = tmp_path / "home"
-    dest = home / ".local" / "bin"
+    dest = install_dir or home / ".local" / "bin"
     dest.mkdir(parents=True, exist_ok=True)
     if existing_client is not None:
         (dest / "ccfleet").write_text(existing_client)
@@ -34,7 +37,9 @@ def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
 import os, sys
 with open(os.environ["TEST_LOG"], "a") as stream:
     stream.write("client:" + " ".join(sys.argv[1:]) + "\\n")
-raise SystemExit(int(os.environ.get("PAIR_RC", "0")) if sys.argv[1:2] == ["login"] else 0)
+code = os.environ.get("PAIR_RC", "0") if sys.argv[1:2] == ["login"] else (
+    os.environ.get("SETUP_RC", "0") if sys.argv[1:2] == ["setup"] else "0")
+raise SystemExit(int(code))
 """)
     client.chmod(0o755)
     helper = tmp_path / "fake-project-files.py"
@@ -50,7 +55,11 @@ exit "${OLD_RC:-0}"
     env = {**os.environ, "HOME": str(home), "CCFLEET_INSTALL_DIR": str(dest),
            "CCFLEET_INSTALL_URL": download_url or client.as_uri(), "TEST_LOG": str(log),
            "PAIR_RC": str(pair_rc), "OLD_RC": str(old_rc),
+           "SETUP_RC": str(setup_rc), "SHELL": shell,
            "PATH": f"{dest}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
+    for key in ("CCFLEET_HOME", "CCFLEET_TOKEN_FILE", "ZDOTDIR", "XDG_CONFIG_HOME"):
+        env.pop(key, None)
+    env.update(extra_env or {})
     if helper_url_override:
         env["CCFLEET_PROJECT_FILES_URL"] = helper.as_uri()
     else:
@@ -278,7 +287,467 @@ def test_migration_without_an_old_command_is_still_a_valid_new_pairing(tmp_path)
     assert "No installed ccfleet-connect command" in result.stdout
 
 
-@pytest.mark.parametrize("args", [("--wat",), ("--name",), ("--name", "x")])
+def test_setup_reuses_ready_pairing_without_calling_login_and_then_cleans_legacy(tmp_path):
+    result, calls, dest = run_install(tmp_path, "--setup", pair_rc=99)
+    assert result.returncode == 0, result.stderr
+    assert calls == ["client:setup --name computer", "old:--remove"]
+    assert "Setup complete" in result.stdout
+    assert "ccfleet local" in result.stdout
+    assert "No project files were uploaded and no Claude session was started" in result.stdout
+    assert str(dest) in (tmp_path / "home/.zshrc").read_text()
+
+
+def test_setup_passes_optional_name_and_slot_without_shell_interpretation(tmp_path):
+    result, calls, _ = run_install(tmp_path, "--setup", "--name", "Personal laptop",
+                                    "--slot", "my-slot")
+    assert result.returncode == 0, result.stderr
+    assert calls[0] == "client:setup --name Personal laptop --slot my-slot"
+
+
+def test_failed_setup_keeps_legacy_and_startup_file_untouched(tmp_path):
+    rc = tmp_path / "home/.zshrc"
+    rc.parent.mkdir()
+    rc.write_bytes(b"# original configuration without trailing newline")
+    result, calls, _ = run_install(tmp_path, "--setup", setup_rc=2)
+    assert result.returncode == 1
+    assert calls == ["client:setup --name computer"]
+    assert rc.read_bytes() == b"# original configuration without trailing newline"
+    assert not list(rc.parent.glob(".zshrc.ccfleet-*"))
+    assert "legacy setup and PATH were not changed" in result.stderr
+    assert "Setup complete" not in result.stdout
+
+
+def test_setup_cleanup_failure_does_not_configure_path_or_claim_completion(tmp_path):
+    result, calls, _ = run_install(tmp_path, "--setup", old_rc=1)
+    assert result.returncode == 1
+    assert calls == ["client:setup --name computer", "old:--remove"]
+    assert "cleanup failed" in result.stderr
+    assert not (tmp_path / "home/.zshrc").exists()
+    assert "Setup complete" not in result.stdout
+
+
+@pytest.mark.parametrize("shell, files", [
+    ("/bin/zsh", [".zshrc"]),
+    ("/bin/bash", [".bash_profile", ".bashrc"]),
+    ("/usr/local/bin/fish", [".config/fish/config.fish"]),
+])
+def test_setup_configures_each_supported_shell_and_is_idempotent(tmp_path, shell, files):
+    result, _, dest = run_install(tmp_path, "--setup", old_client=False, shell=shell)
+    assert result.returncode == 0, result.stderr
+    before = {}
+    for name in files:
+        rc = tmp_path / "home" / name
+        before[name] = rc.read_bytes()
+        assert before[name].count(b"# >>> CC Fleet PATH >>>") == 1
+        assert before[name].count(b"# <<< CC Fleet PATH <<<") == 1
+        assert str(dest).encode() in before[name]
+        assert rc.stat().st_mode & 0o777 == 0o600
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False, shell=shell)
+    assert result.returncode == 0, result.stderr
+    for name in files:
+        rc = tmp_path / "home" / name
+        assert rc.read_bytes() == before[name]
+        assert not list(rc.parent.glob(rc.name + ".ccfleet-backup-*"))
+
+
+def test_path_configuration_preserves_bytes_mode_and_private_backup_without_sourcing(tmp_path):
+    rc = tmp_path / "home/.zshrc"
+    rc.parent.mkdir()
+    marker = tmp_path / "must-not-run"
+    original = f"touch '{marker}'\n".encode() + b"# opaque byte \xff without newline"
+    rc.write_bytes(original)
+    rc.chmod(0o640)
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False)
+    assert result.returncode == 0, result.stderr
+    assert rc.read_bytes().startswith(original + b"\n# >>> CC Fleet PATH >>>\n")
+    assert rc.stat().st_mode & 0o777 == 0o640
+    backups = list(rc.parent.glob(".zshrc.ccfleet-backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+    assert not marker.exists()
+
+
+def test_bash_preserves_existing_login_startup_choice(tmp_path):
+    profile = tmp_path / "home/.profile"
+    profile.parent.mkdir()
+    profile.write_text("# profile customizations\n")
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False, shell="/bin/bash")
+    assert result.returncode == 0, result.stderr
+    assert not (profile.parent / ".bash_profile").exists()
+    assert not (profile.parent / ".bash_login").exists()
+    assert "# >>> CC Fleet PATH >>>" in profile.read_text()
+    assert (profile.parent / ".bashrc").exists()
+
+
+@pytest.mark.parametrize("shell, variable, suffix", [
+    ("/bin/zsh", "ZDOTDIR", ".zshrc"),
+    ("/usr/local/bin/fish", "XDG_CONFIG_HOME", "fish/config.fish"),
+])
+def test_shell_configuration_respects_owned_locations_inside_home(tmp_path, shell, variable, suffix):
+    folder = tmp_path / "home/settings"
+    folder.mkdir(parents=True)
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False, shell=shell,
+                               extra_env={variable: str(folder)})
+    assert result.returncode == 0, result.stderr
+    assert "# >>> CC Fleet PATH >>>" in (folder / suffix).read_text()
+
+
+def test_startup_location_outside_home_is_not_modified(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / ".zshrc").write_text("keep me\n")
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False,
+                               extra_env={"ZDOTDIR": str(outside)})
+    assert result.returncode != 0
+    assert "outside your home" in result.stderr
+    assert (outside / ".zshrc").read_text() == "keep me\n"
+    assert "Setup complete" not in result.stdout
+
+
+@pytest.mark.parametrize("target_inside", [False, True])
+def test_startup_symlink_is_refused_without_replacing_or_touching_target(tmp_path, target_inside):
+    home = tmp_path / "home"
+    home.mkdir()
+    target = (home if target_inside else tmp_path) / "actual-startup"
+    target.write_text("# original\n")
+    rc = home / ".zshrc"
+    rc.symlink_to(target)
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert rc.is_symlink()
+    assert target.read_text() == "# original\n"
+    assert "symlink" in result.stderr
+    assert "manually" in result.stderr
+
+
+def test_startup_directory_symlink_is_refused(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    outside = tmp_path / "outside-config"
+    outside.mkdir()
+    (home / ".config").symlink_to(outside, target_is_directory=True)
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False, shell="/bin/fish")
+    assert result.returncode != 0
+    assert not (outside / "fish/config.fish").exists()
+    assert "symlink" in result.stderr
+
+
+def test_unknown_shell_has_actionable_incomplete_status_without_wrong_rc_edit(tmp_path):
+    result, _, dest = run_install(tmp_path, "--setup", old_client=False, shell="/bin/nu")
+    assert result.returncode != 0
+    assert "login shell is not supported" in result.stderr
+    assert "PATH setup is incomplete" in result.stderr
+    assert str(dest / "ccfleet") in result.stderr
+    assert "absolute client path" in result.stderr
+    assert not (tmp_path / "home/.profile").exists()
+    assert "Setup complete" not in result.stdout
+
+
+@pytest.mark.parametrize("suffix", ["bad:path", "bad\npath"])
+def test_unsafe_install_paths_fail_before_client_execution(tmp_path, suffix):
+    result, calls, dest = run_install(tmp_path, "--setup",
+                                      install_dir=tmp_path / "home" / suffix)
+    assert result.returncode != 0
+    assert "install path must not contain" in result.stderr
+    assert calls == []
+    assert not (dest / "ccfleet").exists()
+
+
+def test_shell_path_block_quotes_metacharacters_literally(tmp_path):
+    dest = tmp_path / "home" / "tools ' $(false) space"
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False, shell="/bin/bash",
+                               install_dir=dest)
+    assert result.returncode == 0, result.stderr
+    rc = tmp_path / "home/.bashrc"
+    checked = subprocess.run(["bash", "--noprofile", "--norc", "-c",
+                              'source "$1"; source "$1"; printf "%s" "$PATH"', "bash", str(rc)],
+                             env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True,
+                             timeout=10)
+    assert checked.returncode == 0, checked.stderr
+    assert checked.stdout.split(":").count(str(dest)) == 1
+
+
+def test_path_block_prioritizes_new_client_over_an_older_preceding_installation(tmp_path):
+    result, _, dest = run_install(tmp_path, "--setup", old_client=False, shell="/bin/bash")
+    assert result.returncode == 0, result.stderr
+    old = tmp_path / "old-bin"
+    old.mkdir()
+    (old / "ccfleet").write_text("#!/bin/sh\nexit 99\n")
+    (old / "ccfleet").chmod(0o755)
+    checked = subprocess.run(["bash", "--noprofile", "--norc", "-c",
+                              'source "$1"; source "$1"; command -v ccfleet', "bash",
+                              str(tmp_path / "home/.bashrc")],
+                             env={"PATH": f"{old}:{dest}:/usr/bin:/bin"},
+                             capture_output=True, text=True, timeout=10)
+    assert checked.returncode == 0, checked.stderr
+    assert checked.stdout.strip() == str(dest / "ccfleet")
+
+
+def test_atomic_editor_replacement_is_preserved_and_path_setup_reports_incomplete(tmp_path):
+    rc = tmp_path / "home/.zshrc"
+    rc.parent.mkdir()
+    rc.write_text("# old startup\n")
+    hook = f"""
+import os
+from pathlib import Path
+target = Path({str(rc)!r})
+original_fsync = os.fsync
+def racing_fsync(fd):
+    original_fsync(fd)
+    if target.exists():
+        opened, current = os.fstat(fd), target.stat()
+        if ((opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
+                and b'# >>> CC Fleet PATH >>>' in target.read_bytes()):
+            replacement = target.with_suffix('.editor-replacement')
+            replacement.write_text('# newer user edits\\n')
+            os.replace(replacement, target)
+os.fsync = racing_fsync
+"""
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False, python_setup=hook)
+    assert result.returncode != 0
+    assert rc.read_text() == "# newer user edits\n"
+    assert "replacement was preserved" in result.stderr
+    assert "PATH setup is incomplete" in result.stderr
+    assert "Setup complete" not in result.stdout
+    assert next(rc.parent.glob(".zshrc.ccfleet-backup-*")).read_text() == "# old startup\n"
+
+
+@pytest.mark.parametrize("original", [
+    "# >>> CC Fleet PATH >>>\n# manually changed\n# <<< CC Fleet PATH <<<\n",
+    "# >>> CC Fleet PATH >>>",
+    "# <<< CC Fleet PATH <<<\r\n",
+])
+def test_modified_managed_path_block_is_preserved_and_reported(tmp_path, original):
+    rc = tmp_path / "home/.zshrc"
+    rc.parent.mkdir()
+    rc.write_text(original)
+    result, _, _ = run_install(tmp_path, "--setup", old_client=False)
+    assert result.returncode != 0
+    assert rc.read_bytes() == original.encode()
+    assert "existing CC Fleet PATH block differs" in result.stderr
+    assert not list(rc.parent.glob(".zshrc.ccfleet-backup-*"))
+
+
+@pytest.mark.parametrize("name", ["token", "token.off", ".ccfleet-token.test"])
+def test_setup_refuses_legacy_symlink_before_invoking_cleanup(tmp_path, name):
+    directory = tmp_path / "home/.config/ccfleet"
+    directory.mkdir(parents=True)
+    config = directory / "config.json"
+    config.write_text('{"pairing":"keep"}\n')
+    (directory / name).symlink_to(config)
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert config.read_text() == '{"pairing":"keep"}\n'
+    assert "legacy cleanup is incomplete" in result.stderr
+    assert "Existing pairing was kept" in result.stderr
+
+
+def test_setup_refuses_custom_legacy_token_location(tmp_path):
+    custom = tmp_path / "home/.config/ccfleet/config.json"
+    custom.parent.mkdir(parents=True)
+    custom.write_text('{"pairing":"keep"}\n')
+    result, calls, _ = run_install(tmp_path, "--setup",
+                                   extra_env={"CCFLEET_TOKEN_FILE": str(custom)})
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "custom token locations" in result.stderr
+    assert custom.read_text() == '{"pairing":"keep"}\n'
+
+
+def test_setup_refuses_predictable_legacy_temporary_path(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    target = home / "keep"
+    target.write_text("unchanged\n")
+    (home / ".zshrc.ccfleet-tmp").symlink_to(target)
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "temporary path already exists" in result.stderr
+    assert target.read_text() == "unchanged\n"
+
+
+@pytest.mark.parametrize("old_client", [False, True])
+def test_setup_does_not_claim_legacy_cleanup_when_artifacts_remain(tmp_path, old_client):
+    token = tmp_path / "home/.config/ccfleet/token"
+    token.parent.mkdir(parents=True)
+    token.write_text("synthetic-legacy-marker\n")
+    result, calls, _ = run_install(tmp_path, "--setup", old_client=old_client)
+    assert result.returncode != 0
+    assert calls == (["client:setup --name computer", "old:--remove"] if old_client
+                     else ["client:setup --name computer"])
+    assert "legacy cleanup is incomplete" in result.stderr
+    assert token.read_text() == "synthetic-legacy-marker\n"
+    assert "Setup complete" not in result.stdout
+    assert not (tmp_path / "home/.zshrc").exists()
+
+
+def test_setup_with_real_legacy_helper_preserves_new_pairing_keys_and_history(tmp_path):
+    home = tmp_path / "home"
+    commands = home / ".local/bin"
+    commands.mkdir(parents=True)
+    old = commands / "ccfleet-connect"
+    old.write_bytes((ROOT / "laptop/ccfleet-connect.sh").read_bytes())
+    old.chmod(0o755)
+    config = home / ".config/ccfleet"
+    config.mkdir(parents=True)
+    (config / "token").write_text("synthetic-legacy-token\n")
+    (config / "config.json").write_text('{"devices":{}}\n')
+    for name in ("keys/device-key", "local-history/session.json"):
+        target = config / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("preserve this existing data\n")
+    rc = home / ".zshrc"
+    original = ("# previous user configuration\n# >>> ccfleet connect >>>\n"
+                "export CLAUDE_CODE_OAUTH_TOKEN=synthetic\n# <<< ccfleet connect <<<\n"
+                "# following user configuration\n")
+    rc.write_text(original)
+    rc.chmod(0o600)
+    result, calls, _ = run_install(tmp_path, "--setup", old_client=False)
+    assert result.returncode == 0, result.stderr
+    assert calls == ["client:setup --name computer"]
+    assert not (config / "token").exists()
+    assert "# >>> ccfleet connect >>>" not in rc.read_text()
+    assert "# >>> CC Fleet PATH >>>" in rc.read_text()
+    assert "# previous user configuration\n# following user configuration\n" in rc.read_text()
+    assert rc.stat().st_mode & 0o777 == 0o600
+    assert (config / "config.json").read_text() == '{"devices":{}}\n'
+    for name in ("keys/device-key", "local-history/session.json"):
+        assert (config / name).read_text() == "preserve this existing data\n"
+    backups = list(home.glob(".zshrc.ccfleet-legacy-backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text() == original
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("field", ["key", "known_hosts"])
+@pytest.mark.parametrize("legacy_name", ["token", "token.off", ".ccfleet-token.saved"])
+def test_setup_refuses_legacy_path_used_by_any_saved_device(tmp_path, field, legacy_name):
+    directory = tmp_path / "home/.config/ccfleet"
+    directory.mkdir(parents=True)
+    candidate = directory / legacy_name
+    candidate.write_text("paired device material\n")
+    device = {"key": str(directory / "device-key"),
+              "known_hosts": str(directory / "host-pin")}
+    device[field] = str(candidate)
+    configuration = {"devices": {"preserved": device}, "active": "another-device"}
+    config = directory / "config.json"
+    config.write_text(json.dumps(configuration))
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "overlaps pairing data" in result.stderr
+    assert candidate.read_text() == "paired device material\n"
+    assert json.loads(config.read_text()) == configuration
+    assert not (tmp_path / "home/.zshrc").exists()
+
+
+def test_saved_host_pin_symlink_alias_protects_legacy_named_target(tmp_path):
+    directory = tmp_path / "home/.config/ccfleet"
+    directory.mkdir(parents=True)
+    candidate = directory / "token"
+    candidate.write_text("host pin material\n")
+    alias = directory / "pin-link"
+    alias.symlink_to(candidate)
+    (directory / "config.json").write_text(json.dumps({"devices": {"d": {
+        "key": str(directory / "key"), "known_hosts": str(alias),
+    }}}))
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "overlaps pairing data" in result.stderr
+    assert candidate.read_text() == "host pin material\n"
+
+
+def test_custom_ccfleet_home_config_is_not_mistaken_for_old_saved_tokens(tmp_path):
+    directory = tmp_path / "home/.config/ccfleet/tokens"
+    directory.mkdir(parents=True)
+    config = directory / "config.json"
+    config.write_text('{"devices":{}}\n')
+    result, calls, _ = run_install(tmp_path, "--setup",
+                                   extra_env={"CCFLEET_HOME": str(directory)})
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "overlaps pairing data" in result.stderr
+    assert config.read_text() == '{"devices":{}}\n'
+
+
+@pytest.mark.parametrize("preserved", ["local", "project-backups", "local-history"])
+def test_retained_history_alias_protects_old_saved_token_directory(tmp_path, preserved):
+    directory = tmp_path / "home/.config/ccfleet"
+    saved = directory / "tokens"
+    saved.mkdir(parents=True)
+    note = saved / "history"
+    note.write_text("retained history\n")
+    (directory / preserved).symlink_to(saved, target_is_directory=True)
+    (directory / "config.json").write_text('{"devices":{}}\n')
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "overlaps pairing data" in result.stderr
+    assert note.read_text() == "retained history\n"
+
+
+@pytest.mark.parametrize("data", [
+    [], {}, {"devices": []}, {"devices": {"d": []}},
+    {"devices": {"d": {"key": None, "known_hosts": "pin"}}},
+    {"devices": {"d": {"key": "key", "known_hosts": ""}}},
+])
+def test_invalid_pairing_metadata_stops_legacy_cleanup(tmp_path, data):
+    config = tmp_path / "home/.config/ccfleet/config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps(data))
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "legacy cleanup is incomplete" in result.stderr
+    assert json.loads(config.read_text()) == data
+
+
+def test_oversized_pairing_metadata_stops_legacy_cleanup(tmp_path):
+    config = tmp_path / "home/.config/ccfleet/config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text('{"devices":{},"padding":"' + "x" * (16 * 1024 * 1024) + '"}')
+    original_size = config.stat().st_size
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "pairing configuration cannot be safely checked" in result.stderr
+    assert config.stat().st_size == original_size
+
+
+def test_group_writable_home_is_rejected_before_legacy_cleanup(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    home.chmod(0o770)
+    result, calls, _ = run_install(tmp_path, "--setup")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "home directory is unsafe" in result.stderr
+
+
+def test_startup_file_used_as_saved_device_key_is_not_modified(tmp_path):
+    directory = tmp_path / "home/.config/ccfleet"
+    directory.mkdir(parents=True)
+    key = tmp_path / "home/.bash_profile"
+    key.write_text("paired key material\n")
+    (directory / "config.json").write_text(json.dumps({"devices": {"d": {
+        "key": str(key), "known_hosts": str(directory / "pin"),
+    }}}))
+    result, calls, _ = run_install(tmp_path, "--setup", shell="/bin/bash")
+    assert result.returncode != 0
+    assert calls == ["client:setup --name computer"]
+    assert "overlaps pairing data" in result.stderr
+    assert key.read_text() == "paired key material\n"
+
+
+@pytest.mark.parametrize("args", [
+    ("--wat",), ("--name",), ("--name", "x"), ("--setup", "--migrate"),
+    ("--slot", "one"), ("--migrate", "--slot", "one"), ("--setup", "--slot"),
+])
 def test_bad_installer_arguments_fail_before_downloading(tmp_path, args):
     result, calls, dest = run_install(tmp_path, *args)
     assert result.returncode == 2
@@ -290,6 +759,6 @@ def test_customer_docs_publish_the_one_command_transition():
     from ccfleetd.customer_docs import guide
 
     page = guide(Config())
-    assert "laptop/install.sh | bash -s -- --migrate" in page
+    assert "laptop/install.sh | bash -s -- --setup" in page
     assert "<pre><code>curl -fsSL" in page
-    assert "pairs the new client first" in page
+    assert "--setup" in page

@@ -7,9 +7,10 @@ The product rule is simple: **one holder, one slot, one Claude account**. CC
 Fleet does not pool accounts, substitute credentials, rotate a request between
 accounts, or expose a shared model API.
 
-The customer experience is also one path: install `ccfleet`, pair it from the
-slot page, then run `ccfleet` in a normal terminal. Customers never type an SSH
-command and no Claude credential is copied to their computer.
+The customer experience is also one path: run the setup command, provide a
+slot-page pairing code only if this computer is not already paired, then use
+`ccfleet` in a normal terminal. Customers never type an SSH command and no Claude
+credential is copied to their computer.
 
 ```text
 customer terminal
@@ -36,19 +37,28 @@ traffic from that slot, under the single Claude account signed in there.
 1. Sign in to the CC Fleet website with Google and claim an allowed slot.
 2. Use the website's **Sign in to Claude** flow once. The resulting Claude
    credential is written only in that slot.
-3. When the slot says **In use**, press **Connect this computer**.
-4. Install the client and pair with the ten-minute, single-use code:
+3. When the slot says **In use**, run the same setup command for new, existing,
+   or legacy computers:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash
-   ccfleet login
+   curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --setup
    ```
 
-5. Open or resume Claude Code:
+4. Existing pairing is reused. Only if setup asks for a pairing code, press
+   **Connect this computer** on [your slot page](https://ccfleet.daichenlab.com/account)
+   and paste the fresh ten-minute, single-use code. Setup waits for device-key
+   propagation and checks readiness without uploading project files or making
+   a model request.
+5. Open a new terminal, choose a project, and start Claude Code on the slot:
 
    ```bash
-   ccfleet
+   cd ~/code/my-project
+   ccfleet local
    ```
+
+Review the selected files and confirm the first share. No local Claude
+installation is needed. Plain `ccfleet` opens the ordinary remote workspace
+without sharing a local project.
 
 `ccfleet` is a thin terminal client. It does not run a second Claude process on
 the customer's computer. Projects live in `~/workspace` on the slot; clone them
@@ -65,17 +75,16 @@ The server stores the public key and only a hash of the access token. A customer
 can remove one computer from the slot page without changing the slot's Claude
 sign-in. Network interruptions reattach to the same tmux session.
 
-Existing users of the removed `ccfleet-connect` token flow can install, pair,
-and retire that local setup in one transaction-like command:
+The same `--setup` command handles migration from `ccfleet-connect`: legacy cleanup
+runs only after readiness succeeds. It preserves existing pairing, configuration,
+local history, and remote files, and backs up shell configuration when changing
+PATH. Finish any active local-agent preview session before updating; setup does
+not terminate it. It never automatically revokes an Anthropic credential. Revoke
+an old setup-token yourself only when it is no longer used anywhere else.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh \
-  | bash -s -- --migrate
-```
-
-The old setup is touched only after new pairing succeeds. The user must still
-revoke an old Anthropic setup-token in their Anthropic account if it is no
-longer used anywhere.
+Optional `--name "Personal Mac"` labels a new device; `--slot SLOT` chooses an
+existing paired slot. Install-only (omit `--setup`), manual `ccfleet login`, and
+legacy `--migrate` remain compatibility options, not extra steps for normal setup.
 
 The default `ccfleet` session uses Opus, max effort and `bypassPermissions`.
 Users can also create and resume named sessions with a model, effort and any
@@ -117,9 +126,9 @@ with backups and conflict checks. After editing locally, use
 `ccfleet project push`; all active sessions for that project must first finish
 with `/exit`. There is no background synchronization or laptop shell access.
 
-Already-paired computers only need the installer update, not another pairing or
-`--migrate`. Pairing, remote files and slot sign-in stay in place. Old local-agent
-conversation history remains local and is not imported into the slot.
+Already-paired computers use the same `--setup` command without another pairing.
+Pairing, remote files and slot sign-in stay in place. Old local-agent conversation
+history remains local and is not imported into the slot.
 
 Only selected relative filenames, bytes, hashes and executable flags are shared,
 not automatically collected laptop environment or identity fields. Limits and
