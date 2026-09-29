@@ -1,5 +1,9 @@
 # Live-folder release verification
 
+Historical evidence for the retired live-folder workflow, not the current
+`ccfleet local` architecture. See [native local relay verification](local-relay-verification.md)
+for the current release; the evidence below remains unchanged.
+
 Verified 2026-09-29 UTC. Runtime release:
 `96de4bb71fd05cb82783859e5576fbc765482362`.
 

@@ -1,8 +1,11 @@
-# CC Fleet design
+# CC Fleet remote-terminal compatibility design
 
-This document describes the default hosted-terminal path. The separately gated
-local-project relay has different execution and privacy boundaries, documented
-in [local-relay.md](local-relay.md); it is not an automatic customer migration.
+This document describes the remote-terminal compatibility path opened by plain
+`ccfleet`. The primary `ccfleet local` workflow runs original Claude on the user's
+computer with assigned-slot inference, and has different execution and privacy
+boundaries documented in [local-relay.md](local-relay.md). Pairing, broker and
+slot-lifecycle mechanisms below are shared, but slot-only execution statements
+apply to the remote-terminal path, not local Claude.
 
 ## Product invariant
 
@@ -11,9 +14,9 @@ CC Fleet provides remote Claude Code slots without an account pool:
 > one holder → one slot → one Claude account
 
 A holder may pair several personal computers with that slot. Pairing authorizes
-transport to the slot; it never exports the Claude credential. Every model
-request is created by the original Claude Code process running in the assigned
-slot and goes from that slot to Anthropic.
+transport to the slot; it never exports the Claude credential. In this
+remote-terminal path, model requests are created by the original Claude Code
+process running in the assigned slot and go from that slot to Anthropic.
 
 ## Data path
 

@@ -236,6 +236,29 @@ def test_the_guide_says_what_the_usage_numbers_count():
     assert "token count covers what Claude Code used on this slot" in guide
 
 
+def test_the_guide_distinguishes_new_local_history_and_account_changes():
+    guide = render("/docs/guide")
+    assert "Running <code>ccfleet local</code> again starts a new conversation" in guide
+    assert "<code>--new</code> makes that choice explicit. Existing history is kept" in guide
+    assert "<code>--continue</code> selects the last local conversation for this directory" in guide
+    assert "<code>--resume</code> uses Claude&#x27;s native history picker or an ID/name" in guide
+    assert "Quit a new local session normally with <code>/exit</code>" in guide
+    assert "does not automatically close your local Claude process or delete its history" in guide
+    assert "cancels an in-flight request if that account changes" in guide
+    assert "new requests then use its current bound account" in guide
+    assert "any open terminal session ends" not in guide
+
+
+def test_how_it_works_scopes_persistence_and_broker_outages():
+    page = render("/docs/how-it-works")
+    assert "plain <code>ccfleet</code> remote-terminal command uses a persistent session" in page
+    assert "<code>ccfleet local</code> instead runs on your computer" in page
+    assert "local model requests require the broker to be reachable" in page
+    assert "your slot keeps working through one" not in page
+    assert "Automatic updates are disabled during a CC Fleet launch" in page
+    assert "update your local Claude installation separately" in page
+
+
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
     terms = render("/docs/terms")
     assert f"Last updated {customer_docs.DOCS_UPDATED}" in terms

@@ -987,13 +987,15 @@ def _sign_in_left(expires: Any, now: float) -> str:
 
 
 def _ways_to_use(_report: Mapping[str, Any]) -> str:
-    """The primary product: a local command driving Claude Code on the slot."""
+    """Local native Claude is primary; the slot terminal remains compatible."""
     return (
         '<div class="ways" aria-label="How to use this slot">'
-        '<div class="way"><b>Claude Code CLI</b><p>Run <code>ccfleet</code> on your '
-        'computer. It opens the original Claude Code CLI on this slot, where your files, '
-        'tools and model connection stay. A dropped network connection resumes the same '
-        'session.</p></div></div>')
+        '<div class="way"><b>Claude Code CLI</b><p>Run <code>ccfleet local</code> on your '
+        'computer for original Claude Code with local files, tools and history. Supported '
+        'model requests use this slot. Use <code>--continue</code> or '
+        '<code>--resume</code> to reopen saved local conversations. Plain '
+        '<code>ccfleet</code> remains the remote-terminal command, with remote files '
+        'and persistent tmux.</p></div></div>')
 
 
 def _ended(login: Mapping[str, Any]) -> str:
@@ -1146,7 +1148,8 @@ def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
     else:
         button = '<span class="muted small">CLI access is being prepared for this slot.</span>'
     return ('<div class="row-line stacked cli-access"><div class="row-name">CC Fleet CLI</div>'
-            '<p class="small muted">The local command opens Claude Code on this slot. Its '
+            '<p class="small muted"><code>ccfleet local</code> runs Claude Code on your '
+            'computer and sends supported model requests through this slot. The device '
             'access key is not your Claude credential.</p>' + ''.join(rows)
             + f'<div class="actions">{button}</div></div>')
 

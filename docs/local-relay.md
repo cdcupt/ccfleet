@@ -73,6 +73,21 @@ follow its migration guidance rather than trying to resume the old mount.
 Earlier `ccfleet project` snapshot commands remain for deliberate recovery only;
 see [retired workspaces and recovery](project-workspaces.md).
 
+### Recovering an interrupted migration
+
+If an older installer printed `EOFError: filesystem connection ended` after you
+approved cleanup, rerun the one-command setup above to install the fix and finish
+migration. Do not delete configuration, remove keys, or re-pair the computer.
+The old local connector may already have stopped while remote cleanup remains.
+
+The current client waits for the connector's shutdown lock to be released, not
+for a reply from a control listener that may already be closing. EOF, timeout,
+or a missing listener alone is not accepted as proof that file access stopped.
+Remote mount/session cleanup must also be confirmed before the saved grant is
+marked retired. If setup still reports unconfirmed cleanup, stop and follow that
+error; do not bypass it by deleting the saved record. Approve the prompt again
+only when ready to end the old live-folder work. Files and history are retained.
+
 ## Daily use and native sessions
 
 ```bash
@@ -100,6 +115,10 @@ ccfleet local --print "Summarize this project"
 These are native Claude sessions, not remote tmux sessions. `--resume` opens the
 native history picker or selects an ID/name; `--continue` uses the last native
 conversation for this directory. `--new --name NAME` starts a named conversation.
+Plain `ccfleet local` also starts fresh: running it again does not automatically
+resume the previous conversation or delete its history. Run these commands at
+your ordinary shell prompt, not as a message inside Claude. Opening another
+terminal starts an independent local session using the same assigned slot/account.
 Use `/model` and `/effort` inside Claude. Defaults for a new conversation should
 not overwrite a resumed conversation's saved model or effort unless requested.
 Model/effort availability depends on the installed CLI and account.
@@ -107,7 +126,9 @@ Model/effort availability depends on the installed CLI and account.
 Additional supported native arguments go after `--`. Options that would override
 the protected model route or authentication are not an alternate CC Fleet mode.
 Quit with Claude's `/exit` or the normal terminal controls, then use native resume
-to continue later. An interrupted request is not guaranteed to have completed;
+to continue later. `/exit` ends this local Claude process and its temporary relay;
+saved native history remains. It does not end a different terminal's session.
+An interrupted request is not guaranteed to have completed;
 CC Fleet does not silently replay inference.
 
 The relay currently supports foreground interactive sessions, `--print`, native
@@ -160,6 +181,40 @@ Native local permissions still matter. Closing the relay stops future transport,
 not data already received by Anthropic or retained in native history.
 
 ## Operations and verification
+
+### Check your installation without exposing existing files
+
+From an ordinary local terminal, run:
+
+```bash
+ccfleet local --check
+```
+
+Success confirms that the original local Claude executable is available and the
+assigned slot relay reports readiness. It does not scan a project, start Claude,
+or make a model request, so it is not proof of an actual request's upstream route.
+
+For a small filesystem check, paste this into a running `ccfleet local` session:
+
+```text
+Use only synthetic test data. Run mktemp -d /tmp/ccfleet-check.XXXXXX.
+In that new directory, use Write to create probe.txt containing CCFLEET_LOCAL_OK.
+Read it back with Read, then give me the exact cat command to run in a separate
+ordinary local terminal. Do not inspect existing files, credentials, environment
+variables, hostname, IP address or location. Do not make network requests or
+delete anything. Do not claim this proves inference routing or metadata privacy.
+```
+
+Run the returned `cat` command yourself outside Claude. A matching marker confirms
+the file is visible on your local filesystem. Claude's own read-back is not an
+independent check; a mounted/shared filesystem could also pass, so this alone does
+not prove where every tool process executes. Only the synthetic directory is
+created, and it remains until you remove it. The test path and tool output can
+become model context. Neither this test nor a readiness check proves zero metadata
+disclosure; see the privacy section above and the
+[release verification record](local-relay-verification.md).
+
+### Operator verification
 
 Relay access requires an upgraded, operator-enabled assigned slot. A working
 remote terminal or old live mount does not prove relay readiness. Deployment and

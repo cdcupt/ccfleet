@@ -181,6 +181,28 @@ def test_old_workspace_guide_is_tombstone_and_keeps_legacy_recovery_scoped():
     assert "Do not stop a real user's old session" in text
 
 
+def test_current_guide_scopes_verification_and_interrupted_migration_recovery():
+    text = " ".join((ROOT / "docs/local-relay.md").read_text().split())
+    for phrase in ("EOFError: filesystem connection ended", "shutdown lock",
+                   "Do not delete configuration, remove keys, or re-pair",
+                   "marked retired", "ordinary shell prompt", "does not automatically",
+                   "mktemp -d /tmp/ccfleet-check.XXXXXX", "outside Claude",
+                   "mounted/shared filesystem could also pass", "does not prove where every",
+                   "Neither this test nor a readiness check proves zero metadata"):
+        assert phrase in text
+
+
+def test_historical_verification_and_remote_design_point_to_current_architecture():
+    for relative in ("docs/live-folders-verification.md", "docs/project-workspaces-verification.md"):
+        text = (ROOT / relative).read_text()
+        assert "local-relay-verification.md" in text
+        assert "retired" in text.lower()
+    design = " ".join((ROOT / "docs/design.md").read_text().split())
+    assert "remote-terminal compatibility design" in design
+    assert "not local Claude" in design
+    assert "default hosted-terminal path" not in design
+
+
 def test_compliance_keeps_historical_provenance_and_does_not_claim_relay_authorization():
     text = " ".join((ROOT / "docs/compliance.md").read_text().split()).replace("**", "")
     assert "Last re-verified against Anthropic's published documentation: 2026-09-28" in text

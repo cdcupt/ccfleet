@@ -422,6 +422,10 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     shown = erik.page()
     assert "In use" in shown and "Max plan" in shown
     assert "Claude Code CLI" in shown and "claude.ai/code" not in shown
+    assert "Run <code>ccfleet local</code>" in shown
+    assert "local files, tools and history" in shown
+    assert "remote-terminal command, with remote files and persistent tmux" in shown
+    assert "A dropped network connection resumes the same session" not in shown
     assert "900</b> tokens run on this slot itself" in shown
     # The windows are the account's, used anywhere; said under them, so a week
     # at 30% beside 900 tokens here does not read as a mistake.
@@ -440,6 +444,9 @@ def test_a_cli_pairing_code_from_the_page(site):
     slot = active(store, claimed(store, erik))
     before = erik.page()
     assert "Connect this computer" in before
+    assert "runs Claude Code on your computer" in before
+    assert "sends supported model requests through this slot" in before
+    assert "The local command opens Claude Code on this slot" not in before
     shown = erik.press(f"/account/slots/{slot['id']}/cli")
     assert shown.status == 200
     assert "ccfleet login" in shown.body and "ccf_pair_" in shown.body

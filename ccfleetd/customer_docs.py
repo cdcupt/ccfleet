@@ -382,6 +382,8 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         'ccfleet local --resume work --fork-session\n'
         'ccfleet local --print "Summarize this project"</code></pre>'
         '<p>These are native local conversations, not remote tmux sessions. '
+        'Running <code>ccfleet local</code> again starts a new conversation; '
+        '<code>--new</code> makes that choice explicit. Existing history is kept. '
         '<code>--resume</code> uses Claude&#x27;s native history picker or an ID/name; '
         '<code>--continue</code> selects the last local conversation for this directory. '
         'Use <code>/model</code> and <code>/effort</code> inside Claude. Resuming preserves '
@@ -488,10 +490,16 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "Your files and settings stay; only the Claude sign-in changes.</p>"
         "<p>Until that sign-in finishes, the slot keeps its current account; if it does not "
         "go through, or you sign in with the account the slot already has, the account does "
-        "not change. Once it finishes, any open terminal session ends so no process keeps "
-        "the old account; run <code>ccfleet</code> again and the new session uses the new "
-        "account. Connected computers stay paired because their CC Fleet keys are separate "
-        "from the Claude credential.</p>"
+        "not change. Once it finishes, the slot&#x27;s Claude sessions end so they no longer "
+        "keep the old account; plain <code>ccfleet</code> opens a new remote session. "
+        "Connected computers stay paired because their CC Fleet keys are separate from "
+        "the Claude credential.</p>"
+        '<p>For <code>ccfleet local</code>, CC Fleet does not automatically close your '
+        'local Claude process or delete its history. The relay checks the slot&#x27;s '
+        'account for every request and cancels an in-flight request if that account '
+        'changes. Wait until the slot is <span class="pill ok">In use</span> again '
+        'before retrying deliberately; new requests then use its current bound account. '
+        'CC Fleet does not silently replay interrupted requests.</p>'
         "<p>A slot can change account once a week; after a change, your slot card says when "
         "it can change again. The operator sees that the account changed, never which "
         "account it is.</p></div>"
@@ -587,9 +595,10 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         f'<div class="how"><figure class="card diagram">{PICTURE}</figure>'
         '<div class="how-text">'
         '<div class="card"><h2>Your slot</h2>'
-        "<p>Your slot is a Linux account under the name you give it. You have a home directory "
-        "only your account can read, the original Claude Code, "
-        "and a persistent terminal session that keeps running when your computer disconnects. "
+        "<p>Your slot is a Linux account under the name you give it, with a private home "
+        "directory and the original Claude Code. The plain <code>ccfleet</code> "
+        "remote-terminal command uses a persistent session that keeps running when your "
+        "computer disconnects; <code>ccfleet local</code> instead runs on your computer. "
         "There is no administrator access inside a slot. Other slots on the same machine use "
         "different operating-system accounts and Claude sign-ins.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
@@ -635,8 +644,10 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "this and we do not look, but nothing can make it impossible. Keep nothing in a slot "
         "that you could not accept an administrator being able to read.</p></div>"
         '<div class="card"><h2>Kept up to date</h2><ul>'
-        '<li><strong>Local Claude Code</strong> uses its normal native update mechanism. '
-        'CC Fleet setup preserves an existing local installation and installs it if missing.</li>'
+        '<li><strong>Local Claude Code</strong>: CC Fleet setup preserves an existing '
+        'local installation and installs it if missing. Automatic updates are disabled '
+        'during a CC Fleet launch; update your local Claude installation separately, '
+        'outside that session.</li>'
         "<li><strong>Claude Code</strong> in your slot is updated automatically to "
         "Anthropic&#x27;s latest release, or to its stable release if you choose that on "
         "your page. A "
@@ -651,7 +662,9 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "how your slot&#x27;s machine is. Turn on <strong>outage emails</strong> there, and we "
         "email you when your slot&#x27;s machine has been down for five minutes, and again "
         "when it is back. An outage of this website is told afterwards, since the website "
-        "is what sends them; your slot keeps working through one.</li></ul></div>"
+        "is what sends them. Existing slot processes may keep running, but local model "
+        "requests require the broker to be reachable; a broker outage interrupts that "
+        "path.</li></ul></div>"
         '<div class="card"><h2>Giving a slot back</h2>'
         "<p>When you give a slot back, the machine stops everything running in it and deletes "
         "your Linux account and every file in it. The slot is offered to anybody else only "

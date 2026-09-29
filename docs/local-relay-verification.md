@@ -6,14 +6,29 @@ Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 ## Tested releases
 
 - Server and slot relay: `1d18b369c1aff3217dc53c7c8d789d72b9824587`.
-- Published client, including fail-closed legacy connector cleanup:
-  `ac193f2704e77e75f71fcaf2cc3fae2e3c59db81`.
+- Published client, including lock-confirmed legacy connector shutdown:
+  `501ffedf7ec55a2b873623b814018cc13e39791c`.
 - [Server release CI](https://github.com/cdcupt/ccfleet/actions/runs/36561158025)
-  and [client fix CI](https://github.com/cdcupt/ccfleet/actions/runs/36561584355)
+  and [current client CI](https://github.com/cdcupt/ccfleet/actions/runs/36566720164)
   passed Python 3.9, 3.12 and 3.13, shell checks and unit validation.
-- The completed local full suite passed **3,242 tests, 93.64% coverage** before
-  the last consent/timeout regression additions. Those additions passed focused
-  tests and the exact-release CI above. Ruff, Bash syntax and ShellCheck passed.
+- The completed local full suite for the current client passed **3,263 tests,
+  93.65% coverage**. The focused connector/native-launch suite also passed on
+  Python 3.9. Ruff, Bash syntax and ShellCheck passed.
+
+### Migration shutdown regression
+
+The first release missed a control-socket shutdown race: a stop acknowledgement
+could arrive before the connector finished closing, and the next status query
+could receive EOF. The current client confirms release of the resident's exclusive
+lock, which remains held until child processes and filesystem handles are closed.
+Missing sockets, EOF, reset and timeout are not themselves proof of completion.
+
+Real Unix-socket and flock tests cover truncated replies, reset/timeout, a missing
+listener with a still-held lock, and delayed filesystem-handle teardown. Migration
+tests confirm that unverified shutdown cannot retire a grant, reset the remote
+workspace, or launch a second local workflow. The public installer was exercised
+in a temporary destination; its client and helper bytes matched this tested
+revision. This was a client-only fix, requiring no server restart or new pairing.
 
 ## Actual native-client checks
 

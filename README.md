@@ -20,6 +20,10 @@ and uses only its bound account. This is an inference relay, not proof of
 slot-only agent execution or metadata-free requests. Plain `ccfleet` remains a
 remote-terminal compatibility command with remote files and persistent tmux.
 
+This implements the requested local-CLI/dedicated-slot relay workflow; it is not
+a claim of complete CC Host feature parity or zero metadata disclosure. See the
+[verified release scope and test evidence](docs/local-relay-verification.md).
+
 ## Customer setup and migration
 
 1. Sign in on the website, claim an allowed slot, and complete **Sign in to
@@ -76,6 +80,12 @@ ccfleet local --resume work --fork-session
 ccfleet local --print "Summarize this project"
 ```
 
+Running plain `ccfleet local` again starts a fresh conversation in the current
+directory; it does not automatically resume the previous one. Use `--continue`
+for the latest conversation in that directory, or `--resume` for the history
+picker. Existing history is kept. A second terminal opens an independent local
+session using the same assigned slot/account.
+
 These are native local conversations, not remote tmux sessions. Use `/model` and
 `/effort` in Claude; availability depends on the installed CLI and account.
 Additional supported native arguments go after `--`, subject to protected
@@ -95,7 +105,8 @@ disables supported optional telemetry without permanently editing native setting
 The previous live-folder mount is retired. `ccfleet local --disconnect` remains
 an explicit cleanup action for it; `--reset-link` is retired. Earlier snapshot
 commands are only for recovery. See [local relay and migration](docs/local-relay.md)
-and [retired workspaces](docs/project-workspaces.md). The website migration guide
+for shutdown-error recovery and a safe local-file check, and
+[retired workspaces](docs/project-workspaces.md). The website migration guide
 is at `/docs/guide#migration`.
 
 ## Privacy and routing scope
