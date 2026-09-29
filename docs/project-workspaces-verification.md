@@ -1,10 +1,11 @@
 # Project workspace release verification
 
-Verified 2026-09-29 UTC. Functional release: `391b0610e0e69a074d5d427597c502751147db32`.
+Verified 2026-09-29 UTC. Initial project release: `391b0610e0e69a074d5d427597c502751147db32`.
+This record also covers the subsequent account-session cleanup hardening.
 
 ## Automated checks
 
-- Full Python 3.12 suite: **2,750 passed**, **95.23% coverage**, exceeding the 80% gate.
+- Final full Python 3.12 suite: **2,775 passed**, **95.32% coverage**, exceeding the 80% gate.
 - Focused transfer/client/node/lifecycle/installer suite: 412 passed.
 - Python 3.9 compatibility checks passed for the shared filesystem module,
   slot protocol, client, installer and migration documentation.
@@ -15,6 +16,12 @@ Verified 2026-09-29 UTC. Functional release: `391b0610e0e69a074d5d427597c5027511
 These tests cover typed content-only transfers, synthetic host metadata exclusions,
 unsafe paths and links, ignored/credential files, bounded framing, account binding,
 conflicts, backups, session command/environment selection and retired relay refusal.
+
+An additional 24 account-transition regression cases verify that an explicit login
+refresh/change ends default, project, and recognized named Claude sessions while
+preserving unrelated shell sessions. Discovery/termination failures leave durable
+restart debt; they cannot silently mark cleanup complete. These tests use synthetic
+accounts and command runners, not changes to a real customer's Claude sign-in.
 
 ## Live owner-slot canary
 

@@ -1915,9 +1915,82 @@ def sync_slot_terminal_unit(runner: Runner = subprocess.run) -> None:
         _run(runner, ["systemctl", "--user", "enable", DEFAULT_SHELL_SERVICE], timeout=30)
 
 
+def _tmux_gone(proc: subprocess.CompletedProcess, *, target: bool = False) -> bool:
+    """Only known idempotent absence is success; never echo raw tmux errors."""
+    error = proc.stderr if isinstance(proc.stderr, str) else ""
+    if proc.returncode != 1 or len(error) > 4096:
+        return False
+    if error.startswith("no server running on "):
+        return True
+    if (error.startswith(("error connecting to ", "failed to connect to server"))
+            and "No such file or directory" in error):
+        return True
+    return target and error.startswith(("can't find session:", "no such session:"))
+
+
+def _slot_claude_sessions(output: str, home: Path) -> Optional[set[str]]:
+    """Identify platform Claude panes without keeping or reporting their commands."""
+    if not isinstance(output, str) or len(output) > 256 * 1024:
+        return None
+    lines = output.splitlines()
+    if len(lines) > 4096:
+        return None
+    result = set()
+    native = str(home / ".local/bin/claude")
+    project = re.compile(r"p_[0-9a-f]{32}_[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}\Z")
+    named = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}\Z")
+    for line in lines:
+        fields = line.split("\t")
+        if len(line) > 8192 or len(fields) != 3:
+            return None
+        name, started, _current = fields
+        if project.fullmatch(name):
+            result.add(name)
+        elif named.fullmatch(name):
+            try:
+                command = shlex.split(started)
+            except ValueError:
+                return None
+            if command and command[0] == native:
+                result.add(name)
+    return result
+
+
 def restart_slot_terminal(runner: Runner = subprocess.run) -> bool:
-    """Make an explicitly refreshed Claude login take effect in the CLI session."""
-    _run(runner, ["tmux", "kill-session", "-t", "ccfleet"], timeout=15)
+    """End every platform Claude session on an explicitly changed/refreshed login.
+
+    A named project or older named terminal can cache its account just like the
+    default session. Do not mark restart debt paid until all those sessions are
+    gone. Other shell sessions and the separate login/quota tmux servers survive.
+    """
+    targets = {"ccfleet"}
+    complete = True
+    try:
+        panes = runner(["tmux", "list-panes", "-a", "-F",
+                        "#{session_name}\t#{pane_start_command}\t#{pane_current_command}"],
+                       capture_output=True, text=True, timeout=15, check=False)
+        if panes.returncode == 0:
+            discovered = _slot_claude_sessions(panes.stdout, Path.home())
+            if discovered is None:
+                complete = False
+            else:
+                targets.update(discovered)
+        elif not _tmux_gone(panes):
+            complete = False
+    except (OSError, subprocess.SubprocessError):
+        complete = False
+    # Always attempt the default even if discovery failed. Exact matching avoids
+    # accidentally killing a similarly named unrelated session or a prefix.
+    for target in sorted(targets):
+        try:
+            killed = runner(["tmux", "kill-session", "-t", "=" + target],
+                            capture_output=True, text=True, timeout=15, check=False)
+            if killed.returncode != 0 and not _tmux_gone(killed, target=True):
+                complete = False
+        except (OSError, subprocess.SubprocessError):
+            complete = False
+    if not complete:
+        return False
     try:
         proc = runner(["systemctl", "--user", "restart", DEFAULT_SHELL_SERVICE],
                       capture_output=True, text=True, timeout=60, check=False)
