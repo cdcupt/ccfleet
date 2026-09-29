@@ -3,7 +3,51 @@
 Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 `ccfleet local` launches; it does not terminate existing user sessions.
 
-## Latest reliability and privacy hardening
+## Latest lifecycle and streaming follow-up
+
+Runtime revision `e1b1abc6378bb24611bcea8c67a505f790b65723` was deployed to
+BWH and all three managed hosted nodes on 2026-09-29 UTC, canary first. The
+published client bytes did not change.
+
+- Completed local suite: **3,653 passed, 1 skipped, 93.78% coverage**. The skip
+  is Linux-only directory traversal validation, which was exercised in CI.
+- [Exact-runtime CI](https://github.com/cdcupt/ccfleet/actions/runs/36618480056)
+  passed all five jobs. Python 3.9, 3.12 and 3.13 each reported **3,654 passed,
+  93.81% coverage**. Ruff, Bash syntax and changed-script ShellCheck passed.
+- Synthetic regressions cover automatic claim/release/reclaim gates, stale and
+  malformed assignments, privileged accounts, operator opt-out, unsafe policy
+  files and installer dependency failures. Three deliberately broken guards
+  failed their targeted regressions in separate processes with fresh bytecode
+  caches.
+- A separate networkless Linux container dropped to a non-root identity and
+  verified claim, release denial, reclaim and opt-out beneath a root-owned
+  `0711` policy directory. No customer credentials or accounts were involved.
+- Stream tests verify same-account native rotation beyond the old expiry,
+  logout/missing/expired credential cancellation, a retained socket after an
+  HTTP `Connection: close` response, and suppression of buffered chunks after
+  cancellation. These are controlled-peer tests, not a forced live OAuth refresh.
+- Root explicitly opted the three hosted machines into automatic gate
+  reconciliation. Installed module hashes and fresh reports were verified.
+  Both occupied nodes passed readiness as the unprivileged slot user; the free
+  node remained unclaimed with no customer Unix account or inference gate.
+  No occupied customer slot was released or reassigned for testing.
+- The public installer paired an isolated owner-canary profile. Two short model
+  turns verified actual local Read/Write and native same-session continuation.
+  Revocation ended an idle connection and denied reconnection. The temporary
+  device was cleaned up, and the pre-existing ordinary tmux session was preserved.
+- The online database backup passed integrity checking; rollback images and
+  node-library backups were retained. Final checks found zero open alerts,
+  zero pending pairings, the one original active device, unchanged responses
+  from all 17 tenant domains, and working migration/privacy pages.
+- Seven inactive synthetic test profiles/staging directories were moved into a
+  private recoverable archive. User projects/history and production recovery
+  backups were preserved; no customer data was deleted as cleanup.
+
+Automatic access policy is documented in [operator verification](local-relay.md#operator-verification).
+This closes the reviewed lifecycle and stream defects; it does not establish
+complete CC Host parity, zero metadata disclosure or indefinite account access.
+
+## Earlier reliability and privacy hardening
 
 Runtime revision `f70b2ed5c9bd61a7aa67e91e7014200bf4c7362c` was deployed to
 BWH and the two currently assigned hosted nodes, canary first. The published
