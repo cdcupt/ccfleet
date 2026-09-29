@@ -5,6 +5,7 @@ from pathlib import Path
 from ccfleet_agent import project_files
 from ccfleetd.config import Config
 from ccfleetd.customer_docs import guide, how_it_works
+from ccfleetd.usersite import privacy_page
 
 ROOT = Path(__file__).parents[1]
 
@@ -113,3 +114,13 @@ def test_readme_and_compliance_describe_the_replacement_without_credential_subst
     assert "old local-agent credential-substitution relay is retired" in compliance
     assert "It does not launch Claude on the laptop" in compliance
     assert "Do not promise anonymity" in compliance
+
+
+def test_privacy_policy_discloses_explicit_project_transfers_and_retained_copies():
+    page = privacy_page(Config())
+    for text in ("Selected project sharing", "relative filenames", "transfer manifests",
+                 "recovery backups", "connection IP and timing", "not anonymity",
+                 "does not delete those files", "giving the slot back wipes its copies",
+                 "relevant shared content is sent to Anthropic", "operator console"):
+        assert text in page
+    assert '/docs/guide#migration' in page

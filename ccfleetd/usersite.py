@@ -610,7 +610,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-09-28"
+PRIVACY_UPDATED = "2026-09-29"
 
 
 def _span(seconds: int) -> str:
@@ -653,7 +653,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "another Claude account, which a "
         "slot may do once a week. Each slot you hold has a name: a neutral one like "
         "slot-4821 when you claim it, never anything from your address, or the one you give "
-        "it on your page (or, if you asked, a name the operator set for you). That name is "
+        "it on your page (or, if you asked, a name the operator set for you). That name "
         "also becomes its machine hostname, so Anthropic can see it too. "
         "The name and the date go when you give the slot back.</li>"
         "<li>Your sign-in here: a random value in a cookie, of which we store only a hash, "
@@ -692,10 +692,26 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "prevents it from reading terminal contents.</p>"
         "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
         "Anthropic&#x27;s own terms and privacy policy.</p></div>"
+        '<div class="card"><h2>Selected project sharing</h2>'
+        '<p>If you choose <code>ccfleet local</code>, you explicitly share selected project '
+        'files with your slot. The connector transfers relative filenames, file contents, '
+        'hashes and executable flags over the encrypted SSH path; it does not automatically '
+        'copy your laptop environment, hostname, username, absolute project path or timezone. '
+        'Claude and its tools run on the slot, and relevant shared content is sent to Anthropic. '
+        'File contents and names can themselves identify you or contain secrets, so review '
+        'the selection before confirming.</p>'
+        '<p>The broker can see your connection IP and timing, and SSH exposes transport '
+        'properties such as client version and terminal dimensions. This is not anonymity. '
+        'Project copies, transfer manifests, and recovery backups are kept in your slot. '
+        'Local tracking and pull backups remain on your computer. Disconnecting or revoking '
+        'a device does not delete those files; giving the slot back wipes its copies, not '
+        'your local files. See the <a href="/docs/guide#migration">migration guide</a> '
+        'for explicit push, review and pull steps.</p></div>'
         '<div class="card"><h2>What the operator can see</h2>'
         "<p>The machines are ours, and their administrators have root. That means they can "
-        "technically read any slot&#x27;s files, and its Claude credential. No feature of "
-        "ccfleet does this and we do not look, but no setting can make it impossible, so "
+        "technically read any slot&#x27;s files, and its Claude credential. The operator "
+        "console does not expose their contents, but no setting can make root access "
+        "impossible, so "
         "please keep nothing on a slot that you could not accept an administrator being "
         "able to read.</p>"
         "<p>In the console, the operator sees your email address, your allowance, the slots "
