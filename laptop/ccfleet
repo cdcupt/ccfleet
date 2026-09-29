@@ -505,7 +505,12 @@ def check_local_relay(device: dict[str, Any]) -> None:
                                 input=relay_preamble({"operation": "status"}),
                                 capture_output=True, timeout=25, check=False)
     except subprocess.TimeoutExpired as exc:
-        raise CliError("slot relay readiness check timed out") from exc
+        raise CliError("slot connection timed out; check your network and try again") from exc
+    if result.returncode not in (0, 2):
+        # Never echo arbitrary SSH/proxy output: it can contain private paths
+        # or remotely supplied terminal control sequences.
+        raise CliError("could not connect to your slot; check your network and Connected "
+                       "devices on your slot page, then retry (re-pair if revoked)")
     stream = io.BytesIO(result.stdout)
     meta = relay_metadata(stream)
     body = relay_chunk(stream)
@@ -517,8 +522,12 @@ def check_local_relay(device: dict[str, Any]) -> None:
         raise CliError("invalid relay readiness response") from exc
     if (not isinstance(answer, dict) or meta["status"] != 200
             or result.returncode != 0 or answer.get("ready") is not True):
-        raise CliError("local relay is unavailable: the operator must enable it and "
-                       "your slot must have a current Claude sign-in")
+        reason = {
+            401: "your slot's Claude sign-in needs renewal; open your slot page to sign in",
+            403: "local projects are not enabled for this slot; ask your CC Fleet operator",
+            409: "your slot is changing accounts; wait for it to finish and try again",
+        }.get(meta["status"], "local relay is unavailable; retry or contact your CC Fleet operator")
+        raise CliError(reason, meta["status"])
 
 
 class LocalRelayServer(ThreadingHTTPServer):
@@ -673,7 +682,8 @@ class LocalRelayHandler(BaseHTTPRequestHandler):
 def local_environment(device: dict[str, Any], port: int, secret: str) -> dict[str, str]:
     env = dict(os.environ)
     for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS",
-                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+                 "ANTHROPIC_MODEL", "CLAUDE_CODE_EFFORT_LEVEL"):
         env.pop(name, None)
     profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
     profile.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -690,7 +700,50 @@ def local_environment(device: dict[str, Any], port: int, secret: str) -> dict[st
     return env
 
 
+def local_claude_command(claude: str, args: argparse.Namespace) -> list[str]:
+    """Keep native history/pickers; never build a second session database."""
+    resuming = args.resume is not None or args.continue_session
+    command = [claude]
+    for flag, value, default in (("--model", args.model, "opus"),
+                                 ("--effort", args.effort, "max")):
+        if value is not None or not resuming:
+            command.extend([flag, value if value is not None else default])
+    if args.mode == "bypassPermissions":
+        command.append("--dangerously-skip-permissions")
+    else:
+        command.extend(["--permission-mode", args.mode])
+    if args.resume is not None:
+        command.append(f"--resume={args.resume}" if args.resume else "--resume")
+    elif args.continue_session:
+        command.append("--continue")
+    if args.fork_session:
+        command.append("--fork-session")
+    if args.name:
+        command.append(f"--name={args.name}")
+    if args.print_prompt is not None:
+        command.extend(["--print", "--", args.print_prompt])
+    return command
+
+
+def validate_local_args(args: argparse.Namespace) -> None:
+    if args.model is not None and not MODEL_RE.fullmatch(args.model):
+        raise CliError("invalid model name")
+    for label, value in (("session name", args.name), ("resume value", args.resume)):
+        if value is not None and (len(value) > 256 or any(ord(c) < 32 or ord(c) == 127
+                                                         for c in value)):
+            raise CliError(f"{label} must be at most 256 characters with no control characters")
+    if args.fork_session and args.resume is None and not args.continue_session:
+        raise CliError("--fork-session needs --resume or --continue")
+    if args.resume == "" and args.print_prompt is not None:
+        raise CliError("--print needs a session ID or name with --resume; "
+                       "omit --print for the picker")
+    if args.check and (args.resume is not None or args.continue_session or args.new_session
+                       or args.name or args.fork_session or args.print_prompt is not None):
+        raise CliError("--check only checks readiness; use session options in a separate launch")
+
+
 def cmd_local(args: argparse.Namespace) -> int:
+    validate_local_args(args)
     device = choose_device(load_config(), args.slot)
     claude = shutil.which("claude")
     if claude is None:
@@ -699,22 +752,16 @@ def cmd_local(args: argparse.Namespace) -> int:
     if not project.is_dir():
         raise CliError("--project must be an existing local directory")
     check_local_relay(device)
+    if args.check:
+        print(f"Ready: local Claude Code, project directory, and slot {device['slot_name']}.\n"
+              "No model request was sent and no Claude session was started.")
+        return 0
     server = LocalRelayServer(device, secrets.token_urlsafe(32))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
         env = local_environment(device, server.server_port, server.secret)
-        command = [claude, "--model", args.model, "--effort", args.effort]
-        if args.mode == "bypassPermissions":
-            command.append("--dangerously-skip-permissions")
-        else:
-            command.extend(["--permission-mode", args.mode])
-        if args.resume:
-            command.extend(["--resume", args.resume])
-        elif args.continue_session:
-            command.append("--continue")
-        if args.print_prompt is not None:
-            command.extend(["--print", args.print_prompt])
+        command = local_claude_command(claude, args)
         print(f"Local project: {project}\nAccount: assigned slot {device['slot_name']}\n"
               "Files, tools and conversation history stay on this computer.\n"
               "Selected file contents and tool output may be sent to Anthropic.",
@@ -723,6 +770,12 @@ def cmd_local(args: argparse.Namespace) -> int:
             return subprocess.call(command, cwd=project, env=env)
         except KeyboardInterrupt:
             return 130
+        finally:
+            if args.print_prompt is None:
+                resume = ["ccfleet", "local", "--slot", device["slot_id"],
+                          "--project", str(project), "--resume"]
+                print(f"\nSession ended. Resume a saved conversation: {shlex.join(resume)}",
+                      file=sys.stderr)
     finally:
         server.stop_connections()
         server.shutdown()
@@ -808,17 +861,30 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--model", default="opus", help="fable, opus, sonnet, or a model id")
     restart.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
-    local = sub.add_parser("local", help="experimental: run local Claude using your slot relay")
+    local = sub.add_parser("local", help="experimental: run local Claude using your slot relay",
+                           epilog="New: ccfleet local --new --name work | "
+                           "Resume picker: ccfleet local --resume | "
+                           "Check setup: ccfleet local --check")
     local.add_argument("--slot", default="", help="paired slot id or name")
     local.add_argument("--project", default=".", help="local project directory (default: current)")
-    local.add_argument("--model", default="opus")
-    local.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
+    local.add_argument("--model", help="new sessions: opus; resumed sessions: keep native choice")
+    local.add_argument("--effort", choices=EFFORT_LEVELS,
+                       help="new sessions: max; resumed sessions: keep native choice")
     local.add_argument("--mode", choices=PERMISSION_MODES, default="manual",
                        help="local tool permissions (default: manual; no slot isolation on laptop)")
     local.add_argument("-p", "--print", dest="print_prompt", help="one non-interactive prompt")
+    local.add_argument("--name", default="", help="display name in Claude's session picker")
+    local.add_argument("--fork-session", action="store_true",
+                       help="resume a copy without replacing the original conversation")
+    local.add_argument("--check", action="store_true",
+                       help="check local dependencies and slot readiness without model usage")
     history = local.add_mutually_exclusive_group()
-    history.add_argument("--resume", default="", metavar="SESSION_ID")
-    history.add_argument("--continue", dest="continue_session", action="store_true")
+    history.add_argument("--resume", nargs="?", const="", metavar="ID_OR_NAME",
+                         help="resume by ID/name, or open Claude's picker when omitted")
+    history.add_argument("--continue", dest="continue_session", action="store_true",
+                         help="continue the last conversation in this local project")
+    history.add_argument("--new", dest="new_session", action="store_true",
+                         help="start a fresh local conversation (the default)")
     sub.add_parser("list", help="list slots connected on this computer")
     use = sub.add_parser("use", help="choose the default slot")
     use.add_argument("slot")
@@ -852,8 +918,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.command == "login":
             return cmd_login(args)
         if args.command == "local":
-            if not MODEL_RE.fullmatch(args.model):
-                raise CliError("invalid model name")
             return cmd_local(args)
         if args.command == "list":
             return cmd_list(args)

@@ -348,7 +348,9 @@ def test_adding_lowercase_no_proxy_keeps_uppercase_only_exclusions(local_client,
 
 def test_laptop_permissions_do_not_silently_inherit_hosted_bypass(local_client):
     args = local_client["parser"]().parse_args(["local"])
-    assert args.mode == "manual" and args.model == "opus" and args.effort == "max"
+    assert args.mode == "manual" and args.model is None and args.effort is None
+    command = local_client["local_claude_command"]("claude", args)
+    assert command == ["claude", "--model", "opus", "--effort", "max", "--permission-mode", "manual"]
     assert args.project == "."
     args = local_client["parser"]().parse_args(["local", "--mode", "bypassPermissions"])
     assert args.mode == "bypassPermissions"
@@ -447,10 +449,153 @@ def test_local_launcher_runs_original_claude_in_the_selected_local_directory(loc
     monkeypatch.setitem(globals_, "check_local_relay", lambda _: None)
     monkeypatch.setattr(local_client["shutil"], "which", lambda _: "/test/original-claude")
     monkeypatch.setattr(subprocess, "call", lambda cmd, **kw: calls.append((cmd, kw)) or 0)
-    args = SimpleNamespace(slot="", project=str(project), model="fable", effort="xhigh",
-                           mode="manual", resume="", continue_session=False, print_prompt=None)
+    args = local_client["parser"]().parse_args([
+        "local", "--project", str(project), "--model", "fable", "--effort", "xhigh"])
     assert local_client["cmd_local"](args) == 0
     command, options = calls[0]
     assert command == ["/test/original-claude", "--model", "fable", "--effort", "xhigh", "--permission-mode", "manual"]
     assert options["cwd"] == project
     assert options["env"]["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
+
+
+@pytest.mark.parametrize("flags,expected", [
+    (["--resume"], ["--resume"]),
+    (["--resume", "saved-session"], ["--resume=saved-session"]),
+    (["--resume", "project with spaces"], ["--resume=project with spaces"]),
+    (["--continue"], ["--continue"]),
+    (["--continue", "--fork-session", "--name", "review"],
+     ["--continue", "--fork-session", "--name=review"]),
+    (["--resume", "original", "--fork-session"], ["--resume=original", "--fork-session"]),
+])
+def test_local_resume_preserves_native_model_and_effort_choices(local_client, flags, expected):
+    args = local_client["parser"]().parse_args(["local", *flags])
+    local_client["validate_local_args"](args)
+    assert local_client["local_claude_command"]("claude", args) == [
+        "claude", "--permission-mode", "manual", *expected]
+
+
+def test_local_resume_can_explicitly_change_model_effort_and_permissions(local_client):
+    args = local_client["parser"]().parse_args([
+        "local", "--continue", "--model", "fable", "--effort", "low",
+        "--mode", "bypassPermissions"])
+    assert local_client["local_claude_command"]("claude", args) == [
+        "claude", "--model", "fable", "--effort", "low",
+        "--dangerously-skip-permissions", "--continue"]
+
+
+def test_named_new_local_session_keeps_names_and_prompts_as_data(local_client):
+    args = local_client["parser"]().parse_args([
+        "local", "--new", "--name=--dangerously-skip-permissions",
+        "--print=--dangerously-skip-permissions"])
+    assert local_client["local_claude_command"]("claude", args) == [
+        "claude", "--model", "opus", "--effort", "max", "--permission-mode", "manual",
+        "--name=--dangerously-skip-permissions", "--print", "--", "--dangerously-skip-permissions"]
+
+
+@pytest.mark.parametrize("flags", [
+    ["--resume", "--continue"], ["--new", "--resume"], ["--new", "--continue"],
+])
+def test_local_history_operations_are_mutually_exclusive(local_client, flags):
+    with pytest.raises(SystemExit):
+        local_client["parser"]().parse_args(["local", *flags])
+
+
+@pytest.mark.parametrize("flags", [
+    ["--fork-session"], ["--new", "--fork-session"], ["--resume", "--print", "hi"],
+    ["--name", "bad\nname"], ["--resume", "bad\x1bname"], ["--name", "a" * 257],
+    ["--model", "bad;name"], ["--check", "--print", "hi"], ["--check", "--continue"],
+    ["--check", "--resume"], ["--check", "--new"], ["--check", "--name", "work"],
+])
+def test_invalid_local_session_options_fail_before_config_or_network(local_client, monkeypatch, flags):
+    def unexpected():
+        pytest.fail("invalid arguments read the device configuration")
+    monkeypatch.setitem(local_client["cmd_local"].__globals__, "load_config", unexpected)
+    assert local_client["main"](["local", *flags]) == 2
+
+
+def test_local_sessions_do_not_inherit_shell_model_or_pinned_effort(local_client, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_EFFORT_LEVEL", "max")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "other-model")
+    env = local_client["local_environment"]({"slot_id": "slot1"}, 12345, "nonce")
+    assert "CLAUDE_CODE_EFFORT_LEVEL" not in env and "ANTHROPIC_MODEL" not in env
+    assert os.environ["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+    assert os.environ["ANTHROPIC_MODEL"] == "other-model"
+
+
+@pytest.fixture
+def local_launch(local_client, monkeypatch, tmp_path):
+    project = tmp_path / "project with spaces"
+    project.mkdir()
+    calls = []
+    probes = []
+    globals_ = local_client["cmd_local"].__globals__
+    monkeypatch.setitem(globals_, "load_config", lambda: {})
+    monkeypatch.setitem(globals_, "choose_device", lambda *_: {"slot_id": "slot1", "slot_name": "test-slot"})
+    monkeypatch.setitem(globals_, "check_local_relay", lambda device: probes.append(device["slot_id"]))
+    monkeypatch.setattr(local_client["shutil"], "which", lambda _: "/test/original-claude")
+    monkeypatch.setattr(subprocess, "call", lambda cmd, **kw: calls.append((cmd, kw)) or 0)
+    return project, calls, probes
+
+
+def test_local_check_sends_only_readiness_probe_and_starts_no_listener_or_claude(local_client, local_launch, monkeypatch, capsys):
+    project, calls, probes = local_launch
+
+    def unexpected(*_):
+        pytest.fail("readiness check created a local listener")
+    monkeypatch.setitem(local_client["cmd_local"].__globals__, "LocalRelayServer", unexpected)
+    assert local_client["main"](["local", "--check", "--project", str(project)]) == 0
+    assert probes == ["slot1"] and calls == []
+    assert "No model request was sent" in capsys.readouterr().out
+    assert not local_client["home"]().exists(), "check should not create a Claude profile"
+
+
+@pytest.mark.parametrize("failure", ["missing_claude", "missing_project", "blocked_slot"])
+def test_local_launch_stops_before_starting_claude_when_not_ready(local_client, local_launch, monkeypatch, failure):
+    project, calls, probes = local_launch
+    if failure == "missing_claude":
+        monkeypatch.setattr(local_client["shutil"], "which", lambda _: None)
+    elif failure == "missing_project":
+        project = project / "does-not-exist"
+    else:
+        def blocked(_):
+            raise local_client["CliError"]("slot unavailable")
+        monkeypatch.setitem(local_client["cmd_local"].__globals__, "check_local_relay", blocked)
+    assert local_client["main"](["local", "--project", str(project)]) == 2
+    assert calls == [] and probes == []
+
+
+@pytest.mark.parametrize("print_mode", [False, True])
+def test_local_exit_suggests_quoted_resume_only_for_interactive_sessions(local_client, local_launch, capsys, print_mode):
+    project, _, _ = local_launch
+    flags = ["--print", "hello"] if print_mode else []
+    assert local_client["main"](["local", "--project", str(project), *flags]) == 0
+    output = capsys.readouterr().err
+    if print_mode:
+        assert "Resume a saved conversation" not in output
+    else:
+        assert f"--slot slot1 --project '{project}' --resume" in output
+
+
+@pytest.mark.parametrize("status,expected", [
+    (401, "sign-in needs renewal"), (403, "not enabled"),
+    (409, "changing accounts"), (503, "unavailable"),
+])
+def test_local_preflight_errors_give_safe_specific_recovery_steps(local_client, monkeypatch, status, expected):
+    encoded = io.BytesIO()
+    relay.send_error(encoded, status, "remote-private-data\x1b")
+    monkeypatch.setitem(local_client["check_local_relay"].__globals__, "relay_ssh_command", lambda _: ["ssh"])
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: SimpleNamespace(
+        stdout=encoded.getvalue(), stderr=b"secret-debug-output", returncode=2))
+    with pytest.raises(local_client["CliError"], match=expected) as error:
+        local_client["check_local_relay"]({})
+    assert error.value.status == status
+    assert "remote-private-data" not in str(error.value) and "secret-debug-output" not in str(error.value)
+
+
+def test_local_preflight_transport_failure_does_not_print_private_ssh_output(local_client, monkeypatch):
+    monkeypatch.setitem(local_client["check_local_relay"].__globals__, "relay_ssh_command", lambda _: ["ssh"])
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: SimpleNamespace(
+        stdout=b"", stderr=b"secret-debug-output", returncode=255))
+    with pytest.raises(local_client["CliError"], match="Connected devices") as error:
+        local_client["check_local_relay"]({})
+    assert "secret-debug-output" not in str(error.value)
