@@ -501,8 +501,9 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         'before retrying deliberately; new requests then use its current bound account. '
         'CC Fleet does not silently replay interrupted requests.</p>'
         "<p>A slot can change account once a week; after a change, your slot card says when "
-        "it can change again. The operator sees that the account changed, never which "
-        "account it is.</p></div>"
+        "it can change again. An account change is visible to the operator; "
+        '<a href="/privacy">the privacy page</a> explains which account information '
+        'is reported to CC Fleet.</p></div>'
         '<div class="card"><h2>Keeping Claude Code up to date</h2>'
         "<p>Your slot card has a <strong>Claude Code</strong> row: the version your slot "
         "runs and, when Anthropic has published a newer one, its number. The button beside "

@@ -247,6 +247,9 @@ def test_the_guide_distinguishes_new_local_history_and_account_changes():
     assert "cancels an in-flight request if that account changes" in guide
     assert "new requests then use its current bound account" in guide
     assert "any open terminal session ends" not in guide
+    assert "An account change is visible to the operator" in guide
+    assert 'href="/privacy">the privacy page</a> explains which account information' in guide
+    assert "never which account it is" not in guide
 
 
 def test_how_it_works_scopes_persistence_and_broker_outages():

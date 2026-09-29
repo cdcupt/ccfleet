@@ -5,7 +5,9 @@ Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 
 ## Tested releases
 
-- Server and slot relay: `1d18b369c1aff3217dc53c7c8d789d72b9824587`.
+- Inference-runtime baseline (server relay code and installed slot relay):
+  `1d18b369c1aff3217dc53c7c8d789d72b9824587`. Later website-copy releases may use a
+  newer repository revision without changing that inference protocol or node code.
 - Published client, including lock-confirmed legacy connector shutdown:
   `501ffedf7ec55a2b873623b814018cc13e39791c`.
 - [Server release CI](https://github.com/cdcupt/ccfleet/actions/runs/36561158025)
