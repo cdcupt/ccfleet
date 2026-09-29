@@ -129,9 +129,14 @@ ccfleet local --print "Summarize this project"
 connections without a model request. It reports connection timings, not model
 inference performance. Foreground launches may explicitly opt into
 `ccfleet local --reuse-transport`; reuse stays off by default. Each launch owns
-its own pinned connection, which closes with its bridge. A failed established
+its own pinned connection, which closes with its bridge on normal exit. A failed established
 master does not open a fallback connection or replay the model request.
 Managed background jobs currently use ordinary pinned SSH connections.
+Killing only the foreground Python wrapper with `SIGKILL` can leave an idle SSH
+master/proxy and private control directory behind, and does not guarantee that
+native/tool children stopped. The idle master makes no model request by itself;
+revoking that computer closes its broker transport. This is not the supervised
+background-job crash guarantee. Reuse remains experimental and off by default.
 
 These are native Claude sessions, not remote tmux sessions. `--resume` opens the
 native history picker or selects an ID/name; `--continue` uses the last native
