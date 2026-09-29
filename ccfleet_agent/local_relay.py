@@ -41,7 +41,10 @@ READ_TIMEOUT = 300
 USER_AGENT = "ccfleet-slot-relay/2"
 HEADER_NAME = re.compile(r"[a-zA-Z0-9-]{1,64}\Z")
 REQUEST_HEADERS = frozenset({"accept", "content-type", "anthropic-version", "anthropic-beta"})
-RESPONSE_HEADERS = frozenset({"content-type", "request-id", "retry-after"})
+RESPONSE_HEADERS = frozenset({"content-type", "retry-after"})
+MAX_RETRY_AFTER = 24 * 60 * 60
+MAX_ERROR_BODY = 64 * 1024
+ERROR_READ_TIMEOUT = 5
 PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true", "/v1/messages/count_tokens",
                    "/v1/messages/count_tokens?beta=true"})
 IDENTITY_FIELDS = frozenset({"user_id", "device_id", "session_id", "client_id",
@@ -123,6 +126,91 @@ def send_error(stream: BinaryIO, status: int, message: str) -> None:
     body = json.dumps({"type": "error", "error": {
         "type": "ccfleet_relay_error", "message": message}}).encode()
     write_chunk(stream, body)
+    write_chunk(stream, b"")
+
+
+def context_overflow(response: Any, headers: dict[str, str], upstream_socket: Any = None) -> bool:
+    """Recognize only native context recovery, without reflecting error text."""
+    length = getattr(response, "length", None)
+    if (response.status != 400 or headers.get("content-type") != "application/json"
+            or (type(length) is int and length >= MAX_ERROR_BODY)):
+        return False
+    raw = bytearray()
+    deadline = time.monotonic() + ERROR_READ_TIMEOUT
+    try:
+        while len(raw) < MAX_ERROR_BODY:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if upstream_socket is not None:
+                upstream_socket.settimeout(remaining)
+            part = response.read1(min(CHUNK_SIZE, MAX_ERROR_BODY - len(raw)))
+            if not part:
+                if getattr(response, "length", None) not in (None, 0):
+                    return False
+                value = decode_json(bytes(raw))
+                error = value.get("error") if isinstance(value, dict) else None
+                if not isinstance(error, dict):
+                    return False
+                if error.get("type") == "context_window_exceeded":
+                    return True
+                message = error.get("message")
+                prefix = "prompt is too long"
+                return (error.get("type") == "invalid_request_error"
+                        and isinstance(message, str)
+                        and message.startswith(prefix)
+                        and (len(message) == len(prefix)
+                             or message[len(prefix)] in ": \t\r\n"))
+            raw.extend(part)
+        # The bounded buffer may be incomplete; never guess from a prefix.
+        return False
+    except (ValueError, UnicodeError, RecursionError, OSError, EOFError,
+            http.client.HTTPException):
+        return False
+
+
+def send_upstream_error(stream: BinaryIO, status: int, headers: dict[str, str], *,
+                        overflow: bool = False) -> None:
+    """Return actionable categories, never provider bodies or account details.
+
+    Status selects the public message, except a bounded JSON classification for
+    native context-overflow recovery. No text from the body is returned. Native
+    clients lose verbose provider diagnostics, but retain status, standard error
+    categories, context recovery and a bounded numeric retry delay.
+    """
+    errors = {
+        400: ("invalid_request_error", "The model request was rejected. Check the selected "
+              "model, context size, and request options."),
+        401: ("authentication_error", "The slot's Claude sign-in was rejected. Open your "
+              "slot page to renew it."),
+        403: ("permission_error", "The slot account cannot use this model or feature. "
+              "Check its access on your slot page."),
+        404: ("not_found_error", "The requested model or endpoint is unavailable. "
+              "Choose an available model."),
+        408: ("api_error", "The upstream model request timed out; the relay did not retry it."),
+        409: ("invalid_request_error", "The model request conflicted with account state. "
+              "Check your slot before trying again."),
+        413: ("request_too_large", "The model request is too large. Start a shorter "
+              "conversation or reduce input."),
+        429: ("rate_limit_error", "The slot account is rate limited. Wait before sending "
+              "a new request."),
+        529: ("overloaded_error", "The upstream model service is overloaded. Try again later."),
+    }
+    if status == 400 and overflow:
+        category = "invalid_request_error"
+        message = "prompt is too long: reduce conversation context or start a new session."
+    elif 300 <= status < 400:
+        status = 502
+        category, message = "api_error", "The upstream model redirect was refused."
+    else:
+        default = (("api_error", "The upstream model service failed. Try again later.")
+                   if status >= 500 else
+                   ("invalid_request_error", "The model request was rejected. Check your "
+                    "selected model and request options."))
+        category, message = errors.get(status, default)
+    write_metadata(stream, status, {**headers, "content-type": "application/json"})
+    write_chunk(stream, json.dumps({"type": "error", "error": {
+        "type": category, "message": message}}, separators=(",", ":")).encode())
     write_chunk(stream, b"")
 
 
@@ -261,15 +349,27 @@ def connect_upstream() -> http.client.HTTPSConnection:
 
 
 def response_headers(response: Any) -> dict[str, str]:
-    headers = {}
+    headers, seen = {}, set()
     for name, value in response.getheaders():
         lowered = name.lower()
         if lowered not in RESPONSE_HEADERS:
             continue
-        if (lowered in headers or len(value) > 8192 or not value.isascii()
+        if (lowered in seen or len(value) > 8192 or not value.isascii()
                 or any(ord(c) < 32 or ord(c) == 127 for c in value)):
             raise RelayError(502, "upstream returned invalid response headers")
-        headers[lowered] = value
+        seen.add(lowered)
+        if lowered == "content-type":
+            media_type = value.split(";", 1)[0].strip().lower()
+            if media_type not in {"application/json", "text/event-stream"}:
+                # Error pages are never forwarded, regardless of their type.
+                if response.status >= 300:
+                    continue
+                raise RelayError(502, "upstream returned an unsupported response type")
+            headers[lowered] = media_type
+        elif len(value) <= 6 and value.isdigit() and int(value) <= MAX_RETRY_AFTER:
+            headers[lowered] = str(int(value))
+    # request-id is deliberately not forwarded: opaque identifiers can contain
+    # account/credential text even when their syntax looks superficially safe.
     return headers
 
 
@@ -335,12 +435,22 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
         # Exactly one upstream POST. No retry, redirect following or alternative
         # account exists, including after an ambiguous connection failure.
         connection.request("POST", path, body=body, headers=headers)
+        # Retain the socket even if HTTPConnection clears its reference after a
+        # Connection: close response; its response file still owns the stream.
+        upstream_socket = getattr(connection, "sock", None)
         response = connection.getresponse()
         if cancelled.is_set():
             raise OSError("inference cancelled")
         if type(response.status) is not int or not 200 <= response.status <= 599:
             raise RelayError(502, "upstream returned invalid HTTP status")
-        write_metadata(output, response.status, response_headers(response))
+        headers = response_headers(response)
+        if response.status >= 300:
+            overflow = context_overflow(response, headers, upstream_socket)
+            if cancelled.is_set():
+                raise OSError("inference cancelled")
+            send_upstream_error(output, response.status, headers, overflow=overflow)
+            return 2
+        write_metadata(output, response.status, headers)
         began = True
         while True:
             if cancelled.is_set():
@@ -352,7 +462,7 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
                 break
             write_chunk(output, data)
         write_chunk(output, b"")
-        return 0 if response.status < 400 else 2
+        return 0
     except RelayError as exc:
         if not began:
             send_error(output, exc.status, str(exc))

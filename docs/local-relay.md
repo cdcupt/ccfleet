@@ -20,6 +20,12 @@ does not pool accounts, choose another account on failure, or refresh credential
 itself. Plain `ccfleet` remains a remote-terminal compatibility command: it opens
 original Claude Code on the slot, with the slot's files and tmux session.
 
+Hosted maintenance checks approaching credential expiry and attempts bounded
+native renewal without relying on a fresh quota-cache miss. It verifies expiry
+actually advanced, serializes attempts, and reports only safe health facts.
+The relay remains read-only with respect to credentials; see
+[reliability and privacy decisions](reliability-privacy.md) for the exact boundaries.
+
 ## One-command setup
 
 Use the same command for a new computer or an update:
@@ -168,6 +174,11 @@ system prompt, user messages, filenames and tool results may contain the local O
 working directory, paths, identity or other environment details. Relevant content
 is processed on the slot and sent to Anthropic. Do not promise fingerprint-free
 requests, zero metadata disclosure, or that Anthropic sees only slot information.
+
+Raw upstream error bodies and opaque request IDs are not forwarded. Fixed error
+categories retain actionable guidance and the native context-overflow signal;
+detailed provider diagnostics are intentionally omitted. Successful response
+content is not redacted. This does not prevent private information in model output.
 
 Only supported message/token-count endpoints use the model relay. MCP servers,
 hooks, shell tools, plugins, updates and other native CLI services can make their

@@ -546,6 +546,37 @@ def test_quota_reads_take_turns_across_runs(cfg):
     assert turns == [[True, False], [False, True], [True, False]]
 
 
+def test_expiring_slot_gets_priority_without_starving_regular_turns(cfg):
+    facts = {"credentials": {"expires_at": (NOW + 10) * 1000,
+                              "account_fp": "a", "bound_fp": "a"}}
+    fake = Fake(users=["slot01", "slot02"], facts=facts, desired={"slots": [
+        {"unix_user": "slot01", "state": "active"}, {"unix_user": "slot02", "state": "active"}]})
+    state = {"slots": ["slot01", "slot02"], "quota_turn": 1,
+             "slot_states": {"slot01": "active", "slot02": "active"},
+             "heard": {"slot01": facts}}
+    turns = []
+    for _ in range(4):
+        fake.spawned.clear()
+        _, _, state = machine.run_cycle(cfg, state, fake.system())
+        turns.append([json.loads(kw["input_text"])["refresh_quota"] for _, kw in fake.spawned])
+    assert turns[:2] == [[True, False], [False, True]]
+    assert state["quota_turn"] == 3, "normal turns still advance during persistent urgency"
+    assert all(sum(turn) == 1 for turn in turns), "at most one expensive native probe per cycle"
+
+
+@pytest.mark.parametrize("extra, renewal", [
+    ({"slot_states": {"slot01": "releasing"}}, {}),
+    ({"slot_logins": {"slot01": {"requested_at": NOW}}}, {}),
+    ({}, {"next_attempt_at": NOW + 60}),
+    ({}, {"reason": "account_transition"}),
+])
+def test_renewal_priority_respects_lifecycle_login_and_backoff(extra, renewal):
+    state = {"slot_states": {"slot01": "active"}, "heard": {"slot01": {
+        "credentials": {"expires_at": (NOW + 10) * 1000, "account_fp": "a",
+                        "bound_fp": "a", "renewal": renewal}}}, **extra}
+    assert machine._renewal_due(state, "slot01", NOW) is None
+
+
 # -- the command -----------------------------------------------------------------
 
 def _env_file(tmp_path, cfg):

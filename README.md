@@ -23,6 +23,8 @@ remote-terminal compatibility command with remote files and persistent tmux.
 This implements the requested local-CLI/dedicated-slot relay workflow; it is not
 a claim of complete CC Host feature parity or zero metadata disclosure. See the
 [verified release scope and test evidence](docs/local-relay-verification.md).
+The [reliability and privacy design](docs/reliability-privacy.md) explains expiry-driven
+native renewal, identity minimization, verified TLS, and per-device transport.
 
 ## Customer setup and migration
 

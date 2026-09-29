@@ -9,6 +9,13 @@ from typing import Any, Optional
 from . import names as slotnames
 from . import slots as slotstates
 from .config import Config
+from .credential_health import (
+    ACCESS_MARGIN_S,
+    RENEWAL_WINDOW_S,
+    TRANSITION_REASONS,
+    access_expiry,
+    renewal_report,
+)
 from .desired import is_channel
 
 LEVEL_WARN = "warn"
@@ -93,8 +100,8 @@ def _heard(at: float, listening_since: Optional[float]) -> float:
 
 def _credential_findings(payload: Mapping[str, Any], now: float, cfg: Config,
                          listening_since: Optional[float] = None) -> list[Finding]:
-    # `claude auth status` is authoritative when the node could ask it; a present
-    # credentials file can still hold a login that no longer works.
+    # Prefer the CLI's local sign-in report to file presence. Neither alone
+    # proves the provider still accepts the credential; expiry is checked too.
     logged_in = _get(payload, "credentials", "logged_in")
     present = logged_in if isinstance(logged_in, bool) else _get(payload, "credentials",
                                                                  "present")
@@ -222,8 +229,9 @@ def _slot_findings(slot_rows: Sequence[Mapping[str, Any]],
 
     Only lifecycle trouble: a wipe that failed, a free slot whose user exists,
     a held slot whose user vanished, provisioning that failed. A holder's own
-    login and quota are theirs to see on their page, not the operator's to be
-    paged about. Each finding names its slot in the rule, so two slots in
+    account identity and quota are theirs to see on their page. Non-secret
+    credential maintenance failures are checked separately below. Each finding
+    names its slot in the rule, so two slots in
     trouble are two alerts rather than one that flaps between them.
     """
     reports = {r.get("unix_user"): r for r in payload.get("slots") or []
@@ -256,6 +264,49 @@ def _slot_findings(slot_rows: Sequence[Mapping[str, Any]],
                 f"slot_provision_failed:{user}", LEVEL_WARN,
                 f"setting up {user} failed ({provision_error}); the claim was "
                 f"given up and the slot is being wiped"))
+    return findings
+
+
+def _slot_credential_findings(slot_rows: Sequence[Mapping[str, Any]],
+                              payload: Mapping[str, Any], now: float) -> list[Finding]:
+    """Operational renewal failures, without account identities or token contents."""
+    reports = {r.get("unix_user"): r for r in payload.get("slots") or []
+               if isinstance(r, Mapping)}
+    findings = []
+    for row in slot_rows:
+        if row.get("state") != slotstates.ACTIVE:
+            continue
+        user = row.get("unix_user")
+        report = reports.get(user) or {}
+        credentials = report.get("credentials")
+        if report.get("present") is not True or not isinstance(credentials, Mapping):
+            continue
+        renewal = renewal_report(credentials.get("renewal"))
+        login = report.get("login")
+        if (renewal.get("reason") in TRANSITION_REASONS
+                or isinstance(login, Mapping) and login.get("state") not in (None, "done", "failed")
+                or credentials.get("account_fp") and credentials.get("bound_fp")
+                and credentials["account_fp"] != credentials["bound_fp"]):
+            continue
+        expires = access_expiry(credentials)
+        if expires is not None and expires <= now + ACCESS_MARGIN_S:
+            findings.append(Finding(
+                f"slot_token_expired:{user}", LEVEL_CRITICAL if expires <= now else LEVEL_WARN,
+                f"{user}: access credential needs renewal; model relay is unavailable. "
+                "Check native maintenance, then request Sign in again if recovery is needed."))
+        elif credentials.get("present") is False or credentials.get("logged_in") is False:
+            findings.append(Finding(
+                f"slot_credentials_missing:{user}", LEVEL_WARN,
+                f"{user}: Claude sign-in is unavailable; the holder may need Sign in again."))
+        elif renewal.get("reason") in {"expiry_unknown", "credential_unavailable"}:
+            findings.append(Finding(
+                f"slot_credential_renewal:{user}", LEVEL_WARN,
+                f"{user}: access credential cannot be verified; check native maintenance."))
+        elif (expires is not None and expires <= now + RENEWAL_WINDOW_S
+                and renewal.get("state") == "retrying"):
+            findings.append(Finding(
+                f"slot_credential_renewal:{user}", LEVEL_WARN,
+                f"{user}: native renewal is not yet confirmed; a bounded retry is scheduled."))
     return findings
 
 
@@ -405,6 +456,11 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
         findings += _egress_findings(payload, prev_payload)
         findings += _slot_findings(slot_rows, payload)
         findings += _slot_account_findings(slot_rows, payload, places, names)
+        if now - float(latest["ts"]) <= cfg.heartbeat_max_age_s:
+            renewal = _slot_credential_findings(slot_rows, payload, now)
+            # Do not invent fresh expiry failures from a pre-restart reading.
+            findings += [f for f in renewal if not listening_since
+                         or float(latest["ts"]) >= listening_since or f.rule in raised]
         return tuple(findings)
     findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg, grace("token_stale"))

@@ -610,6 +610,14 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "authentication and renewal. The slot relay uses that bound credential upstream, "
         "not a credential sent to your laptop. No account rotation or pooling: one slot "
         "keeps one account for one holder.</p></div>"
+        '<div class="card"><h2>Credential maintenance</h2>'
+        '<p>Before access credentials expire, the machine attempts bounded renewal '
+        'through native Claude in an isolated maintenance session. It checks that expiry '
+        'actually advanced, preserves the bound account, and backs off on failure. '
+        'The relay never writes or independently refreshes credentials. Your page reports '
+        'unconfirmed renewal or stale health information instead of claiming readiness. '
+        'Revocation or an expired sign-in can still require <strong>Sign in again</strong>; '
+        'this is not a guarantee of permanent account access.</p></div>'
         '<div class="card"><h2>Use it from anywhere</h2>'
         "<p>Install <code>ccfleet</code> on each computer you use. It creates a device key, "
         "pairs once with your held slot, and starts the local workflow without an SSH command. "

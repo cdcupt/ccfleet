@@ -36,7 +36,9 @@ def test_a_machine_caused_alert_colours_its_machine(rule, level, expected):
 
 
 @pytest.mark.parametrize("rule", [*status.EXCLUDED_RULES, "account_elsewhere:slot01",
-                                  "account_changed:slot01", "something_new"])
+                                  "account_changed:slot01", "slot_credentials_missing:slot01",
+                                  "slot_token_expired:slot01", "slot_credential_renewal:slot01",
+                                  "something_new"])
 @pytest.mark.parametrize("level", [LEVEL_WARN, LEVEL_CRITICAL])
 def test_the_holders_own_and_informational_alerts_colour_nothing(rule, level):
     """A slot signed out, a token gone stale, a week's quota used up, a new

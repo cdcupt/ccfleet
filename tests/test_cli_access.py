@@ -296,3 +296,155 @@ def test_real_claude_effort_levels_are_offered_by_the_client(local_client):
 def test_device_secrets_are_never_sent_over_plaintext_websockets(local_client):
     with pytest.raises(local_client["CliError"]):
         local_client["open_websocket"]("ws://fleet.example.com/api/cli/connect", "secret")
+
+
+@pytest.fixture
+def handshake_peer(local_client, monkeypatch):
+    class Peer:
+        def __init__(self, transform=lambda headers: headers, status="HTTP/1.1 101 Switching Protocols"):
+            self.transform, self.status = transform, status
+            self.closed, self.timeouts, self.recv_calls = False, [], 0
+
+        def settimeout(self, timeout):
+            self.timeouts.append(timeout)
+
+        def sendall(self, request):
+            fields = dict(line.split(": ", 1) for line in request.decode().split("\r\n")[1:]
+                          if ": " in line)
+            accept = cli_access.websocket_accept(fields["Sec-WebSocket-Key"])
+            headers = self.transform(["Upgrade: websocket", "Connection: Upgrade",
+                                      "Sec-WebSocket-Accept: " + accept])
+            self.response = (self.status + "\r\n" + "\r\n".join(headers)
+                             + "\r\n\r\n").encode() + b"initial SSH frame"
+
+        def recv(self, _size):
+            self.recv_calls += 1
+            return self.response
+
+        def close(self):
+            self.closed = True
+
+    def create(*args, **kwargs):
+        peer = Peer(*args, **kwargs)
+        monkeypatch.setattr(local_client["socket"], "create_connection", lambda *_a, **_k: peer)
+        return peer
+
+    return create
+
+
+def test_websocket_upgrade_preserves_initial_frame_and_removes_timeout_only_when_ready(
+        local_client, handshake_peer):
+    peer = handshake_peer(lambda headers: [headers[0], "Connection: keep-alive, UpGrAdE", headers[2]])
+    sock, initial = local_client["open_websocket"]("ws://127.0.0.1:9000/connect", "synthetic")
+    assert sock is peer and initial == b"initial SSH frame" and not peer.closed
+    assert peer.timeouts[-1] is None
+    assert all(0 < value <= 15 for value in peer.timeouts[:-1])
+
+
+@pytest.mark.parametrize("transform", [
+    lambda headers: headers[1:],
+    lambda headers: [headers[0], headers[2]],
+    lambda headers: ["Upgrade: h2c", *headers[1:]],
+    lambda headers: [headers[0], "Connection: not-upgrade", headers[2]],
+    lambda headers: [*headers, "connection: Upgrade"],
+    lambda headers: [*headers, "upgrade: websocket"],
+    lambda headers: [*headers, headers[2]],
+    lambda headers: [*headers, "Sec-WebSocket-Extensions: permessage-deflate"],
+    lambda headers: [*headers, "Sec-WebSocket-Protocol: unexpected"],
+    lambda headers: [*headers, " folded-header: value"],
+    lambda headers: [*headers, "malformed header"],
+    lambda headers: [headers[0], headers[1], "Sec-WebSocket-Accept: incorrect"],
+])
+def test_websocket_upgrade_rejects_ambiguous_or_unnegotiated_headers(
+        local_client, handshake_peer, transform):
+    peer = handshake_peer(transform)
+    with pytest.raises(local_client["CliError"]):
+        local_client["open_websocket"]("ws://127.0.0.1/connect", "synthetic")
+    assert peer.closed and None not in peer.timeouts
+
+
+def test_websocket_upgrade_rejects_non_switching_status(local_client, handshake_peer):
+    peer = handshake_peer(status="HTTP/1.1 200 OK")
+    with pytest.raises(local_client["CliError"], match="refused"):
+        local_client["open_websocket"]("ws://127.0.0.1/connect", "synthetic")
+    assert peer.closed
+
+
+@pytest.mark.parametrize("status", ["HTTP/1.1 401 SECRET_credential\x1b[31m",
+                                    "invalid SECRET_credential response"])
+def test_websocket_refusal_never_echoes_remote_reason(local_client, handshake_peer, status):
+    peer = handshake_peer(status=status)
+    with pytest.raises(local_client["CliError"], match="refused") as error:
+        local_client["open_websocket"]("ws://127.0.0.1/connect", "synthetic")
+    assert "SECRET" not in str(error.value) and "\x1b" not in str(error.value)
+    assert peer.closed
+
+
+def test_websocket_trickled_headers_share_one_absolute_deadline(
+        local_client, handshake_peer, monkeypatch):
+    peer = handshake_peer()
+    now = [0.0]
+    globals_ = local_client["open_websocket"].__globals__
+    monkeypatch.setitem(globals_, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def slow_receive(_size):
+        peer.recv_calls += 1
+        now[0] += 6
+        return b"x"
+
+    monkeypatch.setattr(peer, "recv", slow_receive)
+    with pytest.raises(local_client["CliError"], match="handshake timed out"):
+        local_client["open_websocket"]("ws://127.0.0.1/connect", "synthetic")
+    assert peer.recv_calls == 3 and peer.closed
+    assert peer.timeouts == [15, 15, 9, 3]
+
+
+def test_secure_websocket_verifies_broker_hostname(local_client, handshake_peer, monkeypatch):
+    peer = handshake_peer()
+    contexts, hostnames = [], []
+    real_context = ssl_context = local_client["ssl"].create_default_context()
+    assert real_context.check_hostname
+    assert real_context.verify_mode == local_client["ssl"].CERT_REQUIRED
+
+    def context():
+        contexts.append(ssl_context)
+        return SimpleNamespace(wrap_socket=lambda sock, server_hostname:
+                               hostnames.append(server_hostname) or sock)
+
+    monkeypatch.setattr(local_client["ssl"], "create_default_context", context)
+    sock, _ = local_client["open_websocket"]("wss://broker.example/connect", "synthetic")
+    assert sock is peer and len(contexts) == 1 and hostnames == ["broker.example"]
+
+
+@pytest.fixture
+def proxy_peer(local_client, monkeypatch):
+    peer = SimpleNamespace(close=lambda: None)
+    frames = iter([(2, b"abcdefgh"), (8, b"")])
+    globals_ = local_client["proxy"].__globals__
+    monkeypatch.setitem(globals_, "open_websocket", lambda *_: (peer, b""))
+    monkeypatch.setitem(globals_, "FrameReader", lambda *_: SimpleNamespace(read=lambda: next(frames)))
+    monkeypatch.setitem(globals_, "threading", SimpleNamespace(
+        Lock=threading.Lock, Event=threading.Event,
+        Thread=lambda **_: SimpleNamespace(start=lambda: None)))
+    return {"endpoint": "unused", "device_token": "synthetic"}
+
+
+def test_proxy_preserves_all_ssh_bytes_when_pipe_writes_are_partial(
+        local_client, proxy_peer, monkeypatch):
+    written = []
+
+    def short_write(fd, data):
+        assert fd == 1
+        written.append(bytes(data[:2]))
+        return len(written[-1])
+
+    monkeypatch.setattr(local_client["os"], "write", short_write)
+    assert local_client["proxy"](proxy_peer) == 0
+    assert b"".join(written) == b"abcdefgh" and len(written) == 4
+
+
+def test_proxy_fails_instead_of_spinning_when_pipe_write_makes_no_progress(
+        local_client, proxy_peer, monkeypatch):
+    monkeypatch.setattr(local_client["os"], "write", lambda *_: 0)
+    with pytest.raises(local_client["CliError"], match="SSH input closed"):
+        local_client["proxy"](proxy_peer)

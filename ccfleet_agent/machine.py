@@ -963,6 +963,28 @@ def _read_asked(state: Mapping[str, Any], user: str) -> bool:
     return wanted is not None and wanted > max(read or 0, passed or 0)
 
 
+def _renewal_due(state: Mapping[str, Any], user: str, now: float) -> Optional[float]:
+    """Priority from non-secret last-reported facts; the slot verifies again."""
+    if ((state.get("slot_states") or {}).get(user) not in SIGN_IN_STATES
+            or user in (state.get("slot_logins") or {})):
+        return None
+    credentials = ((state.get("heard") or {}).get(user) or {}).get("credentials")
+    if not isinstance(credentials, Mapping):
+        return None
+    if not credentials.get("bound_fp") or credentials.get("account_fp") != credentials["bound_fp"]:
+        return None
+    expiry = core.credential_expiry(credentials)
+    if expiry is None or expiry > now + core.NATIVE_RENEWAL_EARLY_S:
+        return None
+    renewal = credentials.get("renewal")
+    renewal = renewal if isinstance(renewal, Mapping) else {}
+    if (core.finite_epoch(renewal.get("next_attempt_at")) or 0) > now:
+        return None
+    if renewal.get("reason") in ("account_transition", "sign_in_pending", "account_unbound"):
+        return None
+    return expiry
+
+
 def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
               fast: bool = False, abandoned: Optional[Mapping[str, Any]] = None
               ) -> tuple[int, dict[str, Any], dict[str, Any]]:
@@ -973,7 +995,12 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     # starts a Claude Code session; six at once on one machine is a spike.
     # A slot whose holder asked for a read now goes first.
     asked = [u for u in users if _read_asked(state, u)]
-    refresh_for = ((asked[0] if asked else users[turn % len(users)])
+    due = [(expiry, user) for user in users
+           if (expiry := _renewal_due(state, user, system.clock())) is not None]
+    # Alternate urgency with ordinary turns under persistent failure. One broken
+    # account must never consume every expensive probe or starve another slot.
+    priority = min(due)[1] if due and not state.get("renewal_priority_last") else None
+    refresh_for = ((priority or (asked[0] if asked else users[turn % len(users)]))
                    if users and not fast else None)
     payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned)
     # What each slot said, kept for the fast polls to repeat. Never the sign-in
@@ -1010,7 +1037,9 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
         for s in wanted if "claude_version" in s}
     # A read asked for goes out of turn, and the slot whose turn it took has
     # it next.
-    new_state["quota_turn"] = (turn + (0 if fast or asked else 1)) if users else 0
+    new_state["quota_turn"] = (turn + (0 if fast or asked or priority else 1)) if users else 0
+    if not fast:
+        new_state["renewal_priority_last"] = bool(priority)
     new_state["quota_wanted"] = {s["unix_user"]: s["quota_wanted_at"]
                                  for s in wanted if "quota_wanted_at" in s}
     # The request each slot has been handed, so it is handed once.

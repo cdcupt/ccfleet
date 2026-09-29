@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 from .config import CONTACT_EMAIL_RE
+from .credential_health import renewal_report
 from .slots import MACHINE_MODE
 from .store import UNIX_USER_RE
 
@@ -176,6 +177,7 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "account_fp": account_fp(section.get("account_fp")),
         # The account the slot keeps (its first), to compare with the one above.
         "bound_fp": account_fp(section.get("bound_fp")),
+        "renewal": renewal_report(section.get("renewal")),
     }
 
 

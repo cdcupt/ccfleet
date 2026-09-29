@@ -367,12 +367,14 @@ class _Handler(BaseHTTPRequestHandler):
             timer = threading.Timer(server.bridge.request_timeout, _kill, args=(process,))
             timer.daemon = True
             timer.start()
-            process.stdin.write(prefix)
-            process.stdin.write(body)
-            process.stdin.flush()
+            # An SSH peer can stop reading during a large upload. Watch the
+            # client before writing to the pipe, not only while reading SSE.
             watcher = threading.Thread(target=self._cancel_on_disconnect,
                                        args=(process, complete), daemon=True)
             watcher.start()
+            process.stdin.write(prefix)
+            process.stdin.write(body)
+            process.stdin.flush()
             answer = metadata(process.stdout)
             self.send_response(answer["status"])
             for name, value in answer["headers"].items():

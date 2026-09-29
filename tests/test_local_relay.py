@@ -90,6 +90,9 @@ class Upstream:
         self.closed = False
         self.length = None
         self.sock = UpstreamSocket()
+        self.read_sizes = []
+        self.read_bytes = 0
+        self.pending = b""
 
     def connect(self):
         if self.failure == "connect":
@@ -107,9 +110,13 @@ class Upstream:
         return self.headers
 
     def read1(self, size):
-        assert size == relay.CHUNK_SIZE
+        assert 0 < size <= relay.CHUNK_SIZE
+        self.read_sizes.append(size)
         try:
-            return next(self.chunks)
+            data = self.pending or next(self.chunks)
+            self.pending = data[size:]
+            self.read_bytes += len(data[:size])
+            return data[:size]
         except StopIteration:
             if self.failure == "truncated":
                 raise http.client.IncompleteRead(b"private partial data") from None
@@ -147,7 +154,7 @@ def test_headers_and_structured_identity_are_removed_but_model_context_is_preser
                "tools": [{"name": "tool", "input_schema": {"properties": {"user_id": {}}}}]}
     body = {**context, "metadata": {"user_id": "laptop-id", "session_id": "local-session",
                                     "unknown_future_fingerprint": "private"},
-            "device_id": "laptop-device", "fingerprint": {"os": "local"}}
+            **{name: "LOCAL-STRUCTURED-IDENTITY" for name in relay.IDENTITY_FIELDS}}
     headers = {"content-type": "application/json", "accept": "text/event-stream",
                "anthropic-version": "2023-06-01", "anthropic-beta": "semantic-beta",
                "user-agent": "LOCAL-CLI-VERSION", "x-stainless-os": "LOCAL-OS",
@@ -155,7 +162,8 @@ def test_headers_and_structured_identity_are_removed_but_model_context_is_preser
                "x-forwarded-for": "PRIVATE-IP", "forwarded": "PRIVATE-LOCATION",
                "authorization": "Bearer LOCAL-AUTH", "x-api-key": "LOCAL-API-KEY",
                "cookie": "LOCAL-COOKIE", "host": "caller-selected.invalid",
-               "x-client-request-id": "LOCAL-SESSION"}
+               "x-client-request-id": "LOCAL-SESSION",
+               "x-future-unknown-fingerprint": "LOCAL-FUTURE-IDENTITY"}
     code, raw, upstream = run(slot, request(json.dumps(body).encode(), headers=headers))
     assert code == 0 and response(raw)[0]["status"] == 200
     args, forwarded = upstream.calls[0]
@@ -319,15 +327,171 @@ def test_account_switch_during_connect_stops_before_any_post(slot):
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308, 401, 429, 500])
-def test_redirects_and_api_errors_are_returned_once_without_retry(slot, status):
+def test_redirects_and_api_errors_are_normalized_once_without_retry(slot, status):
     upstream = Upstream(status=status, headers=[("content-type", "application/json"),
                                                 ("location", "https://must-not-follow.invalid"),
                                                 ("set-cookie", "private-cookie")])
     code, raw, upstream = run(slot, upstream=upstream)
     meta, _ = response(raw)
-    assert code == (2 if status >= 400 else 0) and meta["status"] == status
+    assert code == 2 and meta["status"] == (502 if status < 400 else status)
     assert meta["headers"] == {"content-type": "application/json"}
     assert len(upstream.calls) == 1
+    assert upstream.read_sizes == []
+
+
+@pytest.mark.parametrize("status,category", [
+    (400, "invalid_request_error"), (401, "authentication_error"), (403, "permission_error"),
+    (404, "not_found_error"), (408, "api_error"), (409, "invalid_request_error"),
+    (413, "request_too_large"), (422, "invalid_request_error"), (429, "rate_limit_error"),
+    (500, "api_error"), (503, "api_error"), (529, "overloaded_error"),
+])
+@pytest.mark.parametrize("private_body", [
+    b'{"error":{"message":"slot-test-token owner-a private@example.invalid"}}',
+    b'<html>slot-test-token owner-a private@example.invalid</html>',
+    b'{"error":{"message":"malformed slot-test-token',
+    b'{"error":{"message":"' + b"slot-test-token " * 5000 + b'"}}',
+])
+def test_provider_errors_never_echo_private_body_or_request_id(slot, capsys, status,
+                                                              category, private_body):
+    upstream = Upstream(status=status, chunks=[private_body], headers=[
+        ("content-type", "application/json; secret=slot-test-token"),
+        ("request-id", "req_slot-test-token"), ("retry-after", "000012"),
+        ("set-cookie", "slot-test-token"), ("x-private", "private@example.invalid")])
+    code, raw, upstream = run(slot, upstream=upstream)
+    meta, body = response(raw)
+    assert code == 2 and meta["status"] == status
+    assert meta["headers"] == {"content-type": "application/json", "retry-after": "12"}
+    answer = json.loads(body)
+    assert answer["type"] == "error" and answer["error"]["type"] == category
+    assert len(body) < 512 and len(upstream.calls) == 1 and upstream.closed
+    assert upstream.read_bytes <= relay.MAX_ERROR_BODY
+    if status != 400:
+        assert upstream.read_sizes == []
+    for secret in (b"slot-test-token", b"owner-a", b"private@example.invalid", b"<html>"):
+        assert secret not in raw
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("error,overflow", [
+    ({"type": "invalid_request_error", "message": "prompt is too long: slot-test-token"}, True),
+    ({"type": "invalid_request_error", "message": "prompt is too long"}, True),
+    ({"type": "context_window_exceeded", "message": "private@example.invalid"}, True),
+    ({"type": "invalid_request_error", "message": "prompt is too longPRIVATE"}, False),
+    ({"type": "untrusted_error", "message": "prompt is too long: slot-test-token"}, False),
+    ({"type": "invalid_request_error", "message": "other slot-test-token"}, False),
+    ({"type": "invalid_request_error", "message": 123}, False),
+])
+def test_context_overflow_retains_native_recovery_prefix_not_provider_text(slot, error, overflow):
+    upstream = Upstream(status=400, chunks=[json.dumps({"error": error}).encode()],
+                        headers=[("content-type", "application/json")])
+    code, raw, _ = run(slot, upstream=upstream)
+    meta, body = response(raw)
+    answer = json.loads(body)
+    assert code == 2 and meta["status"] == 400
+    assert answer["error"]["type"] == "invalid_request_error"
+    assert answer["error"]["message"].startswith("prompt is too long") is overflow
+    assert b"slot-test-token" not in raw and b"private@example.invalid" not in raw
+    assert len(upstream.calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["html", "known_oversize", "unknown_oversize", "truncated",
+                                  "incomplete_length",
+                                  "duplicate", "malformed", "not_object"])
+def test_untrusted_error_classification_is_bounded_and_fails_to_generic(slot, mode):
+    error = b'{"error":{"type":"invalid_request_error","message":"prompt is too long"}}'
+    headers = [("content-type", "text/html" if mode == "html" else "application/json")]
+    if mode.endswith("oversize"):
+        error = b" " * relay.MAX_ERROR_BODY + error
+    elif mode == "duplicate":
+        error = b'{"error":{"type":"invalid_request_error","type":"context_window_exceeded"}}'
+    elif mode == "malformed":
+        error = b'{"error":"unfinished'
+    elif mode == "not_object":
+        error = b'[]'
+    upstream = Upstream(status=400, chunks=[error], headers=headers,
+                        failure="truncated" if mode == "truncated" else None)
+    if mode == "known_oversize":
+        upstream.length = len(error)
+    elif mode == "incomplete_length":
+        upstream.length = len(error) + 10
+    code, raw, upstream = run(slot, upstream=upstream)
+    meta, body = response(raw)
+    assert code == 2 and meta["status"] == 400 and len(upstream.calls) == 1
+    assert upstream.read_bytes <= relay.MAX_ERROR_BODY
+    assert not json.loads(body)["error"]["message"].startswith("prompt is too long")
+    if mode in {"html", "known_oversize"}:
+        assert upstream.read_sizes == []
+    elif mode == "unknown_oversize":
+        assert upstream.read_sizes == [relay.MAX_ERROR_BODY]
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", "0"), ("000001", "1"), ("86400", "86400"), ("86401", None),
+    ("1234567890123456", None), ("-1", None), ("1.5", None),
+    ("Wed, 21 Oct 2015 07:28:00 GMT", None), ("slot-test-token", None), ("", None),
+])
+def test_retry_after_is_only_bounded_canonical_numeric_guidance(slot, value, expected):
+    upstream = Upstream(status=429, headers=[("retry-after", value)])
+    code, raw, _ = run(slot, upstream=upstream)
+    meta, _ = response(raw)
+    assert code == 2 and meta["status"] == 429
+    assert meta["headers"].get("retry-after") == expected
+
+
+def test_successful_stream_bytes_unchanged_but_opaque_response_identity_removed(slot):
+    chunks = [b"event: message_start\n\ndata: {\"text\":\"literal slot-test-token\"}\n\n",
+              b"data: \xff\n\n", b"event: message_stop\n\n"]
+    upstream = Upstream(chunks=chunks, headers=[
+        ("content-type", "text/event-stream; charset=utf-8; identity=private"),
+        ("request-id", "private@example.invalid")])
+    code, raw, _ = run(slot, upstream=upstream)
+    meta, body = response(raw)
+    assert code == 0 and body == b"".join(chunks)
+    assert meta["headers"] == {"content-type": "text/event-stream"}
+    assert b"private@example.invalid" not in raw and len(upstream.calls) == 1
+    assert upstream.sock.timeout == relay.READ_TIMEOUT
+
+
+def test_partial_provider_error_times_out_to_safe_category_without_retry(slot, monkeypatch):
+    reader, writer = socket.socketpair()
+    reply = http.client.HTTPResponse(reader)
+    writer.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
+                   b"Content-Length: 1024\r\n\r\n{\"error\":")
+    reply.begin()
+    upstream = Upstream(status=400)
+    upstream.sock = reader
+    upstream.getresponse = lambda: reply
+    monkeypatch.setattr(relay, "ERROR_READ_TIMEOUT", 0.05)
+    started = time.monotonic()
+    try:
+        code, raw, _ = run(slot, upstream=upstream)
+        meta, body = response(raw)
+        assert code == 2 and meta["status"] == 400
+        assert json.loads(body)["error"]["type"] == "invalid_request_error"
+        assert time.monotonic() - started < 1
+        assert reader.gettimeout() <= 0.05
+        assert len(upstream.calls) == 1 and upstream.closed
+    finally:
+        reply.close()
+        reader.close()
+        writer.close()
+
+
+def test_dripping_error_body_has_total_deadline_not_reset_per_chunk(monkeypatch):
+    now = [0.0]
+    upstream = Upstream(status=400)
+    calls = []
+
+    def drip(size):
+        calls.append(size)
+        now[0] += 2
+        return b" "
+
+    upstream.read1 = drip
+    monkeypatch.setattr(relay.time, "monotonic", lambda: now[0])
+    assert not relay.context_overflow(upstream, {"content-type": "application/json"},
+                                      upstream.sock)
+    assert len(calls) == 3 and upstream.sock.timeout == 1
 
 
 @pytest.mark.parametrize("headers", [[("content-type", "one"), ("Content-Type", "two")],
@@ -418,6 +582,9 @@ def test_inflight_stream_is_cancelled_on_revocation_account_change_or_timeout(sl
 
 
 def test_upstream_host_port_and_certificate_verification_are_fixed(monkeypatch):
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
+                 "all_proxy", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS"):
+        monkeypatch.setenv(name, "https://untrusted-routing.invalid")
     captured = []
     monkeypatch.setattr(relay.http.client, "HTTPSConnection", lambda *args, **kwargs:
                         captured.append((args, kwargs)))

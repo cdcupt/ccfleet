@@ -79,7 +79,26 @@ class Monitor:
                                   self._store.list_slots(node_id=node["id"],
                                                          kind=slotstates.MACHINE_SLOT), places,
                                   rules.place_names(every_slot), listening, raised)
-        return self._reconcile(node, findings, now)
+        preserve = frozenset()
+        if latest and (latest.get("payload") or {}).get("mode") == slotstates.MACHINE_MODE:
+            from .credential_health import fresh_observation
+
+            prefixes = {"slot_token_expired", "slot_credentials_missing", "slot_credential_renewal"}
+            reports = {r.get("unix_user"): r for r in latest["payload"].get("slots", [])
+                       if isinstance(r, dict)}
+            uncertain = {s["unix_user"] for s in every_slot
+                         if s["node_id"] == node["id"] and s["state"] == slotstates.ACTIVE
+                         and not fresh_observation(
+                             (reports.get(s["unix_user"]) or {}).get("credentials"),
+                             latest["ts"], now, self._cfg.heartbeat_max_age_s, listening)}
+
+            def unconfirmed(rule: str) -> bool:
+                kind, _, user = rule.partition(":")
+                return kind in prefixes and user in uncertain
+
+            preserve = frozenset(rule for rule in raised if unconfirmed(rule))
+            findings = tuple(f for f in findings if not unconfirmed(f.rule))
+        return self._reconcile(node, findings, now, preserve=preserve)
 
     def check_all(self, now: Optional[float] = None) -> list[dict[str, Any]]:
         now = self._clock() if now is None else now
@@ -111,7 +130,7 @@ class Monitor:
                         len(stalled), slotstates.CLAIM_TIMEOUT_S // 60, ", ".join(stalled))
 
     def _reconcile(self, node: dict[str, Any], findings: tuple[rules.Finding, ...],
-                   now: float) -> list[dict[str, Any]]:
+                   now: float, *, preserve: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         open_by_rule = {a["rule"]: a for a in self._store.open_alerts(node["id"])}
         wanted = {f.rule: f for f in findings}
         events: list[dict[str, Any]] = []
@@ -127,7 +146,7 @@ class Monitor:
                      "level": finding.level, "message": finding.message, "opened_at": now}
             events.append({"event": "opened", "alert": alert})
         for rule_name, alert in open_by_rule.items():
-            if rule_name not in wanted:
+            if rule_name not in wanted and rule_name not in preserve:
                 self._store.close_alert(alert["id"], now)
                 events.append({"event": "closed", "alert": alert})
         for event in events:

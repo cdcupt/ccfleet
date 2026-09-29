@@ -38,6 +38,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import os
 import platform
 import re
@@ -845,8 +846,28 @@ def parse_quota(pane: str) -> dict[str, Any]:
     return out
 
 
+def _native_probe_lock(probe: str, name: str = ".native-probe.lock") -> Optional[int]:
+    """Serialize native maintenance; an unsafe/unavailable lock fails closed."""
+    descriptor = None
+    try:
+        descriptor = os.open(os.path.join(probe, name),
+                             os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             0o600)
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1 or info.st_mode & 0o077):
+            raise OSError("unsafe probe lock")
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return descriptor
+    except OSError:
+        if descriptor is not None:
+            os.close(descriptor)
+        return None
+
+
 def read_quota(runner: Runner = subprocess.run,
-               now: Optional[float] = None) -> Optional[dict[str, Any]]:
+               now: Optional[float] = None, *,
+               timeout: float = QUOTA_TIMEOUT_S) -> Optional[dict[str, Any]]:
     """Drive `claude` to its /usage screen once and read the windows off it."""
     path = find_claude()
     if not path:
@@ -862,33 +883,58 @@ def read_quota(runner: Runner = subprocess.run,
     if probe is None:
         log.warning("usage probe not started: %s", why)
         return None
-    _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
-    started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
-                          "-c", probe, "-x", "180", "-y", "45", shlex.quote(path))
-    if not started:
+    lock = _native_probe_lock(probe)
+    if lock is None:
         return None
-    deadline = (time.time() if now is None else now) + QUOTA_TIMEOUT_S
+    try:
+        return _read_quota_locked(path, probe, runner, now, timeout)
+    finally:
+        os.close(lock)
+
+
+def _read_quota_locked(path: str, probe: str, runner: Runner,
+                       now: Optional[float], timeout: float) -> Optional[dict[str, Any]]:
+    deadline = (time.time() if now is None else now) + min(timeout, QUOTA_TIMEOUT_S)
+
+    def left() -> float:
+        return max(0.1, min(15.0, deadline - time.time()))
+
+    def command(*args: str) -> Optional[str]:
+        if time.time() >= deadline:
+            return None
+        return _quota_tmux(runner, *args, timeout=left())
+
+    command("kill-session", "-t", QUOTA_SESSION)
+    if time.time() >= deadline:
+        return None
     result: Optional[dict[str, Any]] = None
     asked = False
     try:
+        # A timeout or nonzero client result does not prove the tmux server
+        # rejected creation. Always clean up after even an ambiguous launch.
+        started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
+                              "-c", probe, "-x", "180", "-y", "45", shlex.quote(path),
+                              timeout=left())
+        if not started:
+            return None
         while time.time() < deadline:
-            time.sleep(3)
-            pane = _quota_tmux(runner, "capture-pane", "-p", "-J", "-t", QUOTA_SESSION) or ""
+            time.sleep(min(3.0, max(0.0, deadline - time.time())))
+            pane = command("capture-pane", "-p", "-J", "-t", QUOTA_SESSION) or ""
             # A fresh working directory asks whether the folder is trusted. It is
             # the probe's own empty directory; answer once and carry on.
             if "trust this folder" in pane:
                 # Only ever the probe directory, checked above. Answer once and
                 # let it settle.
-                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Down")
-                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Enter")
+                command("send-keys", "-t", QUOTA_SESSION, "Down")
+                command("send-keys", "-t", QUOTA_SESSION, "Enter")
                 continue
             if not asked:
                 # Deliberately not keyed to a banner string: the welcome text
                 # changes between releases, and an earlier version of this waited
                 # for one that had scrolled away. The trust prompt being gone is
                 # the only signal that means anything stable.
-                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "/usage")
-                _quota_tmux(runner, "send-keys", "-t", QUOTA_SESSION, "Enter")
+                command("send-keys", "-t", QUOTA_SESSION, "/usage")
+                command("send-keys", "-t", QUOTA_SESSION, "Enter")
                 asked = True
                 continue
             if asked:
@@ -902,7 +948,8 @@ def read_quota(runner: Runner = subprocess.run,
                 if "session" in found and "week" in found:
                     break
     finally:
-        _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION)
+        # Cleanup has its own short allowance after the native-probe deadline.
+        _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION, timeout=5.0)
     return result
 
 
@@ -2427,7 +2474,7 @@ def _to_say(progress: Mapping[str, Any]) -> dict[str, Any]:
 def _moved_on(state: Mapping[str, Any]) -> dict[str, Any]:
     """What a fresh sign-in makes stale, including legacy RC bookkeeping."""
     return {k: v for k, v in state.items()
-            if k not in ("quota", "account_restart", "restart")}
+            if k not in ("quota", "account_restart", "restart", "native_renewal")}
 
 
 def _atomic_write(path: Path, text: str | bytes, mode: int = 0o600) -> bool:
@@ -2489,6 +2536,139 @@ def drop_config_dir_line() -> bool:
     return True
 
 
+# Maintenance is scheduled before the relay's 30-second expiry cutoff. It uses
+# native Claude, never a second OAuth implementation or credential writer.
+NATIVE_RENEWAL_EARLY_S = 10 * 60
+NATIVE_RENEWAL_TIMEOUT_S = 35.0
+NATIVE_RENEWAL_RETRY_S = 60
+NATIVE_RENEWAL_RETRY_MAX_S = 10 * 60
+NATIVE_RENEWAL_TIMESTAMPS = ("last_attempt_at", "next_attempt_at", "last_success_at")
+
+
+def finite_epoch(value: Any) -> Optional[float]:
+    """A finite positive timestamp, excluding booleans and enormous integers."""
+    if type(value) not in (int, float):
+        return None
+    try:
+        return float(value) if math.isfinite(value) and value > 0 else None
+    except (OverflowError, ValueError):
+        return None
+
+
+def credential_expiry(credentials: Mapping[str, Any]) -> Optional[float]:
+    value = finite_epoch(credentials.get("expires_at"))
+    return value / 1000 if value is not None else None
+
+
+def _slot_credential_facts(config_dir: Path, state: Mapping[str, Any],
+                           status: Mapping[str, Any]) -> dict[str, Any]:
+    credentials = credentials_summary(config_dir)
+    credentials.update(slot_account_labels(config_dir))
+    credentials["account_fp"] = account_fingerprint(global_config_of(config_dir))
+    credentials["bound_fp"] = state.get("bound_fp")
+    if status:
+        credentials.update(status)
+        credentials["present"] = status.get("logged_in", credentials.get("present"))
+    return credentials
+
+
+def maintain_slot_credentials(state: Mapping[str, Any], request: Mapping[str, Any],
+                              credentials: Mapping[str, Any], runner: Runner,
+                              now: float, state_path: Path
+                              ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Attempt one bounded native renewal, then verify expiry and account again.
+
+    'current' only describes local expiry, not live provider acceptance. A quota
+    screen or successful CLI exit is never evidence that renewal occurred.
+    Only the machine's chosen maintenance slot may run the expensive probe.
+    """
+    state = dict(state)
+    previous = state.get("native_renewal")
+    previous = previous if isinstance(previous, Mapping) else {}
+    report = {key: finite_epoch(previous.get(key)) for key in NATIVE_RENEWAL_TIMESTAMPS
+              if finite_epoch(previous.get(key)) is not None}
+    report.update({"state": "needed", "checked_at": now})
+    bound = state.get("bound_fp")
+    expiry = credential_expiry(credentials)
+    reason = None
+    if not bound:
+        reason = "account_unbound"
+    elif state.get("account_restart") or credentials.get("account_fp") != bound:
+        reason = "account_transition"
+    elif request.get("login") or state.get("login"):
+        reason = "sign_in_pending"
+    elif credentials.get("parse_error") or credentials.get("store") != "file":
+        reason = "credential_unavailable"
+    elif expiry is None:
+        reason = "expiry_unknown"
+    if reason:
+        report.update({"state": "blocked", "reason": reason})
+        return state, report, False
+    if expiry > now + NATIVE_RENEWAL_EARLY_S:
+        report["state"] = "current"
+        return state, report, False
+    next_at = finite_epoch(previous.get("next_attempt_at")) or 0
+    if next_at > now:
+        report.update({"state": "retrying", "reason": "native_refresh_unconfirmed"})
+        return state, report, False
+    if request.get("refresh_quota") is not True:
+        return state, report, False
+    probe, _why = quota_probe_dir()
+    lock = _native_probe_lock(probe, ".renewal.lock") if probe else None
+    if lock is None:
+        report.update({"state": "blocked", "reason": "maintenance_busy"})
+        return state, report, False
+    try:
+        # Another run may have finished between our initial state read and lock.
+        current = read_state(state_path)
+        if (current.get("bound_fp", bound) != bound or current.get("account_restart")
+                or current.get("login")
+                or account_fingerprint(Path.home() / ".claude.json") != bound):
+            report.update({"state": "blocked", "reason": "account_transition"})
+            return dict(current), report, False
+        latest = current.get("native_renewal")
+        latest = latest if isinstance(latest, Mapping) else {}
+        if (finite_epoch(latest.get("next_attempt_at")) or 0) > now:
+            report.update({key: latest[key] for key in NATIVE_RENEWAL_TIMESTAMPS
+                           if finite_epoch(latest.get(key)) is not None})
+            report.update({"state": "retrying", "reason": "native_refresh_unconfirmed"})
+            return dict(current), report, False
+        failures = previous.get("failures", 0)
+        failures = min(failures, 10) if type(failures) is int and failures >= 0 else 0
+        delay = min(NATIVE_RENEWAL_RETRY_S * 2 ** failures, NATIVE_RENEWAL_RETRY_MAX_S)
+        # Native Claude may decline early refresh until its own renewal window.
+        # Converge toward expiry rather than backing off across that window;
+        # expired credentials retry once a minute, never in a tight loop.
+        expiry_delay = max(NATIVE_RENEWAL_RETRY_S, (expiry - now) / 2)
+        delay = min(delay, expiry_delay)
+        saved = {**report, "last_attempt_at": now, "next_attempt_at": now + delay,
+                 "failures": failures + 1, "state": "retrying",
+                 "reason": "native_refresh_unconfirmed"}
+        state["native_renewal"] = saved
+        # Durable before launching, so a killed probe does not cause a hot loop.
+        if not write_state(state_path, state):
+            report.update({"state": "blocked", "reason": "maintenance_busy"})
+            return state, report, False
+        read_quota(runner, timeout=NATIVE_RENEWAL_TIMEOUT_S)
+        fresh = credentials_summary(Path.home() / ".claude")
+        after = credential_expiry(fresh)
+        current = read_state(state_path)
+        account = account_fingerprint(Path.home() / ".claude.json")
+        if (account != bound or current.get("bound_fp") != bound
+                or current.get("account_restart") or current.get("login")):
+            saved.update({"state": "blocked", "reason": "account_transition"})
+        elif after is not None and after > expiry and after > max(now, time.time()) + 30:
+            saved.update({"state": "renewed", "last_success_at": max(now, time.time()),
+                          "failures": 0})
+            saved.pop("reason", None)
+            saved.pop("next_attempt_at", None)
+        state = {**current, "native_renewal": saved}
+        write_state(state_path, state)
+        return state, {key: value for key, value in saved.items() if key != "failures"}, True
+    finally:
+        os.close(lock)
+
+
 def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
                now: Optional[float] = None) -> dict[str, Any]:
     """What this slot looks like, collected as its own user.
@@ -2506,7 +2686,7 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     reports: which Claude account the slot is signed in to (see
     slot_account_labels).
     """
-    now = time.time() if now is None else now
+    now = finite_epoch(now) or time.time()
     state_path = Path(SLOT_STATE_PATH).expanduser()
     state = read_state(state_path)
     # The slot's own history, once; its mark saved at once, as on an owner's node.
@@ -2545,17 +2725,18 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
         else:
             state["account_restart"] = "owed"
     config_dir = Path.home() / ".claude"
-    credentials = credentials_summary(config_dir)
-    credentials.update(slot_account_labels(config_dir))
-    credentials["account_fp"] = account_fingerprint(global_config_of(config_dir))
     # And the account it keeps. Two fingerprints that differ are a slot signed
     # in to another account by some way other than its page, which the server
     # flags: the binding guards the page, and this says when it was gone round.
-    credentials["bound_fp"] = state.get("bound_fp")
     status = auth_status(runner)
-    if status:
-        credentials.update(status)
-        credentials["present"] = status.get("logged_in", credentials.get("present"))
+    credentials = _slot_credential_facts(config_dir, state, status)
+    state, renewal, attempted = maintain_slot_credentials(
+        state, request, credentials, runner, now, state_path)
+    if attempted:
+        status = auth_status(runner)
+    # Also reflect a transition/backoff discovered under the maintenance lock.
+    credentials = _slot_credential_facts(config_dir, state, status)
+    credentials["renewal"] = renewal
     state, installed = reconcile_slot_version(request, state,
                                               claude_info(runner).get("version"), runner, now)
     remote = remote_control_state(DEFAULT_RC_SERVICE, runner)
@@ -2569,11 +2750,17 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
     # the read opens would start on the login screen — where the keystrokes it
     # types to reach /usage would land instead. Most slots spend their first
     # minutes exactly there, between being claimed and being signed into.
-    if request.get("refresh_quota") is True and credentials.get("logged_in") is True:
+    if (request.get("refresh_quota") is True and credentials.get("logged_in") is True
+            and not attempted and renewal.get("state") not in ("retrying", "needed")
+            and renewal.get("reason") not in ("account_transition", "sign_in_pending",
+                                               "maintenance_busy", "expiry_unknown",
+                                               "credential_unavailable")):
         quota, remember = quota_summary(state, runner, now, config_dir=config_dir,
                                         wanted_at=request.get("quota_wanted_at"))
         if remember is not None:
             state = {**state, "quota": remember}
+        # Normal quota probes can also refresh native credentials.
+        credentials.update(_slot_credential_facts(config_dir, state, status))
     else:
         cached = state.get("quota") if isinstance(state.get("quota"), Mapping) else None
         quota = _quota_report(cached) if cached else None
@@ -2613,7 +2800,18 @@ def slot_facts_main(stdin: Any, stdout: Any, runner: Runner = subprocess.run) ->
     # Claude Code keeps a slot's one account in ~/.claude. A directory inherited
     # from whoever started this would quietly make every call about another.
     os.environ.pop(CONFIG_DIR_VAR, None)
-    json.dump(slot_facts(request, runner), stdout, separators=(",", ":"))
+    # Serialize the whole slot reconciliation, including sign-in adoption and
+    # native maintenance. Timer/manual invocations must not race each other's
+    # state or drive the same native probe. No lock means no mutation.
+    probe, _why = quota_probe_dir()
+    lock = _native_probe_lock(probe, ".slot-facts.lock") if probe else None
+    if lock is None:
+        print("slot maintenance is already running or its lock is unavailable", file=sys.stderr)
+        return 2
+    try:
+        json.dump(slot_facts(request, runner), stdout, separators=(",", ":"))
+    finally:
+        os.close(lock)
     return 0
 
 

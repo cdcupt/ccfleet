@@ -18,6 +18,10 @@ PEER = r'''
 import json, os, struct, sys, time
 from pathlib import Path
 mode, capture, gate = sys.argv[1:4]
+if mode == "blocked-upload":
+    Path(capture).write_text(json.dumps({"pid": os.getpid()}))
+    time.sleep(10)
+    raise SystemExit(2)
 def exact(size):
     data = b""
     while len(data) < size:
@@ -296,6 +300,29 @@ def test_client_disconnect_cancels_blocked_ssh_stream(peer):
         connection.close()
         wait_until(lambda: all(child.poll() is not None for child in children))
         wait_until(lambda: not bridge.server.processes)
+
+
+def test_client_disconnect_cancels_blocked_ssh_upload_before_request_deadline(peer):
+    command, capture, _, calls = peer
+    # Much larger than the OS pipe buffer: the synthetic SSH peer deliberately
+    # never reads stdin, so the bridge must cancel while still writing the body.
+    body = json.dumps({"messages": [{"role": "user", "content": "x" * 1024 * 1024}]}).encode()
+    with relay.Bridge(command("blocked-upload"), request_timeout=10) as bridge:
+        connection = socket.create_connection(("127.0.0.1", bridge.port), timeout=3)
+        try:
+            prefix = (f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{bridge.port}\r\n"
+                      f"Authorization: Bearer {bridge.secret}\r\nContent-Type: application/json\r\n"
+                      f"Content-Length: {len(body)}\r\n\r\n").encode()
+            connection.sendall(prefix + body)
+            wait_until(lambda: capture.exists() and bool(bridge.server.processes))
+            children = list(bridge.server.processes)
+            assert all(child.poll() is None for child in children)
+            connection.close()
+            wait_until(lambda: all(child.poll() is not None for child in children))
+            wait_until(lambda: not bridge.server.processes)
+            assert calls == ["blocked-upload"]
+        finally:
+            connection.close()
 
 
 def test_close_cancels_all_active_children_and_request_deadline_is_bounded(peer):

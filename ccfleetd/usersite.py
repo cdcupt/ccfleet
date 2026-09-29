@@ -24,6 +24,14 @@ from typing import Any, Optional
 from . import claude_versions, cli_access, names, oauth, payments, plans, resets, status
 from . import slots as slotstates
 from .config import Config
+from .credential_health import (
+    ACCESS_MARGIN_S,
+    RENEWAL_WINDOW_S,
+    TRANSITION_REASONS,
+    access_expiry,
+    fresh_observation,
+    renewal_report,
+)
 from .desired import is_login_url
 from .monitor import LOGIN_MAX_AGE_S
 from .render import (
@@ -669,7 +677,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "keeps, so we can tell when one account is signed in on two machines, or a slot on "
         "another account than its own, which ccfleet does not allow, that "
         "plan&#x27;s rate-limit tier, when that sign-in expires, how much of your Claude usage "
-        "limits is used and when they reset, and how "
+        "limits is used and when they reset, credential-renewal state and attempt timestamps "
+        "with fixed reason codes (never tokens or raw native errors), and how "
         "many tokens were used each hour over the last week. The token counts are worked "
         "out on the machine, from Claude Code&#x27;s own records in your slot; only the "
         "numbers leave it. We keep these reports for "
@@ -900,7 +909,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     signed_in = (report.get("credentials") or {}).get("logged_in") is True
     if (signed_in if own else slot["state"] == slotstates.ACTIVE):
         parts.append(_in_use(report, now, "" if own else _quota_refresh(slot, report, csrf,
-                                                                          now)))
+                              now), fresh=fresh_observation(report.get("credentials"), heard,
+                              now, cfg.heartbeat_max_age_s, listening)))
         if not own:
             parts.append(_ways_to_use(report))
     if slot["state"] in CAN_SIGN_IN:
@@ -924,7 +934,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
     return "".join(parts)
 
 
-def _in_use(report: Mapping[str, Any], now: float, refresh: str = "") -> str:
+def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *,
+            fresh: bool = True) -> str:
     """Signed in: as whom, the plan, a way in, and how much of each window is left.
 
     One Claude account per slot, so this names it: the holder can see which of
@@ -932,15 +943,39 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "") -> str:
     fresh sign-in. A slot stays in use when that sign-in is gone, so this says
     so plainly rather than going on about one that is not there.
     """
+    if not fresh:
+        return ("<p>Waiting for fresh credential status from the machine. Current model "
+                "readiness has not been verified; the last report may be out of date.</p>")
     creds = report.get("credentials") or {}
+    renewal = renewal_report(creds.get("renewal"))
+    expires = access_expiry(creds)
+    if renewal.get("reason") in TRANSITION_REASONS:
+        return ("<p>Claude account maintenance is in progress. Wait for it to finish "
+                "before retrying model requests.</p>")
+    if expires is not None and expires <= now + ACCESS_MARGIN_S:
+        return ('<p class="lapsed">Model access needs credential renewal. '
+                + ("Native Claude maintenance checks this automatically. " if renewal else "")
+                + "If access does not recover, use Sign in again below or contact your "
+                "operator. Your pairing, files and history are kept.</p>")
     if creds.get("logged_in") is False:
         return "<p>Not signed in to Claude right now. Sign in below to use your slot.</p>"
+    if renewal.get("reason") in {"expiry_unknown", "credential_unavailable"}:
+        return ('<p class="lapsed">Claude credential expiry could not be verified. '
+                'Contact your operator before assuming model access is ready.</p>')
     plan = plans.label(creds.get("subscription_type"), creds.get("plan"))
     who = f" as {escape(str(creds['email']))}" if creds.get("email") else ""
     left = _sign_in_left(creds.get("refresh_expires_at"), now)
     lines = [f'<p class="signed">Signed in{who}'
              f"{(' · ' + escape(str(plan)) + ' plan') if plan else ''}"
              f"{' · sign-in ' + left if left else ''}.</p>"]
+    if renewal.get("state") == "retrying":
+        lines.append('<p class="small muted">Native credential renewal is not yet '
+                     'confirmed; a bounded retry is scheduled.</p>')
+    elif expires is not None and expires <= now + RENEWAL_WINDOW_S and renewal:
+        lines.append('<p class="small muted">Automatic credential renewal is due.</p>')
+    elif renewal.get("last_success_at"):
+        lines.append('<p class="small muted">Last observed native credential renewal: '
+                     + escape(_age(now, renewal["last_success_at"])) + ' ago.</p>')
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     read = quota.get("checked_at")
