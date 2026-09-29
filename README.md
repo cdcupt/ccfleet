@@ -99,7 +99,9 @@ The operator-enabled `ccfleet local` project connector explicitly shares a
 selected laptop project with the slot, then runs the original Claude Code and
 all agent tools **on the slot**. No local Claude installation is required. This
 replaces the retired local-agent inference-relay preview; it is not a model API
-proxy. Availability remains canary-gated, not enabled for every slot.
+proxy. Project access is enabled for currently assigned hosted slots; newly
+created or reassigned slots still need operator activation. Installing the client
+or running its readiness check does not activate a slot.
 
 ```bash
 cd ~/code/my-project

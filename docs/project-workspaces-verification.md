@@ -50,12 +50,23 @@ check. The shared-node rollout ran the owner canary before the remaining shared
 node; installed files matched the release and fresh heartbeats arrived without
 new alerts. The unchanged owner-node agent also matched the release file hash.
 
-Project access remains explicitly operator-enabled on the owner canary. Installing
-the code does not grant project access to every slot. The old local-agent inference
-relay entry point is retired; ordinary remote terminals are retained.
+Project access uses a separate operator gate. Installing the code or running the
+readiness check does not grant access. Newly created or reassigned hosted slots
+still need explicit operator activation. The old local-agent inference relay
+entry point is retired; ordinary remote terminals are retained.
 
 The migration guide was visually checked at desktop and 390px phone widths, with
 no page-level horizontal overflow. Commands may scroll inside their code blocks.
+
+## Wider activation
+
+Activation was verified on the remaining currently assigned hosted slot on
+2026-09-29 UTC. Installed module hashes matched the tested release; the root-owned
+gate was enabled, and the fixed framed readiness protocol returned success.
+The wider check was readiness-only: no customer project files were read and
+no model requests were made. The owner canary above remains the source of the full
+end-to-end proof. Legacy owner nodes without hosted CLI access are outside this
+activation scope; this is not a claim that every node supports project access.
 
 ## What this evidence does not claim
 

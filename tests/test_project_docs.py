@@ -34,8 +34,9 @@ def test_guide_introduces_explicit_project_sharing_with_a_non_inference_readines
     assert "ccfleet project status" in page
     assert "ccfleet local --new --name work" in page
     assert "Review the file list and confirm the first share" in page
-    assert "operator-enabled canary" in page
-    assert "not enabled for every slot" in page
+    assert "enabled for currently assigned hosted slots" in page
+    assert "Newly created or reassigned slots still need operator activation" in page
+    assert "Installing the client or running the check does not activate access" in page
     assert "check sends no project files and makes no model request" in page
     assert "No local Claude Code installation is required" in page
     assert "runs Claude Code and all agent tools on the slot, not your laptop" in page
@@ -99,7 +100,9 @@ def test_retired_relay_doc_points_to_current_design_and_keeps_history_local():
     assert "# Local-agent relay retired" in old
     assert "[project workspaces](project-workspaces.md)" in old
     assert "history is retained locally" in old
-    assert "operator-enabled canary" in current
+    assert "enabled for currently assigned hosted slots" in current
+    assert "reassigned slots still need operator activation" in current
+    assert "code does not activate a slot" in current
     assert "no background synchronization" in current
     assert "not an operating-system sandbox" in current
     assert "no deployed revision is asserted" in current

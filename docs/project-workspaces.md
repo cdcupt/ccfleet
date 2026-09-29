@@ -6,11 +6,12 @@ original Claude Code there, inside persistent tmux. Claude, shell tools and
 model connections run on the slot. No Claude Code installation is required on
 the laptop; the connector supports macOS and Linux with Python 3.9+ and OpenSSH.
 
-Project access is an operator-enabled canary, not available on every slot.
-Publishing or installing this code does not enable a slot, prove deployment, or
-mean a full fleet rollout has passed. `ccfleet local --check` checks the selected
-slot without transferring project files or making a model request. Plain
-`ccfleet` remains the ordinary remote-terminal workflow.
+Project access is enabled for currently assigned hosted slots. Newly created or
+reassigned slots still need operator activation. Publishing or installing this
+code does not activate a slot. `ccfleet local --check` checks the selected slot
+without transferring project files, making a model request or enabling access.
+Plain `ccfleet` remains the ordinary remote-terminal workflow. Legacy owner
+nodes without hosted CLI access are outside this project-access rollout.
 
 ## Migrate an existing computer
 
@@ -180,9 +181,12 @@ Project access is separately operator-gated. The retired relay gate does not
 enable the new project protocol. The new gate is
 `/etc/ccfleet/project-access/<unix-user>`: a root-owned regular file inside a
 root-owned directory, neither writable by group or others. Normal installation
-does not create it. Preserve the existing terminal path while
-canarying project selection, slot-only process execution, push/pull conflicts,
-multi-computer use, reconnect, account binding and device revocation.
+does not create it. Currently assigned hosted slots have been enabled; new and
+reassigned slots still require deliberate operator activation. The existing
+terminal path remains available. The owner canary supplies full end-to-end proof
+for project selection, slot-only process execution, push/pull conflicts,
+reconnect, account binding and device revocation; wider activation uses readiness
+checks without reading customer projects or making model requests.
 
 Automated tests should use synthetic identifiers to verify the transfer schema
 rejects host metadata and unsafe paths. A successful connection is not evidence
