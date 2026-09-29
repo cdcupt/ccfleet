@@ -1,5 +1,8 @@
 # Project workspace release verification
 
+This is historical evidence for the bounded snapshot workflow. The newer live
+workflow is covered by [live-folder release verification](live-folders-verification.md).
+
 Verified 2026-09-29 UTC. Initial project release: `391b0610e0e69a074d5d427597c502751147db32`.
 This record also covers the subsequent account-session cleanup hardening.
 
