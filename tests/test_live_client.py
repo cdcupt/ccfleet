@@ -145,6 +145,22 @@ def test_private_state_is_bounded(tmp_path):
         live.read_state(tmp_path)
 
 
+def test_unresponsive_control_is_not_mistaken_for_stopped_file_access(tmp_path):
+    import socket
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="ccf-t-") as private, \
+            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        address = Path(private) / "control"
+        listener.bind(str(address))
+        address.chmod(0o600)
+        listener.listen(1)
+        state = tmp_path / "state.json"
+        state.write_text(json.dumps({"socket": str(address), "instance": "test"}))
+        state.chmod(0o600)
+        with pytest.raises(socket.timeout):
+            live.control(tmp_path, "stop")
+
+
 CHILD_PREAMBLE = r'''
 import base64, json, os, struct, sys
 from pathlib import Path

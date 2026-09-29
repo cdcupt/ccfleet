@@ -151,7 +151,7 @@ def control(directory: Path, operation: str) -> dict[str, Any]:
             with connection.makefile("rwb", buffering=0) as stream:
                 write_frame(stream, {"operation": operation, "instance": state.get("instance")})
                 return read_frame(stream)
-    except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+    except (FileNotFoundError, ConnectionRefusedError):
         return {}
 
 
