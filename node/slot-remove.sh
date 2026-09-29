@@ -17,6 +17,13 @@ set -euo pipefail
 
 SLOT=""
 KEEP_HOME=no
+ETC_DIR="${CCFLEET_ETC_DIR:-/etc/ccfleet}"
+
+clear_access_policies() {
+  # The account name is already validated. Remove only these exact gate files,
+  # including on a retry after userdel: permission must not survive reassignment.
+  rm -f -- "$ETC_DIR/project-access/$SLOT" "$ETC_DIR/local-relay/$SLOT"
+}
 
 die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n== %s\n' "$*"; }
@@ -36,7 +43,11 @@ done
 printf '%s' "$SLOT" | grep -qE '^[a-z][a-z0-9_-]{1,31}$' \
   || die "--slot is not a valid slot name"
 [ "$(id -u)" -eq 0 ] || die "run this as root"
-id "$SLOT" >/dev/null 2>&1 || { note "no such user: $SLOT; nothing to release"; exit 0; }
+if ! id "$SLOT" >/dev/null 2>&1; then
+  clear_access_policies
+  note "no such user: $SLOT; nothing to release"
+  exit 0
+fi
 
 # What makes an account a slot is that slot-add created it and put it in this
 # group. Nothing else does: "no sudo and a uid over 1000" describes a great many
@@ -91,6 +102,8 @@ if [ -d "$HOME_DIR" ]; then
     || die "$SLOT's home '$HOME_DIR' is not owned by uid $UID_NUM. It is shared or misconfigured; refusing to delete it."
   HOME_PRESENT=yes
 fi
+
+clear_access_policies
 
 step "1/4  stop what it is running"
 loginctl disable-linger "$SLOT" 2>/dev/null || true

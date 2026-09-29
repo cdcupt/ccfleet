@@ -26,9 +26,10 @@ Anthropic
 
 The broker authenticates the CC Fleet device token, but SSH remains encrypted
 between the customer's computer and the slot. The broker cannot read the
-terminal stream. Claude Code, project files, tools, model requests and responses
-all remain on the slot. Anthropic receives Claude traffic from that slot, under
-the single Claude account signed in there.
+terminal or project-transfer stream. Claude Code and its tools run on the slot,
+and model connections originate there. Projects can be created there or copied
+there through explicit project sharing. Anthropic receives relevant Claude
+traffic from that slot, under the single Claude account signed in there.
 
 ## Customer flow
 
@@ -92,13 +93,42 @@ Supported modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
 and `/effort` change the running session without losing its conversation.
 `restart` deliberately ends the current Claude process before replacing it.
 
-## Experimental local projects
+## Selected projects, slot-only execution
 
-There is also an operator-gated `ccfleet local` prototype for
-running the original Claude Code against laptop files with the assigned slot
-handling model requests. It is off by default and is not the hosted terminal
-workflow above. See [the implementation and release limits](docs/local-relay.md)
-before enabling it; technical operation does not establish provider permission.
+The operator-enabled `ccfleet local` project connector explicitly shares a
+selected laptop project with the slot, then runs the original Claude Code and
+all agent tools **on the slot**. No local Claude installation is required. This
+replaces the retired local-agent inference-relay preview; it is not a model API
+proxy. Availability remains canary-gated, not enabled for every slot.
+
+```bash
+cd ~/code/my-project
+ccfleet local --check
+ccfleet project status
+ccfleet local --new --name work
+```
+
+Review and confirm the first-share file list. Resume the remote project session
+with `ccfleet local --continue` or `ccfleet local --resume`. Use
+`ccfleet project diff` and `ccfleet project pull` to review and apply slot changes
+with backups and conflict checks. After editing locally, use
+`ccfleet project push`; all active sessions for that project must first finish
+with `/exit`. There is no background synchronization or laptop shell access.
+
+Already-paired computers only need the installer update, not another pairing or
+`--migrate`. Pairing, remote files and slot sign-in stay in place. Old local-agent
+conversation history remains local and is not imported into the slot.
+
+Only selected relative filenames, bytes, hashes and executable flags are shared,
+not automatically collected laptop environment or identity fields. Limits and
+credential-name exclusions reduce accidental sharing but cannot detect all
+secrets inside ordinary files. BWH sees connection IP/transport metadata; slot
+root can inspect shared data; relevant project content reaches Anthropic. This
+is not an anonymity guarantee or laptop OS sandbox.
+
+See [project workspaces and migration](docs/project-workspaces.md) for selection,
+limits, session controls, multiple computers, recovery and rollout verification.
+The website guide has a dedicated `/docs/guide#migration` section.
 
 ## What runs where
 
@@ -107,11 +137,15 @@ before enabling it; technical operation does not establish provider permission.
 - `ccfleet_agent/machine.py` provisions and wipes Linux slot users, installs
   their device keys in a root-controlled sshd key directory and reports health facts.
 - `node/slot-entry.sh` is the forced SSH entrypoint. It accepts only an
-  interactive terminal and attaches to the slot's persistent Claude Code
-  session.
+  allowlisted terminal/session command or operator-enabled bounded project
+  protocol, never a client-supplied general shell command.
 - `laptop/ccfleet` is the local client. It wraps OpenSSH behind the WebSocket
   broker, pins the slot's SSH host key and reconnects after ordinary network
   failures.
+- `ccfleet_agent/project_files.py` defines the bounded snapshot format and safe
+  file operations. The installer verifies a versioned copy beside the client.
+- `ccfleet_agent/project_access.py` serves project snapshots and slot-native
+  project sessions behind a separate operator gate.
 
 The server receives operational facts such as versions, login state, account
 fingerprints, quota percentages and hourly token counts. It does not receive a
@@ -236,6 +270,7 @@ Useful paths:
 | `docs/design.md` | architecture and trust boundaries |
 | `docs/runbooks.md` | operator procedures |
 | `docs/compliance.md` | account and credential constraints |
+| `docs/project-workspaces.md` | explicit project sharing and migration |
 | `docs/tunnel.md` | optional heartbeat reporting tunnel |
 | `deploy/` | container, systemd and TLS examples |
 | `tests/` | unit and integration test suite |

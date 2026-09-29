@@ -35,17 +35,80 @@ done
   || { printf 'error: --name is used with --migrate\n' >&2; exit 2; }
 
 command -v python3 >/dev/null 2>&1 || { printf 'ccfleet needs Python 3.9 or newer\n' >&2; exit 1; }
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "ccfleet needs Python 3.9 or newer")'
 command -v ssh >/dev/null 2>&1 || { printf 'ccfleet needs OpenSSH\n' >&2; exit 1; }
 command -v ssh-keygen >/dev/null 2>&1 || { printf 'ccfleet needs ssh-keygen\n' >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { printf 'ccfleet needs curl\n' >&2; exit 1; }
 
 mkdir -p "$DEST"
-TMP="$DEST/.ccfleet.$$"
-trap 'rm -f "$TMP"' EXIT
-curl -fsSL "$URL" -o "$TMP"
-python3 -m py_compile "$TMP"
-chmod 755 "$TMP"
-mv "$TMP" "$DEST/ccfleet"
+CLIENT_TMP="$(mktemp "$DEST/.ccfleet.XXXXXX")"
+HELPER_TMP=""
+trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP"' EXIT
+curl -fsSL "$URL" -o "$CLIENT_TMP"
+# Read the helper digest as data. Never execute the downloaded client to discover
+# its dependencies, and reject missing, computed, or ambiguous digest values.
+PROJECT_FILES_SHA256="$(python3 - "$CLIENT_TMP" <<'PY'
+import ast
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_bytes()
+tree = ast.parse(source, filename=sys.argv[1])
+compile(tree, sys.argv[1], "exec")
+assignments = [
+    node for node in tree.body
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+    and any(
+        isinstance(target, ast.Name) and target.id == "PROJECT_FILES_SHA256"
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+    )
+]
+if len(assignments) != 1:
+    raise SystemExit("ccfleet client must declare one PROJECT_FILES_SHA256 digest")
+assignment = assignments[0]
+value = assignment.value
+if (
+    not isinstance(assignment, ast.Assign)
+    or len(assignment.targets) != 1
+    or not isinstance(value, ast.Constant)
+    or not isinstance(value.value, str)
+    or not re.fullmatch(r"[0-9a-f]{64}", value.value)
+):
+    raise SystemExit("ccfleet PROJECT_FILES_SHA256 must be a literal SHA256 digest")
+print(value.value)
+PY
+)"
+if [ -n "${CCFLEET_PROJECT_FILES_URL:-}" ]; then
+  HELPER_URL="$CCFLEET_PROJECT_FILES_URL"
+else
+  case "$URL" in
+    https://raw.githubusercontent.com/*/laptop/ccfleet)
+      HELPER_URL="${URL%/laptop/ccfleet}/ccfleet_agent/project_files.py" ;;
+    *) HELPER_URL="https://raw.githubusercontent.com/cdcupt/ccfleet/main/ccfleet_agent/project_files.py" ;;
+  esac
+fi
+HELPER_TMP="$(mktemp "$DEST/.ccfleet-project-files.XXXXXX")"
+curl -fsSL "$HELPER_URL" -o "$HELPER_TMP"
+python3 - "$CLIENT_TMP" "$HELPER_TMP" "$DEST" "$PROJECT_FILES_SHA256" <<'PY'
+import hashlib
+import os
+import pathlib
+import sys
+
+client, helper, destination = map(pathlib.Path, sys.argv[1:4])
+digest = sys.argv[4]
+source = helper.read_bytes()
+if hashlib.sha256(source).hexdigest() != digest:
+    raise SystemExit("ccfleet project helper checksum mismatch; existing client left unchanged")
+compile(source, str(helper), "exec")
+# Versioned helpers keep an interrupted update compatible with the old client.
+# os.replace refuses directory destinations and atomically replaces each file.
+helper.chmod(0o644)
+os.replace(helper, destination / ("ccfleet-project-files-" + digest + ".py"))
+client.chmod(0o755)
+os.replace(client, destination / "ccfleet")
+PY
 trap - EXIT
 
 printf 'Installed ccfleet to %s\n' "$DEST/ccfleet"

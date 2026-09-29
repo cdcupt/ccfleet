@@ -107,6 +107,7 @@ box-shadow:0 1px 0 var(--rule);white-space:nowrap}
 .doc .card,.how .card{padding:6px 24px 20px}
 .doc .card>h2:first-child,.how .card>h2:first-child{margin-top:20px}
 .card h3{margin:16px 0 6px}
+.card[id]{scroll-margin-top:110px}
 
 /* How it works: the picture beside the words, where there is room for both. */
 .how{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:18px;
@@ -292,7 +293,10 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
     body = (
         '<div class="dochead"><h1>Getting started</h1>'
         '<p class="lead">From buying a slot to your first Claude Code session. It takes a few '
-        "minutes, most of which is the machine setting your slot up.</p></div>"
+        "minutes, most of which is the machine setting your slot up.</p>"
+        '<p>Already using CC Fleet? Start with the <a href="#migration">migration guide</a>. '
+        'For selected laptop projects, see '
+        '<a href="#project-workspaces">project workspaces</a>.</p></div>'
         '<ol class="steps">'
         "<li><h3>Sign in</h3>"
         '<p>Open <a href="/account">your page</a> and choose '
@@ -317,6 +321,94 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "Install the CC Fleet command shown there, run <code>ccfleet login</code>, and paste "
         "the single-use pairing code. Then run <code>ccfleet</code>.</p></li>"
         "</ol>"
+        '<div class="card" id="migration"><h2>Migration: choose your starting point</h2>'
+        '<h3>1. You still use ccfleet-connect</h3>'
+        '<p>Open <a href="/account">your slot page</a>, choose '
+        '<span class="btnlabel">Connect this computer</span>, and have a fresh pairing code ready. '
+        'In your terminal, run:</p><pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/'
+        'ccfleet/main/laptop/install.sh | bash -s -- --migrate</code></pre>'
+        '<p>This pairs the new client first and removes the installed legacy '
+        '<code>ccfleet-connect</code> setup only after pairing succeeds. Open a new terminal '
+        'afterward. Revoke the old setup-token in your Anthropic account only if nothing '
+        'else uses it.</p>'
+        '<h3>2. This computer is already paired</h3>'
+        '<p>Update only; do not pair again or repeat <code>--migrate</code>:</p>'
+        '<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/'
+        'ccfleet/main/laptop/install.sh | bash</code></pre>'
+        '<p>Your pairing, slot sign-in and existing remote workspace stay in place. '
+        'Plain <code>ccfleet</code> still opens your ordinary slot terminal.</p>'
+        '<h3>3. You used the local-agent relay preview</h3>'
+        '<p>Exit any running local-agent preview session before updating; the installer '
+        'does not stop or convert an already-running process. Update as above, then select '
+        'a project and check the enabled slot:</p>'
+        '<pre><code>cd ~/code/my-project\nccfleet local --check\n'
+        'ccfleet project status\nccfleet local --new --name work</code></pre>'
+        '<p>Review the file list and confirm the first share. The new <code>ccfleet local</code> '
+        'runs Claude Code and all agent tools on the slot, not your laptop. No local Claude '
+        'Code installation is required. Old local conversation history stays on this computer '
+        'and is not imported into the slot. Existing remote files are not automatically moved '
+        'into this new project workspace.</p>'
+        '<p><strong>Availability:</strong> project access is an operator-enabled canary, not '
+        'enabled for every slot. If <code>--check</code> reports it is disabled, keep using '
+        'plain <code>ccfleet</code> and contact your operator. The check sends no project files '
+        'and makes no model request.</p></div>'
+        '<div class="card" id="project-workspaces"><h2>Selected projects, slot-only execution</h2>'
+        '<p><code>ccfleet local</code> is a project connector and remote terminal. It shares '
+        'an explicit snapshot of the chosen directory, then opens the original Claude Code '
+        'inside persistent tmux on your slot. It does not run a local Claude agent, mount your '
+        'computer, or perform background synchronization.</p>'
+        '<ol><li>Choose the directory with <code>cd</code> or '
+        '<code>--project PATH</code>. Inspect selection with '
+        '<code>ccfleet project status</code>.</li>'
+        '<li>Run <code>ccfleet local --new --name work</code>; review and confirm the first '
+        'upload. Use <code>--yes</code> only when you intentionally want to skip '
+        'that confirmation.</li>'
+        '<li>To return after disconnecting, use <code>ccfleet local --continue</code> or '
+        '<code>ccfleet local --resume</code>, the picker of running project sessions. '
+        '<code>ccfleet local --resume work</code> selects one directly.</li>'
+        '<li>Finish a session with <code>/exit</code>. Closing a terminal only disconnects it. '
+        'All sessions for that project must finish before another upload.</li>'
+        '<li>Inspect and bring changes back:</li></ol>'
+        '<pre><code>ccfleet project diff\nccfleet project pull</code></pre>'
+        '<p>Pull shows changes, asks before applying them, preserves recoverable backups '
+        'under <code>~/.config/ccfleet/project-backups</code> (or your configured CC Fleet '
+        'directory), and refuses conflicting local/slot edits. Pause editors during apply; '
+        'a detected concurrent edit can stop a partially applied update, with originals '
+        'retained in the backup. It is not an all-files transaction.</p>'
+        '<p>After editing locally, explicitly upload with <code>ccfleet project push</code>. '
+        'There is no automatic push or pull on reconnect. If local files changed, '
+        '<code>--resume</code> continues the existing slot workspace without uploading them.</p>'
+        '<p>Use <code>--slot SLOT</code> to choose a paired slot. On another paired computer, '
+        '<code>ccfleet project list</code> shows the project ID; use an empty selected directory '
+        'and <code class="code-wrap">ccfleet project pull --remote-project ID '
+        '--project PATH</code> '
+        'before opening it. Each computer remains separately revocable.</p>'
+        '<p>Project sessions default to manual permissions. Choose another mode, model or '
+        'effort for a new session with <code class="code-wrap">ccfleet local --new --name research '
+        '--mode plan --model opus --effort high</code>. In the slot session, use '
+        '<code>/model</code> and <code>/effort</code>. Names use 1–32 letters, digits, underscores '
+        'or hyphens, starting with a letter or digit. The retired local <code>--print</code> '
+        'and <code>--fork-session</code> '
+        'options are not supported; use the original Claude interface on the slot.</p>'
+        '<h3>What is shared</h3>'
+        '<p>Only selected relative filenames, contents, content hashes and executable flags '
+        'are transferred. The connector does not automatically export your laptop hostname, '
+        'username, absolute project path, environment variables, timezone or host fingerprint. '
+        'This is not an anonymity guarantee: BWH sees the incoming IP address and connection '
+        'metadata; SSH exposes transport properties such as its client version and terminal '
+        'dimensions. Slot administrators have root and can inspect shared data. Selected files '
+        'and prompts may themselves identify you, and relevant content is sent to Anthropic.</p>'
+        '<p>Transfers are limited to 1,000 files, 4 MiB per file and 20 MiB total. Git projects '
+        'use tracked files plus untracked files allowed by project ignore rules; personal Git '
+        'configuration is not copied. Hard exclusions always omit Git metadata, credential '
+        'directories, files named like <code>.env*</code>, <code>credentials*</code>, '
+        '<code>secrets*</code>, private-key files, dependency directories and build outputs. '
+        'Symlinks, hardlinks, special files and unsafe paths are rejected rather than followed. '
+        'These name filters cannot detect every secret inside an otherwise ordinary file. '
+        'Review the selected files before sharing.</p>'
+        '<p>This is a bounded file-transfer feature, not an operating-system sandbox on your '
+        'laptop. The remote agent has no connector command for executing a laptop shell. '
+        'Keep your own backups and do not share data you cannot entrust to the slot host.</p></div>'
         '<div class="card"><h2>The CLI experience</h2><ul>'
         "<li><strong>The command.</strong> Run <code>ccfleet</code> in a normal terminal. It "
         "opens the original Claude Code interface running in your slot. You never type an "
@@ -338,16 +430,11 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "fable --effort xhigh</code>. In a running Claude Code session, use "
         "<code>/model</code> or <code>/effort</code> to change it without losing the "
         "conversation.</li>"
-        "<li><strong>Moving from the old local-token setup.</strong> With a fresh pairing "
-        "code ready, run:"
-        "<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/"
-        "ccfleet/main/laptop/install.sh | bash -s -- --migrate</code></pre>It pairs the new "
-        "client first and removes an installed <code>ccfleet-connect</code> setup only after "
-        "that succeeds. Revoke the old setup-token in your Anthropic account if nothing "
-        "else uses it.</li>"
         "<li><strong>Projects.</strong> Keep projects in <code>~/workspace</code> on the slot. "
         "Clone with Git or fetch them from another service from inside Claude Code. CC Fleet "
-        "does not silently upload or mount files from the computer where you run the client.</li>"
+        "does not silently upload or mount files from the computer where you run the client. "
+        'For explicit local snapshots, see '
+        '<a href="#project-workspaces">project workspaces</a>.</li>'
         "<li><strong>Reconnect.</strong> Claude Code runs inside a persistent session. If "
         "Wi-Fi changes, the laptop sleeps or the terminal closes, run <code>ccfleet</code> "
         "again and it reattaches to the same session.</li>"
@@ -497,8 +584,15 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "pairs once with your held slot, and opens a terminal without exposing an SSH command. "
         "The broker accepts an authenticated WebSocket and passes the already encrypted SSH "
         "stream to that slot. It cannot read the terminal contents. A forced entrypoint on the "
-        "slot can only attach to its Claude Code session; it cannot open a general remote shell "
-        "before Claude gives one through its normal tools.</p></div>"
+        "slot permits its Claude Code sessions and, only when operator-enabled, the bounded "
+        "project-transfer protocol. It cannot open a general remote shell before Claude gives "
+        "one through its normal tools.</p></div>"
+        '<div class="card"><h2>Selected laptop projects</h2>'
+        '<p>The operator-enabled <code>ccfleet local</code> connector shares an explicitly '
+        'chosen project snapshot, not a laptop Claude process or laptop shell. Claude and '
+        'its tools run on the slot. Uploads and reviewed downloads are explicit; there is no '
+        'background synchronization. <a href="/docs/guide#migration">The migration guide</a> '
+        'explains how to replace the retired local-agent preview.</p></div>'
         '<div class="card"><h2>What we can and cannot see</h2>'
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
         "signed in, the email address and plan of the Claude account signed in on it, how "
@@ -508,9 +602,11 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<a href="/privacy">The privacy page</a> lists everything, and for how long.</p>'
         "<p>Claude Code on your slot sends Anthropic less than it would by default: its "
         "error reports, bug reports and feedback surveys are switched off. The machines "
-        "keep their clocks on UTC, so your slot "
-        "says nothing about where you are; your page shows times in your own time "
-        "zone.</p>"
+        "keep their clocks on UTC; your page shows times in your own time zone. That does "
+        "not make the service anonymous: BWH sees your connection IP, SSH has transport "
+        "metadata, and shared project contents and prompts can contain identifying details. "
+        "The project connector does not automatically upload your laptop environment, "
+        "hostname, absolute paths or timezone.</p>"
         "<p>One limit is worth saying plainly: the machines are ours, and their "
         "administrators have root, so they can technically read any slot. No feature does "
         "this and we do not look, but nothing can make it impossible. Keep nothing in a slot "
@@ -537,8 +633,9 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "after the machine itself confirms your account is gone, so nobody is ever handed "
         "your files.</p></div>"
         '<div class="card"><h2>Where</h2>'
-        "<p>The machines are in California. Each slot is a machine of its own, with its own "
-        "internet address. ccfleet&#x27;s code is open source: "
+        "<p>The hosted machines are in California. A slot is a separate Linux account; "
+        "slots may share a physical machine and its internet address. "
+        "ccfleet&#x27;s code is open source: "
         '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
         'rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>.</p></div>'
         "</div></div>")

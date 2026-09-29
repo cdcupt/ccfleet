@@ -5,19 +5,21 @@ The local process owns no Claude credential. It opens an authenticated WSS
 byte path through the ccfleet broker, then OpenSSH provides end-to-end
 encryption and host verification to the assigned slot. A forced remote entry
 attaches to a persistent tmux session whose program is the original ``claude``.
-The experimental, separately enabled ``local`` command instead runs the original
-CLI on the laptop, carrying message requests to the assigned slot over that same
-encrypted transport. It never imports a Claude credential onto the laptop.
+The ``local`` command explicitly shares a selected project with that slot.
+Claude and its tools still run on the slot; the laptop never runs a Claude agent
+or an inference proxy. Returned file changes require review and conflict checks.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import difflib
+import fcntl
 import getpass
 import hashlib
-import hmac
-import io
+import importlib.util
 import json
 import os
 import re
@@ -32,10 +34,10 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
@@ -46,10 +48,9 @@ SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
-RELAY_MAX_HEADER = 32 * 1024
-RELAY_MAX_BODY = 20 * 1024 * 1024
-RELAY_PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true",
-                         "/v1/messages/count_tokens", "/v1/messages/count_tokens?beta=true"})
+PROJECT_RE = re.compile(r"^[0-9a-f]{32}$")
+PROJECT_MAX_FRAME = 32 * 1024 * 1024
+PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
 
 
 class CliError(RuntimeError):
@@ -387,7 +388,7 @@ def ssh_transport_command(device: dict[str, Any], *, tty: bool) -> list[str]:
     proxy_command = (f"{shlex.quote(sys.executable)} {shlex.quote(executable)} "
                      f"proxy --device {shlex.quote(device['device_id'])}")
     return [
-        "ssh", "-tt" if tty else "-T",
+        "ssh", "-tt" if tty else "-T", "-F", "/dev/null",
         "-o", f"ProxyCommand={proxy_command}",
         "-o", f"HostKeyAlias={device['host_alias']}",
         "-o", f"UserKnownHostsFile={device['known_hosts']}",
@@ -450,337 +451,480 @@ def cmd_attach(args: argparse.Namespace) -> int:
             return 130
 
 
-def relay_ssh_command(device: dict[str, Any]) -> list[str]:
-    return [*ssh_transport_command(device, tty=False), "ccfleet-relay-v1"]
+def project_files() -> Any:
+    """Load the exact helper shipped with this client, never from the project."""
+    executable = Path(__file__).resolve()
+    candidates = [
+        executable.parent / f"ccfleet-project-files-{PROJECT_FILES_SHA256}.py",
+        executable.parent.parent / "ccfleet_agent" / "project_files.py",
+    ]
+    for candidate in candidates:
+        if not candidate.is_file() or candidate.is_symlink():
+            continue
+        raw = candidate.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != PROJECT_FILES_SHA256:
+            continue
+        spec = importlib.util.spec_from_file_location("_ccfleet_project_files", candidate)
+        if spec is not None and spec.loader is not None:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            # Execute exactly the verified bytes. SourceFileLoader may reopen
+            # a changed file or use an unchecked bytecode cache.
+            exec(compile(raw, str(candidate), "exec"), module.__dict__)
+            return module
+    raise CliError("project helper is missing or mismatched; rerun the CC Fleet installer")
 
 
-def relay_read_exact(stream: Any, size: int) -> bytes:
-    data = bytearray()
-    while len(data) < size:
-        part = stream.read(size - len(data))
-        if not part:
-            raise CliError("slot relay connection ended before the response completed")
-        data.extend(part)
-    return bytes(data)
-
-
-def relay_metadata(stream: Any) -> dict[str, Any]:
-    size = struct.unpack("!I", relay_read_exact(stream, 4))[0]
-    if not 0 < size <= RELAY_MAX_HEADER:
-        raise CliError("invalid slot relay response")
-    try:
-        meta = json.loads(relay_read_exact(stream, size))
-    except (ValueError, UnicodeError) as exc:
-        raise CliError("invalid slot relay response") from exc
-    if (not isinstance(meta, dict) or type(meta.get("version")) is not int
-            or meta["version"] != 1
-            or type(meta.get("status")) is not int or not 200 <= meta["status"] <= 599
-            or not isinstance(meta.get("headers"), dict)):
-        raise CliError("invalid slot relay response")
-    for name, value in meta["headers"].items():
-        if (name not in ("content-type", "request-id", "retry-after")
-                or not isinstance(value, str) or len(value) > 8192
-                or not value.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
-            raise CliError("invalid slot relay response header")
-    return meta
-
-
-def relay_chunk(stream: Any) -> bytes:
-    size = struct.unpack("!I", relay_read_exact(stream, 4))[0]
-    if size > 64 * 1024:
-        raise CliError("oversized slot relay response frame")
-    return relay_read_exact(stream, size)
-
-
-def relay_preamble(meta: dict[str, Any]) -> bytes:
-    body = json.dumps({"version": 1, **meta}).encode()
-    if len(body) > RELAY_MAX_HEADER:
-        raise CliError("request headers exceed the slot relay limit")
-    return struct.pack("!I", len(body)) + body
-
-
-def check_local_relay(device: dict[str, Any]) -> None:
-    try:
-        result = subprocess.run(relay_ssh_command(device),
-                                input=relay_preamble({"operation": "status"}),
-                                capture_output=True, timeout=25, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise CliError("slot connection timed out; check your network and try again") from exc
-    if result.returncode not in (0, 2):
-        # Never echo arbitrary SSH/proxy output: it can contain private paths
-        # or remotely supplied terminal control sequences.
-        raise CliError("could not connect to your slot; check your network and Connected "
-                       "devices on your slot page, then retry (re-pair if revoked)")
-    stream = io.BytesIO(result.stdout)
-    meta = relay_metadata(stream)
-    body = relay_chunk(stream)
-    if relay_chunk(stream) != b"":
-        raise CliError("invalid relay readiness response")
-    try:
-        answer = json.loads(body)
-    except (ValueError, UnicodeError) as exc:
-        raise CliError("invalid relay readiness response") from exc
-    if (not isinstance(answer, dict) or meta["status"] != 200
-            or result.returncode != 0 or answer.get("ready") is not True):
-        reason = {
-            401: "your slot's Claude sign-in needs renewal; open your slot page to sign in",
-            403: "local projects are not enabled for this slot; ask your CC Fleet operator",
-            409: "your slot is changing accounts; wait for it to finish and try again",
-        }.get(meta["status"], "local relay is unavailable; retry or contact your CC Fleet operator")
-        raise CliError(reason, meta["status"])
-
-
-class LocalRelayServer(ThreadingHTTPServer):
-    """A launch-scoped, authenticated loopback listener for one paired slot."""
-
-    daemon_threads = True
-    allow_reuse_address = False
-
-    def __init__(self, device: dict[str, Any], secret: str):
-        self.device, self.secret = device, secret
-        self.workers = threading.BoundedSemaphore(4)
-        self.processes: set[Any] = set()
-        self.process_lock = threading.Lock()
-        self.stopping = threading.Event()
-        super().__init__(("127.0.0.1", 0), LocalRelayHandler)
-
-    def process_request(self, request: Any, client_address: Any) -> None:
-        if self.stopping.is_set() or not self.workers.acquire(blocking=False):
-            request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
-                            b"Connection: close\r\n\r\n")
-            self.shutdown_request(request)
-            return
-        try:
-            super().process_request(request, client_address)
-        except BaseException:
-            self.workers.release()
-            raise
-
-    def process_request_thread(self, request: Any, client_address: Any) -> None:
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self.workers.release()
-
-    def stop_connections(self) -> None:
-        self.stopping.set()
-        with self.process_lock:
-            for process in self.processes:
-                if process.poll() is None:
-                    process.terminate()
-
-    def handle_error(self, _request: Any, _address: Any) -> None:
-        # Never let BaseServer print request handlers, headers or payloads.
-        pass
-
-
-class LocalRelayHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-    server_version = "ccfleet"
-    sys_version = ""
-
-    def setup(self) -> None:
-        super().setup()
-        self.connection.settimeout(20)
-
-    def log_message(self, _format: str, *_args: Any) -> None:
-        pass
-
-    def fail(self, status: int, message: str) -> None:
-        body = json.dumps({"type": "error", "error": {
-            "type": "ccfleet_relay_error", "message": message}}).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.write(body)
-        self.close_connection = True
-
-    def do_POST(self) -> None:
-        server = self.server
-        self.close_connection = True
-        allowed_host = f"127.0.0.1:{server.server_port}"
-        if self.headers.get_all("Host") != [allowed_host] or self.headers.get("Origin"):
-            self.fail(403, "loopback CLI requests only")
-            return
-        auth = self.headers.get_all("Authorization", [])
-        expected = "Bearer " + server.secret
-        if len(auth) != 1 or not hmac.compare_digest(auth[0].encode(), expected.encode()):
-            self.fail(401, "invalid local relay token")
-            return
-        lengths = self.headers.get_all("Content-Length", [])
-        if (self.path not in RELAY_PATHS or self.headers.get("Transfer-Encoding")
-                or len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdigit()):
-            self.fail(400, "invalid Claude request")
-            return
-        size = int(lengths[0])
-        if not 0 < size <= RELAY_MAX_BODY:
-            self.fail(413, "Claude request exceeds the local relay limit")
-            return
-        process = None
-        timer = None
-        began = False
-        try:
-            body = relay_read_exact(self.rfile, size)
-            meta = {"method": "POST", "path": self.path, "body_size": size,
-                    "headers": {name: value for name, value in self.headers.items()
-                                if name.lower() not in ("authorization", "x-api-key",
-                                                       "cookie", "proxy-authorization")}}
-            preamble = relay_preamble(meta)
-            with server.process_lock:
-                if server.stopping.is_set():
-                    raise CliError("local relay is closing")
-                process = subprocess.Popen(relay_ssh_command(server.device),
-                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                           stderr=subprocess.DEVNULL)
-                server.processes.add(process)
-            timer = threading.Timer(300, process.kill)
-            timer.daemon = True
-            timer.start()
-            process.stdin.write(preamble + body)
-            process.stdin.flush()
-            answer = relay_metadata(process.stdout)
-            self.send_response(answer["status"])
-            for name, value in answer["headers"].items():
-                self.send_header(name, value)
-            self.send_header("Transfer-Encoding", "chunked")
-            self.send_header("Connection", "close")
-            self.end_headers()
-            began = True
-            while True:
-                chunk = relay_chunk(process.stdout)
-                if not chunk:
-                    break
-                self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
-                self.wfile.flush()
-            process.stdin.close()
-            exit_code = process.wait(timeout=5)
-            if exit_code != 0 and not (exit_code == 2 and answer["status"] >= 400):
-                raise CliError("slot relay ended unexpectedly")
-            self.wfile.write(b"0\r\n\r\n")
-            self.wfile.flush()
-        except (CliError, OSError, subprocess.SubprocessError):
-            if not began:
-                self.fail(502, "slot relay failed; the relay did not retry this request")
-            # After streaming starts, close without the terminal HTTP chunk.
-            # Claude must see truncation, never a fabricated successful result.
-        finally:
-            if timer is not None:
-                timer.cancel()
-            if process is not None:
-                if process.poll() is None:
-                    process.kill()
-                process.wait(timeout=5)
-                for stream in (process.stdin, process.stdout):
-                    if stream is not None:
-                        stream.close()
-                with server.process_lock:
-                    server.processes.discard(process)
-
-
-def local_environment(device: dict[str, Any], port: int, secret: str) -> dict[str, str]:
-    env = dict(os.environ)
-    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS",
-                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-                 "ANTHROPIC_MODEL", "CLAUDE_CODE_EFFORT_LEVEL"):
-        env.pop(name, None)
-    profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
-    profile.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(profile, 0o700)
-    env.update({"ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
-                "ANTHROPIC_AUTH_TOKEN": secret, "CLAUDE_CONFIG_DIR": str(profile)})
-    # Keep the user's other proxy exclusions (for example internal services)
-    # while ensuring the local model endpoint never traverses an HTTP proxy.
-    fallback = env.get("no_proxy") or env.get("NO_PROXY", "")
-    for name in ("NO_PROXY", "no_proxy"):
-        excluded = [part.strip() for part in (env.get(name) or fallback).split(",")
-                    if part.strip()]
-        env[name] = ",".join(dict.fromkeys([*excluded, "127.0.0.1", "localhost"]))
+def project_environment() -> dict[str, str]:
+    # Needed only for locating this computer's pairing. None of these are sent
+    # via SSH SendEnv: -F /dev/null excludes all user/system SSH configuration.
+    env = {"PATH": os.defpath, "HOME": str(Path.home()), "TERM": "xterm-256color",
+           "LANG": "C", "LC_ALL": "C", "TZ": "UTC",
+           "CCFLEET_HOME": str(home())}
     return env
 
 
-def local_claude_command(claude: str, args: argparse.Namespace) -> list[str]:
-    """Keep native history/pickers; never build a second session database."""
-    resuming = args.resume is not None or args.continue_session
-    command = [claude]
-    for flag, value, default in (("--model", args.model, "opus"),
-                                 ("--effort", args.effort, "max")):
-        if value is not None or not resuming:
-            command.extend([flag, value if value is not None else default])
-    if args.mode == "bypassPermissions":
-        command.append("--dangerously-skip-permissions")
+def project_rpc(device: dict[str, Any], operation: str, **fields: Any) -> dict[str, Any]:
+    payload = json.dumps({"version": 1, "operation": operation, **fields},
+                         ensure_ascii=False, separators=(",", ":")).encode()
+    if len(payload) > PROJECT_MAX_FRAME:
+        raise CliError("project transfer exceeds the 32 MiB protocol limit")
+    command = [*ssh_transport_command(device, tty=False), "ccfleet-project-v1"]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, env=project_environment())
+    expired = threading.Event()
+
+    def timeout() -> None:
+        expired.set()
+        if process.poll() is None:
+            process.kill()
+
+    timer = threading.Timer(90, timeout)
+    timer.daemon = True
+    timer.start()
+
+    def send() -> None:
+        try:
+            process.stdin.write(struct.pack("!I", len(payload)) + payload)
+            process.stdin.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
+    writer = threading.Thread(target=send, daemon=True)
+    writer.start()
+
+    def read_exact(size: int) -> bytes:
+        data = bytearray()
+        while len(data) < size:
+            chunk = process.stdout.read(size - len(data))
+            if not chunk:
+                raise CliError("project connection ended; check your network, pairing, "
+                               "and that the node has been upgraded")
+            data.extend(chunk)
+        return bytes(data)
+
+    try:
+        size = struct.unpack("!I", read_exact(4))[0]
+        if not 0 < size <= PROJECT_MAX_FRAME:
+            raise CliError("invalid project response size")
+        raw = read_exact(size)
+        if process.stdout.read(1):
+            raise CliError("unexpected trailing project response")
+        code = process.wait(timeout=5)
+        def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for name, value in pairs:
+                if name in result:
+                    raise ValueError("duplicate project response field")
+                result[name] = value
+            return result
+
+        answer = json.loads(raw, object_pairs_hook=unique_fields)
+        if (not isinstance(answer, dict) or type(answer.get("version")) is not int
+                or answer["version"] != 1 or type(answer.get("ok")) is not bool):
+            raise CliError("invalid project response")
+        if not answer["ok"]:
+            messages = {
+                "disabled": "project access is not enabled for this slot; contact your operator",
+                "account_unavailable": "your slot needs its original Claude sign-in; "
+                                       "open your slot page",
+                "conflict": "the project changed since the last transfer; review and pull "
+                            "before retrying",
+                "busy": "finish the project's Claude sessions with /exit before pushing; "
+                        "detaching leaves them running",
+                "invalid": "the slot rejected the project request or a protected file",
+            }
+            error = answer.get("error")
+            raise CliError(messages.get(error, "project operation failed safely")
+                           if isinstance(error, str) else "project operation failed safely")
+        if code != 0:
+            raise CliError("project connection ended without a confirmed result")
+        allowed = {"status": {"ready", "protocol"}, "list": {"projects"},
+                   "read": {"files", "manifest"}, "write": {"files", "manifest", "backup"}}
+        if set(answer) - {"version", "ok"} - allowed[operation]:
+            raise CliError("unrecognized project response fields; update CC Fleet")
+        return answer
+    except (ValueError, RecursionError, subprocess.SubprocessError) as exc:
+        raise CliError("invalid or incomplete project response") from exc
+    finally:
+        timer.cancel()
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+        writer.join(timeout=2)
+        process.stdout.close()
+        if expired.is_set():
+            raise CliError("project connection timed out; retry after checking your network")
+
+
+@contextlib.contextmanager
+def project_lock():
+    ensure_home()
+    path = home() / "projects.lock"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CliError("another project operation is running on this computer") from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def selected_project(raw: str) -> Path:
+    path = Path(raw).expanduser().resolve(strict=True)
+    personal = Path.home().resolve()
+    if not path.is_dir():
+        raise CliError("--project must be an existing directory")
+    if path == Path(path.anchor) or personal == path or personal.is_relative_to(path):
+        raise CliError("select a project directory, not your home or a filesystem root")
+    sensitive = (".ssh", ".aws", ".azure", ".config", ".claude", ".codex", ".agents",
+                 ".gnupg", ".kube", "Library", ".local/share", ".password-store")
+    if any(path.is_relative_to((personal / name).resolve()) for name in sensitive):
+        raise CliError("select source code, not a personal credential or application directory")
+    if home().resolve().is_relative_to(path):
+        raise CliError("the selected project contains your CC Fleet configuration")
+    return path
+
+
+def project_record(device: dict[str, Any], root: Path,
+                   remote_project: str = "") -> tuple[str, dict[str, Any]]:
+    key = hashlib.sha256((device["slot_id"] + "\0" + str(root)).encode()).hexdigest()
+    config = load_config()
+    projects = config.get("projects", {})
+    if not isinstance(projects, dict):
+        raise CliError("invalid local project configuration")
+    record = projects.get(key)
+    if record is not None:
+        if (not isinstance(record, dict)
+                or not PROJECT_RE.fullmatch(str(record.get("id", "")))):
+            raise CliError("invalid local project tracking record")
+        if remote_project and record["id"] != remote_project:
+            raise CliError("this directory already tracks another remote project; "
+                           "use a separate local directory")
     else:
-        command.extend(["--permission-mode", args.mode])
-    if args.resume is not None:
-        command.append(f"--resume={args.resume}" if args.resume else "--resume")
-    elif args.continue_session:
-        command.append("--continue")
-    if args.fork_session:
-        command.append("--fork-session")
-    if args.name:
-        command.append(f"--name={args.name}")
-    if args.print_prompt is not None:
-        command.extend(["--print", "--", args.print_prompt])
-    return command
+        record = {"id": remote_project or secrets.token_hex(16), "base": {},
+                  "shared": False, "last_session": "main"}
+    return key, dict(record)
 
 
-def validate_local_args(args: argparse.Namespace) -> None:
-    if args.model is not None and not MODEL_RE.fullmatch(args.model):
+def save_project_record(key: str, record: dict[str, Any]) -> None:
+    config = load_config()
+    config.setdefault("projects", {})[key] = record
+    save_config(config)
+
+
+def safe_display(value: str) -> str:
+    return "".join(c if c in "\n\t" or not unicodedata.category(c).startswith("C")
+                   else ascii(c)[1:-1] for c in value)
+
+
+def confirm_project(message: str, yes: bool) -> None:
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        raise CliError("review the project interactively, or explicitly pass --yes")
+    if input(message + " [y/N] ").strip().lower() not in ("y", "yes"):
+        raise CliError("cancelled; no project files were changed")
+
+
+def print_project_changes(helper: Any, before: dict[str, Any], after: dict[str, Any],
+                          *, contents: bool = False) -> None:
+    delta = helper.changes(helper.manifest(before), helper.manifest(after))
+    if not delta:
+        print("No file changes.")
+        return
+    for change in delta:
+        path = change["path"]
+        print(f"{change['status']:8} {json.dumps(path, ensure_ascii=True)}")
+        if not contents:
+            continue
+        old = base64.b64decode(before[path]["data"]) if path in before else b""
+        new = base64.b64decode(after[path]["data"]) if path in after else b""
+        if max(len(old), len(new)) > 128 * 1024:
+            print(f"  large file: {len(old)} -> {len(new)} bytes; textual diff omitted")
+            continue
+        try:
+            old_text, new_text = old.decode("utf-8"), new.decode("utf-8")
+            if "\0" in old_text or "\0" in new_text:
+                raise UnicodeError()
+        except UnicodeError:
+            print(f"  binary: {len(old)} -> {len(new)} bytes")
+            continue
+        if max(old_text.count("\n"), new_text.count("\n")) > 2000:
+            print("  long text: textual diff omitted; review the slot file before applying")
+            continue
+        lines = list(difflib.unified_diff(old_text.splitlines(), new_text.splitlines(),
+                                         fromfile="local", tofile="slot", lineterm=""))
+        for line in lines[:200]:
+            print(safe_display(line))
+        if len(lines) > 200:
+            print("  ... diff truncated; --yes explicitly accepts all listed changes")
+
+
+def remote_snapshot(helper: Any, answer: dict[str, Any]) -> dict[str, Any]:
+    files = helper.validate_snapshot(answer.get("files"))
+    if helper.manifest(files) != helper.validate_manifest(answer.get("manifest")):
+        raise CliError("slot returned an inconsistent project snapshot")
+    return files
+
+
+def merge_project(helper: Any, base: dict[str, Any], local: dict[str, Any],
+                  remote: dict[str, Any]) -> dict[str, Any]:
+    baseline = helper.validate_manifest(base)
+    ours, theirs = helper.manifest(local), helper.manifest(remote)
+    merged = dict(local)
+    conflicts = []
+    for change in helper.changes(baseline, theirs):
+        path = change["path"]
+        if ours.get(path) not in (baseline.get(path), theirs.get(path)):
+            conflicts.append(path)
+        elif path in remote:
+            merged[path] = remote[path]
+        else:
+            merged.pop(path, None)
+    if conflicts:
+        names = ", ".join(json.dumps(p, ensure_ascii=True) for p in conflicts[:10])
+        raise CliError("local and slot edits conflict; nothing was applied: " + names)
+    return merged
+
+
+def validate_project_args(args: argparse.Namespace) -> None:
+    if args.remote_project and not PROJECT_RE.fullmatch(args.remote_project):
+        raise CliError("--remote-project must be the 32-character ID from ccfleet project list")
+    if getattr(args, "print_prompt", None) is not None or getattr(args, "fork_session", False):
+        raise CliError("the local-agent relay has been retired; use named slot sessions "
+                       "with --new --name NAME, then use Claude's own conversation controls")
+    if getattr(args, "model", None) is not None and not MODEL_RE.fullmatch(args.model):
         raise CliError("invalid model name")
-    for label, value in (("session name", args.name), ("resume value", args.resume)):
-        if value is not None and (len(value) > 256 or any(ord(c) < 32 or ord(c) == 127
-                                                         for c in value)):
-            raise CliError(f"{label} must be at most 256 characters with no control characters")
-    if args.fork_session and args.resume is None and not args.continue_session:
-        raise CliError("--fork-session needs --resume or --continue")
-    if args.resume == "" and args.print_prompt is not None:
-        raise CliError("--print needs a session ID or name with --resume; "
-                       "omit --print for the picker")
-    if args.check and (args.resume is not None or args.continue_session or args.new_session
-                       or args.name or args.fork_session or args.print_prompt is not None):
-        raise CliError("--check only checks readiness; use session options in a separate launch")
+    for value in (getattr(args, "name", ""), getattr(args, "resume", "")):
+        if value and not SESSION_RE.fullmatch(value):
+            raise CliError("remote session names use 1-32 letters, digits, underscores or hyphens")
+    if getattr(args, "reconnect_for", 0) < 0:
+        raise CliError("--reconnect-for cannot be negative")
+
+
+def validate_project_listing(answer: dict[str, Any]) -> list[dict[str, Any]]:
+    projects = answer.get("projects")
+    if not isinstance(projects, list) or len(projects) > 1000:
+        raise CliError("invalid project listing")
+    seen = set()
+    for project in projects:
+        if (not isinstance(project, dict) or set(project) != {"project", "sessions"}
+                or not isinstance(project["project"], str)
+                or not PROJECT_RE.fullmatch(project["project"]) or project["project"] in seen):
+            raise CliError("invalid project listing")
+        seen.add(project["project"])
+        sessions = project["sessions"]
+        if not isinstance(sessions, list) or len(sessions) > 1000 or any(
+                not isinstance(name, str) or not SESSION_RE.fullmatch(name) for name in sessions):
+            raise CliError("invalid project session listing")
+    return projects
+
+
+def cmd_project(args: argparse.Namespace) -> int:
+    validate_project_args(args)
+    helper = project_files()
+    device = choose_device(load_config(), args.slot)
+    if args.project_action == "list":
+        answer = project_rpc(device, "list")
+        for project in validate_project_listing(answer):
+            identifier = project.get("project", "")
+            if not isinstance(identifier, str) or not PROJECT_RE.fullmatch(identifier):
+                raise CliError("invalid project listing")
+            sessions = project.get("sessions", [])
+            if not isinstance(sessions, list) or any(
+                    not isinstance(name, str) or not SESSION_RE.fullmatch(name)
+                    for name in sessions):
+                raise CliError("invalid project session listing")
+            print(f"{identifier}  sessions: {', '.join(sessions) or '(none)'}")
+        return 0
+    root = selected_project(args.project)
+    with project_lock():
+        key, record = project_record(device, root, args.remote_project)
+        local = helper.snapshot(root)
+        if args.project_action == "status":
+            label = record["id"] if record["shared"] else "not yet shared"
+            print(f"Project ID: {label}\nSelected files: {len(local)}")
+            print("Hard exclusions include credentials, VCS metadata, symlinks and build outputs.")
+            for change in helper.changes(helper.validate_manifest(record["base"]),
+                                         helper.manifest(local)):
+                print(f"{change['status']:8} {json.dumps(change['path'], ensure_ascii=True)}")
+            return 0
+        if args.project_action == "push":
+            if not local and not record["shared"]:
+                raise CliError("no shareable project files were found")
+            print(f"Share {len(local)} selected files with slot {device['slot_name']}.")
+            for change in helper.changes(helper.validate_manifest(record["base"]),
+                                         helper.manifest(local)):
+                print(f"{change['status']:8} {json.dumps(change['path'], ensure_ascii=True)}")
+            print("Selected file contents may reach Anthropic. No laptop environment is uploaded.")
+            confirm_project("Upload this snapshot?", args.yes)
+            # Save the opaque destination before sending so a lost response
+            # cannot leave an undiscoverable remote project.
+            save_project_record(key, record)
+            reply = project_rpc(device, "write", project=record["id"],
+                                files=local, expected=record["base"])
+            remote = remote_snapshot(helper, reply)
+            if helper.manifest(remote) != helper.manifest(local):
+                raise CliError("slot did not confirm the uploaded snapshot")
+            record.update(base=helper.manifest(remote), shared=True)
+            save_project_record(key, record)
+            print("Uploaded. Claude and all project tools run on the slot.")
+            return 0
+        remote = remote_snapshot(helper, project_rpc(device, "read", project=record["id"]))
+        merged = merge_project(helper, record["base"], local, remote)
+        print_project_changes(helper, local, merged, contents=True)
+        if args.project_action == "diff":
+            return 0
+        if helper.manifest(local) != helper.manifest(merged):
+            confirm_project("Apply these slot changes to this local project?", args.yes)
+            backup = home() / "project-backups" / record["id"] / secrets.token_hex(8)
+            helper.apply_snapshot(root, merged, helper.manifest(local), backup)
+            print(f"Applied with recoverable backups in {backup}.")
+        record.update(base=helper.manifest(remote), shared=True)
+        save_project_record(key, record)
+    return 0
+
+
+def project_sessions(device: dict[str, Any], identifier: str) -> list[str]:
+    answer = project_rpc(device, "list")
+    for project in validate_project_listing(answer):
+        if project.get("project") == identifier:
+            sessions = project.get("sessions")
+            if not isinstance(sessions, list) or any(
+                    not isinstance(name, str) or not SESSION_RE.fullmatch(name)
+                    for name in sessions):
+                raise CliError("invalid project session listing")
+            return sessions
+    return []
+
+
+def attach_project(device: dict[str, Any], identifier: str, session: str,
+                   args: argparse.Namespace) -> int:
+    action = "new" if args.new_session else "open"
+    failed_since: Optional[float] = None
+    attempt = 0
+    while True:
+        command = [*ssh_transport_command(device, tty=True), "ccfleet-project-session-v1",
+                   identifier, action, session, args.mode, args.model or "opus",
+                   args.effort or "max"]
+        started = time.monotonic()
+        try:
+            code = subprocess.call(command, env=project_environment())
+        except KeyboardInterrupt:
+            return 130
+        if code != 255 or args.no_reconnect:
+            return code
+        now = time.monotonic()
+        if failed_since is None or now - started >= 60:
+            failed_since, attempt = now, 0
+        if now - failed_since >= args.reconnect_for:
+            return code
+        delay = min(10, 1 + attempt * 2, args.reconnect_for - (now - failed_since))
+        print(f"Connection lost; reattaching to the same slot session in {delay}s...",
+              file=sys.stderr)
+        time.sleep(delay)
+        action, attempt = "open", attempt + 1
 
 
 def cmd_local(args: argparse.Namespace) -> int:
-    validate_local_args(args)
+    validate_project_args(args)
+    helper = project_files()
     device = choose_device(load_config(), args.slot)
-    claude = shutil.which("claude")
-    if claude is None:
-        raise CliError("install the original Claude Code CLI on this computer first")
-    project = Path(args.project).expanduser().resolve()
-    if not project.is_dir():
-        raise CliError("--project must be an existing local directory")
-    check_local_relay(device)
+    root = selected_project(args.project)
+    answer = project_rpc(device, "status")
+    if answer.get("ready") is not True or answer.get("protocol") != 1:
+        raise CliError("slot project access is not ready")
     if args.check:
-        print(f"Ready: local Claude Code, project directory, and slot {device['slot_name']}.\n"
-              "No model request was sent and no Claude session was started.")
+        print("Ready: project connector and slot-native Claude access.\n"
+              "No project files, laptop environment, or model request were sent.")
         return 0
-    server = LocalRelayServer(device, secrets.token_urlsafe(32))
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        env = local_environment(device, server.server_port, server.secret)
-        command = local_claude_command(claude, args)
-        print(f"Local project: {project}\nAccount: assigned slot {device['slot_name']}\n"
-              "Files, tools and conversation history stay on this computer.\n"
-              "Selected file contents and tool output may be sent to Anthropic.",
-              file=sys.stderr, flush=True)
-        try:
-            return subprocess.call(command, cwd=project, env=env)
-        except KeyboardInterrupt:
-            return 130
-        finally:
-            if args.print_prompt is None:
-                resume = ["ccfleet", "local", "--slot", device["slot_id"],
-                          "--project", str(project), "--resume"]
-                print(f"\nSession ended. Resume a saved conversation: {shlex.join(resume)}",
-                      file=sys.stderr)
-    finally:
-        server.stop_connections()
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=2)
+    with project_lock():
+        key, record = project_record(device, root, args.remote_project)
+        local = helper.snapshot(root)
+        if not record["shared"]:
+            if args.remote_project:
+                raise CliError("first review and pull this existing project with "
+                               "ccfleet project pull --remote-project ID --project PATH")
+            if not local:
+                raise CliError("no shareable project files were found")
+            print(f"First-time sharing: {len(local)} files with slot {device['slot_name']}.")
+            for path in sorted(local):
+                print("  " + json.dumps(path, ensure_ascii=True))
+            print("Credential/VCS/build files are excluded. "
+                  "Selected contents may reach Anthropic.\n"
+                  "Claude runs only on the slot. Local files are not automatically overwritten.")
+            confirm_project("Share this selected project?", args.yes)
+            save_project_record(key, record)
+            reply = project_rpc(device, "write", project=record["id"],
+                                files=local, expected=record["base"])
+            remote = remote_snapshot(helper, reply)
+            if helper.manifest(remote) != helper.manifest(local):
+                raise CliError("slot did not confirm the uploaded snapshot")
+            record.update(base=helper.manifest(remote), shared=True)
+            save_project_record(key, record)
+        elif helper.manifest(local) != helper.validate_manifest(record["base"]):
+            if args.resume is None and not args.continue_session:
+                raise CliError("local files changed; run ccfleet project push first, "
+                               "or use --resume to continue the existing slot workspace")
+            print("Local changes are not uploaded; continuing the existing slot workspace.",
+                  file=sys.stderr)
+        session = args.name or record.get("last_session", "main")
+        if args.resume is not None:
+            available = project_sessions(device, record["id"])
+            if args.resume:
+                if args.resume not in available:
+                    raise CliError("that project session is not running; use --new --name NAME")
+                session = args.resume
+            else:
+                if not available:
+                    raise CliError("no running project sessions; use --new --name NAME")
+                for number, name in enumerate(available, 1):
+                    print(f"{number}. {name}")
+                if not sys.stdin.isatty():
+                    raise CliError("choose a session explicitly with --resume NAME")
+                selection = input("Session number: ").strip()
+                if not selection.isdigit() or not 1 <= int(selection) <= len(available):
+                    raise CliError("invalid session selection")
+                session = available[int(selection) - 1]
+        elif args.new_session and not args.name:
+            session = "s-" + secrets.token_hex(4)
+        if not isinstance(session, str) or not SESSION_RE.fullmatch(session):
+            raise CliError("invalid saved project session")
+        record["last_session"] = session
+        save_project_record(key, record)
+    print(f"Slot project: {record['id']} / session {session}\n"
+          "Claude, shell commands and model connections run on the slot.\n"
+          "After work: ccfleet project diff, then ccfleet project pull to review/apply changes.",
+          file=sys.stderr)
+    return attach_project(device, record["id"], session, args)
 
 
 def cmd_list(_args: argparse.Namespace) -> int:
@@ -861,30 +1005,41 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--model", default="opus", help="fable, opus, sonnet, or a model id")
     restart.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
-    local = sub.add_parser("local", help="experimental: run local Claude using your slot relay",
+    local = sub.add_parser("local", help="share a selected project; run Claude only on your slot",
                            epilog="New: ccfleet local --new --name work | "
                            "Resume picker: ccfleet local --resume | "
                            "Check setup: ccfleet local --check")
     local.add_argument("--slot", default="", help="paired slot id or name")
     local.add_argument("--project", default=".", help="local project directory (default: current)")
-    local.add_argument("--model", help="new sessions: opus; resumed sessions: keep native choice")
+    local.add_argument("--remote-project", default="", metavar="ID",
+                       help="join an existing project ID after reviewing and pulling it")
+    local.add_argument("--yes", action="store_true", help="explicitly approve first project upload")
+    local.add_argument("--model", help="model for a new slot session (default: opus)")
     local.add_argument("--effort", choices=EFFORT_LEVELS,
-                       help="new sessions: max; resumed sessions: keep native choice")
+                       help="effort for a new slot session (default: max)")
     local.add_argument("--mode", choices=PERMISSION_MODES, default="manual",
-                       help="local tool permissions (default: manual; no slot isolation on laptop)")
-    local.add_argument("-p", "--print", dest="print_prompt", help="one non-interactive prompt")
-    local.add_argument("--name", default="", help="display name in Claude's session picker")
-    local.add_argument("--fork-session", action="store_true",
-                       help="resume a copy without replacing the original conversation")
+                       help="slot tool permissions for a new session (default: manual)")
+    local.add_argument("-p", "--print", dest="print_prompt", help=argparse.SUPPRESS)
+    local.add_argument("--name", default="", help="named persistent project session")
+    local.add_argument("--fork-session", action="store_true", help=argparse.SUPPRESS)
     local.add_argument("--check", action="store_true",
-                       help="check local dependencies and slot readiness without model usage")
+                       help="check readiness without sharing files or using a model")
+    local.add_argument("--no-reconnect", action="store_true")
+    local.add_argument("--reconnect-for", type=int, default=600, metavar="SECONDS")
     history = local.add_mutually_exclusive_group()
-    history.add_argument("--resume", nargs="?", const="", metavar="ID_OR_NAME",
-                         help="resume by ID/name, or open Claude's picker when omitted")
+    history.add_argument("--resume", nargs="?", const="", metavar="NAME",
+                         help="reattach a running project session, or show a picker")
     history.add_argument("--continue", dest="continue_session", action="store_true",
-                         help="continue the last conversation in this local project")
+                         help="reattach this computer's last project session")
     history.add_argument("--new", dest="new_session", action="store_true",
-                         help="start a fresh local conversation (the default)")
+                         help="start a new named project session on the slot")
+    project = sub.add_parser("project", help="review, upload, or apply selected project files")
+    project.add_argument("project_action", choices=("status", "push", "diff", "pull", "list"))
+    project.add_argument("--slot", default="", help="paired slot id or name")
+    project.add_argument("--project", default=".", help="selected local project directory")
+    project.add_argument("--remote-project", default="", metavar="ID",
+                         help="existing project ID from ccfleet project list")
+    project.add_argument("--yes", action="store_true", help="explicitly approve upload/apply")
     sub.add_parser("list", help="list slots connected on this computer")
     use = sub.add_parser("use", help="choose the default slot")
     use.add_argument("slot")
@@ -919,6 +1074,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_login(args)
         if args.command == "local":
             return cmd_local(args)
+        if args.command == "project":
+            return cmd_project(args)
         if args.command == "list":
             return cmd_list(args)
         if args.command == "use":
@@ -928,7 +1085,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.command == "proxy":
             return proxy(choose_device(load_config(), args.device))
         raise CliError("unknown command")
-    except (CliError, OSError) as exc:
+    except KeyboardInterrupt:
+        return 130
+    except (CliError, OSError, ValueError) as exc:
         print(f"ccfleet: {exc}", file=sys.stderr)
         return 2
 

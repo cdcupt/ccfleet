@@ -5,19 +5,39 @@
 
 set -euo pipefail
 
-# This exact non-PTY protocol is separately gated by an operator-owned policy
-# file. It cannot select a command, destination, another user or a credential.
+# The former local-agent inference relay is retired. Never read or export a
+# slot credential for a laptop process, even for an older paired client.
 if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-relay-v1 ]; then
+  printf 'the local inference relay is retired; update ccfleet for slot-only project sessions\n' >&2
+  exit 2
+fi
+
+# Fixed, bounded file protocol; its module separately enforces the operator
+# gate, bound account and workspace boundary. No client-selected commands.
+if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-project-v1 ]; then
   if [ -t 0 ] || [ -t 1 ]; then
-    printf 'the local relay does not accept a terminal\n' >&2
+    printf 'project transfer does not accept a terminal\n' >&2
     exit 2
   fi
-  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/local_relay.py"
+  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/project_access.py"
 fi
 
 if [ ! -t 0 ] || [ ! -t 1 ]; then
   printf 'ccfleet needs an interactive terminal\n' >&2
   exit 2
+fi
+
+if [[ "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-project-session-v1\ * ]]; then
+  # read consumes only one line. Reject controls first so a trailing injected
+  # line can never be silently accepted as a valid session command.
+  [[ "$SSH_ORIGINAL_COMMAND" != *$'\n'* && "$SSH_ORIGINAL_COMMAND" != *$'\r'* ]] \
+    || { printf 'invalid project session request\n' >&2; exit 2; }
+  read -r PROTOCOL PROJECT ACTION SESSION MODE MODEL EFFORT EXTRA <<< "$SSH_ORIGINAL_COMMAND"
+  [ "$PROTOCOL" = ccfleet-project-session-v1 ] && [ -z "${EXTRA:-}" ] \
+    && [ -n "${EFFORT:-}" ] \
+    || { printf 'invalid project session request\n' >&2; exit 2; }
+  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/project_access.py" \
+    session "$PROJECT" "$ACTION" "$SESSION" "$MODE" "$MODEL" "$EFFORT"
 fi
 
 case "${TERM:-}" in

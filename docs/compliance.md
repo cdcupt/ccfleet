@@ -28,10 +28,12 @@ agreed.
 
 ## How CC Fleet maps to those constraints
 
-This mapping describes the deployed remote-terminal path. The experimental
-`ccfleet local` relay reads a slot credential and substitutes upstream
-authentication, so it does **not** inherit this mapping. Its production use
-needs a permitted authentication arrangement; see [local-relay.md](local-relay.md).
+This mapping describes the remote-terminal path and the replacement
+`ccfleet local` project connector. Both run the original Claude Code on the
+slot. The old local-agent credential-substitution relay is retired; see
+[project workspaces](project-workspaces.md) for the replacement and its
+operator-enabled rollout. Architecture changes do not themselves establish
+contractual permission or verified deployment.
 
 - A slot installs and runs the original Claude Code distribution.
 - The customer completes Anthropic's own browser sign-in. The resulting
@@ -45,6 +47,9 @@ needs a permitted authentication arrangement; see [local-relay.md](local-relay.m
   Linux slot and operation.
 - The local command transports a terminal to the slot. It does not make model
   requests, imitate Anthropic authentication or proxy Claude HTTPS traffic.
+- The project connector may also transfer an explicitly selected file snapshot
+  over the same encrypted transport. It does not launch Claude on the laptop,
+  export laptop authentication, or change which account the slot uses.
 - Claude Code on the slot connects to Anthropic with the credential the end
   user supplied through Anthropic's flow.
 
@@ -64,6 +69,21 @@ rewrite Claude model requests.
 
 The legacy `gateway/` experiment is not part of the CC Fleet customer product.
 Do not configure `ANTHROPIC_BASE_URL` for this flow.
+
+## Project data and metadata
+
+The connector transfers selected relative filenames, bytes, content hashes and
+executable flags, not the laptop environment, hostname, absolute paths or
+filesystem ownership/timestamps. Hard exclusions and explicit first-share
+confirmation reduce accidental sharing; they cannot detect every secret or
+personal detail inside file contents. The selected project and relevant prompts
+may be processed by Claude Code and Anthropic.
+
+Do not promise anonymity or that nothing about the user is visible anywhere.
+BWH sees connection IP/routing metadata, SSH exposes transport properties, and
+the slot host's root administrator can inspect the data processed there. The
+project connector is not a laptop OS sandbox. One-account-per-slot isolation,
+credential placement and network encryption remain distinct from these limits.
 
 ## Branding
 

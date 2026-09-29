@@ -63,6 +63,7 @@ def _never_the_real_system(tmp_path_factory, monkeypatch):
     (sandbox / "sudoers.d").mkdir()
     monkeypatch.setenv("CCFLEET_SUDOERS_DIR", str(sandbox / "sudoers.d"))
     monkeypatch.setenv("CCFLEET_SLICE_ROOT", str(sandbox / "systemd"))
+    monkeypatch.setenv("CCFLEET_ETC_DIR", str(sandbox / "ccfleet"))
 
 
 def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
@@ -329,6 +330,33 @@ def test_release_refuses_to_call_a_half_removed_slot_reusable(tmp_path):
 def test_release_says_nothing_to_do_for_an_account_that_is_gone(tmp_path):
     result = as_root(REMOVE, tmp_path, "--slot", "slot01", exists=False)
     assert result.returncode == 0 and "nothing to release" in result.stdout
+
+
+@pytest.mark.parametrize("exists,keep_home", [(True, False), (True, True), (False, False)])
+def test_releasing_a_slot_clears_project_and_legacy_gates(tmp_path, exists, keep_home):
+    directory = Path(os.environ["CCFLEET_ETC_DIR"])
+    markers = []
+    for policy in ("project-access", "local-relay"):
+        parent = directory / policy
+        parent.mkdir(parents=True)
+        marker = parent / "slot01"
+        marker.write_text("operator-enabled")
+        (parent / "slot02").write_text("must remain")
+        markers.append(marker)
+    flags = ["--slot", "slot01"] + (["--keep-home"] if keep_home else [])
+    result = as_root(REMOVE, tmp_path, *flags, exists=exists)
+    assert result.returncode == 0, result.stderr
+    assert all(not marker.exists() for marker in markers)
+    assert all((marker.parent / "slot02").read_text() == "must remain" for marker in markers)
+
+
+def test_rejected_non_slot_account_cannot_remove_its_access_policy(tmp_path):
+    marker = Path(os.environ["CCFLEET_ETC_DIR"]) / "project-access/alice"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("must remain on refusal")
+    result = as_root(REMOVE, tmp_path, "--slot", "alice", groups="alice users")
+    assert result.returncode != 0
+    assert marker.read_text() == "must remain on refusal"
 
 
 def test_add_refuses_to_take_over_somebody_elses_account(tmp_path):
