@@ -1,5 +1,6 @@
 """The local resident bridge retries responses, never filesystem mutations."""
 import base64
+import fcntl
 import io
 import json
 import os
@@ -157,8 +158,122 @@ def test_unresponsive_control_is_not_mistaken_for_stopped_file_access(tmp_path):
         state = tmp_path / "state.json"
         state.write_text(json.dumps({"socket": str(address), "instance": "test"}))
         state.chmod(0o600)
-        with pytest.raises(socket.timeout):
+        with pytest.raises(live.ControlError) as error:
             live.control(tmp_path, "stop")
+        assert isinstance(error.value.__cause__, socket.timeout)
+
+
+@pytest.mark.parametrize("reply", [b"", b"\x00\x00", struct.pack("!I", 8) + b"{"])
+def test_control_closed_or_truncated_reply_is_ambiguous_not_inactive(tmp_path, reply):
+    import socket
+    import tempfile
+    failures = []
+    with tempfile.TemporaryDirectory(prefix="ccf-t-") as private, \
+            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        address = Path(private) / "control"
+        listener.bind(str(address))
+        address.chmod(0o600)
+        listener.listen(1)
+        listener.settimeout(3)
+        state = tmp_path / "state.json"
+        state.write_text(json.dumps({"socket": str(address), "instance": "test"}))
+        state.chmod(0o600)
+
+        def peer():
+            try:
+                connection, _ = listener.accept()
+                with connection, connection.makefile("rwb", buffering=0) as stream:
+                    assert live.read_frame(stream) == {"operation": "status", "instance": "test"}
+                    connection.sendall(reply)
+            except BaseException as exc:
+                failures.append(exc)
+
+        thread = threading.Thread(target=peer, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(live.ControlError) as error:
+                live.control(tmp_path, "status")
+            assert isinstance(error.value.__cause__, EOFError)
+        finally:
+            thread.join(timeout=4)
+        assert not thread.is_alive() and not failures
+
+
+def test_control_reset_by_real_unix_peer_is_not_inactive(tmp_path):
+    import socket
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="ccf-t-") as private, \
+            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        address = Path(private) / "control"
+        listener.bind(str(address))
+        address.chmod(0o600)
+        listener.listen(1)
+        listener.settimeout(3)
+        state = tmp_path / "state.json"
+        state.write_text(json.dumps({"socket": str(address), "instance": "test"}))
+        state.chmod(0o600)
+        failures = []
+
+        def peer():
+            try:
+                connection, _ = listener.accept()
+                with connection:
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                          struct.pack("ii", 1, 0))
+            except BaseException as exc:
+                failures.append(exc)
+
+        thread = threading.Thread(target=peer, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(live.ControlError) as error:
+                live.control(tmp_path, "stop")
+            # Unix implementations report an immediate peer close at either
+            # write or read; none of these outcomes proves filesystem teardown.
+            assert isinstance(error.value.__cause__,
+                              (EOFError, ConnectionResetError, BrokenPipeError))
+        finally:
+            thread.join(timeout=4)
+        assert not thread.is_alive() and not failures
+
+
+def test_stopped_requires_released_real_lock_even_without_control_socket(tmp_path):
+    lock = tmp_path / "connector.lock"
+    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert live.control(tmp_path, "stop") == {}
+        assert live.stopped(tmp_path) is False
+    finally:
+        os.close(descriptor)
+    assert live.stopped(tmp_path) is True
+
+
+def test_stopped_missing_lock_or_directory_is_absent_without_creating_files(tmp_path):
+    assert live.stopped(tmp_path) is True
+    assert live.stopped(tmp_path / "missing") is True
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["permissions", "symlink", "directory", "fifo", "hardlink"])
+def test_stopped_rejects_unsafe_or_nonregular_lock(tmp_path, kind):
+    lock = tmp_path / "connector.lock"
+    if kind == "directory":
+        lock.mkdir(mode=0o700)
+    elif kind == "fifo":
+        os.mkfifo(lock, 0o600)
+    elif kind == "symlink":
+        target = tmp_path / "target"
+        target.touch(mode=0o600)
+        lock.symlink_to(target)
+    else:
+        lock.touch(mode=0o600)
+        if kind == "permissions":
+            lock.chmod(0o644)
+        else:
+            os.link(lock, tmp_path / "duplicate")
+    with pytest.raises((live.LinkError, OSError)):
+        live.stopped(tmp_path)
 
 
 CHILD_PREAMBLE = r'''
@@ -323,6 +438,39 @@ sys.stdin.buffer.read()
     assert not socket_path.exists()
     assert live.control(daemon.directory, "status") == {}
     assert live.read_state(daemon.directory)["connected"] is False
+
+
+def test_resident_lock_remains_held_until_filesystem_teardown_finishes(resident, monkeypatch):
+    daemon = resident('''hello()
+handle = opened()
+(workspace / "opened").write_text("ready")
+sys.stdin.buffer.read()
+''')
+    daemon.connected()
+    daemon.wait(lambda: (daemon.workspace / "opened").exists())
+    closing, release = threading.Event(), threading.Event()
+    original_close = daemon.server.close
+
+    def delayed_close():
+        closing.set()
+        assert release.wait(timeout=6), "test did not release filesystem teardown"
+        original_close()
+
+    monkeypatch.setattr(daemon.server, "close", delayed_close)
+    try:
+        assert live.control(daemon.directory, "stop")["instance"] == "synthetic-instance"
+        assert closing.wait(timeout=6)
+        assert all(child.poll() is not None for child in daemon.children)
+        assert daemon.server.handles and not daemon.server.closed
+        assert live.stopped(daemon.directory) is False
+        # The control listener closes before filesystem handles. Its absence
+        # must not be used as evidence that local file access has ended.
+        assert live.control(daemon.directory, "status") == {}
+    finally:
+        release.set()
+    daemon.joined()
+    assert daemon.server.handles == {}
+    assert live.stopped(daemon.directory) is True
 
 
 def test_resident_reconnect_retains_server_handles_and_deduplicates_uncertain_append(resident):

@@ -248,7 +248,7 @@ PY
   [ -z "$SLOT" ] || SETUP_ARGS+=(--slot "$SLOT")
   [ "$APPROVE_MIGRATION" != yes ] || SETUP_ARGS+=(--yes)
   if ! "$DEST/ccfleet" "${SETUP_ARGS[@]}"; then
-    printf '\nSetup stopped: slot readiness failed; legacy setup and PATH were not changed.\n' >&2
+    printf '\nSetup stopped: readiness or migration did not complete. The client is installed; legacy token cleanup and PATH changes were not performed.\n' >&2
     exit 1
   fi
 else

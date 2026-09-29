@@ -27,6 +27,10 @@ class LinkError(ValueError):
     pass
 
 
+class ControlError(LinkError):
+    """A missing control reply is ambiguous, not proof the connector stopped."""
+
+
 def read_exact(stream: BinaryIO, size: int) -> bytes:
     data = bytearray()
     while len(data) < size:
@@ -153,6 +157,34 @@ def control(directory: Path, operation: str) -> dict[str, Any]:
                 return read_frame(stream)
     except (FileNotFoundError, ConnectionRefusedError):
         return {}
+    except (EOFError, ConnectionResetError, BrokenPipeError, socket.timeout) as exc:
+        raise ControlError("could not confirm the old local connector's state; "
+                           "retry setup after its shutdown finishes") from exc
+
+
+def stopped(directory: Path) -> bool:
+    """The resident keeps this lock until its child and filesystem are closed."""
+    try:
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
+            raise LinkError("unsafe local connector directory")
+        descriptor = os.open(directory / "connector.lock",
+                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return True
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_nlink != 1):
+            raise LinkError("unsafe local connector lock")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+    finally:
+        os.close(descriptor)
 
 
 def run(directory: Path, instance: str, server: Any,

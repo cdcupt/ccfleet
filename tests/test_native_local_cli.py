@@ -1,15 +1,19 @@
 """Original local Claude launch, pinned routing and consented legacy migration."""
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pty
 import runpy
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from ccfleet_agent import live_client
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -228,6 +232,84 @@ def test_failed_legacy_cleanup_does_not_start_second_access_model(client, monkey
     monkeypatch.setitem(client.scope, "live_control", lambda *a: {"mounted": True, "stopped": False})
     monkeypatch.setitem(client.scope, "stop_local_connector", lambda *a: None)
     assert invoke(client, "--yes") == 2 and not client.calls
+
+
+@pytest.mark.parametrize("reply", ["acknowledged", "closed", "missing"])
+def test_migration_waits_for_real_connector_lock_after_stop(client, monkeypatch, reply):
+    item = legacy_record(client)
+    directory = client.cli["live_directory"](item["id"])
+    live_client.private_directory(directory)
+    descriptor = os.open(directory / "connector.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    stopped = threading.Event()
+    local_calls = []
+    def local_control(_directory, action):
+        local_calls.append(action)
+        if action == "stop":
+            stopped.set()
+            if reply == "closed":
+                raise live_client.ControlError("incomplete stop response")
+            return {} if reply == "missing" else {"connected": True}
+        assert local_calls == ["status"] or live_client.stopped(directory)
+        return {}  # No listener is not proof of a stopped resident.
+    monkeypatch.setitem(client.scope, "live_client", lambda: SimpleNamespace(
+        control=local_control, stopped=live_client.stopped, ControlError=live_client.ControlError))
+    remote_stopped = []
+    def remote_control(_device, _identifier, action="status"):
+        if action == "stop":
+            assert live_client.stopped(directory), "remote reset raced a live connector"
+            remote_stopped.append(True)
+            return {"stopped": True}
+        return {"mounted": not remote_stopped, "sessions": [] if remote_stopped else ["main"]}
+    monkeypatch.setitem(client.scope, "live_control", remote_control)
+    def teardown():
+        if stopped.wait(3):
+            # Keep the real lock held across at least one shutdown poll.
+            threading.Event().wait(0.05)
+        os.close(descriptor)
+    worker = threading.Thread(target=teardown)
+    worker.start()
+    try:
+        assert invoke(client, "--yes") == 0
+        assert client.cli["load_config"]()["live_folders"]["record"]["retired"] is True
+        assert local_calls == ["status", "stop", "status"]
+    finally:
+        stopped.set()
+        worker.join(4)
+    assert not worker.is_alive()
+
+
+def test_unconfirmed_stop_never_retires_record_or_launches_native(client, monkeypatch, capsys):
+    legacy_record(client)
+    actions = []
+    def control(_directory, action):
+        if action == "stop":
+            raise live_client.ControlError("incomplete reply")
+        return {"connected": True}
+    helper = SimpleNamespace(control=control, stopped=lambda _: False,
+                             ControlError=live_client.ControlError)
+    monkeypatch.setitem(client.scope, "live_client", lambda: helper)
+    monkeypatch.setitem(client.scope, "live_control", lambda _d, _i, action="status": (
+        actions.append(action) or {"mounted": True}))
+    ticks = iter([0, 0, 11])
+    monkeypatch.setitem(client.scope, "time", SimpleNamespace(
+        monotonic=lambda: next(ticks), sleep=lambda _: None))
+    assert invoke(client, "--yes") == 2
+    assert actions == ["status"] and not client.calls
+    assert "retired" not in client.cli["load_config"]()["live_folders"]["record"]
+    output = capsys.readouterr()
+    assert "migration is incomplete" in output.err and "Traceback" not in output.err
+
+
+def test_ambiguous_migration_preflight_has_clean_error_and_preserves_grant(client, monkeypatch, capsys):
+    legacy_record(client)
+    def control(*args):
+        raise live_client.ControlError("could not confirm the old local connector's state")
+    monkeypatch.setitem(client.scope, "live_client", lambda: SimpleNamespace(control=control))
+    monkeypatch.setitem(client.scope, "live_control", lambda *a: pytest.fail("remote mutation"))
+    assert invoke(client, "--yes") == 2 and not client.calls
+    assert "retired" not in client.cli["load_config"]()["live_folders"]["record"]
+    assert "could not confirm" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("policy", [{"env": {"ANTHROPIC_BASE_URL": "private"}},

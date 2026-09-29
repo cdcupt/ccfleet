@@ -55,7 +55,7 @@ PROJECT_RE = re.compile(r"^[0-9a-f]{32}$")
 PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
-LIVE_CLIENT_SHA256 = "4939ef1c537eda8a1dcfe9967ab181f5afba84c0c3017ee8b2eb51c813f6476a"
+LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
 INFERENCE_CLIENT_SHA256 = "d64304e5a26281c82918f063058cf0f00ac5d91d65ae092d556f64404c8eb5df"
 SETUP_WAIT_SECONDS = 180
 
@@ -1136,14 +1136,19 @@ def save_live_record(key: str, record: dict[str, Any]) -> None:
 def stop_local_connector(identifier: str) -> None:
     helper = live_client()
     directory = live_directory(identifier)
-    reply = helper.control(directory, "stop")
-    if reply:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if not helper.control(directory, "status"):
-                return
-            time.sleep(0.2)
-        raise CliError("local folder connector did not stop; remote access has not been reset")
+    try:
+        helper.control(directory, "stop")
+    except helper.ControlError:
+        # The controller can close while the resident is still tearing down.
+        # Neither EOF nor a timeout proves that filesystem access has ended.
+        pass
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if helper.stopped(directory):
+            return
+        time.sleep(0.2)
+    raise CliError("could not confirm the old local folder connector stopped; "
+                   "migration is incomplete. Wait a moment and rerun setup")
 
 
 def cmd_live_serve(args: argparse.Namespace) -> int:
@@ -1764,7 +1769,8 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--effort", choices=EFFORT_LEVELS,
                        help="effort for a new local conversation (default: max)")
     local.add_argument("--mode", choices=PERMISSION_MODES,
-                       help="native permissions (default: bypassPermissions; legacy snapshot: manual)")
+                       help="native permissions (default: bypassPermissions; "
+                            "legacy snapshot: manual)")
     local.add_argument("-p", "--print", dest="print_prompt", help="native print-mode prompt")
     local.add_argument("--name", default="", help="native local conversation name")
     local.add_argument("--fork-session", action="store_true",

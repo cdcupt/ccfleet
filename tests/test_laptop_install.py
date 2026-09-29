@@ -632,7 +632,8 @@ def test_failed_setup_keeps_legacy_and_startup_file_untouched(tmp_path):
     assert calls == ["client:setup --name computer"]
     assert rc.read_bytes() == b"# original configuration without trailing newline"
     assert not list(rc.parent.glob(".zshrc.ccfleet-*"))
-    assert "legacy setup and PATH were not changed" in result.stderr
+    assert "readiness or migration did not complete" in result.stderr
+    assert "legacy token cleanup and PATH changes were not performed" in result.stderr
     assert "Setup complete" not in result.stdout
 
 
