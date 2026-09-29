@@ -3,7 +3,43 @@
 Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 `ccfleet local` launches; it does not terminate existing user sessions.
 
-## Tested releases
+## Latest reliability and privacy hardening
+
+Runtime revision `f70b2ed5c9bd61a7aa67e91e7014200bf4c7362c` was deployed to
+BWH and the two currently assigned hosted nodes, canary first. The published
+client and its digest-pinned helper matched that revision. Legacy owner nodes
+were not converted.
+
+- Completed local suite: **3,451 passed, 93.80% coverage**. The first full run
+  caught an omitted status-page classification for the new credential alerts;
+  that was corrected and the full suite rerun successfully.
+- [Exact-release CI](https://github.com/cdcupt/ccfleet/actions/runs/36586558266)
+  passed Python 3.9, 3.12 and 3.13, shell and units. Python 3.12 reported
+  **3,451 passed, 93.81% coverage**. Ruff and Bash checks passed.
+- Before deployment, an authorized owner-slot observation saw native credential
+  expiry advance naturally to roughly eight hours with unchanged account binding.
+  No expiry field was edited, credential copied, or model request submitted for
+  that observation. The new early-renewal scheduling and failure/race paths were
+  exercised with synthetic credentials; the live upgraded agents reported
+  `current`, not a newly observed `renewed` event.
+- The public installed-client canary passed actual local Read/Write, same-session
+  `--continue`, idle connection revocation and rejection of a new connection.
+  Its two file-tool calls stayed inside the synthetic directory. The temporary
+  device was revoked and removed locally; the pre-existing ordinary remote
+  session remained unchanged. This used two short owner-account model turns.
+- Both hosted nodes' installed agent, machine and relay hashes matched the
+  release, and both returned protocol-v2 readiness. The second node received
+  readiness-only verification, without a customer model request or file access.
+- The production database backup passed integrity checking. Fresh heartbeats,
+  zero open alerts, one original device, zero pending pairings and all 17 tenant
+  HTTP baselines were verified after rollout. New credential-health copy was
+  checked at desktop and 390px widths.
+
+See [the design choices and limits](reliability-privacy.md). Captured identity
+replay was not implemented. These checks do not prove permanent account access,
+zero metadata disclosure, or absence of every future vendor-compatibility issue.
+
+## Baseline inference release evidence
 
 - Inference-runtime baseline (server relay code and installed slot relay):
   `1d18b369c1aff3217dc53c7c8d789d72b9824587`. Later website-copy releases may use a
