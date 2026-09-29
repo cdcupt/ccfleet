@@ -1,17 +1,20 @@
-# Project workspaces: explicit sharing, slot-only execution
+# Live folders: local files, slot-only execution
 
-`ccfleet local` is a thin project connector, not a local Claude launcher. It
-shares a user-selected project snapshot with the assigned slot and opens the
-original Claude Code there, inside persistent tmux. Claude, shell tools and
-model connections run on the slot. No Claude Code installation is required on
-the laptop; the connector supports macOS and Linux with Python 3.9+ and OpenSSH.
+`ccfleet local` connects the selected laptop folder as a live filesystem on the
+assigned slot and opens original Claude Code there, inside persistent tmux.
+Reads happen on demand; writes and deletions affect the laptop immediately.
+Filename and metadata changes may take about one second to appear on the slot;
+file-content reads bypass that cache and writes remain write-through.
+There is no whole-folder upload and no manual push/pull step in this workflow.
+Claude, shell tools and model connections run on the slot, not the laptop.
+No local Claude Code installation is required.
 
-Project access is enabled for currently assigned hosted slots. Newly created or
-reassigned slots still need operator activation. Publishing or installing this
-code does not activate a slot. `ccfleet local --check` checks the selected slot
-without transferring project files, making a model request or enabling access.
+Live folders require an upgraded node and operator-enabled access. New or
+reassigned slots need operator activation. Publishing or installing this code
+does not activate a slot. `ccfleet local --check` checks readiness without
+reading folder contents, making a model request or enabling access.
 Plain `ccfleet` remains the ordinary remote-terminal workflow. Legacy owner
-nodes without hosted CLI access are outside this project-access rollout.
+nodes without hosted CLI access are outside this rollout.
 
 ## One-command setup and migration
 
@@ -33,22 +36,22 @@ legacy `ccfleet-connect` setup. You do not need to choose a migration mode.
    this computer**, and paste one fresh pairing code when asked. No Claude password,
    token, local Claude installation, or SSH command is needed.
 4. Wait for the readiness result. Setup waits for a new device key to reach the
-   slot and verifies project access without uploading files or making a model
-   request. The legacy `ccfleet-connect` setup is cleaned up only after readiness
-   succeeds. If readiness fails, the legacy setup is left in place; resolve the
-   reported issue and rerun the same command.
-5. Open a new terminal, choose your project, and start:
+   slot and verifies access without uploading files or making a model request.
+   The legacy `ccfleet-connect` setup is cleaned up only after readiness succeeds.
+   If readiness fails, the legacy setup is left in place; resolve the reported
+   issue and rerun the same command.
+5. Open a new terminal, choose your folder, and start:
 
    ```bash
    cd ~/code/my-project
    ccfleet local
    ```
 
-   Review the selected file list and confirm the first share. Setup itself never
-   shares a project or starts a model session.
+   Confirm the selected folder's live read/write trust prompt. Setup itself never
+   shares a folder or starts a model session.
 
-The installer checks the downloaded client and verifies its digest-pinned project
-helper before replacing the client. Earlier helper versions, existing pairing
+The installer checks the downloaded client and verifies its digest-pinned helper
+before replacing the client. Earlier helper versions, existing pairing
 configuration, local conversation history, slot sign-in, and remote files are
 preserved. PATH configuration preserves existing shell settings and keeps a backup
 when modifying them. Open a new terminal to pick up PATH changes. Existing shells
@@ -65,29 +68,56 @@ account; do not revoke a credential that another workflow still needs.
 
 For users of the retired local-agent preview, the execution location changes:
 Claude now runs on the slot. Old local conversation history stays local and is
-not imported into the slot. Existing ordinary remote files are not automatically
-moved into a project workspace. `--print` and `--fork-session` from the preview
-are retired; use the original slot Claude interface's conversation controls.
+not imported into the slot. Existing ordinary remote files and old snapshots
+are not automatically moved into the connected laptop folder. The preview's
+`--print` and `--fork-session` options are retired; use the original slot Claude
+interface's conversation controls.
 
-## First project and daily work
+## Connect a folder
 
 ```bash
 cd ~/code/my-project
 ccfleet local --check
-ccfleet project status
-ccfleet local --new --name work
+ccfleet local
 ```
 
-Review the first-share file list and confirm it. The selected snapshot is copied
-to `~/workspace/projects/<opaque-project-id>` on the slot. Neither the absolute
-laptop path nor its directory name is used as the remote workspace identity.
-`--yes` skips confirmation only when explicitly requested; use it intentionally.
+The first connection asks you to trust live access to that specific folder.
+Approval is retained for that device/folder binding. `--yes` is an explicit
+scripted grant, not a safer mode. Unlike the earlier snapshot workflow, there is
+no per-file upload list or reviewed download: tools can read, edit and delete
+accessible files directly. Keep backups and use version control.
 
-Use `--project PATH` instead of changing directory and `--slot SLOT` to choose a
-paired slot. A project must be a real directory, not the home directory or a
-filesystem root. The selection must not contain CC Fleet's own configuration.
+Use `--project PATH` instead of changing directory and `--slot SLOT` to select
+a paired slot. You may select your home folder using the same trust flow:
 
-Disconnecting preserves the tmux session. Return with:
+```bash
+cd ~
+ccfleet local
+```
+
+There is no separate `--allow-home` flag or home-folder ban. Home access can expose
+dotfiles, `.ssh`, `.claude`, `.env` files, settings and credentials if the agent
+reads them. It can also change startup scripts or other files executed locally
+later. Do not grant a folder you cannot entrust to the slot and its administrators.
+
+The live mount has no snapshot-style file-count, per-file-size or total-size
+product caps, and does not apply Git-ignore or broad hidden-file filters.
+Available storage, operating-system permissions and network performance still
+matter; protocol messages and concurrent operations remain resource-bounded.
+The selected root is the filesystem boundary. CC Fleet's private configuration,
+device keys, host-key pins, and active client/helper files remain protected;
+they are not an invitation to copy or overwrite the connector's own control data.
+The active Python runtime is protected too.
+
+Claude's environment is Linux on the slot. Sharing Mac files does not make
+macOS-only commands, Xcode, local services, or native Mac dependencies available
+there. The connector provides file operations, not a local shell or local process
+execution.
+
+## Sessions, disconnects and reconnects
+
+Closing the terminal detaches the interface but leaves the background folder
+connector active. The remote tmux session also remains. Return with:
 
 ```bash
 ccfleet local --continue
@@ -95,122 +125,103 @@ ccfleet local --resume
 ccfleet local --resume work
 ```
 
-`--continue` selects the previously used remote project session; `--resume`
-lists running project sessions, and `--resume NAME` selects one. These are not
-the old laptop conversation-history picker. Create another named session with
-`--new --name NAME`; names allow 1–32 letters, digits, underscores or hyphens,
-starting with a letter or digit.
+`--continue` selects the previously used remote session; `--resume` lists running
+sessions, and `--resume NAME` selects one. These are not the old laptop history
+picker. Create another named session with `--new --name NAME`; names allow 1–32
+letters, digits, underscores or hyphens, starting with a letter or digit.
 
-Project sessions default to manual permissions, Opus and max effort. Pick new
-session launch settings explicitly, for example:
+New live sessions default to `bypassPermissions`, Opus and max effort. Tools can
+write or delete files in the connected folder without individual permission
+prompts. Choose another mode for a new session, for example:
 
 ```bash
 ccfleet local --new --name research --mode plan --model opus --effort high
 ```
 
-Use `/model` and `/effort` inside the original Claude interface to change an
-existing session. Model availability depends on the slot's Claude account.
-Permission modes govern the slot's tools, not laptop tools. Choosing
-`bypassPermissions` allows tools to run without approval as the slot Linux user.
+Use `/model` and `/effort` inside the original Claude interface. Model availability
+depends on the slot's Claude account. Reattaching does not silently change an
+existing session's model or permission mode. Permission settings govern the
+slot's tools, including their access through the live mount. They do not turn
+folder access into a laptop OS sandbox.
 
-Finish each project session with `/exit` before pushing another snapshot.
-Closing a terminal only disconnects it; it does not end the session. Push is
-rejected while any session for that project is still active.
+Use `/exit` to finish one Claude session. To stop folder access and its associated
+remote project sessions, run from that folder (or specify `--project PATH`):
 
 ```bash
-ccfleet project diff
-ccfleet project pull
-# After making further local changes, with project sessions finished:
-ccfleet project push
+ccfleet local --disconnect
 ```
 
-Diff previews incoming changes. Pull reviews changes and asks before applying
-them, rejects conflicting local/slot edits, and backs up files it will replace
-or delete under `~/.config/ccfleet/project-backups` (or the configured CC Fleet
-directory). Keep separate backups too. Stop local editors during apply: a
-detected concurrent edit can stop an update after earlier files were applied,
-with originals retained in the backup. It is not an all-files transaction.
+If the laptop sleeps or its network is unavailable, filesystem operations wait
+for the connection; the remote session cannot keep using unavailable local files
+as if they were a stored remote copy. Keep the computer awake and online for work
+that needs its folder. A persistent tmux session alone is not a guarantee that an
+interrupted filesystem operation completed successfully.
 
-There is **no background synchronization**, filesystem mount, automatic upload
-on reconnect, or automatic pull when a session ends. If local files have changed,
-resuming keeps the existing slot workspace and does not upload those changes.
+If the background connector was lost or replaced, a new connector instance must
+not silently reuse stale file handles. `ccfleet local --reset-link` performs the
+explicit reset after a warning. Resetting can interrupt work; inspect files and
+restart interrupted operations rather than assuming an in-flight write completed.
 
-For another paired computer, run `ccfleet project list`, choose a new empty local
-directory, and pull the opaque project ID before opening it:
+Multiple computers may stay paired to the same slot, but each live folder belongs
+to its originating computer. Pairing another computer does not copy files or make
+its local directory an interchangeable replacement. Concurrent editors use a live
+filesystem, not the snapshot workflow's conflict review or a collaborative merge.
+
+## Legacy snapshot recovery only
+
+The old `ccfleet project` commands remain for recovering earlier snapshot work.
+They are not required before, during or after a live `ccfleet local` session:
 
 ```bash
 ccfleet project list --slot SLOT
-ccfleet project pull --slot SLOT --remote-project ID --project PATH
-ccfleet local --slot SLOT --project PATH
+ccfleet project pull --slot SLOT --remote-project ID --project EMPTY_DIRECTORY
 ```
 
-Each computer retains its own revocable device key. Optimistic content checks
-reject stale overwrites between computers; they do not implement live co-editing.
-
-## Selection and limits
-
-The snapshot schema permits only relative filenames, file bytes, SHA256 hashes
-and an executable flag. No filesystem ownership, modification times, absolute
-paths or arbitrary metadata fields are transferred.
-
-- Maximum 1,000 files, 4 MiB per file and 20 MiB total content.
-- In a Git project, selection is tracked files plus untracked files allowed by
-  project ignore rules. Personal/system Git configuration is not used. Tracked
-  files remain selected even if a later ignore rule matches them.
-- Hard exclusions apply regardless of Git tracking: `.git`, `.ssh`, `.aws`,
-  `.azure`, `.config`, `.claude`, `.codex`, `.agents`, `.ccfleet`, editor metadata,
-  dependency directories, build outputs, shell histories and known credential
-  filenames. Names starting `.env`, `credentials`, `secrets`, `id_rsa` or
-  `id_ed25519`, and names ending `.pem` or `.key`, are excluded.
-- Selected symlinks, hardlinks, special files, traversal paths and ambiguous
-  cross-platform names are rejected. Directory ancestry is opened without
-  following symlinks. The source of truth for exact limits and exclusions is
-  [`ccfleet_agent/project_files.py`](../ccfleet_agent/project_files.py).
-
-Name exclusions cannot detect every secret inside a normal source file. Review
-the selection and remove sensitive content before sharing. This is a bounded
-file-transfer boundary, **not an operating-system sandbox** against other
-processes running as the laptop user.
+Use an existing empty directory and replace `ID` with an ID from the listing.
+`ccfleet project status`, `diff`, `pull` and `push` retain their earlier explicit
+snapshot behavior, including review, conflict checks and recovery backups under
+`~/.config/ccfleet/project-backups`. All old snapshot project sessions must finish
+before another snapshot push. Legacy limits remain 1,000 files, 4 MiB per file
+and 20 MiB total, with the earlier ignore and credential-name exclusions. Those
+limits and filters do not describe the live mount. Snapshot recovery does not
+automatically migrate old local Claude conversation history into the slot.
 
 ## Privacy and account boundary
 
 ```text
-laptop project connector + terminal
+laptop folder connector + terminal
   -> pinned, end-to-end SSH carried by the BWH WebSocket broker
-  -> selected project workspace + original Claude Code on the slot
+  -> live folder mount + original Claude Code on the slot
   -> Anthropic
 ```
 
 The connector does not automatically collect or forward laptop hostname,
-username, home-directory path, environment variables, timezone or host
-fingerprint. It provides no remote command for executing a laptop shell. There
-is no local model HTTP listener, credential substitution or model-request relay.
-One slot continues to use only its bound holder's account, and native Claude
-retains ownership of authentication and renewal.
+environment variables, timezone, geolocation or host fingerprint. Selected
+filenames, contents, link targets and filesystem metadata can identify the user
+or reveal local environment details when read. It provides no remote command
+for executing a laptop shell. There is no local model HTTP listener, credential
+substitution or model-request relay. One slot continues to use only its bound
+holder's account, and native Claude owns its authentication and renewal.
 
 This is not absolute anonymity. BWH sees the incoming IP and routing/connection
-metadata, though it cannot decrypt the inner SSH contents. SSH itself exposes
-transport properties such as its client version and terminal dimensions. Slot
-root can inspect files, credentials and terminal data, and must be trusted.
-Shared file contents, relative filenames and prompts can identify a person;
-Anthropic receives relevant content and the slot-native client's information.
-Moving execution to a slot does not make every piece of user-supplied content
-anonymous or change account/region eligibility.
+metadata, though it cannot decrypt the inner SSH contents. SSH exposes transport
+properties such as its client version and terminal dimensions. Slot root can
+inspect and change connected data while access is active, and must be trusted.
+Anthropic receives relevant selected content, prompts and slot-native client
+information. Disconnecting stops future folder access but does not erase content
+already read into slot memory, files or conversation history, or undo writes.
 
 ## Rollout and verification
 
-Project access is separately operator-gated. The retired relay gate does not
-enable the new project protocol. The new gate is
-`/etc/ccfleet/project-access/<unix-user>`: a root-owned regular file inside a
-root-owned directory, neither writable by group or others. Normal installation
-does not create it. Currently assigned hosted slots have been enabled; new and
-reassigned slots still require deliberate operator activation. The existing
-terminal path remains available. The owner canary supplies full end-to-end proof
-for project selection, slot-only process execution, push/pull conflicts,
-reconnect, account binding and device revocation; wider activation uses readiness
-checks without reading customer projects or making model requests.
+Live folders require verified node support, including a usable Linux filesystem
+mount facility, and operator-enabled access. A previously working terminal or
+snapshot connection alone does not prove that the live mount is available.
+Installing the client or running a readiness check does not enable access.
 
-Automated tests should use synthetic identifiers to verify the transfer schema
-rejects host metadata and unsafe paths. A successful connection is not evidence
-of zero metadata exposure or a completed fleet deployment. Record live release
-verification separately; no deployed revision is asserted by this guide.
+Release checks must cover actual Linux mounts, local read/write-through, root
+confinement, protected control files, session persistence, interrupted writes,
+reconnect and explicit reset, revocation, and safe unmount before slot removal.
+Use synthetic files and identifiers rather than customer data. A successful
+connection is not evidence of zero metadata exposure or a completed deployment.
+Record live release verification separately; no deployed revision is asserted
+by this guide.

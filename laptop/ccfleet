@@ -7,7 +7,8 @@ encryption and host verification to the assigned slot. A forced remote entry
 attaches to a persistent tmux session whose program is the original ``claude``.
 The ``local`` command explicitly shares a selected project with that slot.
 Claude and its tools still run on the slot; the laptop never runs a Claude agent
-or an inference proxy. Returned file changes require review and conflict checks.
+or an inference proxy. Live-folder changes are written through to local files;
+the older snapshot workflow remains available explicitly for recovery.
 """
 
 from __future__ import annotations
@@ -52,6 +53,8 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 PROJECT_RE = re.compile(r"^[0-9a-f]{32}$")
 PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
+LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
+LIVE_CLIENT_SHA256 = "c0bb1d6651e0452b977f659f47288aa42fa4b8b9d7170b581d090c176ee3a8a3"
 SETUP_WAIT_SECONDS = 180
 
 
@@ -413,7 +416,7 @@ def ssh_transport_command(device: dict[str, Any], *, tty: bool) -> list[str]:
     if shutil.which("ssh") is None:
         raise CliError("OpenSSH is required (missing ssh)")
     executable = str(Path(__file__).resolve())
-    proxy_command = (f"{shlex.quote(sys.executable)} {shlex.quote(executable)} "
+    proxy_command = (f"{shlex.quote(sys.executable)} -I {shlex.quote(executable)} "
                      f"proxy --device {shlex.quote(device['device_id'])}")
     return [
         "ssh", "-tt" if tty else "-T", "-F", "/dev/null",
@@ -479,20 +482,20 @@ def cmd_attach(args: argparse.Namespace) -> int:
             return 130
 
 
-def project_files() -> Any:
+def packaged_helper(name: str, digest: str) -> Any:
     """Load the exact helper shipped with this client, never from the project."""
     executable = Path(__file__).resolve()
     candidates = [
-        executable.parent / f"ccfleet-project-files-{PROJECT_FILES_SHA256}.py",
-        executable.parent.parent / "ccfleet_agent" / "project_files.py",
+        executable.parent / f"ccfleet-{name.replace('_', '-')}-{digest}.py",
+        executable.parent.parent / "ccfleet_agent" / f"{name}.py",
     ]
     for candidate in candidates:
         if not candidate.is_file() or candidate.is_symlink():
             continue
         raw = candidate.read_bytes()
-        if hashlib.sha256(raw).hexdigest() != PROJECT_FILES_SHA256:
+        if hashlib.sha256(raw).hexdigest() != digest:
             continue
-        spec = importlib.util.spec_from_file_location("_ccfleet_project_files", candidate)
+        spec = importlib.util.spec_from_file_location("_ccfleet_" + name, candidate)
         if spec is not None and spec.loader is not None:
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
@@ -501,6 +504,18 @@ def project_files() -> Any:
             exec(compile(raw, str(candidate), "exec"), module.__dict__)
             return module
     raise CliError("project helper is missing or mismatched; rerun the CC Fleet installer")
+
+
+def project_files() -> Any:
+    return packaged_helper("project_files", PROJECT_FILES_SHA256)
+
+
+def live_files() -> Any:
+    return packaged_helper("live_files", LIVE_FILES_SHA256)
+
+
+def live_client() -> Any:
+    return packaged_helper("live_client", LIVE_CLIENT_SHA256)
 
 
 def project_environment() -> dict[str, str]:
@@ -631,6 +646,12 @@ def wait_for_setup(device: dict[str, Any], *, newly_paired: bool) -> None:
         try:
             answer = project_rpc(device, "status", _timeout=min(25, remaining))
             require_project_readiness(answer)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            live = live_control(device, "0" * 32, _timeout=min(25, remaining))
+            if live.get("ready") is not True:
+                raise CliError("slot live-filesystem dependencies are not ready")
             return
         except CliError as exc:
             if not newly_paired or exc.code != "connection":
@@ -648,6 +669,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if shutil.which(executable) is None:
             raise CliError(f"OpenSSH is required (missing {executable})")
     project_files()  # Verify the installed helper; never scan a project here.
+    live_files()
+    live_client()
     config = load_config()
     newly_paired = not config["devices"]
     if newly_paired:
@@ -958,7 +981,8 @@ def attach_project(device: dict[str, Any], identifier: str, session: str,
         action, attempt = "open", attempt + 1
 
 
-def cmd_local(args: argparse.Namespace) -> int:
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    args.mode = args.mode or "manual"
     validate_project_args(args)
     helper = project_files()
     device = choose_device(load_config(), args.slot)
@@ -1030,6 +1054,261 @@ def cmd_local(args: argparse.Namespace) -> int:
     return attach_project(device, record["id"], session, args)
 
 
+def live_control(device: dict[str, Any], project: str, action: str = "status", *,
+                 _timeout: float = 30) -> dict[str, Any]:
+    if not PROJECT_RE.fullmatch(project) or action not in {"status", "stop"}:
+        raise CliError("invalid live-folder control")
+    command = [*ssh_transport_command(device, tty=False), f"ccfleet-live-{action}-v1", project]
+    try:
+        result = subprocess.run(command, input=b"", capture_output=True,
+                                env=project_environment(), timeout=_timeout)
+        import io
+        answer = live_client().read_frame(io.BytesIO(result.stdout))
+    except (OSError, EOFError, ValueError, subprocess.SubprocessError) as exc:
+        raise CliError("live folder connection is unavailable; check pairing and the node upgrade",
+                       code="connection") from exc
+    if result.returncode != 0 or answer.get("ok") is not True or answer.get("version") != 1:
+        error = answer.get("error")
+        messages = {"disabled": "live folder access is not enabled on this slot",
+                    "account_unavailable": "slot sign-in is unavailable; use your slot page",
+                    "stale": "an old folder link needs --reset-link before it can restart",
+                    "busy": "the folder link is busy; retry after it stops"}
+        raise CliError(messages.get(error, "live folder operation failed safely"),
+                       code=error if isinstance(error, str) else "invalid")
+    return answer
+
+
+def live_directory(identifier: str) -> Path:
+    if not PROJECT_RE.fullmatch(identifier):
+        raise CliError("invalid local live-folder identifier")
+    return home() / "live" / identifier
+
+
+def live_protected(root: Path, *modules: Any) -> list[Path]:
+    """Control credentials/code stay outside the remote filesystem authority."""
+    result = [home(), Path(__file__), Path(sys.executable),
+              Path(sys.prefix), Path(sys.base_prefix)]
+    for module in modules:
+        result.append(Path(module.__file__))
+    for device in load_config()["devices"].values():
+        if not isinstance(device, dict):
+            raise CliError("invalid saved pairing")
+        for field in ("key", "known_hosts"):
+            value = device.get(field)
+            if not isinstance(value, str) or not value:
+                raise CliError("invalid saved pairing paths")
+            result.append(Path(value))
+    protected = []
+    for path in result:
+        for candidate in (Path(os.path.abspath(path)), path.resolve()):
+            if candidate == root or root.is_relative_to(candidate):
+                raise CliError("CC Fleet's own control directory cannot be shared")
+            if candidate.is_relative_to(root):
+                protected.append(candidate)
+    return protected
+
+
+def live_record(device: dict[str, Any], root: Path) -> tuple[str, dict[str, Any]]:
+    key = hashlib.sha256((device["device_id"] + "\0" + str(root)).encode()).hexdigest()
+    records = load_config().get("live_folders", {})
+    if not isinstance(records, dict):
+        raise CliError("invalid live-folder configuration")
+    record = records.get(key)
+    if record is None:
+        record = {"id": secrets.token_hex(16), "root": str(root),
+                  "device": device["device_id"], "trusted": False, "last_session": "main"}
+    if (not isinstance(record, dict) or not PROJECT_RE.fullmatch(str(record.get("id", "")))
+            or record.get("root") != str(root) or record.get("device") != device["device_id"]):
+        raise CliError("invalid live-folder record")
+    return key, dict(record)
+
+
+def save_live_record(key: str, record: dict[str, Any]) -> None:
+    config = load_config()
+    config.setdefault("live_folders", {})[key] = record
+    save_config(config)
+
+
+def stop_local_connector(identifier: str) -> None:
+    helper = live_client()
+    directory = live_directory(identifier)
+    reply = helper.control(directory, "stop")
+    if reply:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if not helper.control(directory, "status"):
+                return
+            time.sleep(0.2)
+        raise CliError("local folder connector did not stop; remote access has not been reset")
+
+
+def cmd_live_serve(args: argparse.Namespace) -> int:
+    records = load_config().get("live_folders", {})
+    record = next((value for value in records.values()
+                   if isinstance(value, dict) and value.get("id") == args.project_id), None)
+    if not record or record.get("trusted") is not True:
+        raise CliError("folder sharing has not been approved")
+    device = choose_device(load_config(), record["device"])
+    root = Path(record["root"]).resolve(strict=True)
+    if not root.is_dir():
+        raise CliError("shared folder is unavailable")
+    files, connector = live_files(), live_client()
+    instance = secrets.token_hex(16)
+    server = files.SFTPServer(root, protected=live_protected(root, files, connector))
+    command = [*ssh_transport_command(device, tty=False), "ccfleet-live-v1",
+               record["id"], instance]
+
+    def paired() -> bool:
+        try:
+            return load_config()["devices"].get(device["device_id"]) == device
+        except (CliError, OSError):
+            return False
+
+    return connector.run(live_directory(record["id"]), instance, server,
+                         lambda: subprocess.Popen(command, stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             env=project_environment()), check_pairing=paired)
+
+
+def start_local_connector(identifier: str) -> None:
+    helper = live_client()
+    directory = live_directory(identifier)
+    existing = helper.control(directory, "status")
+    child = None
+    if not existing:
+        child = subprocess.Popen([sys.executable, "-I", str(Path(__file__).resolve()),
+                                  "live-serve", "--project-id", identifier],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True,
+                                 env=project_environment())
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        state = helper.control(directory, "status")
+        if state.get("connected") is True:
+            return
+        if state.get("error") in {
+                "stale", "protocol", "disabled", "account_unavailable", "unavailable"}:
+            break
+        if child is not None and child.poll() is not None:
+            break
+        time.sleep(0.25)
+    raise CliError("the live folder is not connected. Check your slot/network; "
+                   "after a connector crash use --reset-link to end its old slot sessions "
+                   "and reconnect. No snapshot fallback was used")
+
+
+def cmd_local(args: argparse.Namespace) -> int:
+    args.mode = args.mode or "bypassPermissions"
+    validate_project_args(args)
+    if args.remote_project:
+        raise CliError("live folders belong to the computer serving them; use snapshot/project "
+                       "commands to recover an older remote snapshot")
+    device = choose_device(load_config(), args.slot)
+    if args.check:
+        answer = live_control(device, "0" * 32)
+        if answer.get("ready") is not True:
+            raise CliError("slot live-filesystem dependencies are not ready")
+        print("Ready: live folder access with Claude running on the slot.\n"
+              "No local folder was scanned, shared, or mounted; no model request was made.")
+        return 0
+    root = Path(args.project).expanduser().resolve(strict=not args.disconnect)
+    if not args.disconnect and not root.is_dir():
+        raise CliError("--project must be an existing directory")
+    files, connector = live_files(), live_client()
+    live_protected(root, files, connector)
+    with project_lock():
+        key, record = live_record(device, root)
+        identifier = record["id"]
+        if args.disconnect or args.reset_link:
+            if args.reset_link:
+                print("Reset ends this folder's running slot sessions and invalidates open files.")
+                confirm_project("Reset this folder link?", args.yes)
+            stop_local_connector(identifier)
+            live_control(device, identifier, "stop")
+            if args.disconnect:
+                print("Folder access stopped; its slot sessions ended. "
+                      "Local files were not deleted.")
+                return 0
+        ready = live_control(device, identifier)
+        if ready.get("ready") is not True:
+            raise CliError("live folder access is not ready on the slot")
+        if record.get("trusted") is not True:
+            print("Live folder: " + json.dumps(str(root), ensure_ascii=True))
+            print("This grants the slot read/write access to files in this folder on demand.\n"
+                  "Edits and deletions take effect locally immediately; there is no push/pull.\n"
+                  "Hidden files and Git-ignored files are available too. Shared files may contain\n"
+                  "credentials or identifying information; relevant content may reach Anthropic.\n"
+                  "Slot administrators can inspect this access. CC Fleet's own keys and code\n"
+                  "remain protected. Claude runs on the slot, using its Linux tools.\n"
+                  "Access stays active after this terminal closes. Stop it with:\n"
+                  "  ccfleet local --disconnect --project " + shlex.quote(str(root)))
+            if args.mode == "bypassPermissions":
+                print("Bypass-permissions mode lets tools change/delete files without prompts.")
+            confirm_project("Trust this folder for live read/write access?", args.yes)
+            record["trusted"] = True
+            save_live_record(key, record)
+        start_local_connector(identifier)
+        deadline = time.monotonic() + 15
+        while True:
+            state = live_control(device, identifier)
+            if state.get("mounted") is True and state.get("connected") is True:
+                break
+            if time.monotonic() >= deadline:
+                raise CliError("folder mount did not become ready; no Claude session was started")
+            time.sleep(0.25)
+        session = args.name or record.get("last_session", "main")
+        if args.resume is not None:
+            available = state.get("sessions", [])
+            if not isinstance(available, list) or any(
+                    not isinstance(name, str) or not SESSION_RE.fullmatch(name)
+                    for name in available):
+                raise CliError("invalid live session listing")
+            if args.resume:
+                if args.resume not in available:
+                    raise CliError("that live session is not running; use --new --name NAME")
+                session = args.resume
+            else:
+                if not available:
+                    raise CliError("no running live sessions; use --new --name NAME")
+                for number, name in enumerate(available, 1):
+                    print(f"{number}. {name}")
+                if not sys.stdin.isatty():
+                    raise CliError("choose a session explicitly with --resume NAME")
+                choice = input("Session number: ").strip()
+                if not choice.isdigit() or not 1 <= int(choice) <= len(available):
+                    raise CliError("invalid session selection")
+                session = available[int(choice) - 1]
+        elif args.new_session and not args.name:
+            session = "s-" + secrets.token_hex(4)
+        if not isinstance(session, str) or not SESSION_RE.fullmatch(session):
+            raise CliError("invalid saved live session")
+        record["last_session"] = session
+        save_live_record(key, record)
+    print("Live folder connected. Files stay on this computer; Claude and tools run on the slot.\n"
+          "Local edits are visible remotely and slot edits write through immediately.\n"
+          "Closing this terminal leaves access active; use ccfleet local --disconnect to stop.",
+          file=sys.stderr)
+    action = "new" if args.new_session else "open"
+    failed_since: Optional[float] = None
+    attempt = 0
+    while True:
+        command = [*ssh_transport_command(device, tty=True), "ccfleet-live-session-v1",
+                   identifier, action, session, args.mode,
+                   args.model or "opus", args.effort or "max"]
+        started = time.monotonic()
+        code = subprocess.call(command, env=project_environment())
+        if code != 255 or args.no_reconnect:
+            return code
+        now = time.monotonic()
+        if failed_since is None or now - started >= 60:
+            failed_since, attempt = now, 0
+        if now - failed_since >= args.reconnect_for:
+            return code
+        print("Connection interrupted; reattaching to the same live session...", file=sys.stderr)
+        time.sleep(min(10, 1 + attempt * 2, args.reconnect_for - (now - failed_since)))
+        action, attempt = "open", attempt + 1
+
+
 def cmd_list(_args: argparse.Namespace) -> int:
     config = load_config()
     if not config["devices"]:
@@ -1053,6 +1332,14 @@ def cmd_use(args: argparse.Namespace) -> int:
 def cmd_logout(args: argparse.Namespace) -> int:
     config = load_config()
     device = choose_device(config, args.slot)
+    for record in config.get("live_folders", {}).values():
+        if isinstance(record, dict) and record.get("device") == device["device_id"]:
+            try:
+                stop_local_connector(record["id"])
+                live_control(device, record["id"], "stop")
+            except (CliError, OSError, ValueError):
+                print("Warning: a folder cleanup is pending; device revocation will still proceed.",
+                      file=sys.stderr)
     try:
         api_json(device["server"] + "/api/cli/revoke", device["device_token"], {})
     except CliError as exc:
@@ -1113,7 +1400,8 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--model", default="opus", help="fable, opus, sonnet, or a model id")
     restart.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
-    local = sub.add_parser("local", help="share a selected project; run Claude only on your slot",
+    local = sub.add_parser("local", aliases=["snapshot"],
+                           help="live selected-folder access; run Claude only on your slot",
                            epilog="New: ccfleet local --new --name work | "
                            "Resume picker: ccfleet local --resume | "
                            "Check setup: ccfleet local --check")
@@ -1121,12 +1409,17 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--project", default=".", help="local project directory (default: current)")
     local.add_argument("--remote-project", default="", metavar="ID",
                        help="join an existing project ID after reviewing and pulling it")
-    local.add_argument("--yes", action="store_true", help="explicitly approve first project upload")
+    local.add_argument("--yes", action="store_true",
+                       help="explicitly approve folder access or reset")
+    local.add_argument("--disconnect", action="store_true",
+                       help="stop this folder's access and its slot sessions")
+    local.add_argument("--reset-link", action="store_true",
+                       help="end stale folder sessions and reconnect after a connector crash")
     local.add_argument("--model", help="model for a new slot session (default: opus)")
     local.add_argument("--effort", choices=EFFORT_LEVELS,
                        help="effort for a new slot session (default: max)")
-    local.add_argument("--mode", choices=PERMISSION_MODES, default="manual",
-                       help="slot tool permissions for a new session (default: manual)")
+    local.add_argument("--mode", choices=PERMISSION_MODES,
+                       help="new session permissions (live: bypassPermissions; snapshot: manual)")
     local.add_argument("-p", "--print", dest="print_prompt", help=argparse.SUPPRESS)
     local.add_argument("--name", default="", help="named persistent project session")
     local.add_argument("--fork-session", action="store_true", help=argparse.SUPPRESS)
@@ -1156,6 +1449,8 @@ def parser() -> argparse.ArgumentParser:
     logout.add_argument("--local-only", action="store_true", help=argparse.SUPPRESS)
     hidden = sub.add_parser("proxy", help=argparse.SUPPRESS)
     hidden.add_argument("--device", required=True)
+    resident = sub.add_parser("live-serve", help=argparse.SUPPRESS)
+    resident.add_argument("--project-id", required=True)
     return root
 
 
@@ -1184,6 +1479,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_setup(args)
         if args.command == "local":
             return cmd_local(args)
+        if args.command == "snapshot":
+            if args.disconnect or args.reset_link:
+                raise CliError("live link controls are not snapshot operations")
+            return cmd_snapshot(args)
         if args.command == "project":
             return cmd_project(args)
         if args.command == "list":
@@ -1194,6 +1493,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_logout(args)
         if args.command == "proxy":
             return proxy(choose_device(load_config(), args.device))
+        if args.command == "live-serve":
+            return cmd_live_serve(args)
         raise CliError("unknown command")
     except KeyboardInterrupt:
         return 130

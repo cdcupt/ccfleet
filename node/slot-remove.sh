@@ -127,6 +127,63 @@ if pgrep -u "$SLOT" >/dev/null 2>&1; then
 fi
 note "nothing running as $SLOT"
 
+# A live mount points at the holder's laptop, not disposable slot storage.
+# Never let userdel/rm walk one, even after its FUSE process has been killed.
+MOUNTINFO="${CCFLEET_MOUNTINFO:-/proc/self/mountinfo}"
+if ! python3 - "$HOME_DIR" "$MOUNTINFO" <<'PY'
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+home = pathlib.Path(os.path.abspath(sys.argv[1]))
+table = pathlib.Path(sys.argv[2])
+
+def stop():
+    raise SystemExit("slot release blocked: mounted filesystems remain or cannot be verified; home kept")
+
+def below_home():
+    results = []
+    try:
+        lines = table.read_text().splitlines()
+    except (OSError, UnicodeError):
+        stop()
+    for line in lines:
+        parts = line.split()
+        try:
+            separator = parts.index("-")
+            if separator < 6 or len(parts) <= separator + 2:
+                stop()
+            path = pathlib.Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), parts[4]))
+            if path == home or home in path.parents:
+                results.append((path, parts[separator + 1]))
+        except (ValueError, IndexError):
+            stop()
+    return results
+
+mounts = below_home()
+for path, filesystem in mounts:
+    relative = path.relative_to(home).parts
+    if (filesystem != "fuse.sshfs" or len(relative) != 3
+            or relative[:2] != ("workspace", "live")
+            or re.fullmatch(r"[0-9a-f]{32}", relative[2]) is None):
+        stop()
+for path, _ in mounts:
+    try:
+        result = subprocess.run(["umount", "-l", "--", str(path)], capture_output=True,
+                                timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        stop()
+    if result.returncode != 0:
+        stop()
+if below_home():
+    stop()
+PY
+then
+  die "mounted filesystem safety check failed; not deleting $SLOT or its home"
+fi
+
 step "3/4  the account and its home"
 SLICE_ROOT="${CCFLEET_SLICE_ROOT:-/etc/systemd/system}"
 rm -f "$SLICE_ROOT/user-$UID_NUM.slice.d/50-ccfleet.conf"

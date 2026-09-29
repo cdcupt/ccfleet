@@ -67,11 +67,13 @@ command -v curl >/dev/null 2>&1 || { printf 'ccfleet needs curl\n' >&2; exit 1; 
 mkdir -p "$DEST"
 CLIENT_TMP="$(mktemp "$DEST/.ccfleet.XXXXXX")"
 HELPER_TMP=""
-trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP"' EXIT
+LIVE_FILES_TMP=""
+LIVE_CLIENT_TMP=""
+trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP" "$LIVE_FILES_TMP" "$LIVE_CLIENT_TMP"' EXIT
 curl -fsSL "$URL" -o "$CLIENT_TMP"
 # Read the helper digest as data. Never execute the downloaded client to discover
 # its dependencies, and reject missing, computed, or ambiguous digest values.
-PROJECT_FILES_SHA256="$(python3 - "$CLIENT_TMP" <<'PY'
+DIGESTS="$(python3 - "$CLIENT_TMP" <<'PY'
 import ast
 import pathlib
 import re
@@ -80,56 +82,77 @@ import sys
 source = pathlib.Path(sys.argv[1]).read_bytes()
 tree = ast.parse(source, filename=sys.argv[1])
 compile(tree, sys.argv[1], "exec")
-assignments = [
-    node for node in tree.body
-    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
-    and any(
-        isinstance(target, ast.Name) and target.id == "PROJECT_FILES_SHA256"
-        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
-    )
-]
-if len(assignments) != 1:
-    raise SystemExit("ccfleet client must declare one PROJECT_FILES_SHA256 digest")
-assignment = assignments[0]
-value = assignment.value
-if (
-    not isinstance(assignment, ast.Assign)
-    or len(assignment.targets) != 1
-    or not isinstance(value, ast.Constant)
-    or not isinstance(value.value, str)
-    or not re.fullmatch(r"[0-9a-f]{64}", value.value)
-):
-    raise SystemExit("ccfleet PROJECT_FILES_SHA256 must be a literal SHA256 digest")
-print(value.value)
+def digest(name, required=False):
+    assignments = [
+        node for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        )
+    ]
+    if not assignments and not required:
+        return ""
+    if len(assignments) != 1:
+        raise SystemExit("ccfleet client must declare one " + name + " digest")
+    assignment = assignments[0]
+    value = assignment.value
+    if (
+        not isinstance(assignment, ast.Assign)
+        or len(assignment.targets) != 1
+        or not isinstance(value, ast.Constant)
+        or not isinstance(value.value, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value.value)
+    ):
+        raise SystemExit("ccfleet " + name + " must be a literal SHA256 digest")
+    return value.value
+
+project, live_files, live_client = (digest("PROJECT_FILES_SHA256", required=True),
+                                   digest("LIVE_FILES_SHA256"), digest("LIVE_CLIENT_SHA256"))
+if bool(live_files) != bool(live_client):
+    raise SystemExit("ccfleet must declare both LIVE_FILES_SHA256 and LIVE_CLIENT_SHA256")
+print("|".join((project, live_files, live_client)))
 PY
 )"
-if [ -n "${CCFLEET_PROJECT_FILES_URL:-}" ]; then
-  HELPER_URL="$CCFLEET_PROJECT_FILES_URL"
-else
-  case "$URL" in
-    https://raw.githubusercontent.com/*/laptop/ccfleet)
-      HELPER_URL="${URL%/laptop/ccfleet}/ccfleet_agent/project_files.py" ;;
-    *) HELPER_URL="https://raw.githubusercontent.com/cdcupt/ccfleet/main/ccfleet_agent/project_files.py" ;;
-  esac
-fi
+IFS='|' read -r PROJECT_FILES_SHA256 LIVE_FILES_SHA256 LIVE_CLIENT_SHA256 <<< "$DIGESTS"
+case "$URL" in
+  https://raw.githubusercontent.com/*/laptop/ccfleet)
+    HELPER_BASE="${URL%/laptop/ccfleet}/ccfleet_agent" ;;
+  *) HELPER_BASE="https://raw.githubusercontent.com/cdcupt/ccfleet/main/ccfleet_agent" ;;
+esac
+HELPER_URL="${CCFLEET_PROJECT_FILES_URL:-$HELPER_BASE/project_files.py}"
 HELPER_TMP="$(mktemp "$DEST/.ccfleet-project-files.XXXXXX")"
 curl -fsSL "$HELPER_URL" -o "$HELPER_TMP"
-python3 - "$CLIENT_TMP" "$HELPER_TMP" "$DEST" "$PROJECT_FILES_SHA256" <<'PY'
+HELPER_ARGS=(project-files "$HELPER_TMP" "$PROJECT_FILES_SHA256")
+if [ -n "$LIVE_FILES_SHA256" ]; then
+  LIVE_FILES_TMP="$(mktemp "$DEST/.ccfleet-live-files.XXXXXX")"
+  LIVE_CLIENT_TMP="$(mktemp "$DEST/.ccfleet-live-client.XXXXXX")"
+  curl -fsSL "${CCFLEET_LIVE_FILES_URL:-$HELPER_BASE/live_files.py}" -o "$LIVE_FILES_TMP"
+  curl -fsSL "${CCFLEET_LIVE_CLIENT_URL:-$HELPER_BASE/live_client.py}" -o "$LIVE_CLIENT_TMP"
+  HELPER_ARGS+=(live-files "$LIVE_FILES_TMP" "$LIVE_FILES_SHA256"
+               live-client "$LIVE_CLIENT_TMP" "$LIVE_CLIENT_SHA256")
+fi
+python3 - "$CLIENT_TMP" "$DEST" "${HELPER_ARGS[@]}" <<'PY'
 import hashlib
 import os
 import pathlib
 import sys
 
-client, helper, destination = map(pathlib.Path, sys.argv[1:4])
-digest = sys.argv[4]
-source = helper.read_bytes()
-if hashlib.sha256(source).hexdigest() != digest:
-    raise SystemExit("ccfleet project helper checksum mismatch; existing client left unchanged")
-compile(source, str(helper), "exec")
+client, destination = map(pathlib.Path, sys.argv[1:3])
+verified = []
+for offset in range(3, len(sys.argv), 3):
+    name, path, digest = sys.argv[offset:offset + 3]
+    helper = pathlib.Path(path)
+    source = helper.read_bytes()
+    if hashlib.sha256(source).hexdigest() != digest:
+        raise SystemExit("ccfleet " + name + " helper checksum mismatch; existing client left unchanged")
+    compile(source, str(helper), "exec")
+    verified.append((helper, destination / ("ccfleet-" + name + "-" + digest + ".py")))
 # Versioned helpers keep an interrupted update compatible with the old client.
-# os.replace refuses directory destinations and atomically replaces each file.
-helper.chmod(0o644)
-os.replace(helper, destination / ("ccfleet-project-files-" + digest + ".py"))
+# Validate EVERY helper before installing any of them or replacing the client.
+for helper, target in verified:
+    helper.chmod(0o644)
+    os.replace(helper, target)
 client.chmod(0o755)
 os.replace(client, destination / "ccfleet")
 PY

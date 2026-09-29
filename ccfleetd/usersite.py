@@ -692,21 +692,34 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "prevents it from reading terminal contents.</p>"
         "<p>Claude Code on your slot talks to Anthropic directly, under your own account and "
         "Anthropic&#x27;s own terms and privacy policy.</p></div>"
-        '<div class="card"><h2>Selected project sharing</h2>'
-        '<p>If you choose <code>ccfleet local</code>, you explicitly share selected project '
-        'files with your slot. The connector transfers relative filenames, file contents, '
-        'hashes and executable flags over the encrypted SSH path; it does not automatically '
-        'copy your laptop environment, hostname, username, absolute project path or timezone. '
-        'Claude and its tools run on the slot, and relevant shared content is sent to Anthropic. '
-        'File contents and names can themselves identify you or contain secrets, so review '
-        'the selection before confirming.</p>'
+        '<div class="card"><h2>Live folder access</h2>'
+        '<p>If you choose <code>ccfleet local</code>, you grant live read/write access to a '
+        'selected laptop folder. Reads happen on demand over the encrypted SSH path; '
+        'writes and deletions affect your laptop immediately. Claude and its tools run on '
+        'the slot, and relevant shared content is sent to Anthropic. The connector does not '
+        'automatically collect laptop hostname, environment variables, timezone, geolocation '
+        'or host fingerprint. Selected filenames, contents, link targets and filesystem '
+        'metadata may identify you or reveal secrets.</p>'
+        '<p>There is no broad hidden-file or Git-ignore filter in live access. Selecting '
+        'home can expose settings, SSH keys, local Claude files and other credentials if read; '
+        'writes may change files executed locally later. CC Fleet private configuration, '
+        'device keys, host-key pins and active client/helper files are protected. The '
+        'active Python runtime is protected too. The '
+        'connector provides no local shell or local execution command, but folder trust is '
+        'not an operating-system sandbox. Slot administrators have root and can inspect '
+        'and change connected data while access is active.</p>'
         '<p>The broker can see your connection IP and timing, and SSH exposes transport '
         'properties such as client version and terminal dimensions. This is not anonymity. '
-        'Project copies, transfer manifests, and recovery backups are kept in your slot. '
-        'Local tracking and pull backups remain on your computer. Disconnecting or revoking '
-        'a device does not delete those files; giving the slot back wipes its copies, not '
-        'your local files. See the <a href="/docs/guide#migration">migration guide</a> '
-        'for explicit push, review and pull steps.</p></div>'
+        'Closing the terminal leaves the background folder connector active. '
+        '<code>ccfleet local --disconnect</code> stops the folder connection and its remote '
+        'project sessions. Disconnecting or revoking a device does not undo writes or erase '
+        'content already read into slot files, memory or conversation history. Local folder '
+        'grants and connection state remain on your computer. Earlier snapshot copies, '
+        'transfer manifests and recovery backups may remain in your slot or on your laptop; '
+        'disconnecting does not delete those files. Giving the slot back stops folder access '
+        'and wipes its stored copies, not your local files. See the '
+        '<a href="/docs/guide#migration">migration guide</a> for live connection controls '
+        'and legacy snapshot recovery.</p></div>'
         '<div class="card"><h2>What the operator can see</h2>'
         "<p>The machines are ours, and their administrators have root. That means they can "
         "technically read any slot&#x27;s files, and its Claude credential. The operator "
@@ -1241,11 +1254,13 @@ def cli_pairing_page(slot: Mapping[str, Any], token: str,
         "and enter its code.</p></div>"
         "<div class=\"card\"><h2>3. Choose your project</h2>"
         "<pre>cd /path/to/your-project\nccfleet local</pre>"
-        "<p>Open a new terminal first so PATH changes take effect. Review and confirm "
-        "the first-share file list. Original Claude Code and its tools run on the slot; "
-        "bring edits back with reviewed <code>ccfleet project pull</code>.</p>"
+        "<p>Open a new terminal first so PATH changes take effect. Confirm the folder's "
+        "live read/write grant. Original Claude Code and its tools run on the slot; "
+        "edits and deletions affect local files immediately, without push or pull.</p>"
         "<p class=\"muted\">Plain <code>ccfleet</code> still opens the ordinary remote "
         "workspace, without sharing a local folder. Its default session bypasses permission "
-        "prompts; project sessions default to manual permissions. See the "
+        "prompts, as do new live sessions. Choose <code>--mode manual</code> for prompts. "
+        "Closing the terminal leaves live folder access active; "
+        "<code>ccfleet local --disconnect</code> stops it. See the "
         '<a href="/docs/guide#migration">setup and migration guide</a>.</p></div>'
         "<p><a class=\"back\" href=\"/account\">&larr; your slots</a></p>"), viewer=viewer)

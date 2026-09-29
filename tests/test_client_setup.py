@@ -28,6 +28,10 @@ def client(tmp_path, monkeypatch):
         pytest.fail("setup attempted project file access")
     monkeypatch.setitem(result["cmd_setup"].__globals__, "project_files",
                         lambda: SimpleNamespace(snapshot=forbidden, apply_snapshot=forbidden))
+    monkeypatch.setitem(result["cmd_setup"].__globals__, "live_files", lambda: SimpleNamespace())
+    monkeypatch.setitem(result["cmd_setup"].__globals__, "live_client", lambda: SimpleNamespace())
+    monkeypatch.setitem(result["cmd_setup"].__globals__, "live_control",
+                        lambda *a, **kw: {"ready": True})
     return result
 
 

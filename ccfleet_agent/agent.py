@@ -1937,7 +1937,7 @@ def _slot_claude_sessions(output: str, home: Path) -> Optional[set[str]]:
         return None
     result = set()
     native = str(home / ".local/bin/claude")
-    project = re.compile(r"p_[0-9a-f]{32}_[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}\Z")
+    project = re.compile(r"[pl]_[0-9a-f]{32}_[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}\Z")
     named = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}\Z")
     for line in lines:
         fields = line.split("\t")
@@ -1965,6 +1965,17 @@ def restart_slot_terminal(runner: Runner = subprocess.run) -> bool:
     """
     targets = {"ccfleet"}
     complete = True
+    if (Path.home() / ".config/ccfleet/live").exists():
+        # A held live mount must not retain the previous account's access, even
+        # when there are no visible tmux panes or filesystem I/O is blocked.
+        try:
+            stopped = runner(["/usr/bin/python3", "-I",
+                              str(Path(__file__).with_name("live_access.py")), "_stop-all"],
+                             capture_output=True, text=True, timeout=60, check=False)
+            if stopped.returncode:
+                complete = False
+        except (OSError, subprocess.SubprocessError):
+            complete = False
     try:
         panes = runner(["tmux", "list-panes", "-a", "-F",
                         "#{session_name}\t#{pane_start_command}\t#{pane_current_command}"],

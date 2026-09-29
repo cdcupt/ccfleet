@@ -16,6 +16,32 @@ HELPER_SOURCE = "\"\"\"A pinned project-file helper fixture.\"\"\"\nVALUE = 1\n"
 HELPER_DIGEST = hashlib.sha256(HELPER_SOURCE.encode()).hexdigest()
 
 
+def test_real_installer_loads_all_pinned_release_helpers_without_pairing(tmp_path):
+    home = tmp_path / "isolated-home"
+    home.mkdir(mode=0o700)
+    destination = home / ".local/bin"
+    env = {**os.environ, "HOME": str(home), "CCFLEET_HOME": str(home / ".config/ccfleet"),
+           "CCFLEET_INSTALL_DIR": str(destination),
+           "CCFLEET_INSTALL_URL": (ROOT / "laptop/ccfleet").as_uri(),
+           "CCFLEET_PROJECT_FILES_URL": (ROOT / "ccfleet_agent/project_files.py").as_uri(),
+           "CCFLEET_LIVE_FILES_URL": (ROOT / "ccfleet_agent/live_files.py").as_uri(),
+           "CCFLEET_LIVE_CLIENT_URL": (ROOT / "ccfleet_agent/live_client.py").as_uri()}
+    result = subprocess.run(["bash", str(INSTALL)], env=env, capture_output=True,
+                            text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    source = ("import runpy,sys; c=runpy.run_path(sys.argv[1]); "
+              "[c[name]() for name in ('project_files','live_files','live_client')]")
+    result = subprocess.run(["python3", "-I", "-c", source, str(destination / "ccfleet")],
+                            env=env, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert len(list(destination.glob("ccfleet-*.py"))) == 3
+    assert not (home / ".config/ccfleet").exists()
+LIVE_FILES_SOURCE = '"""Synthetic live filesystem helper."""\nVALUE = 2\n'
+LIVE_CLIENT_SOURCE = '"""Synthetic live transport helper."""\nVALUE = 3\n'
+LIVE_FILES_DIGEST = hashlib.sha256(LIVE_FILES_SOURCE.encode()).hexdigest()
+LIVE_CLIENT_DIGEST = hashlib.sha256(LIVE_CLIENT_SOURCE.encode()).hexdigest()
+
+
 def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
                 old_rc: int = 0, old_client: bool = True,
                 helper_source: str = HELPER_SOURCE, helper_missing: bool = False,
@@ -23,7 +49,10 @@ def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
                 existing_client: str | None = None, download_url: str | None = None,
                 helper_url_override: bool = True, python_setup: str = "",
                 setup_rc: int = 0, shell: str = "/bin/zsh",
-                extra_env: dict[str, str] | None = None, install_dir: Path | None = None):
+                extra_env: dict[str, str] | None = None, install_dir: Path | None = None,
+                live_helpers: bool = False, live_declarations: str | None = None,
+                live_files_source: str = LIVE_FILES_SOURCE,
+                live_client_source: str = LIVE_CLIENT_SOURCE, live_missing: str = ""):
     home = tmp_path / "home"
     dest = install_dir or home / ".local" / "bin"
     dest.mkdir(parents=True, exist_ok=True)
@@ -33,6 +62,10 @@ def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
     client = tmp_path / "fake-ccfleet"
     assignment = (digest_assignment if digest_assignment is not None
                   else f"PROJECT_FILES_SHA256 = {HELPER_DIGEST!r}")
+    if live_helpers:
+        assignment += "\n" + (live_declarations if live_declarations is not None else
+                               f"LIVE_FILES_SHA256 = {LIVE_FILES_DIGEST!r}\n"
+                               f"LIVE_CLIENT_SHA256 = {LIVE_CLIENT_DIGEST!r}")
     client.write_text("#!/usr/bin/env python3\n" + assignment + "\n" + client_prelude + "\n" + """
 import os, sys
 with open(os.environ["TEST_LOG"], "a") as stream:
@@ -45,6 +78,12 @@ raise SystemExit(int(code))
     helper = tmp_path / "fake-project-files.py"
     if not helper_missing:
         helper.write_text(helper_source)
+    live_files = tmp_path / "fake-live-files.py"
+    live_client = tmp_path / "fake-live-client.py"
+    if live_missing != "live_files":
+        live_files.write_text(live_files_source)
+    if live_missing != "live_client":
+        live_client.write_text(live_client_source)
     old = dest / "ccfleet-connect"
     if old_client:
         old.write_text("""#!/bin/sh
@@ -62,8 +101,12 @@ exit "${OLD_RC:-0}"
     env.update(extra_env or {})
     if helper_url_override:
         env["CCFLEET_PROJECT_FILES_URL"] = helper.as_uri()
+        env["CCFLEET_LIVE_FILES_URL"] = live_files.as_uri()
+        env["CCFLEET_LIVE_CLIENT_URL"] = live_client.as_uri()
     else:
         env.pop("CCFLEET_PROJECT_FILES_URL", None)
+        env.pop("CCFLEET_LIVE_FILES_URL", None)
+        env.pop("CCFLEET_LIVE_CLIENT_URL", None)
     if python_setup:
         # Instrument installer subprocesses without replacing the installer logic.
         hooks = tmp_path / "python-hooks"
@@ -78,12 +121,16 @@ import os, pathlib, shutil, sys
 url = sys.argv[2]
 with open(os.environ["DOWNLOAD_LOG"], "a") as stream:
     stream.write(url + "\\n")
-source = "CLIENT_SOURCE" if url.endswith("/laptop/ccfleet") else "HELPER_SOURCE"
+source = ("CLIENT_SOURCE" if url.endswith("/laptop/ccfleet") else
+          "LIVE_FILES_SOURCE" if url.endswith(("/live_files.py", "/fake-live-files.py")) else
+          "LIVE_CLIENT_SOURCE" if url.endswith(("/live_client.py", "/fake-live-client.py")) else
+          "HELPER_SOURCE")
 shutil.copyfile(os.environ[source], sys.argv[4])
 """)
         curl.chmod(0o755)
         env.update(DOWNLOAD_LOG=str(tmp_path / "downloads.log"),
-                   CLIENT_SOURCE=str(client), HELPER_SOURCE=str(helper))
+                   CLIENT_SOURCE=str(client), HELPER_SOURCE=str(helper),
+                   LIVE_FILES_SOURCE=str(live_files), LIVE_CLIENT_SOURCE=str(live_client))
     result = subprocess.run(["bash", str(INSTALL), *args], env=env, capture_output=True,
                             text=True, timeout=30)
     calls = log.read_text().splitlines() if log.exists() else []
@@ -100,6 +147,109 @@ def test_plain_install_does_not_start_a_transition(tmp_path):
     assert hashlib.sha256(helper.read_bytes()).hexdigest() == HELPER_DIGEST
     assert helper.stat().st_mode & 0o777 == 0o644
     assert not list(dest.glob(".ccfleet*"))
+
+
+def test_live_release_installs_three_verified_versioned_helpers_without_executing(tmp_path):
+    result, calls, dest = run_install(tmp_path, live_helpers=True)
+    assert result.returncode == 0, result.stderr
+    assert calls == []
+    for name, digest, source in (
+        ("project-files", HELPER_DIGEST, HELPER_SOURCE),
+        ("live-files", LIVE_FILES_DIGEST, LIVE_FILES_SOURCE),
+        ("live-client", LIVE_CLIENT_DIGEST, LIVE_CLIENT_SOURCE),
+    ):
+        installed = dest / f"ccfleet-{name}-{digest}.py"
+        assert installed.read_text() == source
+        assert hashlib.sha256(installed.read_bytes()).hexdigest() == digest
+        assert installed.stat().st_mode & 0o777 == 0o644
+    assert not list(dest.glob(".ccfleet*"))
+
+
+@pytest.mark.parametrize("helper", ["live_files", "live_client"])
+@pytest.mark.parametrize("failure", ["download", "tampered", "syntax"])
+def test_all_live_helpers_must_validate_before_any_install_or_client_replacement(tmp_path,
+                                                                                 helper, failure):
+    options = {"live_missing": helper} if failure == "download" else {
+        helper + "_source": "def invalid(:\n" if failure == "syntax" else "# tampered\n"}
+    if failure == "syntax":
+        damaged_digest = hashlib.sha256(options[helper + "_source"].encode()).hexdigest()
+        files = damaged_digest if helper == "live_files" else LIVE_FILES_DIGEST
+        client = damaged_digest if helper == "live_client" else LIVE_CLIENT_DIGEST
+        options["live_declarations"] = (f"LIVE_FILES_SHA256 = {files!r}\n"
+                                        f"LIVE_CLIENT_SHA256 = {client!r}")
+    result, calls, dest = run_install(tmp_path, "--setup", live_helpers=True,
+                                      existing_client="old working client\n", **options)
+    assert result.returncode != 0
+    assert calls == []
+    assert (dest / "ccfleet").read_text() == "old working client\n"
+    assert not list(dest.glob("ccfleet-*.py"))
+    assert not list(dest.glob(".ccfleet*"))
+    assert not (tmp_path / "home/.zshrc").exists()
+
+
+@pytest.mark.parametrize("declarations", [
+    f"LIVE_FILES_SHA256 = {LIVE_FILES_DIGEST!r}",
+    f"LIVE_CLIENT_SHA256 = {LIVE_CLIENT_DIGEST!r}",
+    f"LIVE_FILES_SHA256 = '0' * 64\nLIVE_CLIENT_SHA256 = {LIVE_CLIENT_DIGEST!r}",
+    f"LIVE_FILES_SHA256: str = {LIVE_FILES_DIGEST!r}\n"
+    f"LIVE_CLIENT_SHA256 = {LIVE_CLIENT_DIGEST!r}",
+    f"LIVE_FILES_SHA256 = {LIVE_FILES_DIGEST!r}\nLIVE_FILES_SHA256 = {LIVE_FILES_DIGEST!r}\n"
+    f"LIVE_CLIENT_SHA256 = {LIVE_CLIENT_DIGEST!r}",
+    f"LIVE_FILES_SHA256 = {LIVE_FILES_DIGEST!r}\nLIVE_CLIENT_SHA256 = 'bad'",
+])
+def test_incomplete_or_ambiguous_live_digests_are_rejected(tmp_path, declarations):
+    result, calls, dest = run_install(tmp_path, live_helpers=True,
+                                      live_declarations=declarations,
+                                      existing_client="old working client\n")
+    assert result.returncode != 0
+    assert calls == []
+    assert "LIVE_" in result.stderr
+    assert (dest / "ccfleet").read_text() == "old working client\n"
+    assert not list(dest.glob("ccfleet-*.py"))
+
+
+def test_live_helper_validation_never_executes_downloaded_source(tmp_path):
+    marker = tmp_path / "must-not-execute"
+    source = f"open({str(marker)!r}, 'w').write('unsafe execution')\n"
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    result, calls, _ = run_install(
+        tmp_path, live_helpers=True, client_prelude=source,
+        live_declarations=f"LIVE_FILES_SHA256 = {digest!r}\nLIVE_CLIENT_SHA256 = {digest!r}",
+        live_files_source=source, live_client_source=source)
+    assert result.returncode == 0, result.stderr
+    assert calls == []
+    assert not marker.exists()
+
+
+def test_live_helper_urls_follow_source_ref_and_explicit_overrides(tmp_path):
+    prefix = "https://raw.githubusercontent.com/cdcupt/ccfleet/releases/live"
+    result, _, _ = run_install(tmp_path, live_helpers=True,
+                               download_url=prefix + "/laptop/ccfleet", helper_url_override=False)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "downloads.log").read_text().splitlines() == [
+        prefix + "/laptop/ccfleet", prefix + "/ccfleet_agent/project_files.py",
+        prefix + "/ccfleet_agent/live_files.py", prefix + "/ccfleet_agent/live_client.py",
+    ]
+    # The same digest-pinned installation can use local helper override URLs.
+    (tmp_path / "downloads.log").unlink()
+    result, _, _ = run_install(tmp_path, live_helpers=True,
+                               download_url=prefix + "/laptop/ccfleet")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "downloads.log").read_text().splitlines()[1:] == [
+        (tmp_path / "fake-project-files.py").as_uri(),
+        (tmp_path / "fake-live-files.py").as_uri(),
+        (tmp_path / "fake-live-client.py").as_uri(),
+    ]
+
+
+def test_live_release_keeps_prior_helper_versions(tmp_path):
+    dest = tmp_path / "home/.local/bin"
+    dest.mkdir(parents=True)
+    previous = dest / ("ccfleet-live-files-" + "a" * 64 + ".py")
+    previous.write_text("# old helper kept for old client\n")
+    result, _, _ = run_install(tmp_path, live_helpers=True)
+    assert result.returncode == 0, result.stderr
+    assert previous.read_text() == "# old helper kept for old client\n"
 
 
 @pytest.mark.parametrize("helper_missing", [False, True])

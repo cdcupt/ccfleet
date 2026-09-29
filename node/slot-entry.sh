@@ -12,6 +12,32 @@ if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-relay-v1 ]; then
   exit 2
 fi
 
+if [[ "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-live-v1\ * \
+   || "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-live-status-v1\ * \
+   || "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-live-stop-v1\ * ]]; then
+  [ ! -t 0 ] && [ ! -t 1 ] \
+    || { printf 'live filesystem transport does not accept a terminal\n' >&2; exit 2; }
+  [[ "$SSH_ORIGINAL_COMMAND" != *$'\n'* && "$SSH_ORIGINAL_COMMAND" != *$'\r'* ]] \
+    || { printf 'invalid live workspace request\n' >&2; exit 2; }
+  read -r PROTOCOL PROJECT INSTANCE EXTRA <<< "$SSH_ORIGINAL_COMMAND"
+  [[ "$PROJECT" =~ ^[0-9a-f]{32}$ ]] && [ -z "${EXTRA:-}" ] \
+    || { printf 'invalid live workspace request\n' >&2; exit 2; }
+  case "$PROTOCOL" in
+    ccfleet-live-v1)
+      [[ "$INSTANCE" =~ ^[0-9a-f]{32}$ ]] \
+        || { printf 'invalid live connector instance\n' >&2; exit 2; }
+      exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/live_access.py" \
+        link "$PROJECT" "$INSTANCE" ;;
+    ccfleet-live-status-v1|ccfleet-live-stop-v1)
+      [ -z "${INSTANCE:-}" ] \
+        || { printf 'invalid live workspace request\n' >&2; exit 2; }
+      ACTION=status
+      [ "$PROTOCOL" != ccfleet-live-stop-v1 ] || ACTION=stop
+      exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/live_access.py" \
+        "$ACTION" "$PROJECT" ;;
+  esac
+fi
+
 # Fixed, bounded file protocol; its module separately enforces the operator
 # gate, bound account and workspace boundary. No client-selected commands.
 if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-project-v1 ]; then
@@ -25,6 +51,16 @@ fi
 if [ ! -t 0 ] || [ ! -t 1 ]; then
   printf 'ccfleet needs an interactive terminal\n' >&2
   exit 2
+fi
+
+if [[ "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-live-session-v1\ * ]]; then
+  [[ "$SSH_ORIGINAL_COMMAND" != *$'\n'* && "$SSH_ORIGINAL_COMMAND" != *$'\r'* ]] \
+    || { printf 'invalid live session request\n' >&2; exit 2; }
+  read -r PROTOCOL PROJECT ACTION SESSION MODE MODEL EFFORT EXTRA <<< "$SSH_ORIGINAL_COMMAND"
+  [ -z "${EXTRA:-}" ] && [ -n "${EFFORT:-}" ] \
+    || { printf 'invalid live session request\n' >&2; exit 2; }
+  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/live_access.py" \
+    session "$PROJECT" "$ACTION" "$SESSION" "$MODE" "$MODEL" "$EFFORT"
 fi
 
 if [[ "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-project-session-v1\ * ]]; then

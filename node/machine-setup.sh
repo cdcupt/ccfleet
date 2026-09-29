@@ -146,8 +146,8 @@ apt-get update -q >/dev/null
 # sudo and adduser: slot-add.sh creates each slot with adduser and drops into it
 # with sudo -u. libpam-systemd: without it no slot gets its own systemd manager,
 # and its work session and Remote Control have nowhere to run.
-apt-get install -y -q python3 tmux curl sudo adduser ca-certificates libpam-systemd git gh rsync >/dev/null
-note "installed: python3, tmux, curl, sudo, adduser, libpam-systemd, git, gh, rsync"
+apt-get install -y -q python3 tmux curl sudo adduser ca-certificates libpam-systemd git gh rsync sshfs fuse3 >/dev/null
+note "installed: python3, tmux, curl, sudo, adduser, libpam-systemd, git, gh, rsync, sshfs, fuse3"
 
 step "2/6  the agent and the slot scripts"
 mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
@@ -157,6 +157,7 @@ fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
 fetch ccfleet_agent/local_relay.py "$LIB_DIR/ccfleet_agent/local_relay.py" 644
 fetch ccfleet_agent/project_access.py "$LIB_DIR/ccfleet_agent/project_access.py" 644
 fetch ccfleet_agent/project_files.py "$LIB_DIR/ccfleet_agent/project_files.py" 644
+fetch ccfleet_agent/live_access.py "$LIB_DIR/ccfleet_agent/live_access.py" 644
 fetch node/slot-add.sh          "$LIB_DIR/slot-add.sh" 755
 fetch node/slot-remove.sh       "$LIB_DIR/slot-remove.sh" 755
 fetch node/slot-entry.sh        "$LIB_DIR/slot-entry.sh" 755

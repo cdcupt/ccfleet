@@ -52,7 +52,7 @@ def paired(client, tmp_path, monkeypatch):
         return {"version": 1, "ok": True,
                 **access.handle(request, slot, policy=lambda: None)}
 
-    scope = client["cmd_local"].__globals__
+    scope = client["cmd_snapshot"].__globals__
     monkeypatch.setitem(scope, "project_rpc", rpc)
     calls = []
     monkeypatch.setattr(subprocess, "call", lambda cmd, **kw: calls.append((cmd, kw)) or 0)
@@ -61,7 +61,7 @@ def paired(client, tmp_path, monkeypatch):
 
 
 def launch(client, project, *flags):
-    return client["main"](["local", "--project", str(project), *flags])
+    return client["main"](["snapshot", "--project", str(project), *flags])
 
 
 def operation(client, project, action, *flags):
@@ -248,7 +248,7 @@ def test_reconnect_reattaches_same_project_and_never_replays_new(client, paired,
     monkeypatch.setattr(subprocess, "call", run)
     monkeypatch.setattr(client["time"], "monotonic", lambda: clock["now"])
     monkeypatch.setattr(client["time"], "sleep", lambda _: None)
-    args = client["parser"]().parse_args(["local", "--new", "--name", "work"])
+    args = client["parser"]().parse_args(["snapshot", "--new", "--name", "work", "--mode", "manual"])
     assert client["attach_project"](device, "a" * 32, "work", args) == 0
     assert calls[0][0][-5:] == ["new", "work", "manual", "opus", "max"]
     assert calls[1][0][-5:] == ["open", "work", "manual", "opus", "max"]

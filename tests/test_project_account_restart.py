@@ -14,6 +14,7 @@ from . import test_agent_one_account as account_tests
 from .test_agent_one_account import NOW, SlotFake, state_file, walk_to_code_sent
 
 PROJECT = "p_" + "a" * 32 + "_work"
+LIVE = "l_" + "b" * 32 + "_work"
 slot_home = account_tests.slot_home
 
 
@@ -55,14 +56,15 @@ def test_refresh_closes_default_projects_and_named_claude_but_preserves_shells(t
         f"research\t{native} --permission-mode plan\tclaude",
         f"research\t{native} --model sonnet\tclaude",  # multiple panes, kill once
         f"{PROJECT}\t/usr/bin/python3 -I /usr/local/lib/ccfleet/project_access.py\tclaude",
+        f"{LIVE}\t/usr/bin/python3 -I /usr/local/lib/ccfleet/live_access.py\tclaude",
         "shell\t/bin/bash\tbash",
         f"echo-probe\techo {shlex.quote(native)}\techo",
         "interactive\t/bin/bash\tclaude",  # not launched by this platform
         "ccfleet-backup\tsleep 9999\tsleep",
     ]))
     assert agent.restart_slot_terminal(fake)
-    assert set(fake.killed()) == {"=ccfleet", "=research", "=" + PROJECT}
-    assert len(fake.killed()) == 3
+    assert set(fake.killed()) == {"=ccfleet", "=research", "=" + PROJECT, "=" + LIVE}
+    assert len(fake.killed()) == 4
     assert fake.restarted()
     assert all(args[:2] != ["tmux", "-L"] for args in fake.calls)
 
@@ -133,6 +135,22 @@ def test_invalid_project_and_session_names_cannot_be_tmux_targets(tmp_path, monk
 
 def test_failed_service_restart_remains_owed():
     assert not agent.restart_slot_terminal(RestartRunner(restart_code=1))
+
+
+@pytest.mark.parametrize("code", [0, 2])
+def test_account_refresh_stops_live_mounts_before_finishing(tmp_path, monkeypatch, code):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config/ccfleet/live").mkdir(parents=True)
+    class Runner(RestartRunner):
+        def __call__(self, argv, **kwargs):
+            if argv[-1] == "_stop-all":
+                self.calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, code, stdout="", stderr="")
+            return super().__call__(argv, **kwargs)
+    fake = Runner()
+    assert agent.restart_slot_terminal(fake) is (code == 0)
+    assert fake.calls[0][-1] == "_stop-all"
+    assert fake.restarted() is (code == 0)
 
 
 @pytest.mark.parametrize("failure", ["list", "kill"])

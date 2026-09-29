@@ -64,6 +64,9 @@ def _never_the_real_system(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("CCFLEET_SUDOERS_DIR", str(sandbox / "sudoers.d"))
     monkeypatch.setenv("CCFLEET_SLICE_ROOT", str(sandbox / "systemd"))
     monkeypatch.setenv("CCFLEET_ETC_DIR", str(sandbox / "ccfleet"))
+    mountinfo = sandbox / "mountinfo"
+    mountinfo.write_text("")
+    monkeypatch.setenv("CCFLEET_MOUNTINFO", str(mountinfo))
 
 
 def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,

@@ -27,9 +27,9 @@ Anthropic
 
 The broker authenticates the CC Fleet device token, but SSH remains encrypted
 between the customer's computer and the slot. The broker cannot read the
-terminal or project-transfer stream. Claude Code and its tools run on the slot,
-and model connections originate there. Projects can be created there or copied
-there through explicit project sharing. Anthropic receives relevant Claude
+terminal or filesystem stream. Claude Code and its tools run on the slot,
+and model connections originate there. Projects can live there or be accessed
+through an explicitly connected laptop folder. Anthropic receives relevant Claude
 traffic from that slot, under the single Claude account signed in there.
 
 ## Customer flow
@@ -56,7 +56,7 @@ traffic from that slot, under the single Claude account signed in there.
    ccfleet local
    ```
 
-Review the selected files and confirm the first share. No local Claude
+Confirm the selected folder's live read/write trust prompt. No local Claude
 installation is needed. Plain `ccfleet` opens the ordinary remote workspace
 without sharing a local project.
 
@@ -102,43 +102,66 @@ Supported modes are `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
 and `/effort` change the running session without losing its conversation.
 `restart` deliberately ends the current Claude process before replacing it.
 
-## Selected projects, slot-only execution
+## Live folders, slot-only execution
 
-The operator-enabled `ccfleet local` project connector explicitly shares a
-selected laptop project with the slot, then runs the original Claude Code and
-all agent tools **on the slot**. No local Claude installation is required. This
-replaces the retired local-agent inference-relay preview; it is not a model API
-proxy. Project access is enabled for currently assigned hosted slots; newly
-created or reassigned slots still need operator activation. Installing the client
-or running its readiness check does not activate a slot.
+`ccfleet local` connects a selected laptop folder as a live filesystem on the
+slot, then runs original Claude Code and all agent tools **on the slot**. Reads
+happen on demand; writes and deletions affect the laptop immediately. No local
+Claude installation, whole-project upload, or manual push/pull is required.
+Filename and metadata changes may take about one second to appear on the slot;
+file-content reads bypass that cache and writes remain write-through.
+This is not a model API proxy. The node must support live mounts and have
+operator-enabled access; installing the client does not activate a slot.
 
 ```bash
 cd ~/code/my-project
 ccfleet local --check
-ccfleet project status
-ccfleet local --new --name work
+ccfleet local
 ```
 
-Review and confirm the first-share file list. Resume the remote project session
-with `ccfleet local --continue` or `ccfleet local --resume`. Use
-`ccfleet project diff` and `ccfleet project pull` to review and apply slot changes
-with backups and conflict checks. After editing locally, use
-`ccfleet project push`; all active sessions for that project must first finish
-with `/exit`. There is no background synchronization or laptop shell access.
+The initial folder trust prompt grants live read/write access for that device and
+folder; `--yes` explicitly grants it in scripts. New live sessions default to
+`bypassPermissions`, Opus and max effort: tools can change or delete connected
+files without individual permission prompts. Choose `--mode manual` or
+`--mode plan` for a new session if desired. Reattaching preserves its settings.
+
+Home is supported through the same trust flow: `cd ~` then `ccfleet local`.
+There are no snapshot-style file-count, per-file-size or total-size product caps,
+and no Git-ignore or broad hidden-file filtering. Home access can therefore expose
+settings, `.ssh`, `.claude`, `.env` files and credentials if read. Live writes can
+also alter files later executed locally. CC Fleet's private configuration, keys,
+host-key pins and active client/helper files remain protected, as does the active
+Python runtime. Root confinement, OS permissions and bounded protocol resources
+still apply.
+
+Closing the terminal leaves the background folder connector and remote tmux
+session active. Resume with `ccfleet local --continue` or `ccfleet local --resume`.
+Run `ccfleet local --disconnect` to stop that folder connection and its remote
+project sessions. If the laptop sleeps or goes offline, filesystem operations
+wait; the slot cannot keep using unavailable local files as a stored copy.
+If a connector instance is lost, `ccfleet local --reset-link` explicitly resets
+the link after a warning; interrupted writes must not be assumed successful.
+
+The connector offers file operations, not a laptop shell. Tools execute on Linux,
+so sharing Mac files does not provide Xcode, macOS-only commands or local services.
+Keep backups: this is a live filesystem, not reviewed snapshot delivery or an
+operating-system sandbox. The old `ccfleet project` commands remain only as
+advanced legacy snapshot/recovery operations, with their previous limits and
+reviewed-pull behavior; they are not steps in the live workflow.
 
 Already-paired computers use the same `--setup` command without another pairing.
 Pairing, remote files and slot sign-in stay in place. Old local-agent conversation
 history remains local and is not imported into the slot.
 
-Only selected relative filenames, bytes, hashes and executable flags are shared,
-not automatically collected laptop environment or identity fields. Limits and
-credential-name exclusions reduce accidental sharing but cannot detect all
-secrets inside ordinary files. BWH sees connection IP/transport metadata; slot
-root can inspect shared data; relevant project content reaches Anthropic. This
-is not an anonymity guarantee or laptop OS sandbox.
+The connector does not automatically collect laptop hostname, environment,
+timezone, geolocation or host fingerprint. Selected names, contents, link targets
+and filesystem metadata can still identify users. BWH sees connection IP and
+transport metadata; slot root can inspect and change connected data; relevant
+content reaches Anthropic. This is not an anonymity guarantee. Disconnecting
+does not erase information already read or undo writes.
 
-See [project workspaces and migration](docs/project-workspaces.md) for selection,
-limits, session controls, multiple computers, recovery and rollout verification.
+See [live folders and migration](docs/project-workspaces.md) for folder trust,
+session controls, disconnect/reconnect behavior, legacy recovery and verification.
 The website guide has a dedicated `/docs/guide#migration` section.
 
 ## What runs where
@@ -153,9 +176,9 @@ The website guide has a dedicated `/docs/guide#migration` section.
 - `laptop/ccfleet` is the local client. It wraps OpenSSH behind the WebSocket
   broker, pins the slot's SSH host key and reconnects after ordinary network
   failures.
-- `ccfleet_agent/project_files.py` defines the bounded snapshot format and safe
+- `ccfleet_agent/project_files.py` defines the legacy bounded snapshot format and safe
   file operations. The installer verifies a versioned copy beside the client.
-- `ccfleet_agent/project_access.py` serves project snapshots and slot-native
+- `ccfleet_agent/project_access.py` serves legacy project snapshots and slot-native
   project sessions behind a separate operator gate.
 
 The server receives operational facts such as versions, login state, account
