@@ -152,8 +152,9 @@ note "installed: python3, tmux, curl, sudo, adduser, libpam-systemd, git, gh, rs
 step "2/6  the agent and the slot scripts"
 mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 fetch ccfleet_agent/__init__.py "$LIB_DIR/ccfleet_agent/__init__.py" 644
-fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
 fetch ccfleet_agent/inference_policy.py "$LIB_DIR/ccfleet_agent/inference_policy.py" 644
+fetch ccfleet_agent/relay_metrics.py "$LIB_DIR/ccfleet_agent/relay_metrics.py" 644
+fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
 fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
 fetch ccfleet_agent/local_relay.py "$LIB_DIR/ccfleet_agent/local_relay.py" 644
 fetch ccfleet_agent/project_access.py "$LIB_DIR/ccfleet_agent/project_access.py" 644

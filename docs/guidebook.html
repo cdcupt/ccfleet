@@ -113,6 +113,11 @@ use <code>/admin</code>.</p>
 <p><code>CCFLEET_BYPASS_BY_DEFAULT</code> stays off for hosted customer slots. Turning it on
 adds <code>--bypass-permissions</code> to legacy owner-node install instructions; because those
 owners also have passwordless sudo, use it only on a fleet you personally control.</p>
+<p><code>CCFLEET_BROKER_ONLY</code> defaults to false. Enable it only for a secondary
+broker sharing the primary database and secrets: it serves health and authenticated CLI
+transport, status and revocation, without account/operator pages or an independent monitor.
+See the broker Compose and Caddy examples in <code>deploy/</code>; a same-host replica
+does not protect against loss of the physical host.</p>
 
 <h3>2. Register one shared machine and slot</h3>
 <pre><code>ccfleetd node add pool-1 --owner ops --region us-west

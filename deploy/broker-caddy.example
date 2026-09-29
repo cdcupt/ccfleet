@@ -1,0 +1,22 @@
+# Add this matcher/handler to the existing CC Fleet host, before its normal proxy.
+# Validate and reload only the owning tenant's configuration under the edge runbook.
+@ccfleet_transport path /api/cli/connect /api/cli/status /api/cli/revoke
+handle @ccfleet_transport {
+    reverse_proxy ccfleet:8110 ccfleet-broker:8110 {
+        lb_policy first
+        health_uri /healthz
+        health_interval 10s
+        health_timeout 2s
+        fail_duration 10s
+        max_fails 1
+        lb_try_duration 2s
+        lb_retry_match {
+            method GET
+        }
+        # Existing streams retain authorization checks on their original broker.
+        stream_close_delay 1h
+    }
+}
+handle {
+    reverse_proxy ccfleet:8110
+}

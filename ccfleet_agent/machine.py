@@ -115,7 +115,7 @@ MAX_LOGIN_FIELD = 512
 EXIT_GRACE_S = 5.0
 # Only these reach the server from a slot's own report. Everything else in the
 # entry — presence, provisioning, wipes — is root's own knowledge.
-SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "upgrade")
+SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "upgrade", "relay")
 # The states in which a slot's Linux user exists and belongs to somebody: the
 # only ones whose Claude Code follows the machine's pin. A claiming slot is
 # still being made, and a releasing one is about to be deleted.

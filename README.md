@@ -49,7 +49,7 @@ native renewal, identity minimization, verified TLS, and per-device transport.
 
    ```bash
    cd ~/code/my-project
-   ccfleet local
+   ccfleet start
    ```
 
 Setup checks readiness without uploading project files or making a model request.
@@ -62,6 +62,10 @@ Optional `--name "Personal Mac"` labels a new device; `--slot SLOT` chooses an
 existing pairing. Install-only (omit `--setup`), manual `ccfleet login`, and
 legacy `--migrate` remain compatibility options. No SSH command or slot Claude
 credential needs to be entered locally.
+
+`ccfleet start` offers local new/continue/resume choices; `ccfleet local` remains
+the direct launch command. Bare `ccfleet` has not changed meaning: it still opens
+the remote terminal. `ccfleet remote` is the explicit remote alias.
 
 ## Native local files, sessions and settings
 
@@ -80,6 +84,10 @@ ccfleet local --resume work
 ccfleet local --continue
 ccfleet local --resume work --fork-session
 ccfleet local --print "Summarize this project"
+ccfleet sessions
+ccfleet preferences set --model opus --effort high --mode plan
+ccfleet preferences show
+ccfleet preferences clear
 ```
 
 Running plain `ccfleet local` again starts a fresh conversation in the current
@@ -94,9 +102,55 @@ Additional supported native arguments go after `--`, subject to protected
 routing/authentication settings. Quit normally with `/exit`; resume saved local
 history later. CC Fleet does not silently replay interrupted inference.
 Interactive foreground sessions, `--print`, `--resume`, and multiple terminal
-sessions are supported. Native `--bg` / `--background` is currently rejected:
-that agent would outlive this command's launch-scoped relay. Use another normal
-terminal for parallel work instead.
+sessions are supported. `ccfleet sessions` opens native history; project preferences
+affect new local sessions, with explicit flags taking precedence. They do not
+rewrite existing conversations or synchronize history between computers.
+
+## Diagnostics, signed updates and background work
+
+```bash
+ccfleet status --json
+ccfleet doctor --privacy --json --export ./ccfleet-support.json
+ccfleet version --json
+ccfleet update
+ccfleet update --rollback
+```
+
+Diagnostics make no model request and do not scan a project. Export creates only
+the requested new private local file; it is not uploaded and excludes prompts,
+file contents, paths, tokens and account emails. Reported account health separates
+ready, renewal pending, sign-in required, account maintenance and stale observations.
+A heartbeat does not prove that Anthropic will accept the next model request.
+
+The updater authenticates its signed release channel using the pinned Ed25519 key,
+then checks the immutable manifest and every digest-pinned helper before atomic
+activation. Failed verification leaves the current client in place. Rollback
+preserves pairing and native history; restored legacy bootstraps are not labelled
+signature-verified. `version --json` distinguishes verified and bootstrap installs.
+This updates CC Fleet, not the original Claude executable.
+
+```bash
+ccfleet jobs start --prompt "Review this project and summarize findings"
+ccfleet jobs list
+ccfleet jobs status JOB_ID
+ccfleet jobs logs JOB_ID
+ccfleet jobs stop JOB_ID
+# Equivalent supervised launch:
+ccfleet local --background --print "Summarize this project"
+```
+
+These are managed **local print-mode jobs**, not native detached `--bg`, remote
+agents or interactive attachable sessions. The supervisor owns the bridge after
+the starting terminal closes; the computer must stay running and connected. Use
+an explicit `--resume NAME_OR_ID` or `--continue` for existing context. Passing
+native `--bg` / `--background` after `--` remains rejected.
+
+Jobs default to one hour (`--timeout`, maximum 24 hours) and four concurrent jobs
+(`--max-jobs`, maximum 16). Private stdout/stderr logs are each bounded to 4 MiB;
+they may contain sensitive content and are displayed only on request. Stop,
+timeout, revocation and supervisor loss close the owned process group/bridge;
+uncertain cleanup is reported as such. Deliberately detached tool processes are
+not sandbox-contained. Jobs never automatically restart or replay inference.
 
 Native settings/history, including an existing `CLAUDE_CONFIG_DIR`, are preserved
 by default. `--legacy-history` selects the earlier per-slot relay-preview profile

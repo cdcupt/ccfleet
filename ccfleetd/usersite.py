@@ -21,7 +21,17 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, cli_access, names, oauth, payments, plans, resets, status
+from . import (
+    claude_versions,
+    cli_access,
+    client_status,
+    names,
+    oauth,
+    payments,
+    plans,
+    resets,
+    status,
+)
 from . import slots as slotstates
 from .config import Config
 from .credential_health import (
@@ -33,6 +43,7 @@ from .credential_health import (
     renewal_report,
 )
 from .desired import is_login_url
+from .heartbeat import relay_report
 from .monitor import LOGIN_MAX_AGE_S
 from .render import (
     CONSOLE_PATH,
@@ -681,7 +692,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "with fixed reason codes (never tokens or raw native errors), and how "
         "many tokens were used each hour over the last week. The token counts are worked "
         "out on the machine, from Claude Code&#x27;s own records in your slot; only the "
-        "numbers leave it. We keep these reports for "
+        "numbers leave it. Separately, relay measurements report request counts, completed "
+        "transfers and fixed error categories over seven UTC calendar days, together with "
+        "connection, first-body-byte and total-request timing sample counts, means and maxima, "
+        "the observation time and last completed-transfer time. These metrics contain no "
+        "model names, request IDs, headers, bodies, paths, email addresses or credentials. "
+        "The seven-day local aggregate window is distinct from how long heartbeat snapshots "
+        "are retained here. We keep these reports for "
         f"{_span(cfg.retention_days * 86400)}.</li></ul>"
         "<p>Your slot never reports your prompts, your conversations, your files, your Claude "
         "credential, or the name on your Claude account.</p></div>"
@@ -719,12 +736,20 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         'administrators have root and can inspect or alter relayed requests and responses; '
         'altered responses may influence local tool actions. Native permissions and trust '
         'in the slot host remain important.</p>'
-        '<p>The broker can see your connection IP and timing, and SSH exposes transport '
-        'properties such as client version and terminal dimensions. This is not anonymity. '
+        '<p>The broker can see your connection IP and timing, and SSH exposes client version. '
+        'Remote-terminal sessions also send terminal dimensions. This is not anonymity. '
         'Native local history/settings are kept in their existing location. '
         '<code>--legacy-history</code> selects an earlier per-slot preview profile without '
         'copying or deleting it. Disconnecting or revoking a device does not undo writes '
         'or erase content already received or saved in native history.</p>'
+        '<p>Project preferences are private local settings indexed by a directory hash. '
+        'Managed background jobs keep their prompts, options, project paths and bounded '
+        'stdout/stderr logs in private files on your computer; those files can contain '
+        'sensitive content and are retained until deliberately removed. Job listings '
+        'do not display prompt or path contents. Doctor/status exports contain only '
+        'allowlisted health facts and fixed recovery guidance, not job logs, credentials '
+        'or project contents. An export is saved only to the local file you request; '
+        'it is never automatically uploaded to the operator.</p>'
         '<p>Earlier live-folder grants may remain active until explicit cleanup. Setup '
         'asks before stopping their connectors and associated remote live-folder sessions; '
         'approval cancels pending work, but preserves files/history and ordinary remote '
@@ -902,6 +927,8 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         parts.append(machine_line)
     if detail:
         parts.append(f"<p>{escape(detail)}</p>")
+    if not own and slot["state"] in CAN_SIGN_IN:
+        parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
     if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):
         # The machine is working on it. The sentence above says what; this
         # says it is still moving, which a still page otherwise cannot.
@@ -912,6 +939,9 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
                               now), fresh=fresh_observation(report.get("credentials"), heard,
                               now, cfg.heartbeat_max_age_s, listening)))
         if not own:
+            since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
+            parts.append(_relay_usage(report.get("relay"), heard, now,
+                                      cfg.heartbeat_max_age_s, since=since))
             parts.append(_ways_to_use(report))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
@@ -932,6 +962,87 @@ def _slot_card(slot: Mapping[str, Any], node: Mapping[str, Any],
         parts.append(_release(slot, csrf))
     parts.append("</div></div>")
     return "".join(parts)
+
+
+def _account_health(slot: Mapping[str, Any], report: Mapping[str, Any],
+                    login: Mapping[str, Any], heard: Any, cfg: Config, now: float,
+                    listening: Optional[float] = None) -> str:
+    """Only fixed health codes become copy; never echo a diagnostic payload."""
+    observation = client_status.health(slot, report, login, heard=heard, now=now,
+                                        max_age=cfg.heartbeat_max_age_s,
+                                        listening_since=listening)
+    words = {
+        "ready": ("ok", "Reported ready", "The latest slot report shows current credentials."),
+        "renewal_pending": ("warn", "Renewal pending",
+                            "Native Claude maintenance is checking the sign-in. If access does "
+                            "not recover, use the sign-in controls below."),
+        "sign_in_required": ("warn", "Sign-in required",
+                             "Use the Claude sign-in controls below. Your computer pairing "
+                             "and saved local conversations are kept."),
+        "switching": ("busy", "Account maintenance",
+                      "Wait for the current sign-in or account change to finish before retrying."),
+        "degraded": ("warn", "Readiness unverified",
+                     "Fresh account readiness is not established. Run ccfleet doctor or "
+                     "contact your operator if this persists."),
+    }
+    code = observation.get("health")
+    if not isinstance(code, str) or code not in words \
+            or (code == "ready" and slot.get("state") != slotstates.ACTIVE):
+        code = "degraded"
+    tone, title, detail = words[code]
+    return (f'<div class="account-health" role="status" data-health="{code}" '
+            f'aria-label="Reported account health"><p><span class="pill {tone}">{title}</span> '
+            f'{detail}</p><p class="small muted">A heartbeat observation does not prove '
+            'that Anthropic will accept a model request. Use <code>ccfleet status --json</code> '
+            'or <code>ccfleet doctor --privacy</code> for connection checks.</p></div>')
+
+
+def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: float = 0) -> str:
+    """Separate transport observations from account quota and native transcripts."""
+    report = relay_report(raw, now)
+    if report is None or report["observed_at"] < since:
+        return ""
+    observed = report["observed_at"]
+    current = (type(heard) in (int, float) and now - max_age <= heard <= now + 60
+               and observed >= now - max_age)
+    freshness = "Fresh report" if current else "Stale report — not current performance"
+    errors = report["requests"] - report["success"]
+    success = report["last_success_at"]
+    last_transfer = ("Last completed transfer " + escape(_age(now, min(success, now))) + " ago."
+                     if success is not None else "No completed transfer observed in this window.")
+    lines = [
+        '<div class="relay-usage" aria-label="Inference relay measurements">'
+        '<h3>Relay measurements</h3>',
+        f'<p class="small muted">{freshness}; observed '
+        f'{escape(_age(now, min(observed, now)))} ago. Seven UTC calendar days.</p>',
+        f'<p><strong>{report["requests"]}</strong> requests observed · '
+        f'<strong>{report["success"]}</strong> completed transfers · '
+        f'<strong>{errors}</strong> other outcomes.</p>',
+        f'<p class="small muted">{last_transfer}</p>',
+        '<p class="small">Separate from the subscription quota bars and native transcript '
+        'token counts. A completed HTTP transfer does not prove model-task success or '
+        'future account readiness.</p><ul class="small">',
+    ]
+    for key, label in (("connect_ms", "Upstream connection"),
+                       ("first_byte_ms", "First upstream body byte"),
+                       ("total_ms", "Total relay request")):
+        value = report["latencies"][key]
+        samples = "sample" if value["count"] == 1 else "samples"
+        measured = (f'{value["mean"]:.1f} ms mean · {value["max"]:.1f} ms max · '
+                    f'{value["count"]} {samples}' if value["count"] else "No timing samples")
+        lines.append(f"<li>{label}: {measured}</li>")
+    lines.append('</ul><details class="small"><summary>Other outcome categories</summary><ul>')
+    for key, label in (("auth_errors", "Authentication errors"),
+                       ("permission_errors", "Permission errors"), ("rate_limits", "Rate limits"),
+                       ("upstream_errors", "Upstream errors"),
+                       ("connection_errors", "Connection errors"),
+                       ("cancelled", "Cancelled"), ("input_errors", "Input errors")):
+        lines.append(f"<li>{label}: {report[key]}</li>")
+    lines.append('</ul></details><p class="small muted">Timing is measured on the slot, '
+                 'not end-to-end from your computer. First-byte and total timing begin after '
+                 'the relay decodes a model-request envelope. First-byte samples require '
+                 'a forwarded upstream response body.</p></div>')
+    return "".join(lines)
 
 
 def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *,
@@ -1030,7 +1141,10 @@ def _ways_to_use(_report: Mapping[str, Any]) -> str:
         'model requests use this slot. Use <code>--continue</code> or '
         '<code>--resume</code> to reopen saved local conversations. Plain '
         '<code>ccfleet</code> remains the remote-terminal command, with remote files '
-        'and persistent tmux.</p></div></div>')
+        'and persistent tmux.</p><p><code>ccfleet start</code> offers a guided local '
+        'new/continue/resume menu; <code>ccfleet sessions</code> opens native history. '
+        '<a href="/docs/guide#client-tools">Diagnostics, preferences, updates and '
+        'background jobs</a> are in the guide.</p></div></div>')
 
 
 def _ended(login: Mapping[str, Any]) -> str:
@@ -1299,10 +1413,11 @@ def cli_pairing_page(slot: Mapping[str, Any], token: str,
         "use this code. To deliberately pair another slot, use <code>ccfleet login</code> "
         "and enter its code.</p></div>"
         "<div class=\"card\"><h2>3. Choose your project</h2>"
-        "<pre>cd /path/to/your-project\nccfleet local</pre>"
+        "<pre>cd /path/to/your-project\nccfleet start</pre>"
         "<p>Open a new terminal first so PATH changes take effect. Original Claude Code, "
         "files, tools, settings and history run locally; supported model requests use "
-        "your assigned slot. No upload, mount or push/pull step is needed.</p>"
+        "your assigned slot. Choose new, continue or resume in the menu, or run "
+        "<code>ccfleet local</code> directly. No upload, mount or push/pull step is needed.</p>"
         "<p class=\"muted\">Plain <code>ccfleet</code> still opens the ordinary remote "
         "workspace, without sharing a local folder. Its default session bypasses permission "
         "prompts, as do new local conversations. Choose <code>--mode manual</code> for prompts. "

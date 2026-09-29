@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,19 +27,20 @@ def test_real_installer_loads_all_pinned_release_helpers_without_pairing(tmp_pat
            "CCFLEET_PROJECT_FILES_URL": (ROOT / "ccfleet_agent/project_files.py").as_uri(),
            "CCFLEET_LIVE_FILES_URL": (ROOT / "ccfleet_agent/live_files.py").as_uri(),
            "CCFLEET_LIVE_CLIENT_URL": (ROOT / "ccfleet_agent/live_client.py").as_uri(),
-           "CCFLEET_INFERENCE_CLIENT_URL": (ROOT / "ccfleet_agent/inference_client.py").as_uri()}
+           "CCFLEET_INFERENCE_CLIENT_URL": (ROOT / "ccfleet_agent/inference_client.py").as_uri(),
+           "CCFLEET_CLIENT_EXPERIENCE_URL": (ROOT / "ccfleet_agent/client_experience.py").as_uri(),
+           "CCFLEET_LOCAL_JOBS_URL": (ROOT / "ccfleet_agent/local_jobs.py").as_uri(),
+           "CCFLEET_CLIENT_RELEASE_URL": (ROOT / "ccfleet_agent/client_release.py").as_uri()}
     result = subprocess.run(["bash", str(INSTALL)], env=env, capture_output=True,
                             text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     source = ("import runpy,sys; c=runpy.run_path(sys.argv[1]); "
-              "[c[name]() for name in ('project_files','live_files','live_client')]; "
-              "c['packaged_helper']('inference_client', c['INFERENCE_CLIENT_SHA256']) "
-              "if 'INFERENCE_CLIENT_SHA256' in c else None")
+              "[c[name]() for name in ('project_files','live_files','live_client',"
+              "'inference_client','client_experience','local_jobs','client_release')]")
     result = subprocess.run(["python3", "-I", "-c", source, str(destination / "ccfleet")],
                             env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
-    assert len(list(destination.glob("ccfleet-*.py"))) == (
-        4 if "INFERENCE_CLIENT_SHA256" in (ROOT / "laptop/ccfleet").read_text() else 3)
+    assert len(list(destination.glob("ccfleet-*.py"))) == 7
     assert not (home / ".config/ccfleet").exists()
 LIVE_FILES_SOURCE = '"""Synthetic live filesystem helper."""\nVALUE = 2\n'
 LIVE_CLIENT_SOURCE = '"""Synthetic live transport helper."""\nVALUE = 3\n'
@@ -133,11 +135,26 @@ exit "${OLD_RC:-0}"
         env.pop("CCFLEET_LIVE_CLIENT_URL", None)
         env.pop("CCFLEET_INFERENCE_CLIENT_URL", None)
     if python_setup:
-        # Instrument installer subprocesses without replacing the installer logic.
-        hooks = tmp_path / "python-hooks"
-        hooks.mkdir()
-        (hooks / "sitecustomize.py").write_text(python_setup)
-        env["PYTHONPATH"] = str(hooks)
+        # Isolated production Python intentionally ignores PYTHONPATH. Fault
+        # injection belongs in an explicit test interpreter, not sitecustomize.
+        interpreter = dest / "python3"
+        interpreter.write_text(f"""#!{sys.executable} -I
+import runpy, sys
+exec({python_setup!r}, globals())
+arguments = sys.argv[1:]
+if arguments[:1] == ['-I']:
+    arguments.pop(0)
+if arguments[:1] == ['-c']:
+    sys.argv = ['-c', *arguments[2:]]
+    exec(compile(arguments[1], '<test interpreter>', 'exec'), globals())
+elif arguments[:1] == ['-']:
+    sys.argv = arguments
+    exec(compile(sys.stdin.read(), '<test installer>', 'exec'), globals())
+else:
+    sys.argv = arguments
+    runpy.run_path(arguments[0], run_name='__main__')
+""")
+        interpreter.chmod(0o755)
     if download_url is not None or not native_claude:
         # Keep URL derivation tests offline, while exercising the real installer.
         vendor = tmp_path / "vendor-installer.sh"

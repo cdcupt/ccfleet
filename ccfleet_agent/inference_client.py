@@ -11,14 +11,18 @@ import contextlib
 import hmac
 import json
 import math
+import os
 import secrets
 import select
 import socket
+import stat
 import struct
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, BinaryIO, Optional
 
 VERSION = 2
@@ -441,6 +445,296 @@ class Bridge:
             self.server.shutdown()
             self.thread.join(timeout=2)
         self.server.server_close()
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, *_):
+        self.close()
+
+
+class TransportSession:
+    """Opt-in, foreground-owned SSH multiplexing for one captured device route.
+
+    This does not change Bridge or retry a request. The caller may choose a cold
+    connection only if start() fails before sending model traffic. Once started,
+    channels use a failing ProxyCommand so a dead master cannot silently fall
+    back to a fresh connection. No ControlPersist daemon or new process group is
+    created; a background-job guardian therefore still owns the entire job.
+
+    close() asks OpenSSH to exit gracefully, then bounds termination of the owned
+    Popen. OpenSSH owns cleanup of its ProxyCommand. If forcible termination was
+    needed, close() reports that proxy teardown was not confirmed. It never kills
+    a saved PID, a discovered descendant PID or the caller's process group.
+    """
+
+    # OpenSSH binds a temporary pathname with a 17-character suffix before
+    # publishing its control socket. Reserve that space on both macOS and Linux.
+    MAX_CONTROL_PATH = 80
+
+    def __init__(self, base_command: Command, environment: Environment,
+                 directory: Path, timeout: float = 15):
+        if (type(timeout) not in (int, float) or not math.isfinite(timeout)
+                or not 0 < timeout <= 30):
+            raise RelayError("invalid SSH session startup timeout")
+        self.base_command = base_command
+        self.environment = environment
+        self.directory = Path(directory)
+        self.timeout = timeout
+        self._guard = threading.RLock()
+        self._process: Optional[subprocess.Popen] = None
+        self._parent: Optional[int] = None
+        self._child: Optional[int] = None
+        self._name = "m" + secrets.token_hex(4)
+        self._socket_identity: Optional[tuple[int, int]] = None
+        self._directory_identity: Optional[tuple[int, int]] = None
+        self._base: list[str] = []
+        self._slave_base: list[str] = []
+        self._env: Optional[dict[str, str]] = None
+        self._started = False
+        self._closed = False
+        self._path = str(self.directory / self._name / "s")
+
+    @staticmethod
+    def _trusted(info: os.stat_result) -> bool:
+        return (stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                and not info.st_mode & 0o077)
+
+    def _open_directory(self) -> None:
+        if (not self.directory.is_absolute() or ".." in self.directory.parts
+                or any(char.isspace() or ord(char) < 32 or char in "%$\0"
+                       for char in str(self.directory))):
+            raise RelayError("SSH reuse needs an absolute private directory "
+                             "without special characters")
+        if len(os.fsencode(self._path)) > self.MAX_CONTROL_PATH:
+            raise RelayError("SSH reuse needs a shorter private configuration path; "
+                             "use cold transport")
+        flags = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open(self.directory.anchor, flags)
+        try:
+            for part in self.directory.parts[1:]:
+                child = os.open(part, flags, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            if not self._trusted(os.fstat(fd)):
+                raise RelayError("SSH reuse directory must be private and owned by this user")
+            self._parent, fd = fd, None
+            os.mkdir(self._name, 0o700, dir_fd=self._parent)
+            self._child = os.open(self._name, flags, dir_fd=self._parent)
+            info = os.fstat(self._child)
+            if not self._trusted(info):
+                raise RelayError("SSH reuse directory could not be created safely")
+            self._directory_identity = (info.st_dev, info.st_ino)
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def _capture_command(self) -> None:
+        base = self.base_command()
+        if (not isinstance(base, list) or len(base) < 3
+                or any(not isinstance(arg, str) or not arg or "\0" in arg
+                       or any(ord(char) < 32 or ord(char) == 127 for char in arg) for arg in base)
+                or base[-1].startswith("-") or any(char.isspace() for char in base[-1])):
+            raise RelayError("invalid captured SSH device command")
+        # Only the executable's existing noninteractive, config-free shape is
+        # accepted. Reject ambient multiplexing, ProxyJump and daemon switches.
+        slave = [base[0]]
+        proxy_count = 0
+        no_config = no_tty = False
+        index = 1
+        while index < len(base) - 1:
+            arg = base[index]
+            if arg == "-T":
+                no_tty = True
+                slave.append(arg)
+                index += 1
+                continue
+            if arg == "-F" and index + 1 < len(base) - 1 and base[index + 1] == "/dev/null":
+                no_config = True
+                slave.extend(base[index:index + 2])
+                index += 2
+                continue
+            if arg != "-o" or index + 1 >= len(base) - 1:
+                raise RelayError("SSH reuse requires the fixed noninteractive device transport")
+            option = base[index + 1]
+            name, separator, _ = option.partition("=")
+            if not separator or not name or any(char.isspace() for char in name):
+                raise RelayError("invalid fixed SSH transport option")
+            lowered = name.lower()
+            if lowered in {"controlmaster", "controlpath", "controlpersist", "proxyjump",
+                           "forkafterauthentication", "remotecommand", "localcommand"}:
+                raise RelayError("SSH reuse cannot inherit a competing transport lifecycle")
+            if lowered == "proxycommand":
+                proxy_count += 1
+            else:
+                slave.extend((arg, option))
+            index += 2
+        if not no_config or not no_tty or proxy_count != 1:
+            raise RelayError("SSH reuse requires one fixed proxy and isolated SSH settings")
+        self._base = list(base)
+        self._slave_base = slave
+        environment = self.environment() if self.environment is not None else None
+        if environment is not None:
+            if (not isinstance(environment, Mapping)
+                    or any(not isinstance(key, str) or not isinstance(value, str)
+                           or "\0" in key or "=" in key or "\0" in value
+                           for key, value in environment.items())):
+                raise RelayError("invalid SSH session environment")
+            self._env = dict(environment)
+
+    def _socket(self) -> bool:
+        if self._child is None or self._parent is None or self._directory_identity is None:
+            return False
+        current_dir = os.stat(self._name, dir_fd=self._parent, follow_symlinks=False)
+        if (not self._trusted(current_dir)
+                or (current_dir.st_dev, current_dir.st_ino) != self._directory_identity):
+            raise RelayError("SSH reuse directory changed; no channel was opened")
+        try:
+            info = os.stat("s", dir_fd=self._child, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_nlink != 1):
+            raise RelayError("SSH control socket is not private and user-owned")
+        identity = (info.st_dev, info.st_ino)
+        if self._socket_identity is not None and self._socket_identity != identity:
+            raise RelayError("SSH control socket changed; no replacement connection was opened")
+        self._socket_identity = identity
+        return True
+
+    def _control_arguments(self, action: str) -> list[str]:
+        return [*self._slave_base, "-o", "ControlMaster=no", "-o", f"ControlPath={self._path}",
+                "-o", "ControlPersist=no", "-o", "ProxyCommand=/bin/false",
+                "-O", action, self._base[-1]]
+
+    def _control(self, action: str, timeout: float) -> bool:
+        result = subprocess.run(self._control_arguments(action), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=self._env, timeout=timeout, check=False,
+                                start_new_session=False)
+        return result.returncode == 0
+
+    def start(self):
+        with self._guard:
+            if self._closed or self._started or self._process is not None:
+                raise RelayError("SSH transport session cannot be started twice")
+            try:
+                self._capture_command()
+                self._open_directory()
+                command = [*self._base[:-1], "-M", "-N", "-o", "ControlMaster=yes",
+                           "-o", f"ControlPath={self._path}", "-o", "ControlPersist=no",
+                           self._base[-1]]
+                self._process = subprocess.Popen(
+                    command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, env=self._env, start_new_session=False)
+                deadline = time.monotonic() + self.timeout
+                while time.monotonic() < deadline:
+                    if self._process.poll() is not None:
+                        raise RelayError("SSH reuse could not authenticate; "
+                                         "no model request was sent")
+                    if (self._socket()
+                            and self._control("check", max(0.05, deadline - time.monotonic()))):
+                        if self._process.poll() is not None:
+                            raise RelayError("SSH reuse ended during startup; "
+                                             "no model request was sent")
+                        self._started = True
+                        return self
+                    time.sleep(min(0.025, max(0, deadline - time.monotonic())))
+                raise RelayError("SSH reuse startup timed out; no model request was sent")
+            except BaseException as exc:
+                with contextlib.suppress(RelayError):
+                    self.close()
+                if isinstance(exc, (KeyboardInterrupt, SystemExit, RelayError)):
+                    raise
+                raise RelayError("SSH reuse could not start safely; "
+                                 "no model request was sent") from exc
+
+    def command(self, remote_command: list[str]) -> list[str]:
+        with self._guard:
+            if (not isinstance(remote_command, list) or not 1 <= len(remote_command) <= 16
+                    or any(not isinstance(arg, str) or not arg or len(arg) > 1024
+                           or any(ord(char) < 32 or ord(char) == 127 for char in arg)
+                           for arg in remote_command)):
+                raise RelayError("invalid fixed SSH channel command")
+            if (self._closed or not self._started or self._process is None
+                    or self._process.poll() is not None):
+                raise RelayError("SSH session ended; no request was retried "
+                                 "or new connection opened")
+            try:
+                if not self._socket():
+                    raise RelayError("SSH control socket is unavailable; "
+                                     "no fallback connection was opened")
+            except OSError as exc:
+                raise RelayError("SSH control socket is unavailable; "
+                                 "no fallback connection was opened") from exc
+            return [*self._slave_base, "-o", "ControlMaster=no", "-o", f"ControlPath={self._path}",
+                    "-o", "ControlPersist=no", "-o", "ProxyCommand=/bin/false",
+                    self._base[-1], *remote_command]
+
+    def close(self) -> None:
+        with self._guard:
+            if self._closed:
+                return
+            self._closed = True
+            confirmed = True
+            process = self._process
+            try:
+                if process is not None:
+                    if process.poll() is None:
+                        try:
+                            if self._socket():
+                                self._control("exit", 2)
+                        except (OSError, RelayError, subprocess.SubprocessError):
+                            pass
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                confirmed = False
+                                process.kill()
+                                process.wait(timeout=2)
+                    else:
+                        process.wait(timeout=1)
+            except (OSError, subprocess.SubprocessError, KeyboardInterrupt):
+                confirmed = False
+                if process is not None:
+                    with contextlib.suppress(OSError, subprocess.SubprocessError):
+                        process.kill()
+                        process.wait(timeout=2)
+            try:
+                if self._child is not None:
+                    try:
+                        info = os.stat("s", dir_fd=self._child, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        if (self._socket_identity != (info.st_dev, info.st_ino)
+                                or not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()
+                                or info.st_nlink != 1):
+                            raise RelayError("SSH control cleanup could not verify "
+                                             "the remaining socket")
+                        os.unlink("s", dir_fd=self._child)
+                if self._parent is not None and self._directory_identity is not None:
+                    info = os.stat(self._name, dir_fd=self._parent, follow_symlinks=False)
+                    if (not self._trusted(info)
+                            or (info.st_dev, info.st_ino) != self._directory_identity):
+                        raise RelayError("SSH control cleanup could not verify "
+                                         "its private directory")
+                    os.rmdir(self._name, dir_fd=self._parent)
+            except (OSError, RelayError):
+                confirmed = False
+            finally:
+                for name in ("_child", "_parent"):
+                    descriptor = getattr(self, name)
+                    if descriptor is not None:
+                        os.close(descriptor)
+                        setattr(self, name, None)
+            if not confirmed:
+                raise RelayError("SSH session stopped, but control/proxy cleanup "
+                                 "was not fully confirmed")
 
     def __enter__(self):
         return self.start()

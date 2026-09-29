@@ -103,7 +103,9 @@ def test_foreground_bridge_does_not_claim_native_background_agent_support():
     assert re.search(r"Foreground interactive sessions,\s+--print\s*,\s*native resume", text)
     assert "multiple normal terminal sessions are supported" in text
     assert "Native --bg / --background is explicitly rejected" in text
-    assert "detached agent would outlive the launch-scoped bridge" in text
+    assert "Managed local background jobs" in text
+    assert re.search(r"It is not a remote job, native detached\s+--bg\s*, or an", text)
+    assert "computer must stay running and connected" in text
 
 
 def test_privacy_distinguishes_structured_filtering_from_native_context_and_direct_network():

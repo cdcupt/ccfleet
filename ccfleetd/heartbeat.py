@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from collections.abc import Mapping
 from typing import Any, Optional
+
+from ccfleet_agent.relay_metrics import DAY_SECONDS, WINDOW_DAYS, MetricsError, validate_report
 
 from .config import CONTACT_EMAIL_RE
 from .credential_health import renewal_report
@@ -225,7 +228,19 @@ def _claude_update(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
             "to": _str(section.get("to"), 40), "detail": _str(section.get("detail"))}
 
 
-def _slots(value: Any) -> list[dict[str, Any]]:
+def relay_report(value: Any, now: float) -> Optional[dict[str, Any]]:
+    """Pure numeric validation plus a server-clock freshness/retention boundary."""
+    try:
+        clean = validate_report(value)
+    except (MetricsError, TypeError, ValueError, OverflowError):
+        return None
+    observed = clean["observed_at"]
+    if not now - WINDOW_DAYS * DAY_SECONDS <= observed <= now + 60:
+        return None
+    return clean
+
+
+def _slots(value: Any, now: float) -> list[dict[str, Any]]:
     """One entry per slot on a shared machine, each about one Linux user.
 
     The user name is the key the server matches on, so an entry without a
@@ -265,6 +280,9 @@ def _slots(value: Any) -> list[dict[str, Any]]:
             "quota": _quota(_section(entry, "quota")),
             "usage": _usage(_section(entry, "usage")),
         })
+        relay = relay_report(entry.get("relay"), now)
+        if relay is not None:
+            out[-1]["relay"] = relay
         progress = _login_progress(_section(entry, "login"))
         if progress:
             out[-1]["login"] = progress
@@ -299,7 +317,8 @@ def _login_progress(login: Mapping[str, Any]) -> Optional[dict[str, Any]]:
             "secret": _str(login.get("secret"), MAX_SECRET)}
 
 
-def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
+def validate_heartbeat(payload: Any, node_id: str, *,
+                       now: Optional[float] = None) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise HeartbeatError("heartbeat body must be a JSON object")
     if payload.get("node_id") != node_id:
@@ -356,7 +375,7 @@ def validate_heartbeat(payload: Any, node_id: str) -> dict[str, Any]:
     # every ordinary node's stored heartbeat keeps exactly the shape it had.
     if payload.get("mode") == MACHINE_MODE:
         result["mode"] = MACHINE_MODE
-        result["slots"] = _slots(payload.get("slots"))
+        result["slots"] = _slots(payload.get("slots"), time.time() if now is None else now)
     # Whether the OS asked for a reboot. A strict bool or nothing: "yes", 1 or a
     # string from an agent that got it wrong is not a reboot anybody asked for.
     if isinstance(payload.get("reboot_required"), bool):

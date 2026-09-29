@@ -99,8 +99,15 @@ only when ready to end the old live-folder work. Files and history are retained.
 ```bash
 cd ~/code/my-project
 ccfleet local --check
-ccfleet local --new --name work
+ccfleet start
 ```
+
+`ccfleet start` (or `ccfleet menu`) offers local new, continue and resume choices.
+`ccfleet sessions` opens the original Claude history picker. No native history is
+imported or synchronized by these controls. `ccfleet local --new --name work`
+remains the direct named-session command. Bare `ccfleet` still means the remote
+terminal, also explicitly available as `ccfleet remote`; the menu does not change
+those command meanings.
 
 Home directories work normally too: `cd ~` then `ccfleet local`. The current
 working directory is not a security sandbox. Claude's local permissions determine
@@ -117,6 +124,14 @@ ccfleet local --continue
 ccfleet local --resume work --fork-session
 ccfleet local --print "Summarize this project"
 ```
+
+`ccfleet benchmark --iterations 3` compares ordinary and reused SSH readiness
+connections without a model request. It reports connection timings, not model
+inference performance. Foreground launches may explicitly opt into
+`ccfleet local --reuse-transport`; reuse stays off by default. Each launch owns
+its own pinned connection, which closes with its bridge. A failed established
+master does not open a fallback connection or replay the model request.
+Managed background jobs currently use ordinary pinned SSH connections.
 
 These are native Claude sessions, not remote tmux sessions. `--resume` opens the
 native history picker or selects an ID/name; `--continue` uses the last native
@@ -137,11 +152,113 @@ saved native history remains. It does not end a different terminal's session.
 An interrupted request is not guaranteed to have completed;
 CC Fleet does not silently replay inference.
 
-The relay currently supports foreground interactive sessions, `--print`, native
-resume, and multiple normal terminal sessions. Native `--bg` / `--background`
-is explicitly rejected because the detached agent would outlive its launch-scoped
-bridge. This is not background-agent support; use another regular terminal for
-parallel sessions.
+The relay supports foreground interactive sessions, `--print`, native resume and
+multiple normal terminal sessions. Native `--bg` / `--background` forwarded after
+`--` is rejected because it would bypass supervision. For managed noninteractive
+local work, use the background job commands below; for parallel interactive work,
+use another regular terminal.
+
+## Project defaults
+
+```bash
+ccfleet preferences set --model opus --effort high --mode plan
+ccfleet preferences show
+ccfleet preferences clear
+```
+
+Preferences apply to the current project, or pass `--project PATH`. They are
+stored privately on this computer, indexed by a hash of the project directory.
+Explicit launch arguments win over defaults; resume does not implicitly replace
+a conversation's saved model or effort. Clearing preferences does not erase native
+history or change slot credentials. They do not change the remote tmux defaults.
+
+## Diagnostics and reported account health
+
+```bash
+ccfleet status --json
+ccfleet doctor --privacy --json --export ./ccfleet-support.json
+```
+
+Doctor separates installation, pairing, broker/relay and account-health checks.
+These commands make no model request, scan no project, and do not automatically
+repair settings, re-pair or erase history. A support export creates only the new
+local file explicitly requested; it is not uploaded and excludes prompt/file
+content, local paths, credentials and account email. Review it before sharing it.
+An existing output file is not overwritten.
+
+The website and status response distinguish **reported ready**, **renewal
+pending**, **sign-in required**, **account maintenance** and unverified/stale
+observations. A heartbeat does not prove provider acceptance. If sign-in is
+required, use the existing Claude sign-in controls on your slot page; pairing
+and local history are kept. `ccfleet local --check` separately tests current slot
+relay readiness without starting a model conversation.
+
+## Signed client updates and rollback
+
+```bash
+ccfleet version --json
+ccfleet update
+ccfleet update --rollback
+```
+
+The update path verifies an expiring stable-channel signature against the public
+Ed25519 key pinned in the client. It then verifies an immutable manifest, full
+source revision, every file checksum and the complete helper set. Redirected or
+unapproved origins, unsigned/tampered manifests, stale channels and implicit
+downgrades are refused. All files are checked before atomic launcher activation.
+
+The previous client and helpers are retained for explicit rollback; pairing,
+native history, project files and preferences are not changed. Version output
+distinguishes a verified signed release from a bootstrap installation. A restored
+legacy bootstrap can run but is not represented as signature-verified. If no
+valid signed channel is published, update fails rather than falling back to an
+unsigned download. Initial installation still requires trusting its HTTPS
+bootstrap and pinned key; signing is not a sandbox or a guarantee against a
+compromised trusted signing key. These commands update CC Fleet, not native Claude.
+
+## Managed local background jobs
+
+```bash
+ccfleet jobs start --prompt "Review this project and summarize findings"
+ccfleet jobs list
+ccfleet jobs status JOB_ID
+ccfleet jobs logs JOB_ID
+ccfleet jobs logs JOB_ID --stream stderr
+ccfleet jobs stop JOB_ID
+ccfleet jobs archive JOB_ID
+```
+
+Use the job ID returned by start. `ccfleet local --background --print "PROMPT"`
+is an equivalent supervised launch. `--prompt -` reads a prompt from standard
+input. Use `--project PATH`, an explicit `--resume NAME_OR_ID`, or `--continue`
+when needed. A background job cannot show the interactive resume picker.
+
+These jobs run the original Claude CLI in **local print mode**. The detached
+supervisor owns the foreground command's process group, authenticated control
+socket, bounded logs and temporary model bridge. Work can continue after the
+starting terminal closes while the computer remains running and connected.
+This is not native `--bg` support, an attachable terminal, or a remote agent.
+
+- Default duration: one hour; `--timeout SECONDS` permits at most 24 hours.
+- Default concurrency: four; `--max-jobs` permits at most 16.
+- Prompts, options, project paths and output stay in private local job files.
+  Stdout and stderr are each capped at 4 MiB. Logs may contain sensitive content;
+  read them only deliberately. Diagnostic exports do not include job logs.
+- Stop, timeout, device revocation or supervisor loss ends the owned process
+  group and bridge. Background authorization is rechecked periodically, not an
+  instantaneous local-file-access guarantee. Unknown cleanup remains explicitly
+  unconfirmed; a saved PID is never treated as proof of a live owned process.
+- Each job remains bound to its starting device, slot and account assignment.
+  Sign-in/account transitions or changed pairing stop old jobs instead of silently
+  continuing under a different account. Start new work explicitly once ready.
+- Jobs are never automatically restarted, and ambiguous inference is not replayed.
+  Records are retained (up to 256), not silently deleted. Ask for recovery help if
+  an interrupted record or history limit prevents new work.
+
+Native tools can deliberately detach into another process group; supervision is
+not an OS sandbox for arbitrary tool descendants. Original local permissions
+still apply, particularly `bypassPermissions`. A stopped job cannot undo edits or
+data already sent by its tools or model requests.
 
 ## History, settings and routing
 

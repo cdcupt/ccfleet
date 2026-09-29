@@ -1,0 +1,21 @@
+# Add with: docker compose -f docker-compose.yml -f src/deploy/broker-compose.yml up -d
+# Same-host process resilience; physical-host redundancy requires another broker host.
+services:
+  ccfleet-broker:
+    image: ccfleetd:local
+    container_name: ccfleet-broker
+    restart: unless-stopped
+    env_file: ccfleetd.env
+    environment:
+      CCFLEET_BROKER_ONLY: "1"
+    ports:
+      - "127.0.0.1:8113:8110"
+    volumes:
+      - ccfleet-data:/data
+    networks:
+      - 9relay_default
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

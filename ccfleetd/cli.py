@@ -531,10 +531,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return _price_command(args, store)
             # Only the running server reads Anthropic's release channels; a
             # one-off `check` never reaches out to the network.
-            fetcher = claude_versions.default_fetcher if args.command == "serve" else None
+            fetcher = (claude_versions.default_fetcher
+                       if args.command == "serve" and not cfg.broker_only else None)
             # Outage emails go from the serving loop alone, like everything else
             # that reaches out.
-            mailer = build_mailer(cfg) if args.command == "serve" else None
+            mailer = build_mailer(cfg) if args.command == "serve" and not cfg.broker_only else None
             monitor = Monitor(store, cfg, build_notifier(cfg), channel_fetcher=fetcher,
                               mailer=mailer)
             if args.command == "check":

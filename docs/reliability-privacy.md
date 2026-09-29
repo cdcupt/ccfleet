@@ -99,6 +99,57 @@ operator opt-out denies managed gates immediately. Legacy manual gates remain
 compatible until explicitly disabled or taken under managed policy. See
 [operator activation](local-relay.md#operator-verification).
 
+## 5. Local controls, diagnostics and supervised jobs
+
+The guided `ccfleet start` menu and `ccfleet sessions` delegate to original native
+new/continue/resume behavior; they do not parse or synchronize conversation
+contents. Project preferences remain private and do not implicitly override the
+model/effort saved by a resumed conversation. Bare `ccfleet` remains the remote
+compatibility command, with `ccfleet remote` as an explicit alias.
+
+`ccfleet doctor --privacy` and `ccfleet status --json` perform read-only checks
+without a model request or project scan. Reports contain allowlisted check codes,
+version facts and fixed recovery messages, not tokens, account email, prompts,
+local paths or filesystem content. `--export LOCALFILE` writes only the requested
+new private file and never uploads it. A reported-ready heartbeat remains an
+observation, not proof of provider acceptance. Website health badges use the same
+fixed classifications without changing sign-in, pairing or CSRF protections.
+
+Managed background jobs are local native print-mode work, not vendor-native
+detached agents or attachable remote sessions. Each supervisor has private
+authenticated local control, periodically checks device authorization and keeps
+the model bridge alive. Its lifetime guardian stays in the owned process group
+through foreground exit; cleanup does not signal a PID loaded from disk. Logs
+are bounded and private, but may contain sensitive user data. Normal reports and
+support exports exclude prompts, project paths and log contents.
+
+Jobs pin their starting device/slot/account assignment and fail closed on sign-in,
+account or pairing transitions; new model connections do not silently migrate an
+old job to another account. These checks use opaque assignment state, not a
+provider identity exposed in support exports.
+
+No job automatically restarts or replays inference. Timeout, stop, revocation or
+supervisor loss closes the owned process group and transport; unconfirmed cleanup
+is labelled unconfirmed. Deliberately detached tool descendants are outside this
+process-group boundary: this is not a local filesystem or process sandbox.
+
+## 6. Authenticated client release activation
+
+The client pins an Ed25519 public key. Signed channel metadata can identify only
+an approved immutable manifest and source revision, and must be unexpired.
+OpenSSH verifies detached signatures in the `ccfleet-release` namespace before
+downloaded metadata is trusted. Every source file/helper is size- and checksum-
+checked, and helper declarations must match the signed bundle completely.
+
+Verified files are staged privately, then a single atomic launcher replacement
+activates the release and records its previous version and version high-water
+mark. A normal update cannot silently downgrade or replace the same version with
+different contents. Explicit rollback validates the preserved target without
+touching pairing, project files or native history. A legacy bootstrap backup is
+labelled as legacy, not as a signature-verified release. Initial HTTPS bootstrap,
+the pinned public key and the operator's private signing-key custody remain trust
+dependencies; neither signatures nor finite tests guarantee future availability.
+
 ## Boundaries and acceptance evidence
 
 Prompts, system context, paths and tool results can still contain private data.

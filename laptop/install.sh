@@ -55,8 +55,8 @@ done
   || { printf 'error: --yes is used only with --setup\n' >&2; exit 2; }
 
 command -v python3 >/dev/null 2>&1 || { printf 'ccfleet needs Python 3.9 or newer\n' >&2; exit 1; }
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "ccfleet needs Python 3.9 or newer")'
-DEST="$(python3 - "$DEST" <<'PY'
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "ccfleet needs Python 3.9 or newer")'
+DEST="$(python3 -I - "$DEST" <<'PY'
 import os
 import sys
 
@@ -70,17 +70,33 @@ command -v ssh >/dev/null 2>&1 || { printf 'ccfleet needs OpenSSH\n' >&2; exit 1
 command -v ssh-keygen >/dev/null 2>&1 || { printf 'ccfleet needs ssh-keygen\n' >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { printf 'ccfleet needs curl\n' >&2; exit 1; }
 
+fetch_file() {
+  case "$1" in
+    https://raw.githubusercontent.com/cdcupt/ccfleet/*)
+      # Bootstrap establishes the release verifier and its trust key. Never
+      # follow even an HTTPS redirect before signature verification exists.
+      curl --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 \
+        --max-time 60 --max-redirs 0 -fsSL "$1" -o "$2" ;;
+    *)
+      # An explicit source override supports offline/development installation.
+      curl --connect-timeout 10 --max-time 60 -fsSL "$1" -o "$2" ;;
+  esac
+}
+
 mkdir -p "$DEST"
 CLIENT_TMP="$(mktemp "$DEST/.ccfleet.XXXXXX")"
 HELPER_TMP=""
 LIVE_FILES_TMP=""
 LIVE_CLIENT_TMP=""
 INFERENCE_CLIENT_TMP=""
-trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP" "$LIVE_FILES_TMP" "$LIVE_CLIENT_TMP" "$INFERENCE_CLIENT_TMP"' EXIT
-curl -fsSL "$URL" -o "$CLIENT_TMP"
+CLIENT_EXPERIENCE_TMP=""
+LOCAL_JOBS_TMP=""
+CLIENT_RELEASE_TMP=""
+trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP" "$LIVE_FILES_TMP" "$LIVE_CLIENT_TMP" "$INFERENCE_CLIENT_TMP" "$CLIENT_EXPERIENCE_TMP" "$LOCAL_JOBS_TMP" "$CLIENT_RELEASE_TMP"' EXIT
+fetch_file "$URL" "$CLIENT_TMP"
 # Read the helper digest as data. Never execute the downloaded client to discover
 # its dependencies, and reject missing, computed, or ambiguous digest values.
-DIGESTS="$(python3 - "$CLIENT_TMP" <<'PY'
+DIGESTS="$(python3 -I - "$CLIENT_TMP" <<'PY'
 import ast
 import pathlib
 import re
@@ -118,11 +134,17 @@ project, live_files, live_client = (digest("PROJECT_FILES_SHA256", required=True
                                    digest("LIVE_FILES_SHA256"), digest("LIVE_CLIENT_SHA256"))
 if bool(live_files) != bool(live_client):
     raise SystemExit("ccfleet must declare both LIVE_FILES_SHA256 and LIVE_CLIENT_SHA256")
-print("|".join((project, live_files, live_client, digest("INFERENCE_CLIENT_SHA256"))))
+experience, jobs, release = (digest("CLIENT_EXPERIENCE_SHA256"), digest("LOCAL_JOBS_SHA256"),
+                            digest("CLIENT_RELEASE_SHA256"))
+if any((experience, jobs, release)) and not all((experience, jobs, release)):
+    raise SystemExit("ccfleet must declare all experience, jobs and release helper digests")
+print("|".join((project, live_files, live_client, digest("INFERENCE_CLIENT_SHA256"),
+                experience, jobs, release)))
 PY
 )"
 IFS='|' read -r PROJECT_FILES_SHA256 LIVE_FILES_SHA256 LIVE_CLIENT_SHA256 \
-  INFERENCE_CLIENT_SHA256 <<< "$DIGESTS"
+  INFERENCE_CLIENT_SHA256 CLIENT_EXPERIENCE_SHA256 LOCAL_JOBS_SHA256 CLIENT_RELEASE_SHA256 \
+  <<< "$DIGESTS"
 case "$URL" in
   https://raw.githubusercontent.com/*/laptop/ccfleet)
     HELPER_BASE="${URL%/laptop/ccfleet}/ccfleet_agent" ;;
@@ -130,45 +152,87 @@ case "$URL" in
 esac
 HELPER_URL="${CCFLEET_PROJECT_FILES_URL:-$HELPER_BASE/project_files.py}"
 HELPER_TMP="$(mktemp "$DEST/.ccfleet-project-files.XXXXXX")"
-curl -fsSL "$HELPER_URL" -o "$HELPER_TMP"
+fetch_file "$HELPER_URL" "$HELPER_TMP"
 HELPER_ARGS=(project-files "$HELPER_TMP" "$PROJECT_FILES_SHA256")
 if [ -n "$LIVE_FILES_SHA256" ]; then
   LIVE_FILES_TMP="$(mktemp "$DEST/.ccfleet-live-files.XXXXXX")"
   LIVE_CLIENT_TMP="$(mktemp "$DEST/.ccfleet-live-client.XXXXXX")"
-  curl -fsSL "${CCFLEET_LIVE_FILES_URL:-$HELPER_BASE/live_files.py}" -o "$LIVE_FILES_TMP"
-  curl -fsSL "${CCFLEET_LIVE_CLIENT_URL:-$HELPER_BASE/live_client.py}" -o "$LIVE_CLIENT_TMP"
+  fetch_file "${CCFLEET_LIVE_FILES_URL:-$HELPER_BASE/live_files.py}" "$LIVE_FILES_TMP"
+  fetch_file "${CCFLEET_LIVE_CLIENT_URL:-$HELPER_BASE/live_client.py}" "$LIVE_CLIENT_TMP"
   HELPER_ARGS+=(live-files "$LIVE_FILES_TMP" "$LIVE_FILES_SHA256"
                live-client "$LIVE_CLIENT_TMP" "$LIVE_CLIENT_SHA256")
 fi
 if [ -n "$INFERENCE_CLIENT_SHA256" ]; then
   INFERENCE_CLIENT_TMP="$(mktemp "$DEST/.ccfleet-inference-client.XXXXXX")"
-  curl -fsSL "${CCFLEET_INFERENCE_CLIENT_URL:-$HELPER_BASE/inference_client.py}" \
-    -o "$INFERENCE_CLIENT_TMP"
+  fetch_file "${CCFLEET_INFERENCE_CLIENT_URL:-$HELPER_BASE/inference_client.py}" \
+    "$INFERENCE_CLIENT_TMP"
   HELPER_ARGS+=(inference-client "$INFERENCE_CLIENT_TMP" "$INFERENCE_CLIENT_SHA256")
 fi
-python3 - "$CLIENT_TMP" "$DEST" "${HELPER_ARGS[@]}" <<'PY'
+if [ -n "$CLIENT_EXPERIENCE_SHA256" ]; then
+  CLIENT_EXPERIENCE_TMP="$(mktemp "$DEST/.ccfleet-client-experience.XXXXXX")"
+  LOCAL_JOBS_TMP="$(mktemp "$DEST/.ccfleet-local-jobs.XXXXXX")"
+  CLIENT_RELEASE_TMP="$(mktemp "$DEST/.ccfleet-client-release.XXXXXX")"
+  fetch_file "${CCFLEET_CLIENT_EXPERIENCE_URL:-$HELPER_BASE/client_experience.py}" \
+    "$CLIENT_EXPERIENCE_TMP"
+  fetch_file "${CCFLEET_LOCAL_JOBS_URL:-$HELPER_BASE/local_jobs.py}" "$LOCAL_JOBS_TMP"
+  fetch_file "${CCFLEET_CLIENT_RELEASE_URL:-$HELPER_BASE/client_release.py}" \
+    "$CLIENT_RELEASE_TMP"
+  HELPER_ARGS+=(client-experience "$CLIENT_EXPERIENCE_TMP" "$CLIENT_EXPERIENCE_SHA256"
+               local-jobs "$LOCAL_JOBS_TMP" "$LOCAL_JOBS_SHA256"
+               client-release "$CLIENT_RELEASE_TMP" "$CLIENT_RELEASE_SHA256")
+fi
+python3 -I - "$CLIENT_TMP" "$DEST" "$URL" "${HELPER_ARGS[@]}" <<'PY'
+import ast
 import hashlib
 import os
 import pathlib
 import sys
+import types
 
 client, destination = map(pathlib.Path, sys.argv[1:3])
+origin = sys.argv[3]
 verified = []
-for offset in range(3, len(sys.argv), 3):
+for offset in range(4, len(sys.argv), 3):
     name, path, digest = sys.argv[offset:offset + 3]
     helper = pathlib.Path(path)
     source = helper.read_bytes()
     if hashlib.sha256(source).hexdigest() != digest:
         raise SystemExit("ccfleet " + name + " helper checksum mismatch; existing client left unchanged")
     compile(source, str(helper), "exec")
-    verified.append((helper, destination / ("ccfleet-" + name + "-" + digest + ".py")))
+    verified.append((name, helper, source,
+                     destination / ("ccfleet-" + name + "-" + digest + ".py")))
 # Versioned helpers keep an interrupted update compatible with the old client.
 # Validate EVERY helper before installing any of them or replacing the client.
-for helper, target in verified:
-    helper.chmod(0o644)
-    os.replace(helper, target)
-client.chmod(0o755)
-os.replace(client, destination / "ccfleet")
+release = next((item for item in verified if item[0] == "client-release"), None)
+signed = (release is not None and origin ==
+          "https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet")
+if signed:
+    tree = ast.parse(client.read_bytes())
+    keys = [node.value for node in tree.body if isinstance(node, ast.Assign)
+            and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "RELEASE_PUBLIC_KEY"]
+    if len(keys) != 1 or not isinstance(keys[0], ast.Constant) or not isinstance(keys[0].value, str):
+        raise SystemExit("ccfleet bootstrap must declare one literal release trust key")
+    module = types.ModuleType("_ccfleet_release_bootstrap")
+    module.__file__ = str(release[1])
+    sys.modules[module.__name__] = module
+    # Execute the checksum-verified helper bytes, not a reopened path or cache.
+    exec(compile(release[2], str(release[1]), "exec"), module.__dict__)
+    result = module.install_channel(keys[0].value, destination)
+    print("Verified signed CC Fleet release " + result["version"])
+    client.unlink()
+    for _, helper, _, _ in verified:
+        helper.unlink()
+else:
+    existing = destination / "ccfleet"
+    if existing.is_file() and b"# ccfleet-release-state: " in existing.read_bytes()[:4096]:
+        raise SystemExit("a managed signed release is installed; use ccfleet update or "
+                         "ccfleet update --rollback instead of replacing its launcher")
+    for _, helper, _, target in verified:
+        helper.chmod(0o644)
+        os.replace(helper, target)
+    client.chmod(0o755)
+    os.replace(client, destination / "ccfleet")
 PY
 trap - EXIT
 
@@ -198,7 +262,7 @@ if [ "$SETUP" = yes ]; then
     fi
     bash -n "$VENDOR_INSTALLER" \
       || { printf 'Claude installer validation failed; no pairing was started.\n' >&2; exit 1; }
-    if ! python3 - "$VENDOR_INSTALLER" <<'PY'
+    if ! python3 -I - "$VENDOR_INSTALLER" <<'PY'
 import contextlib
 import os
 import signal
@@ -227,7 +291,7 @@ PY
     trap - EXIT
     NATIVE_CLAUDE="$HOME/.local/bin/claude"
   fi
-  if ! python3 - "$NATIVE_CLAUDE" <<'PY'
+  if ! python3 -I - "$NATIVE_CLAUDE" <<'PY'
 import subprocess
 import sys
 
@@ -268,7 +332,7 @@ elif command -v ccfleet-connect >/dev/null 2>&1; then
 fi
 
 check_legacy_cleanup() {
-  python3 - "$1" "$OLD_CONNECT" <<'PY'
+  python3 -I - "$1" "$OLD_CONNECT" <<'PY'
 import json
 import os
 import pathlib
@@ -425,7 +489,7 @@ fi
 
 if [ "$SETUP" = yes ]; then
   check_legacy_cleanup after
-  if python3 - "$DEST" <<'PY'
+  if python3 -I - "$DEST" <<'PY'
 import fcntl
 import os
 import pathlib

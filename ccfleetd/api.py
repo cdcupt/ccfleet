@@ -18,7 +18,16 @@ from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 
-from . import cli_access, consoleslots, customer_docs, oauth, sessions, statuspage, usersite
+from . import (
+    cli_access,
+    client_status,
+    consoleslots,
+    customer_docs,
+    oauth,
+    sessions,
+    statuspage,
+    usersite,
+)
 from . import slots as slotstates
 from .config import Config
 from .desired import desired_state, machine_hostname
@@ -651,6 +660,28 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if ctx.cfg.broker_only and path not in {
+                    "/healthz", "/api/cli/connect", "/api/cli/status"}:
+                self._json(404, {"error": "not found"})
+                return
+            if path == "/api/cli/status":
+                if not self._product_site():
+                    self._json(404, {"error": "not found"})
+                    return
+                token = _prefixed_bearer(self.headers.get("Authorization"),
+                                         cli_access.DEVICE_PREFIX)
+                device = ctx.store.resolve_cli_device(token or "", now=time.time(), touch=False)
+                if device is None:
+                    self._json(401, {"error": "device is not authorized"})
+                    return
+                answer = client_status.device_status(ctx.store, ctx.cfg, device, time.time())
+                # Recheck after building the response: release/revocation can
+                # occur while the status snapshot is being assembled.
+                if not ctx.store.cli_device_is_active(device["device_id"]):
+                    self._json(401, {"error": "device is not authorized"})
+                    return
+                self._json(200, answer)
+                return
             if path == "/api/cli/connect":
                 self._cli_connect()
                 return
@@ -763,6 +794,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if ctx.cfg.broker_only and path != "/api/cli/revoke":
+                self._json(404, {"error": "not found"})
+                return
             if path == "/api/cli/register":
                 if not self._product_site():
                     self._json(404, {"error": "not found"})
@@ -1087,7 +1121,8 @@ def serve(ctx: Context) -> None:
     stop = threading.Event()
     worker = threading.Thread(target=ctx.monitor.run_forever, args=(stop,),
                               name="ccfleet-monitor", daemon=True)
-    worker.start()
+    if not ctx.cfg.broker_only:
+        worker.start()
 
     def _shutdown(_signum: int, _frame: Any) -> None:
         stop.set()

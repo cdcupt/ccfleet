@@ -380,6 +380,39 @@ def response_headers(response: Any) -> dict[str, str]:
     return headers
 
 
+def _metrics_module():
+    try:
+        from . import relay_metrics
+        return relay_metrics
+    except ImportError:
+        # Optional observability on the installed -I entrypoint: only a sibling
+        # root-owned module is eligible, never cwd or a slot project module.
+        spec = importlib.util.spec_from_file_location(
+            "ccfleet_relay_metrics", Path(__file__).with_name("relay_metrics.py"))
+        if spec is None or spec.loader is None:
+            raise ImportError("metrics module unavailable") from None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+def _record_metrics(home: Path, account: str, outcome: str, timings: dict[str, float]) -> None:
+    try:
+        if bound_account(home) != account:
+            return
+        _metrics_module().record(home, account, outcome, timings, time.time(),
+                                 still_bound=lambda: bound_account(home) == account)
+    except Exception:
+        # Metrics are best effort. Do not reflect exceptions, retry inference or
+        # change an already completed response for a missing/failed collector.
+        pass
+
+
+def _outcome(status: int) -> str:
+    return ({401: "auth_errors", 403: "permission_errors", 429: "rate_limits"}.get(status)
+            or ("input_errors" if status in {400, 404, 409, 413} else "upstream_errors"))
+
+
 def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
               policy: Callable[[], None] = require_enabled,
               connect: Callable[[], Any] = connect_upstream,
@@ -387,10 +420,16 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
               watch: bool = False) -> int:
     connection = upstream_socket = None
     began = False
+    account = None
+    request_started = None
+    timings: dict[str, float] = {}
+    outcome = "connection_errors"
     finished, cancelled = threading.Event(), threading.Event()
     try:
         policy()
         meta = read_metadata(input_)
+        if meta.get("operation") == "request":
+            request_started = time.monotonic()
         account = bound_account(home)
         if meta == {"version": 2, "operation": "status"}:
             credential(home, time.time())
@@ -436,7 +475,9 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
 
         if watch:
             threading.Thread(target=stop_if_revoked, daemon=True).start()
+        connect_started = time.monotonic()
         connection.connect()
+        timings["connect_ms"] = (time.monotonic() - connect_started) * 1000
         # HTTPConnection clears .sock for Connection: close responses, while
         # HTTPResponse still owns a blocking stream. Keep its cancellation handle.
         upstream_socket = getattr(connection, "sock", None)
@@ -459,6 +500,7 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             raise RelayError(502, "upstream returned invalid HTTP status")
         headers = response_headers(response)
         if response.status >= 300:
+            outcome = _outcome(response.status)
             overflow = context_overflow(response, headers, upstream_socket)
             if cancelled.is_set():
                 raise OSError("inference cancelled")
@@ -476,19 +518,27 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
                 if getattr(response, "length", None) not in (None, 0):
                     raise OSError("incomplete upstream response")
                 break
+            if "first_byte_ms" not in timings and request_started is not None:
+                timings["first_byte_ms"] = (time.monotonic() - request_started) * 1000
             write_chunk(output, data)
         write_chunk(output, b"")
+        outcome = "success"
         return 0
     except RelayError as exc:
+        outcome = "cancelled" if exc.status in {409, 504} else _outcome(exc.status)
         if not began:
             send_error(output, exc.status, str(exc))
         return 2
     except (OSError, EOFError, http.client.HTTPException):
+        outcome = "connection_errors" if connection is not None else "input_errors"
         if not began:
             send_error(output, 502, "slot inference connection failed; no request was retried")
         return 2
     finally:
         finished.set()
+        if request_started is not None and account is not None:
+            timings["total_ms"] = (time.monotonic() - request_started) * 1000
+            _record_metrics(home, account, "cancelled" if cancelled.is_set() else outcome, timings)
         if connection is not None:
             connection.close()
 

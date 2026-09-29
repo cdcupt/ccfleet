@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import logging
@@ -2669,6 +2670,39 @@ def maintain_slot_credentials(state: Mapping[str, Any], request: Mapping[str, An
         os.close(lock)
 
 
+def _slot_relay_report(credentials: Mapping[str, Any], state: Mapping[str, Any],
+                       now: float) -> Optional[dict[str, Any]]:
+    """Read this slot's numeric aggregates as its user, never from the root agent."""
+    bound = state.get("bound_fp")
+    if (os.geteuid() == 0 or not isinstance(bound, str)
+            or not re.fullmatch(r"[0-9a-f]{16}", bound)
+            or credentials.get("bound_fp") != bound or credentials.get("account_fp") != bound
+            or credentials.get("logged_in") is not True
+            or state.get("login") or state.get("account_restart")):
+        return None
+    try:
+        try:
+            from . import relay_metrics
+        except ImportError:
+            # agent.py is also installed as a standalone -I script. Metrics are
+            # optional; owner-only installations need not have this sibling.
+            spec = importlib.util.spec_from_file_location(
+                "ccfleet_relay_metrics", Path(__file__).with_name("relay_metrics.py"))
+            if spec is None or spec.loader is None:
+                return None
+            relay_metrics = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(relay_metrics)
+        result = relay_metrics.validate_report(relay_metrics.report(Path.home(), bound, now))
+        current = read_state(Path(SLOT_STATE_PATH).expanduser())
+        if (current.get("bound_fp") != bound or current.get("login")
+                or current.get("account_restart")
+                or account_fingerprint(Path.home() / ".claude.json") != bound):
+            return None
+        return result
+    except Exception:
+        return None
+
+
 def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
                now: Optional[float] = None) -> dict[str, Any]:
     """What this slot looks like, collected as its own user.
@@ -2776,6 +2810,11 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
         facts["quota"] = quota
     if progress:
         facts["login"] = progress
+    # Native probes above can take time. Date the aggregate at this fresh read,
+    # not the beginning of reconciliation, which could hide concurrent requests.
+    relay = _slot_relay_report(credentials, state, max(now, time.time()))
+    if relay is not None:
+        facts["relay"] = relay
     return facts
 
 

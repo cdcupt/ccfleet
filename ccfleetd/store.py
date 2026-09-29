@@ -2134,12 +2134,14 @@ class Store:
                 "AND revoked_at IS NULL ORDER BY created_at", (slot_id,)).fetchall()
         return [str(row["public_key"]) for row in rows]
 
-    def resolve_cli_device(self, device_token: str, *, now: float) -> Optional[dict[str, Any]]:
+    def resolve_cli_device(self, device_token: str, *, now: float,
+                           touch: bool = True) -> Optional[dict[str, Any]]:
         """Authenticate one broker connection and resolve its fixed slot endpoint."""
         if not cli_access.token_has_prefix(device_token, cli_access.DEVICE_PREFIX):
             return None
         digest = cli_access.token_hash(device_token)
-        with self._write_txn() as conn:
+        transaction = self._write_txn() if touch else contextlib.nullcontext(self._conn)
+        with self._lock, transaction as conn:
             row = conn.execute(
                 "SELECT d.id AS device_id, d.token_hash, d.slot_id, d.account_id, "
                 "s.unix_user, s.name, s.state, s.held_by, n.id AS node_id, n.enabled, "
@@ -2153,8 +2155,9 @@ class Store:
                     or not row["enabled"] or not row["access_host"]
                     or not row["ssh_host_key"]):
                 return None
-            conn.execute("UPDATE cli_devices SET last_seen_at = ? WHERE id = ?",
-                         (now, row["device_id"]))
+            if touch:
+                conn.execute("UPDATE cli_devices SET last_seen_at = ? WHERE id = ?",
+                             (now, row["device_id"]))
             return dict(row)
 
     def cli_device_is_active(self, device_id: str) -> bool:

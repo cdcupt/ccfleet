@@ -30,6 +30,7 @@ import shutil
 import socket
 import ssl
 import stat
+import statistics
 import struct
 import subprocess
 import sys
@@ -45,6 +46,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
+CLIENT_VERSION = "0.2.0"
+RELEASE_PUBLIC_KEY = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
+)
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_FRAME = 2 * 1024 * 1024
 SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
@@ -56,7 +61,10 @@ PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
-INFERENCE_CLIENT_SHA256 = "a3084fe0829aa5a7f49e2181e5f039802160b329b4f1474b2567c024e70c0e10"
+INFERENCE_CLIENT_SHA256 = "ab0d9e958b50611bcd660cfbc52658d8db579fada5b6953bc9958b2a7ac0fa64"
+CLIENT_EXPERIENCE_SHA256 = "f5ff07cd207dffb05ac95da49adb95b6617ed1fe8a9d0d8f6847c6e3b090765c"
+LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
+CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
 SETUP_WAIT_SECONDS = 180
 
 
@@ -135,7 +143,7 @@ def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
         except (ValueError, UnicodeError):
             why = None
         raise CliError(str(why or f"server returned HTTP {exc.code}"), exc.code) from exc
-    except (OSError, ValueError) as exc:
+    except (CliError, OSError, ValueError) as exc:
         raise CliError(f"could not reach ccfleet: {exc}") from exc
     if not isinstance(result, dict):
         raise CliError("ccfleet returned an invalid response")
@@ -258,7 +266,7 @@ def cmd_login(args: argparse.Namespace) -> int:
                     old_path.unlink(missing_ok=True)
                 except OSError as exc:
                     print(f"Warning: could not remove old {field}: {exc}", file=sys.stderr)
-    print(f"Connected to {answer['slot_name']}. Run ccfleet to open Claude Code.")
+    print(f"Connected to {answer['slot_name']}. Run ccfleet local to open local Claude Code.")
     return 0
 
 
@@ -558,6 +566,118 @@ def inference_client() -> Any:
     return packaged_helper("inference_client", INFERENCE_CLIENT_SHA256)
 
 
+def client_experience() -> Any:
+    return packaged_helper("client_experience", CLIENT_EXPERIENCE_SHA256)
+
+
+def local_jobs() -> Any:
+    return packaged_helper("local_jobs", LOCAL_JOBS_SHA256)
+
+
+def client_release() -> Any:
+    return packaged_helper("client_release", CLIENT_RELEASE_SHA256)
+
+
+def install_directory() -> Path:
+    executable = Path(__file__).resolve()
+    for parent in executable.parents:
+        if parent.name == ".ccfleet-releases":
+            return parent.parent
+    return executable.parent
+
+
+def device_context(device: dict[str, Any]) -> dict[str, Any]:
+    return api_json(device["server"] + "/api/cli/status", device["device_token"], method="GET")
+
+
+def _local_options(values: dict[str, Any]) -> argparse.Namespace:
+    args = parser().parse_args(["local"])
+    allowed = set(vars(args)) - {"command"}
+    if set(values) - allowed:
+        raise CliError("unsupported local launch options")
+    vars(args).update(values)
+    return args
+
+
+def experience_callbacks() -> dict[str, Any]:
+    def launch_local(values: dict[str, Any]) -> int:
+        return cmd_local(_local_options(values))
+
+    def launch_remote(values: dict[str, Any]) -> int:
+        args = parser().parse_args(["attach"])
+        allowed = set(vars(args)) - {"command"}
+        if set(values) - allowed:
+            raise CliError("unsupported remote launch options")
+        vars(args).update(values)
+        return cmd_attach(args)
+
+    return {"load_config": load_config, "choose_device": choose_device,
+            "find_local_claude": find_local_claude, "check_managed_route": check_managed_route,
+            "check_inference": check_inference, "device_context": device_context,
+            "launch_local": launch_local, "launch_remote": launch_remote}
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    helper = client_experience()
+    preferences = helper.Preferences(home())
+    project = Path(args.project).expanduser()
+    if args.action == "menu":
+        return helper.menu(experience_callbacks(), project=project, slot=args.slot,
+                           preferences=preferences)
+    values = {key: getattr(args, key) for key in ("model", "effort", "mode", "name", "yes")}
+    return helper.launch(args.action, experience_callbacks(), project=project,
+                         slot=args.slot, preferences=preferences, options=values)
+
+
+def cmd_diagnostics(args: argparse.Namespace) -> int:
+    helper = client_experience()
+    report = (helper.status(experience_callbacks(), slot=args.slot) if args.command == "status"
+              else helper.doctor(experience_callbacks(), slot=args.slot, privacy=args.privacy))
+    report = helper.safe_report(report)
+    if args.export:
+        helper.export_report(report, Path(args.export).expanduser())
+    print(json.dumps(report, sort_keys=True) if args.json else helper.render_report(report))
+    return 0 if report["ok"] else 1
+
+
+def cmd_preferences(args: argparse.Namespace) -> int:
+    helper = client_experience()
+    preferences = helper.Preferences(home())
+    project = Path(args.project).expanduser()
+    if args.preference_action == "clear":
+        preferences.clear(project)
+    elif args.preference_action == "set":
+        values = {key: getattr(args, key) for key in ("model", "effort", "mode")
+                  if getattr(args, key) is not None}
+        if not values:
+            raise CliError("choose --model, --effort or --mode to save a preference")
+        preferences.set(project, values)
+    print(json.dumps(preferences.get(project), sort_keys=True))
+    return 0
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    helper = client_release()
+    if args.command == "version":
+        report = helper.status(install_directory(), RELEASE_PUBLIC_KEY)
+        report["client_version"] = CLIENT_VERSION
+        report["native_claude_version"] = None
+        try:
+            report["native_claude_version"] = client_experience().native_version(
+                find_local_claude())
+        except (CliError, OSError, ValueError, subprocess.SubprocessError):
+            pass
+    elif args.rollback:
+        report = helper.rollback(install_directory(), RELEASE_PUBLIC_KEY)
+    else:
+        report = helper.install_channel(RELEASE_PUBLIC_KEY, install_directory())
+    print(json.dumps(report, sort_keys=True) if args.json else
+          "CC Fleet " + str(report.get("version") or report.get("client_version") or CLIENT_VERSION)
+          + "\n" + ("Verified signed release." if report.get("signature_verified")
+                       else "Bootstrap installation; use ccfleet update for a signed release."))
+    return 0
+
+
 def project_environment() -> dict[str, str]:
     # Needed only for locating this computer's pairing. None of these are sent
     # via SSH SendEnv: -F /dev/null excludes all user/system SSH configuration.
@@ -698,6 +818,7 @@ def wait_for_setup(device: dict[str, Any], *, newly_paired: bool) -> None:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
+    print("[1/5] Checking this computer's installation...", file=sys.stderr, flush=True)
     for executable in ("ssh", "ssh-keygen"):
         if shutil.which(executable) is None:
             raise CliError(f"OpenSSH is required (missing {executable})")
@@ -708,6 +829,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     find_local_claude()
     config = load_config()
     newly_paired = not config["devices"]
+    print("[2/5] Pairing this computer..." if newly_paired else
+          "[2/5] Reusing this computer's pairing...", file=sys.stderr, flush=True)
     if newly_paired:
         if args.slot:
             raise CliError("--slot selects an already paired slot; omit it for first setup. "
@@ -730,8 +853,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
                        "unchanged. Check Connected devices before pairing again")
     if not newly_paired:
         print(f"Already paired with {device['slot_name']}; keeping this device and its history.")
-    print("Checking the slot without uploading files or making a model request...", flush=True)
+    print("[3/5] Checking the slot without uploading files or making a model request...",
+          file=sys.stderr, flush=True)
     wait_for_setup(device, newly_paired=newly_paired)
+    print("[4/5] Checking previous connections before migration...", file=sys.stderr, flush=True)
     retire_live_grants(device, yes=getattr(args, "yes", False))
     if args.slot and config.get("active") != device["device_id"]:
         # Persist an explicitly selected default only after it has passed checks.
@@ -740,6 +865,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             raise CliError("pairing changed during setup; rerun setup")
         config["active"] = device["device_id"]
         save_config(config)
+    print("[5/5] Setup complete.", file=sys.stderr, flush=True)
     print(f"Ready: {device['slot_name']}. Pairing and local Claude relay verified.\n"
           "No project was uploaded and no Claude session was started.")
     return 0
@@ -1459,7 +1585,7 @@ def native_extra_args(args: argparse.Namespace) -> list[str]:
             break
         if value.split("=", 1)[0] in {"--bg", "--background"}:
             raise CliError("native background agents outlive this command's relay; "
-                           "use a foreground session or a separate local terminal")
+                           "use ccfleet jobs start --prompt for a supervised local job")
         if value.split("=", 1)[0] in forbidden:
             raise CliError("this native option replaces CC Fleet's selected-slot route; "
                            "use ordinary Claude directly for a separate service/configuration")
@@ -1604,7 +1730,8 @@ def local_claude_command(claude: str, args: argparse.Namespace,
                                  ("--effort", args.effort, "max")):
         if flag not in supplied and (value is not None or not resuming):
             command.extend([flag, value if value is not None else default])
-    if not supplied.intersection({"--permission-mode", "--dangerously-skip-permissions"}):
+    if (not supplied.intersection({"--permission-mode", "--dangerously-skip-permissions"})
+            and (args.mode is not None or not resuming)):
         mode = args.mode or "bypassPermissions"
         command.extend(["--dangerously-skip-permissions"] if mode == "bypassPermissions"
                        else ["--permission-mode", mode])
@@ -1618,12 +1745,18 @@ def local_claude_command(claude: str, args: argparse.Namespace,
         command.append("--name=" + args.name)
     split = extra.index("--") if "--" in extra else len(extra)
     command += extra[:split] + ["--settings", str(settings_path)] + extra[split:]
-    if args.print_prompt is not None:
+    if args.print_prompt is not None and not getattr(args, "_background_job", False):
         command.extend(["--print", "--", args.print_prompt])
+    elif getattr(args, "_background_job", False):
+        command.append("--print")
     return command
 
 
 def cmd_local(args: argparse.Namespace) -> int:
+    if getattr(args, "background", False):
+        if args.print_prompt is None:
+            raise CliError("background work needs --print PROMPT; use ccfleet jobs start --prompt")
+        return start_local_job(args, args.print_prompt)
     if args.disconnect:
         return cmd_live(args)
     if args.reset_link or args.remote_project:
@@ -1653,13 +1786,36 @@ def cmd_local(args: argparse.Namespace) -> int:
     project = Path(args.project).expanduser().resolve(strict=True)
     if not project.is_dir():
         raise CliError("--project must be an existing local directory")
+    resuming = (args.resume is not None or args.continue_session or any(
+        value.split("=", 1)[0] in {"--resume", "-r", "--continue", "-c"} for value in options))
+    if not resuming:
+        for name, value in client_experience().Preferences(home()).get(project).items():
+            if getattr(args, name) is None:
+                setattr(args, name, value)
     retire_live_grants(device, yes=args.yes)
     helper = inference_client()
-    bridge = helper.Bridge(lambda: inference_command(device), project_environment)
+    transport = None
+
+    def model_command() -> list[str]:
+        expected = getattr(args, "_job_generation", None)
+        if expected is not None and not _job_authorized(
+                {"device_id": device["device_id"], "slot_id": device["slot_id"]},
+                {device["device_id"]: expected,
+                 "token:" + device["device_id"]: args._job_device_generation}):
+            raise helper.RelayError("the background job's account authorization changed")
+        return (transport.command(["ccfleet-inference-v1"]) if transport is not None
+                else inference_command(device))
+
+    bridge = None
     descriptor = -1
     settings_path = None
     try:
         ensure_home()
+        if getattr(args, "reuse_transport", False):
+            transport = helper.TransportSession(
+                lambda: ssh_transport_command(device, tty=False),
+                project_environment, home()).start()
+        bridge = helper.Bridge(model_command, project_environment)
         descriptor, filename = tempfile.mkstemp(
             prefix=".inference-settings-", suffix=".json", dir=home())
         settings_path = Path(filename)
@@ -1680,14 +1836,24 @@ def cmd_local(args: argparse.Namespace) -> int:
               "Model requests use your assigned slot. Native prompts/tool results can still\n"
               "contain local context; this is not an anonymity guarantee.",
               file=sys.stderr, flush=True)
-        return subprocess.call(local_claude_command(claude, args, settings_path, extra),
-                               cwd=project, env=env)
+        command = local_claude_command(claude, args, settings_path, extra)
+        if getattr(args, "_background_job", False):
+            return subprocess.run(command, cwd=project, env=env,
+                                  input=args.print_prompt, text=True, check=False).returncode
+        return subprocess.call(command, cwd=project, env=env)
     finally:
-        bridge.close()
-        if descriptor != -1:
-            os.close(descriptor)
-        if settings_path is not None:
-            settings_path.unlink(missing_ok=True)
+        try:
+            if bridge is not None:
+                bridge.close()
+        finally:
+            try:
+                if transport is not None:
+                    transport.close()
+            finally:
+                if descriptor != -1:
+                    os.close(descriptor)
+                if settings_path is not None:
+                    settings_path.unlink(missing_ok=True)
 
 
 def cmd_list(_args: argparse.Namespace) -> int:
@@ -1721,13 +1887,23 @@ def cmd_logout(args: argparse.Namespace) -> int:
             except (CliError, OSError, ValueError):
                 print("Warning: a folder cleanup is pending; device revocation will still proceed.",
                       file=sys.stderr)
+    pending_error: Optional[CliError] = None
     try:
         api_json(device["server"] + "/api/cli/revoke", device["device_token"], {})
     except CliError as exc:
-        if exc.status != 401 and not args.local_only:
-            raise
         if exc.status != 401:
-            print(f"Warning: server revocation failed: {exc}", file=sys.stderr)
+            pending_error = exc
+    # Cut server access before local cleanup, which may need time to drain.
+    try:
+        local_jobs().stop_device(home() / "jobs", device["device_id"])
+    except (CliError, OSError, ValueError):
+        print("Local job cleanup needs attention; run ccfleet jobs list.", file=sys.stderr)
+    if pending_error is not None:
+        if not args.local_only:
+            raise CliError("server revocation could not be confirmed; pairing is kept so you "
+                           "can retry logout or revoke this device on your slot page")
+        print("Server revocation is unconfirmed; only local pairing will be removed.",
+              file=sys.stderr)
     for key in ("key", "known_hosts"):
         try:
             Path(device[key]).unlink()
@@ -1742,9 +1918,171 @@ def cmd_logout(args: argparse.Namespace) -> int:
     return 0
 
 
+def start_local_job(args: argparse.Namespace, prompt: str) -> int:
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise CliError("a background job needs a nonempty prompt")
+    if getattr(args, "resume", None) == "":
+        raise CliError("a background job needs an explicit --resume ID or name; "
+                       "use --continue for the latest conversation")
+    if getattr(args, "reuse_transport", False):
+        raise CliError("transport reuse is currently a foreground option; background jobs "
+                       "use ordinary pinned SSH connections")
+    device = choose_device(load_config(), args.slot)
+    # Confirm cleanup while the user still has an interactive terminal. The
+    # detached supervisor is not permitted to implicitly approve migration.
+    check_managed_route()
+    find_local_claude()
+    check_inference(device)
+    retire_live_grants(device, yes=getattr(args, "yes", False))
+    project = Path(args.project).expanduser().resolve(strict=True)
+    if not project.is_dir():
+        raise CliError("--project must be an existing local directory")
+    values = {key: getattr(args, key, None) for key in (
+        "model", "effort", "mode", "name", "resume", "continue_session",
+        "fork_session", "legacy_history")}
+    values = {key: value for key, value in values.items() if value is not None}
+    extra = native_extra_args(args)
+    native_resuming = any(value.split("=", 1)[0] in {
+        "--resume", "-r", "--continue", "-c"} for value in extra)
+    if not values.get("resume") and not values.get("continue_session") and not native_resuming:
+        values = {**client_experience().Preferences(home()).get(project), **values}
+    values["extra_args"] = extra
+    spec = {"device_id": device["device_id"], "slot_id": device["slot_id"],
+            "project": str(project), "prompt": prompt, "options": values}
+    command = [sys.executable, "-I", str(Path(__file__).resolve()), "__job-run"]
+    result = local_jobs().start(home() / "jobs", spec, command,
+                                timeout_s=getattr(args, "timeout", 3600),
+                                max_jobs=getattr(args, "max_jobs", 4))
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result.get("state") not in {
+        "failed", "timed_out", "unresponsive", "interrupted"} else 2
+
+
+def cmd_jobs(args: argparse.Namespace) -> int:
+    helper, root = local_jobs(), home() / "jobs"
+    if args.job_action == "start":
+        prompt = args.prompt
+        if prompt == "-":
+            prompt = sys.stdin.read(1024 * 1024 + 1)
+        return start_local_job(args, prompt)
+    if args.job_action in (None, "list"):
+        result = helper.list_jobs(root)
+    elif args.job_action == "status":
+        result = helper.status(root, args.job_id)
+    elif args.job_action == "stop":
+        result = helper.stop(root, args.job_id)
+    elif args.job_action == "logs":
+        sys.stdout.buffer.write(helper.logs(root, args.job_id, stream=args.stream,
+                                             max_bytes=args.bytes))
+        return 0
+    elif args.job_action == "archive":
+        result = helper.archive(root, args.job_id,
+                                 acknowledge_unconfirmed=args.acknowledge_unconfirmed)
+    else:
+        raise CliError("unknown job action")
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _job_authorized(spec: dict[str, Any], generations: Optional[dict[str, str]] = None) -> bool:
+    try:
+        device = choose_device(load_config(), spec["device_id"])
+        if device["slot_id"] != spec["slot_id"]:
+            return False
+        answer = device_context(device)
+        slot = answer.get("slot") or {}
+        generation = slot.get("account_generation")
+        if not isinstance(generation, str) or not re.fullmatch(r"[0-9a-f]{24}", generation):
+            return False
+        if slot.get("health") in {"switching", "sign_in_required"}:
+            return False
+        if generations is not None:
+            previous = generations.setdefault(spec["device_id"], generation)
+            if previous != generation:
+                return False
+            token_hash = hashlib.sha256(device["device_token"].encode()).hexdigest()
+            credential = generations.setdefault("token:" + spec["device_id"], token_hash)
+            if credential != token_hash:
+                return False
+        return (answer.get("authenticated") is True
+                and (answer.get("device") or {}).get("active") is True)
+    except (CliError, OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def cmd_job_run(args: argparse.Namespace) -> int:
+    helper = local_jobs()
+    generations: dict[str, str] = {}
+
+    def command(spec: dict[str, Any]) -> list[str]:
+        if not _job_authorized(spec, generations):
+            raise CliError("the background job's device authorization could not be verified")
+        return [sys.executable, "-I", str(Path(__file__).resolve()), "__job-exec", args.job_id,
+                "--generation", generations[spec["device_id"]], "--device-generation",
+                generations["token:" + spec["device_id"]]]
+
+    return helper.run(home() / "jobs", args.job_id,
+                      command=command,
+                      check_authorization=lambda spec: _job_authorized(spec, generations))
+
+
+def cmd_job_exec(args: argparse.Namespace) -> int:
+    helper = local_jobs()
+    with helper.parent_guard():
+        spec = helper.read_spec(home() / "jobs", args.job_id)
+        device = choose_device(load_config(), spec["device_id"])
+        if device["slot_id"] != spec["slot_id"]:
+            raise CliError("the background job's assignment changed")
+        values = dict(spec["options"])
+        values["claude_args"] = values.pop("extra_args", [])
+        values.update(slot=spec["device_id"], project=spec["project"],
+                      print_prompt=spec["prompt"], background=False, yes=False)
+        options = _local_options(values)
+        options._background_job = True
+        options._job_generation = args.generation
+        options._job_device_generation = args.device_generation
+        if not _job_authorized(spec, {spec["device_id"]: args.generation,
+                                      "token:" + spec["device_id"]: args.device_generation}):
+            raise CliError("the background job's account authorization changed")
+        return cmd_local(options)
+
+
+def cmd_benchmark(args: argparse.Namespace) -> int:
+    if not 2 <= args.iterations <= 10:
+        raise CliError("choose between 2 and 10 readiness samples")
+    helper = inference_client()
+    device = choose_device(load_config(), args.slot)
+    ensure_home()
+    cold, reused = [], []
+    for _ in range(args.iterations):
+        began = time.monotonic()
+        check_inference(device)
+        cold.append(round((time.monotonic() - began) * 1000, 2))
+    session = helper.TransportSession(lambda: ssh_transport_command(device, tty=False),
+                                      project_environment, home())
+    began = time.monotonic()
+    session.start()
+    startup = round((time.monotonic() - began) * 1000, 2)
+    try:
+        for _ in range(args.iterations):
+            began = time.monotonic()
+            helper.check_status(lambda: session.command(["ccfleet-inference-v1"]),
+                                project_environment, timeout=25)
+            reused.append(round((time.monotonic() - began) * 1000, 2))
+    finally:
+        session.close()
+    report = {"schema": 1, "model_requests": 0, "method": "readiness_only",
+              "samples": args.iterations, "cold_median_ms": statistics.median(cold),
+              "reused_median_ms": statistics.median(reused), "master_startup_ms": startup,
+              "inference_latency_measured": False}
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="ccfleet",
-                                   description="Open Claude Code on your ccfleet slot.")
+                                   description="Local Claude Code with your assigned slot; "
+                                   "run ccfleet start for the guided launcher.")
     sub = root.add_subparsers(dest="command")
     login = sub.add_parser("login", help="pair this computer with a slot")
     login.add_argument("code", nargs="?", help=argparse.SUPPRESS)
@@ -1757,7 +2095,8 @@ def parser() -> argparse.ArgumentParser:
                        help="explicitly approve ending this computer's old live-folder sessions")
     setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
                        help="server used only when pairing a new computer")
-    attach = sub.add_parser("attach", help="open the persistent Claude Code session")
+    attach = sub.add_parser("attach", aliases=["remote"],
+                            help="open remote Claude with slot files and persistent tmux")
     attach.add_argument("--slot", default="", help="slot id or name")
     attach.add_argument("--session", default="ccfleet", help="remote session name")
     attach.add_argument("--mode", choices=PERMISSION_MODES, default="bypassPermissions",
@@ -1769,21 +2108,21 @@ def parser() -> argparse.ArgumentParser:
     attach.add_argument("--no-reconnect", action="store_true")
     attach.add_argument("--reconnect-for", type=int, default=600, metavar="SECONDS")
     attach.set_defaults(action="open")
-    new = sub.add_parser("new", help="start a new named Claude Code session")
+    new = sub.add_parser("new", help="start a named remote Claude session with slot files")
     new.add_argument("session", help="letters, digits, underscore or hyphen; max 32")
     new.add_argument("--slot", default="", help="slot id or name")
     new.add_argument("--mode", choices=PERMISSION_MODES, default="bypassPermissions")
     new.add_argument("--model", default="opus", help="fable, opus, sonnet, or a model id")
     new.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     new.set_defaults(action="new", no_reconnect=True, reconnect_for=0)
-    restart = sub.add_parser("restart", help="replace a session with chosen launch settings")
+    restart = sub.add_parser("restart", help="replace a remote session with chosen settings")
     restart.add_argument("--session", default="ccfleet", help="remote session name")
     restart.add_argument("--slot", default="", help="slot id or name")
     restart.add_argument("--mode", choices=PERMISSION_MODES, default="bypassPermissions")
     restart.add_argument("--model", default="opus", help="fable, opus, sonnet, or a model id")
     restart.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
-    local = sub.add_parser("local", aliases=["snapshot"],
+    local = sub.add_parser("local",
                            help="run original local Claude Code through your assigned slot",
                            epilog="New: ccfleet local --new --name work | "
                            "Resume picker: ccfleet local --resume | "
@@ -1791,7 +2130,7 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--slot", default="", help="paired slot id or name")
     local.add_argument("--project", default=".", help="local project directory (default: current)")
     local.add_argument("--remote-project", default="", metavar="ID",
-                       help="join an existing project ID after reviewing and pulling it")
+                       help=argparse.SUPPRESS)
     local.add_argument("--yes", action="store_true",
                        help="explicitly approve retiring old live-folder connections")
     local.add_argument("--disconnect", action="store_true",
@@ -1809,6 +2148,14 @@ def parser() -> argparse.ArgumentParser:
                        help="fork a resumed local conversation")
     local.add_argument("--legacy-history", action="store_true",
                        help="use the earlier per-slot local-preview conversation history")
+    local.add_argument("--background", action="store_true",
+                       help="supervise a local --print job after this terminal exits")
+    local.add_argument("--timeout", type=int, default=3600,
+                       help="background job time limit in seconds (default: 3600)")
+    local.add_argument("--max-jobs", type=int, default=4,
+                       help="maximum concurrent background jobs (default: 4)")
+    local.add_argument("--reuse-transport", action="store_true",
+                       help="opt into one pinned foreground SSH connection for this launch")
     local.add_argument("claude_args", nargs=argparse.REMAINDER,
                        help="additional native Claude options after --")
     local.add_argument("--check", action="store_true",
@@ -1823,6 +2170,83 @@ def parser() -> argparse.ArgumentParser:
                          help="continue the latest native conversation in this folder")
     history.add_argument("--new", dest="new_session", action="store_true",
                          help="start a fresh native local conversation")
+    sub.add_parser("snapshot", parents=[local], add_help=False,
+                   help="legacy snapshot recovery; see ccfleet project",
+                   description="Legacy snapshot recovery; local Claude now uses ccfleet local.",
+                   epilog="Snapshot recovery is separate from local Claude sessions.")
+    start = sub.add_parser("start", aliases=["menu"], help="guided local session launcher")
+    start.add_argument("action", nargs="?", choices=("menu", "new", "continue", "resume"),
+                       default="menu")
+    start.add_argument("--project", default=".")
+    start.add_argument("--slot", default="")
+    start.add_argument("--model")
+    start.add_argument("--effort", choices=EFFORT_LEVELS)
+    start.add_argument("--mode", choices=PERMISSION_MODES)
+    start.add_argument("--name", default="")
+    start.add_argument("--yes", action="store_true",
+                       help="approve retiring old live-folder work during launch")
+    sessions = sub.add_parser("sessions", help="open the original local conversation picker")
+    sessions.add_argument("--project", default=".")
+    sessions.add_argument("--slot", default="")
+    sessions.add_argument("--yes", action="store_true")
+    for name in ("doctor", "status"):
+        command = sub.add_parser(name, help="diagnose local installation and connection" if
+                                 name == "doctor" else "show assigned-slot account health")
+        command.add_argument("--slot", default="")
+        command.add_argument("--json", action="store_true")
+        command.add_argument("--export", default="", help="save a private report locally")
+        if name == "doctor":
+            command.add_argument("--privacy", action="store_true",
+                                 help="explain the verified routing and privacy boundaries")
+    preferences = sub.add_parser("preferences", help="new-session defaults stored on this computer")
+    preferences.add_argument("preference_action", nargs="?", choices=("show", "set", "clear"),
+                             default="show")
+    preferences.add_argument("--project", default=".")
+    preferences.add_argument("--model")
+    preferences.add_argument("--effort", choices=EFFORT_LEVELS)
+    preferences.add_argument("--mode", choices=PERMISSION_MODES)
+    version = sub.add_parser("version", help="show client and original Claude versions")
+    version.add_argument("--json", action="store_true")
+    update = sub.add_parser("update", help="install a verified signed client release")
+    update.add_argument("--rollback", action="store_true", help="restore the previous client")
+    update.add_argument("--json", action="store_true")
+    benchmark = sub.add_parser("benchmark", help="measure readiness transport without model calls")
+    benchmark.add_argument("--slot", default="")
+    benchmark.add_argument("--iterations", type=int, default=3)
+    jobs = sub.add_parser("jobs", help="supervised local background work")
+    job_commands = jobs.add_subparsers(dest="job_action")
+    job_commands.add_parser("list", help="show this computer's jobs without prompts or paths")
+    job_start = job_commands.add_parser("start", help="start local Claude print-mode work")
+    job_start.add_argument("--prompt", required=True, help="job prompt; - reads standard input")
+    job_start.add_argument("--project", default=".")
+    job_start.add_argument("--slot", default="")
+    job_start.add_argument("--model")
+    job_start.add_argument("--effort", choices=EFFORT_LEVELS)
+    job_start.add_argument("--mode", choices=PERMISSION_MODES)
+    job_start.add_argument("--name", default="")
+    job_start.add_argument("--resume")
+    job_start.add_argument("--continue", dest="continue_session", action="store_true")
+    job_start.add_argument("--fork-session", action="store_true")
+    job_start.add_argument("--legacy-history", action="store_true")
+    job_start.add_argument("--yes", action="store_true")
+    job_start.add_argument("--timeout", type=int, default=3600)
+    job_start.add_argument("--max-jobs", type=int, default=4)
+    job_start.add_argument("claude_args", nargs=argparse.REMAINDER)
+    for name in ("status", "stop", "logs", "archive"):
+        job_command = job_commands.add_parser(name, help=name + " a local background job")
+        job_command.add_argument("job_id")
+        if name == "logs":
+            job_command.add_argument("--stream", choices=("stdout", "stderr"), default="stdout")
+            job_command.add_argument("--bytes", type=int, default=65536)
+        elif name == "archive":
+            job_command.add_argument("--acknowledge-unconfirmed", action="store_true",
+                                     help="archive an inactive record whose cleanup is unconfirmed")
+    for name in ("__job-run", "__job-exec"):
+        internal = sub.add_parser(name, help=argparse.SUPPRESS)
+        internal.add_argument("job_id")
+        if name == "__job-exec":
+            internal.add_argument("--generation", required=True)
+            internal.add_argument("--device-generation", required=True)
     project = sub.add_parser("project", help="review, upload, or apply selected project files")
     project.add_argument("project_action", choices=("status", "push", "diff", "pull", "list"))
     project.add_argument("--slot", default="", help="paired slot id or name")
@@ -1840,13 +2264,18 @@ def parser() -> argparse.ArgumentParser:
     hidden.add_argument("--device", required=True)
     resident = sub.add_parser("live-serve", help=argparse.SUPPRESS)
     resident.add_argument("--project-id", required=True)
+    # argparse otherwise prints suppressed subcommands as '==SUPPRESS=='.
+    sub.metavar = "COMMAND"
+    internal_commands = {"proxy", "live-serve", "__job-run", "__job-exec"}
+    sub._choices_actions = [action for action in sub._choices_actions
+                            if action.dest not in internal_commands]
     return root
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.command in (None, "attach"):
+        if args.command in (None, "attach", "remote"):
             if args.command is None:
                 args.slot, args.session, args.mode = "", "ccfleet", "bypassPermissions"
                 args.model, args.effort = "opus", "max"
@@ -1866,6 +2295,25 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_login(args)
         if args.command == "setup":
             return cmd_setup(args)
+        if args.command in ("start", "menu"):
+            return cmd_start(args)
+        if args.command == "sessions":
+            return cmd_local(_local_options({"project": args.project, "slot": args.slot,
+                                              "resume": "", "yes": args.yes}))
+        if args.command in ("doctor", "status"):
+            return cmd_diagnostics(args)
+        if args.command == "preferences":
+            return cmd_preferences(args)
+        if args.command in ("version", "update"):
+            return cmd_release(args)
+        if args.command == "benchmark":
+            return cmd_benchmark(args)
+        if args.command == "jobs":
+            return cmd_jobs(args)
+        if args.command == "__job-run":
+            return cmd_job_run(args)
+        if args.command == "__job-exec":
+            return cmd_job_exec(args)
         if args.command == "local":
             return cmd_local(args)
         if args.command == "snapshot":

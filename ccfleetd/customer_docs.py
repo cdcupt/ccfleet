@@ -21,7 +21,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-09-28"
+DOCS_UPDATED = "2026-09-29"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -248,7 +248,8 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         "wants a dedicated account-bound slot for model access.</p>"
         '<div class="features">'
         f'<div class="feature">{ICONS["account"]}<h3>Your own Linux account</h3>'
-        "<p>A home directory only you can read, and room for your projects and tools.</p></div>"
+        "<p>A slot home isolated from other slot users, with room for your tools. "
+        "Administrators retain root access.</p></div>"
         f'<div class="feature">{ICONS["machine"]}<h3>Your native local workflow</h3>'
         "<p>Original Claude Code, local tools and native history; no project upload or "
         "filesystem mount.</p></div>"
@@ -285,6 +286,78 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
 
 
 # -- getting started ----------------------------------------------------------------
+
+def _client_tools() -> str:
+    """Concrete local controls, distinct from the unchanged remote commands."""
+    return (
+        '<div class="card" id="client-tools"><h2>Your everyday terminal controls</h2>'
+        '<h3>Choose a session and save defaults</h3>'
+        '<pre><code>ccfleet start\nccfleet sessions\n'
+        'ccfleet preferences set --model opus --effort high --mode plan\n'
+        'ccfleet preferences show\nccfleet preferences clear</code></pre>'
+        '<p><code>ccfleet start</code> (also <code>ccfleet menu</code>) offers local new, '
+        'continue and resume choices. <code>ccfleet sessions</code> opens the original '
+        'Claude history picker; CC Fleet does not import or synchronize conversations. '
+        'Preferences apply to new local sessions in this project, or use '
+        '<code>--project PATH</code>. Explicit launch choices win; resuming keeps the '
+        'saved model and effort unless changed deliberately. Clearing preferences does '
+        'not clear history. Bare <code>ccfleet</code> still means the remote terminal; '
+        '<code>ccfleet remote</code> selects it explicitly.</p>'
+        '<h3>Check readiness and get local help</h3>'
+        '<pre><code>ccfleet status --json\n'
+        'ccfleet doctor --privacy --json --export ./ccfleet-support.json</code></pre>'
+        '<p>These checks make no model request and do not scan a project. Doctor separates '
+        'installation, pairing, broker/relay and account-health problems. The support '
+        'report is written only to the new local file you request; it is not uploaded and '
+        'does not include prompts, file contents, local paths, tokens or account email. '
+        'Review it before sharing it yourself. A reported-ready heartbeat is an '
+        'observation, not proof that Anthropic will accept the next request. Renewal '
+        'pending, sign-in required, account maintenance and stale observations remain '
+        'distinct; keep your pairing and use the existing sign-in controls when needed.</p>'
+        '<h3>Update or return to the previous client</h3>'
+        '<pre><code>ccfleet version --json\nccfleet update\nccfleet update --rollback</code></pre>'
+        '<p>The updater verifies a signed release channel against the client&#x27;s pinned '
+        'Ed25519 key, then verifies an immutable manifest and every helper before atomic '
+        'activation. A failed verification or download leaves the current client in place. '
+        'Rollback selects the preserved previous client without changing pairing, local '
+        'files or native history. A restored legacy bootstrap is not labelled signature-verified. '
+        'The version report distinguishes bootstrap and verified releases; an absent or '
+        'expired signed channel is an error, not permission to install unsigned code. '
+        'These commands update CC Fleet, not Anthropic&#x27;s original Claude executable.</p></div>'
+        '<div class="card" id="background-jobs"><h2>Managed local background jobs</h2>'
+        '<pre><code>ccfleet jobs start --prompt "Review this project and summarize findings"\n'
+        'ccfleet jobs list\nccfleet jobs status JOB_ID\nccfleet jobs logs JOB_ID\n'
+        'ccfleet jobs logs JOB_ID --stream stderr\nccfleet jobs stop JOB_ID\n'
+        'ccfleet jobs archive JOB_ID</code></pre>'
+        '<p>Copy the job ID returned by start. An equivalent launch form is '
+        '<code class="code-wrap">ccfleet local --background --print '
+        '"Summarize this project"</code>. '
+        'This runs local Claude print-mode work under a supervisor and keeps its local '
+        'bridge alive after the starting terminal closes. Your computer must stay running '
+        'and connected. It is not a remote job, native detached <code>--bg</code>, or an '
+        'interactive session you can attach to. For saved context choose an explicit '
+        '<code>--resume NAME_OR_ID</code> or <code>--continue</code>, not a history picker.</p>'
+        '<p>The default timeout is one hour; <code>--timeout SECONDS</code> allows at most '
+        '24 hours. The default concurrency limit is four, with <code>--max-jobs</code> '
+        'allowing at most 16. Prompts, job specifications and output stay in private local '
+        'files; each stdout/stderr log is capped at 4 MiB and can contain sensitive content. '
+        'Logs are shown only when requested, not included in support exports. Jobs never '
+        'automatically restart or replay failed inference.</p>'
+        '<p>Stop, timeout, device revocation or supervisor loss ends the owned process '
+        'group and bridge. Authorization is checked periodically, not instantaneously. '
+        'A sign-in/account transition or changed computer pairing stops old jobs; '
+        'they do not silently continue under a different account. '
+        'Shutdown is reported as confirmed only after cleanup is '
+        'verified; an interrupted or unresponsive record is not proof it stopped. Tools '
+        'that deliberately detach into another process group are not sandbox-contained. '
+        'Native permissions still govern local data, including bypass mode. Job records '
+        'are retained, not silently deleted. Archive an inactive, confirmed record with '
+        '<code>ccfleet jobs archive JOB_ID</code> to keep its private files while freeing '
+        'record capacity. An unconfirmed record requires '
+        '<code>--acknowledge-unconfirmed</code>; archiving never claims its cleanup succeeded '
+        'and never stops an active job.</p></div>'
+    )
+
 
 def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
           price: Optional[pricing.Price] = None) -> str:
@@ -347,10 +420,11 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         'uploading project files or making a model request. Old '
         '<code>ccfleet-connect</code> cleanup runs only after readiness succeeds.</li>'
         '<li><strong>Open a new terminal, then choose your project:</strong></li></ol>'
-        '<pre><code>cd ~/code/my-project\nccfleet local</code></pre>'
+        '<pre><code>cd ~/code/my-project\nccfleet start</code></pre>'
         '<p>Original Claude Code now runs on your computer with local files, tools, '
         'settings and history. Supported model requests use your assigned slot. Setup '
-        'itself starts no Claude conversation.</p>'
+        'itself starts no Claude conversation. Choose new, continue or resume from the '
+        'menu, or run <code>ccfleet local</code> directly.</p>'
         '<p>The installer verifies its digest-pinned helper. Pairing, configuration, '
         'slot sign-in and existing remote files stay in place. PATH changes preserve '
         'existing shell settings and keep a backup. Existing terminals keep their old '
@@ -392,8 +466,10 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         'are not alternate CC Fleet modes.</p>'
         '<p>Foreground interactive sessions, <code>--print</code>, native resume and '
         'multiple normal terminal sessions are supported. Native <code>--bg</code> / '
-        '<code>--background</code> is explicitly rejected: a detached agent would outlive '
-        'the launch-scoped bridge. Use another regular terminal for parallel work.</p>'
+        '<code>--background</code> is explicitly rejected when forwarded after '
+        '<code>--</code>: it would bypass supervision. Use the '
+        '<a href="#background-jobs">managed local background jobs</a> below, or another '
+        'regular terminal for parallel interactive work.</p>'
         '<h3>Keep your native settings and history</h3>'
         '<p>The default uses native Claude settings/history, including an existing '
         '<code>CLAUDE_CONFIG_DIR</code>. Nothing is imported or deleted. To reopen an '
@@ -424,11 +500,13 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         'shell tools, updates and other native CLI services can connect directly from '
         'the laptop. Optional telemetry controls are not an all-traffic firewall.</p>'
         '<p>BWH sees your incoming IP address and connection metadata but cannot decrypt '
-        'the inner SSH model stream. SSH exposes client version and terminal dimensions. '
+        'the inner SSH model stream. SSH exposes client version; remote-terminal sessions '
+        'also send terminal dimensions. '
         'Slot administrators have root and can inspect or alter relayed requests and '
         'responses, which can influence local tool actions. Trust and native local '
         'permissions remain important. Each paired device remains separately revocable.</p></div>'
-        '<div class="card"><h2>Remote-terminal compatibility</h2>'
+        + _client_tools()
+        + '<div class="card"><h2>Remote-terminal compatibility</h2>'
         '<p>The commands below run on the slot, not in a local Claude conversation.</p><ul>'
         "<li><strong>The command.</strong> Run <code>ccfleet</code> in a normal terminal. It "
         "opens the original Claude Code interface running in your slot. You never type an "
@@ -618,6 +696,13 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         'unconfirmed renewal or stale health information instead of claiming readiness. '
         'Revocation or an expired sign-in can still require <strong>Sign in again</strong>; '
         'this is not a guarantee of permanent account access.</p></div>'
+        '<div class="card"><h2>Reported health and local diagnostics</h2>'
+        '<p>Your slot card distinguishes reported ready, renewal pending, sign-in required '
+        'and account maintenance. Stale observations do not claim readiness. A heartbeat '
+        'does not prove provider acceptance; <code>ccfleet doctor --privacy</code> and '
+        '<code>ccfleet status --json</code> perform read-only connection checks without a '
+        'model request or project scan. Support export is an explicit local-file operation, '
+        'not an upload of your project or conversation.</p></div>'
         '<div class="card"><h2>Use it from anywhere</h2>'
         "<p>Install <code>ccfleet</code> on each computer you use. It creates a device key, "
         "pairs once with your held slot, and starts the local workflow without an SSH command. "

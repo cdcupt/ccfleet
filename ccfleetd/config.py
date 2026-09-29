@@ -76,6 +76,7 @@ class Config:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     public_url: str = ""
+    broker_only: bool = False
     heartbeat_max_age_s: int = 15 * 60
     token_stale_s: int = 24 * 3600
     token_expired_grace_s: int = 3600
@@ -163,6 +164,7 @@ class Config:
             telegram_bot_token=env.get(ENV_PREFIX + "TELEGRAM_BOT_TOKEN", ""),
             telegram_chat_id=env.get(ENV_PREFIX + "TELEGRAM_CHAT_ID", ""),
             public_url=env.get(ENV_PREFIX + "PUBLIC_URL", "").rstrip("/"),
+            broker_only=_env_bool(env, "BROKER_ONLY", False),
             heartbeat_max_age_s=_env_int(env, "HEARTBEAT_MAX_AGE_S", 15 * 60, 60),
             token_stale_s=_env_int(env, "TOKEN_STALE_S", 24 * 3600, 60),
             token_expired_grace_s=_env_int(env, "TOKEN_EXPIRED_GRACE_S", 3600, 0),
