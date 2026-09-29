@@ -1,10 +1,130 @@
-"""The retired local-agent model relay must fail closed, including old clients."""
+"""Inference v2 filtering, slot isolation, streaming and legacy-route retirement."""
 
+import hashlib
+import http.client
+import io
+import json
+import os
+import socket
+import stat
+import struct
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from ccfleet_agent import local_relay
+
+relay = local_relay
+
+
+@pytest.fixture
+def slot(tmp_path):
+    home = tmp_path.resolve() / "slot"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".config/ccfleet").mkdir(parents=True)
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": {"accountUuid": "owner-a"}}))
+    fingerprint = hashlib.sha256(b"owner-a").hexdigest()[:16]
+    (home / ".config/ccfleet/slot-state.json").write_text(json.dumps({"bound_fp": fingerprint}))
+    write_credentials(home)
+    return home
+
+
+def write_credentials(home, token="slot-test-token", expiry=None):
+    (home / ".claude/.credentials.json").write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": token, "refreshToken": "never-forward-this-refresh-token",
+        "expiresAt": expiry if expiry is not None else (time.time() + 3600) * 1000}}))
+
+
+def request(body=b'{"model":"opus","messages":[]}', **changes):
+    meta = {"version": 2, "operation": "request", "method": "POST", "path": "/v1/messages",
+            "headers": {"content-type": "application/json", "anthropic-version": "2023-06-01",
+                        "anthropic-beta": "real-protocol-beta", "accept": "text/event-stream"},
+            "body_size": len(body), **changes}
+    return frame(meta) + body
+
+
+def frame(value):
+    raw = json.dumps(value).encode()
+    return struct.pack("!I", len(raw)) + raw
+
+
+def response(raw):
+    stream = io.BytesIO(raw)
+    header = relay.read_metadata(stream)
+    chunks = []
+    while True:
+        length = struct.unpack("!I", relay.read_exact(stream, 4))[0]
+        assert length <= relay.CHUNK_SIZE
+        if not length:
+            break
+        chunks.append(relay.read_exact(stream, length))
+    assert stream.read() == b""
+    return header, b"".join(chunks)
+
+
+class UpstreamSocket:
+    def __init__(self):
+        self.cancelled = threading.Event()
+        self.timeout = None
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def shutdown(self, how):
+        assert how == socket.SHUT_RDWR
+        self.cancelled.set()
+
+
+class Upstream:
+    def __init__(self, status=200, chunks=None, headers=None, failure=None):
+        self.status = status
+        self.chunks = iter(chunks or [b"event: message_start\n\n", b"event: message_stop\n\n"])
+        self.headers = headers or [("Content-Type", "text/event-stream"), ("request-id", "safe-id")]
+        self.failure = failure
+        self.calls = []
+        self.closed = False
+        self.length = None
+        self.sock = UpstreamSocket()
+
+    def connect(self):
+        if self.failure == "connect":
+            raise OSError("private upstream address and credential detail")
+
+    def request(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+
+    def getresponse(self):
+        if self.failure == "response":
+            raise http.client.HTTPException("private raw response")
+        return self
+
+    def getheaders(self):
+        return self.headers
+
+    def read1(self, size):
+        assert size == relay.CHUNK_SIZE
+        try:
+            return next(self.chunks)
+        except StopIteration:
+            if self.failure == "truncated":
+                raise http.client.IncompleteRead(b"private partial data") from None
+            return b""
+
+    def close(self):
+        self.closed = True
+
+
+def run(slot, data=None, upstream=None, **kwargs):
+    output = io.BytesIO()
+    upstream = upstream or Upstream()
+    code = relay.serve_one(io.BytesIO(request() if data is None else data), output, slot,
+                           policy=lambda: None, connect=lambda: upstream, **kwargs)
+    return code, output.getvalue(), upstream
 
 
 def test_retired_relay_does_not_read_credentials_or_open_network(capsys):
@@ -19,3 +139,328 @@ def test_old_forced_command_has_no_inference_route():
         input=b'not-a-model-request', capture_output=True, timeout=5)
     assert result.returncode == 2 and result.stdout == b""
     assert b"retired" in result.stderr
+
+
+def test_headers_and_structured_identity_are_removed_but_model_context_is_preserved(slot):
+    context = {"model": "opus", "system": "Working directory /Users/example; Darwin",
+               "messages": [{"role": "user", "content": "my user_id is application data"}],
+               "tools": [{"name": "tool", "input_schema": {"properties": {"user_id": {}}}}]}
+    body = {**context, "metadata": {"user_id": "laptop-id", "session_id": "local-session",
+                                    "unknown_future_fingerprint": "private"},
+            "device_id": "laptop-device", "fingerprint": {"os": "local"}}
+    headers = {"content-type": "application/json", "accept": "text/event-stream",
+               "anthropic-version": "2023-06-01", "anthropic-beta": "semantic-beta",
+               "user-agent": "LOCAL-CLI-VERSION", "x-stainless-os": "LOCAL-OS",
+               "x-stainless-arch": "LOCAL-ARCH", "x-app": "local-value",
+               "x-forwarded-for": "PRIVATE-IP", "forwarded": "PRIVATE-LOCATION",
+               "authorization": "Bearer LOCAL-AUTH", "x-api-key": "LOCAL-API-KEY",
+               "cookie": "LOCAL-COOKIE", "host": "caller-selected.invalid",
+               "x-client-request-id": "LOCAL-SESSION"}
+    code, raw, upstream = run(slot, request(json.dumps(body).encode(), headers=headers))
+    assert code == 0 and response(raw)[0]["status"] == 200
+    args, forwarded = upstream.calls[0]
+    assert args == ("POST", "/v1/messages")
+    assert json.loads(forwarded["body"]) == context
+    assert forwarded["headers"] == {
+        "content-type": "application/json", "accept": "text/event-stream",
+        "anthropic-version": "2023-06-01", "anthropic-beta": "semantic-beta",
+        "accept-encoding": "identity", "user-agent": "ccfleet-slot-relay/2",
+        "x-app": "cli", "authorization": "Bearer slot-test-token"}
+    assert "LOCAL-" not in json.dumps(forwarded["headers"])
+    assert b"never-forward-this-refresh-token" not in raw
+    assert upstream.closed and upstream.sock.timeout == relay.READ_TIMEOUT
+
+
+def test_status_has_no_model_call_account_label_or_credential(slot):
+    code, raw, upstream = run(slot, frame({"version": 2, "operation": "status"}))
+    meta, body = response(raw)
+    assert code == 0 and upstream.calls == []
+    assert meta == {"version": 2, "status": 200, "headers": {"content-type": "application/json"}}
+    assert json.loads(body) == {"ready": True, "protocol": 2}
+    assert b"owner-a" not in raw and b"slot-test-token" not in raw
+
+
+def test_disabled_policy_runs_before_input_or_credentials(tmp_path):
+    source, output = io.BytesIO(b"must not read"), io.BytesIO()
+
+    def disabled():
+        raise relay.RelayError(403, "local inference is not enabled for this slot")
+
+    assert relay.serve_one(source, output, tmp_path, policy=disabled) == 2
+    assert source.tell() == 0 and response(output.getvalue())[0]["status"] == 403
+
+
+def test_missing_operator_policy_fails_closed(tmp_path):
+    with pytest.raises(relay.RelayError) as error:
+        relay.require_enabled(tmp_path / "missing")
+    assert error.value.status == 403
+
+
+@pytest.mark.parametrize("parent_mode,parent_uid,mode,uid,nlink,allowed", [
+    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o644, 0, 1, True),
+    (stat.S_IFDIR | 0o777, 0, stat.S_IFREG | 0o644, 0, 1, False),
+    (stat.S_IFDIR | 0o755, 1000, stat.S_IFREG | 0o644, 0, 1, False),
+    (stat.S_IFLNK | 0o755, 0, stat.S_IFREG | 0o644, 0, 1, False),
+    (stat.S_IFDIR | 0o755, 0, stat.S_IFLNK | 0o644, 0, 1, False),
+    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o666, 0, 1, False),
+    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o644, 1000, 1, False),
+    (stat.S_IFDIR | 0o755, 0, stat.S_IFREG | 0o644, 0, 2, False),
+])
+def test_gate_is_root_owned_regular_nonwritable_and_not_a_link(monkeypatch, parent_mode, parent_uid,
+                                                             mode, uid, nlink, allowed):
+    directory = Path("/gate")
+    monkeypatch.setattr(Path, "lstat", lambda path: SimpleNamespace(
+        st_mode=parent_mode if path == directory else mode,
+        st_uid=parent_uid if path == directory else uid, st_nlink=nlink))
+    if allowed:
+        relay.require_enabled(directory)
+    else:
+        with pytest.raises(relay.RelayError):
+            relay.require_enabled(directory)
+
+
+@pytest.mark.parametrize("changes", [
+    {"version": 1}, {"version": True}, {"operation": "status", "extra": "private"},
+    {"method": "GET"}, {"path": "https://example.invalid/v1/messages"},
+    {"path": "/v1/messages?destination=other"}, {"path": "/v1/messages/../admin"},
+    {"body_size": True}, {"body_size": 0}, {"body_size": relay.MAX_BODY + 1},
+    {"headers": {"content-type": "text/plain"}},
+    {"headers": {"content-type": "application/json", "User-Agent": "a", "user-agent": "b"}},
+    {"headers": {"content-type": "application/json", "x-stainless-os": "bad\nheader"}},
+    {"host": "example.invalid"},
+])
+def test_invalid_requests_never_reach_the_upstream(slot, changes):
+    code, raw, upstream = run(slot, request(**changes))
+    assert code == 2 and response(raw)[0]["status"] in (400, 413)
+    assert upstream.calls == []
+
+
+@pytest.mark.parametrize("raw", [b"{}", b'{"version":2,"version":2}', b'[]',
+                                  b'{"version":NaN}', b'\xff'])
+def test_strict_frame_json_rejects_ambiguity(slot, raw):
+    code, output, upstream = run(slot, struct.pack("!I", len(raw)) + raw)
+    assert code == 2 and response(output)[0]["status"] == 400
+    assert upstream.calls == []
+
+
+@pytest.mark.parametrize("body", [b"[]", b'{"model":"a","model":"b"}',
+                                   b'{"messages":[{"role":"x","role":"y"}]}',
+                                   b'{"metadata":"private-id"}', b'{"max_tokens":NaN}',
+                                   b'{"temperature":1e999}', b'{"model":"\\ud800"}', b"{broken"])
+def test_unambiguous_body_required_before_model_post(slot, body):
+    code, raw, upstream = run(slot, request(body))
+    assert code == 2 and response(raw)[0]["status"] == 400
+    assert upstream.calls == []
+
+
+def test_request_above_previous_twenty_megabyte_cap_is_supported(slot):
+    body = json.dumps({"messages": [{"role": "user", "content": "x" * (21 * 1024 * 1024)}]}).encode()
+    code, _, upstream = run(slot, request(body))
+    assert code == 0 and len(upstream.calls[0][1]["body"]) > 20 * 1024 * 1024
+
+
+@pytest.mark.parametrize("expiry", [True, "soon", -1, 0, float("nan"), float("inf"), 10**1000])
+def test_invalid_native_expiry_fails_closed_without_refresh(slot, expiry):
+    write_credentials(slot, expiry=expiry)
+    source = slot / ".claude/.credentials.json"
+    before = source.read_bytes(), source.stat().st_mtime_ns
+    code, raw, upstream = run(slot)
+    assert code == 2 and response(raw)[0]["status"] == 401
+    assert upstream.calls == []
+    assert (source.read_bytes(), source.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("token", ["", "bad\nvalue", "unicode-中文", "x" * 8193])
+def test_invalid_slot_token_never_becomes_an_upstream_header(slot, token):
+    write_credentials(slot, token=token)
+    code, raw, upstream = run(slot)
+    assert code == 2 and response(raw)[0]["status"] == 401 and not upstream.calls
+
+
+@pytest.mark.parametrize("target", ["credential", "profile", "config_parent"])
+def test_authentication_symlinks_cannot_redirect_reads(slot, target):
+    path = {"credential": slot / ".claude/.credentials.json", "profile": slot / ".claude.json",
+            "config_parent": slot / ".config"}[target]
+    path.rename(path.with_name(path.name + "-original"))
+    path.symlink_to(path.with_name(path.name + "-original"))
+    code, raw, upstream = run(slot)
+    assert code == 2 and response(raw)[0]["status"] == 401 and not upstream.calls
+
+
+def test_native_token_rotation_is_observed_without_writes_by_relay(slot):
+    first = run(slot)[2]
+    write_credentials(slot, token="new-native-slot-token")
+    path = slot / ".claude/.credentials.json"
+    stamp = path.stat().st_mtime_ns
+    second = run(slot)[2]
+    assert first.calls[0][1]["headers"]["authorization"] == "Bearer slot-test-token"
+    assert second.calls[0][1]["headers"]["authorization"] == "Bearer new-native-slot-token"
+    assert path.stat().st_mtime_ns == stamp
+
+
+@pytest.mark.parametrize("account", ["", "\ud800", "bad\naccount", "x" * 257])
+def test_corrupt_native_account_metadata_fails_with_safe_framed_error(slot, account):
+    (slot / ".claude.json").write_text(json.dumps({"oauthAccount": {"accountUuid": account}}))
+    code, raw, upstream = run(slot)
+    assert code == 2 and response(raw)[0]["status"] == 401
+    assert not upstream.calls
+
+
+def test_account_switch_during_connect_stops_before_any_post(slot):
+    upstream = Upstream()
+
+    def connect():
+        (slot / ".claude.json").write_text('{"oauthAccount":{"accountUuid":"other"}}')
+
+    upstream.connect = connect
+    code, raw, upstream = run(slot, upstream=upstream)
+    assert code == 2 and response(raw)[0]["status"] == 409
+    assert not upstream.calls and upstream.closed
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308, 401, 429, 500])
+def test_redirects_and_api_errors_are_returned_once_without_retry(slot, status):
+    upstream = Upstream(status=status, headers=[("content-type", "application/json"),
+                                                ("location", "https://must-not-follow.invalid"),
+                                                ("set-cookie", "private-cookie")])
+    code, raw, upstream = run(slot, upstream=upstream)
+    meta, _ = response(raw)
+    assert code == (2 if status >= 400 else 0) and meta["status"] == status
+    assert meta["headers"] == {"content-type": "application/json"}
+    assert len(upstream.calls) == 1
+
+
+@pytest.mark.parametrize("headers", [[("content-type", "one"), ("Content-Type", "two")],
+                                      [("retry-after", "1\nprivate")]])
+def test_upstream_header_ambiguity_is_not_sent_to_local_client(slot, headers):
+    code, raw, _ = run(slot, upstream=Upstream(headers=headers))
+    assert code == 2 and response(raw)[0]["status"] == 502
+
+
+@pytest.mark.parametrize("failure", ["connect", "response"])
+def test_upstream_failure_is_safe_and_never_retried(slot, failure):
+    code, raw, upstream = run(slot, upstream=Upstream(failure=failure))
+    assert code == 2 and response(raw)[0]["status"] == 502
+    assert len(upstream.calls) == (0 if failure == "connect" else 1)
+    assert b"private" not in raw and b"slot-test-token" not in raw
+
+
+def test_truncated_sse_has_no_success_terminator(slot):
+    code, raw, upstream = run(slot, upstream=Upstream(failure="truncated"))
+    assert code == 2 and len(upstream.calls) == 1 and upstream.closed
+    with pytest.raises(EOFError):
+        response(raw)
+
+
+def test_eof_before_declared_content_length_is_not_success(slot):
+    upstream = Upstream()
+    upstream.length = 10
+    code, raw, _ = run(slot, upstream=upstream)
+    assert code == 2
+    with pytest.raises(EOFError):
+        response(raw)
+
+
+@pytest.mark.parametrize("status", [True, 0, 101, 199, 600])
+def test_invalid_or_informational_upstream_status_is_not_a_final_response(slot, status):
+    code, raw, upstream = run(slot, upstream=Upstream(status=status))
+    assert code == 2 and response(raw)[0]["status"] == 502
+    assert len(upstream.calls) == 1
+
+
+@pytest.mark.parametrize("reason", ["disconnect", "policy", "account", "deadline", "expiry"])
+def test_inflight_stream_is_cancelled_on_revocation_account_change_or_timeout(slot, monkeypatch, reason):
+    read_side, write_side = socket.socketpair()
+    source = read_side.makefile("rb")
+    entered = threading.Event()
+    allowed = threading.Event()
+    allowed.set()
+    upstream = Upstream()
+    output = io.BytesIO()
+    result = []
+
+    def policy():
+        if not allowed.is_set():
+            raise relay.RelayError(403, "disabled")
+
+    def read(size):
+        entered.set()
+        assert upstream.sock.cancelled.wait(3)
+        return b""
+
+    upstream.read1 = read
+    if reason == "deadline":
+        monkeypatch.setattr(relay, "REQUEST_TIMEOUT", 0.01)
+    worker = threading.Thread(target=lambda: result.append(relay.serve_one(
+        source, output, slot, policy=policy, connect=lambda: upstream, watch=True)))
+    write_side.sendall(request())
+    worker.start()
+    try:
+        assert entered.wait(2)
+        if reason == "disconnect":
+            write_side.shutdown(socket.SHUT_WR)
+        elif reason == "policy":
+            allowed.clear()
+        elif reason == "account":
+            (slot / ".claude.json").write_text('{"oauthAccount":{"accountUuid":"other"}}')
+        elif reason == "expiry":
+            now = time.time()
+            monkeypatch.setattr(relay.time, "time", lambda: now + 7200)
+        worker.join(timeout=4)
+        assert not worker.is_alive() and result == [2]
+        assert upstream.closed and len(upstream.calls) == 1
+        with pytest.raises(EOFError):
+            response(output.getvalue())
+    finally:
+        write_side.close()
+        source.close()
+        read_side.close()
+
+
+def test_upstream_host_port_and_certificate_verification_are_fixed(monkeypatch):
+    captured = []
+    monkeypatch.setattr(relay.http.client, "HTTPSConnection", lambda *args, **kwargs:
+                        captured.append((args, kwargs)))
+    relay.connect_upstream()
+    args, kwargs = captured[0]
+    assert args == ("api.anthropic.com", 443)
+    assert kwargs["context"].check_hostname is True
+    assert kwargs["context"].verify_mode == relay.ssl.CERT_REQUIRED
+
+
+def test_v2_main_uses_authenticated_unix_home_not_forwarded_environment(monkeypatch):
+    monkeypatch.setenv("HOME", "/untrusted-client-home")
+    monkeypatch.setattr(relay.pwd, "getpwuid", lambda _: SimpleNamespace(pw_dir="/slot-home"))
+    monkeypatch.setattr(relay.signal, "signal", lambda *a: None)
+    alarms = []
+    monkeypatch.setattr(relay.signal, "alarm", alarms.append)
+    monkeypatch.setattr(relay.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
+    monkeypatch.setattr(relay.sys, "stdout", SimpleNamespace(buffer=io.BytesIO()))
+    calls = []
+
+    def serve(input_, output, home, **kwargs):
+        calls.append((home, kwargs["watch"]))
+        kwargs["request_ready"]()
+        return 0
+
+    monkeypatch.setattr(relay, "serve_one", serve)
+    assert relay.main(["--protocol-v2"]) == 0
+    assert calls == [(Path("/slot-home"), True)]
+    assert alarms == [relay.INPUT_TIMEOUT, relay.REQUEST_TIMEOUT, 0]
+
+
+@pytest.mark.parametrize("command,accepted", [
+    ("ccfleet-inference-v1", True), ("ccfleet-relay-v1", False),
+    ("ccfleet-inference-v1 extra", False), ("ccfleet-inference-v1\nid", False),
+    ("ccfleet-inference-v1; id", False),
+])
+def test_only_exact_new_forced_command_can_enter_v2(tmp_path, command, accepted):
+    entry = tmp_path / "slot-entry.sh"
+    entry.write_text((Path(__file__).resolve().parents[1] / "node/slot-entry.sh").read_text())
+    package = tmp_path / "ccfleet_agent"
+    package.mkdir()
+    (package / "local_relay.py").write_text("import sys\nprint(repr(sys.argv[1:]))\n")
+    result = subprocess.run(["bash", str(entry)], capture_output=True, text=True,
+                            env={**os.environ, "SSH_ORIGINAL_COMMAND": command})
+    assert (result.returncode == 0) == accepted
+    assert result.stdout.strip() == ("['--protocol-v2']" if accepted else "")

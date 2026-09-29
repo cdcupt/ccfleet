@@ -1,4 +1,4 @@
-"""Live command UX uses real file-boundary helpers and only synthetic local homes."""
+"""Legacy live-client engine regressions; new native-local UX has separate tests."""
 
 from __future__ import annotations
 
@@ -32,7 +32,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(personal))
     monkeypatch.setenv("CCFLEET_HOME", str(personal / ".fleet-control"))
     cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
-    scope = cli["cmd_local"].__globals__
+    scope = cli["cmd_live"].__globals__
+    # Existing pre-migration connectors retain this engine. Exercise its old
+    # command dispatch without representing it as the new native-local path.
+    monkeypatch.setitem(scope, "cmd_local", cli["cmd_live"])
     monkeypatch.setitem(scope, "live_files", lambda: live_files)
     monkeypatch.setitem(scope, "live_client", lambda: live_client)
     monkeypatch.setitem(scope, "project_files", lambda: pytest.fail("live command scanned a snapshot"))

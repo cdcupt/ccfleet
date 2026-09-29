@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install the ccfleet client. It is a small Python program that delegates the
-# encrypted terminal to the operating system's OpenSSH client.
+# Install ccfleet and its digest-pinned helpers. Setup also ensures the original
+# local Claude Code CLI is available; pairing remains owned by ccfleet.
 
 set -euo pipefail
 
@@ -8,6 +8,7 @@ DEST="${CCFLEET_INSTALL_DIR:-$HOME/.local/bin}"
 URL="${CCFLEET_INSTALL_URL:-https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet}"
 MIGRATE=no
 SETUP=no
+APPROVE_MIGRATION=no
 DEVICE_NAME=computer
 SLOT=""
 
@@ -17,12 +18,14 @@ Install the CC Fleet terminal client.
 
   install.sh
   install.sh --migrate [--name "My computer"]
-  install.sh --setup [--name "My computer"] [--slot SLOT]
+  install.sh --setup [--name "My computer"] [--slot SLOT] [--yes]
 
 --migrate installs and pairs the new client first, then removes an installed
 legacy ccfleet-connect token setup. Have a fresh pairing code from /account.
---setup reuses a working pairing or pairs if needed, checks slot project access,
-then retires the legacy setup and configures PATH. It never uploads a project.
+--setup installs original Claude Code if missing, reuses a working pairing or
+pairs if needed, checks slot inference, then retires the legacy setup and
+configures PATH. It never uploads a project or starts a Claude session.
+--yes explicitly approves ending this computer's old live-folder sessions.
 USAGE
 }
 
@@ -30,6 +33,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --migrate) MIGRATE=yes; shift ;;
     --setup) SETUP=yes; shift ;;
+    --yes) APPROVE_MIGRATION=yes; shift ;;
     --slot)
       [ $# -ge 2 ] && [ -n "$2" ] \
         || { printf 'error: --slot needs a slot name or id\n' >&2; exit 2; }
@@ -47,6 +51,8 @@ done
   || { printf 'error: --name is used with --setup or --migrate\n' >&2; exit 2; }
 [ -z "$SLOT" ] || [ "$SETUP" = yes ] \
   || { printf 'error: --slot is used with --setup\n' >&2; exit 2; }
+[ "$APPROVE_MIGRATION" != yes ] || [ "$SETUP" = yes ] \
+  || { printf 'error: --yes is used only with --setup\n' >&2; exit 2; }
 
 command -v python3 >/dev/null 2>&1 || { printf 'ccfleet needs Python 3.9 or newer\n' >&2; exit 1; }
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "ccfleet needs Python 3.9 or newer")'
@@ -69,7 +75,8 @@ CLIENT_TMP="$(mktemp "$DEST/.ccfleet.XXXXXX")"
 HELPER_TMP=""
 LIVE_FILES_TMP=""
 LIVE_CLIENT_TMP=""
-trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP" "$LIVE_FILES_TMP" "$LIVE_CLIENT_TMP"' EXIT
+INFERENCE_CLIENT_TMP=""
+trap 'rm -f "$CLIENT_TMP" "$HELPER_TMP" "$LIVE_FILES_TMP" "$LIVE_CLIENT_TMP" "$INFERENCE_CLIENT_TMP"' EXIT
 curl -fsSL "$URL" -o "$CLIENT_TMP"
 # Read the helper digest as data. Never execute the downloaded client to discover
 # its dependencies, and reject missing, computed, or ambiguous digest values.
@@ -111,10 +118,11 @@ project, live_files, live_client = (digest("PROJECT_FILES_SHA256", required=True
                                    digest("LIVE_FILES_SHA256"), digest("LIVE_CLIENT_SHA256"))
 if bool(live_files) != bool(live_client):
     raise SystemExit("ccfleet must declare both LIVE_FILES_SHA256 and LIVE_CLIENT_SHA256")
-print("|".join((project, live_files, live_client)))
+print("|".join((project, live_files, live_client, digest("INFERENCE_CLIENT_SHA256"))))
 PY
 )"
-IFS='|' read -r PROJECT_FILES_SHA256 LIVE_FILES_SHA256 LIVE_CLIENT_SHA256 <<< "$DIGESTS"
+IFS='|' read -r PROJECT_FILES_SHA256 LIVE_FILES_SHA256 LIVE_CLIENT_SHA256 \
+  INFERENCE_CLIENT_SHA256 <<< "$DIGESTS"
 case "$URL" in
   https://raw.githubusercontent.com/*/laptop/ccfleet)
     HELPER_BASE="${URL%/laptop/ccfleet}/ccfleet_agent" ;;
@@ -131,6 +139,12 @@ if [ -n "$LIVE_FILES_SHA256" ]; then
   curl -fsSL "${CCFLEET_LIVE_CLIENT_URL:-$HELPER_BASE/live_client.py}" -o "$LIVE_CLIENT_TMP"
   HELPER_ARGS+=(live-files "$LIVE_FILES_TMP" "$LIVE_FILES_SHA256"
                live-client "$LIVE_CLIENT_TMP" "$LIVE_CLIENT_SHA256")
+fi
+if [ -n "$INFERENCE_CLIENT_SHA256" ]; then
+  INFERENCE_CLIENT_TMP="$(mktemp "$DEST/.ccfleet-inference-client.XXXXXX")"
+  curl -fsSL "${CCFLEET_INFERENCE_CLIENT_URL:-$HELPER_BASE/inference_client.py}" \
+    -o "$INFERENCE_CLIENT_TMP"
+  HELPER_ARGS+=(inference-client "$INFERENCE_CLIENT_TMP" "$INFERENCE_CLIENT_SHA256")
 fi
 python3 - "$CLIENT_TMP" "$DEST" "${HELPER_ARGS[@]}" <<'PY'
 import hashlib
@@ -169,8 +183,70 @@ fi
 [ "$MIGRATE" = yes ] || [ "$SETUP" = yes ] || exit 0
 
 if [ "$SETUP" = yes ]; then
+  NATIVE_CLAUDE="$(command -v claude || true)"
+  if [ -z "$NATIVE_CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then
+    NATIVE_CLAUDE="$HOME/.local/bin/claude"
+  fi
+  if [ -z "$NATIVE_CLAUDE" ]; then
+    printf '\nInstalling the original Claude Code CLI for this user (no sudo).\n'
+    VENDOR_INSTALLER="$(mktemp "$DEST/.ccfleet-claude-installer.XXXXXX")"
+    trap 'rm -f "$VENDOR_INSTALLER"' EXIT
+    if ! curl --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 120 \
+        -fsSL https://claude.ai/install.sh -o "$VENDOR_INSTALLER"; then
+      printf 'Claude Code download failed; pairing and legacy setup were not changed.\n' >&2
+      exit 1
+    fi
+    bash -n "$VENDOR_INSTALLER" \
+      || { printf 'Claude installer validation failed; no pairing was started.\n' >&2; exit 1; }
+    if ! python3 - "$VENDOR_INSTALLER" <<'PY'
+import contextlib
+import os
+import signal
+import subprocess
+import sys
+
+process = subprocess.Popen(["bash", sys.argv[1]], stdin=subprocess.DEVNULL, start_new_session=True)
+try:
+    raise SystemExit(process.wait(timeout=180))
+except subprocess.TimeoutExpired:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, sig)
+        try:
+            process.wait(timeout=3)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+    raise SystemExit("Claude Code installation timed out")
+PY
+    then
+      printf 'Claude Code installation failed; pairing and legacy setup were not changed.\n' >&2
+      exit 1
+    fi
+    rm -f "$VENDOR_INSTALLER"
+    trap - EXIT
+    NATIVE_CLAUDE="$HOME/.local/bin/claude"
+  fi
+  if ! python3 - "$NATIVE_CLAUDE" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run([sys.argv[1], "--version"], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    raise SystemExit(result.returncode)
+except (OSError, subprocess.SubprocessError):
+    raise SystemExit(1)
+PY
+  then
+    printf 'Claude Code is unavailable or its version check failed; no pairing or legacy cleanup was started.\n' >&2
+    exit 1
+  fi
+  PATH="$(dirname "$NATIVE_CLAUDE"):$PATH"
+  export PATH
   SETUP_ARGS=(setup --name "$DEVICE_NAME")
   [ -z "$SLOT" ] || SETUP_ARGS+=(--slot "$SLOT")
+  [ "$APPROVE_MIGRATION" != yes ] || SETUP_ARGS+=(--yes)
   if ! "$DEST/ccfleet" "${SETUP_ARGS[@]}"; then
     printf '\nSetup stopped: slot readiness failed; legacy setup and PATH were not changed.\n' >&2
     exit 1

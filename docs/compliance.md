@@ -6,11 +6,20 @@ This is an engineering constraint record, not legal advice. Re-check the linked
 terms before a production launch and obtain the commercial agreement or written
 approval required for the actual business.
 
+Current architecture note (2026-09-29): `ccfleet local` now launches native Claude
+on the laptop and relays supported model requests using the assigned slot's
+credential. That inference-relay design is **not covered by the historical hosted
+terminal mapping below**. An implementation, canary or deployment is not evidence
+of provider authorization. This document claims no approval for the relay and
+does not treat one-account-per-slot isolation as contractual permission. The
+source record below was not re-fetched as part of this architecture change.
+
 ## Hosted Claude Code
 
-Anthropic's current [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
-page has a specific section for offering Claude Code inside products and hosted
-agent infrastructure. Its conditions include:
+As recorded on the verification date above, Anthropic's
+[Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
+page had a specific section for offering Claude Code inside products and hosted
+agent infrastructure. Its recorded conditions include:
 
 - use the unmodified Claude Code binary as Anthropic publishes it;
 - do not remove, disable or restrict the authentication methods built into it;
@@ -26,14 +35,13 @@ those conditions. It also says that preinstalling or running Claude Code in a
 product or service requires Anthropic's Commercial Terms unless otherwise
 agreed.
 
-## How CC Fleet maps to those constraints
+## Historical hosted-terminal mapping only
 
-This mapping describes the remote-terminal path and the replacement
-`ccfleet local` project connector. Both run the original Claude Code on the
-slot. The old local-agent credential-substitution relay is retired; see
-[project workspaces](project-workspaces.md) for the replacement and its
-operator-enabled rollout. Architecture changes do not themselves establish
-contractual permission or verified deployment.
+This mapping describes plain `ccfleet`, the remote-terminal compatibility path.
+It does not describe the current `ccfleet local` inference relay. Earlier
+remote snapshot/live-folder designs are retired as the primary workflow; see
+[legacy workspace recovery](project-workspaces.md). Architecture changes do not
+themselves establish contractual permission or verified deployment.
 
 - A slot installs and runs the original Claude Code distribution.
 - The customer completes Anthropic's own browser sign-in. The resulting
@@ -47,13 +55,12 @@ contractual permission or verified deployment.
   Linux slot and operation.
 - The local command transports a terminal to the slot. It does not make model
   requests, imitate Anthropic authentication or proxy Claude HTTPS traffic.
-- The project connector may also transfer an explicitly selected file snapshot
-  over the same encrypted transport. It does not launch Claude on the laptop,
-  export laptop authentication, or change which account the slot uses.
+- Historical snapshot/live-folder connectors added file transport while keeping
+  the Claude process on the slot. That is not the current local launcher.
 - Claude Code on the slot connects to Anthropic with the credential the end
   user supplied through Anthropic's flow.
 
-## Important distinction: terminal broker, not model gateway
+## Remote-terminal distinction: terminal broker, not model gateway
 
 The BWH service is in the network path from the user's terminal to the slot,
 but not in the Claude-to-Anthropic path:
@@ -67,22 +74,39 @@ the CC Fleet device and relays opaque bytes to a fixed, operator-configured
 endpoint. It never receives the Claude OAuth token and does not inspect or
 rewrite Claude model requests.
 
-The legacy `gateway/` experiment is not part of the CC Fleet customer product.
-Do not configure `ANTHROPIC_BASE_URL` for this flow.
+The legacy `gateway/` experiment is not part of this remote-terminal path.
+Do not configure `ANTHROPIC_BASE_URL` for that compatibility flow. The current
+local launcher instead sets a temporary loopback model endpoint, as described
+below; it must not be represented as the same architecture.
+
+## Current local inference relay
+
+Original Claude Code, files, tools, native settings and conversation history run
+on the laptop. The local bridge removes selected headers and top-level structured
+metadata, then sends supported model requests through encrypted SSH to the
+assigned slot. The slot relay authenticates upstream with that slot's bound
+credential; it does not distribute the credential to BWH or the laptop, pool
+accounts, or select another account on failure. Native slot Claude owns renewal.
+
+This design intermediates model traffic and slot authentication. The earlier
+hosted-terminal reasoning does not establish that such a relay is permitted.
+Any applicable agreement or authorization must cover this actual architecture,
+not merely unmodified Claude Code running on a hosted machine. See
+[local relay design](local-relay.md) for technical scope and migration.
 
 ## Project data and metadata
 
-The connector transfers selected relative filenames, bytes, content hashes and
-executable flags, not the laptop environment, hostname, absolute paths or
-filesystem ownership/timestamps. Hard exclusions and explicit first-share
-confirmation reduce accidental sharing; they cannot detect every secret or
-personal detail inside file contents. The selected project and relevant prompts
-may be processed by Claude Code and Anthropic.
+The current launcher adds no CC Fleet filesystem cap, snapshot filter or mount.
+Native local permissions apply. Selected header/structured-metadata removal does
+not redact arbitrary native system prompts, user messages, files or tool results:
+local OS, working-directory paths, environment details and personal information
+may reach the slot and Anthropic. MCP, hooks, tools, updates and other native
+services can make independent laptop connections outside the model relay.
 
 Do not promise anonymity or that nothing about the user is visible anywhere.
 BWH sees connection IP/routing metadata, SSH exposes transport properties, and
 the slot host's root administrator can inspect the data processed there. The
-project connector is not a laptop OS sandbox. One-account-per-slot isolation,
+local launcher is not a laptop OS sandbox. One-account-per-slot isolation,
 credential placement and network encryption remain distinct from these limits.
 
 ## Branding
@@ -91,7 +115,7 @@ Anthropic's page permits accurately stating in plain text that a product has
 Claude Code preinstalled or runs Claude Code, but restricts use of Anthropic or
 Claude names and logos as a product/company name or implied partnership. CC
 Fleet therefore uses its own name and mark and describes Claude Code only as
-the third-party software that runs in a slot. Public pages state that CC Fleet
+the third-party software that runs locally or in a slot. Public pages state that CC Fleet
 is independent and not endorsed by Anthropic.
 
 ## Regions and policies
@@ -103,7 +127,7 @@ regional or account restriction.
 
 ## Launch gate
 
-Before public commercial operation:
+Before public commercial operation, using terms applicable to the actual design:
 
 1. confirm the deployment uses the unmodified Claude Code binary;
 2. confirm every user authenticates their own account through Anthropic;
@@ -112,3 +136,6 @@ Before public commercial operation:
 5. review the then-current Commercial Terms and hosted-product conditions;
 6. contact Anthropic sales when the intended arrangement needs written
    confirmation.
+
+For the current relay, do not substitute the historical hosted-terminal mapping
+for that review or claim that deployment establishes provider approval.

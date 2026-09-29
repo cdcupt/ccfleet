@@ -26,7 +26,7 @@ from ccfleetd.store import Store
 PRODUCT = "fleet.example.com"
 ADMIN = "admin.fleet.example.com"
 DOC_PATHS = ("/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms")
-LANDING = "<h1>Claude Code on a machine that is always on</h1>"
+LANDING = "<h1>Local Claude Code, your own account on your slot</h1>"
 HOW = ("How it works", "/docs/how-it-works")
 
 

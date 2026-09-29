@@ -72,7 +72,7 @@ def _basic(token=ADMIN_TOKEN):
     return {"Authorization": "Basic " + base64.b64encode(f"admin:{token}".encode()).decode()}
 
 
-LANDING = "<h1>Claude Code on a machine that is always on</h1>"
+LANDING = "<h1>Local Claude Code, your own account on your slot</h1>"
 HOW = ("How it works", "/docs/how-it-works")
 
 

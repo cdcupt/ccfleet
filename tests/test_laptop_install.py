@@ -25,21 +25,27 @@ def test_real_installer_loads_all_pinned_release_helpers_without_pairing(tmp_pat
            "CCFLEET_INSTALL_URL": (ROOT / "laptop/ccfleet").as_uri(),
            "CCFLEET_PROJECT_FILES_URL": (ROOT / "ccfleet_agent/project_files.py").as_uri(),
            "CCFLEET_LIVE_FILES_URL": (ROOT / "ccfleet_agent/live_files.py").as_uri(),
-           "CCFLEET_LIVE_CLIENT_URL": (ROOT / "ccfleet_agent/live_client.py").as_uri()}
+           "CCFLEET_LIVE_CLIENT_URL": (ROOT / "ccfleet_agent/live_client.py").as_uri(),
+           "CCFLEET_INFERENCE_CLIENT_URL": (ROOT / "ccfleet_agent/inference_client.py").as_uri()}
     result = subprocess.run(["bash", str(INSTALL)], env=env, capture_output=True,
                             text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     source = ("import runpy,sys; c=runpy.run_path(sys.argv[1]); "
-              "[c[name]() for name in ('project_files','live_files','live_client')]")
+              "[c[name]() for name in ('project_files','live_files','live_client')]; "
+              "c['packaged_helper']('inference_client', c['INFERENCE_CLIENT_SHA256']) "
+              "if 'INFERENCE_CLIENT_SHA256' in c else None")
     result = subprocess.run(["python3", "-I", "-c", source, str(destination / "ccfleet")],
                             env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
-    assert len(list(destination.glob("ccfleet-*.py"))) == 3
+    assert len(list(destination.glob("ccfleet-*.py"))) == (
+        4 if "INFERENCE_CLIENT_SHA256" in (ROOT / "laptop/ccfleet").read_text() else 3)
     assert not (home / ".config/ccfleet").exists()
 LIVE_FILES_SOURCE = '"""Synthetic live filesystem helper."""\nVALUE = 2\n'
 LIVE_CLIENT_SOURCE = '"""Synthetic live transport helper."""\nVALUE = 3\n'
 LIVE_FILES_DIGEST = hashlib.sha256(LIVE_FILES_SOURCE.encode()).hexdigest()
 LIVE_CLIENT_DIGEST = hashlib.sha256(LIVE_CLIENT_SOURCE.encode()).hexdigest()
+INFERENCE_SOURCE = '"""Synthetic inference bridge."""\nVALUE = 4\n'
+INFERENCE_DIGEST = hashlib.sha256(INFERENCE_SOURCE.encode()).hexdigest()
 
 
 def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
@@ -52,7 +58,12 @@ def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
                 extra_env: dict[str, str] | None = None, install_dir: Path | None = None,
                 live_helpers: bool = False, live_declarations: str | None = None,
                 live_files_source: str = LIVE_FILES_SOURCE,
-                live_client_source: str = LIVE_CLIENT_SOURCE, live_missing: str = ""):
+                live_client_source: str = LIVE_CLIENT_SOURCE, live_missing: str = "",
+                inference_helper: bool = False, inference_declaration: str | None = None,
+                inference_source: str = INFERENCE_SOURCE, inference_missing: bool = False,
+                native_claude: bool = True, native_rc: int = 0, vendor_rc: int = 0,
+                vendor_download_failure: bool = False, vendor_source: str | None = None,
+                vendor_creates_binary: bool = True):
     home = tmp_path / "home"
     dest = install_dir or home / ".local" / "bin"
     dest.mkdir(parents=True, exist_ok=True)
@@ -66,6 +77,9 @@ def run_install(tmp_path: Path, *args: str, pair_rc: int = 0,
         assignment += "\n" + (live_declarations if live_declarations is not None else
                                f"LIVE_FILES_SHA256 = {LIVE_FILES_DIGEST!r}\n"
                                f"LIVE_CLIENT_SHA256 = {LIVE_CLIENT_DIGEST!r}")
+    if inference_helper:
+        assignment += "\n" + (inference_declaration if inference_declaration is not None else
+                               f"INFERENCE_CLIENT_SHA256 = {INFERENCE_DIGEST!r}")
     client.write_text("#!/usr/bin/env python3\n" + assignment + "\n" + client_prelude + "\n" + """
 import os, sys
 with open(os.environ["TEST_LOG"], "a") as stream:
@@ -84,6 +98,15 @@ raise SystemExit(int(code))
         live_files.write_text(live_files_source)
     if live_missing != "live_client":
         live_client.write_text(live_client_source)
+    inference = tmp_path / "fake-inference-client.py"
+    if not inference_missing:
+        inference.write_text(inference_source)
+    native = tmp_path / "native-claude-fixture"
+    native.write_text(f"#!/bin/sh\nprintf '1.0 (Claude Code)\\n'\nexit {native_rc}\n")
+    native.chmod(0o755)
+    if native_claude:
+        (dest / "claude").write_bytes(native.read_bytes())
+        (dest / "claude").chmod(0o755)
     old = dest / "ccfleet-connect"
     if old_client:
         old.write_text("""#!/bin/sh
@@ -103,34 +126,53 @@ exit "${OLD_RC:-0}"
         env["CCFLEET_PROJECT_FILES_URL"] = helper.as_uri()
         env["CCFLEET_LIVE_FILES_URL"] = live_files.as_uri()
         env["CCFLEET_LIVE_CLIENT_URL"] = live_client.as_uri()
+        env["CCFLEET_INFERENCE_CLIENT_URL"] = inference.as_uri()
     else:
         env.pop("CCFLEET_PROJECT_FILES_URL", None)
         env.pop("CCFLEET_LIVE_FILES_URL", None)
         env.pop("CCFLEET_LIVE_CLIENT_URL", None)
+        env.pop("CCFLEET_INFERENCE_CLIENT_URL", None)
     if python_setup:
         # Instrument installer subprocesses without replacing the installer logic.
         hooks = tmp_path / "python-hooks"
         hooks.mkdir()
         (hooks / "sitecustomize.py").write_text(python_setup)
         env["PYTHONPATH"] = str(hooks)
-    if download_url is not None:
+    if download_url is not None or not native_claude:
         # Keep URL derivation tests offline, while exercising the real installer.
+        vendor = tmp_path / "vendor-installer.sh"
+        vendor.write_text(vendor_source if vendor_source is not None else """#!/bin/sh
+printf 'vendor:install\\n' >> "$TEST_LOG"
+[ "$VENDOR_RC" -eq 0 ] || exit "$VENDOR_RC"
+[ "$VENDOR_CREATES_BINARY" = yes ] || exit 0
+mkdir -p "$HOME/.local/bin"
+cp "$NATIVE_SOURCE" "$HOME/.local/bin/claude"
+chmod 755 "$HOME/.local/bin/claude"
+""")
         curl = dest / "curl"
         curl.write_text("""#!/usr/bin/env python3
-import os, pathlib, shutil, sys
-url = sys.argv[2]
+import os, shutil, sys
+url = next(value for value in sys.argv[1:] if value.startswith(("https://", "file://")))
 with open(os.environ["DOWNLOAD_LOG"], "a") as stream:
     stream.write(url + "\\n")
-source = ("CLIENT_SOURCE" if url.endswith("/laptop/ccfleet") else
+if url == "https://claude.ai/install.sh" and os.environ["VENDOR_DOWNLOAD_FAILURE"] == "yes":
+    raise SystemExit(22)
+source = ("VENDOR_SOURCE" if url == "https://claude.ai/install.sh" else
+          "CLIENT_SOURCE" if url.endswith(("/laptop/ccfleet", "/fake-ccfleet")) else
           "LIVE_FILES_SOURCE" if url.endswith(("/live_files.py", "/fake-live-files.py")) else
           "LIVE_CLIENT_SOURCE" if url.endswith(("/live_client.py", "/fake-live-client.py")) else
+          "INFERENCE_SOURCE" if url.endswith(("/inference_client.py", "/fake-inference-client.py")) else
           "HELPER_SOURCE")
-shutil.copyfile(os.environ[source], sys.argv[4])
+shutil.copyfile(os.environ[source], sys.argv[sys.argv.index("-o") + 1])
 """)
         curl.chmod(0o755)
         env.update(DOWNLOAD_LOG=str(tmp_path / "downloads.log"),
                    CLIENT_SOURCE=str(client), HELPER_SOURCE=str(helper),
-                   LIVE_FILES_SOURCE=str(live_files), LIVE_CLIENT_SOURCE=str(live_client))
+                   LIVE_FILES_SOURCE=str(live_files), LIVE_CLIENT_SOURCE=str(live_client),
+                   INFERENCE_SOURCE=str(inference), VENDOR_SOURCE=str(vendor),
+                   NATIVE_SOURCE=str(native), VENDOR_RC=str(vendor_rc),
+                   VENDOR_DOWNLOAD_FAILURE="yes" if vendor_download_failure else "no",
+                   VENDOR_CREATES_BINARY="yes" if vendor_creates_binary else "no")
     result = subprocess.run(["bash", str(INSTALL), *args], env=env, capture_output=True,
                             text=True, timeout=30)
     calls = log.read_text().splitlines() if log.exists() else []
@@ -147,6 +189,18 @@ def test_plain_install_does_not_start_a_transition(tmp_path):
     assert hashlib.sha256(helper.read_bytes()).hexdigest() == HELPER_DIGEST
     assert helper.stat().st_mode & 0o777 == 0o644
     assert not list(dest.glob(".ccfleet*"))
+
+
+def test_setup_passes_explicit_legacy_session_migration_consent(tmp_path):
+    result, calls, _ = run_install(tmp_path, "--setup", "--yes", old_client=False)
+    assert result.returncode == 0, result.stderr
+    assert "client:setup --name computer --yes" in calls
+
+
+@pytest.mark.parametrize("flags", [("--yes",), ("--migrate", "--yes")])
+def test_legacy_session_consent_is_not_accepted_for_unrelated_install_modes(tmp_path, flags):
+    result, calls, _ = run_install(tmp_path, *flags)
+    assert result.returncode == 2 and not calls
 
 
 def test_live_release_installs_three_verified_versioned_helpers_without_executing(tmp_path):
@@ -250,6 +304,121 @@ def test_live_release_keeps_prior_helper_versions(tmp_path):
     result, _, _ = run_install(tmp_path, live_helpers=True)
     assert result.returncode == 0, result.stderr
     assert previous.read_text() == "# old helper kept for old client\n"
+
+
+def test_inference_helper_is_digest_pinned_alongside_existing_helpers(tmp_path):
+    result, calls, dest = run_install(tmp_path, live_helpers=True, inference_helper=True)
+    assert result.returncode == 0, result.stderr
+    assert calls == []
+    helper = dest / f"ccfleet-inference-client-{INFERENCE_DIGEST}.py"
+    assert helper.read_text() == INFERENCE_SOURCE
+    assert helper.stat().st_mode & 0o777 == 0o644
+    assert len(list(dest.glob("ccfleet-*.py"))) == 4
+
+
+@pytest.mark.parametrize("failure", ["download", "tampered", "syntax"])
+def test_inference_helper_failure_preserves_existing_client_and_installs_no_helpers(tmp_path, failure):
+    options = {"inference_missing": True} if failure == "download" else {
+        "inference_source": "def broken(:\n" if failure == "syntax" else "# tampered\n"}
+    if failure == "syntax":
+        digest = hashlib.sha256(options["inference_source"].encode()).hexdigest()
+        options["inference_declaration"] = f"INFERENCE_CLIENT_SHA256 = {digest!r}"
+    result, calls, dest = run_install(tmp_path, "--setup", live_helpers=True,
+                                      inference_helper=True, existing_client="old client\n", **options)
+    assert result.returncode != 0
+    assert calls == []
+    assert (dest / "ccfleet").read_text() == "old client\n"
+    assert not list(dest.glob("ccfleet-*.py"))
+    assert not list(dest.glob(".ccfleet*"))
+
+
+@pytest.mark.parametrize("declaration", [
+    "INFERENCE_CLIENT_SHA256 = 'bad'", "INFERENCE_CLIENT_SHA256 = '0' * 64",
+    f"INFERENCE_CLIENT_SHA256: str = {INFERENCE_DIGEST!r}",
+    f"INFERENCE_CLIENT_SHA256 = {INFERENCE_DIGEST!r}\n"
+    f"INFERENCE_CLIENT_SHA256 = {INFERENCE_DIGEST!r}",
+])
+def test_inference_digest_must_be_a_unique_literal(tmp_path, declaration):
+    result, calls, dest = run_install(tmp_path, inference_helper=True,
+                                      inference_declaration=declaration, existing_client="old\n")
+    assert result.returncode != 0 and calls == []
+    assert "INFERENCE_CLIENT_SHA256" in result.stderr
+    assert (dest / "ccfleet").read_text() == "old\n"
+
+
+def test_inference_helper_is_not_executed_during_install_and_supports_source_refs(tmp_path):
+    marker = tmp_path / "must-not-execute"
+    source = f"open({str(marker)!r}, 'w').write('executed')\n"
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    prefix = "https://raw.githubusercontent.com/cdcupt/ccfleet/releases/inference"
+    result, calls, _ = run_install(
+        tmp_path, inference_helper=True, inference_source=source,
+        inference_declaration=f"INFERENCE_CLIENT_SHA256 = {digest!r}",
+        download_url=prefix + "/laptop/ccfleet", helper_url_override=False)
+    assert result.returncode == 0, result.stderr
+    assert calls == [] and not marker.exists()
+    assert (tmp_path / "downloads.log").read_text().splitlines() == [
+        prefix + "/laptop/ccfleet", prefix + "/ccfleet_agent/project_files.py",
+        prefix + "/ccfleet_agent/inference_client.py",
+    ]
+
+
+def test_setup_installs_missing_native_cli_before_pairing_without_sudo(tmp_path):
+    result, calls, dest = run_install(tmp_path, "--setup", native_claude=False)
+    assert result.returncode == 0, result.stderr
+    assert calls == ["vendor:install", "client:setup --name computer", "old:--remove"]
+    assert (dest / "claude").is_file()
+    assert "Installing the original Claude Code CLI" in result.stdout
+    assert "no sudo" in result.stdout
+    assert (tmp_path / "downloads.log").read_text().splitlines()[-1] == "https://claude.ai/install.sh"
+    assert not list(dest.glob(".ccfleet-claude-installer.*"))
+
+
+@pytest.mark.parametrize("failure", ["download", "run", "syntax", "missing-binary", "bad-version"])
+def test_native_install_failure_never_pairs_or_removes_legacy(tmp_path, failure):
+    options = {
+        "download": {"vendor_download_failure": True},
+        "run": {"vendor_rc": 1},
+        "syntax": {"vendor_source": "if broken syntax\n"},
+        "missing-binary": {"vendor_creates_binary": False},
+        "bad-version": {"native_rc": 1},
+    }[failure]
+    result, calls, dest = run_install(tmp_path, "--setup", native_claude=False, **options)
+    assert result.returncode != 0
+    assert not any(call.startswith(("client:", "old:")) for call in calls)
+    assert "Setup complete" not in result.stdout
+    assert not (tmp_path / "home/.zshrc").exists()
+    assert not list(dest.glob(".ccfleet-claude-installer.*"))
+
+
+def test_setup_preserves_existing_working_native_cli_and_does_not_fetch_vendor(tmp_path):
+    dest = tmp_path / "home/.local/bin"
+    dest.mkdir(parents=True)
+    binary = dest / "claude"
+    original = "#!/bin/sh\nprintf 'existing Claude Code\\n'\nexit 0\n"
+    binary.write_text(original)
+    binary.chmod(0o755)
+    result, calls, _ = run_install(tmp_path, "--setup", native_claude=False)
+    assert result.returncode == 0, result.stderr
+    assert calls == ["client:setup --name computer", "old:--remove"]
+    assert binary.read_text() == original
+    assert "https://claude.ai/install.sh" not in (tmp_path / "downloads.log").read_text()
+
+
+def test_broken_existing_native_cli_is_not_overwritten_or_used_for_setup(tmp_path):
+    result, calls, dest = run_install(tmp_path, "--setup", native_rc=1)
+    assert result.returncode != 0 and calls == []
+    assert "version check failed" in result.stderr
+    assert "exit 1" in (dest / "claude").read_text()
+
+
+@pytest.mark.parametrize("flags", [(), ("--migrate",)])
+def test_plain_install_and_legacy_migrate_do_not_install_native_claude(tmp_path, flags):
+    result, calls, dest = run_install(tmp_path, *flags, native_claude=False)
+    assert result.returncode == 0, result.stderr
+    assert "vendor:install" not in calls
+    assert not (dest / "claude").exists()
+    assert "https://claude.ai/install.sh" not in (tmp_path / "downloads.log").read_text()
 
 
 @pytest.mark.parametrize("helper_missing", [False, True])

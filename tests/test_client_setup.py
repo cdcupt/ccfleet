@@ -32,6 +32,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setitem(result["cmd_setup"].__globals__, "live_client", lambda: SimpleNamespace())
     monkeypatch.setitem(result["cmd_setup"].__globals__, "live_control",
                         lambda *a, **kw: {"ready": True})
+    from ccfleet_agent import inference_client
+    helper = SimpleNamespace(RelayError=inference_client.RelayError,
+                             check_status=lambda *a, **kw: {"ready": True, "protocol": 2})
+    monkeypatch.setitem(result["cmd_setup"].__globals__, "inference_client", lambda: helper)
+    result["_inference_fixture"] = helper
     return result
 
 
@@ -65,15 +70,15 @@ def test_existing_setup_preserves_keys_config_history_and_device_label(client, m
     before = client["config_path"]().read_bytes()
     forbid_pairing(client, monkeypatch)
     calls = []
-    def rpc(selected, operation, **kw):
-        calls.append((selected, operation, kw))
-        return {"ready": True, "protocol": 1}
-    monkeypatch.setitem(client["cmd_setup"].__globals__, "project_rpc", rpc)
+    def rpc(selected, **kw):
+        calls.append((selected, "status", kw))
+        return {"ready": True, "protocol": 2}
+    monkeypatch.setitem(client["cmd_setup"].__globals__, "check_inference", rpc)
     assert client["main"](["setup", "--name", "new-label-must-not-repair"]) == 0
     assert client["config_path"]().read_bytes() == before
     assert Path(saved["key"]).read_text() == "FAKE_PRIVATE_KEY"
     assert len(calls) == 1 and calls[0][1] == "status"
-    assert set(calls[0][2]) == {"_timeout"} and 0 < calls[0][2]["_timeout"] <= 25
+    assert set(calls[0][2]) == {"timeout"} and 0 < calls[0][2]["timeout"] <= 25
     output = capsys.readouterr()
     assert "Already paired" in output.out and "No project was uploaded" in output.out
     assert saved["device_token"] not in output.out + output.err
@@ -86,17 +91,17 @@ def test_new_setup_registers_once_then_waits_for_key_propagation(client, monkeyp
         logins.append(args)
         save(client, device(client))
         return 0
-    def rpc(selected, operation, **kw):
-        probes.append((selected["device_id"], operation, kw["_timeout"]))
+    def rpc(selected, **kw):
+        probes.append((selected["device_id"], "status", kw["timeout"]))
         if len(probes) < 3:
             raise client["CliError"]("key has not converged", code="connection")
-        return {"ready": True, "protocol": 1}
+        return {"ready": True, "protocol": 2}
     def sleep(seconds):
         sleeps.append(seconds)
         clock["now"] += seconds
     scope = client["cmd_setup"].__globals__
     monkeypatch.setitem(scope, "cmd_login", login)
-    monkeypatch.setitem(scope, "project_rpc", rpc)
+    monkeypatch.setitem(scope, "check_inference", rpc)
     monkeypatch.setattr(client["time"], "monotonic", lambda: clock["now"])
     monkeypatch.setattr(client["time"], "sleep", sleep)
     assert client["main"](["setup", "--name", "computer"]) == 0
@@ -113,14 +118,13 @@ def test_setup_deadline_keeps_successful_pairing_without_registering_again(clien
     def login(args):
         logins.append(args)
         save(client, device(client))
-    def rpc(_selected, operation, **kw):
-        assert operation == "status"
-        budgets.append(kw["_timeout"])
-        clock["now"] += kw["_timeout"]
+    def rpc(_selected, **kw):
+        budgets.append(kw["timeout"])
+        clock["now"] += kw["timeout"]
         raise client["CliError"]("transport timeout", code="connection")
     scope = client["cmd_setup"].__globals__
     monkeypatch.setitem(scope, "cmd_login", login)
-    monkeypatch.setitem(scope, "project_rpc", rpc)
+    monkeypatch.setitem(scope, "check_inference", rpc)
     monkeypatch.setitem(scope, "SETUP_WAIT_SECONDS", 32)
     monkeypatch.setattr(client["time"], "monotonic", lambda: clock["now"])
     monkeypatch.setattr(client["time"], "sleep",
@@ -141,7 +145,7 @@ def test_permanent_readiness_failures_stop_without_retry_or_cleanup(client, monk
         raise client["CliError"]("operator action required", code=code)
     scope = client["cmd_setup"].__globals__
     monkeypatch.setitem(scope, "cmd_login", login)
-    monkeypatch.setitem(scope, "project_rpc", rpc)
+    monkeypatch.setitem(scope, "check_inference", rpc)
     assert client["main"](["setup"]) == 2
     assert len(calls) == 1 and client["load_config"]()["active"] == "one"
     assert "old setup has not been removed" in capsys.readouterr().err
@@ -155,17 +159,17 @@ def test_existing_connection_failure_never_repairs_or_changes_configuration(clie
     def rpc(*a, **kw):
         calls.append(kw)
         raise client["CliError"]("check network or revocation", code="connection")
-    monkeypatch.setitem(client["cmd_setup"].__globals__, "project_rpc", rpc)
+    monkeypatch.setitem(client["cmd_setup"].__globals__, "check_inference", rpc)
     assert client["main"](["setup"]) == 2
     assert len(calls) == 1 and client["config_path"]().read_bytes() == original
 
 
 @pytest.mark.parametrize("answer", [{"ready": 1, "protocol": 1}, {"ready": True, "protocol": True},
                                     {"ready": True, "protocol": "1"}, {"protocol": 1},
-                                    {"ready": False, "protocol": 1}, {"ready": True, "protocol": 2}])
+                                    {"ready": False, "protocol": 1}, {"ready": True, "protocol": 1}])
 def test_setup_requires_strict_ready_and_integer_protocol(client, monkeypatch, answer):
     save(client, device(client))
-    monkeypatch.setitem(client["cmd_setup"].__globals__, "project_rpc", lambda *a, **kw: answer)
+    monkeypatch.setattr(client["_inference_fixture"], "check_status", lambda *a, **kw: answer)
     assert client["main"](["setup"]) == 2
 
 
@@ -176,8 +180,8 @@ def test_explicit_paired_slot_becomes_default_only_after_readiness(client, monke
     def rpc(selected, *a, **kw):
         assert selected["device_id"] == "two"
         assert client["load_config"]()["active"] == "one"
-        return {"ready": True, "protocol": 1}
-    monkeypatch.setitem(client["cmd_setup"].__globals__, "project_rpc", rpc)
+        return {"ready": True, "protocol": 2}
+    monkeypatch.setitem(client["cmd_setup"].__globals__, "check_inference", rpc)
     assert client["main"](["setup", "--slot", "slot-two"]) == 0
     config = client["load_config"]()
     assert config["active"] == "two" and len(config["devices"]) == 2
@@ -198,7 +202,7 @@ def test_invalid_existing_pairing_is_not_replaced(client, monkeypatch, bad):
     forbid_pairing(client, monkeypatch)
     def rpc(*a, **kw):
         pytest.fail("invalid pairing contacted the network")
-    monkeypatch.setitem(client["cmd_setup"].__globals__, "project_rpc", rpc)
+    monkeypatch.setitem(client["cmd_setup"].__globals__, "check_inference", rpc)
     flags = ["--slot", "unknown"] if bad == "unknown_slot" else []
     assert client["main"](["setup", *flags]) == 2
     assert client["config_path"]().read_bytes() == before

@@ -5,11 +5,17 @@
 
 set -euo pipefail
 
-# The former local-agent inference relay is retired. Never read or export a
-# slot credential for a laptop process, even for an older paired client.
+# The old protocol remains retired. Inference v2 is a separate operator-gated
+# transport that keeps the credential on the slot and filters client identity.
 if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-relay-v1 ]; then
   printf 'the local inference relay is retired; update ccfleet for slot-only project sessions\n' >&2
   exit 2
+fi
+
+if [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-inference-v1 ]; then
+  [ ! -t 0 ] && [ ! -t 1 ] \
+    || { printf 'inference transport does not accept a terminal\n' >&2; exit 2; }
+  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/local_relay.py" --protocol-v2
 fi
 
 if [[ "${SSH_ORIGINAL_COMMAND:-}" == ccfleet-live-v1\ * \

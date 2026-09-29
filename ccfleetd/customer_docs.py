@@ -198,7 +198,7 @@ def _demo() -> str:
         '<p class="demo-meta">machine last heard 12s ago</p>'
         '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
         'Max 20x plan.</p>'
-        '<p class="rc on">CC Fleet CLI is ready: run <strong>ccfleet</strong> anywhere.</p>'
+        '<p class="rc on">CC Fleet CLI is ready: run <strong>ccfleet local</strong>.</p>'
         '<div class="demo-usage">'
         + _meter(34, "5-hour session", "at 11:40pm") + _meter(61, "This week", "on Friday")
         + "</div></div></div>"
@@ -236,25 +236,25 @@ def overview(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<section class="hero"><div class="hero-copy"><div class="hero-top">'
         '<p class="eyebrow">Bring your own Claude plan</p>'
         + statuspage.pill(health) + "</div>"
-        "<h1>Claude Code on a machine that is always on</h1>"
+        "<h1>Local Claude Code, your own account on your slot</h1>"
         '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux account on a '
         "machine we run, with Claude Code installed and signed in to <em>your own</em> Claude "
-        "account. Install the small <code>ccfleet</code> terminal client on any computer and "
-        "run one command. The original Claude Code CLI, your files and its connection to "
-        "Anthropic all remain on your slot, even when your laptop disconnects.</p>"
+        "account. Run <code>ccfleet local</code> for original Claude Code, files, tools and "
+        "history on your computer, with supported model requests relayed through that slot. "
+        "Plain <code>ccfleet</code> keeps the remote terminal available for earlier work.</p>"
         + way_in + "</div>" + _demo() + "</section>"
         '<section class="band"><h2>What you get</h2>'
         '<p class="band-lead">For anybody with a Claude plan that includes Claude Code who '
-        "wants it running somewhere that stays on.</p>"
+        "wants a dedicated account-bound slot for model access.</p>"
         '<div class="features">'
         f'<div class="feature">{ICONS["account"]}<h3>Your own Linux account</h3>'
         "<p>A home directory only you can read, and room for your projects and tools.</p></div>"
-        f'<div class="feature">{ICONS["machine"]}<h3>Claude Code, always on</h3>'
-        "<p>Installed on the slot, kept up to date, and resumed after a dropped "
-        "connection.</p></div>"
+        f'<div class="feature">{ICONS["machine"]}<h3>Your native local workflow</h3>'
+        "<p>Original Claude Code, local tools and native history; no project upload or "
+        "filesystem mount.</p></div>"
         f'<div class="feature">{ICONS["usage"]}<h3>One command anywhere</h3>'
-        "<p>Run <code>ccfleet</code> from your terminal. No SSH command, proxy setting or "
-        "Claude credential is installed on your computer.</p></div>"
+        "<p>Run <code>ccfleet local</code> from your terminal. No manual SSH or proxy "
+        "configuration, and no slot Claude credential copied to your computer.</p></div>"
         "</div></section>"
         '<section class="band two">'
         '<div class="card"><h2>What you need</h2><ul>'
@@ -295,8 +295,8 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<p class="lead">From buying a slot to your first Claude Code session. It takes a few '
         "minutes, most of which is the machine setting your slot up.</p>"
         '<p>Already using CC Fleet? Start with the <a href="#migration">migration guide</a>. '
-        'For selected laptop projects, see '
-        '<a href="#project-workspaces">project workspaces</a>.</p></div>'
+        'For the native local workflow, see '
+        '<a href="#project-workspaces">local files and history</a>.</p></div>'
         '<ol class="steps">'
         "<li><h3>Sign in</h3>"
         '<p>Open <a href="/account">your page</a> and choose '
@@ -324,137 +324,116 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<div class="card" id="migration"><h2>One-command setup and migration</h2>'
         '<p>New computer, already paired, or still using <code>ccfleet-connect</code>: '
         'use the same command. You do not need to choose a migration mode.</p>'
-        '<ol><li><strong>Finish an old preview session, if one is running.</strong> '
-        'Exit any running local-agent preview session before updating; the installer '
-        'does not stop or convert an already-running process.</li>'
-        '<li><strong>Run setup in your terminal:</strong></li></ol>'
+        '<ol><li><strong>Finish old work first.</strong> An old live-folder connector may '
+        'still be running after its terminal closes. Finish that work before approving '
+        'migration; do not assume a closed terminal stopped folder access.</li>'
+        '<li><strong>Run setup:</strong></li></ol>'
         '<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/'
         'ccfleet/main/laptop/install.sh | bash -s -- --setup</code></pre>'
-        '<ol start="3"><li><strong>Follow the setup prompt.</strong> An already-paired '
+        '<ol start="3"><li><strong>Follow the pairing prompt.</strong> An already-paired '
         'computer reuses its existing pairing; do not pair again. Only if this computer '
         'is not paired, open <a href="/account">your slot page</a>, choose '
         '<span class="btnlabel">Connect this computer</span>, and paste one fresh pairing '
-        'code when asked. No Claude password, token, or SSH command is needed.</li>'
-        '<li><strong>Wait for readiness.</strong> Setup waits for a new device key to reach '
-        'the slot and checks access without uploading project files or making a model '
-        'request. It cleans up the legacy <code>ccfleet-connect</code> setup only after '
-        'readiness succeeds. If readiness fails, the legacy setup is left in place; '
-        'resolve the reported issue and rerun the same command.</li>'
+        'code when asked. No SSH command or slot Claude credential is needed.</li>'
+        '<li><strong>Approve old access cleanup only when ready.</strong> Setup asks in '
+        'the controlling terminal before stopping old live-folder connectors and their '
+        'associated remote live-folder sessions. This cancels pending work and invalidates '
+        'open mount handles. Files and history are kept; ordinary remote tmux sessions '
+        'are untouched. If you decline or cleanup fails, follow the reported instructions '
+        'and retry. Adding <code>--yes</code> explicitly authorizes this cancellation.</li>'
+        '<li><strong>Wait for readiness.</strong> Existing native Claude is preserved; '
+        'if missing, setup installs the original local CLI from the fixed vendor URL. '
+        'Setup waits for a new device key to reach the slot and checks access without '
+        'uploading project files or making a model request. Old '
+        '<code>ccfleet-connect</code> cleanup runs only after readiness succeeds.</li>'
         '<li><strong>Open a new terminal, then choose your project:</strong></li></ol>'
         '<pre><code>cd ~/code/my-project\nccfleet local</code></pre>'
-        '<p>Confirm the selected folder\'s live read/write trust prompt. '
-        '<code>ccfleet local</code> '
-        'runs Claude Code and all agent tools on the slot, not your laptop. No local Claude '
-        'Code installation is required. Setup itself does not share files or start a model '
-        'session.</p>'
-        '<p>The installer checks the downloaded client and verifies its digest-pinned helper. '
-        'Your pairing, configuration, slot sign-in and existing remote workspace stay in place. '
-        'PATH changes preserve existing shell settings and keep a backup when modifying '
-        'them. Open a new terminal to pick up PATH changes. Existing shells keep their '
-        'old environment; custom token exports outside the managed setup are not removed.</p>'
-        '<p>Optional: add <code>--name "Personal Mac"</code> after <code>--setup</code> '
-        'to label a new device, or <code>--slot SLOT</code> to choose an existing paired slot. '
-        'Install-only (omit <code>--setup</code>), manual <code>ccfleet login</code>, and '
-        'legacy <code>--migrate</code> remain compatibility options, not extra setup steps.</p>'
-        '<p>Setup does not automatically revoke an Anthropic credential. Revoke an old '
-        'setup-token yourself only if nothing else uses it. '
-        'Old local conversation history stays on this computer '
-        'and is not imported into the slot. Existing remote files are not automatically moved '
-        'into the connected laptop folder. Plain <code>ccfleet</code> still opens your ordinary '
-        'slot terminal.</p>'
-        '<p><strong>Availability:</strong> live folders require an upgraded node and '
-        'operator-enabled access. Newly created or reassigned slots need operator activation. '
-        'Installing the client or running the check does not activate access. '
-        'Repeat readiness independently with <code>ccfleet local --check</code>. '
-        'If it reports access is disabled or unsupported, keep using plain <code>ccfleet</code> '
-        'and contact '
-        'your operator. The check sends no project files '
-        'and makes no model request.</p></div>'
-        '<div class="card" id="project-workspaces"><h2>Live folders, slot-only execution</h2>'
-        '<p><code>ccfleet local</code> connects your selected laptop folder as a live '
-        'filesystem on the slot and opens original Claude Code inside persistent tmux. '
-        'Reads happen on demand; writes and deletions affect your laptop immediately. '
-        'Filename and metadata changes may take about one second to appear on the slot; '
-        'file-content reads bypass that cache and writes remain write-through. '
-        'There is no whole-project upload and no manual push/pull step. Claude and all '
-        'tools run on the slot, not as a local laptop agent.</p>'
-        '<ol><li>Choose a folder with <code>cd</code> or <code>--project PATH</code>.</li>'
-        '<li>Run <code>ccfleet local</code> and approve its initial folder trust prompt. '
-        'The grant is retained for that device/folder binding. <code>--yes</code> is an '
-        'explicit scripted grant of live read/write access, not a safer mode.</li>'
-        '<li>Work normally. Changes are live, not held for a reviewed download. '
-        'Keep backups and use version control.</li></ol>'
-        '<h3>Home folders and access</h3>'
+        '<p>Original Claude Code now runs on your computer with local files, tools, '
+        'settings and history. Supported model requests use your assigned slot. Setup '
+        'itself starts no Claude conversation.</p>'
+        '<p>The installer verifies its digest-pinned helper. Pairing, configuration, '
+        'slot sign-in and existing remote files stay in place. PATH changes preserve '
+        'existing shell settings and keep a backup. Existing terminals keep their old '
+        'environment; custom token exports outside the managed setup are not removed.</p>'
+        '<p>Optional: add <code>--name "Personal Mac"</code> after <code>--setup</code> to '
+        'label a new device, or <code>--slot SLOT</code> to choose an existing pairing. '
+        'Install-only, manual <code>ccfleet login</code>, and legacy <code>--migrate</code> '
+        'remain compatibility options. Setup does not automatically revoke an Anthropic '
+        'credential. Revoke an old setup-token yourself only if nothing else uses it.</p>'
+        '<p><strong>Availability:</strong> inference relay access requires an upgraded, '
+        'operator-enabled assigned slot. Installing the client or running the check '
+        'does not activate access. <code>ccfleet local --check</code> sends no project '
+        'files and makes no model request. A working old terminal or mount does not '
+        'prove the relay is enabled; follow any readiness error before starting work.</p></div>'
+        '<div class="card" id="project-workspaces"><h2>Local Claude, local files and history</h2>'
+        '<p><code>ccfleet local</code> launches the original local Claude CLI. It does not '
+        'upload a project, mount your filesystem on the slot, or require push/pull. There '
+        'are no CC Fleet filesystem count/size caps or Git-ignore filters. Use '
+        '<code>--project PATH</code> or <code>cd</code>; home works too:</p>'
         '<pre><code>cd ~\nccfleet local</code></pre>'
-        '<p>Home uses the same folder trust flow. There is no separate '
-        '<code>--allow-home</code> flag or home-folder ban. There are no snapshot-style '
-        'file-count, per-file-size or total-size product caps, and no Git-ignore or broad '
-        'hidden-file filtering. Operating-system permissions, storage and network limits '
-        'still apply; protocol messages and concurrent operations remain resource-bounded.</p>'
-        '<p>Sharing home can expose settings, <code>.ssh</code>, <code>.claude</code>, '
-        '<code>.env</code> files and credentials if read. Live writes can change startup '
-        'scripts or other files executed locally later. CC Fleet private configuration, '
-        'device keys, host-key pins and active client/helper files remain protected. '
-        'The active Python runtime is protected too. '
-        'The selected root remains the filesystem boundary. Do not grant a folder you '
-        'cannot entrust to the slot and its administrators.</p>'
-        '<h3>Sessions and modes</h3>'
-        '<p>New live sessions default to <code>bypassPermissions</code>, Opus and max effort. '
-        'Tools can write or delete connected files without individual permission prompts. '
-        'Choose another mode, model or effort with '
-        '<code class="code-wrap">ccfleet local --new --name research --mode plan '
-        '--model opus --effort high</code>. Existing sessions keep their settings on reattach. '
-        'Inside original Claude, use <code>/model</code> and <code>/effort</code>.</p>'
-        '<p><code>ccfleet local --continue</code> returns to the previous session; '
-        '<code>ccfleet local --resume</code> opens a picker of running sessions, and '
-        '<code>ccfleet local --resume work</code> selects one directly. '
-        '<code>ccfleet local --new --name work</code> creates another named session. '
-        'The retired local <code>--print</code> and <code>--fork-session</code> options are '
-        'not supported; use the slot Claude interface.</p>'
-        '<h3>Closing, disconnecting and reconnecting</h3>'
-        '<p>Closing the terminal leaves the background folder connector and remote tmux '
-        'session active. <code>/exit</code> finishes one Claude session. To stop folder '
-        'access and its associated remote project sessions, run:</p>'
-        '<pre><code>ccfleet local --disconnect</code></pre>'
-        '<p>If the laptop sleeps or goes offline, filesystem operations wait for the '
-        'connection. Keep it awake and online for work that needs its files. Persistent '
-        'tmux does not prove an interrupted write succeeded. If the background connector '
-        'is lost or replaced, use <code>ccfleet local --reset-link</code> for an explicit '
-        'reset after a warning; inspect files and restart interrupted operations.</p>'
-        '<p>Multiple computers may remain paired, but a live folder belongs to its '
-        'originating computer. Another computer is not an interchangeable copy of that '
-        'folder. Each device remains separately revocable.</p>'
-        '<h3>Environment and privacy</h3>'
-        '<p>Tools execute on Linux. Sharing Mac files does not provide Xcode, macOS-only '
-        'commands, local services or native Mac dependencies. The connector exposes file '
-        'operations, not a laptop shell or local process execution.</p>'
-        '<p>The connector does not automatically collect laptop hostname, environment '
-        'variables, timezone, geolocation or host fingerprint. Selected filenames, contents, '
-        'link targets and filesystem metadata can identify you. BWH sees your incoming IP '
-        'address and connection metadata; SSH exposes its client version and terminal '
-        'dimensions. Slot administrators have root and can inspect and change connected '
-        'data. Relevant content is sent to Anthropic. This is not an anonymity guarantee '
-        'or an operating-system sandbox. Disconnecting does not erase previously read '
-        'content or undo writes.</p>'
-        '<details><summary>Legacy snapshot recovery</summary>'
-        '<p>The old <code>ccfleet project status</code>, <code>ccfleet project diff</code>, '
-        '<code>ccfleet project pull</code> and <code>ccfleet project push</code> commands '
-        'remain for earlier snapshot work only. They are not part of the live workflow. '
-        '<code>ccfleet project list</code> lists old IDs; recover one into an existing '
-        'empty directory with <code class="code-wrap">ccfleet project pull '
-        '--remote-project ID --project PATH</code>.</p>'
-        '<p>Legacy snapshots retain reviewed pulls, conflict checks, '
-        '<code>project-backups</code>, and the old 1,000 files, 4 MiB per file and '
-        '20 MiB total limits and ignore filters. Finish old snapshot sessions before '
-        'pushing another snapshot. These restrictions do not apply to the live mount.</p>'
-        '</details></div>'
-        '<div class="card"><h2>The CLI experience</h2><ul>'
+        '<p>The working directory is not a sandbox. Native Claude permissions govern '
+        'local file and tool access, including outside that directory. New conversations '
+        'default to <code>bypassPermissions</code>, Opus and max effort, so local tools can '
+        'modify, delete or transmit data without individual approval prompts. Choose '
+        'another mode when appropriate:</p>'
+        '<pre><code>ccfleet local --new --name work\n'
+        'ccfleet local --new --name research --mode plan --model opus --effort high\n'
+        'ccfleet local --resume\nccfleet local --resume work\nccfleet local --continue\n'
+        'ccfleet local --resume work --fork-session\n'
+        'ccfleet local --print "Summarize this project"</code></pre>'
+        '<p>These are native local conversations, not remote tmux sessions. '
+        '<code>--resume</code> uses Claude&#x27;s native history picker or an ID/name; '
+        '<code>--continue</code> selects the last local conversation for this directory. '
+        'Use <code>/model</code> and <code>/effort</code> inside Claude. Resuming preserves '
+        'the saved model and effort unless you request changes. Additional supported '
+        'native arguments go after <code>--</code>; routing/authentication overrides '
+        'are not alternate CC Fleet modes.</p>'
+        '<p>Foreground interactive sessions, <code>--print</code>, native resume and '
+        'multiple normal terminal sessions are supported. Native <code>--bg</code> / '
+        '<code>--background</code> is explicitly rejected: a detached agent would outlive '
+        'the launch-scoped bridge. Use another regular terminal for parallel work.</p>'
+        '<h3>Keep your native settings and history</h3>'
+        '<p>The default uses native Claude settings/history, including an existing '
+        '<code>CLAUDE_CONFIG_DIR</code>. Nothing is imported or deleted. To reopen an '
+        'earlier per-slot relay-preview profile, use '
+        '<code class="code-wrap">ccfleet local --legacy-history --resume</code>. This selects '
+        'that old local profile; it does not merge it into native history. Old remote '
+        'history remains on the slot.</p>'
+        '<p>A temporary private settings overlay pins the loopback model route and nonce, '
+        'clears conflicting provider/authentication overrides, and disables supported '
+        'optional telemetry. Ordinary customizations remain; native settings files '
+        'are not permanently rewritten.</p>'
+        '<h3>Stopping and recovering older work</h3>'
+        '<p>Quit a new local session normally with <code>/exit</code>, then use native '
+        'resume later. A closed terminal does not create a persistent remote version of '
+        'this local agent. Interrupted inference is not silently replayed by CC Fleet.</p>'
+        '<p><code>ccfleet local --disconnect</code> is only for explicitly cleaning up an '
+        'old live-folder grant and its associated remote sessions. It can cancel pending '
+        'work. <code>--reset-link</code> is retired and provides migration guidance. '
+        'Old <code>ccfleet project</code> commands remain for deliberate snapshot recovery, '
+        'not for the current local workflow.</p>'
+        '<h3>Routing and privacy limits</h3>'
+        '<p>The relay removes selected headers and the top-level structured '
+        '<code>metadata</code> field before forwarding. It does not redact arbitrary '
+        'prompts or tool results. Native system prompts may include local OS, working '
+        'directory and environment details; files and paths may identify you and reach '
+        'the slot and Anthropic. This is not a fingerprint-free or zero-metadata guarantee.</p>'
+        '<p>Only supported model endpoints use the relay. MCP servers, hooks, plugins, '
+        'shell tools, updates and other native CLI services can connect directly from '
+        'the laptop. Optional telemetry controls are not an all-traffic firewall.</p>'
+        '<p>BWH sees your incoming IP address and connection metadata but cannot decrypt '
+        'the inner SSH model stream. SSH exposes client version and terminal dimensions. '
+        'Slot administrators have root and can inspect or alter relayed requests and '
+        'responses, which can influence local tool actions. Trust and native local '
+        'permissions remain important. Each paired device remains separately revocable.</p></div>'
+        '<div class="card"><h2>Remote-terminal compatibility</h2>'
+        '<p>The commands below run on the slot, not in a local Claude conversation.</p><ul>'
         "<li><strong>The command.</strong> Run <code>ccfleet</code> in a normal terminal. It "
         "opens the original Claude Code interface running in your slot. You never type an "
         "SSH command and your computer receives no Claude credential.</li>"
         "<li><strong>Where work runs.</strong> Claude Code, its shell tools and model requests "
-        "run on the slot. Files are stored there or reached through an explicitly connected "
-        "live folder. The laptop runs the connector and encrypted terminal, not Claude.</li>"
+        "run on the slot for this compatibility command. Files live in its remote workspace; "
+        "use <code>ccfleet local</code> for local Claude and local files.</li>"
         "<li><strong>Permission mode.</strong> Hosted sessions start with permission prompts "
         "off. Claude can run tools without asking as your slot user. The slot has no sudo, "
         "but Claude can read, change, delete or send anything that user can access. Start a "
@@ -472,8 +451,8 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<li><strong>Projects.</strong> Keep projects in <code>~/workspace</code> on the slot. "
         "Clone with Git or fetch them from another service from inside Claude Code. CC Fleet "
         "does not silently upload or mount files from the computer where you run the client. "
-        'For explicit local folder access, see '
-        '<a href="#project-workspaces">live folders</a>.</li>'
+        'For local Claude instead, see '
+        '<a href="#project-workspaces">local files and history</a>.</li>'
         "<li><strong>Reconnect.</strong> Claude Code runs inside a persistent session. If "
         "Wi-Fi changes, the laptop sleeps or the terminal closes, run <code>ccfleet</code> "
         "again and it reattaches to the same session.</li>"
@@ -482,6 +461,7 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         "your slot page without changing your Claude sign-in.</li>"
         "<li><strong>Your usage.</strong> The 5-hour and weekly bars cover the whole Claude "
         "account. Beside them, the token count covers what Claude Code used on this slot. "
+        "That slot token count is not a complete local-relay usage meter. "
         "The limits are read every five minutes; <span class=\"btnlabel\">Refresh</span> "
         "reads them now.</li>"
         '<li><strong>Giving it back.</strong> Tick the box and press '
@@ -565,33 +545,33 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
 #: to the slot.
 PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img" aria-labelledby="diag-t diag-d">
 <title id="diag-t">Where your work runs</title>
-<desc id="diag-d">The ccfleet command on your computer opens an encrypted terminal through the
-CC Fleet broker to the original Claude Code process in your slot. Only the slot talks to
-Anthropic.</desc>
+<desc id="diag-d">Original Claude Code runs locally. Supported model requests travel through
+encrypted SSH and the CC Fleet broker to the assigned slot relay, then Anthropic.
+Other native CLI services can connect directly from the laptop.</desc>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
 orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
 <marker id="af" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
 orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="box you" x="20" y="14" width="320" height="70" rx="12"/>
-<text x="180" y="44" text-anchor="middle">You</text>
-<text class="sub" x="180" y="66" text-anchor="middle">the ccfleet command in your terminal</text>
+<text x="180" y="44" text-anchor="middle">Local original Claude Code</text>
+<text class="sub" x="180" y="66" text-anchor="middle">local files, tools and history</text>
 <path class="arrow" d="M180,88 L180,126" marker-start="url(#ah)" marker-end="url(#ah)"/>
 <text class="sub" x="190" y="111">TLS + encrypted SSH</text>
 <rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
 <text x="180" y="160" text-anchor="middle">CC Fleet broker</text>
 <text class="sub" x="180" y="182" text-anchor="middle">authenticates device; relays bytes</text>
 <path class="arrow" d="M180,204 L180,242" marker-start="url(#ah)" marker-end="url(#ah)"/>
-<text class="sub" x="190" y="227">encrypted through to the slot</text>
+<text class="sub" x="190" y="227">SSH to the slot</text>
 <rect class="slot" x="20" y="246" width="320" height="114" rx="12"/>
 <text x="180" y="276" text-anchor="middle">Your slot, on our machine</text>
-<text class="sub" x="180" y="300" text-anchor="middle">your Linux account, files and tools</text>
-<text class="sub" x="180" y="322" text-anchor="middle">original Claude Code, signed in as you</text>
-<text class="sub" x="180" y="344" text-anchor="middle">session survives disconnects</text>
+<text class="sub" x="180" y="300" text-anchor="middle">fixed upstream model relay</text>
+<text class="sub" x="180" y="322" text-anchor="middle">only your bound Claude account</text>
+<text class="sub" x="180" y="344" text-anchor="middle">credential stays on the slot</text>
 <path class="arrow" d="M180,364 L180,408" marker-start="url(#ah)" marker-end="url(#ah)"/>
 <text class="sub" x="190" y="392">Claude traffic from the slot</text>
 <rect class="box" x="20" y="412" width="320" height="82" rx="12"/>
 <text x="180" y="444" text-anchor="middle">Anthropic</text>
-<text class="sub" x="180" y="468" text-anchor="middle">sees slot and its one Claude account</text>
+<text class="sub" x="180" y="468" text-anchor="middle">relevant prompts and tool context</text>
 </svg>"""
 
 
@@ -601,9 +581,9 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
     the same way."""
     body = (
         '<div class="dochead"><h1>How it works</h1>'
-        '<p class="lead">Your terminal reaches the original Claude Code process in your slot. '
-        "CC Fleet brokers the connection, but the terminal stream is encrypted through to "
-        "the slot; only Claude Code on the slot talks to Anthropic.</p></div>"
+        '<p class="lead"><code>ccfleet local</code> runs original Claude Code on your computer. '
+        'Supported model requests travel through encrypted SSH to your assigned slot relay. '
+        'Plain <code>ccfleet</code> remains a remote-terminal compatibility command.</p></div>'
         f'<div class="how"><figure class="card diagram">{PICTURE}</figure>'
         '<div class="how-text">'
         '<div class="card"><h2>Your slot</h2>'
@@ -616,25 +596,24 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<p>You sign in to Claude yourself, through Anthropic&#x27;s own sign-in. The "
         "credential that creates is written on the machine, in your slot, and nowhere else: "
         "ccfleet&#x27;s server passes along the sign-in link and the code you paste, and "
-        "never receives or keeps the resulting credential. Claude Code in your slot talks "
-        "to Anthropic directly. CC Fleet never substitutes, rotates or pools Claude accounts: "
-        "one slot keeps one account for one holder.</p></div>"
+        "never receives or keeps the resulting credential. Native Claude on the slot owns "
+        "authentication and renewal. The slot relay uses that bound credential upstream, "
+        "not a credential sent to your laptop. No account rotation or pooling: one slot "
+        "keeps one account for one holder.</p></div>"
         '<div class="card"><h2>Use it from anywhere</h2>'
         "<p>Install <code>ccfleet</code> on each computer you use. It creates a device key, "
-        "pairs once with your held slot, and opens a terminal without exposing an SSH command. "
+        "pairs once with your held slot, and starts the local workflow without an SSH command. "
         "The broker accepts an authenticated WebSocket and passes the already encrypted SSH "
-        "stream to that slot. It cannot read the terminal contents. A forced entrypoint on the "
-        "slot permits its Claude Code sessions and, only when operator-enabled, the "
-        "selected-folder filesystem protocol. It cannot open a general remote shell before "
-        "Claude gives one through its normal tools.</p></div>"
-        '<div class="card"><h2>Live laptop folders</h2>'
-        '<p>The operator-enabled <code>ccfleet local</code> connector makes your explicitly '
-        'chosen folder available as a live filesystem on the slot, not a laptop Claude process '
-        'or laptop shell. Reads are on demand; writes and deletions affect the laptop immediately. '
-        'Closing the terminal leaves the background connector active; '
-        '<code>ccfleet local --disconnect</code> stops it and its remote project sessions. '
-        '<a href="/docs/guide#migration">The migration guide</a> explains how to replace the '
-        'retired local-agent preview and recover older snapshots.</p></div>'
+        "stream to that slot. It cannot read model request contents. A forced entrypoint "
+        "permits only the fixed relay and compatibility protocols, with forwarding disabled. "
+        "The model destination is not caller-selected.</p></div>"
+        '<div class="card"><h2>Native local files and history</h2>'
+        '<p>Claude, its tools, settings and conversations run locally. There is no folder '
+        'upload, mount or push/pull step, and no CC Fleet filesystem cap. Native permissions '
+        'apply; bypass mode can read, modify, delete or transmit local data without prompts. '
+        '<a href="/docs/guide#migration">The migration guide</a> explains explicit cleanup '
+        'of retired live-folder grants and the optional <code>--legacy-history</code> '
+        'profile.</p></div>'
         '<div class="card"><h2>What we can and cannot see</h2>'
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
         "signed in, the email address and plan of the Claude account signed in on it, how "
@@ -646,15 +625,18 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "error reports, bug reports and feedback surveys are switched off. The machines "
         "keep their clocks on UTC; your page shows times in your own time zone. That does "
         "not make the service anonymous: BWH sees your connection IP, SSH has transport "
-        "metadata, and selected names, contents, filesystem metadata and prompts can identify you. "
-        "The connector does not automatically collect your laptop environment, hostname, "
-        "timezone or geolocation. Selected home files may contain settings and credentials; "
-        "live writes can change files executed locally later.</p>"
+        "metadata, and native prompts, tool results and file contents can identify you. "
+        "Selected headers and top-level structured metadata are removed, but native system "
+        "prompts can still include local OS, working directory or environment details. "
+        "MCP servers, hooks, plugins, tools, updates and other native services can connect "
+        "directly from the laptop. Optional telemetry controls are not an all-traffic firewall.</p>"
         "<p>One limit is worth saying plainly: the machines are ours, and their "
         "administrators have root, so they can technically read any slot. No feature does "
         "this and we do not look, but nothing can make it impossible. Keep nothing in a slot "
         "that you could not accept an administrator being able to read.</p></div>"
         '<div class="card"><h2>Kept up to date</h2><ul>'
+        '<li><strong>Local Claude Code</strong> uses its normal native update mechanism. '
+        'CC Fleet setup preserves an existing local installation and installs it if missing.</li>'
         "<li><strong>Claude Code</strong> in your slot is updated automatically to "
         "Anthropic&#x27;s latest release, or to its stable release if you choose that on "
         "your page. A "

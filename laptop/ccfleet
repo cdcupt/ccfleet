@@ -5,10 +5,10 @@ The local process owns no Claude credential. It opens an authenticated WSS
 byte path through the ccfleet broker, then OpenSSH provides end-to-end
 encryption and host verification to the assigned slot. A forced remote entry
 attaches to a persistent tmux session whose program is the original ``claude``.
-The ``local`` command explicitly shares a selected project with that slot.
-Claude and its tools still run on the slot; the laptop never runs a Claude agent
-or an inference proxy. Live-folder changes are written through to local files;
-the older snapshot workflow remains available explicitly for recovery.
+The ``local`` command runs the original local Claude CLI and tools. Its model
+requests cross an ephemeral authenticated loopback bridge and the assigned
+slot's inference relay. Remote terminal and retired filesystem cleanup remain
+available; no folder upload or mount is needed for local Claude.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ import shlex
 import shutil
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -55,6 +56,7 @@ PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "c0bb1d6651e0452b977f659f47288aa42fa4b8b9d7170b581d090c176ee3a8a3"
+INFERENCE_CLIENT_SHA256 = "d64304e5a26281c82918f063058cf0f00ac5d91d65ae092d556f64404c8eb5df"
 SETUP_WAIT_SECONDS = 180
 
 
@@ -329,7 +331,8 @@ def open_websocket(endpoint: str, token: str) -> tuple[socket.socket, bytes]:
         sock = raw
         if parsed.scheme == "wss":
             sock = ssl.create_default_context().wrap_socket(raw, server_hostname=parsed.hostname)
-        sock.settimeout(None)
+        # Keep the connect/TLS timeout through HTTP Upgrade. A healthy TCP peer
+        # that never sends headers must not strand the local proxy indefinitely.
         key = base64.b64encode(os.urandom(16)).decode()
         path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
         host_name = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
@@ -355,6 +358,7 @@ def open_websocket(endpoint: str, token: str) -> tuple[socket.socket, bytes]:
         expected = base64.b64encode(hashlib.sha1(key.encode() + WS_GUID).digest()).decode()
         if headers.get("sec-websocket-accept") != expected:
             raise CliError("broker WebSocket identity check failed")
+        sock.settimeout(None)
         return sock, initial
     except CliError:
         if sock is not None:
@@ -518,6 +522,10 @@ def live_client() -> Any:
     return packaged_helper("live_client", LIVE_CLIENT_SHA256)
 
 
+def inference_client() -> Any:
+    return packaged_helper("inference_client", INFERENCE_CLIENT_SHA256)
+
+
 def project_environment() -> dict[str, str]:
     # Needed only for locating this computer's pairing. None of these are sent
     # via SSH SendEnv: -F /dev/null excludes all user/system SSH configuration.
@@ -644,14 +652,7 @@ def wait_for_setup(device: dict[str, Any], *, newly_paired: bool) -> None:
             raise CliError("paired, but slot readiness is not yet confirmed; your pairing is "
                            "saved. Rerun the same setup command; do not pair again")
         try:
-            answer = project_rpc(device, "status", _timeout=min(25, remaining))
-            require_project_readiness(answer)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                continue
-            live = live_control(device, "0" * 32, _timeout=min(25, remaining))
-            if live.get("ready") is not True:
-                raise CliError("slot live-filesystem dependencies are not ready")
+            check_inference(device, timeout=min(25, remaining))
             return
         except CliError as exc:
             if not newly_paired or exc.code != "connection":
@@ -671,6 +672,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     project_files()  # Verify the installed helper; never scan a project here.
     live_files()
     live_client()
+    inference_client()
+    find_local_claude()
     config = load_config()
     newly_paired = not config["devices"]
     if newly_paired:
@@ -697,6 +700,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"Already paired with {device['slot_name']}; keeping this device and its history.")
     print("Checking the slot without uploading files or making a model request...", flush=True)
     wait_for_setup(device, newly_paired=newly_paired)
+    retire_live_grants(device, yes=getattr(args, "yes", False))
     if args.slot and config.get("active") != device["device_id"]:
         # Persist an explicitly selected default only after it has passed checks.
         config = load_config()
@@ -704,7 +708,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             raise CliError("pairing changed during setup; rerun setup")
         config["active"] = device["device_id"]
         save_config(config)
-    print(f"Ready: {device['slot_name']}. Pairing and project access verified.\n"
+    print(f"Ready: {device['slot_name']}. Pairing and local Claude relay verified.\n"
           "No project was uploaded and no Claude session was started.")
     return 0
 
@@ -1197,7 +1201,7 @@ def start_local_connector(identifier: str) -> None:
                    "and reconnect. No snapshot fallback was used")
 
 
-def cmd_local(args: argparse.Namespace) -> int:
+def cmd_live(args: argparse.Namespace) -> int:
     args.mode = args.mode or "bypassPermissions"
     validate_project_args(args)
     if args.remote_project:
@@ -1309,6 +1313,346 @@ def cmd_local(args: argparse.Namespace) -> int:
         action, attempt = "open", attempt + 1
 
 
+def find_local_claude() -> str:
+    candidate = shutil.which("claude")
+    if candidate is None:
+        fallback = Path.home() / ".local/bin/claude"
+        if fallback.is_file() and os.access(fallback, os.X_OK):
+            candidate = str(fallback)
+    if candidate is None:
+        raise CliError("original local Claude Code is missing; rerun the --setup installer")
+    return candidate
+
+
+def inference_command(device: dict[str, Any]) -> list[str]:
+    return [*ssh_transport_command(device, tty=False), "ccfleet-inference-v1"]
+
+
+def check_inference(device: dict[str, Any], *, timeout: float = 25) -> None:
+    helper = inference_client()
+    try:
+        answer = helper.check_status(lambda: inference_command(device), project_environment,
+                                     timeout=timeout)
+    except helper.RelayError as exc:
+        messages = {401: "your slot's Claude sign-in needs renewal; use your slot page",
+                    403: "the local Claude relay is not enabled on your slot",
+                    409: "slot account transition is pending; retry after it completes"}
+        raise CliError(messages.get(exc.status, "could not reach the slot relay; "
+                                    "check your connection and pairing"), exc.status,
+                       code="connection" if exc.status is None else "relay") from exc
+    if (answer.get("ready") is not True or type(answer.get("protocol")) is not int
+            or answer["protocol"] != 2):
+        raise CliError("the slot relay uses an unsupported protocol")
+
+
+def confirm_legacy_retirement(yes: bool) -> None:
+    if yes:
+        return
+    message = ("Switching to local Claude ends this computer's old live-folder connections "
+               "and their remote Claude sessions. Files and conversation history are kept; "
+               "ordinary remote-terminal sessions are not stopped. Continue? [y/N] ")
+    try:
+        # curl|bash occupies stdin. Read only an actual controlling terminal.
+        # Buffered r+ text files require seek(), which a terminal does not
+        # support. Use the raw read/write TTY without consuming installer stdin.
+        with open("/dev/tty", "r+b", buffering=0) as terminal:
+            if not terminal.isatty():
+                raise OSError("not a terminal")
+            terminal.write(message.encode("utf-8"))
+            answer = terminal.readline(64).strip().lower()
+    except OSError as exc:
+        raise CliError("old live-folder access is still active; finish it and run "
+                       "ccfleet local --disconnect, or explicitly pass --yes to migrate") from exc
+    if answer not in (b"y", b"yes"):
+        raise CliError("migration cancelled; existing sessions and files were left unchanged")
+
+
+def retire_live_grants(device: dict[str, Any], *, yes: bool) -> None:
+    with project_lock():
+        records = load_config().get("live_folders", {})
+        if not isinstance(records, dict):
+            raise CliError("invalid saved legacy folder configuration")
+        matching = [(key, item) for key, item in records.items() if isinstance(item, dict)
+                    and item.get("device") == device["device_id"]
+                    and item.get("retired") is not True]
+        if not matching:
+            return
+        print("Checking previous live-folder connections before migration...",
+              file=sys.stderr, flush=True)
+        active = False
+        for _key, record in matching:
+            identifier = record.get("id")
+            if not isinstance(identifier, str) or not PROJECT_RE.fullmatch(identifier):
+                raise CliError("invalid saved legacy workspace; no new Claude session was started")
+            local = live_client().control(live_directory(identifier), "status")
+            remote = live_control(device, identifier)
+            if local or remote.get("mounted") or remote.get("connected") or remote.get("sessions"):
+                active = True
+        if active:
+            confirm_legacy_retirement(yes)
+        # Do not silently leave a second, broader filesystem access path running.
+        for key, record in matching:
+            identifier = record["id"]
+            stop_local_connector(identifier)
+            answer = live_control(device, identifier, "stop")
+            if answer.get("stopped") is not True:
+                raise CliError("legacy folder cleanup is incomplete; no local Claude was started")
+            after = live_control(device, identifier)
+            if (live_client().control(live_directory(identifier), "status")
+                    or after.get("mounted") or after.get("connected") or after.get("sessions")):
+                raise CliError("legacy folder access is still active; migration stopped safely")
+            config = load_config()
+            saved = config.get("live_folders", {}).get(key)
+            if not isinstance(saved, dict) or saved.get("id") != identifier:
+                raise CliError("legacy folder configuration changed during migration")
+            saved["retired"] = True
+            save_config(config)
+    print("Old live-folder access stopped. Local files and histories were preserved.",
+          file=sys.stderr, flush=True)
+
+
+def native_extra_args(args: argparse.Namespace) -> list[str]:
+    extra = list(getattr(args, "claude_args", []))
+    if extra[:1] == ["--"]:
+        extra.pop(0)
+    forbidden = {"--cloud", "--teleport", "--remote-control", "--environment",
+                 "--client-data-url", "--settings"}
+    for value in extra:
+        if value == "--":
+            break
+        if value.split("=", 1)[0] in {"--bg", "--background"}:
+            raise CliError("native background agents outlive this command's relay; "
+                           "use a foreground session or a separate local terminal")
+        if value.split("=", 1)[0] in forbidden:
+            raise CliError("this native option replaces CC Fleet's selected-slot route; "
+                           "use ordinary Claude directly for a separate service/configuration")
+    return extra
+
+
+def native_settings(env: dict[str, str], base_url: str, secret: str, *,
+                    bare: bool) -> dict[str, Any]:
+    # Process environment alone loses to saved settings.env in native Claude.
+    # The last explicit settings file pins only routing/privacy, leaving tools,
+    # permissions, project customizations and native history under user control.
+    pinned = {"ANTHROPIC_BASE_URL": base_url,
+              "ANTHROPIC_AUTH_TOKEN": "" if bare else secret,
+              "ANTHROPIC_API_KEY": secret if bare else "",
+              "CLAUDE_CODE_OAUTH_TOKEN": "", "ANTHROPIC_CUSTOM_HEADERS": "",
+              "CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "0",
+              "CLAUDE_CODE_USE_FOUNDRY": "0", "CLAUDE_CODE_USE_ANTHROPIC_AWS": "0",
+              "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "0", "CLAUDE_CODE_USE_MANTLE": "0",
+              "CLAUDE_CODE_USE_GATEWAY": "0", "CLAUDE_CODE_CLIENT_DATA_URL": "",
+              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+              "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
+              "DISABLE_BUG_COMMAND": "1", "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+              "DISABLE_AUTOUPDATER": "1"}
+    env.update(pinned)
+    for key in ("ANTHROPIC_MODEL", "CLAUDE_CODE_EFFORT_LEVEL"):
+        env.pop(key, None)
+    fallback = env.get("no_proxy") or env.get("NO_PROXY", "")
+    for name in ("NO_PROXY", "no_proxy"):
+        items = [part.strip() for part in (env.get(name) or fallback).split(",") if part.strip()]
+        env[name] = ",".join(dict.fromkeys([*items, "127.0.0.1", "localhost"]))
+        pinned[name] = env[name]
+    return {"env": pinned, "apiKeyHelper": ""}
+
+
+def native_proxy_exclusions(env: dict[str, str], project: Path, extra: list[str]) -> None:
+    """Retain native settings.env proxy exclusions before pinning loopback bypass."""
+    sources = {"user", "project", "local"}
+    extra = extra[:extra.index("--")] if "--" in extra else extra
+    if "--bare" in extra:
+        sources = set()
+    for index, value in enumerate(extra):
+        if value == "--":
+            break
+        if value == "--setting-sources" and index + 1 < len(extra):
+            sources = set(extra[index + 1].split(","))
+        elif value.startswith("--setting-sources="):
+            sources = set(value.split("=", 1)[1].split(","))
+    config = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    if not config.is_absolute():
+        config = project / config
+    files = (("user", config / "settings.json"),
+             ("project", project / ".claude/settings.json"),
+             ("local", project / ".claude/settings.local.json"))
+    for source, path in files:
+        if source not in sources:
+            continue
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            continue
+        try:
+            with os.fdopen(descriptor, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("nonregular settings")
+                raw = stream.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized settings")
+            value = json.loads(raw)
+            overrides = value.get("env", {})
+            if not isinstance(overrides, dict):
+                raise ValueError("invalid settings")
+            for name in ("NO_PROXY", "no_proxy"):
+                if name in overrides:
+                    if not isinstance(overrides[name], str) or "\0" in overrides[name]:
+                        raise ValueError("invalid proxy exclusion")
+                    env[name] = overrides[name]
+        except (OSError, ValueError, AttributeError) as exc:
+            raise CliError("could not safely preserve native proxy exclusions; "
+                           "check your Claude settings files") from exc
+
+
+def check_managed_route(paths: Optional[list[Path]] = None) -> None:
+    if os.environ.get("CLAUDE_CODE_CLIENT_DATA_URL"):
+        raise CliError("a managed client configuration selects another route; "
+                       "ask its administrator before using CC Fleet")
+    if paths is None:
+        paths = ([Path("/Library/Application Support/ClaudeCode/managed-settings.json")]
+                 if sys.platform == "darwin" else [Path("/etc/claude-code/managed-settings.json")])
+        dropins = paths[0].parent / "managed-settings.d"
+        if dropins.exists():
+            if dropins.is_symlink() or not dropins.is_dir():
+                raise CliError("managed Claude settings cannot be safely verified")
+            entries = list(dropins.iterdir())
+            if len(entries) > 100:
+                raise CliError("too many managed policy files to safely verify")
+            paths.extend(sorted(path for path in entries if path.suffix == ".json"))
+        if sys.platform == "darwin":
+            import pwd
+            preferences = Path("/Library/Managed Preferences")
+            user = pwd.getpwuid(os.getuid()).pw_name
+            for folder in (preferences, preferences / user):
+                if (folder / "com.anthropic.claudecode.plist").exists():
+                    raise CliError("managed macOS Claude preferences need administrator "
+                                   "routing review before using CC Fleet")
+    reserved = {"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+                "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_CLIENT_DATA_URL",
+                "ANTHROPIC_CUSTOM_HEADERS",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
+                "all_proxy", "NO_PROXY", "no_proxy"}
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("nonregular policy")
+                raw = stream.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized policy")
+            value = json.loads(raw)
+            settings_env = value.get("env", {})
+            if not isinstance(settings_env, dict):
+                raise ValueError("invalid policy")
+            if (value.get("apiKeyHelper") or reserved.intersection(settings_env)
+                    or any(key.startswith("CLAUDE_CODE_USE_") and value not in ("0", "", False)
+                           for key, value in settings_env.items())):
+                raise CliError("managed Claude settings select authentication/routing; "
+                               "CC Fleet will not override that policy")
+        except (OSError, ValueError, AttributeError) as exc:
+            raise CliError("could not safely verify managed Claude routing settings") from exc
+
+
+def local_claude_command(claude: str, args: argparse.Namespace,
+                         settings_path: Path, extra: list[str]) -> list[str]:
+    options = extra[:extra.index("--")] if "--" in extra else extra
+    supplied = {value.split("=", 1)[0] for value in options}
+    resuming = (args.resume is not None or args.continue_session
+                or bool(supplied.intersection({"--resume", "-r", "--continue", "-c"})))
+    command = [claude]
+    for flag, value, default in (("--model", args.model, "opus"),
+                                 ("--effort", args.effort, "max")):
+        if flag not in supplied and (value is not None or not resuming):
+            command.extend([flag, value if value is not None else default])
+    if not supplied.intersection({"--permission-mode", "--dangerously-skip-permissions"}):
+        mode = args.mode or "bypassPermissions"
+        command.extend(["--dangerously-skip-permissions"] if mode == "bypassPermissions"
+                       else ["--permission-mode", mode])
+    if args.resume is not None:
+        command.append("--resume=" + args.resume if args.resume else "--resume")
+    elif args.continue_session:
+        command.append("--continue")
+    if args.fork_session:
+        command.append("--fork-session")
+    if args.name:
+        command.append("--name=" + args.name)
+    split = extra.index("--") if "--" in extra else len(extra)
+    command += extra[:split] + ["--settings", str(settings_path)] + extra[split:]
+    if args.print_prompt is not None:
+        command.extend(["--print", "--", args.print_prompt])
+    return command
+
+
+def cmd_local(args: argparse.Namespace) -> int:
+    if args.disconnect:
+        return cmd_live(args)
+    if args.reset_link or args.remote_project:
+        raise CliError("live mounts are retired; use --disconnect to close old access, "
+                       "then run ccfleet local for the local Claude CLI")
+    if args.fork_session and args.resume is None and not args.continue_session:
+        raise CliError("--fork-session needs --resume or --continue")
+    for label, value in (("session name", args.name), ("resume value", args.resume)):
+        if value is not None and (len(value) > 256 or any(
+                ord(c) < 32 or ord(c) == 127 for c in value)):
+            raise CliError(f"{label} must be at most 256 characters without control characters")
+    if args.model is not None and not MODEL_RE.fullmatch(args.model):
+        raise CliError("invalid model name")
+    extra = native_extra_args(args)
+    options = extra[:extra.index("--")] if "--" in extra else extra
+    if args.print_prompt is not None and "--" in extra:
+        raise CliError("use --print or a native positional prompt, not both")
+    claude = find_local_claude()
+    check_managed_route()
+    device = choose_device(load_config(), args.slot)
+    print("Checking the assigned slot's model relay...", file=sys.stderr, flush=True)
+    check_inference(device)
+    if args.check:
+        print("Ready: original local Claude Code and assigned-slot inference relay.\n"
+              "No project was scanned and no model request or Claude session was started.")
+        return 0
+    project = Path(args.project).expanduser().resolve(strict=True)
+    if not project.is_dir():
+        raise CliError("--project must be an existing local directory")
+    retire_live_grants(device, yes=args.yes)
+    helper = inference_client()
+    bridge = helper.Bridge(lambda: inference_command(device), project_environment)
+    descriptor = -1
+    settings_path = None
+    try:
+        ensure_home()
+        descriptor, filename = tempfile.mkstemp(
+            prefix=".inference-settings-", suffix=".json", dir=home())
+        settings_path = Path(filename)
+        env = dict(os.environ)
+        if args.legacy_history:
+            profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
+            if not profile.is_dir():
+                raise CliError("no earlier local-preview history exists for this slot")
+            env["CLAUDE_CONFIG_DIR"] = str(profile)
+        native_proxy_exclusions(env, project, extra)
+        settings = native_settings(env, bridge.base_url, bridge.secret, bare="--bare" in options)
+        with os.fdopen(descriptor, "w") as stream:
+            descriptor = -1
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(settings, stream)
+        bridge.start()
+        print("Starting original local Claude Code. Files, tools and history stay here.\n"
+              "Model requests use your assigned slot. Native prompts/tool results can still\n"
+              "contain local context; this is not an anonymity guarantee.",
+              file=sys.stderr, flush=True)
+        return subprocess.call(local_claude_command(claude, args, settings_path, extra),
+                               cwd=project, env=env)
+    finally:
+        bridge.close()
+        if descriptor != -1:
+            os.close(descriptor)
+        if settings_path is not None:
+            settings_path.unlink(missing_ok=True)
+
+
 def cmd_list(_args: argparse.Namespace) -> int:
     config = load_config()
     if not config["devices"]:
@@ -1372,6 +1716,8 @@ def parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="pair only if needed and verify slot readiness")
     setup.add_argument("--name", default="computer", help="label for a newly paired computer")
     setup.add_argument("--slot", default="", help="paired slot to check and use by default")
+    setup.add_argument("--yes", action="store_true",
+                       help="explicitly approve ending this computer's old live-folder sessions")
     setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
                        help="server used only when pairing a new computer")
     attach = sub.add_parser("attach", help="open the persistent Claude Code session")
@@ -1401,7 +1747,7 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--effort", choices=EFFORT_LEVELS, default="max")
     restart.set_defaults(action="restart", no_reconnect=True, reconnect_for=0)
     local = sub.add_parser("local", aliases=["snapshot"],
-                           help="live selected-folder access; run Claude only on your slot",
+                           help="run original local Claude Code through your assigned slot",
                            epilog="New: ccfleet local --new --name work | "
                            "Resume picker: ccfleet local --resume | "
                            "Check setup: ccfleet local --check")
@@ -1410,30 +1756,35 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("--remote-project", default="", metavar="ID",
                        help="join an existing project ID after reviewing and pulling it")
     local.add_argument("--yes", action="store_true",
-                       help="explicitly approve folder access or reset")
+                       help="explicitly approve retiring old live-folder connections")
     local.add_argument("--disconnect", action="store_true",
-                       help="stop this folder's access and its slot sessions")
-    local.add_argument("--reset-link", action="store_true",
-                       help="end stale folder sessions and reconnect after a connector crash")
-    local.add_argument("--model", help="model for a new slot session (default: opus)")
+                       help="stop retired live-folder access and its old remote sessions")
+    local.add_argument("--reset-link", action="store_true", help=argparse.SUPPRESS)
+    local.add_argument("--model", help="model for a new local conversation (default: opus)")
     local.add_argument("--effort", choices=EFFORT_LEVELS,
-                       help="effort for a new slot session (default: max)")
+                       help="effort for a new local conversation (default: max)")
     local.add_argument("--mode", choices=PERMISSION_MODES,
-                       help="new session permissions (live: bypassPermissions; snapshot: manual)")
-    local.add_argument("-p", "--print", dest="print_prompt", help=argparse.SUPPRESS)
-    local.add_argument("--name", default="", help="named persistent project session")
-    local.add_argument("--fork-session", action="store_true", help=argparse.SUPPRESS)
+                       help="native permissions (default: bypassPermissions; legacy snapshot: manual)")
+    local.add_argument("-p", "--print", dest="print_prompt", help="native print-mode prompt")
+    local.add_argument("--name", default="", help="native local conversation name")
+    local.add_argument("--fork-session", action="store_true",
+                       help="fork a resumed local conversation")
+    local.add_argument("--legacy-history", action="store_true",
+                       help="use the earlier per-slot local-preview conversation history")
+    local.add_argument("claude_args", nargs=argparse.REMAINDER,
+                       help="additional native Claude options after --")
     local.add_argument("--check", action="store_true",
                        help="check readiness without sharing files or using a model")
-    local.add_argument("--no-reconnect", action="store_true")
-    local.add_argument("--reconnect-for", type=int, default=600, metavar="SECONDS")
+    local.add_argument("--no-reconnect", action="store_true", help=argparse.SUPPRESS)
+    local.add_argument("--reconnect-for", type=int, default=600, metavar="SECONDS",
+                       help=argparse.SUPPRESS)
     history = local.add_mutually_exclusive_group()
     history.add_argument("--resume", nargs="?", const="", metavar="NAME",
-                         help="reattach a running project session, or show a picker")
+                         help="resume a native local conversation, or show its picker")
     history.add_argument("--continue", dest="continue_session", action="store_true",
-                         help="reattach this computer's last project session")
+                         help="continue the latest native conversation in this folder")
     history.add_argument("--new", dest="new_session", action="store_true",
-                         help="start a new named project session on the slot")
+                         help="start a fresh native local conversation")
     project = sub.add_parser("project", help="review, upload, or apply selected project files")
     project.add_argument("project_action", choices=("status", "push", "diff", "pull", "list"))
     project.add_argument("--slot", default="", help="paired slot id or name")
