@@ -21,10 +21,46 @@ tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-lef
 footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
-</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#latest-comparison-driven-follow-up--client-021">Latest comparison-driven follow-up — client 0.2.1</a></li><li class="level-2"><a href="#earlier-native-client-platform-release--client-020">Earlier native client platform release — client 0.2.0</a></li><li class="level-2"><a href="#earlier-lifecycle-and-streaming-follow-up">Earlier lifecycle and streaming follow-up</a></li><li class="level-2"><a href="#earlier-reliability-and-privacy-hardening">Earlier reliability and privacy hardening</a></li><li class="level-2"><a href="#baseline-inference-release-evidence">Baseline inference release evidence</a></li><li class="level-3"><a href="#migration-shutdown-regression">Migration shutdown regression</a></li><li class="level-2"><a href="#actual-native-client-checks">Actual native-client checks</a></li><li class="level-2"><a href="#deployment-checks">Deployment checks</a></li><li class="level-2"><a href="#limits-of-this-evidence">Limits of this evidence</a></li></ol></nav></details></aside><main><h1 id="native-local-relay-verification">Native local relay verification</h1>
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#dedicated-privacy-management-client-022">Dedicated privacy and management — client 0.2.2</a></li><li class="level-2"><a href="#latest-comparison-driven-follow-up--client-021">Latest comparison-driven follow-up — client 0.2.1</a></li><li class="level-2"><a href="#earlier-native-client-platform-release--client-020">Earlier native client platform release — client 0.2.0</a></li><li class="level-2"><a href="#earlier-lifecycle-and-streaming-follow-up">Earlier lifecycle and streaming follow-up</a></li><li class="level-2"><a href="#earlier-reliability-and-privacy-hardening">Earlier reliability and privacy hardening</a></li><li class="level-2"><a href="#baseline-inference-release-evidence">Baseline inference release evidence</a></li><li class="level-3"><a href="#migration-shutdown-regression">Migration shutdown regression</a></li><li class="level-2"><a href="#actual-native-client-checks">Actual native-client checks</a></li><li class="level-2"><a href="#deployment-checks">Deployment checks</a></li><li class="level-2"><a href="#limits-of-this-evidence">Limits of this evidence</a></li></ol></nav></details></aside><main><h1 id="native-local-relay-verification">Native local relay verification</h1>
 <p>Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 <code>ccfleet local</code> launches; it does not terminate existing user sessions.</p>
-<span id="latest-native-client-platform-release" class="anchor-alias"></span><h2 id="latest-comparison-driven-follow-up--client-021">Latest comparison-driven follow-up — client 0.2.1</h2>
+<span id="latest-native-client-platform-release" class="anchor-alias"></span>
+<h2 id="dedicated-privacy-management-client-022">Dedicated privacy and management — client 0.2.2</h2>
+<p>Verified native/signed-canary checkpoint, 2026-09-30 UTC. Runtime and immutable
+client source are <code>5860127cd73bae0ab525c6701cb25fe1ab5f4859</code>; client version
+is 0.2.2. BWH and the internal broker run the tested runtime, with the same
+database and broker-only boundaries. Canary-first installation updated only the
+slot relay module on all three nodes; five relevant hashes, root policy, both
+assigned slots' unprivileged readiness and the free slot's absent account/gate
+were checked. No customer slot was released and no credential expiry was forced.</p>
+<ul><li>Full local suite: <strong>4,719 passed, 2 skipped, 91.85% coverage</strong>.
+<a href="https://github.com/cdcupt/ccfleet/actions/runs/36691782862">Exact runtime CI</a>
+passed all five jobs. Header sentinel/compatibility tests passed on all three
+Python versions; native prompts/system/tools were preserved, not anonymized.</li>
+<li>The actual official MCP SDK negotiated the stdio server with zero discovery
+GETs, exactly one status GET per tool and no extra GET for rejected arguments.
+Three signed-client management tools also worked against the live assigned
+slot. Fixed health/numeric observations omitted account/device identifiers,
+hosts/IPs, local paths and arbitrary strings. These tool results are intentionally
+visible to the calling AI; no model request is made by the management tools.</li>
+<li>The existing 0.2.1 signed verifier accepted the immutable eight-file 0.2.2
+bundle and staged signed channel. Pairing, keys and startup settings were retained.
+Final main-channel promotion follows publication CI; its outcome is recorded in
+<a href="https://github.com/cdcupt/ccfleet/pull/127">the release record</a>.</li>
+<li>Actual original Claude completed local Read/Write and same-session continuation
+in a fresh private canary. There were two native invocations; no claim is made
+that this equals two HTTP model requests. Private diagnostics, preferences,
+synthetic background stop/log/archive and idle revocation passed. The temporary
+device was removed and the original tmux session remained unchanged.</li>
+<li>All 16 public HTML assets matched the runtime source; redirects and denial
+probes passed, as did all 17 neighboring-site baselines. Desktop/mobile guidance
+was inspected and the long MCP setup command was wrapped.</li></ul>
+<p>Backup integrity was checked before both owned server/broker restarts. Existing
+rollback images and node libraries are retained. Shared Caddy was not reloaded;
+public same-slot broker failover remains unactivated. This release is not a
+competitor performance benchmark, long-term account-survival guarantee, physical
+host redundancy, complete CC Host copy or zero-disclosure proof.</p>
+<h2 id="latest-comparison-driven-follow-up--client-021">Latest comparison-driven follow-up — client 0.2.1</h2>
 <p>Verified 2026-09-30 UTC. Runtime and immutable client source are
 <code>058515e36db6418fc86953b36f9e97f2e555c9ed</code>. BWH, the internal broker and all three
 nodes were upgraded and their relevant runtime hashes checked. The previously
