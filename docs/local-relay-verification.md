@@ -3,7 +3,50 @@
 Verified 2026-09-29 UTC. This supersedes the live-folder release for new
 `ccfleet local` launches; it does not terminate existing user sessions.
 
-## Latest native client platform release
+## Latest comparison-driven follow-up — client 0.2.1
+
+Verified 2026-09-30 UTC. Runtime and immutable client source are
+`058515e36db6418fc86953b36f9e97f2e555c9ed`. BWH, the internal broker and all three
+nodes were upgraded and their relevant runtime hashes checked. The previously
+unreachable free node recovered before rollout; it still has no customer account
+or inference gate. No network recovery cause is inferred and no holder was released.
+
+- Local full suite: **4,240 passed, 2 skipped, 91.60% coverage**. Ruff, Bash,
+  changed-script ShellCheck and diff checks passed.
+- [Runtime CI](https://github.com/cdcupt/ccfleet/actions/runs/36658746610) and
+  [publication CI](https://github.com/cdcupt/ccfleet/actions/runs/36659916868)
+  passed all five jobs, including the three supported Python versions.
+- The backend emits HTTP/1.1 only for WebSocket switching responses. Direct
+  primary/secondary tests verified byte relay, fixed endpoints, release/revoke
+  and unchanged REST closure. A wire mutation restoring HTTP/1.0 was rejected.
+- A disposable network-disabled real-OpenSSH fixture verified parent-only
+  SIGKILL cleanup, concurrent channels on one connection, host pinning and no
+  fallback. Caller/sibling preservation and stubborn-child cases also passed.
+  This covers the owned transport group, not arbitrary detached tool processes.
+- All eight actual public immutable files and the 0.2.1 channel/manifest signatures
+  matched the unchanged pinned signing key. Public install/repeat preserved pairing.
+- Public canaries verified private diagnostics/preferences, supervised local
+  Read/Write and native continuation through reused transport. Two original-Claude
+  invocations made four completed Messages transfers; all four contributed valid
+  numeric usage samples. No model/session identifiers or content were added to
+  those aggregates. Missing/old traffic was not backfilled or labelled zero.
+- A separate zero-model canary proved **direct secondary inner SSH readiness**,
+  matching account generations, revocation through the secondary closing both
+  brokers' transports, and autonomous background-job stop with confirmed cleanup.
+  Temporary devices were removed; the original tmux session/device were preserved.
+- Online database backups passed integrity checking; rollback images and node
+  libraries remain. Final audit: all nodes reachable/fresh, zero alerts/pairings,
+  one original active device, and all 17 shared-tenant HTTP baselines unchanged.
+- Desktop/390px numeric-usage layouts were inspected. The UI distinguishes
+  sample coverage/unknown cache values from quota, billing and whole-account totals.
+
+**Public failover routing remains unactivated:** the shared-edge reload has not
+been approved. The direct upgrade incompatibility below is fixed by this release;
+the remaining gate is safe public routing activation, not another protocol fix.
+The [comparison](platform-comparison.md) distinguishes CC Host's documented breadth
+from unmeasured privacy, performance and account-longevity claims.
+
+## Earlier native client platform release — client 0.2.0
 
 Runtime `9e52e29deb439a5fc2991076af42024790ee03da` was verified on BWH and
 the two reachable managed hosted nodes on 2026-09-29 UTC. Client **0.2.0** uses

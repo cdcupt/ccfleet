@@ -81,3 +81,12 @@ CC Host's broader provider, group, billing and management-MCP features are
 separate product choices; cross-account pooling/fallback would violate our
 existing isolation contract. Comparative performance, account longevity and
 fingerprint/TLS equivalence remain unmeasured.
+
+Follow-up delivery: runtime/source `058515e`, signed client 0.2.1, manifest
+publication `11b7f3e`, channel publication `1bca6fc`. Both runtime and publication
+CI passed all five jobs. All three nodes and both broker processes were updated;
+the recovered free node remains unheld. Public installed-client and direct
+secondary-transport/revocation canaries passed. Actual numeric usage coverage
+was observed, without adding identity/content logs. Public edge routing remains
+unchanged pending an approved shared-edge reload. See the latest verification
+record for evidence, limits and the source-grounded competitor comparison.
