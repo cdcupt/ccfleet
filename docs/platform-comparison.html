@@ -29,6 +29,12 @@ implemented behavior; deployment evidence lives in
 <p>There is not enough comparative evidence to call either platform best overall.
 CC Host currently documents a broader product. CC Fleet deliberately focuses on
 one user-owned Claude account per slot and a native local coding experience.</p>
+<div class="notice"><strong>How to read “win” and “loss”.</strong> Our tested
+advantages are a fixed assigned-account contract, pinned inner SSH, individually
+revocable devices and deliberately smaller centralized analytics. These are
+engineering controls, not proof that CC Host lacks equivalent controls or that
+we win every dedicated-account scenario. Feature breadth, measured usability,
+privacy boundaries and availability must be scored separately.</div>
 <div class="table-scroll" role="region" aria-label="Scrollable table" tabindex="0"><table>
 <thead>
 <tr>
@@ -48,15 +54,19 @@ one user-owned Claude account per slot and a native local coding experience.</p>
 <tr>
 <td>Teams and commercial operations</td>
 <td>Groups, sharing, Stripe seat subscriptions, management MCP</td>
-<td>Individually paired/revocable devices; no account pooling or sharing product</td>
+<td>Individually paired/revocable devices and operator-managed allowance/payment records; no account pooling or sharing product</td>
 <td>CC Host has more documented business features. Adding these would require explicit product/authentication/payment choices.</td>
 </tr>
 <tr>
 <td>Analytics</td>
 <td>Token/cache/model/request/session analysis</td>
-<td>Aggregate transfer outcomes/latencies; follow-up adds numeric token/cache totals and coverage</td>
+<td>Aggregate transfer outcomes/latencies plus numeric token/cache totals and explicit sample coverage; no central model/session identities</td>
 <td>CC Host has richer central detail. CC Fleet intentionally avoids central model/session identifiers and content.</td>
 </tr>
+<tr><td>Read-only management MCP</td>
+<td>Remote browser-authorized tools for accounts, endpoints, quota, model/session analytics and billing</td>
+<td>Client 0.2.2: explicitly enabled local stdio tools for one pairing's cached health, quota and numeric relay usage</td>
+<td>The core read-only health/usage gap is addressed with fewer disclosed fields. CC Host still has broader queries and remote authorization. Our tools do not mutate state or register automatically.</td></tr>
 <tr>
 <td>Native local coding</td>
 <td>Configure existing local clients through endpoints; CC Switch import</td>
@@ -111,6 +121,9 @@ identifies itself as a companion to Wang Shuaiqi's ByteTech article, dated
 relay-owned OAuth examples do not establish CC Host's commercial implementation.
 CC Host's exact fingerprint/TLS stack and renewal algorithm remain unverified.</p>
 <h2 id="improvements-selected-for-the-current-follow-up">Improvements selected for the current follow-up</h2>
+<p>The protocol, transport cleanup, numeric usage and recovered-node changes in
+the list below were delivered in client 0.2.1; they are not remaining blockers.
+The public shared-edge activation gate is still outstanding.</p>
 <ol>
 <li>Fix direct backend WebSocket upgrade compliance without relaxing client TLS,
 pinning or HTTP-version checks.</li>
@@ -121,8 +134,14 @@ request content or central model/session/device identity collection.</li>
 <li>Finish the recovered free node's queued runtime upgrade and verify secondary
 transport. Public routing activation still needs safe shared-edge conditions.</li>
 </ol>
-<p>Separate future decisions: additional providers, team/commercial management,
-read-only management MCP, physical-host redundancy and a sustained user pilot.
+<p>Client 0.2.2 adds semantic header-value normalization at both boundaries,
+opt-in read-only management MCP, explicit menu permission/model forwarding and
+side-effect-free background-job preflight. Cached quota observations carry
+numeric timestamps and exclude samples predating assignment/account change.
+Release status and live evidence must be checked separately; implementation
+tests alone do not establish production deployment or market superiority.</p>
+<p>Remaining gaps: broader providers, team/commercial management, full account-wide
+management queries, physical-host redundancy and a sustained comparative user pilot.
 Each should be evaluated on actual usability/reliability evidence, not a promise
 to copy every competitor feature or prevent every possible metadata disclosure.</p>
 </main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

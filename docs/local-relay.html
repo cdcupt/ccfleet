@@ -107,6 +107,10 @@ imported or synchronized by these controls. <code>ccfleet local --new --name wor
 remains the direct named-session command. Bare <code>ccfleet</code> still means the remote
 terminal, also explicitly available as <code>ccfleet remote</code>; the menu does not change
 those command meanings.</p>
+<p>Client 0.2.2 preserves explicit model, effort and permission choices passed to
+the menu, including <code>ccfleet start --mode plan</code>. An explicit local
+conversation name or cleanup consent is not forwarded to the remote-terminal
+option. Invalid background-job inputs are checked before stopping legacy live work.</p>
 <p>Home directories work normally too: <code>cd ~</code> then <code>ccfleet local</code>. The current
 working directory is not a security sandbox. Claude's local permissions determine
 which files and commands it may use, including outside the current directory.
@@ -155,6 +159,23 @@ multiple normal terminal sessions. Native <code>--bg</code> / <code>--background
 <code>--</code> is rejected because it would bypass supervision. For managed noninteractive
 local work, use the background job commands below; for parallel interactive work,
 use another regular terminal.</p>
+<section id="management-mcp"><h2>Optional read-only management MCP</h2>
+<p><code>ccfleet mcp serve</code> exposes three local stdio tools:
+<code>ccfleet_health</code>, <code>ccfleet_quota</code> and
+<code>ccfleet_relay_usage</code>. To explicitly add it to original local Claude,
+run <code>claude mcp add --transport stdio ccfleet -- ccfleet mcp serve</code>,
+then review the tools with <code>/mcp</code>. Add <code>--slot SLOT</code> after
+<code>serve</code> to select one existing pairing at process start. Nothing is
+registered automatically; remove it with <code>claude mcp remove ccfleet</code>.</p>
+<p>Tool results intentionally enter the calling AI's context. They contain fixed
+health codes and numeric cached quota/relay observations, freshness and sample
+coverage—not account/device IDs, names, emails, IPs, native versions, local paths,
+prompts, logs or model/session IDs. They do not launch Claude, scan projects,
+refresh quota, execute commands, create endpoints or change accounts. Discovery
+does not contact the broker. A tool call only reads the preselected pairing's
+status; authorization changes invalidate the process. Missing observations are
+unknown, not zero. Relay totals cover seven UTC calendar days and are not billing
+or current-day totals. A reported-ready heartbeat is not a provider acceptance test.</p></section>
 <h2 id="project-defaults">Project defaults</h2>
 <pre><code class="language-bash">ccfleet preferences set --model opus --effort high --mode plan
 ccfleet preferences show

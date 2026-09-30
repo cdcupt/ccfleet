@@ -167,6 +167,12 @@ for shutdown-error recovery and a safe local-file check, and
 <a href="docs/project-workspaces.html">retired workspaces</a>. The website migration guide
 is at <code>/docs/guide#migration</code>.</p>
 <h2 id="privacy-and-routing-scope">Privacy and routing scope</h2>
+<p>Client 0.2.2 adds opt-in local read-only management MCP via
+<code>ccfleet mcp serve</code>: cached health, native quota observations and numeric
+relay usage. Tools expose their stated fixed codes/numbers to the calling AI,
+not account/device identities, hosts/IPs, local paths, prompts or logs. No
+automatic registration, project scan, model request, quota refresh or mutation.
+See <a href="docs/local-relay.html#management-mcp">setup and disclosure boundaries</a>.</p>
 <p>The relay removes selected headers and the top-level structured <code>metadata</code> field.
 It does not redact arbitrary prompts or tool results. Native system prompts can
 include OS, working-directory and environment details; file contents and paths

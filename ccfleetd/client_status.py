@@ -23,6 +23,32 @@ from .heartbeat import relay_report
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9]+)?\Z")
 
 
+def quota_observation(quota: Any, slot: Mapping[str, Any], now: float) -> dict[str, Any]:
+    """Only attributed numeric cached readings; no account IDs or reset text."""
+    if not isinstance(quota, Mapping):
+        return {}
+    checked = quota.get("checked_at")
+    since = max((value for value in (slot.get("claimed_at"), slot.get("account_switched_at"))
+                 if type(value) in (int, float) and math.isfinite(value)), default=0)
+    if (type(checked) not in (int, float) or not math.isfinite(checked)
+            or not 0 < checked <= now + 60 or checked < since):
+        return {}
+    clean: dict[str, Any] = {}
+    for name in ("session", "week"):
+        window = quota.get(name)
+        if not isinstance(window, Mapping):
+            continue
+        used = window.get("used_pct")
+        if type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used <= 100:
+            continue
+        clean[name] = {"used_pct": used}
+        reset = window.get("resets_at")
+        if (type(reset) in (int, float) and math.isfinite(reset)
+                and checked <= reset <= now + 8 * 24 * 60 * 60):
+            clean[name]["resets_at"] = reset
+    return {"checked_at": checked, **clean} if clean else {}
+
+
 def slot_report(slot: Mapping[str, Any], heartbeat: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     payload = (heartbeat or {}).get("payload")
     entries = payload.get("slots") if isinstance(payload, Mapping) else None
@@ -78,18 +104,9 @@ def health(slot: Mapping[str, Any], report: Mapping[str, Any], login: Any, *,
     if isinstance(version, str) and VERSION_RE.fullmatch(version):
         result["claude_version"] = version
     # Quota freshness and native credential readiness are distinct observations.
-    quota = report.get("quota")
-    if isinstance(quota, Mapping):
-        clean = {}
-        for name in ("session", "week"):
-            window = quota.get(name)
-            if not isinstance(window, Mapping):
-                continue
-            used = window.get("used_pct")
-            if (type(used) in (int, float) and math.isfinite(used) and 0 <= used <= 100):
-                clean[name] = {"used_pct": used}
-        if clean:
-            result["quota"] = clean
+    quota = quota_observation(report.get("quota"), slot, now)
+    if quota and result["health"] != "switching":
+        result["quota"] = quota
     return result
 
 

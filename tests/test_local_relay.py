@@ -179,6 +179,55 @@ def test_headers_and_structured_identity_are_removed_but_model_context_is_preser
     assert upstream.closed and upstream.sock.timeout == relay.READ_TIMEOUT
 
 
+@pytest.mark.parametrize("path", sorted(relay.PATHS))
+def test_slot_independently_removes_semantic_header_parameters(slot, capsys, path):
+    context = {"model": "opus", "messages": [], "system": "Native local/path stays intact"}
+    code, raw, upstream = run(slot, request(json.dumps(context).encode(), path=path, headers={
+        "content-type": 'application/json; charset=utf-8; device="PRIVATE-DEVICE"',
+        "accept": 'text/event-stream; environment="PRIVATE-OS,LOCATION";q=0.900, '
+                  'application/json; fingerprint=PRIVATE-FINGERPRINT;q=1.000',
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20, future-feature-2027-01-01",
+    }))
+    assert code == 0 and response(raw)[0]["status"] == 200
+    args, forwarded = upstream.calls[0]
+    assert args == ("POST", path) and json.loads(forwarded["body"]) == context
+    assert forwarded["headers"] == {
+        "content-type": "application/json",
+        "accept": "text/event-stream;q=0.9, application/json;q=1",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20,future-feature-2027-01-01",
+        "accept-encoding": "identity", "user-agent": "ccfleet-slot-relay/2",
+        "x-app": "cli", "authorization": "Bearer slot-test-token",
+    }
+    assert "PRIVATE-" not in json.dumps(forwarded["headers"]) and b"PRIVATE-" not in raw
+    output = capsys.readouterr()
+    assert "PRIVATE-" not in output.out + output.err
+
+
+@pytest.mark.parametrize("name, value", [
+    ("content-type", "text/plain; device=PRIVATE-DEVICE"),
+    ("accept", "application/json;q=PRIVATE-LOCATION"),
+    ("accept", 'text/event-stream; device="PRIVATE-DEVICE'),
+    ("accept", "application/json;q=0.2;q=0.3"),
+    ("anthropic-version", "2023-06-01; environment=PRIVATE-OS"),
+    ("anthropic-version", "2023-02-29"),
+    ("anthropic-beta", "native-feature; fingerprint=PRIVATE-FINGERPRINT"),
+    ("anthropic-beta", ",".join(["feature"] * 65)),
+])
+def test_slot_rejects_invalid_semantic_values_before_connect_or_post(slot, capsys, name, value):
+    connections = []
+    output = io.BytesIO()
+    code = relay.serve_one(io.BytesIO(request(headers={
+        "content-type": "application/json", name: value})), output, slot,
+        policy=lambda: None, connect=lambda: connections.append(True))
+    meta, body = response(output.getvalue())
+    assert code == 2 and meta["status"] == 400 and connections == []
+    assert json.loads(body)["error"]["message"] == "invalid model request headers"
+    captured = capsys.readouterr()
+    assert "PRIVATE-" not in captured.out + captured.err
+
+
 def test_status_has_no_model_call_account_label_or_credential(slot):
     code, raw, upstream = run(slot, frame({"version": 2, "operation": "status"}))
     meta, body = response(raw)

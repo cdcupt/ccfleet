@@ -76,13 +76,13 @@ content filtering is not an anonymity or zero-disclosure guarantee.</li>
 <td>Releases and rollback</td>
 <td>Signed immutable bundles, complete verification and atomic activation</td>
 <td>Tamper, wrong key, interruption, downgrade and rollback fault tests</td>
-<td>Signed 0.2.0 published; all eight public files verified</td>
+<td>Signed 0.2.1 published; immutable public files and signatures verified. 0.2.2 uses the same helper inventory.</td>
 </tr>
 <tr>
 <td>Service visibility</td>
 <td>Aggregate relay counters and latency information, distinct from subscription quota</td>
 <td>No content/identity strings accepted; stale metrics labelled; account transition resets attribution</td>
-<td>Deployed on reachable nodes; fresh reports verified</td>
+<td>Deployed on all three nodes; numeric token/cache totals and sample coverage verified</td>
 </tr>
 <tr>
 <td>Transport performance</td>
@@ -94,7 +94,7 @@ content filtering is not an anonymity or zero-disclosure guarantee.</li>
 <td>Broker resilience</td>
 <td>Same-slot broker alternatives with consistent authorization</td>
 <td>Alternative broker cannot change slot identity; no credential fallback or POST replay</td>
-<td>Internal status/revocation verified; upgrade compliance and public routing pending</td>
+<td>Direct secondary SSH/status/revocation and upgrade compliance verified; public shared-edge routing pending</td>
 </tr>
 <tr>
 <td>Website and guides</td>
@@ -117,6 +117,10 @@ Each stage permits at most two review/fix passes. On budget exhaustion, preserve
 a reviewable checkpoint and report remaining work; do not claim unfinished
 features are deployed.</p>
 <h2 id="acceptance-record">Acceptance record</h2>
+<p>The 0.2.0 sections below are dated history. Their unreachable-node, HTTP/1.0
+upgrade and transport-cleanup blockers were resolved in the 0.2.1 follow-up;
+public edge activation remains pending. The work-package table describes the
+latest verified baseline, not the older limitations.</p>
 <p>Runtime/source <code>9e52e29</code>, signed client 0.2.0, manifest publication <code>58141f4</code>
 and stable-channel publication <code>c7621d6</code> are recorded in
 <a href="local-relay-verification.html#latest-native-client-platform-release">the verification evidence</a>.
@@ -156,4 +160,22 @@ secondary-transport/revocation canaries passed. Actual numeric usage coverage
 was observed, without adding identity/content logs. Public edge routing remains
 unchanged pending an approved shared-edge reload. See the latest verification
 record for evidence, limits and the source-grounded competitor comparison.</p>
+<h2 id="dedicated-privacy-and-management-follow-up">Dedicated privacy and management follow-up</h2>
+<p>This pass is bounded to 90 minutes with at most two fix/recheck rounds. It
+addresses concrete disclosure and usability gaps without adding providers,
+account pooling, payment integrations or new credential writers:</p>
+<ul><li>Normalize semantic request-header values before SSH and independently at
+the slot; synthetic identity parameters are removed or rejected without reflection.</li>
+<li>Preserve explicitly requested menu model/effort/permissions, including plan mode.</li>
+<li>Validate background projects/options/specs before readiness checks or retiring
+legacy live-folder sessions; invalid replacement work must not stop existing work.</li>
+<li>Provide three opt-in local read-only MCP tools with fixed health/numeric usage
+results, bounded stdio, authorization binding and a real total status-read deadline.</li>
+<li>Expose attributable numeric quota observation/reset times; absent or older
+samples remain unknown rather than becoming current-account or zero-usage claims.</li></ul>
+<p>Client 0.2.2 retains the existing signed helper inventory so installed updaters
+can verify it. Release gates include the full suite, three-version CI, signed
+publication, backup-first server/node rollout and public-client canaries. No
+passing code test is described as live evidence. Prompts/system/tool content
+remain native; these controls do not prove zero fingerprint disclosure.</p>
 </main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

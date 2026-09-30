@@ -30,6 +30,13 @@ provider approval, or zero metadata disclosure.</p>
 top-level <code>metadata</code> and the explicitly enumerated direct identity fields.
 Unknown headers, including local SDK/runtime fingerprint headers, are not sent
 upstream. The slot identifies its relay truthfully as <code>ccfleet-slot-relay/2</code>.</p>
+<p>Client 0.2.2 also normalizes allowed header values independently before SSH
+and before the slot's upstream request. JSON Content-Type is canonical;
+Accept keeps supported JSON/SSE/wildcard media ranges and valid quality values,
+not unrelated parameters. Version dates and bounded beta feature lists must be
+well-formed. Synthetic private-parameter tests verify rejection or removal
+without reflecting the supplied values. Valid future beta names remain supported;
+this does not prevent deliberate identifiers encoded inside functional values.</p>
 <p>We do not record and replay another process's account/session identity. A captured
 profile can become stale when the native client changes, and matching selected
 headers is not evidence that all local information was removed. Unknown JSON
@@ -160,6 +167,17 @@ labelled as legacy, not as a signature-verified release. Initial HTTPS bootstrap
 the pinned public key and the operator's private signing-key custody remain trust
 dependencies; neither signatures nor finite tests guarantee future availability.</p>
 <h2 id="boundaries-and-acceptance-evidence">Boundaries and acceptance evidence</h2>
+<p>Optional local stdio management MCP is explicitly enabled with
+<code>ccfleet mcp serve</code>. Its three read-only tools expose fixed health codes
+and numeric cached quota/relay observations to the calling AI, not account/device
+IDs, host/IP information, local paths, logs, model/session IDs or arbitrary response
+strings. Discovery makes no network call; tool calls only read the selected pairing's
+status, with a hard total deadline, bounded input and rate limits. It does not
+invoke Claude, refresh quota, register itself, or mutate state. Missing quota
+timestamps remain unknown; server attribution rejects samples predating assignment
+or account change. Re-pairing, revocation and account generation changes invalidate
+the running process. This is opt-in disclosure of the stated numeric observations,
+not a claim that no information reaches a model.</p>
 <p>Prompts, system context, paths and tool results can still contain private data.
 MCP, hooks, shell tools and other native services can use their own networking.
 BWH sees connection metadata; slot root can inspect decrypted requests. The

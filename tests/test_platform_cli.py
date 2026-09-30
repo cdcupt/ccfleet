@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccfleet_agent import client_experience, inference_client
+from ccfleet_agent import client_experience, inference_client, local_jobs
 from tests.test_native_local_cli import client as client
 
 PRIVATE = "PRIVATE_FIXTURE_INFORMATION_MUST_NOT_APPEAR"
@@ -126,6 +126,21 @@ def test_menu_entry_delegates_with_consent_protections_not_implicit_launch(platf
     monkeypatch.setattr(client_experience, "menu", menu)
     assert invoke(platform, "menu", "--project", str(platform.home)) == 7
     assert len(calls) == 1 and not platform.calls
+
+
+def test_menu_cli_passes_explicit_permission_model_and_effort(platform, monkeypatch):
+    actual = client_experience.menu
+    def choose_new(callbacks, **options):
+        return actual(callbacks, **options, input_fn=lambda _: "1", output_fn=lambda _: None,
+                      is_tty=True)
+    monkeypatch.setattr(client_experience, "menu", choose_new)
+    assert invoke(platform, "start", "--project", str(platform.home), "--mode", "plan",
+                  "--model", "sonnet", "--effort", "low") == 0
+    native = platform.calls[-1][0]
+    assert native[native.index("--permission-mode") + 1] == "plan"
+    assert native[native.index("--model") + 1] == "sonnet"
+    assert native[native.index("--effort") + 1] == "low"
+    assert "--dangerously-skip-permissions" not in native
 
 
 def test_sessions_uses_native_picker_without_parsing_history(platform):
@@ -269,7 +284,10 @@ def job_capture(platform, monkeypatch):
         started.append((root, spec, command, options))
         return {"job_id": "a" * 32, "state": "running"}
 
-    helper = SimpleNamespace(start=start)
+    helper = SimpleNamespace(start=start, _spec=local_jobs._spec, _number=local_jobs._number,
+                             MAX_TIMEOUT_S=local_jobs.MAX_TIMEOUT_S,
+                             MAX_CONCURRENT=local_jobs.MAX_CONCURRENT,
+                             MAX_SPEC_BYTES=local_jobs.MAX_SPEC_BYTES)
     monkeypatch.setitem(platform.scope, "local_jobs", lambda: helper)
     return started, helper
 

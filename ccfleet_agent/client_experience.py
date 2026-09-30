@@ -10,7 +10,9 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import io
 import json
+import math
 import os
 import re
 import secrets
@@ -21,6 +23,7 @@ import stat
 import subprocess
 import sys
 import time
+from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -770,6 +773,7 @@ def menu(
     project: Path,
     slot: str = "",
     preferences: Optional[Preferences] = None,
+    options: Optional[Mapping[str, Any]] = None,
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], Any] = print,
     is_tty: Optional[bool] = None,
@@ -794,6 +798,7 @@ def menu(
                 project=project,
                 slot=slot,
                 preferences=preferences,
+                options=options,
             )
         if choice == "4":
             output_fn(
@@ -801,7 +806,11 @@ def menu(
             )
             if input_fn("Open the remote terminal? [y/N]: ").strip().lower() != "y":
                 return 0
-            return launch("remote", callbacks, project=project, slot=slot)
+            # Local conversation names and cleanup consent are not remote entry
+            # arguments. Explicit model/effort/permission choices still apply.
+            remote_options = {key: value for key, value in (options or {}).items()
+                              if key in ("model", "effort", "mode") and value is not None}
+            return launch("remote", callbacks, project=project, slot=slot, options=remote_options)
         if choice == "5":
             if preferences is None:
                 raise ExperienceError("project preferences are unavailable")
@@ -835,3 +844,411 @@ def menu(
         raise ExperienceError("invalid menu selection; no session was started")
     except EOFError:
         return 0
+
+
+# Management MCP deliberately lives in this already-pinned helper. Adding a new
+# helper would make older signed updaters reject the otherwise valid release.
+# This is a small stdio-only subset of MCP 2025-06-18 / 2025-11-25: no HTTP server,
+# filesystem roots, resources, prompts, sampling, logging or server-initiated RPC.
+MCP_PROTOCOLS = ("2025-06-18", "2025-11-25")
+MCP_MAX_LINE = 64 * 1024
+MCP_MAX_CALLS = 20  # Per process, in a sliding minute; no background polling.
+MCP_MAX_COUNTER = 2**53 - 1
+MCP_MAX_EPOCH = 253402300799
+MCP_MAX_LATENCY = 3_600_000
+MCP_FRESH_SECONDS = 300
+MCP_QUOTA_FRESH_SECONDS = 600
+MCP_OUTCOMES = (
+    "success", "auth_errors", "permission_errors", "rate_limits", "upstream_errors",
+    "connection_errors", "cancelled", "input_errors",
+)
+MCP_TIMINGS = ("connect_ms", "first_byte_ms", "total_ms")
+MCP_TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                    "cache_creation_input_tokens")
+MCP_REASONS = {
+    "ready": {"credentials_current"},
+    "renewal_pending": {"native_renewal_pending", "renewal_due"},
+    "degraded": {"observation_stale", "account_unbound", "expiry_unknown"},
+    "sign_in_required": {"not_signed_in", "credential_expired"},
+    "switching": {"sign_in_pending", "account_transition", "account_mismatch"},
+}
+
+
+def _management_number(value: Any, upper: float = MCP_MAX_EPOCH) -> bool:
+    return type(value) in (int, float) and 0 <= value <= upper and math.isfinite(value)
+
+
+def _management_counter(value: Any) -> bool:
+    return type(value) is int and 0 <= value <= MCP_MAX_COUNTER
+
+
+def _management_slot(status: Any, now: float) -> dict[str, Any]:
+    if (not isinstance(status, dict) or status.get("authenticated") is not True
+            or type(status.get("protocol")) is not int or status["protocol"] != 2
+            or not isinstance(status.get("device"), dict)
+            or status["device"].get("active") is not True
+            or not isinstance(status.get("slot"), dict)):
+        raise ExperienceError("invalid management status")
+    slot = status["slot"]
+    health, reason, state = slot.get("health"), slot.get("reason"), slot.get("state")
+    if (not isinstance(health, str) or health not in MCP_REASONS
+            or not isinstance(reason, str) or reason not in MCP_REASONS[health]
+            or state not in ("free", "claiming", "claimed", "active", "releasing", "unknown")
+            or slot.get("readiness_source") != "reported" or type(slot.get("ready")) is not bool
+            or slot["ready"] != (health == "ready")
+            or (slot["ready"] and state not in ("claimed", "active"))):
+        raise ExperienceError("invalid management health")
+    # A malformed known status field invalidates every projection, not just
+    # health. Missing/stale observations remain legitimate unknown/stale data.
+    _management_observation(slot.get("observed_at"), now, MCP_FRESH_SECONDS)
+    return slot
+
+
+def _management_observation(value: Any, now: float, fresh_seconds: int) -> dict[str, Any]:
+    if value is None:
+        return {"observed_at": None, "age_seconds": None, "freshness": "unknown"}
+    if not _management_number(value) or value > now + 60:
+        raise ExperienceError("invalid management observation time")
+    age = max(0, now - value)
+    return {"observed_at": float(value), "age_seconds": int(age),
+            "freshness": "fresh" if age <= fresh_seconds else "stale"}
+
+
+def _management_now(now: Optional[float]) -> float:
+    value = time.time() if now is None else now
+    if not _management_number(value):
+        raise ExperienceError("invalid management clock")
+    return value
+
+
+def management_health(status: Any, *, now: Optional[float] = None) -> dict[str, Any]:
+    """Project fixed health codes only; a heartbeat is not a provider acceptance test."""
+    current = _management_now(now)
+    slot = _management_slot(status, current)
+    observation = _management_observation(slot.get("observed_at"), current,
+                                          MCP_FRESH_SECONDS)
+    return {"source": "cached_slot_report", "slot_state": slot["state"],
+            "health": slot["health"], "reason": slot["reason"], **observation,
+            "reported_ready": slot["ready"] and observation["freshness"] == "fresh",
+            "provider_acceptance_verified": False}
+
+
+def management_quota(status: Any, *, now: Optional[float] = None) -> dict[str, Any]:
+    """Cached native subscription percentages, never a refresh or inferred billing value."""
+    current = _management_now(now)
+    slot = _management_slot(status, current)
+    raw = slot.get("quota")
+    result: dict[str, Any] = {"source": "cached_native_quota", "available": False,
+                             **_management_observation(None, current, MCP_QUOTA_FRESH_SECONDS),
+                             "windows": {}}
+    if raw is None:
+        return result
+    if not isinstance(raw, dict):
+        raise ExperienceError("invalid management quota")
+    # Older servers omit the quota observation. Their percentages cannot be
+    # attributed to a fresh/current-account observation, so disclose no numbers.
+    if raw.get("checked_at") is None:
+        return result
+    observation = _management_observation(raw["checked_at"], current, MCP_QUOTA_FRESH_SECONDS)
+    windows = {}
+    for name in ("session", "week"):
+        if name not in raw:
+            continue
+        window = raw[name]
+        if not isinstance(window, dict) or not _management_number(window.get("used_pct"), 100):
+            raise ExperienceError("invalid management quota window")
+        reset = window.get("resets_at")
+        if reset is not None and not _management_number(reset):
+            raise ExperienceError("invalid management quota reset")
+        used = window["used_pct"]
+        windows[name] = {"used_pct": used, "remaining_pct": 100 - used, "resets_at": reset}
+    return {**result, **observation, "available": bool(windows), "windows": windows}
+
+
+def _management_usage(raw: Any, successes: int) -> dict[str, Any]:
+    keys = {"eligible", "samples", "cache_read_samples", "cache_creation_samples",
+            *MCP_TOKEN_FIELDS}
+    if (not isinstance(raw, dict) or set(raw) != keys
+            or any(not _management_counter(value) for value in raw.values())
+            or not raw["samples"] <= raw["eligible"] <= successes
+            or not raw["cache_read_samples"] <= raw["samples"]
+            or not raw["cache_creation_samples"] <= raw["samples"]):
+        raise ExperienceError("invalid management token coverage")
+    for key, count in (("input_tokens", "samples"), ("output_tokens", "samples"),
+                       ("cache_read_input_tokens", "cache_read_samples"),
+                       ("cache_creation_input_tokens", "cache_creation_samples")):
+        if raw[key] > raw[count] * 10**9:
+            raise ExperienceError("invalid management token total")
+    return {"eligible": raw["eligible"], "samples": raw["samples"],
+            "coverage_pct": 100 * raw["samples"] / raw["eligible"] if raw["eligible"] else None,
+            "input_tokens": raw["input_tokens"] if raw["samples"] else None,
+            "output_tokens": raw["output_tokens"] if raw["samples"] else None,
+            "cache_read_samples": raw["cache_read_samples"],
+            "cache_creation_samples": raw["cache_creation_samples"],
+            "cache_read_input_tokens": (raw["cache_read_input_tokens"]
+                                        if raw["cache_read_samples"] else None),
+            "cache_creation_input_tokens": (raw["cache_creation_input_tokens"]
+                                            if raw["cache_creation_samples"] else None)}
+
+
+def management_relay_usage(status: Any, *, now: Optional[float] = None) -> dict[str, Any]:
+    """Revalidate the fixed seven-UTC-day report without importing another client helper.
+
+    Zero timing/usage samples become null observations, not zero performance or
+    free inference. No account binding, model, transcript, or other identifier is
+    part of this view; its fixed fields mirror the server's numeric report v1.
+    """
+    current = _management_now(now)
+    slot = _management_slot(status, current)
+    result: dict[str, Any] = {
+        "source": "cached_relay_aggregates", "available": False,
+        "window_days": 7, "window_kind": "utc_calendar_days", "billing": False,
+        **_management_observation(None, current, MCP_FRESH_SECONDS),
+    }
+    raw = slot.get("relay")
+    if raw is None:
+        return result
+    keys = {"version", "observed_at", "window_days", "last_success_at", "latencies",
+            "requests", *MCP_OUTCOMES}
+    if (not isinstance(raw, dict) or set(raw) - {"token_usage"} != keys
+            or type(raw["version"]) is not int or raw["version"] != 1
+            or type(raw["window_days"]) is not int or raw["window_days"] != 7
+            or not _management_number(raw["observed_at"])
+            or any(not _management_counter(raw[key]) for key in ("requests", *MCP_OUTCOMES))
+            or sum(raw[key] for key in MCP_OUTCOMES) != raw["requests"]):
+        raise ExperienceError("invalid management relay report")
+    observation = _management_observation(raw["observed_at"], current, MCP_FRESH_SECONDS)
+    if raw["observed_at"] < current - 7 * 86400:
+        return result
+    last = raw["last_success_at"]
+    first_day = max(0, int(raw["observed_at"] // 86400) - 6) * 86400
+    if ((raw["success"] == 0 and last is not None)
+            or (raw["success"] > 0 and (not _management_number(last)
+                or not first_day <= last <= raw["observed_at"]))):
+        raise ExperienceError("invalid management relay success time")
+    if not isinstance(raw["latencies"], dict) or set(raw["latencies"]) != set(MCP_TIMINGS):
+        raise ExperienceError("invalid management relay timings")
+    latencies = {}
+    for key in MCP_TIMINGS:
+        sample = raw["latencies"][key]
+        if (not isinstance(sample, dict) or set(sample) != {"count", "mean", "max"}
+                or not _management_counter(sample["count"]) or sample["count"] > raw["requests"]
+                or not _management_number(sample["mean"], MCP_MAX_LATENCY)
+                or not _management_number(sample["max"], MCP_MAX_LATENCY)
+                or sample["mean"] > sample["max"]
+                or (sample["count"] == 0 and (sample["mean"] != 0 or sample["max"] != 0))):
+            raise ExperienceError("invalid management relay timing sample")
+        count = sample["count"]
+        latencies[key] = {"samples": count, "mean_ms": sample["mean"] if count else None,
+                          "max_ms": sample["max"] if count else None}
+    usage = _management_usage(raw["token_usage"], raw["success"]) if "token_usage" in raw else None
+    return {**result, **observation, "available": True,
+            "counts": {key: raw[key] for key in ("requests", *MCP_OUTCOMES)},
+            "last_success_at": last, "latency_unit": "milliseconds", "latencies": latencies,
+            "token_usage": usage}
+
+
+_MCP_TOOLS = {
+    "ccfleet_health": (management_health,
+        "Read cached health of the one paired slot. Reported readiness is not a live "
+        "connection or provider acceptance test. Returns fixed health codes and observation age."),
+    "ccfleet_quota": (management_quota,
+        "Read cached native subscription quota percentages and reset timestamps for the one "
+        "paired slot. Missing observations are unknown, not zero. Does not refresh quota."),
+    "ccfleet_relay_usage": (management_relay_usage,
+        "Read cached numeric relay counts, latency samples and optional token coverage for "
+        "seven UTC calendar days, not just today. Not billing or subscription quota. "
+        "Missing samples are unknown; completed transfer does not prove task success."),
+}
+
+
+def _mcp_tools() -> list[dict[str, Any]]:
+    return [{"name": name, "description": description,
+             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+             "annotations": {"readOnlyHint": True, "destructiveHint": False,
+                             "idempotentHint": True, "openWorldHint": False}}
+            for name, (_function, description) in _MCP_TOOLS.items()]
+
+
+def _mcp_unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate field")
+        result[key] = value
+    return result
+
+
+def _mcp_constant(_value):
+    raise ValueError("nonfinite JSON")
+
+
+def _mcp_id(value: Any) -> bool:
+    # Request IDs are echoed only in the required JSON-RPC envelope, never sent
+    # to the status callback or included in tool results, stored, or logged.
+    return ((type(value) is int and -MCP_MAX_COUNTER <= value <= MCP_MAX_COUNTER)
+            or (isinstance(value, str) and 1 <= len(value) <= 128
+                and all(32 <= ord(char) <= 126 for char in value)))
+
+
+def _mcp_error(identifier: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": identifier, "error": {"code": code, "message": message}}
+
+
+def _mcp_result(identifier: Any, value: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": identifier, "result": value}
+
+
+def _mcp_tool_result(value: dict[str, Any], *, error: bool = False) -> dict[str, Any]:
+    return {"isError": error, "structuredContent": value,
+            "content": [{"type": "text", "text": json.dumps(value, sort_keys=True,
+                                                                 allow_nan=False)}]}
+
+
+def _mcp_failure(exc: Exception) -> dict[str, Any]:
+    code = {401: "pairing_unavailable", 403: "access_denied", 404: "service_unavailable",
+            409: "assignment_changed"}.get(_http_status(exc), "status_unavailable")
+    return _mcp_tool_result({"available": False, "error": code,
+                            "message": "The paired-slot observation is unavailable. "
+                            "Check CC Fleet in a separate terminal; no changes were made."},
+                           error=True)
+
+
+def serve_mcp(read_status: Callable[[], Any], *, input_stream=None, output_stream=None) -> int:
+    """Opt-in, bounded NDJSON management server over stdio; never logs input/output.
+
+    ``read_status`` owns bounded GET-only transport and binding/revocation checks
+    for one preselected existing pairing. It must not scan projects, make model
+    requests, invoke native clients, follow redirects, or print anything. The
+    callback is invoked once per authorized tools/call and receives no caller
+    arguments. Discovery/initialization/ping never invoke it. Tools intentionally
+    disclose their fixed numeric/code results to the calling MCP client and AI.
+
+    Streams default to binary stdio. Text IO is supported for embedded tests.
+    Oversized or unterminated frames close the session; no unbounded draining.
+    """
+    incoming = sys.stdin.buffer if input_stream is None else input_stream
+    outgoing = sys.stdout.buffer if output_stream is None else output_stream
+    phase = "new"
+    calls: deque[float] = deque()
+
+    def emit(value):
+        line = json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":")) + "\n"
+        outgoing.write(line if isinstance(outgoing, io.TextIOBase) else line.encode("utf-8"))
+        outgoing.flush()
+
+    try:
+        while True:
+            line = incoming.readline(MCP_MAX_LINE + 1)
+            if not line:
+                return 0
+            try:
+                raw = line.encode("utf-8") if isinstance(line, str) else line
+            except UnicodeError:
+                emit(_mcp_error(None, -32700, "Invalid JSON message"))
+                continue
+            if len(raw) > MCP_MAX_LINE or not raw.endswith(b"\n"):
+                emit(_mcp_error(None, -32600, "Message exceeds framing limits"))
+                return 2
+            try:
+                text = raw[:-1].removesuffix(b"\r").decode("utf-8")
+                if "\r" in text:
+                    raise ValueError("embedded line break")
+                message = json.loads(text, object_pairs_hook=_mcp_unique,
+                                     parse_constant=_mcp_constant)
+            except (ValueError, UnicodeError, RecursionError, OverflowError):
+                emit(_mcp_error(None, -32700, "Invalid JSON message"))
+                continue
+            if (not isinstance(message, dict) or message.get("jsonrpc") != "2.0"
+                    or set(message) - {"jsonrpc", "id", "method", "params"}
+                    or not isinstance(message.get("method"), str)
+                    or not 1 <= len(message["method"]) <= 128
+                    or ("id" in message and not _mcp_id(message["id"]))):
+                emit(_mcp_error(None, -32600, "Invalid request"))
+                continue
+            method, identifier = message["method"], message.get("id")
+            params = message.get("params", {})
+            if "id" not in message:
+                if method == "notifications/initialized" and phase == "initializing" \
+                        and isinstance(params, dict) and not set(params) - {"_meta"} \
+                        and isinstance(params.get("_meta", {}), dict):
+                    phase = "ready"
+                # Notifications never invoke a tool and never get a response.
+                continue
+            if not isinstance(params, dict):
+                emit(_mcp_error(identifier, -32602, "Invalid parameters"))
+                continue
+            # _meta is bounded by framing, discarded, and never reflected or sent
+            # to the status callback (including progress tokens or trace context).
+            if "_meta" in params and not isinstance(params["_meta"], dict):
+                emit(_mcp_error(identifier, -32602, "Invalid parameters"))
+                continue
+            params = {key: value for key, value in params.items() if key != "_meta"}
+            if method == "ping":
+                emit(_mcp_error(identifier, -32602, "Invalid parameters") if params else
+                     _mcp_result(identifier, {}))
+                continue
+            if method == "initialize":
+                client = params.get("clientInfo")
+                if (phase != "new" or set(params) != {
+                        "protocolVersion", "capabilities", "clientInfo"}
+                        or not isinstance(params["protocolVersion"], str)
+                        or re.fullmatch(r"\d{4}-\d{2}-\d{2}", params["protocolVersion"]) is None
+                        or not isinstance(params["capabilities"], dict)
+                        or not isinstance(client, dict)
+                        or any(not isinstance(client.get(key), str)
+                               or not 1 <= len(client[key]) <= 256 for key in ("name", "version"))):
+                    emit(_mcp_error(identifier, -32602, "Invalid initialization"))
+                    continue
+                protocol = params["protocolVersion"]
+                phase = "initializing"
+                emit(_mcp_result(identifier, {
+                    "protocolVersion": protocol if protocol in MCP_PROTOCOLS else MCP_PROTOCOLS[-1],
+                    "capabilities": {"tools": {"listChanged": False}},
+                    # Fixed implementation metadata required by MCP; never the
+                    # native Claude, OS, account, slot or clientInfo version.
+                    "serverInfo": {"name": "ccfleet-management", "version": "1"},
+                    "instructions": "Opt-in read-only access to one paired slot's cached "
+                    "health and numeric usage. Tool results are visible to the calling AI. "
+                    "No models are invoked and no quota is refreshed. Observations are not "
+                    "billing, current-day usage, or a guarantee of provider acceptance.",
+                }))
+                continue
+            if phase != "ready":
+                emit(_mcp_error(identifier, -32002, "Server is not initialized"))
+                continue
+            if method == "tools/list":
+                # All three tools fit one page. Any cursor is invalid; echo none.
+                emit(_mcp_error(identifier, -32602, "Invalid parameters") if params else
+                     _mcp_result(identifier, {"tools": _mcp_tools()}))
+            elif method == "tools/call":
+                name = params.get("name")
+                if (set(params) - {"name", "arguments"} or not isinstance(name, str)
+                        or name not in _MCP_TOOLS
+                        or not isinstance(params.get("arguments", {}), dict)
+                        or params.get("arguments", {})):
+                    emit(_mcp_error(identifier, -32602, "Unknown tool or invalid arguments"))
+                    continue
+                now = time.monotonic()
+                while calls and calls[0] <= now - 60:
+                    calls.popleft()
+                if len(calls) >= MCP_MAX_CALLS:
+                    emit(_mcp_result(identifier, _mcp_tool_result(
+                        {"available": False, "error": "rate_limited",
+                         "message": "Management observation limit reached; try again later."},
+                        error=True)))
+                    continue
+                calls.append(now)
+                try:
+                    result = _MCP_TOOLS[name][0](read_status())
+                except Exception as exc:
+                    result = _mcp_failure(exc)
+                else:
+                    result = _mcp_tool_result(result)
+                emit(_mcp_result(identifier, result))
+            else:
+                emit(_mcp_error(identifier, -32601, "Method not found"))
+    except (OSError, UnicodeError):
+        return 1
+    except KeyboardInterrupt:
+        return 130

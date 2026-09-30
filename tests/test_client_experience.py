@@ -486,6 +486,22 @@ def test_guided_menu_dispatches_only_selected_native_action(environment, selecti
     assert "yes" not in values
 
 
+@pytest.mark.parametrize("selection", ["1", "2", "3"])
+def test_menu_preserves_explicit_permission_model_and_consent_options(environment, selection):
+    options = {"mode": "plan", "model": "sonnet", "effort": "low", "name": "review", "yes": False}
+    result, _ = menu(environment, [selection], options=options)
+    assert result == 17
+    assert all(environment.events[-1][1][key] == value for key, value in options.items())
+
+
+def test_remote_menu_forwards_modes_but_not_local_only_options(environment):
+    result, _ = menu(environment, ["4", "y"], options={"mode": "plan", "model": "sonnet",
+                                                       "effort": "low", "name": "local", "yes": True})
+    assert result == 19
+    assert environment.events[-1] == ("remote", {"slot": "", "mode": "plan",
+                                                "model": "sonnet", "effort": "low"})
+
+
 @pytest.mark.parametrize("answer,launched", [("y", True), ("n", False), ("", False)])
 def test_remote_menu_requires_explicit_choice_and_confirmation(environment, answer, launched):
     result, output = menu(environment, ["4", answer])

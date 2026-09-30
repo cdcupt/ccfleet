@@ -26,6 +26,7 @@ import struct
 import sys
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Optional
 
@@ -298,6 +299,87 @@ def credential(home: Path, now: float, *, minimum_remaining: float = 30) -> tupl
     return token, seconds
 
 
+def _header_parts(value: str, delimiter: str) -> list[str]:
+    """Split HTTP list/parameter syntax without splitting quoted private values."""
+    parts, start, quoted, escaped = [], 0, False, False
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+        elif quoted and char == "\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif char == delimiter and not quoted:
+            parts.append(value[start:index].strip())
+            start = index + 1
+    if quoted or escaped:
+        raise ValueError("invalid model request headers")
+    parts.append(value[start:].strip())
+    return parts
+
+
+def sanitize_request_headers(supplied: dict[str, str]) -> dict[str, str]:
+    """Keep semantic values, not arbitrary identity-bearing header parameters.
+
+    Mirrored in inference_client.py so the standalone laptop and slot enforce the
+    same boundary independently. Parity tests cover both implementations.
+    Feature names remain extensible; valid names can themselves carry identity,
+    so this is minimization, not an anonymity or covert-channel guarantee.
+    """
+    headers = {name: value for name, value in supplied.items() if name in REQUEST_HEADERS}
+    if any(not isinstance(value, str) or len(value) > 8192 or not value.isascii()
+           or any(not 32 <= ord(char) < 127 for char in value) for value in headers.values()):
+        raise ValueError("invalid model request headers")
+    if headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise ValueError("invalid model request headers")
+    # Both boundaries serialize the parsed body as UTF-8 JSON. Original charset
+    # and extension parameters describe neither that body nor needed API input.
+    headers["content-type"] = "application/json"
+    if "accept" in headers:
+        ranges = _header_parts(headers["accept"], ",")
+        if len(ranges) > 32:
+            raise ValueError("invalid model request headers")
+        normalized = []
+        token = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
+        quoted = r'"(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*"'
+        for item in ranges:
+            parts = _header_parts(item, ";")
+            media = parts[0].lower()
+            if media not in {"application/json", "text/event-stream", "application/*",
+                             "text/*", "*/*"}:
+                raise ValueError("invalid model request headers")
+            quality = None
+            for parameter in parts[1:]:
+                name, separator, value = parameter.partition("=")
+                name, value = name.strip().lower(), value.strip()
+                if (not re.fullmatch(token, name) or not separator
+                        or not re.fullmatch(f"(?:{token}|{quoted})", value)):
+                    raise ValueError("invalid model request headers")
+                if name == "q":
+                    if quality is not None or not re.fullmatch(
+                            r"(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)", value):
+                        raise ValueError("invalid model request headers")
+                    quality = value.rstrip("0").rstrip(".") if "." in value else value
+            normalized.append(media + (";q=" + quality if quality is not None else ""))
+        headers["accept"] = ", ".join(normalized)
+    if "anthropic-version" in headers:
+        version = headers["anthropic-version"].strip()
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", version):
+            raise ValueError("invalid model request headers")
+        try:
+            date.fromisoformat(version)
+        except ValueError:
+            raise ValueError("invalid model request headers") from None
+        headers["anthropic-version"] = version
+    if "anthropic-beta" in headers:
+        features = [value.strip() for value in headers["anthropic-beta"].split(",")]
+        if len(features) > 64 or any(not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", feature) for feature in features):
+            raise ValueError("invalid model request headers")
+        headers["anthropic-beta"] = ",".join(features)
+    return headers
+
+
 def validate_request(meta: dict[str, Any]) -> tuple[str, dict[str, str], int]:
     if (set(meta) != {"version", "operation", "method", "path", "headers", "body_size"}
             or meta.get("operation") != "request" or meta.get("method") != "POST"
@@ -321,8 +403,10 @@ def validate_request(meta: dict[str, Any]) -> tuple[str, dict[str, str], int]:
         seen.add(lowered)
         if lowered in REQUEST_HEADERS:
             headers[lowered] = value
-    if headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
-        raise RelayError(400, "Claude requests must be JSON")
+    try:
+        headers = sanitize_request_headers(headers)
+    except ValueError:
+        raise RelayError(400, "invalid model request headers") from None
     headers.update({"accept-encoding": "identity", "user-agent": USER_AGENT, "x-app": "cli"})
     return meta["path"], headers, size
 

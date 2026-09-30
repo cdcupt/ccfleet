@@ -118,7 +118,8 @@ def raw_request(bridge, fields, *, method="POST", path="/v1/messages", body=b"{}
 
 def ordinary_headers(bridge):
     return [("Host", f"127.0.0.1:{bridge.port}"),
-            ("Authorization", "Bearer " + bridge.secret), ("Content-Length", "2")]
+            ("Authorization", "Bearer " + bridge.secret), ("Content-Length", "2"),
+            ("Content-Type", "application/json")]
 
 
 def wait_until(predicate, timeout=3):
@@ -181,6 +182,52 @@ def test_headers_and_structured_identity_are_removed_before_ssh(bridge, peer, ca
         assert secret not in capture.read_text()
         assert secret not in capsys.readouterr().out
     assert calls == ["ok"]
+
+
+@pytest.mark.parametrize("path", sorted(relay.PATHS))
+def test_semantic_header_parameters_are_removed_before_ssh(bridge, peer, capsys, path):
+    context = {"model": "test", "messages": [], "system": "Native local/path stays intact"}
+    connection, response = post(bridge, context, {
+        "Content-Type": 'application/json; charset=utf-8; device="PRIVATE-DEVICE"',
+        "Accept": 'text/event-stream; environment="PRIVATE-OS,LOCATION";q=0.900, '
+                  'application/json; fingerprint=PRIVATE-FINGERPRINT;q=1.000',
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20, future-feature-2027-01-01",
+    }, path=path)
+    assert response.status == 200 and response.read() == b"data: first\n\n"
+    connection.close()
+    capture = peer[1].read_text()
+    saved = json.loads(capture)
+    assert saved["meta"]["headers"] == {
+        "content-type": "application/json",
+        "accept": "text/event-stream;q=0.9, application/json;q=1",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "oauth-2025-04-20,future-feature-2027-01-01",
+    }
+    assert json.loads(saved["body"]) == context
+    assert "PRIVATE-" not in capture and peer[3] == ["ok"]
+    output = capsys.readouterr()
+    assert "PRIVATE-" not in output.out + output.err
+
+
+@pytest.mark.parametrize("name, value", [
+    ("Content-Type", "text/plain; device=PRIVATE-DEVICE"),
+    ("Accept", "application/json;q=PRIVATE-LOCATION"),
+    ("Accept", 'text/event-stream; device="PRIVATE-DEVICE'),
+    ("Accept", "application/json;q=0.2;q=0.3"),
+    ("anthropic-version", "2023-06-01; environment=PRIVATE-OS"),
+    ("anthropic-version", "2023-02-29"),
+    ("anthropic-beta", "native-feature; fingerprint=PRIVATE-FINGERPRINT"),
+    ("anthropic-beta", ",".join(["feature"] * 65)),
+])
+def test_invalid_semantic_header_values_never_start_ssh(bridge, peer, capsys, name, value):
+    connection, response = post(bridge, headers={name: value})
+    assert response.status == 400
+    assert json.loads(response.read())["error"]["message"] == "invalid model request headers"
+    connection.close()
+    assert peer[3] == [] and not peer[1].exists()
+    output = capsys.readouterr()
+    assert "PRIVATE-" not in output.out + output.err
 
 
 def test_bare_native_api_key_nonce_auth_is_supported_without_forwarding_it(bridge, peer):
@@ -348,7 +395,8 @@ def test_concurrency_is_resource_bounded_before_starting_extra_ssh(peer):
     with relay.Bridge(command(), max_requests=1, body_timeout=2) as bridge:
         first = socket.create_connection(("127.0.0.1", bridge.port), timeout=3)
         first.sendall((f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{bridge.port}\r\n"
-                       f"Authorization: Bearer {bridge.secret}\r\nContent-Length: 100\r\n\r\n"
+                       f"Authorization: Bearer {bridge.secret}\r\n"
+                       "Content-Type: application/json\r\nContent-Length: 100\r\n\r\n"
                        "{").encode())
         try:
             wait_until(lambda: len(bridge.server.connections) == 1)

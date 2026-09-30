@@ -27,6 +27,7 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import socket
 import ssl
 import stat
@@ -46,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
-CLIENT_VERSION = "0.2.1"
+CLIENT_VERSION = "0.2.2"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -61,11 +62,12 @@ PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
-INFERENCE_CLIENT_SHA256 = "ad0baabefa94ca8465c04229d02ae55818f355d9c7bd92ecd1e2fe7d578a05df"
-CLIENT_EXPERIENCE_SHA256 = "f5ff07cd207dffb05ac95da49adb95b6617ed1fe8a9d0d8f6847c6e3b090765c"
+INFERENCE_CLIENT_SHA256 = "c59232eba9b4e551b29ff953d1eccd69177b0a9624536bd0dcf5dad2d9a10530"
+CLIENT_EXPERIENCE_SHA256 = "479b274114c99c71ceecd0a279c1dc69e06137443f0a6ebfbfcaf67a2286e18f"
 LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
 CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
 SETUP_WAIT_SECONDS = 180
+MCP_READ_TIMEOUT = 25
 
 
 class CliError(RuntimeError):
@@ -621,10 +623,10 @@ def cmd_start(args: argparse.Namespace) -> int:
     helper = client_experience()
     preferences = helper.Preferences(home())
     project = Path(args.project).expanduser()
+    values = {key: getattr(args, key) for key in ("model", "effort", "mode", "name", "yes")}
     if args.action == "menu":
         return helper.menu(experience_callbacks(), project=project, slot=args.slot,
-                           preferences=preferences)
-    values = {key: getattr(args, key) for key in ("model", "effort", "mode", "name", "yes")}
+                           preferences=preferences, options=values)
     return helper.launch(args.action, experience_callbacks(), project=project,
                          slot=args.slot, preferences=preferences, options=values)
 
@@ -638,6 +640,76 @@ def cmd_diagnostics(args: argparse.Namespace) -> int:
         helper.export_report(report, Path(args.export).expanduser())
     print(json.dumps(report, sort_keys=True) if args.json else helper.render_report(report))
     return 0 if report["ok"] else 1
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Opt-in read-only management, pinned to one existing local pairing."""
+    helper = client_experience()
+    selected = choose_device(load_config(), args.slot)
+    fields = ("device_id", "slot_id", "device_token", "server")
+    if any(not isinstance(selected.get(field), str) or not selected[field] for field in fields):
+        raise CliError("MCP needs a complete existing pairing; run ccfleet setup")
+    binding = {field: selected[field] for field in fields}
+    generation: Optional[str] = None
+    invalidated = False
+
+    def read_status() -> dict[str, Any]:
+        nonlocal generation, invalidated
+        if invalidated:
+            raise CliError("MCP authorization changed; restart after checking your pairing")
+        try:
+            current = choose_device(load_config(), binding["device_id"])
+        except (CliError, OSError, ValueError, TypeError, KeyError):
+            invalidated = True
+            raise CliError("MCP pairing is unavailable; restart after ccfleet setup") from None
+        if any(current.get(field) != value for field, value in binding.items()):
+            invalidated = True
+            raise CliError("MCP pairing changed; restart after checking your pairing")
+        try:
+            answer = mcp_status_context(current)
+        except CliError as exc:
+            if exc.status in (401, 403, 404):
+                invalidated = True
+            raise CliError("MCP status is unavailable; check pairing and connection") from None
+        slot = answer.get("slot") if isinstance(answer, dict) else None
+        active = answer.get("device") if isinstance(answer, dict) else None
+        observed = slot.get("account_generation") if isinstance(slot, dict) else None
+        if (not isinstance(answer, dict) or answer.get("authenticated") is not True
+                or type(answer.get("protocol")) is not int or answer["protocol"] != 2
+                or not isinstance(active, dict) or active.get("active") is not True
+                or not isinstance(observed, str) or not re.fullmatch(r"[0-9a-f]{24}", observed)):
+            raise CliError("MCP received no valid authenticated status")
+        if generation is not None and observed != generation:
+            invalidated = True
+            raise CliError("MCP account assignment changed; restart after checking your slot")
+        generation = observed
+        return answer
+
+    return helper.serve_mcp(read_status)
+
+
+def mcp_status_context(device: dict[str, Any]) -> dict[str, Any]:
+    """A hard total read deadline, not merely a resettable socket timeout.
+
+    This POSIX stdio command runs on the main thread. Do not replace another
+    owner's active timer; restore the signal handler even on malformed replies.
+    """
+    if (threading.current_thread() is not threading.main_thread()
+            or not hasattr(signal, "setitimer")
+            or any(signal.getitimer(signal.ITIMER_REAL))):
+        raise CliError("MCP status requires an available main-thread deadline")
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def expired(_signum: int, _frame: Any) -> None:
+        raise CliError("MCP status read exceeded its deadline")
+
+    try:
+        signal.signal(signal.SIGALRM, expired)
+        signal.setitimer(signal.ITIMER_REAL, MCP_READ_TIMEOUT)
+        return device_context(device)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def cmd_preferences(args: argparse.Namespace) -> int:
@@ -1918,7 +1990,13 @@ def cmd_logout(args: argparse.Namespace) -> int:
     return 0
 
 
-def start_local_job(args: argparse.Namespace, prompt: str) -> int:
+def _prepare_local_job(args: argparse.Namespace, prompt: str
+                       ) -> tuple[Any, dict[str, Any], dict[str, Any], list[str], float, int]:
+    """Validate deterministic launch inputs without retiring or starting work.
+
+    The worker repeats its own guards later. This preflight is not a promise
+    that the network, authorization or available job capacity cannot change.
+    """
     if not isinstance(prompt, str) or not prompt.strip():
         raise CliError("a background job needs a nonempty prompt")
     if getattr(args, "resume", None) == "":
@@ -1927,32 +2005,83 @@ def start_local_job(args: argparse.Namespace, prompt: str) -> int:
     if getattr(args, "reuse_transport", False):
         raise CliError("transport reuse is currently a foreground option; background jobs "
                        "use ordinary pinned SSH connections")
-    device = choose_device(load_config(), args.slot)
-    # Confirm cleanup while the user still has an interactive terminal. The
-    # detached supervisor is not permitted to implicitly approve migration.
-    check_managed_route()
-    find_local_claude()
-    check_inference(device)
-    retire_live_grants(device, yes=getattr(args, "yes", False))
-    project = Path(args.project).expanduser().resolve(strict=True)
+    if any(getattr(args, name, False) for name in ("disconnect", "reset_link", "remote_project")):
+        raise CliError("background work cannot also request legacy workspace cleanup or recovery")
+    try:
+        project = Path(args.project).expanduser().resolve(strict=True)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise CliError("--project must be an existing local directory") from exc
     if not project.is_dir():
         raise CliError("--project must be an existing local directory")
+    extra = native_extra_args(args)
+    if "--" in extra:
+        raise CliError("use the background prompt or a native positional prompt, not both")
+    for index, value in enumerate(extra):
+        if (value == "--resume=" or value in {"--resume", "-r"}
+                and (index + 1 == len(extra) or not extra[index + 1]
+                     or extra[index + 1].startswith("-"))):
+            raise CliError("a background job needs an explicit --resume ID or name; "
+                           "use --continue for the latest conversation")
     values = {key: getattr(args, key, None) for key in (
         "model", "effort", "mode", "name", "resume", "continue_session",
         "fork_session", "legacy_history")}
     values = {key: value for key, value in values.items() if value is not None}
-    extra = native_extra_args(args)
     native_resuming = any(value.split("=", 1)[0] in {
         "--resume", "-r", "--continue", "-c"} for value in extra)
     if not values.get("resume") and not values.get("continue_session") and not native_resuming:
         values = {**client_experience().Preferences(home()).get(project), **values}
+    options = _local_options({**values, "claude_args": extra,
+                              "project": str(project), "print_prompt": prompt})
+    if options.resume is not None and options.continue_session:
+        raise CliError("use either --resume or --continue, not both")
+    if options.fork_session and options.resume is None and not options.continue_session:
+        raise CliError("--fork-session needs --resume or --continue")
+    for label, value in (("session name", options.name), ("resume value", options.resume)):
+        if value is not None and (not isinstance(value, str) or len(value) > 256 or any(
+                ord(c) < 32 or ord(c) == 127 for c in value)):
+            raise CliError(f"{label} must be at most 256 characters without control characters")
+    if options.model is not None and (not isinstance(options.model, str)
+                                     or not MODEL_RE.fullmatch(options.model)):
+        raise CliError("invalid model name")
+    if options.mode is not None and options.mode not in PERMISSION_MODES:
+        raise CliError("invalid Claude permission mode")
+    if options.effort is not None and options.effort not in EFFORT_LEVELS:
+        raise CliError("invalid Claude effort level")
+    helper = local_jobs()
+    timeout = helper._number(getattr(args, "timeout", 3600), 1, helper.MAX_TIMEOUT_S, "job timeout")
+    max_jobs = getattr(args, "max_jobs", 4)
+    if type(max_jobs) is not int or not 1 <= max_jobs <= helper.MAX_CONCURRENT:
+        raise CliError("invalid maximum concurrent job count")
+    device = choose_device(load_config(), args.slot)
     values["extra_args"] = extra
     spec = {"device_id": device["device_id"], "slot_id": device["slot_id"],
             "project": str(project), "prompt": prompt, "options": values}
+    helper._spec(dict(spec))
+    if len(json.dumps(spec, allow_nan=False).encode()) > helper.MAX_SPEC_BYTES:
+        raise CliError("local job specification is too large")
+    check_managed_route()
+    claude = find_local_claude()
+    native_env = dict(os.environ)
+    if options.legacy_history:
+        profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
+        if not profile.is_dir():
+            raise CliError("no earlier local-preview history exists for this slot")
+        native_env["CLAUDE_CONFIG_DIR"] = str(profile)
+    native_proxy_exclusions(native_env, project, extra)
+    options._background_job = True
+    # Construct only: no native process or temporary settings file is created.
+    local_claude_command(claude, options, home() / ".inference-settings-preflight", extra)
     command = [sys.executable, "-I", str(Path(__file__).resolve()), "__job-run"]
-    result = local_jobs().start(home() / "jobs", spec, command,
-                                timeout_s=getattr(args, "timeout", 3600),
-                                max_jobs=getattr(args, "max_jobs", 4))
+    return helper, device, spec, command, timeout, max_jobs
+
+
+def start_local_job(args: argparse.Namespace, prompt: str) -> int:
+    helper, device, spec, command, timeout, max_jobs = _prepare_local_job(args, prompt)
+    check_inference(device)
+    # Ask only after inputs pass, while the user's interactive terminal exists.
+    # The detached supervisor must not implicitly approve legacy cancellation.
+    retire_live_grants(device, yes=getattr(args, "yes", False))
+    result = helper.start(home() / "jobs", spec, command, timeout_s=timeout, max_jobs=max_jobs)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("state") not in {
         "failed", "timed_out", "unresponsive", "interrupted"} else 2
@@ -2198,6 +2327,9 @@ def parser() -> argparse.ArgumentParser:
         if name == "doctor":
             command.add_argument("--privacy", action="store_true",
                                  help="explain the verified routing and privacy boundaries")
+    management = sub.add_parser("mcp", help="opt-in read-only health and usage MCP")
+    management.add_argument("mcp_action", choices=("serve",), help="serve MCP over local stdio")
+    management.add_argument("--slot", default="", help="one existing paired slot")
     preferences = sub.add_parser("preferences", help="new-session defaults stored on this computer")
     preferences.add_argument("preference_action", nargs="?", choices=("show", "set", "clear"),
                              default="show")
@@ -2302,6 +2434,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                               "resume": "", "yes": args.yes}))
         if args.command in ("doctor", "status"):
             return cmd_diagnostics(args)
+        if args.command == "mcp":
+            return cmd_mcp(args)
         if args.command == "preferences":
             return cmd_preferences(args)
         if args.command in ("version", "update"):

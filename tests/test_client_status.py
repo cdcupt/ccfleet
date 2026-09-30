@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ccfleetd.client_status import health
+from ccfleetd.client_status import health, quota_observation
 from tests.test_api import _active_cli_slot, call, server  # noqa: F401
 
 NOW = 10000.0
@@ -56,6 +56,47 @@ def test_private_strings_never_appear_in_report():
                                renewal={"state": "blocked", "checked_at": NOW,
                                         "detail": "SECRET_BODY"}))
     assert "SECRET" not in json.dumps(result)
+
+
+def test_cached_quota_retains_only_numeric_observation_and_reset_fields():
+    quota = {"checked_at": NOW - 10, "accountUuid": "SECRET_ACCOUNT",
+             "session": {"used_pct": 0, "resets_at": NOW + 300, "resets": "SECRET_LOCATION"},
+             "week": {"used_pct": 99.5, "resets_at": NOW + 86400, "email": "SECRET_EMAIL"}}
+    expected = {"checked_at": NOW - 10, "session": {"used_pct": 0, "resets_at": NOW + 300},
+                "week": {"used_pct": 99.5, "resets_at": NOW + 86400}}
+    assert quota_observation(quota, {"claimed_at": NOW - 100}, NOW) == expected
+    result = health({"state": "active", "claimed_at": NOW - 100},
+                    {"credentials": credentials(), "quota": quota}, None,
+                    heard=NOW, now=NOW, max_age=300)
+    assert result["quota"] == expected and "SECRET" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("checked", [None, "SECRET", True, float("nan"), float("inf"), 0,
+                                     NOW + 61, NOW - 200])
+def test_quota_missing_invalid_future_or_before_assignment_is_unknown(checked):
+    assert quota_observation({"checked_at": checked, "session": {"used_pct": 20}},
+                             {"claimed_at": NOW - 100}, NOW) == {}
+
+
+def test_quota_before_account_switch_and_during_transition_is_not_exported():
+    quota = {"checked_at": NOW - 10, "session": {"used_pct": 20}}
+    assert quota_observation(quota, {"account_switched_at": NOW - 5}, NOW) == {}
+    result = health({"state": "active"}, {"credentials": credentials(), "quota": quota},
+                    {"state": "waiting"}, heard=NOW, now=NOW, max_age=300)
+    assert "quota" not in result
+
+
+@pytest.mark.parametrize("reset", ["SECRET", True, float("nan"), float("inf"), -1,
+                                   NOW - 11, NOW + 9 * 86400])
+def test_quota_invalid_reset_is_omitted_without_losing_valid_percentage(reset):
+    assert quota_observation({"checked_at": NOW - 10,
+                              "week": {"used_pct": 50, "resets_at": reset}}, {}, NOW) == {
+        "checked_at": NOW - 10, "week": {"used_pct": 50}}
+
+
+@pytest.mark.parametrize("used", ["SECRET", True, float("nan"), float("inf"), -1, 101])
+def test_invalid_quota_numbers_never_become_zero(used):
+    assert quota_observation({"checked_at": NOW, "session": {"used_pct": used}}, {}, NOW) == {}
 
 
 def test_authenticated_endpoint_is_read_only_and_denies_after_revoke(server):  # noqa: F811
