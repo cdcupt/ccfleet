@@ -62,3 +62,22 @@ with the client's required HTTP/1.1 response; that needs a separately verified
 server fix before the broker activation gate can be completed. Secure signer recovery and signed-channel renewal are
 operator responsibilities. This release does not complete a sustained user pilot,
 add new providers/payment integrations, or establish an anonymity guarantee.
+
+## 2026-09-30 comparison-driven follow-up
+
+This pass has a 90-minute wall-clock cap (01:28–02:58 UTC), with at most two
+fix/re-verify rounds per stage. It addresses measured gaps, not an unsupported
+claim that either platform is best overall:
+
+- Correct direct broker upgrades to HTTP/1.1 without enabling REST keepalive.
+- End optional owned SSH transport when its foreground parent is forcibly killed.
+- Add bounded numeric token/cache aggregates and sample coverage, without central
+  model/session identifiers, prompts, local paths or device fingerprints.
+- Reverify the previously unreachable free node and complete its queued upgrade.
+- Verify secondary transport directly; public edge activation still requires
+  safe shared-service reload conditions. Do not interrupt unrelated streams.
+
+CC Host's broader provider, group, billing and management-MCP features are
+separate product choices; cross-account pooling/fallback would violate our
+existing isolation contract. Comparative performance, account longevity and
+fingerprint/TLS equivalence remain unmeasured.

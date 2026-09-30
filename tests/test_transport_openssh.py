@@ -16,5 +16,6 @@ def test_real_openssh_master_and_framed_channels():
     assert report["host_pin_failure_refused"] is True
     assert report["closed_master_no_fallback"] is True
     assert report["owned_master_and_proxy_cleanup"] is True
-    assert report["authenticated_connections"] == 4
+    assert report["wrapper_sigkill_master_proxy_cleanup"] is True
+    assert report["authenticated_connections"] == 5
     assert report["model_requests"] == 0

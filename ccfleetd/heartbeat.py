@@ -229,7 +229,11 @@ def _claude_update(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
 
 
 def relay_report(value: Any, now: float) -> Optional[dict[str, Any]]:
-    """Pure numeric validation plus a server-clock freshness/retention boundary."""
+    """Numeric counters/optional usage coverage plus server-clock freshness.
+
+    The shared validator accepts legacy reports without token_usage; any new
+    usage block must contain only its fixed numeric aggregates and sample counts.
+    """
     try:
         clean = validate_report(value)
     except (MetricsError, TypeError, ValueError, OverflowError):

@@ -101,6 +101,12 @@ compatible until explicitly disabled or taken under managed policy. See
 
 ## 5. Local controls, diagnostics and supervised jobs
 
+The 0.2.1 follow-up scopes HTTP/1.1 to a WebSocket upgrade response, leaving
+ordinary REST connection-close behavior unchanged. Optional foreground SSH reuse
+now has an isolated live group owner and anonymous parent-liveness pipe so
+parent-only hard kill terminates its owned transport. This is not a promise to
+contain arbitrary native/tool processes that detach elsewhere.
+
 The guided `ccfleet start` menu and `ccfleet sessions` delegate to original native
 new/continue/resume behavior; they do not parse or synchronize conversation
 contents. Project preferences remain private and do not implicitly override the
@@ -114,6 +120,14 @@ local paths or filesystem content. `--export LOCALFILE` writes only the requeste
 new private file and never uploads it. A reported-ready heartbeat remains an
 observation, not proof of provider acceptance. Website health badges use the same
 fixed classifications without changing sign-in, pairing or CSRF protections.
+
+Response usage observation is bounded and best effort. Completed successful
+Messages responses can contribute numeric input/output/cache totals and explicit
+sample coverage. Missing, partial, oversized or invalid observations remain
+unsampled; absent cache fields are unknown. These are observed sums, not a bill,
+subscription quota or complete account total. No model/session IDs, prompts,
+device fingerprints or local paths are added to those aggregates. Existing
+seven-day slot storage and historical heartbeat retention still apply.
 
 Managed background jobs are local native print-mode work, not vendor-native
 detached agents or attachable remote sessions. Each supervisor has private

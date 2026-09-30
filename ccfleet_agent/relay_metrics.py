@@ -45,6 +45,12 @@ OUTCOMES = (
 COUNTERS = ("requests", *OUTCOMES)
 TIMINGS = ("connect_ms", "first_byte_ms", "total_ms")
 SUMMARY_KEYS = {"version", "observed_at", "window_days", "last_success_at", "latencies", *COUNTERS}
+USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                "cache_creation_input_tokens")
+USAGE_KEYS = {"eligible", "samples", *USAGE_FIELDS, "cache_read_samples", "cache_creation_samples"}
+USAGE_EVENT_BYTES = 64 * 1024
+USAGE_JSON_BYTES = 256 * 1024
+MAX_USAGE_TOKENS = 10**9
 
 
 class MetricsError(ValueError):
@@ -81,6 +87,168 @@ def _counts(raw: Any) -> dict[str, int]:
     return {key: raw[key] for key in COUNTERS}
 
 
+def _usage(raw: Any, successes: int) -> dict[str, int]:
+    if (not isinstance(raw, dict) or set(raw) != USAGE_KEYS
+            or any(not _counter(value) for value in raw.values())
+            or not raw["samples"] <= raw["eligible"] <= successes
+            or not raw["cache_read_samples"] <= raw["samples"]
+            or not raw["cache_creation_samples"] <= raw["samples"]
+            or (not raw["samples"] and (raw["input_tokens"] or raw["output_tokens"]))
+            or (not raw["cache_read_samples"] and raw["cache_read_input_tokens"])
+            or (not raw["cache_creation_samples"] and raw["cache_creation_input_tokens"])
+            or max(raw["input_tokens"], raw["output_tokens"]) > raw["samples"] * MAX_USAGE_TOKENS
+            or raw["cache_read_input_tokens"] > raw["cache_read_samples"] * MAX_USAGE_TOKENS
+            or raw["cache_creation_input_tokens"] >
+            raw["cache_creation_samples"] * MAX_USAGE_TOKENS):
+        raise MetricsError("invalid aggregate token usage")
+    return dict(raw)
+
+
+def _usage_sample(raw: Any) -> Optional[dict[str, int]]:
+    if (not isinstance(raw, dict) or not {"input_tokens", "output_tokens"} <= raw.keys()
+            or raw.keys() - set(USAGE_FIELDS)
+            or any(type(value) is not int or not 0 <= value <= MAX_USAGE_TOKENS
+                   for value in raw.values())):
+        return None
+    return dict(raw)
+
+
+class UsageCollector:
+    """Bounded, transient response observer; only numeric usage can escape finish().
+
+    Unknown/oversized/ambiguous input disables sampling, never forwarding. JSON
+    bodies and SSE events have separate hard caps. No content is logged or saved.
+    Anthropic message_delta usage is cumulative, not a per-event increment.
+    """
+
+    def __init__(self, media_type: str):
+        self.mode = media_type
+        self.bad = media_type not in {"application/json", "text/event-stream"}
+        self.buffer = bytearray()
+        self.event = ""
+        self.data = bytearray()
+        self.started = self.delta = self.stopped = False
+        self.numbers: dict[str, int] = {}
+
+    def _reject(self) -> None:
+        self.bad = True
+        self.buffer.clear()
+        self.data.clear()
+        self.numbers.clear()
+
+    @staticmethod
+    def _object(raw: bytes) -> Any:
+        def constant(_):
+            raise ValueError("nonfinite JSON")
+        return json.loads(raw, object_pairs_hook=_unique_pairs, parse_constant=constant)
+
+    def _merge(self, usage: Any, *, initial: bool = False) -> None:
+        if not isinstance(usage, dict):
+            raise ValueError("missing usage")
+        values = {key: usage[key] for key in USAGE_FIELDS if key in usage}
+        if any(type(value) is not int or not 0 <= value <= MAX_USAGE_TOKENS
+               for value in values.values()):
+            raise ValueError("invalid usage")
+        if initial and not {"input_tokens", "output_tokens"} <= values.keys():
+            raise ValueError("partial initial usage")
+        if not initial and "output_tokens" not in values:
+            raise ValueError("partial final usage")
+        for key, value in values.items():
+            if value < self.numbers.get(key, 0):
+                raise ValueError("nonmonotonic cumulative usage")
+            self.numbers[key] = value
+
+    def _dispatch(self) -> None:
+        if not self.event and not self.data:
+            return
+        kind = self.event
+        if kind not in {"message_start", "message_delta", "message_stop", "error"}:
+            if self.stopped and kind != "ping":
+                raise ValueError("event after completion")
+            return
+        value = self._object(bytes(self.data))
+        if not isinstance(value, dict) or value.get("type") != kind or self.stopped:
+            raise ValueError("ambiguous stream event")
+        if kind == "message_start":
+            if self.started:
+                raise ValueError("duplicate message start")
+            message = value.get("message")
+            if not isinstance(message, dict):
+                raise ValueError("missing message")
+            self._merge(message.get("usage"), initial=True)
+            self.started = True
+        elif kind == "message_delta":
+            if not self.started:
+                raise ValueError("delta before start")
+            self._merge(value.get("usage"))
+            self.delta = True
+        elif kind == "message_stop":
+            if not self.started or not self.delta:
+                raise ValueError("incomplete stream")
+            self.stopped = True
+        else:
+            raise ValueError("upstream error event")
+
+    def _line(self, line: bytes) -> None:
+        if not line:
+            self._dispatch()
+            self.event = ""
+            self.data.clear()
+        elif not line.startswith(b":"):
+            field, _, value = line.partition(b":")
+            if value.startswith(b" "):
+                value = value[1:]
+            if field == b"event":
+                if self.event or len(value) > 64:
+                    raise ValueError("ambiguous event name")
+                self.event = value.decode("ascii")
+            elif field == b"data":
+                if len(self.data) + len(value) + 1 > USAGE_EVENT_BYTES:
+                    raise ValueError("oversized event")
+                self.data.extend(value + b"\n")
+
+    def feed(self, chunk: bytes) -> None:
+        if self.bad:
+            return
+        try:
+            if self.mode == "application/json":
+                if len(self.buffer) + len(chunk) > USAGE_JSON_BYTES:
+                    raise ValueError("oversized JSON")
+                self.buffer.extend(chunk)
+                return
+            parts = chunk.split(b"\n")
+            for index, part in enumerate(parts):
+                if len(self.buffer) + len(part) > USAGE_EVENT_BYTES:
+                    raise ValueError("oversized SSE line")
+                self.buffer.extend(part)
+                if index < len(parts) - 1:
+                    self._line(bytes(self.buffer).removesuffix(b"\r"))
+                    self.buffer.clear()
+        except (ValueError, UnicodeError, TypeError, RecursionError, OverflowError):
+            self._reject()
+
+    def finish(self) -> Optional[dict[str, int]]:
+        try:
+            if self.bad:
+                return None
+            if self.mode == "application/json":
+                value = self._object(bytes(self.buffer))
+                if (not isinstance(value, dict) or value.get("type") != "message"
+                        or not isinstance(value.get("stop_reason"), str)
+                        or not value["stop_reason"]):
+                    return None
+                self._merge(value.get("usage"), initial=True)
+            elif self.buffer or self.data or not self.stopped:
+                return None
+            return _usage_sample(self.numbers)
+        except (ValueError, UnicodeError, TypeError, RecursionError, OverflowError):
+            return None
+        finally:
+            self.buffer.clear()
+            self.data.clear()
+            self.numbers.clear()
+
+
 def _empty_bucket() -> dict[str, Any]:
     return {
         "counts": dict.fromkeys(COUNTERS, 0),
@@ -91,7 +259,7 @@ def _empty_bucket() -> dict[str, Any]:
 
 
 def _bucket(raw: Any, day: int) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != {
+    if not isinstance(raw, dict) or set(raw) - {"token_usage"} != {
         "counts",
         "last_success_at",
         "updated_at",
@@ -145,6 +313,8 @@ def _bucket(raw: Any, day: int) -> dict[str, Any]:
         "updated_at": float(updated),
         "last_success_at": float(success) if success is not None else None,
         "timings": timings,
+        **({"token_usage": _usage(raw["token_usage"], counts["success"])}
+           if "token_usage" in raw else {}),
     }
 
 
@@ -323,7 +493,8 @@ def _save(directory: int, state: dict[str, Any]) -> None:
 
 
 def record(home: Path, bound_fp: str, outcome: str, timings: dict[str, Any], now: float, *,
-           still_bound: Optional[Callable[[], bool]] = None) -> None:
+           still_bound: Optional[Callable[[], bool]] = None,
+           usage: Optional[dict[str, int]] = None, usage_eligible: bool = False) -> None:
     """Record one completed attempt, using milliseconds for available stages only.
 
     Each call increments requests and exactly one OUTCOMES counter. A failed or
@@ -334,6 +505,9 @@ def record(home: Path, bound_fp: str, outcome: str, timings: dict[str, Any], now
     observed = _clock(now)
     if not isinstance(outcome, str) or outcome not in OUTCOMES:
         raise MetricsError("invalid metrics outcome")
+    if type(usage_eligible) is not bool or (usage is not None and (
+            not usage_eligible or outcome != "success" or _usage_sample(usage) is None)):
+        raise MetricsError("invalid completed usage sample")
     if (
         not isinstance(timings, dict)
         or set(timings) - set(TIMINGS)
@@ -361,6 +535,19 @@ def record(home: Path, bound_fp: str, outcome: str, timings: dict[str, Any], now
         bucket["updated_at"] = max(bucket["updated_at"], observed)
         if outcome == "success":
             bucket["last_success_at"] = max(bucket["last_success_at"] or 0, observed)
+            if usage_eligible:
+                totals = _usage(bucket.get("token_usage", dict.fromkeys(USAGE_KEYS, 0)),
+                                bucket["counts"]["success"])
+                totals["eligible"] += 1
+                if usage is not None:
+                    totals["samples"] += 1
+                    for field, value in usage.items():
+                        totals[field] += value
+                    if "cache_read_input_tokens" in usage:
+                        totals["cache_read_samples"] += 1
+                    if "cache_creation_input_tokens" in usage:
+                        totals["cache_creation_samples"] += 1
+                bucket["token_usage"] = _usage(totals, bucket["counts"]["success"])
         for name, value in timings.items():
             sample = bucket["timings"][name]
             measured = round(float(value), 3)
@@ -389,9 +576,15 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
         "last_success_at": None,
     }
     timings = {key: {"count": 0, "sum": 0.0, "max": 0.0} for key in TIMINGS}
+    usage = dict.fromkeys(USAGE_KEYS, 0)
+    has_usage = False
     for bucket in state["buckets"].values():
         for key in COUNTERS:
             result[key] += bucket["counts"][key]
+        if "token_usage" in bucket:
+            has_usage = True
+            for key, value in bucket["token_usage"].items():
+                usage[key] += value
         success = bucket["last_success_at"]
         if success is not None and (
             result["last_success_at"] is None or success > result["last_success_at"]
@@ -410,6 +603,8 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
         }
         for key, sample in timings.items()
     }
+    if has_usage:
+        result["token_usage"] = usage
     return validate_report(result)
 
 
@@ -439,7 +634,7 @@ def validate_report(raw: Any) -> dict[str, Any]:
     """Reject unexpected/nonfinite fields and return a detached numeric-only report."""
     if (
         not isinstance(raw, dict)
-        or set(raw) != SUMMARY_KEYS
+        or set(raw) - {"token_usage"} != SUMMARY_KEYS
         or type(raw["version"]) is not int
         or raw["version"] != 1
         or type(raw["window_days"]) is not int
@@ -482,4 +677,6 @@ def validate_report(raw: Any) -> dict[str, Any]:
         **counts,
         "last_success_at": float(success) if success is not None else None,
         "latencies": latencies,
+        **({"token_usage": _usage(raw["token_usage"], counts["success"])}
+           if "token_usage" in raw else {}),
     }

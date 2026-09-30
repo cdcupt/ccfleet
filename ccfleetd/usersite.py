@@ -695,7 +695,9 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "numbers leave it. Separately, relay measurements report request counts, completed "
         "transfers and fixed error categories over seven UTC calendar days, together with "
         "connection, first-body-byte and total-request timing sample counts, means and maxima, "
-        "the observation time and last completed-transfer time. These metrics contain no "
+        "the observation time and last completed-transfer time. Validated input/output and "
+        "cache-read/cache-write token totals have explicit completed-response sample coverage; "
+        "missing or partial usage is unknown, not a zero or a bill. These metrics contain no "
         "model names, request IDs, headers, bodies, paths, email addresses or credentials. "
         "The seven-day local aggregate window is distinct from how long heartbeat snapshots "
         "are retained here. We keep these reports for "
@@ -1031,7 +1033,31 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
         measured = (f'{value["mean"]:.1f} ms mean · {value["max"]:.1f} ms max · '
                     f'{value["count"]} {samples}' if value["count"] else "No timing samples")
         lines.append(f"<li>{label}: {measured}</li>")
-    lines.append('</ul><details class="small"><summary>Other outcome categories</summary><ul>')
+    lines.append('</ul>')
+    usage = report.get("token_usage")
+    if usage is None:
+        lines.append('<p class="small">Response token usage: not measured by this report.</p>')
+    else:
+        lines.append('<div class="small relay-tokens"><b>Observed response token usage</b>'
+                     f'<p>Complete input/output samples: {usage["samples"]} of '
+                     f'{usage["eligible"]} completed Messages responses tracked for usage.</p>')
+        if usage["samples"]:
+            lines.append(f'<p>{usage["input_tokens"]:,} input tokens · '
+                         f'{usage["output_tokens"]:,} output tokens.</p>')
+        else:
+            lines.append('<p>Input/output totals unknown: no complete usage samples.</p>')
+        for prefix, label in (("cache_read", "Cache-read input"),
+                               ("cache_creation", "Cache-write input")):
+            samples = usage[prefix + "_samples"]
+            measured = (f'{usage[prefix + "_input_tokens"]:,} tokens from {samples} samples'
+                        if samples else "unknown (no explicit cache samples)")
+            lines.append(f'<p>{label}: {measured}.</p>')
+        lines.append('<p class="muted">Only validated usage in fully completed successful '
+                     'responses contributes. Missing, oversized or partial usage is not zero; '
+                     'older traffic was not backfilled. These observed sums are not a bill, '
+                     'subscription quota, or a complete account total. No model/session IDs '
+                     'or conversation content are stored with them.</p></div>')
+    lines.append('<details class="small"><summary>Other outcome categories</summary><ul>')
     for key, label in (("auth_errors", "Authentication errors"),
                        ("permission_errors", "Permission errors"), ("rate_limits", "Rate limits"),
                        ("upstream_errors", "Upstream errors"),

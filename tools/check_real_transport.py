@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import pwd
+import select
 import shlex
 import shutil
 import socket
@@ -309,6 +310,39 @@ MaxSessions 10
                 pass
             else:
                 raise CheckError("a closed session produced a new channel command")
+            # Kill only the wrapper PID: its separately owned SSH supervisor
+            # must observe parent EOF and clean the master/proxy group itself.
+            wrapper_code = (
+                "import importlib.util,json,sys; from pathlib import Path; "
+                "s=importlib.util.spec_from_file_location('relay',sys.argv[1]); "
+                "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "b=json.loads(sys.argv[3]); e=json.loads(sys.argv[4]); "
+                "t=m.TransportSession(lambda:b,lambda:e,Path(sys.argv[2]),timeout=8).start(); "
+                "print(json.dumps({'path':t._path}),flush=True); sys.stdin.buffer.read()"
+            )
+            before_forced = len(events(forced_events))
+            wrapper = subprocess.Popen(
+                [sys.executable, "-I", "-c", wrapper_code, str(source), str(private),
+                 json.dumps(base()), json.dumps(environment)], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+            try:
+                if not select.select([wrapper.stdout], [], [], 10)[0]:
+                    raise CheckError("synthetic transport wrapper did not become ready")
+                raw = wrapper.stdout.readline()
+                if not raw:
+                    raise CheckError("synthetic transport wrapper failed before readiness")
+                control_path = Path(json.loads(raw)["path"])
+                wrapper.kill()
+                wrapper.wait(timeout=3)
+                eventually(lambda: not control_path.parent.exists())
+                if len(events(forced_events)) != before_forced:
+                    raise CheckError("hard-kill proof opened an unexpected remote command")
+            finally:
+                if wrapper.poll() is None:
+                    wrapper.kill()
+                wrapper.wait(timeout=3)
+                wrapper.stdin.close()
+                wrapper.stdout.close()
             wrong_session = transport.TransportSession(lambda: base(wrong), lambda: environment,
                                                         private, timeout=5)
             before = accepted()
@@ -323,7 +357,7 @@ MaxSessions 10
             if accepted() != before:
                 raise CheckError("wrong host pin reached authenticated session access")
             cold = [probe(lambda: [*base(), "ccfleet-inference-v1"]) for _ in range(samples)]
-            if accepted() != 1 + samples:
+            if accepted() != 2 + samples:
                 raise CheckError("cold/reused authenticated connection counts did not match")
 
             def proxies_ended():
@@ -355,6 +389,7 @@ MaxSessions 10
                     "master_did_not_invoke_forced_command": True,
                     "two_channels_one_connection": True, "host_pin_failure_refused": True,
                     "closed_master_no_fallback": True, "owned_master_and_proxy_cleanup": True,
+                    "wrapper_sigkill_master_proxy_cleanup": True,
                     "authenticated_connections": accepted(), "model_requests": 0,
                     "latency_ms": {"samples_each": samples, "master_startup": round(startup, 2),
                                    "cold_median": round(statistics.median(cold), 2),

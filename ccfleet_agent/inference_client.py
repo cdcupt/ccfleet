@@ -14,10 +14,12 @@ import math
 import os
 import secrets
 import select
+import signal
 import socket
 import stat
 import struct
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -453,19 +455,125 @@ class Bridge:
         self.close()
 
 
+def _transport_artifacts(parent: int, child: int, name: str,
+                         expected: Optional[tuple[int, int]]) -> bool:
+    """Remove only the owned transport directory and its private socket."""
+    try:
+        own = os.fstat(child)
+        try:
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        if (not TransportSession._trusted(own) or not TransportSession._trusted(current)
+                or (own.st_dev, own.st_ino) != (current.st_dev, current.st_ino)):
+            return False
+        try:
+            sock = os.stat("s", dir_fd=child, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if (not stat.S_ISSOCK(sock.st_mode) or sock.st_uid != os.getuid()
+                    or sock.st_mode & 0o077 or sock.st_nlink != 1
+                    or expected != (sock.st_dev, sock.st_ino)):
+                return False
+            os.unlink("s", dir_fd=child)
+        os.rmdir(name, dir_fd=parent)
+        return True
+    except OSError:
+        return False
+
+
+def _transport_supervisor(arguments: list[str]) -> int:
+    """Private entry point; the live supervisor pins its own isolated PGID."""
+    if len(arguments) != 5 or os.getpid() != os.getpgrp():
+        return 2
+    try:
+        alive, status, parent, child = map(int, arguments[:4])
+        name = arguments[4]
+        if (len({alive, status, parent, child}) != 4 or min(alive, status, parent, child) < 3
+                or len(name) != 9 or name[0] != "m"
+                or any(c not in "0123456789abcdef" for c in name[1:])
+                or not stat.S_ISFIFO(os.fstat(alive).st_mode)
+                or not stat.S_ISFIFO(os.fstat(status).st_mode)
+                or not TransportSession._trusted(os.fstat(parent))
+                or not TransportSession._trusted(os.fstat(child))):
+            return 2
+    except (ValueError, OSError):
+        return 2
+    stopped = threading.Event()
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, lambda *_: stopped.set())
+    for descriptor in (alive, status, parent, child):
+        os.set_inheritable(descriptor, False)
+    master = None
+    socket_identity = None
+    try:
+        raw = bytearray()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not stopped.is_set():
+            readable = select.select([0, alive], [], [], 0.1)[0]
+            if alive in readable:
+                return 2
+            if 0 not in readable:
+                continue
+            block = os.read(0, 4096)
+            if not block:
+                break
+            raw.extend(block)
+            if len(raw) > 16 * 1024:
+                return 2
+        else:
+            return 2
+        command = _json(bytes(raw))
+        if (not isinstance(command, list) or not command
+                or any(not isinstance(arg, str) or not arg or "\0" in arg for arg in command)):
+            return 2
+        # Same group as this live owner, never the caller's foreground group.
+        master = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=False)
+        os.write(status, b"R")
+        while not stopped.is_set() and master.poll() is None:
+            if socket_identity is None:
+                with contextlib.suppress(FileNotFoundError):
+                    info = os.stat("s", dir_fd=child, follow_symlinks=False)
+                    if (stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid()
+                            and not info.st_mode & 0o077 and info.st_nlink == 1):
+                        socket_identity = (info.st_dev, info.st_ino)
+                        os.write(status, b"K")
+            if select.select([alive], [], [], 0.05)[0]:
+                break  # EOF is wrapper exit, including SIGKILL of that one PID.
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    finally:
+        with contextlib.suppress(OSError):
+            os.write(status, b"S")
+        # This process remains alive throughout both signals. Its own TERM
+        # handler only sets an event, so the PGID cannot be recycled underneath
+        # the final kill, even if SSH exited and every child became an orphan.
+        with contextlib.suppress(OSError):
+            os.killpg(os.getpgrp(), signal.SIGTERM)
+        time.sleep(0.3)
+        clean = _transport_artifacts(parent, child, name, socket_identity)
+        with contextlib.suppress(OSError):
+            os.write(status, b"C" if clean else b"U")
+        for descriptor in (alive, parent, child):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+        # Includes this live leader and all still-grouped SSH/proxy descendants.
+        os.killpg(os.getpgrp(), signal.SIGKILL)
+    return 2  # Unreachable after successful group cleanup.
+
+
 class TransportSession:
     """Opt-in, foreground-owned SSH multiplexing for one captured device route.
 
     This does not change Bridge or retry a request. The caller may choose a cold
     connection only if start() fails before sending model traffic. Once started,
     channels use a failing ProxyCommand so a dead master cannot silently fall
-    back to a fresh connection. No ControlPersist daemon or new process group is
-    created; a background-job guardian therefore still owns the entire job.
-
-    close() asks OpenSSH to exit gracefully, then bounds termination of the owned
-    Popen. OpenSSH owns cleanup of its ProxyCommand. If forcible termination was
-    needed, close() reports that proxy teardown was not confirmed. It never kills
-    a saved PID, a discovered descendant PID or the caller's process group.
+    back to a fresh connection. A launch-scoped supervisor owns an isolated
+    process group and an anonymous parent-liveness pipe, not a persistent daemon.
+    Wrapper exit, including SIGKILL, closes the pipe and stops that owned group.
+    No persisted PID, discovered descendant PID or caller group is signalled.
     """
 
     # OpenSSH binds a temporary pathname with a 17-character suffix before
@@ -494,6 +602,65 @@ class TransportSession:
         self._started = False
         self._closed = False
         self._path = str(self.directory / self._name / "s")
+        self._liveness: Optional[int] = None
+        self._status: Optional[int] = None
+        self._supervisor_ready = False
+        self._supervisor_socket_ready = False
+        self._supervisor_ended = False
+        self._supervisor_eof = False
+        self._cleanup_confirmed = False
+        self._cleanup_observed = False
+
+    def _read_status(self) -> None:
+        if self._status is None:
+            return
+        while select.select([self._status], [], [], 0)[0]:
+            data = os.read(self._status, 32)
+            if not data:
+                self._supervisor_ended = True
+                self._supervisor_eof = True
+                return
+            for value in data:
+                if value == ord("R"):
+                    self._supervisor_ready = True
+                elif value == ord("K"):
+                    self._supervisor_socket_ready = True
+                elif value == ord("C"):
+                    self._cleanup_confirmed = True
+                    self._cleanup_observed = True
+                elif value in (ord("S"), ord("U")):
+                    self._supervisor_ended = True
+                    if value == ord("U"):
+                        self._cleanup_observed = True
+                else:
+                    self._supervisor_ended = True
+
+    def _alive(self) -> bool:
+        # Do not poll()/wait(): an unreaped child pins the owned PGID if its
+        # supervisor crashes before completing cleanup.
+        self._read_status()
+        return self._supervisor_ready and not self._supervisor_ended
+
+    def _launch_supervisor(self, command: list[str]) -> None:
+        raw = json.dumps(command).encode()
+        if len(raw) > 16 * 1024:
+            raise RelayError("SSH transport command exceeds its startup bound")
+        alive_read, self._liveness = os.pipe()
+        self._status, status_write = os.pipe()
+        try:
+            assert self._parent is not None and self._child is not None
+            self._process = subprocess.Popen(
+                [sys.executable, "-I", str(Path(__file__).resolve()), "--transport-supervisor",
+                 str(alive_read), str(status_write), str(self._parent), str(self._child),
+                 self._name],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=self._env, start_new_session=True,
+                pass_fds=(alive_read, status_write, self._parent, self._child))
+            self._process.stdin.write(raw)
+            self._process.stdin.close()
+        finally:
+            os.close(alive_read)
+            os.close(status_write)
 
     @staticmethod
     def _trusted(info: os.stat_result) -> bool:
@@ -624,17 +791,16 @@ class TransportSession:
                 command = [*self._base[:-1], "-M", "-N", "-o", "ControlMaster=yes",
                            "-o", f"ControlPath={self._path}", "-o", "ControlPersist=no",
                            self._base[-1]]
-                self._process = subprocess.Popen(
-                    command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, env=self._env, start_new_session=False)
+                self._launch_supervisor(command)
                 deadline = time.monotonic() + self.timeout
                 while time.monotonic() < deadline:
-                    if self._process.poll() is not None:
+                    self._read_status()
+                    if self._supervisor_ended:
                         raise RelayError("SSH reuse could not authenticate; "
                                          "no model request was sent")
-                    if (self._socket()
+                    if (self._socket() and self._supervisor_socket_ready
                             and self._control("check", max(0.05, deadline - time.monotonic()))):
-                        if self._process.poll() is not None:
+                        if not self._alive():
                             raise RelayError("SSH reuse ended during startup; "
                                              "no model request was sent")
                         self._started = True
@@ -657,7 +823,7 @@ class TransportSession:
                            for arg in remote_command)):
                 raise RelayError("invalid fixed SSH channel command")
             if (self._closed or not self._started or self._process is None
-                    or self._process.poll() is not None):
+                    or not self._alive()):
                 raise RelayError("SSH session ended; no request was retried "
                                  "or new connection opened")
             try:
@@ -680,54 +846,57 @@ class TransportSession:
             process = self._process
             try:
                 if process is not None:
-                    if process.poll() is None:
+                    if self._alive():
                         try:
                             if self._socket():
                                 self._control("exit", 2)
                         except (OSError, RelayError, subprocess.SubprocessError):
                             pass
-                        try:
-                            process.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            process.terminate()
-                            try:
-                                process.wait(timeout=2)
-                            except subprocess.TimeoutExpired:
-                                confirmed = False
-                                process.kill()
-                                process.wait(timeout=2)
-                    else:
-                        process.wait(timeout=1)
+                if self._liveness is not None:
+                    os.close(self._liveness)
+                    self._liveness = None
+                if process is not None:
+                    deadline = time.monotonic() + 3
+                    while not self._supervisor_eof and time.monotonic() < deadline:
+                        self._read_status()
+                        if self._cleanup_confirmed:
+                            break
+                        time.sleep(0.025)
             except (OSError, subprocess.SubprocessError, KeyboardInterrupt):
                 confirmed = False
+            finally:
                 if process is not None:
-                    with contextlib.suppress(OSError, subprocess.SubprocessError):
-                        process.kill()
-                        process.wait(timeout=2)
-            try:
-                if self._child is not None:
+                    # Never reap before this final signal. Even an unexpectedly
+                    # dead supervisor's unreaped PID pins this owned group ID.
+                    permission_denied = False
                     try:
-                        info = os.stat("s", dir_fd=self._child, follow_symlinks=False)
-                    except FileNotFoundError:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
                         pass
-                    else:
-                        if (self._socket_identity != (info.st_dev, info.st_ino)
-                                or not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()
-                                or info.st_nlink != 1):
-                            raise RelayError("SSH control cleanup could not verify "
-                                             "the remaining socket")
-                        os.unlink("s", dir_fd=self._child)
-                if self._parent is not None and self._directory_identity is not None:
-                    info = os.stat(self._name, dir_fd=self._parent, follow_symlinks=False)
-                    if (not self._trusted(info)
-                            or (info.st_dev, info.st_ino) != self._directory_identity):
-                        raise RelayError("SSH control cleanup could not verify "
-                                         "its private directory")
-                    os.rmdir(self._name, dir_fd=self._parent)
+                    except PermissionError:
+                        # macOS reports EPERM for a group containing only
+                        # zombies. Accept that only after the owned supervisor
+                        # completed cleanup and closed its private status pipe.
+                        permission_denied = True
+                    except OSError:
+                        confirmed = False
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        confirmed = False
+                    if permission_denied:
+                        self._read_status()
+                        if not (self._cleanup_observed and self._supervisor_eof
+                                and process.returncode == -signal.SIGKILL):
+                            confirmed = False
+            try:
+                if self._child is not None and self._parent is not None:
+                    confirmed = _transport_artifacts(self._parent, self._child, self._name,
+                                                       self._socket_identity) and confirmed
             except (OSError, RelayError):
                 confirmed = False
             finally:
-                for name in ("_child", "_parent"):
+                for name in ("_child", "_parent", "_liveness", "_status"):
                     descriptor = getattr(self, name)
                     if descriptor is not None:
                         os.close(descriptor)
@@ -741,3 +910,9 @@ class TransportSession:
 
     def __exit__(self, *_):
         self.close()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 7 and sys.argv[1] == "--transport-supervisor":
+        raise SystemExit(_transport_supervisor(sys.argv[2:]))
+    raise SystemExit(2)

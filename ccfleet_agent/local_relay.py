@@ -396,12 +396,14 @@ def _metrics_module():
         return module
 
 
-def _record_metrics(home: Path, account: str, outcome: str, timings: dict[str, float]) -> None:
+def _record_metrics(home: Path, account: str, outcome: str, timings: dict[str, float], *,
+                    usage: Optional[dict[str, int]] = None, usage_eligible: bool = False) -> None:
     try:
         if bound_account(home) != account:
             return
         _metrics_module().record(home, account, outcome, timings, time.time(),
-                                 still_bound=lambda: bound_account(home) == account)
+                                 still_bound=lambda: bound_account(home) == account,
+                                 usage=usage, usage_eligible=usage_eligible)
     except Exception:
         # Metrics are best effort. Do not reflect exceptions, retry inference or
         # change an already completed response for a missing/failed collector.
@@ -424,6 +426,9 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
     request_started = None
     timings: dict[str, float] = {}
     outcome = "connection_errors"
+    usage_collector = None
+    usage = None
+    usage_eligible = False
     finished, cancelled = threading.Event(), threading.Event()
     try:
         policy()
@@ -506,6 +511,12 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
                 raise OSError("inference cancelled")
             send_upstream_error(output, response.status, headers, overflow=overflow)
             return 2
+        usage_eligible = path.split("?", 1)[0] == "/v1/messages"
+        if usage_eligible:
+            try:
+                usage_collector = _metrics_module().UsageCollector(headers.get("content-type", ""))
+            except Exception:
+                pass
         write_metadata(output, response.status, headers)
         began = True
         while True:
@@ -521,8 +532,18 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             if "first_byte_ms" not in timings and request_started is not None:
                 timings["first_byte_ms"] = (time.monotonic() - request_started) * 1000
             write_chunk(output, data)
+            if usage_collector is not None:
+                try:
+                    usage_collector.feed(data)
+                except Exception:
+                    usage_collector = None
         write_chunk(output, b"")
         outcome = "success"
+        if usage_collector is not None:
+            try:
+                usage = usage_collector.finish()
+            except Exception:
+                pass
         return 0
     except RelayError as exc:
         outcome = "cancelled" if exc.status in {409, 504} else _outcome(exc.status)
@@ -538,7 +559,10 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
         finished.set()
         if request_started is not None and account is not None:
             timings["total_ms"] = (time.monotonic() - request_started) * 1000
-            _record_metrics(home, account, "cancelled" if cancelled.is_set() else outcome, timings)
+            final_outcome = "cancelled" if cancelled.is_set() else outcome
+            _record_metrics(home, account, final_outcome, timings,
+                            usage=usage if final_outcome == "success" else None,
+                            usage_eligible=usage_eligible and final_outcome == "success")
         if connection is not None:
             connection.close()
 

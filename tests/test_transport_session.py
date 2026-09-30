@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import os
 import shutil
 import socket
@@ -53,6 +54,7 @@ if '-M' not in args:
 assert '-N' in args and options['controlpersist'] == 'no'
 assert options['controlmaster'] == 'yes'
 (root / 'master-started').write_text('1')
+(root / 'master-pid').write_text(str(os.getpid()))
 if mode == 'exit':
     sys.exit(42)
 if mode == 'never_ready':
@@ -71,8 +73,11 @@ else:
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, terminate)
 proxy = subprocess.Popen([sys.executable, '-c',
-    "import sys; from pathlib import Path; sys.stdin.buffer.read(); "
-    "Path(sys.argv[1]).write_text('proxy-drained')", str(root / 'proxy-drained')],
+    "import os, signal, sys; from pathlib import Path; "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "Path(sys.argv[2]).write_text(str(os.getpid())); sys.stdin.buffer.read(); "
+    "Path(sys.argv[1]).write_text('proxy-drained')", str(root / 'proxy-drained'),
+    str(root / 'proxy-pid')],
     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:
     while True:
@@ -151,12 +156,27 @@ def run(command, env):
     )
 
 
+def eventually(check, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(0.025)
+    assert check()
+
+
+def process_running(pid):
+    result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "stat="],
+                            capture_output=True, text=True, timeout=2, check=False)
+    return bool(result.stdout.strip()) and not result.stdout.lstrip().startswith("Z")
+
+
 def test_one_owned_foreground_master_serves_concurrent_channels_and_closes_proxy(setup):
     directory, _, env, factory = setup
     session = factory().start()
     master = session._process
-    assert master is not None and master.poll() is None
-    assert os.getpgid(master.pid) == os.getpgrp()
+    assert master is not None and session._alive()
+    assert os.getpgid(master.pid) == master.pid != os.getpgrp()
     control = Path(session._path)
     assert control.parent.stat().st_mode & 0o777 == 0o700
     assert control.stat().st_mode & 0o777 == 0o600
@@ -164,9 +184,9 @@ def test_one_owned_foreground_master_serves_concurrent_channels_and_closes_proxy
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(lambda command: run(command, env), commands))
     assert all(result.returncode == 0 and result.stdout == b"channel-ok" for result in results)
-    assert session._process is master and master.poll() is None
+    assert session._process is master and session._alive()
     session.close()
-    assert master.returncode == 0
+    assert master.returncode is not None
     assert (directory / "proxy-drained").read_text() == "proxy-drained"
     assert not control.exists() and not control.parent.exists()
     session.close()  # Idempotent; no retained PID or repeated signal.
@@ -199,7 +219,7 @@ def test_master_crash_fails_future_channels_and_early_argv_without_retry(setup):
     peer.connect(session._path)
     peer.sendall(b"crash")
     peer.close()
-    assert session._process.wait(timeout=3) == 9
+    eventually(lambda: not session._alive())
     with pytest.raises(RelayError, match="no request was retried"):
         session.command(["ccfleet-inference-v1"])
     result = run(command, env)
@@ -216,8 +236,8 @@ def test_master_crash_fails_future_channels_and_early_argv_without_retry(setup):
 def test_external_revocation_terminates_master_and_cannot_reconnect(setup):
     _, _, _, factory = setup
     session = factory().start()
-    session._process.terminate()
-    session._process.wait(timeout=3)
+    assert session._control("exit", 1)
+    eventually(lambda: not session._alive())
     with pytest.raises(RelayError):
         session.command(["ccfleet-inference-v1"])
     session.close()
@@ -227,7 +247,7 @@ def test_external_revocation_terminates_master_and_cannot_reconnect(setup):
 def test_startup_failure_is_bounded_and_never_sends_remote_command(setup, mode):
     directory, _, env, factory = setup
     env["FAKE_SSH_MODE"] = mode
-    session = factory(timeout=0.15)
+    session = factory(timeout=0.5)
     with pytest.raises(RelayError) as error:
         session.start()
     assert "synthetic-private-proxy" not in str(error.value)
@@ -240,18 +260,16 @@ def test_startup_failure_is_bounded_and_never_sends_remote_command(setup, mode):
     assert not (directory / "channel").exists()
 
 
-def test_stubborn_master_is_killed_but_close_reports_unconfirmed_proxy_cleanup(setup):
+def test_stubborn_master_and_proxy_are_killed_in_the_owned_group(setup):
     directory, _, env, factory = setup
     env["FAKE_SSH_MODE"] = "stubborn"
     session = factory().start()
-    with pytest.raises(RelayError, match="not fully confirmed"):
-        session.close()
+    eventually(lambda: (directory / "proxy-pid").exists())
+    child = int((directory / "proxy-pid").read_text())
+    session.close()
     assert session._process.poll() is not None
     assert not Path(session._path).parent.exists()
-    deadline = time.monotonic() + 2
-    while not (directory / "proxy-drained").exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert (directory / "proxy-drained").exists()
+    eventually(lambda: not process_running(child))
 
 
 @pytest.mark.parametrize("kind", ["symlink", "public", "long"])
@@ -364,10 +382,61 @@ def test_keyboard_interrupt_during_start_closes_owned_process(setup, monkeypatch
 
 def test_transport_cleanup_never_signals_caller_process_group(setup, monkeypatch):
     _, _, _, factory = setup
+    session = factory()
+    original = os.killpg
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("transport must not signal the caller or a saved group id")
+    def owned_only(group, number):
+        assert session._process is not None
+        assert group == session._process.pid and group != os.getpgrp()
+        return original(group, number)
 
-    monkeypatch.setattr(os, "killpg", forbidden)
-    with factory() as session:
+    monkeypatch.setattr(os, "killpg", owned_only)
+    with session:
         assert session.command(["ccfleet-inference-v1"])
+
+
+@pytest.mark.parametrize("mode", ["normal", "stubborn"])
+def test_sigkill_of_only_wrapper_stops_its_master_and_proxy(setup, mode):
+    directory, base, env, _ = setup
+    env["FAKE_SSH_MODE"] = mode
+    source = Path(sys.modules[TransportSession.__module__].__file__).resolve()
+    script = (
+        "import importlib.util, json, sys; from pathlib import Path; "
+        "spec=importlib.util.spec_from_file_location('relay',sys.argv[1]); "
+        "relay=importlib.util.module_from_spec(spec); spec.loader.exec_module(relay); "
+        "base=json.loads(sys.argv[3]); env=json.loads(sys.argv[4]); "
+        "session=relay.TransportSession(lambda:base,lambda:env,Path(sys.argv[2]),timeout=3).start(); "
+        "print(json.dumps({'path':session._path,'supervisor':session._process.pid}),flush=True); "
+        "sys.stdin.buffer.read()"
+    )
+    wrapper = subprocess.Popen([sys.executable, "-I", "-c", script, str(source), str(directory),
+                                json.dumps(base), json.dumps(env)], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+    sibling = subprocess.Popen([sys.executable, "-I", "-c", "import time;time.sleep(30)"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+    try:
+        import select
+        assert select.select([wrapper.stdout], [], [], 5)[0]
+        line = wrapper.stdout.readline()
+        assert line, wrapper.stderr.read().decode()
+        started = json.loads(line)
+        eventually(lambda: (directory / "proxy-pid").exists())
+        master = int((directory / "master-pid").read_text())
+        proxy = int((directory / "proxy-pid").read_text())
+        assert process_running(master) and process_running(proxy)
+        wrapper.kill()  # Exactly the wrapper PID, not its session/group.
+        wrapper.wait(timeout=2)
+        eventually(lambda: not process_running(master) and not process_running(proxy))
+        eventually(lambda: not process_running(started["supervisor"]))
+        assert not Path(started["path"]).parent.exists()
+        assert sibling.poll() is None
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+        wrapper.wait(timeout=3)
+        for stream in (wrapper.stdin, wrapper.stdout, wrapper.stderr):
+            stream.close()
+        sibling.terminate()
+        sibling.wait(timeout=3)

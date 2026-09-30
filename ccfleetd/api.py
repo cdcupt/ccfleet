@@ -637,12 +637,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(502, {"error": "slot is temporarily unreachable"})
                 return
             try:
-                self.send_response(101)
-                self.send_header("Upgrade", "websocket")
-                self.send_header("Connection", "Upgrade")
-                self.send_header("Sec-WebSocket-Accept", accept)
-                self.end_headers()
-                self.wfile.flush()
+                # A direct broker must emit an HTTP/1.1 switching response;
+                # the public reverse proxy must not be required to repair it.
+                # Scope this to this upgrade only: ordinary REST responses
+                # retain their existing HTTP/1.0 connection-close behavior.
+                protocol = self.protocol_version
+                try:
+                    self.protocol_version = "HTTP/1.1"
+                    self.send_response(101)
+                    self.send_header("Upgrade", "websocket")
+                    self.send_header("Connection", "Upgrade")
+                    self.send_header("Sec-WebSocket-Accept", accept)
+                    self.end_headers()
+                    self.wfile.flush()
+                finally:
+                    self.protocol_version = protocol
                 self.close_connection = True
                 cli_access.relay_websocket(
                     self.connection, upstream,
