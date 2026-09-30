@@ -4,6 +4,7 @@ import hashlib
 import http.client
 import io
 import json
+import math
 import os
 import socket
 import struct
@@ -328,14 +329,24 @@ def test_credential_is_reread_after_connect_before_the_only_post(slot, change):
         assert upstream.calls == []
 
 
-def test_existing_stream_uses_zero_expiry_margin_but_new_requests_keep_thirty_seconds(slot):
-    now = time.time()
-    write_credentials(slot, expiry=(now + 10) * 1000)
-    assert relay.credential(slot, now, minimum_remaining=0)[0] == "slot-test-token"
-    with pytest.raises(relay.RelayError):
-        relay.credential(slot, now)
-    with pytest.raises(relay.RelayError):
-        relay.credential(slot, now + 10, minimum_remaining=0)
+@pytest.mark.parametrize("existing_stream", [True, False], ids=["existing-stream", "new-request"])
+@pytest.mark.parametrize("position", [-1, 0, 1], ids=["just-before", "exactly-at", "just-after"])
+def test_existing_stream_uses_zero_expiry_margin_but_new_requests_keep_thirty_seconds(
+        slot, existing_stream, position):
+    # An integral millisecond fixture round-trips exactly. time.time()*1000
+    # can round upward, placing the stored expiry after the purported boundary.
+    expiry_seconds = 1_700_000_040
+    write_credentials(slot, expiry=expiry_seconds * 1000)
+    boundary = float(expiry_seconds - (0 if existing_stream else 30))
+    now = (math.nextafter(boundary, -math.inf) if position < 0 else
+           math.nextafter(boundary, math.inf) if position > 0 else boundary)
+    options = {"minimum_remaining": 0} if existing_stream else {}
+    if position < 0:
+        assert relay.credential(slot, now, **options) == ("slot-test-token", float(expiry_seconds))
+    else:
+        with pytest.raises(relay.RelayError) as error:
+            relay.credential(slot, now, **options)
+        assert error.value.status == 401
 
 
 @pytest.mark.parametrize("account", ["", "\ud800", "bad\naccount", "x" * 257])
