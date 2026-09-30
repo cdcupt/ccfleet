@@ -24,6 +24,7 @@ from . import (
     consoleslots,
     customer_docs,
     oauth,
+    reference_docs,
     sessions,
     statuspage,
     usersite,
@@ -672,6 +673,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if ctx.cfg.broker_only and path not in {
                     "/healthz", "/api/cli/connect", "/api/cli/status"}:
                 self._json(404, {"error": "not found"})
+                return
+            if reference_docs.library_route(path):
+                if not self._product_site():
+                    self._json(404, {"error": "not found"})
+                elif path in ("/docs/library", "/docs/library/"):
+                    self._redirect(reference_docs.INDEX_PATH)
+                else:
+                    name = reference_docs.relative_path(path)
+                    document = reference_docs.load_document(name) if name is not None else None
+                    if document is None:
+                        self._json(404, {"error": "not found"})
+                    else:
+                        self._send(200, document, HTML_HEADERS)
                 return
             if path == "/api/cli/status":
                 if not self._product_site():

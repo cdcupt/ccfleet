@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CC Fleet · CC Fleet</title><style>
+:root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent);text-underline-offset:.18em}a:hover{color:#251369}
+.shell{max-width:1120px;margin:0 auto;padding:26px 22px 64px}.doc-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;font-size:14px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px}.contents{align-self:start;position:sticky;top:20px;font-size:13px;max-height:85vh;overflow:auto}
+.contents ol{list-style:none;padding:0}.contents li{margin:7px 0}.contents .level-3{padding-left:12px}
+main{min-width:0}h1{font-size:clamp(30px,5vw,46px);line-height:1.12;letter-spacing:-.03em;margin:0 0 24px}
+h2{font-size:25px;line-height:1.25;margin:38px 0 14px}h3{font-size:19px;line-height:1.3;margin:25px 0 12px}
+p,li{overflow-wrap:break-word}p{margin:14px 0}code,pre{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--soft);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:8px;overflow:auto;max-width:100%}
+pre code{padding:0;background:none;white-space:pre;overflow-wrap:normal}blockquote{border-left:4px solid var(--accent);margin:20px 0;padding:2px 18px;color:var(--muted)}
+.table-scroll{overflow-x:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:620px}th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:break-word}th{background:var(--soft);font-size:14px}
+tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-left:4px solid var(--accent);padding:14px 18px;margin-bottom:22px;background:var(--soft)}
+.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.catalog a{display:block;padding:18px;border:1px solid var(--line);border-radius:8px;text-decoration:none}
+.catalog strong{display:block;font-size:18px;color:var(--ink)}.catalog span{display:block;font-size:14px;color:var(--muted);margin-top:7px}
+footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
+@media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="docs/index.html">HTML library</a><a href="README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#customer-setup-and-migration">Customer setup and migration</a></li><li class="level-2"><a href="#native-local-files-sessions-and-settings">Native local files, sessions and settings</a></li><li class="level-2"><a href="#diagnostics-signed-updates-and-background-work">Diagnostics, signed updates and background work</a></li><li class="level-2"><a href="#privacy-and-routing-scope">Privacy and routing scope</a></li><li class="level-2"><a href="#remote-terminal-compatibility">Remote-terminal compatibility</a></li><li class="level-2"><a href="#what-runs-where">What runs where</a></li><li class="level-2"><a href="#server-quickstart">Server quickstart</a></li><li class="level-2"><a href="#lifecycle-rules">Lifecycle rules</a></li><li class="level-2"><a href="#security-and-privacy-boundary">Security and privacy boundary</a></li><li class="level-2"><a href="#operations">Operations</a></li><li class="level-2"><a href="#development">Development</a></li><li class="level-2"><a href="#license">License</a></li></ol></nav></details></aside><main><h1 id="cc-fleet">CC Fleet</h1>
+<p>CC Fleet pairs each user with a dedicated Linux slot and that user's own Claude
+account. <strong>One holder, one slot, one Claude account:</strong> no account pool, account
+rotation, credential fallback, or shared inference account.</p>
+<p>The primary command, <code>ccfleet local</code>, runs the original Claude Code CLI on the
+user's computer. Files, tools, settings and conversation history stay in their
+native local locations. Supported model requests travel through the assigned
+slot; its Claude credential is never returned to the laptop or BWH.</p>
+<pre><code class="language-text">local original Claude Code → authenticated loopback bridge
+    → pinned SSH carried through the BWH WSS broker
+    → assigned slot's inference relay → Anthropic
+</code></pre>
+<p>BWH cannot decrypt the inner SSH stream. The slot relay can read model requests
+and uses only its bound account. This is an inference relay, not proof of
+slot-only agent execution or metadata-free requests. Plain <code>ccfleet</code> remains a
+remote-terminal compatibility command with remote files and persistent tmux.</p>
+<p>This implements the requested local-CLI/dedicated-slot relay workflow; it is not
+a claim of complete CC Host feature parity or zero metadata disclosure. See the
+<a href="docs/local-relay-verification.html">verified release scope and test evidence</a>.
+The <a href="docs/reliability-privacy.html">reliability and privacy design</a> explains expiry-driven
+native renewal, identity minimization, verified TLS, and per-device transport.</p>
+<h2 id="customer-setup-and-migration">Customer setup and migration</h2>
+<ol>
+<li>
+<p>Sign in on the website, claim an allowed slot, and complete <strong>Sign in to
+Claude</strong> with your own account. That credential remains on the slot.</p>
+</li>
+<li>
+<p>Run the same setup command for a new or existing computer:</p>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --setup
+</code></pre>
+</li>
+<li>
+<p>Existing pairing and native Claude installation are reused. If the original
+local Claude CLI is missing, setup installs it from the fixed vendor URL.
+Only if asked, obtain one fresh ten-minute pairing code from <strong>Connect this
+computer</strong> on <a href="https://ccfleet.daichenlab.com/account">your slot page</a>.</p>
+</li>
+<li>
+<p>If an older live-folder grant is active, finish its work or explicitly approve
+stopping its background connector and associated remote live-folder sessions.
+Setup asks in the controlling terminal; <code>--yes</code> explicitly authorizes this
+cancellation for scripts. Files/history and ordinary remote tmux sessions are
+kept. A failed cleanup must be resolved, not silently ignored.</p>
+</li>
+<li>
+<p>Open a new terminal and run native Claude in your project:</p>
+<pre><code class="language-bash">cd ~/code/my-project
+ccfleet start
+</code></pre>
+</li>
+</ol>
+<p>Setup checks readiness without uploading project files or making a model request.
+It preserves configuration/history and backs up shell settings when adjusting
+PATH. Legacy <code>ccfleet-connect</code> cleanup happens only after readiness succeeds.
+It does not automatically revoke an Anthropic credential: revoke an old
+setup-token yourself only if it is no longer used anywhere else.</p>
+<p>Optional <code>--name &quot;Personal Mac&quot;</code> labels a new device; <code>--slot SLOT</code> chooses an
+existing pairing. Install-only (omit <code>--setup</code>), manual <code>ccfleet login</code>, and
+legacy <code>--migrate</code> remain compatibility options. No SSH command or slot Claude
+credential needs to be entered locally.</p>
+<p><code>ccfleet start</code> offers local new/continue/resume choices; <code>ccfleet local</code> remains
+the direct launch command. Bare <code>ccfleet</code> has not changed meaning: it still opens
+the remote terminal. <code>ccfleet remote</code> is the explicit remote alias.</p>
+<h2 id="native-local-files-sessions-and-settings">Native local files, sessions and settings</h2>
+<p><code>ccfleet local</code> does not upload or mount a folder and adds no filesystem count,
+size or Git-ignore filters. <code>cd ~</code> works too. The working directory is not a
+sandbox: original Claude's native permissions govern local file and tool access.
+New conversations default to <code>bypassPermissions</code>, Opus and max effort, so local
+tools can modify, delete or transmit data without individual approval prompts.</p>
+<pre><code class="language-bash">ccfleet local --check
+ccfleet local --new --name work
+ccfleet local --new --name research --mode plan --model opus --effort high
+ccfleet local --resume
+ccfleet local --resume work
+ccfleet local --continue
+ccfleet local --resume work --fork-session
+ccfleet local --print &quot;Summarize this project&quot;
+ccfleet sessions
+ccfleet preferences set --model opus --effort high --mode plan
+ccfleet preferences show
+ccfleet preferences clear
+</code></pre>
+<p>Running plain <code>ccfleet local</code> again starts a fresh conversation in the current
+directory; it does not automatically resume the previous one. Use <code>--continue</code>
+for the latest conversation in that directory, or <code>--resume</code> for the history
+picker. Existing history is kept. A second terminal opens an independent local
+session using the same assigned slot/account.</p>
+<p>These are native local conversations, not remote tmux sessions. Use <code>/model</code> and
+<code>/effort</code> in Claude; availability depends on the installed CLI and account.
+Additional supported native arguments go after <code>--</code>, subject to protected
+routing/authentication settings. Quit normally with <code>/exit</code>; resume saved local
+history later. CC Fleet does not silently replay interrupted inference.
+Interactive foreground sessions, <code>--print</code>, <code>--resume</code>, and multiple terminal
+sessions are supported. <code>ccfleet sessions</code> opens native history; project preferences
+affect new local sessions, with explicit flags taking precedence. They do not
+rewrite existing conversations or synchronize history between computers.</p>
+<h2 id="diagnostics-signed-updates-and-background-work">Diagnostics, signed updates and background work</h2>
+<pre><code class="language-bash">ccfleet status --json
+ccfleet doctor --privacy --json --export ./ccfleet-support.json
+ccfleet version --json
+ccfleet update
+ccfleet update --rollback
+</code></pre>
+<p>Diagnostics make no model request and do not scan a project. Export creates only
+the requested new private local file; it is not uploaded and excludes prompts,
+file contents, paths, tokens and account emails. Reported account health separates
+ready, renewal pending, sign-in required, account maintenance and stale observations.
+A heartbeat does not prove that Anthropic will accept the next model request.</p>
+<p>The updater authenticates its signed release channel using the pinned Ed25519 key,
+then checks the immutable manifest and every digest-pinned helper before atomic
+activation. Failed verification leaves the current client in place. Rollback
+preserves pairing and native history; restored legacy bootstraps are not labelled
+signature-verified. <code>version --json</code> distinguishes verified and bootstrap installs.
+This updates CC Fleet, not the original Claude executable.</p>
+<pre><code class="language-bash">ccfleet jobs start --prompt &quot;Review this project and summarize findings&quot;
+ccfleet jobs list
+ccfleet jobs status JOB_ID
+ccfleet jobs logs JOB_ID
+ccfleet jobs stop JOB_ID
+# Equivalent supervised launch:
+ccfleet local --background --print &quot;Summarize this project&quot;
+</code></pre>
+<p>These are managed <strong>local print-mode jobs</strong>, not native detached <code>--bg</code>, remote
+agents or interactive attachable sessions. The supervisor owns the bridge after
+the starting terminal closes; the computer must stay running and connected. Use
+an explicit <code>--resume NAME_OR_ID</code> or <code>--continue</code> for existing context. Passing
+native <code>--bg</code> / <code>--background</code> after <code>--</code> remains rejected.</p>
+<p>Jobs default to one hour (<code>--timeout</code>, maximum 24 hours) and four concurrent jobs
+(<code>--max-jobs</code>, maximum 16). Private stdout/stderr logs are each bounded to 4 MiB;
+they may contain sensitive content and are displayed only on request. Stop,
+timeout, revocation and supervisor loss close the owned process group/bridge;
+uncertain cleanup is reported as such. Deliberately detached tool processes are
+not sandbox-contained. Jobs never automatically restart or replay inference.</p>
+<p>Native settings/history, including an existing <code>CLAUDE_CONFIG_DIR</code>, are preserved
+by default. <code>--legacy-history</code> selects the earlier per-slot relay-preview profile
+without importing or deleting it. A temporary private settings overlay pins the
+loopback model route and nonce, clears conflicting provider/auth overrides, and
+disables supported optional telemetry without permanently editing native settings.</p>
+<p>The previous live-folder mount is retired. <code>ccfleet local --disconnect</code> remains
+an explicit cleanup action for it; <code>--reset-link</code> is retired. Earlier snapshot
+commands are only for recovery. See <a href="docs/local-relay.html">local relay and migration</a>
+for shutdown-error recovery and a safe local-file check, and
+<a href="docs/project-workspaces.html">retired workspaces</a>. The website migration guide
+is at <code>/docs/guide#migration</code>.</p>
+<h2 id="privacy-and-routing-scope">Privacy and routing scope</h2>
+<p>The relay removes selected headers and the top-level structured <code>metadata</code> field.
+It does not redact arbitrary prompts or tool results. Native system prompts can
+include OS, working-directory and environment details; file contents and paths
+can identify users and reach the slot and Anthropic. Do not claim fingerprint-free
+requests or that Anthropic sees only slot information.</p>
+<p>Only supported model endpoints use the relay. MCP servers, hooks, plugins, shell
+tools, updates and other native CLI services can connect directly from the
+laptop. Optional telemetry controls are not an all-traffic firewall or anonymity
+guarantee. BWH sees connection IP/transport metadata. Slot root can inspect or
+alter requests/responses, which can influence local tool actions. Native local
+permissions and trust in the slot host remain important.</p>
+<p>Relay access requires upgraded nodes and operator activation. A previous remote
+terminal or live-mount deployment does not establish relay availability or
+provider authorization; validate the canary and actual deployment separately.
+The <a href="docs/compliance.html">compliance record</a> distinguishes the historical hosted
+terminal mapping from the current inference relay; it makes no approval claim.</p>
+<h2 id="remote-terminal-compatibility">Remote-terminal compatibility</h2>
+<p>Plain <code>ccfleet</code> still opens original Claude Code on the slot, with projects in
+<code>~/workspace</code> and persistent tmux. The default remains Opus, max effort and
+<code>bypassPermissions</code>, as the slot Linux user. Named remote sessions remain:</p>
+<pre><code class="language-bash">ccfleet new research --model fable --effort xhigh --mode plan
+ccfleet attach --session research
+ccfleet restart --session research --model opus --effort max --mode auto
+</code></pre>
+<p>These commands do not operate on local Claude conversation history. An intentional
+remote <code>restart</code> terminates that session before replacing it.</p>
+<h2 id="what-runs-where">What runs where</h2>
+<ul>
+<li><code>laptop/ccfleet</code> starts native local Claude and a launch-scoped loopback bridge;
+it also retains the remote-terminal compatibility commands.</li>
+<li><code>ccfleet_agent/inference_client.py</code> implements the authenticated local model
+transport; <code>ccfleet_agent/local_relay.py</code> handles fixed-upstream slot inference.</li>
+<li><code>ccfleetd/</code> handles the website, pairing, device authorization, operational state
+and encrypted byte broker, not plaintext model bodies or slot credentials.</li>
+<li><code>ccfleet_agent/machine.py</code> manages slot users and root-owned device keys.</li>
+<li><code>node/slot-entry.sh</code> dispatches only fixed protocols with forwarding disabled.</li>
+<li><code>project_files.py</code>, <code>project_access.py</code>, and the live-folder helpers retain
+legacy recovery/cleanup responsibilities; they are not the local agent.</li>
+</ul>
+<h2 id="server-quickstart">Server quickstart</h2>
+<p>Run the server behind TLS:</p>
+<pre><code class="language-bash">git clone https://github.com/cdcupt/ccfleet.git
+cd ccfleet
+cp deploy/ccfleetd.env.example deploy/ccfleetd.env
+# Set CCFLEET_ADMIN_TOKEN, CCFLEET_PUBLIC_URL, Google OAuth and cookie secrets.
+docker compose -f deploy/docker-compose.yml up -d --build
+</code></pre>
+<p>The bare public URL serves the product website. <code>/account</code> is the customer
+page; <code>/admin</code> is the operator console. <code>CCFLEET_ADMIN_HOST</code> can move the
+console to a separate hostname.</p>
+<p>Create a shared machine and its slots:</p>
+<pre><code class="language-bash">ccfleetd node add pool-1 --owner ops --region us-west
+ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
+</code></pre>
+<p>On a fresh Ubuntu machine, first install base hardening and then the shared
+machine agent:</p>
+<pre><code class="language-bash">git clone https://github.com/cdcupt/ccfleet.git
+sudo ./ccfleet/node/bootstrap.sh ops &quot;ssh-ed25519 AAAA... operator&quot;
+sudo hostnamectl set-hostname pool-1
+sudo timedatectl set-timezone Etc/UTC
+
+curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
+  | sudo bash -s -- \
+      --server https://fleet.example.com \
+      --node pool-1 \
+      --token &lt;node-token&gt;
+</code></pre>
+<p>Configure the fixed endpoint the BWH server uses to reach that machine. Copy
+the node's public SSH host key to a file on the server first:</p>
+<pre><code class="language-bash">ccfleetd node access pool-1 \
+  --host &lt;address-reachable-from-bwh&gt; \
+  --port 22 \
+  --host-key-file /secure/path/pool-1-ssh_host_ed25519_key.pub
+</code></pre>
+<p>Only the broker needs network access to the node's SSH port. The customer uses
+the public HTTPS/WSS service and never receives the node address.</p>
+<p>Grant a signed-in customer an allowance:</p>
+<pre><code class="language-bash">ccfleetd account quota alice@example.com 1
+ccfleetd account role you@example.com admin
+</code></pre>
+<h2 id="lifecycle-rules">Lifecycle rules</h2>
+<ul>
+<li>A slot is offered only after its machine confirms the previous Linux user is
+absent.</li>
+<li>Releasing a slot immediately revokes all paired CC Fleet devices, stops its
+processes and deletes the Linux user and files. The slot becomes free only
+after the machine confirms the wipe.</li>
+<li>A slot keeps one Claude account. <strong>Sign in again</strong> accepts only that account;
+<strong>Change account</strong> replaces it deliberately and at most once a week.</li>
+<li>One Claude account detected on two live fleet slots raises an alert.</li>
+<li>Lowering an allowance does not seize an existing slot.</li>
+<li>Payments are records for the operator; the allowance remains the grant.</li>
+<li>Claude Code updates are staged and never interrupt the running persistent
+session. New sessions use the installed version.</li>
+</ul>
+<p>The public site documents the current product at <code>/</code>, <code>/docs/guide</code>,
+<code>/docs/how-it-works</code>, <code>/docs/terms</code> and <code>/privacy</code>.</p>
+<h2 id="security-and-privacy-boundary">Security and privacy boundary</h2>
+<ul>
+<li>The outer connection is TLS/WSS to the broker.</li>
+<li>The inner OpenSSH connection is encrypted end-to-end and pins the slot host
+key returned at pairing.</li>
+<li>Device keys live outside holder-writable home directories. Both sshd and each
+key enforce the forced entrypoint, with no agent forwarding, port forwarding,
+X11 forwarding or user-supplied SSH command.</li>
+<li>The public-key path is root-owned but readable by slot users (<code>0711</code> parent,
+<code>0755</code> key directory, <code>0644</code> files); the node token remains in an atomically
+written root-only <code>0600</code> file.</li>
+<li>Slot accounts receive a discarded random password only so OpenSSH/PAM will
+evaluate public keys; the slot sshd policy explicitly disables password and
+keyboard-interactive authentication.</li>
+<li>Pairing codes are random, single-use, stored only as hashes and expire after
+ten minutes.</li>
+<li>Device access tokens are random and stored only as hashes. Device removal or
+slot release revokes them immediately.</li>
+<li>The broker chooses the node endpoint from operator configuration; the client
+cannot use it as an arbitrary TCP proxy.</li>
+<li>The local client stores its private key and access token under
+<code>~/.config/ccfleet</code> with mode <code>0600</code>.</li>
+<li>The slot administrator still has root. End-to-end transport encryption does
+not hide plaintext model requests/responses from the slot relay endpoint.</li>
+</ul>
+<h2 id="operations">Operations</h2>
+<p>Agents report heartbeat facts and the server raises alerts for missing nodes,
+missing or stale Claude login, version drift, disk pressure and changed egress.
+Legacy owner-node and Remote Control monitoring remains in the code for owner
+installations. Hosted customer slots actively disable the old Remote Control
+unit; it is not an alternative product mode.</p>
+<p>Useful paths:</p>
+<div class="table-scroll" role="region" aria-label="Scrollable table" tabindex="0"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docs/design.html</code></td>
+<td>architecture and trust boundaries</td>
+</tr>
+<tr>
+<td><code>docs/runbooks.html</code></td>
+<td>operator procedures</td>
+</tr>
+<tr>
+<td><code>docs/compliance.html</code></td>
+<td>account and credential constraints</td>
+</tr>
+<tr>
+<td><code>docs/local-relay.html</code></td>
+<td>native local Claude, slot inference, privacy and migration</td>
+</tr>
+<tr>
+<td><code>docs/project-workspaces.html</code></td>
+<td>retired mount/snapshot cleanup and recovery</td>
+</tr>
+<tr>
+<td><code>docs/tunnel.html</code></td>
+<td>optional heartbeat reporting tunnel</td>
+</tr>
+<tr>
+<td><code>deploy/</code></td>
+<td>container, systemd and TLS examples</td>
+</tr>
+<tr>
+<td><code>tests/</code></td>
+<td>unit and integration test suite</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="development">Development</h2>
+<pre><code class="language-bash">uv run --python 3.12 --with ruff --no-project -- ruff check .
+uv run --python 3.12 --with pytest --with pytest-cov --no-project -- pytest --cov
+uvx --from shellcheck-py shellcheck -S warning node/*.sh laptop/*.sh
+</code></pre>
+<p>Python 3.9+; the runtime server uses only the standard library.</p>
+<h2 id="license">License</h2>
+<p>MIT — see <a href="https://github.com/cdcupt/ccfleet/blob/main/LICENSE">LICENSE</a>.</p>
+</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

@@ -1,6 +1,6 @@
 [Unit]
 Description=ccfleet SSH tunnel to the fleet server (for nodes with no public endpoint)
-Documentation=https://github.com/cdcupt/ccfleet/blob/main/docs/tunnel.md
+Documentation=https://github.com/cdcupt/ccfleet/blob/main/docs/tunnel.html
 After=network-online.target
 Before=ccfleet-agent.service
 
@@ -18,7 +18,7 @@ Before=ccfleet-agent.service
 # The host key is pinned, not trusted on first use: this connection runs
 # unattended and carries the node token, so accepting an unknown server once
 # would hand that token to whoever answered. Populate the known-hosts file with
-# a fingerprint you verified out of band; see docs/tunnel.md.
+# a fingerprint you verified out of band; see docs/tunnel.html.
 [Service]
 EnvironmentFile=%h/.config/ccfleet/tunnel.env
 ExecStart=/usr/bin/ssh -N -T \

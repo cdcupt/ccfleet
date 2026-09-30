@@ -161,6 +161,8 @@ def contact(cfg: Config) -> str:
 def _page(here: str, title: str, body: str, width: str = "doc",
           viewer: Optional[Viewer] = None, canonical: str = "") -> str:
     """A docs page in the site's frame, with its own link in the bar marked."""
+    body += ('<p class="sub"><a href="/docs/library">HTML reference library</a>'
+             ' &mdash; architecture, operations and verification records.</p>')
     return _shell(title, body, extra_css=DOCS_CSS, here=here, width=width, viewer=viewer,
                   canonical=canonical)
 

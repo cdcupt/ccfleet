@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Native local relay verification · CC Fleet</title><style>
+:root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent);text-underline-offset:.18em}a:hover{color:#251369}
+.shell{max-width:1120px;margin:0 auto;padding:26px 22px 64px}.doc-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;font-size:14px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px}.contents{align-self:start;position:sticky;top:20px;font-size:13px;max-height:85vh;overflow:auto}
+.contents ol{list-style:none;padding:0}.contents li{margin:7px 0}.contents .level-3{padding-left:12px}
+main{min-width:0}h1{font-size:clamp(30px,5vw,46px);line-height:1.12;letter-spacing:-.03em;margin:0 0 24px}
+h2{font-size:25px;line-height:1.25;margin:38px 0 14px}h3{font-size:19px;line-height:1.3;margin:25px 0 12px}
+p,li{overflow-wrap:break-word}p{margin:14px 0}code,pre{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--soft);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:8px;overflow:auto;max-width:100%}
+pre code{padding:0;background:none;white-space:pre;overflow-wrap:normal}blockquote{border-left:4px solid var(--accent);margin:20px 0;padding:2px 18px;color:var(--muted)}
+.table-scroll{overflow-x:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:620px}th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:break-word}th{background:var(--soft);font-size:14px}
+tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-left:4px solid var(--accent);padding:14px 18px;margin-bottom:22px;background:var(--soft)}
+.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.catalog a{display:block;padding:18px;border:1px solid var(--line);border-radius:8px;text-decoration:none}
+.catalog strong{display:block;font-size:18px;color:var(--ink)}.catalog span{display:block;font-size:14px;color:var(--muted);margin-top:7px}
+footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
+@media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#latest-comparison-driven-follow-up--client-021">Latest comparison-driven follow-up — client 0.2.1</a></li><li class="level-2"><a href="#earlier-native-client-platform-release--client-020">Earlier native client platform release — client 0.2.0</a></li><li class="level-2"><a href="#earlier-lifecycle-and-streaming-follow-up">Earlier lifecycle and streaming follow-up</a></li><li class="level-2"><a href="#earlier-reliability-and-privacy-hardening">Earlier reliability and privacy hardening</a></li><li class="level-2"><a href="#baseline-inference-release-evidence">Baseline inference release evidence</a></li><li class="level-3"><a href="#migration-shutdown-regression">Migration shutdown regression</a></li><li class="level-2"><a href="#actual-native-client-checks">Actual native-client checks</a></li><li class="level-2"><a href="#deployment-checks">Deployment checks</a></li><li class="level-2"><a href="#limits-of-this-evidence">Limits of this evidence</a></li></ol></nav></details></aside><main><h1 id="native-local-relay-verification">Native local relay verification</h1>
+<p>Verified 2026-09-29 UTC. This supersedes the live-folder release for new
+<code>ccfleet local</code> launches; it does not terminate existing user sessions.</p>
+<span id="latest-native-client-platform-release" class="anchor-alias"></span><h2 id="latest-comparison-driven-follow-up--client-021">Latest comparison-driven follow-up — client 0.2.1</h2>
+<p>Verified 2026-09-30 UTC. Runtime and immutable client source are
+<code>058515e36db6418fc86953b36f9e97f2e555c9ed</code>. BWH, the internal broker and all three
+nodes were upgraded and their relevant runtime hashes checked. The previously
+unreachable free node recovered before rollout; it still has no customer account
+or inference gate. No network recovery cause is inferred and no holder was released.</p>
+<ul>
+<li>Local full suite: <strong>4,240 passed, 2 skipped, 91.60% coverage</strong>. Ruff, Bash,
+changed-script ShellCheck and diff checks passed.</li>
+<li><a href="https://github.com/cdcupt/ccfleet/actions/runs/36658746610">Runtime CI</a> and
+<a href="https://github.com/cdcupt/ccfleet/actions/runs/36659916868">publication CI</a>
+passed all five jobs, including the three supported Python versions.</li>
+<li>The backend emits HTTP/1.1 only for WebSocket switching responses. Direct
+primary/secondary tests verified byte relay, fixed endpoints, release/revoke
+and unchanged REST closure. A wire mutation restoring HTTP/1.0 was rejected.</li>
+<li>A disposable network-disabled real-OpenSSH fixture verified parent-only
+SIGKILL cleanup, concurrent channels on one connection, host pinning and no
+fallback. Caller/sibling preservation and stubborn-child cases also passed.
+This covers the owned transport group, not arbitrary detached tool processes.</li>
+<li>All eight actual public immutable files and the 0.2.1 channel/manifest signatures
+matched the unchanged pinned signing key. Public install/repeat preserved pairing.</li>
+<li>Public canaries verified private diagnostics/preferences, supervised local
+Read/Write and native continuation through reused transport. Two original-Claude
+invocations made four completed Messages transfers; all four contributed valid
+numeric usage samples. No model/session identifiers or content were added to
+those aggregates. Missing/old traffic was not backfilled or labelled zero.</li>
+<li>A separate zero-model canary proved <strong>direct secondary inner SSH readiness</strong>,
+matching account generations, revocation through the secondary closing both
+brokers' transports, and autonomous background-job stop with confirmed cleanup.
+Temporary devices were removed; the original tmux session/device were preserved.</li>
+<li>Online database backups passed integrity checking; rollback images and node
+libraries remain. Final audit: all nodes reachable/fresh, zero alerts/pairings,
+one original active device, and all 17 shared-tenant HTTP baselines unchanged.</li>
+<li>Desktop/390px numeric-usage layouts were inspected. The UI distinguishes
+sample coverage/unknown cache values from quota, billing and whole-account totals.</li>
+</ul>
+<p><strong>Public failover routing remains unactivated:</strong> the shared-edge reload has not
+been approved. The direct upgrade incompatibility below is fixed by this release;
+the remaining gate is safe public routing activation, not another protocol fix.
+The <a href="platform-comparison.html">comparison</a> distinguishes CC Host's documented breadth
+from unmeasured privacy, performance and account-longevity claims.</p>
+<h2 id="earlier-native-client-platform-release--client-020">Earlier native client platform release — client 0.2.0</h2>
+<p>Runtime <code>9e52e29deb439a5fc2991076af42024790ee03da</code> was verified on BWH and
+the two reachable managed hosted nodes on 2026-09-29 UTC. Client <strong>0.2.0</strong> uses
+that immutable source revision. The manifest was published at <code>58141f4</code>, and
+the signed stable channel at <code>c7621d6</code>; these publication commits do not change
+runtime bytes. The third, free node is unreachable and was not upgraded.</p>
+<ul>
+<li>Required completed macOS/Python3.12 suite: <strong>4,168 passed, 2 skipped,
+91.75% coverage</strong>. The skips are Linux-only traversal and the opt-in real
+OpenSSH fixture, which was separately exercised in an isolated container.</li>
+<li><a href="https://github.com/cdcupt/ccfleet/actions/runs/36637460729">Exact-runtime CI</a>
+passed all five jobs. Linux Python3.9, 3.12 and 3.13 each reported
+<strong>4,169 passed, 1 skipped</strong>, at least <strong>91.79% coverage</strong>. Ruff, Bash and
+changed-script ShellCheck passed. A later publication rerun exposed a
+Linux test-client race sending a body after the concurrency admission
+guard had already closed the socket; its regression now reads the early
+503 without sending request bytes. The production guard was not changed.
+The corrected check passed 40 repetitions in a network-disabled Linux
+container, and a private disabled-guard mutation was detected. The completed
+follow-up macOS full run again passed 4,168 tests at 91.75% coverage.</li>
+<li>Eight actual public immutable client/helper files matched the signed manifest
+and the pinned Ed25519 key. Public fresh installation and repeated setup
+verified the signed release and preserved pairing, keys and startup settings.
+The shell launcher starts Python with isolation before any startup imports;
+hostile <code>PYTHONPATH</code>, tamper, downgrade and rollback cases are covered.</li>
+<li>The installed public client passed status, private diagnostics/export,
+create-new export protection, and private project preferences without a
+project scan or model request. Desktop and 390px guide/account layouts were
+inspected; the guide had no page-wide horizontal overflow.</li>
+<li>Supervised local work passed a synthetic stop/log/archive check with no
+model request. Two original-Claude invocations then proved background
+Read/Write on the local filesystem and foreground continuation of the same
+native session through reused transport. This is not a claim of exactly two
+HTTP requests: native tool turns made four completed transfers.</li>
+<li>Idle upload revocation closed the connection and refused a new one. The
+canary device was removed locally; its synthetic history was retained. The
+pre-existing ordinary remote tmux session remained unchanged, and no occupied
+customer slot was released or reassigned.</li>
+<li>Live WSS readiness measurements, three samples per mode: cold median
+<strong>1,332.03ms</strong>, reused median <strong>441.36ms</strong>, master startup <strong>957.18ms</strong>.
+These are connection/readiness timings, not model latency. Reuse remains
+experimental and off by default; targeted hard-kill residue is disclosed.</li>
+<li>Fresh, validated numeric heartbeat aggregates were observed. Readiness did
+not count as inference. The owner canary produced four completed transfers
+and one deliberately interrupted upload; counts are not subscription quota
+or proof of model-task success.</li>
+<li>Online database backups passed integrity checking. Runtime rollback images
+and node libraries were retained. Migration/privacy website checks and all
+17 shared-tenant HTTP baselines passed after rollout.</li>
+<li>The internal secondary broker uses the primary's exact image and database
+file and passed restricted-route checks. A separate zero-model canary proved
+matching device/account generations, secondary revocation rejected by both
+brokers, closure of the primary SSH stream, and autonomous background-job
+shutdown with confirmed cleanup. Both synthetic profiles were unpaired and
+recoverably archived; no user data was deleted.
+<strong>Public failover is not active</strong>:
+reloading the shared edge could close unrelated active WebSockets. A
+same-host replica is not physical-host redundancy.</li>
+</ul>
+<p>Direct secondary WebSocket transport was not verified: its backend sends an
+HTTP/1.0 upgrade response while the client correctly requires HTTP/1.1. A local
+reproduction confirmed that incompatibility. The existing public Caddy path
+normalizes the frontend response and passed the actual client canary. Backend
+upgrade compliance needs a separately tested fix before completing the broker
+activation gate; no client TLS or protocol checks were weakened for testing.</p>
+<p>Outstanding operational work: restore the free node's SSH reachability before
+its upgrade, and arrange a safe shared-edge activation window. Its existing
+outage alert remains visible; stale nodes are excluded from customer claims.
+The stable channel expires <strong>2026-12-27 22:16 UTC</strong> and must be renewed or
+replaced before then. Keep the private release signer in protected operator
+storage with an offline recovery backup; it is never published in the repository.
+Long-term account availability still requires observation and can require native
+sign-in. None of this establishes exact CC Host parity or zero metadata disclosure.</p>
+<h2 id="earlier-lifecycle-and-streaming-follow-up">Earlier lifecycle and streaming follow-up</h2>
+<p>Runtime revision <code>e1b1abc6378bb24611bcea8c67a505f790b65723</code> was deployed to
+BWH and all three managed hosted nodes on 2026-09-29 UTC, canary first. The
+published client bytes did not change.</p>
+<ul>
+<li>Completed local suite: <strong>3,653 passed, 1 skipped, 93.78% coverage</strong>. The skip
+is Linux-only directory traversal validation, which was exercised in CI.</li>
+<li><a href="https://github.com/cdcupt/ccfleet/actions/runs/36618480056">Exact-runtime CI</a>
+passed all five jobs. Python 3.9, 3.12 and 3.13 each reported <strong>3,654 passed,
+93.81% coverage</strong>. Ruff, Bash syntax and changed-script ShellCheck passed.</li>
+<li>Synthetic regressions cover automatic claim/release/reclaim gates, stale and
+malformed assignments, privileged accounts, operator opt-out, unsafe policy
+files and installer dependency failures. Three deliberately broken guards
+failed their targeted regressions in separate processes with fresh bytecode
+caches.</li>
+<li>A separate networkless Linux container dropped to a non-root identity and
+verified claim, release denial, reclaim and opt-out beneath a root-owned
+<code>0711</code> policy directory. No customer credentials or accounts were involved.</li>
+<li>Stream tests verify same-account native rotation beyond the old expiry,
+logout/missing/expired credential cancellation, a retained socket after an
+HTTP <code>Connection: close</code> response, and suppression of buffered chunks after
+cancellation. These are controlled-peer tests, not a forced live OAuth refresh.</li>
+<li>Root explicitly opted the three hosted machines into automatic gate
+reconciliation. Installed module hashes and fresh reports were verified.
+Both occupied nodes passed readiness as the unprivileged slot user; the free
+node remained unclaimed with no customer Unix account or inference gate.
+No occupied customer slot was released or reassigned for testing.</li>
+<li>The public installer paired an isolated owner-canary profile. Two short model
+turns verified actual local Read/Write and native same-session continuation.
+Revocation ended an idle connection and denied reconnection. The temporary
+device was cleaned up, and the pre-existing ordinary tmux session was preserved.</li>
+<li>The online database backup passed integrity checking; rollback images and
+node-library backups were retained. Final checks found zero open alerts,
+zero pending pairings, the one original active device, unchanged responses
+from all 17 tenant domains, and working migration/privacy pages.</li>
+<li>Seven inactive synthetic test profiles/staging directories were moved into a
+private recoverable archive. User projects/history and production recovery
+backups were preserved; no customer data was deleted as cleanup.</li>
+</ul>
+<p>Automatic access policy is documented in <a href="local-relay.html#operator-verification">operator verification</a>.
+This closes the reviewed lifecycle and stream defects; it does not establish
+complete CC Host parity, zero metadata disclosure or indefinite account access.</p>
+<h2 id="earlier-reliability-and-privacy-hardening">Earlier reliability and privacy hardening</h2>
+<p>Runtime revision <code>f70b2ed5c9bd61a7aa67e91e7014200bf4c7362c</code> was deployed to
+BWH and the two currently assigned hosted nodes, canary first. The published
+client and its digest-pinned helper matched that revision. Legacy owner nodes
+were not converted.</p>
+<ul>
+<li>Completed local suite: <strong>3,451 passed, 93.80% coverage</strong>. The first full run
+caught an omitted status-page classification for the new credential alerts;
+that was corrected and the full suite rerun successfully.</li>
+<li><a href="https://github.com/cdcupt/ccfleet/actions/runs/36586558266">Exact-release CI</a>
+passed Python 3.9, 3.12 and 3.13, shell and units. Python 3.12 reported
+<strong>3,451 passed, 93.81% coverage</strong>. Ruff and Bash checks passed.</li>
+<li>Before deployment, an authorized owner-slot observation saw native credential
+expiry advance naturally to roughly eight hours with unchanged account binding.
+No expiry field was edited, credential copied, or model request submitted for
+that observation. The new early-renewal scheduling and failure/race paths were
+exercised with synthetic credentials; the live upgraded agents reported
+<code>current</code>, not a newly observed <code>renewed</code> event.</li>
+<li>The public installed-client canary passed actual local Read/Write, same-session
+<code>--continue</code>, idle connection revocation and rejection of a new connection.
+Its two file-tool calls stayed inside the synthetic directory. The temporary
+device was revoked and removed locally; the pre-existing ordinary remote
+session remained unchanged. This used two short owner-account model turns.</li>
+<li>Both hosted nodes' installed agent, machine and relay hashes matched the
+release, and both returned protocol-v2 readiness. The second node received
+readiness-only verification, without a customer model request or file access.</li>
+<li>The production database backup passed integrity checking. Fresh heartbeats,
+zero open alerts, one original device, zero pending pairings and all 17 tenant
+HTTP baselines were verified after rollout. New credential-health copy was
+checked at desktop and 390px widths.</li>
+</ul>
+<p>See <a href="reliability-privacy.html">the design choices and limits</a>. Captured identity
+replay was not implemented. These checks do not prove permanent account access,
+zero metadata disclosure, or absence of every future vendor-compatibility issue.</p>
+<h2 id="baseline-inference-release-evidence">Baseline inference release evidence</h2>
+<ul>
+<li>Inference-runtime baseline (server relay code and installed slot relay):
+<code>1d18b369c1aff3217dc53c7c8d789d72b9824587</code>. Later website-copy releases may use a
+newer repository revision without changing that inference protocol or node code.</li>
+<li>Published client, including lock-confirmed legacy connector shutdown:
+<code>501ffedf7ec55a2b873623b814018cc13e39791c</code>.</li>
+<li><a href="https://github.com/cdcupt/ccfleet/actions/runs/36561158025">Server release CI</a>
+and <a href="https://github.com/cdcupt/ccfleet/actions/runs/36566720164">current client CI</a>
+passed Python 3.9, 3.12 and 3.13, shell checks and unit validation.</li>
+<li>The completed local full suite for the current client passed <strong>3,263 tests,
+93.65% coverage</strong>. The focused connector/native-launch suite also passed on
+Python 3.9. Ruff, Bash syntax and ShellCheck passed.</li>
+</ul>
+<h3 id="migration-shutdown-regression">Migration shutdown regression</h3>
+<p>The first release missed a control-socket shutdown race: a stop acknowledgement
+could arrive before the connector finished closing, and the next status query
+could receive EOF. The current client confirms release of the resident's exclusive
+lock, which remains held until child processes and filesystem handles are closed.
+Missing sockets, EOF, reset and timeout are not themselves proof of completion.</p>
+<p>Real Unix-socket and flock tests cover truncated replies, reset/timeout, a missing
+listener with a still-held lock, and delayed filesystem-handle teardown. Migration
+tests confirm that unverified shutdown cannot retire a grant, reset the remote
+workspace, or launch a second local workflow. The public installer was exercised
+in a temporary destination; its client and helper bytes matched this tested
+revision. This was a client-only fix, requiring no server restart or new pairing.</p>
+<h2 id="actual-native-client-checks">Actual native-client checks</h2>
+<p>Tests used a synthetic local home/project and the owner's canary slot, not
+customer files or customer model requests. The actual local Claude executable
+was version 2.1.284.</p>
+<ol>
+<li>Native settings precedence was checked against controlled loopback endpoints.
+User/project settings can override process environment; a final private
+settings overlay was necessary to keep the authenticated inference route.</li>
+<li>The public installer paired the isolated home and checked inference readiness
+through BWH and pinned SSH. Setup itself made no model request.</li>
+<li>The installed client launched original <strong>local</strong> Claude. Its native Read and
+Write tools copied a unique synthetic input to a local output byte-for-byte,
+while inference used the assigned slot relay.</li>
+<li>Native <code>--continue</code> retained the same session ID and recalled the previous
+turn's unique marker without reading files again.</li>
+<li>Revoking the test device terminated an incomplete idle relay request and
+denied a new connection. This revocation check made no upstream model call.</li>
+<li>Cleanup retained the owner's pre-existing ordinary tmux session and old
+live-folder session. The temporary device was revoked; only the existing
+device remained active. An initial cleanup wait exceeded its harness timeout;
+the idempotent cleanup retry completed successfully.</li>
+</ol>
+<p>Protocol and launcher tests additionally cover identity-header/structured-metadata
+filtering before SSH and at the slot, account binding, expiry, framing limits,
+streaming, cancellation, route/auth conflicts, and consent-based legacy cleanup.
+Native slot credential renewal was verified during earlier canary work, not
+forced again against a real account for this release.</p>
+<h2 id="deployment-checks">Deployment checks</h2>
+<p>The production SQLite database was backed up through the online backup API and
+integrity-checked before deployment. BWH was updated first, then the owner
+canary, then the remaining hosted node. Installed relay and entrypoint hashes
+matched the tested release on both hosted nodes; both returned protocol-v2
+readiness. The second node's check made no customer model request. Legacy owner
+nodes were not converted.</p>
+<p>The final audit found fresh heartbeats, zero open alerts, zero pending pairings,
+and the existing device/session preserved. All 17 tenant HTTP status codes
+matched baseline. Published client bytes matched the tested client revision.
+The migration guide and pairing UI were visually checked at desktop and 390px
+widths.</p>
+<h2 id="limits-of-this-evidence">Limits of this evidence</h2>
+<p>This verifies the exercised paths, not the absence of every future bug or
+complete CC Host feature parity. Local tools and history stay local, but native
+prompts/tool results may disclose paths, OS details or identifying content.
+Independent hooks/MCP/tools can use the network directly. Slot root remains
+trusted; one slot still uses one bound account. No anonymity or provider approval
+is implied. Detached native background agents are not supported by the
+launch-scoped relay. See <a href="local-relay.html">usage, migration and privacy</a>.</p>
+</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

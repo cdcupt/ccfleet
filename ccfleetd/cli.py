@@ -436,7 +436,7 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         print(f"  CCFLEET_NODE_ID={args.new_id}\n")
         print("in /etc/ccfleet/agent.env on a shared machine, or ~/.config/ccfleet/agent.env "
               "on an owner's node,")
-        print("then rename the host itself: docs/runbooks.md, 'Rename a machine'. Its slots "
+        print("then rename the host itself: docs/runbooks.html, 'Rename a machine'. Its slots "
               "keep their ids; 'ccfleetd slot rename' renames them.")
     elif args.node_command == "rotate-token":
         _print_token(args.node_id, store.rotate_token(args.node_id), cfg)

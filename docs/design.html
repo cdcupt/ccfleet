@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CC Fleet remote-terminal compatibility design · CC Fleet</title><style>
+:root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent);text-underline-offset:.18em}a:hover{color:#251369}
+.shell{max-width:1120px;margin:0 auto;padding:26px 22px 64px}.doc-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;font-size:14px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px}.contents{align-self:start;position:sticky;top:20px;font-size:13px;max-height:85vh;overflow:auto}
+.contents ol{list-style:none;padding:0}.contents li{margin:7px 0}.contents .level-3{padding-left:12px}
+main{min-width:0}h1{font-size:clamp(30px,5vw,46px);line-height:1.12;letter-spacing:-.03em;margin:0 0 24px}
+h2{font-size:25px;line-height:1.25;margin:38px 0 14px}h3{font-size:19px;line-height:1.3;margin:25px 0 12px}
+p,li{overflow-wrap:break-word}p{margin:14px 0}code,pre{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--soft);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:8px;overflow:auto;max-width:100%}
+pre code{padding:0;background:none;white-space:pre;overflow-wrap:normal}blockquote{border-left:4px solid var(--accent);margin:20px 0;padding:2px 18px;color:var(--muted)}
+.table-scroll{overflow-x:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:620px}th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:break-word}th{background:var(--soft);font-size:14px}
+tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-left:4px solid var(--accent);padding:14px 18px;margin-bottom:22px;background:var(--soft)}
+.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.catalog a{display:block;padding:18px;border:1px solid var(--line);border-radius:8px;text-decoration:none}
+.catalog strong{display:block;font-size:18px;color:var(--ink)}.catalog span{display:block;font-size:14px;color:var(--muted);margin-top:7px}
+footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
+@media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
+</style><style>
+.diagram{margin:24px 0;max-width:520px}.diagram svg{width:100%;height:auto;display:block}
+.diagram rect{fill:var(--soft);stroke:var(--line);stroke-width:1.5}.diagram text{fill:var(--ink);font-family:system-ui,sans-serif}
+.diagram .edge{fill:none;stroke:var(--accent);stroke-width:2}.diagram marker path{fill:var(--accent)}
+.diagram figcaption{color:var(--muted);font-size:14px;margin-top:10px}.diagram details{margin-top:10px}
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">Historical / compatibility reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#product-invariant">Product invariant</a></li><li class="level-2"><a href="#data-path">Data path</a></li><li class="level-2"><a href="#pairing">Pairing</a></li><li class="level-2"><a href="#connection">Connection</a></li><li class="level-2"><a href="#reconnection">Reconnection</a></li><li class="level-2"><a href="#trust-boundaries">Trust boundaries</a></li><li class="level-3"><a href="#user-computer">User computer</a></li><li class="level-3"><a href="#bwh-broker">BWH broker</a></li><li class="level-3"><a href="#slot-machine">Slot machine</a></li><li class="level-3"><a href="#anthropic">Anthropic</a></li><li class="level-2"><a href="#control-plane">Control plane</a></li><li class="level-2"><a href="#slot-lifecycle">Slot lifecycle</a></li><li class="level-2"><a href="#persistence-and-schema">Persistence and schema</a></li><li class="level-2"><a href="#non-goals">Non-goals</a></li></ol></nav></details></aside><main><h1 id="cc-fleet-remote-terminal-compatibility-design">CC Fleet remote-terminal compatibility design</h1>
+<p>This document describes the remote-terminal compatibility path opened by plain
+<code>ccfleet</code>. The primary <code>ccfleet local</code> workflow runs original Claude on the user's
+computer with assigned-slot inference, and has different execution and privacy
+boundaries documented in <a href="local-relay.html">local-relay.html</a>. Pairing, broker and
+slot-lifecycle mechanisms below are shared, but slot-only execution statements
+apply to the remote-terminal path, not local Claude.</p>
+<h2 id="product-invariant">Product invariant</h2>
+<p>CC Fleet provides remote Claude Code slots without an account pool:</p>
+<blockquote>
+<p>one holder → one slot → one Claude account</p>
+</blockquote>
+<p>A holder may pair several personal computers with that slot. Pairing authorizes
+transport to the slot; it never exports the Claude credential. In this
+remote-terminal path, model requests are created by the original Claude Code
+process running in the assigned slot and go from that slot to Anthropic.</p>
+<h2 id="data-path">Data path</h2>
+<figure class="diagram"><svg viewBox="0 0 420 680" role="img" aria-labelledby="data-path-title data-path-desc"><title id="data-path-title">Historical hosted-terminal data path</title><desc id="data-path-desc">User terminal sends inner SSH over TLS/WSS through BWH to the assigned Linux slot; original Claude on the slot uses that account to reach Anthropic.</desc><defs><marker id="data-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z"/></marker></defs><rect x="20" y="10" width="380" height="95" rx="8"/><text x="210.0" y="45.5" text-anchor="middle" font-size="19"><tspan x="210.0" dy="0">User terminal</tspan><tspan x="210.0" dy="24">ccfleet</tspan></text><path class="edge" d="M210 105 V185" marker-end="url(#data-arrow)"/><text x="230" y="130" font-size="16">TLS/WSS</text><text x="230" y="151" font-size="16">inner SSH stream</text><rect x="20" y="200" width="380" height="95" rx="8"/><text x="210.0" y="235.5" text-anchor="middle" font-size="19"><tspan x="210.0" dy="0">BWH</tspan><tspan x="210.0" dy="24">CC Fleet HTTPS/WSS broker</tspan></text><path class="edge" d="M210 295 V375" marker-end="url(#data-arrow)"/><text x="230" y="320" font-size="16">Opaque SSH bytes</text><rect x="20" y="390" width="380" height="95" rx="8"/><text x="210.0" y="413.5" text-anchor="middle" font-size="19"><tspan x="210.0" dy="0">Assigned Linux slot</tspan><tspan x="210.0" dy="24">forced entry → tmux</tspan><tspan x="210.0" dy="24">→ original claude</tspan></text><path class="edge" d="M210 485 V565" marker-end="url(#data-arrow)"/><text x="230" y="510" font-size="16">Claude HTTPS</text><text x="230" y="531" font-size="16">slot’s own account</text><rect x="20" y="580" width="380" height="95" rx="8"/><text x="210.0" y="627.5" text-anchor="middle" font-size="19"><tspan x="210.0" dy="0">Anthropic</tspan></text></svg><figcaption>Historical remote-terminal compatibility path, not the current native-local tool execution path.</figcaption></figure><details><summary>Preserved Mermaid source</summary><pre><code class="language-mermaid">flowchart LR
+  U[User terminal&lt;br/&gt;ccfleet]
+  B[BWH&lt;br/&gt;CC Fleet HTTPS/WSS broker]
+  S[Assigned Linux slot&lt;br/&gt;forced entry → tmux → original claude]
+  A[Anthropic]
+
+  U == TLS/WSS&lt;br/&gt;inner SSH stream ==&gt; B
+  B == opaque SSH bytes ==&gt; S
+  S == Claude HTTPS&lt;br/&gt;slot's own account ==&gt; A
+</code></pre></details>
+<p>The local command is a terminal transport, not a second Claude client. The
+outer layer is TLS/WSS between the computer and BWH. Inside it, OpenSSH is
+authenticated and encrypted between the computer and the slot. BWH selects the
+operator-configured node endpoint and relays bytes; it does not terminate SSH
+and therefore cannot inspect prompts or terminal output.</p>
+<p>The slot host key is returned at pairing and written to a device-specific
+<code>known_hosts</code> file. OpenSSH uses <code>StrictHostKeyChecking=yes</code>, so a later machine
+or routing substitution fails closed.</p>
+<h2 id="pairing">Pairing</h2>
+<ol>
+<li>A signed-in holder requests a pairing code for a held, active slot.</li>
+<li>The server creates a high-entropy <code>ccf_pair_…</code> value, stores only its
+SHA-256 hash, and expires it after ten minutes.</li>
+<li><code>ccfleet login</code> generates a local Ed25519 key pair and exchanges the code
+and public key at <code>/api/cli/register</code>.</li>
+<li>Registration consumes the pairing code atomically and returns:
+<ul>
+<li>a random <code>ccf_dev_…</code> access token;</li>
+<li>the assigned slot id, display name and Unix user;</li>
+<li>the public WSS endpoint;</li>
+<li>the slot machine's SSH host key.</li>
+</ul>
+</li>
+<li>The server stores only the device-token hash, public key, label,
+fingerprint and timestamps. The private key remains on the paired computer.</li>
+<li>Machine desired state contains public keys only. The agent installs them in
+<code>/etc/ccfleet/authorized_keys/&lt;unix-user&gt;</code>, outside the holder-writable home.</li>
+</ol>
+<p>A slot supports at most ten paired devices. Pairing codes are single-use.
+Removing a device deletes its server row, closes an already-open broker stream
+and removes its public key at the next machine convergence. Releasing,
+unholding or removing the slot deletes all pairings and devices immediately on
+the server; releasing sends an empty key set before a wipe attempt.</p>
+<h2 id="connection">Connection</h2>
+<p><code>ccfleet</code> chooses the active local profile and starts OpenSSH with a
+<code>ProxyCommand</code> that invokes <code>ccfleet proxy</code>. The proxy performs an authenticated
+WebSocket upgrade to <code>/api/cli/connect</code> and carries binary SSH bytes.</p>
+<p>The broker:</p>
+<ul>
+<li>hashes and resolves the device token;</li>
+<li>verifies the device, slot, holder, slot state, node state and fixed endpoint;</li>
+<li>never accepts a host or port from the client;</li>
+<li>opens one TCP connection to the configured node endpoint;</li>
+<li>forwards complete, bounded, unfragmented binary WebSocket frames;</li>
+<li>handles ping, pong and close frames;</li>
+<li>stops both directions when either side closes.</li>
+</ul>
+<p>The client asks OpenSSH for a PTY and authenticates as the assigned slot Unix
+user. Each installed key has these restrictions:</p>
+<pre><code class="language-text">command=&quot;/usr/local/lib/ccfleet/slot-entry.sh&quot;,no-agent-forwarding,
+no-port-forwarding,no-X11-forwarding,no-user-rc
+</code></pre>
+<p>The sshd <code>Match Group ccfleet-slots</code> block independently sets the same
+<code>ForceCommand</code>, disables forwarding and reads keys only from the root-controlled
+directory. A slot can use shell tools through Claude Code but cannot replace
+its own SSH authorization or escape device revocation.</p>
+<p>sshd reads an <code>AuthorizedKeysFile</code> using the target account's credentials, so
+the path is traversable/readable (<code>/etc/ccfleet</code> 0711, key directory 0755,
+public-key files 0644) but root-owned and never holder-writable. The adjacent
+machine token is atomically replaced as a root-only 0600 file.</p>
+<p>Debian treats the shadow marker created by <code>adduser --disabled-password</code> as a
+locked account and may reject it before public-key authentication. Provisioning
+therefore assigns a random, discarded password hash; the slot Match block still
+sets both <code>PasswordAuthentication no</code> and <code>KbdInteractiveAuthentication no</code>.</p>
+<p><code>slot-entry.sh</code> rejects non-interactive sessions, normalizes unsupported
+<code>TERM</code> values, and accepts only a fixed
+<code>ccfleet-session ACTION NAME MODE MODEL EFFORT</code> request from the forced key.
+Names, modes, model syntax and effort levels are validated; arbitrary SSH
+commands remain impossible. The default changes to <code>~/workspace</code> and executes:</p>
+<pre><code class="language-bash">tmux new-session -A -s ccfleet -c &quot;$HOME/workspace&quot; \
+  &quot;$HOME/.local/bin/claude&quot; --dangerously-skip-permissions --model opus --effort max
+</code></pre>
+<p>This gives the original Claude Code interface while preventing the transport
+key from becoming a general-purpose SSH key. Shell commands remain available
+through Claude Code's ordinary tool execution inside the slot.</p>
+<p>The hosted session deliberately bypasses Claude Code permission prompts. This
+does not grant sudo or cross the slot's Linux-user boundary, but it does allow
+Claude to act without confirmation on every file and network capability the
+slot user already has.</p>
+<p>Users may create named tmux sessions with a supported permission mode, a safe
+model token and an effort of <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>, or
+<code>ultracode</code>. The original Claude interface's <code>/model</code> and <code>/effort</code> controls can
+change a running conversation. <code>open</code> is idempotent for reconnect, <code>new</code> refuses
+an existing name, and <code>restart</code> explicitly ends the current Claude process.
+Every action remains inside the forced entrypoint. Four-field requests from the
+previous client remain valid and use the slot defaults.</p>
+<h2 id="reconnection">Reconnection</h2>
+<p>The tmux session belongs to the slot, not the network connection. On an SSH
+transport failure, the local client retries for up to ten minutes with bounded
+backoff. A new connection attaches to the same <code>ccfleet</code> session. Intentional
+Claude exit returns normally and is not turned into a reconnect loop.</p>
+<h2 id="trust-boundaries">Trust boundaries</h2>
+<h3 id="user-computer">User computer</h3>
+<p>Stores, mode <code>0600</code>:</p>
+<ul>
+<li>one private SSH key per paired profile;</li>
+<li>the pinned host key;</li>
+<li>the CC Fleet device access token and slot metadata.</li>
+</ul>
+<p>It stores no Claude OAuth credential and does not set <code>ANTHROPIC_BASE_URL</code>,
+<code>ANTHROPIC_AUTH_TOKEN</code>, <code>ANTHROPIC_API_KEY</code> or <code>CLAUDE_CODE_OAUTH_TOKEN</code>.</p>
+<h3 id="bwh-broker">BWH broker</h3>
+<p>Can observe that a device connected, which slot it resolved to and the traffic
+timing/volume available to any relay. It stores device metadata and token
+hashes. Because SSH is the inner layer, it cannot read the terminal content.</p>
+<p>BWH is still trusted for availability and routing: it can refuse a connection
+or point a slot at the wrong endpoint. Host-key pinning turns endpoint
+substitution into a visible connection failure rather than silently exposing a
+session.</p>
+<h3 id="slot-machine">Slot machine</h3>
+<p>Intentionally decrypts the terminal because it runs Claude Code. It holds the
+Claude credential, project files and tool processes. The machine administrator
+has root and can technically inspect them; no transport design can hide data
+from the computer that executes it.</p>
+<p>Linux users isolate ordinary slot processes from one another, but they are not
+a boundary against root or a kernel compromise.</p>
+<h3 id="anthropic">Anthropic</h3>
+<p>Receives the ordinary traffic emitted by the original Claude Code process on
+the slot under the account signed in there. Network, host and application
+metadata generated by Claude Code are therefore the slot's. The user's browser
+is still involved when the user completes Anthropic's login flow, and Anthropic
+handles that browser interaction under its own policies.</p>
+<h2 id="control-plane">Control plane</h2>
+<p>Machine agents post authenticated heartbeats and request desired state. The
+server responds with per-slot lifecycle, version, sign-in operations and the
+public keys of currently paired devices. Node bearer tokens and device tokens
+are stored as SHA-256 hashes.</p>
+<p>The customer website provides:</p>
+<ul>
+<li>Google sign-in to CC Fleet;</li>
+<li>claim, release, rename and account-change lifecycle;</li>
+<li>the Claude sign-in link/code exchange;</li>
+<li>CLI pairing and per-device revocation;</li>
+<li>quota and health summaries;</li>
+<li>public product, privacy, terms and status pages.</li>
+</ul>
+<p>The operator console manages accounts, allowances, payments, nodes, slots and
+alerts. It does not expose Claude credentials or pairing secrets.</p>
+<h2 id="slot-lifecycle">Slot lifecycle</h2>
+<figure class="diagram"><svg viewBox="0 0 420 740" role="img" aria-labelledby="lifecycle-title lifecycle-desc"><title id="lifecycle-title">Slot lifecycle</title><desc id="lifecycle-desc">Initial state to free; holder claims to claiming; machine creates user to claimed; Claude login succeeds to active; holder or operator releases to releasing; machine confirms user absent back to free.</desc><defs><marker id="state-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z"/></marker></defs><circle cx="142" cy="12" r="7" fill="var(--ink)"/><path class="edge" d="M142 20V43" marker-end="url(#state-arrow)"/><rect x="20" y="50" width="245" height="70" rx="8"/><text x="142.5" y="85.0" text-anchor="middle" font-size="19"><tspan x="142.5" dy="0">free</tspan></text><path class="edge" d="M265 85H275V215H269" marker-end="url(#state-arrow)"/><text x="18" y="154" font-size="16">holder claims</text><rect x="20" y="180" width="245" height="70" rx="8"/><text x="142.5" y="215.0" text-anchor="middle" font-size="19"><tspan x="142.5" dy="0">claiming</tspan></text><path class="edge" d="M265 215H275V345H269" marker-end="url(#state-arrow)"/><text x="18" y="284" font-size="16">machine creates user</text><rect x="20" y="310" width="245" height="70" rx="8"/><text x="142.5" y="345.0" text-anchor="middle" font-size="19"><tspan x="142.5" dy="0">claimed</tspan></text><path class="edge" d="M265 345H275V475H269" marker-end="url(#state-arrow)"/><text x="18" y="414" font-size="16">Claude login succeeds</text><rect x="20" y="440" width="245" height="70" rx="8"/><text x="142.5" y="475.0" text-anchor="middle" font-size="19"><tspan x="142.5" dy="0">active</tspan></text><path class="edge" d="M265 475H275V605H269" marker-end="url(#state-arrow)"/><text x="18" y="544" font-size="16">holder/operator releases</text><rect x="20" y="570" width="245" height="70" rx="8"/><text x="142.5" y="605.0" text-anchor="middle" font-size="19"><tspan x="142.5" dy="0">releasing</tspan></text><path class="edge" d="M142 640V690H382V85H269" marker-end="url(#state-arrow)"/><text x="280" y="330" font-size="16">machine</text><text x="280" y="354" font-size="16">confirms</text><text x="280" y="378" font-size="16">user absent</text></svg><figcaption>All original states, transitions and transition labels are preserved.</figcaption></figure><details><summary>Preserved Mermaid source</summary><pre><code class="language-mermaid">stateDiagram-v2
+  [*] --&gt; free
+  free --&gt; claiming: holder claims
+  claiming --&gt; claimed: machine creates user
+  claimed --&gt; active: Claude login succeeds
+  active --&gt; releasing: holder/operator releases
+  releasing --&gt; free: machine confirms user absent
+</code></pre></details>
+<ul>
+<li>Pairing is allowed only in <code>active</code>.</li>
+<li>A slot's accepted Claude account fingerprint is bound after first login.</li>
+<li>“Sign in again” keeps that fingerprint; “Change account” deliberately
+replaces it and is rate-limited.</li>
+<li>Releasing closes device transports and revokes keys before the asynchronous
+wipe completes, including when that wipe fails and must retry.</li>
+<li>A free slot has no holder, pairings, devices or account binding.</li>
+</ul>
+<h2 id="persistence-and-schema">Persistence and schema</h2>
+<p>Relevant tables:</p>
+<ul>
+<li><code>nodes</code>: fixed BWH-reachable access host, port and SSH host key;</li>
+<li><code>slots</code>: holder, Unix user, lifecycle, display name and Claude-account
+binding;</li>
+<li><code>cli_pairings</code>: pairing-token hash, holder, slot and expiry;</li>
+<li><code>cli_devices</code>: token hash, public key, fingerprint, label and timestamps;</li>
+<li><code>heartbeats</code>, <code>alerts</code>, <code>slot_logins</code>, <code>claude_updates</code>, accounts and payment
+records for the existing control plane.</li>
+</ul>
+<p>SQLite writes use the store transaction lock. Pairing consumption and device
+creation occur in one write transaction, which prevents replay races.</p>
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li>No account pool or automatic account selection.</li>
+<li>No model API compatible endpoint for customers.</li>
+<li>No Claude credential on BWH or the local computer.</li>
+<li>No local-project mount or implicit background synchronization.</li>
+<li>No customer-visible SSH workflow.</li>
+<li>No promise that a slot is private from its root administrator.</li>
+</ul>
+<p>Legacy owner-node, Remote Control and pass-through gateway code remains for
+owner deployments. Hosted customer slots disable the old Remote Control unit;
+none of it is presented as an alternative product mode.</p>
+</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

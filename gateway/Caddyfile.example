@@ -18,7 +18,7 @@
 # with ECONNRESET and restarting it made it succeed again (so the gateway really
 # was in the path), and neither ANTHROPIC_API_KEY nor ANTHROPIC_AUTH_TOKEN was
 # set, so nothing overrode the subscription and the saved OAuth login is what
-# authenticated. See gateway/README.md.
+# authenticated. See gateway/README.html.
 
 gw-a.example.com {
     @keyed header X-Gw-Key {env.GW_KEY_A}

@@ -12,6 +12,7 @@ from ccfleetd import customer_docs, usersite
 from ccfleetd.config import Config
 from ccfleetd.store import Store
 from tests.test_cli_access import active_slot
+from tests.test_html_document_preservation import read_document
 
 NOW = 1_800_000_000.0
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,8 +154,8 @@ def test_public_privacy_covers_local_job_retention_without_hiding_root_access():
 
 
 def test_repository_guides_include_the_new_controls_and_preserve_privacy_boundaries():
-    for path in (ROOT / "README.md", ROOT / "docs/local-relay.md"):
-        source = path.read_text()
+    for path in (ROOT / "README.html", ROOT / "docs/local-relay.html"):
+        source = read_document(path).text
         for command in ("ccfleet start", "ccfleet sessions", "ccfleet doctor --privacy",
                         "ccfleet status --json", "ccfleet preferences set", "ccfleet update",
                         "ccfleet update --rollback", "ccfleet jobs stop JOB_ID"):

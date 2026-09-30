@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.html LICENSE ./
+COPY docs ./docs
+COPY gateway/README.html ./gateway/README.html
 COPY ccfleetd ./ccfleetd
 COPY ccfleet_agent ./ccfleet_agent
 RUN pip install --no-cache-dir . && useradd --system --uid 10001 ccfleet && mkdir -p /data && chown ccfleet /data

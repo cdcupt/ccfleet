@@ -24,7 +24,7 @@ width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(
 padding:10px 8px}th{font-size:13px;color:var(--muted)}
 </style>
 </head>
-<body><main class="wrap">
+<body><main class="wrap"><div class="card note" id="historical-guidebook"><strong>Historical hosted-terminal guidebook.</strong><p>The dated workflow below is retained for compatibility and operator reference; it is not the current primary native-local experience. Read <a href="local-relay.html">local Claude setup and migration</a>, <a href="../README.html">the current overview</a>, and <a href="index.html">the HTML library</a> first.</p></div>
 <p class="eyebrow">CC Fleet · guidebook · 2026-09-28</p>
 <h1>Claude Code anywhere, one account per slot</h1>
 <p class="lead">CC Fleet hosts the original Claude Code CLI in a private Linux slot. A
@@ -88,7 +88,7 @@ endpoint. It does not terminate the inner SSH session, so it cannot read termina
 The client pins the slot machine's SSH host key.</p>
 
 <h2 id="privacy">Privacy boundary</h2>
-<table><thead><tr><th>Place</th><th>What it holds or can observe</th></tr></thead><tbody>
+<div class="table-scroll" style="overflow-x:auto;max-width:100%"><table><thead><tr><th>Place</th><th>What it holds or can observe</th></tr></thead><tbody>
 <tr><td>User computer</td><td>A CC Fleet device token, private SSH key, pinned host key and
 terminal data. No Claude credential.</td></tr>
 <tr><td>BWH broker</td><td>The device-to-slot mapping and connection metadata. It relays the
@@ -97,7 +97,7 @@ inner encrypted stream and cannot read it.</td></tr>
 Claude Code runs.</td></tr>
 <tr><td>Anthropic</td><td>The ordinary traffic and metadata sent by Claude Code on the slot, under
 the customer's own account.</td></tr>
-</tbody></table>
+</tbody></table></div>
 <p>The slot machine's administrator has root and can technically inspect slot files or
 processes. Transport encryption does not hide data from the computer that executes it.</p>
 
@@ -170,7 +170,7 @@ or an SSH command.</li>
 </ul>
 
 <h2 id="commands">Daily commands</h2>
-<table><thead><tr><th>Command</th><th>Purpose</th></tr></thead><tbody>
+<div class="table-scroll" style="overflow-x:auto;max-width:100%"><table><thead><tr><th>Command</th><th>Purpose</th></tr></thead><tbody>
 <tr><td><code>ccfleet</code></td><td>Open or resume the active slot.</td></tr>
 <tr><td><code>ccfleet login</code></td><td>Pair this computer with a code from the slot page.</td></tr>
 <tr><td><code>ccfleet list</code></td><td>List locally paired slots.</td></tr>
@@ -179,7 +179,7 @@ or an SSH command.</li>
 <tr><td><code>ccfleet new NAME --model MODEL --effort LEVEL --mode MODE</code></td><td>Start a separate named session.</td></tr>
 <tr><td><code>ccfleet attach --session NAME</code></td><td>Resume a named session.</td></tr>
 <tr><td><code>ccfleet restart --session NAME [choices]</code></td><td>Deliberately replace its current Claude process.</td></tr>
-</tbody></table>
+</tbody></table></div>
 
 <h2 id="recovery">Recovery</h2>
 <ul>
@@ -195,6 +195,6 @@ the broker and reconnect.</li>
 error; inspect the machine and its SSH reachability from BWH.</li>
 </ul>
 
-<p class="lead">Detailed architecture lives in <a href="design.md">design.md</a>; operator
-procedures live in <a href="runbooks.md">runbooks.md</a>.</p>
+<p class="lead">Detailed architecture lives in <a href="design.html">design.html</a>; operator
+procedures live in <a href="runbooks.html">runbooks.html</a>.</p>
 </main></body></html>

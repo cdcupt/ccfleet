@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Runbooks · CC Fleet</title><style>
+:root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent);text-underline-offset:.18em}a:hover{color:#251369}
+.shell{max-width:1120px;margin:0 auto;padding:26px 22px 64px}.doc-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;font-size:14px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px}.contents{align-self:start;position:sticky;top:20px;font-size:13px;max-height:85vh;overflow:auto}
+.contents ol{list-style:none;padding:0}.contents li{margin:7px 0}.contents .level-3{padding-left:12px}
+main{min-width:0}h1{font-size:clamp(30px,5vw,46px);line-height:1.12;letter-spacing:-.03em;margin:0 0 24px}
+h2{font-size:25px;line-height:1.25;margin:38px 0 14px}h3{font-size:19px;line-height:1.3;margin:25px 0 12px}
+p,li{overflow-wrap:break-word}p{margin:14px 0}code,pre{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--soft);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:8px;overflow:auto;max-width:100%}
+pre code{padding:0;background:none;white-space:pre;overflow-wrap:normal}blockquote{border-left:4px solid var(--accent);margin:20px 0;padding:2px 18px;color:var(--muted)}
+.table-scroll{overflow-x:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:620px}th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:break-word}th{background:var(--soft);font-size:14px}
+tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-left:4px solid var(--accent);padding:14px 18px;margin-bottom:22px;background:var(--soft)}
+.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.catalog a{display:block;padding:18px;border:1px solid var(--line);border-radius:8px;text-decoration:none}
+.catalog strong{display:block;font-size:18px;color:var(--ink)}.catalog span{display:block;font-size:14px;color:var(--muted);margin-top:7px}
+footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
+@media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#naming-machines-and-slots">Naming machines and slots</a></li><li class="level-2"><a href="#add-an-owner">Add an owner</a></li><li class="level-2"><a href="#add-a-shared-machine">Add a shared machine</a></li><li class="level-2"><a href="#timers-never-run-after-setup">Timers never run after setup</a></li><li class="level-2"><a href="#credentials_missing-or-token_expired">credentials_missing or token_expired</a></li><li class="level-2"><a href="#token_stale">token_stale</a></li><li class="level-2"><a href="#no_heartbeat">no_heartbeat</a></li><li class="level-2"><a href="#version_mismatch">version_mismatch</a></li><li class="level-2"><a href="#staged-upgrade-of-the-fleet">Staged upgrade of the fleet</a></li><li class="level-2"><a href="#egress_changed">egress_changed</a></li><li class="level-2"><a href="#disk_high">disk_high</a></li><li class="level-2"><a href="#remote_control_down-legacy-owner-nodes-only">remote_control_down (legacy owner nodes only)</a></li><li class="level-2"><a href="#slot_wipe_faileduser">slot_wipe_failed:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_occupieduser">slot_occupied:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_missinguser">slot_missing:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_provision_faileduser">slot_provision_failed:&lt;user&gt;</a></li><li class="level-2"><a href="#quota_high_session-or-quota_high_week">quota_high_session or quota_high_week</a></li><li class="level-2"><a href="#account_elsewhere-or-account_elsewhereuser">account_elsewhere or account_elsewhere:&lt;user&gt;</a></li><li class="level-2"><a href="#account_changeduser">account_changed:&lt;user&gt;</a></li><li class="level-2"><a href="#a-holder-wants-their-slot-on-another-claude-account">A holder wants their slot on another Claude account</a></li><li class="level-2"><a href="#rebuild-a-node">Rebuild a node</a></li><li class="level-2"><a href="#rename-a-machine">Rename a machine</a></li><li class="level-2"><a href="#count-an-owners-own-node-as-their-slot-legacy">Count an owner&#x27;s own node as their slot (legacy)</a></li><li class="level-2"><a href="#keep-a-machine-for-one-account">Keep a machine for one account</a></li><li class="level-2"><a href="#remove-an-owner">Remove an owner</a></li><li class="level-2"><a href="#rotate-the-admin-token">Rotate the admin token</a></li><li class="level-2"><a href="#quarterly">Quarterly</a></li></ol></nav></details></aside><main><h1 id="runbooks">Runbooks</h1>
+<p>Short procedures for the situations the dashboard will put in front of you.
+Commands marked <em>node</em> run as the owner on the node; <em>server</em> runs where
+<code>ccfleetd</code> lives.</p>
+<h2 id="naming-machines-and-slots">Naming machines and slots</h2>
+<p>One machine is one slot, and one name per machine, used everywhere: its node
+id, its slot's id and its hostname. Named by role:</p>
+<ul>
+<li><code>&lt;operator&gt;-N</code> for the operator's own machines, owner nodes and shared
+machines kept for their own account alike: <code>erik-1</code>, <code>erik-2</code>;</li>
+<li><code>pool-N</code> for shared machines offered to customers: <code>pool-1</code>, <code>pool-2</code>.</li>
+</ul>
+<p>A shared machine's one slot takes the machine's name (<code>pool-1</code> on <code>pool-1</code>),
+and its Linux user is <code>slot01</code>. When somebody claims it, the slot gets a
+neutral name, <code>slot-4821</code> (random digits nobody answers to yet), never anything
+from their address: Claude Code can report the hostname to Anthropic
+(Erik, 2026-09-24). The holder renames it on their page, and
+<code>ccfleetd slot name &lt;slot&gt; [&lt;name&gt;]</code> does it for them (no name: a fresh neutral
+one). A handle set with <code>ccfleetd account handle &lt;email&gt; &lt;handle&gt;</code>, only at the
+person's request, names their slots <code>&lt;handle&gt;-&lt;n&gt;</code> instead (<code>alice-1</code>, then
+<code>alice-2</code>). The machine takes the name as its hostname on its next run; the
+console marks the machine &quot;hostname pending&quot; until it has. When the wipe that frees the slot completes, the name
+goes and the slot is called by its id again.</p>
+<p>Set the hostname when the machine is added, the way step 4 of
+<a href="#rename-a-machine">Rename a machine</a> does, so a provider's serial-number
+hostname never reaches the picker. A fleet already running under other names
+moves onto these with <a href="#rename-a-machine">Rename a machine</a>, held slots included.</p>
+<h2 id="add-an-owner">Add an owner</h2>
+<ol>
+<li><em>server</em>: <code>ccfleetd node add &lt;node-id&gt; --owner &lt;name&gt; --region &lt;region&gt; [--rc-expected]</code>
+and hand the printed three lines to the owner over a private channel.</li>
+<li>New VPS in a supported region. <em>root</em>: <code>bootstrap.sh &lt;owner&gt; &lt;pubkey&gt;</code>.</li>
+<li><em>node</em>: <code>git clone https://github.com/cdcupt/ccfleet.git &amp;&amp; ccfleet/node/setup-owner.sh</code>,
+fill <code>~/.config/ccfleet/agent.env</code>, <code>chmod 600</code> it.</li>
+<li><em>node</em>: log in over SSH, which attaches you to the persistent session, then <code>claude</code>, <code>/login</code>, paste the code, <code>/status</code>.</li>
+<li><em>node</em>: <code>ccfleet-agent --print</code>, then <code>systemctl --user start ccfleet-agent.service</code>.</li>
+<li><em>server</em>: <code>ccfleetd node pin &lt;node-id&gt; &lt;version&gt;</code> with the version from <code>/status</code>.</li>
+</ol>
+<h2 id="add-a-shared-machine">Add a shared machine</h2>
+<p>A shared machine carries one slot: its own Linux user with its own Claude
+sign-in, under a name its holder chooses. <em>root</em> here means root on the new
+machine; <em>laptop</em> is wherever your operator SSH key lives.</p>
+<p><strong>Pick the box.</strong> A KVM VPS running Debian or Ubuntu with at least 2 GiB of RAM.
+LXC and OpenVZ containers are unsuitable: every slot needs its own systemd user
+manager. Size it from what a slot really uses (measured 2026-09-23 on a
+signed-in slot): about 420 MiB idle, about 665 MiB while
+a session runs, and about 225 MB of disk for Claude Code; the OS and the machine
+agent take about 400 MiB. So a 2 GiB box carries its one slot with room to
+spare. Below 4 GiB, add a 2 GiB swap file as a cushion for spikes.</p>
+<ol>
+<li><em>laptop</em>: make a key for this machine and install it for root, e.g.
+<code>ssh-copy-id -i &lt;key&gt; root@&lt;machine&gt;</code> while password login still works.</li>
+<li><strong>Prove key login before anything turns passwords off.</strong> Some provider images
+ship with key login disabled (<code>PubkeyAuthentication no</code> at the end of
+<code>/etc/ssh/sshd_config</code>). <em>root</em>: <code>sshd -T | grep -E '^(pubkeyauthentication|passwordauthentication) '</code>;
+if key login is off, set <code>PubkeyAuthentication yes</code> there, <code>sshd -t</code>, reload
+<code>ssh</code>, and log in again with the key before going on.</li>
+<li><em>root</em>: harden with <code>bootstrap.sh</code>, not <code>install.sh</code> (that one turns the box
+into a single owner's node, whose agent <code>machine-setup.sh</code> refuses to run
+beside): <code>git clone https://github.com/cdcupt/ccfleet.git &amp;&amp; ccfleet/node/bootstrap.sh &lt;your-login&gt; &quot;&lt;your public key&gt;&quot;</code>.
+It gives you a login with sudo, key-only SSH, a firewall and unattended
+security upgrades, and it stops, leaving SSH as it was, if sshd would not
+end up with keys on and passwords off. Then name it and put its clock on
+UTC: <code>hostnamectl set-hostname &lt;machine&gt; &amp;&amp; timedatectl set-timezone Etc/UTC</code>.
+Claude Code can tell Anthropic the machine's time zone; UTC says nothing
+about where the slot's holder is, and the pages show times in each viewer's
+own zone.</li>
+<li><em>root</em>, only below 4 GiB of RAM:
+<code>fallocate -l 2G /swapfile &amp;&amp; chmod 600 /swapfile &amp;&amp; mkswap /swapfile &amp;&amp; swapon /swapfile</code>,
+then <code>echo '/swapfile none swap sw 0 0' &gt;&gt; /etc/fstab</code> and
+<code>echo vm.swappiness=10 &gt; /etc/sysctl.d/99-ccfleet-swap.conf &amp;&amp; sysctl -p /etc/sysctl.d/99-ccfleet-swap.conf</code>.</li>
+<li><em>server</em>: <code>ccfleetd node add &lt;machine&gt; --owner &lt;your-login&gt; --region &lt;region&gt;</code>. The
+token it prints is shown once; keep it for step 8 and nowhere else.</li>
+<li><em>server</em>: <code>ccfleetd node pin &lt;machine&gt; latest</code>, the Claude Code channel the
+machine's slots are meant to follow. Slots start on <code>opus</code>, which is the
+newest Opus only on a Claude Code that knows it.</li>
+<li><em>server</em>: <code>ccfleetd slot add &lt;machine&gt; --machine &lt;machine&gt; --unix-user slot01</code>.
+Its capacity stays 1: a second slot is refused because the machine has one
+hostname and one advertised access endpoint. Do not
+create the Linux user yourself: the machine makes it when somebody claims the
+slot and wipes it when they give it back.</li>
+<li><em>root</em>:
+<code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh | bash -s -- --server &lt;fleet url&gt; --node &lt;machine&gt; --token &lt;token&gt;</code>.
+This also installs <code>git</code>, <code>gh</code>, <code>rsync</code> and the forced CC Fleet entrypoint,
+creates the root-controlled <code>/etc/ccfleet/authorized_keys</code> directory, and
+validates an sshd match block that forces that entrypoint and disables
+agent, port and X11 forwarding, tunnels and user rc files for the
+<code>ccfleet-slots</code> group before reloading SSH.</li>
+<li><em>root</em>: copy <code>/etc/ssh/ssh_host_ed25519_key.pub</code> to a root-owned file on the
+BWH server over an authenticated operator channel. <em>server</em>: configure the
+endpoint that only BWH uses:
+<code>ccfleetd node access &lt;machine&gt; --host &lt;address-reachable-from-bwh&gt; --port 22 --host-key-file &lt;copied-public-host-key&gt;</code>.
+Do not put the node address on the customer page.</li>
+<li><em>server</em>: within a couple of minutes <code>ccfleetd slot list --machine &lt;machine&gt;</code>
+shows its slot <code>free</code> and <code>on machine</code> <code>no</code>: the machine itself has
+confirmed it is empty, which is what makes it claimable.</li>
+</ol>
+<p>Prove the machine is closed before anyone is given a slot on it:</p>
+<ul>
+<li><em>laptop</em>: <code>ssh -o PubkeyAuthentication=no root@&lt;machine&gt;</code> is refused with
+<code>Permission denied (publickey)</code>.</li>
+<li><em>root</em>: <code>sshd -T</code> reports <code>pubkeyauthentication yes</code> and <code>passwordauthentication no</code>.</li>
+<li><em>root</em>: <code>sshd -T -C user=slot01,host=localhost,addr=127.0.0.1</code> (after the first
+slot has been provisioned) reports the forced <code>slot-entry.sh</code>, the
+root-controlled <code>authorizedkeysfile</code>, <code>allowagentforwarding no</code>,
+<code>passwordauthentication no</code>, <code>kbdinteractiveauthentication no</code>,
+<code>allowtcpforwarding no</code>, <code>x11forwarding no</code>, <code>permittunnel no</code> and <code>permituserrc no</code>.</li>
+<li><em>root</em>: <code>passwd -S slot01</code> reports <code>P</code>, not <code>L</code>. The password is random and
+discarded; the sshd checks above are what keep password login impossible.</li>
+<li><em>root</em>: <code>/etc/ccfleet</code> is root-owned <code>0711</code>, its <code>authorized_keys</code> directory
+<code>0755</code>, and each public-key file <code>0644</code>; none is holder-writable.
+<code>/etc/ccfleet/agent.env</code> remains root-owned <code>0600</code>.</li>
+<li><em>root</em>: <code>ufw status</code> reports <code>Status: active</code>, and <code>systemctl is-active ccfleet-machine.timer</code> says <code>active</code>.</li>
+</ul>
+<p>Slot holders are not given an SSH workflow or the node address. They install
+the <code>ccfleet</code> command, pair a device from <code>/account</code>, and run <code>ccfleet</code>. Under
+the surface the client opens SSH through the BWH WebSocket broker. Every key
+has a forced command and forwarding disabled. After a test pairing, inspect
+<code>/etc/ccfleet/authorized_keys/slot01</code>: it must name <code>slot-entry.sh</code> and the
+no-forwarding options. The slot's own <code>~/.ssh/authorized_keys</code> is not an sshd
+key source. Remove the device from the page and confirm the managed file is
+removed on the next machine-agent cycle.</p>
+<p>The packaged <code>ccfleet-shell.service</code> and <code>slot-entry.sh</code> both launch Claude with
+<code>--dangerously-skip-permissions</code>; the default unit also passes <code>--model opus --effort max</code>.
+On rollout, the slot agent replaces an older unit and ends the old <code>ccfleet</code> tmux session once;
+the holder's next <code>ccfleet</code> command creates the new default session.
+Verify the slot still has no sudo or privileged group before calling that safe enough to operate.
+The forced entrypoint also accepts only <code>ccfleet-session</code> with a validated action, session
+name, Claude permission mode, model and effort. Test that arbitrary commands are rejected, then
+test <code>ccfleet new research --model fable --effort xhigh --mode plan</code>, <code>ccfleet attach --session research</code>, in-session <code>/model</code> and <code>/effort</code>, and an explicit <code>restart</code>.</p>
+<p>For a computer configured by the old <code>ccfleet-connect</code> flow, have the holder create a fresh
+pairing code and run:</p>
+<p><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --migrate</code></p>
+<p>The migration pairs first and calls the installed legacy command's <code>--remove</code> only after
+success. It cannot revoke the Anthropic setup-token; the holder does that in their Anthropic
+account if the token is no longer used anywhere.</p>
+<p>These steps are deliberately mechanical. An operator can put exactly them in a
+private script that takes an address and a name, reads the root password once
+from a prompt, and re-runs safely, so the next machine is one command.</p>
+<h2 id="timers-never-run-after-setup">Timers never run after setup</h2>
+<p><code>setup-owner.sh</code> now refuses to continue when the owner has no working per-user
+systemd manager, because enabling a timer there looks successful and then
+nothing ever fires. The usual cause is a minimal image without <code>libpam-systemd</code>,
+so <code>pam_systemd.so</code> is absent and <code>XDG_RUNTIME_DIR</code> is never set.</p>
+<ol>
+<li><em>node</em>: <code>systemctl status user@$(id -u).service</code> and
+<code>journalctl -u user@$(id -u).service -n 20</code>.</li>
+<li><em>root</em>: <code>apt-get install -y libpam-systemd &amp;&amp; loginctl enable-linger &lt;owner&gt;</code>.
+This edits PAM, so keep a second SSH session open while you do it.</li>
+<li>Log out, back in, re-run <code>setup-owner.sh</code>.</li>
+</ol>
+<h2 id="credentials_missing-or-token_expired"><code>credentials_missing</code> or <code>token_expired</code></h2>
+<p>The owner needs to sign in again; nobody else can do it for them.</p>
+<ol>
+<li>The holder opens <code>/account</code>, presses <strong>Sign in again</strong>, completes Anthropic's
+browser flow and pastes the code back into the page.</li>
+<li>The machine applies the result to the slot; nobody else handles the
+credential.</li>
+<li>The alert closes on the next heartbeat.</li>
+</ol>
+<h2 id="token_stale"><code>token_stale</code></h2>
+<p>Usually the slot was simply idle for a day (Claude Code refreshes on use). Run
+<code>ccfleet</code>; if the warning persists after use, treat it as <code>token_expired</code>.</p>
+<h2 id="no_heartbeat"><code>no_heartbeat</code></h2>
+<ol>
+<li><em>server</em>: <code>ccfleetd node list</code> to see the last time it was heard from.</li>
+<li><em>node</em>: <code>systemctl --user status ccfleet-agent.timer ccfleet-agent.service</code>,
+<code>journalctl --user -u ccfleet-agent.service -n 50</code>.</li>
+<li>Common causes: linger disabled (<code>loginctl enable-linger &lt;owner&gt;</code> as root),
+wrong token after a rotation, VPS down.</li>
+</ol>
+<h2 id="version_mismatch"><code>version_mismatch</code></h2>
+<p>The pin is now authoritative: an agent that finds its node on a different
+version installs the pinned one and reports the result. So this alert means the
+node has not reconciled yet, or tried and failed.</p>
+<ol>
+<li><em>server</em>: check the node's row. A failed attempt is shown under the version
+with the installer's own error.</li>
+<li>A node that simply has not caught up closes the alert on its next heartbeat.</li>
+<li>Repeated failures back off for an hour between attempts, so a node that
+cannot install the pinned version alerts rather than retrying in a loop.</li>
+</ol>
+<blockquote>
+<p><strong>Upgrading a node by hand no longer sticks.</strong> While a pin is set, the next
+heartbeat installs the pinned version over whatever you just installed. Change
+the pin instead; the node follows. To work on a node outside the pin, either
+clear the pin or run its agent with <code>--no-reconcile</code>.</p>
+</blockquote>
+<h2 id="staged-upgrade-of-the-fleet">Staged upgrade of the fleet</h2>
+<p>The pin drives the upgrade, so stage it one node at a time and let each one
+prove itself before the next.</p>
+<ol>
+<li><em>server</em>: <code>ccfleetd node pin &lt;first-node&gt; &lt;new version&gt;</code>. Pick the node you
+would least mind losing for an hour.</li>
+<li>Wait a full heartbeat interval and confirm the row shows the new version with
+no failure. Then work a normal session on it for a day.</li>
+<li>Pin the remaining nodes. Never pin them all at once: a bad release would take
+the whole fleet in the same five minutes.</li>
+</ol>
+<p>A node can also be told to track a channel — <code>ccfleetd node pin &lt;node&gt; latest</code>
+or <code>stable</code>. The server reads both channels' release numbers from Anthropic
+about hourly and sends them with every reply, and the node installs a new
+release at its next quiet moment, never during a sign-in. Without a number from
+the server it resolves the channel itself once a day. A channel pin never
+reports drift, because tracking it is what the pin asks for.</p>
+<h2 id="egress_changed"><code>egress_changed</code></h2>
+<p>Confirm with <em>node</em> <code>exitip</code>. If the provider moved the IP, nothing to do; the
+alert is informational and closes on the next heartbeat. If you did not expect
+it, check the VPS console for a rebuild or migration.</p>
+<h2 id="disk_high"><code>disk_high</code></h2>
+<p><em>node</em>: <code>du -sh ~/.claude ~/backups ~/projects 2&gt;/dev/null</code>; old backups
+rotate automatically (<code>CCFLEET_BACKUP_KEEP</code>); <code>~/.claude/debug</code> and
+<code>~/.claude/cache</code> are safe to delete.</p>
+<h2 id="remote_control_down-legacy-owner-nodes-only"><code>remote_control_down</code> (legacy owner nodes only)</h2>
+<p><em>node</em>: <code>systemctl --user restart claude-remote-control.service</code>, then
+<code>tmux -L ccfleet-rc attach -t remote-control</code> to read the reason. Remote Control needs a
+valid login; if it complains about eligibility, do the re-login runbook. The
+very first start must be interactive to accept the one-time prompt.</p>
+<p>Hosted customer slots disable and stop this legacy unit. Do not turn it back on;
+the supported customer path is the local <code>ccfleet</code> terminal.</p>
+<h2 id="slot_wipe_faileduser"><code>slot_wipe_failed:&lt;user&gt;</code></h2>
+<p>A slot was given back, or taken back, and removing its Linux user failed. It
+stays out of the pool, because only a finished wipe makes a slot free, and the
+machine agent tries again every 10 minutes by itself. The alert names the
+error. The usual cause is a process that outlived <code>pkill</code>; to see it, on the
+machine: <code>ps -u &lt;user&gt;</code>, and the agent's own account of it with
+<code>journalctl -u ccfleet-machine --since -1h</code>. Once the cause is gone, either
+wait for the next attempt or run it now as root:
+<code>/usr/local/lib/ccfleet/slot-remove.sh --slot &lt;user&gt;</code>. The slot turns free when
+the machine next reports the user absent.</p>
+<h2 id="slot_occupieduser"><code>slot_occupied:&lt;user&gt;</code></h2>
+<p>ccfleet's records say the slot is free, but the machine says its Linux user
+exists. It is not handed out while that is true: a user that should not exist
+may still hold the last person's files. Nobody made it through ccfleet, so it
+was made by hand, or the fleet's database was restored from before a claim.
+Look at what is in the home directory before anything else. A leftover slot
+comes off with <code>/usr/local/lib/ccfleet/slot-remove.sh --slot &lt;user&gt;</code> on the
+machine. If that refuses because the account is not a ccfleet slot, the name
+belongs to an account ccfleet did not make: leave that account alone, remove the
+slot here with <code>ccfleetd slot remove &lt;id&gt;</code> (it is free, so it may go), and
+declare it again under an unused name.</p>
+<h2 id="slot_missinguser"><code>slot_missing:&lt;user&gt;</code></h2>
+<p>Somebody holds the slot, and its Linux user has gone from the machine: removed
+by hand, or the machine was rebuilt. Their files went with it. Take the slot
+back in the console (it asks for the slot's id), tell the person, and let them
+claim again; the new slot is set up from scratch.</p>
+<h2 id="slot_provision_faileduser"><code>slot_provision_failed:&lt;user&gt;</code></h2>
+<p>Setting up a claimed slot failed, so the claim was given up and the slot is
+being wiped; the person can simply claim again. It is a warning, not a page,
+unless it repeats. Repeats mean the machine cannot make slots at all: read the
+error in the alert, then <code>journalctl -u ccfleet-machine --since -1h</code> on the
+machine. Disk space and a failed Claude Code install are the usual causes.</p>
+<h2 id="quota_high_session-or-quota_high_week"><code>quota_high_session</code> or <code>quota_high_week</code></h2>
+<p>The account's Claude usage window is 75% used (warn) or 90% (critical); the
+thresholds are <code>CCFLEET_QUOTA_WARN_PCT</code> and <code>CCFLEET_QUOTA_CRIT_PCT</code>. Nothing is
+broken and nothing on the node needs doing: the owner slows down or waits for
+the reset the message names. The windows belong to the Claude account, counted
+across every device it is used on, so the node is only where it was noticed. A
+reading older than two hours is ignored rather than alerted on.</p>
+<h2 id="account_elsewhere-or-account_elsewhereuser"><code>account_elsewhere</code> or <code>account_elsewhere:&lt;user&gt;</code></h2>
+<p>One Claude account is signed in on two live places at once: two slots, or a
+slot and a node. ccfleet keeps one account in one place, so the alert is raised
+on each place, and the message names the other. An owner's node carries it
+with nothing after the colon; a slot carries its Linux user.</p>
+<ol>
+<li>Find out whose account it is and which place should keep it. Usually one
+person signed a slot in with the account already on their own node.</li>
+<li>Sign it out of the other place. On an owner's node, the owner runs
+<code>claude auth logout</code> there, then signs that node in to its own account. A
+slot on the wrong account moves to another of its holder's accounts with
+<em>Change account</em> on their page, files kept, at most once a week; or it is
+given back (a wipe) and a new one claimed with the right account.</li>
+<li>The alert closes on the next report from the place that stopped reporting
+the account. A node gone quiet counts as nowhere: it is left out rather than
+counted twice.</li>
+</ol>
+<h2 id="account_changeduser"><code>account_changed:&lt;user&gt;</code></h2>
+<p>A held slot is signed in to another Claude account than the one it keeps.
+Nothing in the product does that: <em>Sign in again</em> keeps only the slot's own
+account, and <em>Change account</em> moves the binding along with the sign-in. So its
+holder signed in by hand, or put another account's credential in place. The
+slot is their own Linux account, so ccfleet detects this; it cannot prevent it.</p>
+<ol>
+<li>Ask the holder to sign the slot's own account in again from their page, or,
+if the other account is the one they mean to use, to move the slot to it
+with <em>Change account</em>. Either is kept only once it has worked, and replaces
+the wrong sign-in.</li>
+<li>If they will not, it is the terms' rule of one account per slot: take the
+slot back in the console, which wipes it.</li>
+</ol>
+<h2 id="a-holder-wants-their-slot-on-another-claude-account">A holder wants their slot on another Claude account</h2>
+<p>It is theirs to do: <em>Change account</em> on their page, on a slot in use. The new
+account signs in to a scratch directory while the old one keeps working, and
+replaces it only once that sign-in has finished; the files and paired CC Fleet
+devices stay. At that point the persistent terminal is restarted so no running
+Claude process keeps the previous account; the holder runs <code>ccfleet</code> again.</p>
+<ul>
+<li><strong>Once a week.</strong> The next change can come seven days after one that moved the
+account; signing in with the account the slot already has does not count.
+Their slot card says when, in their own time zone. There is no override: if
+it cannot wait, they give the slot back (a wipe) and claim another, which
+starts with no week behind it.</li>
+<li><strong>What you see.</strong> The Slots card says <em>changed Claude account &lt;age&gt; ago</em> for
+that week; it never says which account.</li>
+<li><strong>If it says it stopped halfway.</strong> <em>it stopped halfway and could not be
+undone; change account again to finish it</em> means a step failed and so did
+putting it back. Changing account again, to the same new account, finishes
+it; the week has not started.</li>
+<li><strong>An owner's own node</strong> has no <em>Change account</em>: its owner signs it in to
+whichever account on the node itself, and <code>account_elsewhere</code> still applies.</li>
+<li><strong>Agents and server ship together.</strong> An agent from before <em>Change account</em>
+hears it as a plain sign-in and refuses the other account, so nothing changes
+on that slot until its agent is current.</li>
+</ul>
+<h2 id="rebuild-a-node">Rebuild a node</h2>
+<ol>
+<li>New VPS, <code>bootstrap.sh</code>, <code>setup-owner.sh</code>, then restore the latest
+<code>claude-state-*.tar.gz</code> from <code>~/backups/ccfleet</code> or the rclone remote.
+Archive paths are relative to <code>/</code> (<code>home/&lt;owner&gt;/.claude/...</code>), so as the
+owner run <code>tar -xzf claude-state-&lt;stamp&gt;.tar.gz -C /</code>. It contains no
+credentials.</li>
+<li>Owner runs <code>claude</code> and <code>/login</code>.</li>
+<li><em>server</em>: <code>ccfleetd node rotate-token &lt;node-id&gt;</code> and put the new token in
+<code>agent.env</code>; the old token is revoked immediately.</li>
+</ol>
+<h2 id="rename-a-machine">Rename a machine</h2>
+<p>The server's records move first, then the box. Do the two within a few
+minutes: in between, the box's heartbeats are refused, because a heartbeat
+names the node its token belongs to and that name has just changed. A refused
+heartbeat changes nothing on the box (a shared machine provisions, wipes and
+restarts nothing on one), so the gap costs a report or two, not a slot.</p>
+<ol>
+<li><em>server</em>: <code>ccfleetd node rename &lt;old&gt; &lt;new&gt;</code>. Its slots, heartbeats, alerts
+and its own sign-in move with it, in one transaction; its token does not
+change.</li>
+<li><em>server</em>, shared machine only: rename its slot, whatever its state, held
+and in use included: <code>ccfleetd slot rename &lt;old&gt; &lt;new&gt;</code>. The holder, the
+claim and the sign-in move with it, and a held slot keeps its holder's name.
+The machine knows its slot by its Linux user and each claim by its time,
+never by the slot's id, so the box needs nothing for this. An owner's node
+counted as their slot is renamed with the node in step 1.</li>
+<li>The box's own record of its id: <em>root</em>, on a shared machine, set
+<code>CCFLEET_NODE_ID=&lt;new&gt;</code> in <code>/etc/ccfleet/agent.env</code>; <em>node</em>, on an owner's
+node, the same line in <code>~/.config/ccfleet/agent.env</code>. The next heartbeat is
+accepted.
+On a shared machine, stop here: steps 4 and 5 happen by themselves. The
+machine agent answers to its slot's name (its holder's while held, its own
+id while free): on its next run it rewrites <code>/etc/hosts</code>, runs <code>hostnamectl</code>,
+writes the cloud-init drop-in, and restarts any legacy Remote Control service
+if it is running. The console says &quot;hostname pending&quot; until it has. An owner's
+node is never renamed for you; go on with step 4 there.</li>
+<li><em>root</em>: the host. Put the new name in <code>/etc/hosts</code> before the hostname
+changes, so <code>sudo</code> never runs on a name it cannot resolve: the line
+<code>127.0.1.1 &lt;new&gt; &lt;old&gt;</code> (on some images the old name sits on the public
+address's line instead; replace it there). Then <code>hostnamectl set-hostname &lt;new&gt;</code>,
+and keep cloud-init from putting the provider's name back at the next boot:
+<code>printf 'preserve_hostname: true\nmanage_etc_hosts: false\n' &gt; /etc/cloud/cloud.cfg.d/99-ccfleet.cfg</code>.</li>
+<li>On a legacy owner node, Remote Control takes its name from the hostname (<code>--name %H</code>), which systemd
+fills in when it loads the unit. So, as each user running it (the owner on
+an owner's node, the signed-in slot on a shared machine):
+<code>systemctl --user daemon-reload &amp;&amp; systemctl --user restart claude-remote-control</code>,
+or reboot the box, which does both. It keeps its environment and registers
+again under the new hostname, so claude.ai/code shows the machine by its new
+name. The session it created on its very first start keeps its old title
+until it is archived in claude.ai; sessions started since are unaffected.
+Restarting ends whatever is running in Remote Control, so pick a quiet moment.</li>
+<li><em>server</em>: <code>ccfleetd node list</code> shows the new id with a fresh <code>last seen</code>, and
+<code>ccfleetd slot list --machine &lt;new&gt;</code> the renamed slots in their old states.</li>
+</ol>
+<h2 id="count-an-owners-own-node-as-their-slot-legacy">Count an owner's own node as their slot (legacy)</h2>
+<p>An owner's own node can count as a slot they hold, so everything a person
+uses is one list on their page and in the console: one account, one slot.
+It is a record and nothing more. Nothing on the node changes, and ccfleet
+never hands it out, provisions it or wipes it.</p>
+<ol>
+<li><em>server</em>: it counts toward their allowance like any slot, so raise it first
+if they are at it: <code>ccfleetd account quota &lt;email&gt; &lt;n&gt;</code>.</li>
+<li><em>server</em>: <code>ccfleetd node hold &lt;node&gt; &lt;email&gt;</code>. Their Linux login on it is
+taken as the node's owner; name another with <code>--unix-user &lt;login&gt;</code>.</li>
+<li>Their page shows the node as their slot, from the node's own heartbeat:
+signed in or not, the plan and usage. Signing in again runs the node's own
+sign-in, for them alone. CLI pairing is only offered for hosted machine
+slots. There is no
+&quot;Give it back&quot;: that would mean wiping somebody's own machine.</li>
+</ol>
+<p>Let go of the record with <code>ccfleetd node hold &lt;node&gt; --none</code>; the node, its
+history and its own sign-in stay exactly as they are.</p>
+<h2 id="keep-a-machine-for-one-account">Keep a machine for one account</h2>
+<p>A shared machine can be kept for one account, so its free slot never goes to
+anybody else: your own <code>erik-N</code> machines, or a machine set aside for one
+customer.</p>
+<ol>
+<li><em>server</em>: <code>ccfleetd node reserve &lt;machine&gt; &lt;email&gt;</code>. The address is the
+account's, as it signed in; an unknown address is refused, and only a shared
+machine can be kept.</li>
+<li>Claims from that account take a slot on a machine kept for it first; nobody
+else is ever handed its slot. The account's allowance still applies.</li>
+<li><code>ccfleetd node list</code> shows the reservation in its last column. Customers'
+pages never show one.</li>
+</ol>
+<p>Open it to anybody again with <code>ccfleetd node reserve &lt;machine&gt; --none</code>.</p>
+<h2 id="remove-an-owner">Remove an owner</h2>
+<ol>
+<li><em>server</em>: <code>ccfleetd node disable &lt;node-id&gt;</code> (keeps history) or
+<code>ccfleetd node remove &lt;node-id&gt;</code> (deletes heartbeats and alerts).</li>
+<li>Owner runs <code>/logout</code> on the node, then destroy the VPS.</li>
+</ol>
+<h2 id="rotate-the-admin-token">Rotate the admin token</h2>
+<p><em>server</em>: change <code>CCFLEET_ADMIN_TOKEN</code> in the env file, restart <code>ccfleetd</code>,
+update the password saved in your browser.</p>
+<h2 id="quarterly">Quarterly</h2>
+<p>Re-read the pages quoted in <code>docs/compliance.html</code>; Anthropic's terms and the
+gateway requirements change. Check <code>claude --version</code> against the pin on every
+node and upgrade in stages.</p>
+</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

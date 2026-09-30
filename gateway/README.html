@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pass-through gateway (optional) · CC Fleet</title><style>
+:root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent);text-underline-offset:.18em}a:hover{color:#251369}
+.shell{max-width:1120px;margin:0 auto;padding:26px 22px 64px}.doc-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;font-size:14px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px}.contents{align-self:start;position:sticky;top:20px;font-size:13px;max-height:85vh;overflow:auto}
+.contents ol{list-style:none;padding:0}.contents li{margin:7px 0}.contents .level-3{padding-left:12px}
+main{min-width:0}h1{font-size:clamp(30px,5vw,46px);line-height:1.12;letter-spacing:-.03em;margin:0 0 24px}
+h2{font-size:25px;line-height:1.25;margin:38px 0 14px}h3{font-size:19px;line-height:1.3;margin:25px 0 12px}
+p,li{overflow-wrap:break-word}p{margin:14px 0}code,pre{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--soft);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:8px;overflow:auto;max-width:100%}
+pre code{padding:0;background:none;white-space:pre;overflow-wrap:normal}blockquote{border-left:4px solid var(--accent);margin:20px 0;padding:2px 18px;color:var(--muted)}
+.table-scroll{overflow-x:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:620px}th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:break-word}th{background:var(--soft);font-size:14px}
+tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-left:4px solid var(--accent);padding:14px 18px;margin-bottom:22px;background:var(--soft)}
+.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.catalog a{display:block;padding:18px;border:1px solid var(--line);border-radius:8px;text-decoration:none}
+.catalog strong{display:block;font-size:18px;color:var(--ink)}.catalog span{display:block;font-size:14px;color:var(--muted);margin-top:7px}
+footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
+@media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="../docs/index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">Historical / compatibility reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#status-validated-live-2026-09-19">Status: validated live, 2026-09-19</a></li></ol></nav></details></aside><main><div class="notice"><strong>Historical optional gateway.</strong> This is not the current primary CC Fleet workflow. Read <a href="../docs/local-relay.html">local relay and migration</a> for current use. Dated validation and policy limits below are preserved.</div><h1 id="pass-through-gateway-optional">Pass-through gateway (optional)</h1>
+<p>Use this only for an owner who must keep their files on the laptop and cannot
+work on a hosted node. It is the shape Anthropic documents under
+<a href="https://code.claude.com/docs/en/llm-gateway">&quot;Subscriptions and gateways&quot;</a>:
+setting only <code>ANTHROPIC_BASE_URL</code> keeps the saved claude.ai login as the active
+credential, and the gateway must forward <code>anthropic-beta</code> and <code>anthropic-version</code>
+verbatim, stream responses, and pass SSE pings through.</p>
+<p>What the gateway does:</p>
+<ol>
+<li>Requires a private <code>X-Gw-Key</code> header and answers 401 without it.</li>
+<li>Drops that header and forwards the request to <code>api.anthropic.com</code> with the
+body and Anthropic's required headers (<code>anthropic-version</code>, <code>anthropic-beta</code>,
+and the owner's own OAuth bearer) unchanged.</li>
+<li>Flushes every chunk immediately (<code>flush_interval -1</code>) so streaming works.</li>
+<li>Stores no credentials.</li>
+</ol>
+<p>Being a reverse proxy, it does rewrite <code>Host</code> (deliberately, so TLS and routing
+reach Anthropic) and Caddy adds the usual <code>X-Forwarded-*</code> headers. &quot;Rewrites
+nothing&quot; would be too strong. The guarantee that matters is narrower and exact:
+it never substitutes a credential and never alters who the client says it is.</p>
+<p>What it deliberately does not do: hold tokens, substitute a credential, alter
+the client's identity, change the request body,
+pool accounts, or share one gateway between people. One gateway, one owner,
+one account.</p>
+<p>Setup:</p>
+<pre><code class="language-bash">export GW_KEY_A=&quot;$(openssl rand -hex 32)&quot;      # keep it in /etc/caddy/env (0600)
+caddy validate --config Caddyfile
+sudo systemctl restart caddy
+</code></pre>
+<p>Laptop:</p>
+<pre><code class="language-bash">export ANTHROPIC_BASE_URL=https://gw-a.example.com
+export ANTHROPIC_CUSTOM_HEADERS=&quot;X-Gw-Key: $GW_KEY_A&quot;
+claude
+/status     # base URL shows the gateway; Login row still shows your claude.ai account
+</code></pre>
+<p>Alternative to the header: mutual TLS. Caddy can require a client certificate
+and Claude Code presents one via <code>CLAUDE_CODE_CLIENT_CERT</code>,
+<code>CLAUDE_CODE_CLIENT_KEY</code> and <code>CLAUDE_CODE_CLIENT_KEY_PASSPHRASE</code>.</p>
+<h2 id="status-validated-live-2026-09-19">Status: validated live, 2026-09-19</h2>
+<p>A real Claude Code session completed through this handler. What was checked, and
+how, so you can judge how much it covers:</p>
+<div class="table-scroll" role="region" aria-label="Scrollable table" tabindex="0"><table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Method</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Refuses without the key</td>
+<td>request with no <code>X-Gw-Key</code></td>
+<td>401 from the gateway</td>
+</tr>
+<tr>
+<td>Reaches Anthropic with it</td>
+<td>request with the key</td>
+<td>405 from Anthropic, so it was forwarded</td>
+</tr>
+<tr>
+<td>A real session works</td>
+<td><code>claude -p</code> with only <code>ANTHROPIC_BASE_URL</code> and the header set</td>
+<td>completed and answered</td>
+</tr>
+<tr>
+<td>The gateway was really in the path</td>
+<td>stopped the container, reran the same command</td>
+<td>failed with <code>ECONNRESET</code></td>
+</tr>
+<tr>
+<td>And recovered</td>
+<td>restarted it, reran</td>
+<td>succeeded again</td>
+</tr>
+<tr>
+<td>Nothing overrode the subscription</td>
+<td>checked that neither <code>ANTHROPIC_API_KEY</code> nor <code>ANTHROPIC_AUTH_TOKEN</code> was set</td>
+<td>neither set, so the saved OAuth login is what authenticated</td>
+</tr>
+</tbody>
+</table></div>
+<p>The test ran over plain HTTP on a loopback port through an SSH tunnel, so TLS
+termination and a public hostname are the parts still unexercised. Those are
+Caddy's ordinary job rather than anything specific to this config, but if you are
+about to depend on it, run a long streamed session over the real hostname first
+and watch that output arrives incrementally rather than in one block.</p>
+</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>

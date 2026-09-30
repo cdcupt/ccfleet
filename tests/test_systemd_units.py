@@ -9,6 +9,8 @@ on a live node 2026-09-19.
 import configparser
 from pathlib import Path
 
+from tests.test_html_document_preservation import read_document
+
 UNITS = Path(__file__).resolve().parents[1] / "node" / "systemd"
 RC = UNITS / "claude-remote-control.service"
 SHELL = UNITS / "ccfleet-shell.service"
@@ -73,8 +75,8 @@ def test_the_two_units_do_not_share_a_tmux_server():
 
 def test_docs_tell_people_which_server_to_attach_to():
     root = Path(__file__).resolve().parents[1]
-    for rel in ("docs/runbooks.md", "docs/guidebook.html"):
-        text = (root / rel).read_text()
+    for rel in ("docs/runbooks.html", "docs/guidebook.html"):
+        text = read_document(root / rel).text
         if "attach -t remote-control" in text:
             assert "-L ccfleet-rc attach -t remote-control" in text, \
                 f"{rel} sends people to the wrong tmux server"

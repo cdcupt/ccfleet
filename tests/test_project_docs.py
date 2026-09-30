@@ -1,12 +1,12 @@
 """Current local-Claude guidance never inherits retired slot-only/privacy claims."""
 
 import re
-from html import unescape
 from pathlib import Path
 
 from ccfleetd.config import Config
 from ccfleetd.customer_docs import guide, how_it_works, overview
 from ccfleetd.usersite import cli_pairing_page, privacy_page
+from tests.test_html_document_preservation import read_document, visible_html
 
 ROOT = Path(__file__).parents[1]
 SETUP_COMMAND = ("curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/"
@@ -14,7 +14,7 @@ SETUP_COMMAND = ("curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/ma
 
 
 def visible(page):
-    return " ".join(unescape(re.sub(r"<[^>]+>", " ", page)).split())
+    return visible_html(page)
 
 
 def test_guide_keeps_one_setup_command_and_reuses_existing_pairing():
@@ -162,8 +162,8 @@ def test_pairing_page_shares_setup_and_native_launch_without_embedding_code_in_c
 
 
 def test_readme_and_current_relay_guide_share_setup_and_native_semantics():
-    for relative in ("README.md", "docs/local-relay.md"):
-        text = " ".join((ROOT / relative).read_text().split()).replace("**", "")
+    for relative in ("README.html", "docs/local-relay.html"):
+        text = read_document(ROOT / relative).text
         assert SETUP_COMMAND in text
         for phrase in ("--legacy-history", "--fork-session", "--print", "--continue",
                        "--disconnect", "--reset-link", "MCP", "slot", "local"):
@@ -173,9 +173,12 @@ def test_readme_and_current_relay_guide_share_setup_and_native_semantics():
 
 
 def test_old_workspace_guide_is_tombstone_and_keeps_legacy_recovery_scoped():
-    text = " ".join((ROOT / "docs/project-workspaces.md").read_text().split())
-    assert text.startswith("# Retired remote workspaces")
-    assert "[local Claude setup and migration](local-relay.md)" in text
+    page = read_document(ROOT / "docs/project-workspaces.html")
+    text = page.text
+    assert any(tag == "h1" and heading.startswith("Retired remote workspaces")
+               for tag, heading in page.headings)
+    assert "local Claude setup and migration" in text
+    assert "local-relay.html" in page.links
     assert "primary workflow" in text
     assert "1,000 files, 4 MiB per file and 20 MiB total" in text
     assert "apply only to those legacy transfer commands" in text
@@ -184,7 +187,7 @@ def test_old_workspace_guide_is_tombstone_and_keeps_legacy_recovery_scoped():
 
 
 def test_current_guide_scopes_verification_and_interrupted_migration_recovery():
-    text = " ".join((ROOT / "docs/local-relay.md").read_text().split())
+    text = read_document(ROOT / "docs/local-relay.html").text
     for phrase in ("EOFError: filesystem connection ended", "shutdown lock",
                    "Do not delete configuration, remove keys, or re-pair",
                    "marked retired", "ordinary shell prompt", "does not automatically",
@@ -195,20 +198,22 @@ def test_current_guide_scopes_verification_and_interrupted_migration_recovery():
 
 
 def test_historical_verification_and_remote_design_point_to_current_architecture():
-    for relative in ("docs/live-folders-verification.md", "docs/project-workspaces-verification.md"):
-        text = (ROOT / relative).read_text()
-        assert "local-relay-verification.md" in text
-        assert "retired" in text.lower()
-    design = " ".join((ROOT / "docs/design.md").read_text().split())
+    for relative in ("docs/live-folders-verification.html",
+                     "docs/project-workspaces-verification.html"):
+        page = read_document(ROOT / relative)
+        assert "local-relay-verification.html" in page.links
+        assert "retired" in page.text.lower()
+    design = read_document(ROOT / "docs/design.html").text
     assert "remote-terminal compatibility design" in design
     assert "not local Claude" in design
     assert "default hosted-terminal path" not in design
 
 
 def test_compliance_keeps_historical_provenance_and_does_not_claim_relay_authorization():
-    text = " ".join((ROOT / "docs/compliance.md").read_text().split()).replace("**", "")
+    page = read_document(ROOT / "docs/compliance.html")
+    text = page.text
     assert "Last re-verified against Anthropic's published documentation: 2026-09-28" in text
-    assert "https://code.claude.com/docs/en/legal-and-compliance" in text
+    assert "https://code.claude.com/docs/en/legal-and-compliance" in page.links
     assert "not covered by the historical hosted terminal mapping" in text
     assert "claims no approval for the relay" in text
     assert "source record below was not re-fetched" in text

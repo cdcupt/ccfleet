@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Long-term account reliability and privacy · CC Fleet</title><style>
+:root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent);text-underline-offset:.18em}a:hover{color:#251369}
+.shell{max-width:1120px;margin:0 auto;padding:26px 22px 64px}.doc-nav{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:30px;font-size:14px}
+.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:36px}.contents{align-self:start;position:sticky;top:20px;font-size:13px;max-height:85vh;overflow:auto}
+.contents ol{list-style:none;padding:0}.contents li{margin:7px 0}.contents .level-3{padding-left:12px}
+main{min-width:0}h1{font-size:clamp(30px,5vw,46px);line-height:1.12;letter-spacing:-.03em;margin:0 0 24px}
+h2{font-size:25px;line-height:1.25;margin:38px 0 14px}h3{font-size:19px;line-height:1.3;margin:25px 0 12px}
+p,li{overflow-wrap:break-word}p{margin:14px 0}code,pre{font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--soft);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:8px;overflow:auto;max-width:100%}
+pre code{padding:0;background:none;white-space:pre;overflow-wrap:normal}blockquote{border-left:4px solid var(--accent);margin:20px 0;padding:2px 18px;color:var(--muted)}
+.table-scroll{overflow-x:auto;max-width:100%;margin:20px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:620px}th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:break-word}th{background:var(--soft);font-size:14px}
+tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-left:4px solid var(--accent);padding:14px 18px;margin-bottom:22px;background:var(--soft)}
+.catalog{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.catalog a{display:block;padding:18px;border:1px solid var(--line);border-radius:8px;text-decoration:none}
+.catalog strong{display:block;font-size:18px;color:var(--ink)}.catalog span{display:block;font-size:14px;color:var(--muted);margin-top:7px}
+footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
+@media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#1-identity-minimization-not-captured-identity-replay">1. Identity minimization, not captured-identity replay</a></li><li class="level-2"><a href="#2-keep-standard-verified-outgoing-tls">2. Keep standard, verified outgoing TLS</a></li><li class="level-2"><a href="#3-one-credential-writer-native-claude">3. One credential writer: native Claude</a></li><li class="level-2"><a href="#4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</a></li><li class="level-2"><a href="#5-local-controls-diagnostics-and-supervised-jobs">5. Local controls, diagnostics and supervised jobs</a></li><li class="level-2"><a href="#6-authenticated-client-release-activation">6. Authenticated client release activation</a></li><li class="level-2"><a href="#boundaries-and-acceptance-evidence">Boundaries and acceptance evidence</a></li></ol></nav></details></aside><main><h1 id="long-term-account-reliability-and-privacy">Long-term account reliability and privacy</h1>
+<p>This records the engineering choices for the native local Claude workflow.
+It is not a claim of complete CC Host parity, permanent account availability,
+provider approval, or zero metadata disclosure.</p>
+<h2 id="1-identity-minimization-not-captured-identity-replay">1. Identity minimization, not captured-identity replay</h2>
+<p>Both ends of the model bridge allowlist semantic request headers and remove
+top-level <code>metadata</code> and the explicitly enumerated direct identity fields.
+Unknown headers, including local SDK/runtime fingerprint headers, are not sent
+upstream. The slot identifies its relay truthfully as <code>ccfleet-slot-relay/2</code>.</p>
+<p>We do not record and replay another process's account/session identity. A captured
+profile can become stale when the native client changes, and matching selected
+headers is not evidence that all local information was removed. Unknown JSON
+fields and native system/messages/tool content are not arbitrarily rewritten:
+doing so can alter model behavior and tool arguments. This is a bounded,
+testable minimization boundary, not a fingerprint-free promise.</p>
+<p>Provider error bodies are also treated as sensitive. Non-success responses are
+normalized to fixed messages and categories. A JSON classification of at most
+64 KiB and five seconds recognizes the native <code>prompt is too long</code> signal without
+echoing provider text. Opaque request IDs and verbose diagnostics are omitted;
+numeric Retry-After values are bounded. Successful JSON/SSE body bytes are kept.
+This trades detailed provider diagnostics for a smaller error-reflection surface.</p>
+<h2 id="2-keep-standard-verified-outgoing-tls">2. Keep standard, verified outgoing TLS</h2>
+<p>The slot uses Python HTTPS with certificate and hostname verification to the fixed
+<code>api.anthropic.com</code> destination. Caller-selected upstreams, redirects, proxy
+environment routing and account fallback are not supported. There is no evidence
+here that switching to Node/undici would improve account survival or privacy.
+Either implementation can use secure TLS; neither proves absence of identifying
+information in the application payload. No TLS-fingerprint equivalence is claimed.</p>
+<h2 id="3-one-credential-writer-native-claude">3. One credential writer: native Claude</h2>
+<p>The relay reads credentials but never implements OAuth refresh or writes tokens.
+Native Claude remains the credential writer. This avoids a second implementation
+competing over rotating refresh tokens or depending on an independently copied
+vendor OAuth flow.</p>
+<p>Hosted maintenance now checks access expiry independently of cached quota data:</p>
+<ul>
+<li>Within ten minutes of expiry, the selected slot may run the existing isolated
+native <code>/usage</code> probe. This is not an inference/model request.</li>
+<li>Slot reconciliation, renewal and quota probes are serialized with private
+locks. A pending sign-in, account transition or unavailable safe lock blocks
+the attempt. A probe never intentionally stops the holder's ordinary session.</li>
+<li>Probe commands share a 35-second budget, with up to five seconds for cleanup.
+Even an uncertain tmux launch receives cleanup.</li>
+<li>Retry state is saved before launching. Delays start at 60 seconds and grow to
+ten minutes, but shrink near expiry; expired credentials retry no faster than
+once per minute. The machine alternates urgent and ordinary turns so one
+failing account cannot starve the other slots.</li>
+<li>Renewal is reported only after expiry actually advances and the bound account
+remains unchanged. Native process success or a quota screen alone is not proof.
+Credential facts are reread in the same heartbeat.</li>
+</ul>
+<p>The server receives only allowlisted renewal states, timestamps and fixed reason
+codes—not tokens, raw CLI output, errors containing account data, or account IDs.
+Active-slot expiry and unconfirmed renewal can alert the operator. Old or missing
+observations do not resolve an existing failure or establish current readiness.</p>
+<p><code>current</code> means the locally reported expiry is sufficiently far in the future;
+it does not prove that the provider will accept the credential. Revocation,
+account policy, expired refresh credentials or a changed native CLI can still
+require the holder to use <strong>Sign in again</strong>. No implementation can guarantee that
+a subscription will remain usable indefinitely without user involvement.</p>
+<p>An in-flight stream rechecks the current credential and bound account. A native
+same-account token rotation can extend validity beyond the old token's expiry;
+missing, invalid or expired credentials cancel the stream. Immediately before
+the sole upstream POST, the relay rereads the credential after connecting TLS.
+It does not retry a POST to recover from an authentication race. Every request
+still has a fixed overall deadline.</p>
+<h2 id="4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</h2>
+<p>The local bridge uses an ephemeral authentication nonce. Each computer has its
+own paired device token and SSH key; BWH carries the pinned inner SSH stream and
+does not receive plaintext model content or the slot's OAuth credential.
+This preserves a concrete confidentiality boundary and individual revocation,
+without replacing it with a shared secret that every computer must rotate.</p>
+<p>The WebSocket upgrade validates the required headers, rejects ambiguous or
+unrequested negotiation, and applies a shrinking network-handshake timeout.
+Partial pipe writes are completed; zero progress fails. A disconnected client
+cancels the SSH child even while a large request is still uploading.
+CC Fleet does not replay an ambiguous inference POST or silently switch accounts.
+Cancellation retains the connected upstream socket even when HTTP
+<code>Connection: close</code> detaches it from the connection object. It interrupts blocked
+reads and checks cancellation again before forwarding another response chunk.</p>
+<p>On explicitly opted-in machines, inference gates follow the one held managed
+slot through claim, release and reassignment. Revocation precedes wipe retries;
+operator opt-out denies managed gates immediately. Legacy manual gates remain
+compatible until explicitly disabled or taken under managed policy. See
+<a href="local-relay.html#operator-verification">operator activation</a>.</p>
+<h2 id="5-local-controls-diagnostics-and-supervised-jobs">5. Local controls, diagnostics and supervised jobs</h2>
+<p>The 0.2.1 follow-up scopes HTTP/1.1 to a WebSocket upgrade response, leaving
+ordinary REST connection-close behavior unchanged. Optional foreground SSH reuse
+now has an isolated live group owner and anonymous parent-liveness pipe so
+parent-only hard kill terminates its owned transport. This is not a promise to
+contain arbitrary native/tool processes that detach elsewhere.</p>
+<p>The guided <code>ccfleet start</code> menu and <code>ccfleet sessions</code> delegate to original native
+new/continue/resume behavior; they do not parse or synchronize conversation
+contents. Project preferences remain private and do not implicitly override the
+model/effort saved by a resumed conversation. Bare <code>ccfleet</code> remains the remote
+compatibility command, with <code>ccfleet remote</code> as an explicit alias.</p>
+<p><code>ccfleet doctor --privacy</code> and <code>ccfleet status --json</code> perform read-only checks
+without a model request or project scan. Reports contain allowlisted check codes,
+version facts and fixed recovery messages, not tokens, account email, prompts,
+local paths or filesystem content. <code>--export LOCALFILE</code> writes only the requested
+new private file and never uploads it. A reported-ready heartbeat remains an
+observation, not proof of provider acceptance. Website health badges use the same
+fixed classifications without changing sign-in, pairing or CSRF protections.</p>
+<p>Response usage observation is bounded and best effort. Completed successful
+Messages responses can contribute numeric input/output/cache totals and explicit
+sample coverage. Missing, partial, oversized or invalid observations remain
+unsampled; absent cache fields are unknown. These are observed sums, not a bill,
+subscription quota or complete account total. No model/session IDs, prompts,
+device fingerprints or local paths are added to those aggregates. Existing
+seven-day slot storage and historical heartbeat retention still apply.</p>
+<p>Managed background jobs are local native print-mode work, not vendor-native
+detached agents or attachable remote sessions. Each supervisor has private
+authenticated local control, periodically checks device authorization and keeps
+the model bridge alive. Its lifetime guardian stays in the owned process group
+through foreground exit; cleanup does not signal a PID loaded from disk. Logs
+are bounded and private, but may contain sensitive user data. Normal reports and
+support exports exclude prompts, project paths and log contents.</p>
+<p>Jobs pin their starting device/slot/account assignment and fail closed on sign-in,
+account or pairing transitions; new model connections do not silently migrate an
+old job to another account. These checks use opaque assignment state, not a
+provider identity exposed in support exports.</p>
+<p>No job automatically restarts or replays inference. Timeout, stop, revocation or
+supervisor loss closes the owned process group and transport; unconfirmed cleanup
+is labelled unconfirmed. Deliberately detached tool descendants are outside this
+process-group boundary: this is not a local filesystem or process sandbox.</p>
+<h2 id="6-authenticated-client-release-activation">6. Authenticated client release activation</h2>
+<p>The client pins an Ed25519 public key. Signed channel metadata can identify only
+an approved immutable manifest and source revision, and must be unexpired.
+OpenSSH verifies detached signatures in the <code>ccfleet-release</code> namespace before
+downloaded metadata is trusted. Every source file/helper is size- and checksum-
+checked, and helper declarations must match the signed bundle completely.</p>
+<p>Verified files are staged privately, then a single atomic launcher replacement
+activates the release and records its previous version and version high-water
+mark. A normal update cannot silently downgrade or replace the same version with
+different contents. Explicit rollback validates the preserved target without
+touching pairing, project files or native history. A legacy bootstrap backup is
+labelled as legacy, not as a signature-verified release. Initial HTTPS bootstrap,
+the pinned public key and the operator's private signing-key custody remain trust
+dependencies; neither signatures nor finite tests guarantee future availability.</p>
+<h2 id="boundaries-and-acceptance-evidence">Boundaries and acceptance evidence</h2>
+<p>Prompts, system context, paths and tool results can still contain private data.
+MCP, hooks, shell tools and other native services can use their own networking.
+BWH sees connection metadata; slot root can inspect decrypted requests. The
+working directory is not a filesystem sandbox, especially in bypass mode.</p>
+<p>Tests use synthetic credentials and controlled peers to cover refresh scheduling,
+atomic rotation observation, account-transition races, lock contention, interrupted
+maintenance, credential/error redaction, TLS verification, short writes and upload
+cancellation. Actual native renewal must be observed separately on an authorized
+canary, with unchanged account binding and no customer session interruption.
+Do not edit token expiry or duplicate live refresh credentials just to force that
+test. A successful finite test is not a long-term availability guarantee.</p>
+</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>
