@@ -31,6 +31,31 @@ padding:10px 8px}th{font-size:13px;color:var(--muted)}
 small local command connects your terminal to it; the Claude credential and model traffic
 stay on the slot.</p>
 
+<section class="card note" id="simple-verification">
+<p class="eyebrow">Current native-local guidance · added 2026-09-30</p>
+<h2>Simple readiness and response checks</h2>
+<p>This current-client check is separate from the historical hosted-terminal
+instructions below. With the current native-local client, run
+<code>ccfleet local --check</code> in your normal terminal, not inside Claude.</p>
+<p>It checks local Claude executable availability and assigned-slot relay readiness.
+It does not scan projects, start a Claude session or make a model request.
+Readiness is not proof that Anthropic will accept the next request.</p>
+<p>For an optional basic response check, open <code>ccfleet local</code> and paste:</p>
+<blockquote><p>Do not use tools, read files, or inspect my system or network.<br>
+Reply only: <code>CCFLEET_OK</code></p></blockquote>
+<p>The optional prompt makes a model request and may use your plan allowance.
+A matching reply checks only basic responsiveness; it does not independently prove
+routing, anonymity or zero metadata disclosure. The no-tools instruction is not
+an enforced privacy safeguard. Native context or hooks can still exist, and context
+may include local OS or directory information. Do not ask Claude to print real IPs,
+locations or environment values just to check privacy: those outputs would enter
+the conversation. BWH sees connection metadata; for relayed model requests,
+Anthropic sees the slot's outbound IP. Other native/tool network connections are
+outside that statement.</p>
+<p><a href="https://ccfleet.daichenlab.com/docs/guide#simple-verification">Current customer guide</a>
+· <a href="local-relay.html">Native local setup, sessions and privacy boundaries</a></p>
+</section>
+
 <div class="card note"><strong>The invariant</strong><p>One holder, one slot, one Claude
 account. CC Fleet never pools accounts, chooses an account for a request, or exposes a shared
 Claude API.</p></div>
