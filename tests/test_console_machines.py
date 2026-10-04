@@ -232,7 +232,97 @@ def test_a_slot_nobody_has_signed_in_says_so(console):
     fleet(store, time.time())
     row = row_of(call("GET", "/admin").body, "ysflowerdog-1")
     assert "not signed in" in row and "missing" not in row and "unknown" not in row
-    assert ">inactive<" in row
+    assert ">disabled (hosted)<" in row
+
+
+def test_a_free_pool_slot_explains_its_missing_installation(console):
+    store, call = console
+    now = time.time()
+    fleet(store, now)
+    store.set_pinned_version("erik-2", "latest")
+    store.begin_release("erik-2")
+    store.apply_slot_report("erik-2", [{"unix_user": "slot01", "present": False}], now=now)
+    machine_beat(store, "erik-2", now, [{"unix_user": "slot01", "present": False}])
+    row = row_of(call("GET", "/admin").body, "erik-2")
+    assert "Installed on claim" in row and "free · in pool" in row
+    assert "unknown" not in row and "token " not in row and "latest" not in row
+    assert ">disabled (hosted)<" in row
+
+
+def test_a_free_slot_does_not_show_the_previous_holders_login(console):
+    store, call = console
+    fleet(store, time.time())
+    store.begin_release("erik-2")
+    store.apply_slot_report("erik-2", [{"unix_user": "slot01", "present": False}],
+                            now=time.time())
+    # Until the next heartbeat, the last stored report still belongs to the
+    # previous holder. The lifecycle record already confirms the wipe.
+    row = row_of(call("GET", "/admin").body, "erik-2")
+    assert "free · in pool" in row and "Installed on claim" in row
+    assert "2.1.281" not in row and "Max" not in row and "token " not in row
+    assert ">disabled (hosted)<" in row and ">active<" not in row
+
+
+@pytest.mark.parametrize("present,words", [(True, "cleanup required"),
+                                           (None, "waiting for machine")])
+def test_a_free_slot_is_not_called_available_without_a_confirmed_wipe(cfg, present, words):
+    nodes = [{"id": "m1", "owner": "erik", "region": "us", "pinned_version": "latest",
+              "rc_expected": False, "enabled": True, "created_at": 0}]
+    one = [{"id": "m1", "node_id": "m1", "unix_user": "slot01",
+            "kind": slots.MACHINE_SLOT, "state": slots.FREE, "present": present}]
+    row = build_rows(nodes, {}, [], 3_000_000, slots=one)[0]
+    page = render_dashboard([row], [], 3_000_000, cfg)
+    assert f"free · {words}" in row_of(page, "m1")
+    assert "free · in pool" not in row_of(page, "m1")
+
+
+@pytest.mark.parametrize("enabled,reserved,words", [(True, True, "reserved in pool"),
+                                                    (False, False, "machine disabled")])
+def test_a_free_slot_is_only_available_when_its_machine_allows_claims(cfg, enabled,
+                                                                    reserved, words):
+    nodes = [{"id": "m1", "owner": "erik", "region": "us", "pinned_version": "latest",
+              "rc_expected": False, "enabled": enabled, "created_at": 0,
+              "reserved_for": "holder" if reserved else None}]
+    one = [{"id": "m1", "node_id": "m1", "unix_user": "slot01",
+            "kind": slots.MACHINE_SLOT, "state": slots.FREE, "present": False}]
+    row = build_rows(nodes, {}, [], 3_000_000, slots=one)[0]
+    page = render_dashboard([row], [], 3_000_000, cfg)
+    assert f"free · {words}" in row_of(page, "m1")
+    assert "free · in pool" not in row_of(page, "m1")
+
+
+@pytest.mark.parametrize("state", ["active", "failed"])
+def test_a_legacy_hosted_remote_control_state_stays_visible(console, state):
+    store, call = console
+    now = time.time()
+    fleet(store, now)
+    machine_beat(store, "pool-1", now, [{"unix_user": "slot01", "present": True,
+        "credentials": {"present": False}, "remote_control": {"state": state}}])
+    row = row_of(call("GET", "/admin").body, "ysflowerdog-1")
+    assert f">{state}<" in row and "disabled (hosted)" not in row
+
+
+@pytest.mark.parametrize("credentials", [{"present": False},
+                                        {"present": True, "logged_in": False}])
+def test_a_signed_out_slot_does_not_display_a_cached_plan(console, credentials):
+    store, call = console
+    now = time.time()
+    fleet(store, now)
+    machine_beat(store, "pool-1", now, [{"unix_user": "slot01", "present": True,
+        "credentials": {**credentials, "subscription_type": "max",
+                        "plan": "default_claude_max_20x", "expires_at": 0}}])
+    row = row_of(call("GET", "/admin").body, "ysflowerdog-1")
+    assert "not signed in" in row and "token unavailable" in row
+    assert "Max 20x" not in row and "refreshed" not in row
+
+
+def test_missing_login_telemetry_stays_unknown(console):
+    store, call = console
+    now = time.time()
+    fleet(store, now)
+    machine_beat(store, "pool-1", now, [{"unix_user": "slot01", "present": True}])
+    row = row_of(call("GET", "/admin").body, "ysflowerdog-1")
+    assert "unknown" in row and "not signed in" not in row
 
 
 def test_a_machine_with_no_slot_yet_says_so(console):

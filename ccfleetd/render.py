@@ -13,6 +13,7 @@ from . import names as slotnames
 from . import plans, resets
 from . import slots as slotstates
 from .config import Config
+from .credential_health import access_expiry
 from .desired import is_channel, is_login_url
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
@@ -460,9 +461,10 @@ def _age(now: float, ts: Optional[float]) -> str:
 
 
 def _in(now: float, ts_ms: Optional[float]) -> str:
-    if ts_ms is None:
-        return "-"
-    delta = ts_ms / 1000.0 - now
+    expiry = access_expiry({"expires_at": ts_ms})
+    if expiry is None:
+        return "unavailable"
+    delta = expiry - now
     return ("in " if delta >= 0 else "") + _age(0, -abs(delta)) + ("" if delta >= 0 else " ago")
 
 
@@ -522,6 +524,10 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "held_name": len(mine) == 1 and bool(mine[0].get("name")),
             # Its one slot, for the usage card's Refresh (see _quota_refresh).
             "slot_id": mine[0]["id"] if len(mine) == 1 else None,
+            "slot_state": mine[0].get("state") if len(mine) == 1 else None,
+            "slot_present": (bool(mine[0]["present"]) if len(mine) == 1
+                             and mine[0].get("present") is not None else None),
+            "pool_reserved": bool(node.get("reserved_for")),
             "quota_wanted_at": mine[0].get("quota_wanted_at") if len(mine) == 1 else None,
             "owner": node["owner"], "region": node["region"],
             "enabled": node["enabled"], "status": level if node["enabled"] else "disabled",
@@ -534,6 +540,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "load1": (payload.get("load") or {}).get("1"),
             "device_token_at": node.get("device_token_at"),
             "credentials_present": creds.get("present"),
+            "credentials_logged_in": creds.get("logged_in"),
             "credentials_mtime": creds.get("mtime"),
             "token_expires_at": creds.get("expires_at"),
             "subscription_type": creds.get("subscription_type"),
@@ -603,6 +610,7 @@ def _called(row: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _row_html(row: Mapping[str, Any], now: float) -> str:
+    free = row.get("machine") and row.get("slot_state") == slotstates.FREE
     version = _fmt(row["claude_version"])
     pinned = row["pinned_version"]
     # Only say the pin when it tells you something. Repeating it beside an equal
@@ -620,27 +628,54 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         version += (f'<br><span class="bad-text">upgrade to '
                     f'{escape(str(upgrade.get("to") or "?"))} failed</span>'
                     + (f' <span class="muted">{detail}</span>' if detail else ""))
+    if free:
+        # Its next holder gets a fresh installation. A cached report from the
+        # previous holder says nothing about that installation.
+        version = '<span class="muted">Installed on claim</span>'
     creds = row["credentials_present"]
-    cred_text = ("unknown" if creds is None else ("missing" if creds is False else
-                 f"refreshed {_age(now, row['credentials_mtime'])} ago"))
+    signed_out = creds is False or row.get("credentials_logged_in") is False
+    cred_text = ("not signed in" if row.get("credentials_logged_in") is False else
+                 "unknown" if creds is None else "missing" if creds is False else
+                 f"refreshed {_age(now, row['credentials_mtime'])} ago")
     if row.get("machine"):
         count = row.get("slot_count") or 0
         cred_text = ("no slot yet" if count == 0 else
                      f"{count} slots, see Slots" if count > 1 else
-                     "not signed in" if creds is False else cred_text)
+                     "not signed in" if signed_out else cred_text)
     plan = plans.label(row["subscription_type"], row.get("plan"))
-    if plan:
+    if free:
+        present = row.get("slot_present")
+        if present is True:
+            cred_text = "free · cleanup required"
+        elif present is None:
+            cred_text = "free · waiting for machine"
+        elif not row["enabled"]:
+            cred_text = "free · machine disabled"
+        else:
+            cred_text = ("free · reserved in pool" if row.get("pool_reserved") else
+                         "free · in pool")
+    elif plan and not signed_out:
         # The plan is a label on the login, not a qualifier on the time. Trailing
         # it read as "refreshed 10m ago (max)", where (max) looks like it modifies
         # the age; leading it reads as what it is.
         cred_text = f"{plan} \u00b7 {cred_text}"
     rc = row["remote_control"] or "-"
+    if row.get("machine") and (row["remote_control"] in (None, "", "inactive", "disabled")
+                               or free and row.get("slot_present") is False):
+        # Hosted slots use the CLI relay. Their agents retire the legacy Remote
+        # Control unit, so an inactive unit is the intended state. A reported
+        # active or failed legacy unit remains visible for the operator.
+        rc = "disabled (hosted)"
     # Nothing is expected of a node that is switched off, so saying so is noise;
     # nor of a shared machine, whose Remote Control is its slot's to run.
     if row["rc_expected"] and row["enabled"] and not row.get("machine"):
         rc += " (expected)"
     shown, beside = _called(row)
     byline = " \u00b7 ".join(part for part in (beside, row["region"] or "-") if part)
+    login = escape(cred_text)
+    if not free:
+        login += ('<br><span class="muted">token '
+                  + escape(_in(now, row["token_expires_at"])) + "</span>")
     return (
         f'<tr class="r-{escape(row["status"])}">'
         f"<td>{_pill(row['status'])}</td>"
@@ -652,8 +687,7 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         f"<td><code>{_fmt(row['egress_ip'])}</code></td>"
         f"<td class=\"num\">{_fmt(row['disk_used_pct'], '%')}</td>"
         f"<td class=\"num\">{_fmt(row['load1'])}</td>"
-        f"<td>{escape(cred_text)}<br><span class=\"muted\">token "
-        f"{escape(_in(now, row['token_expires_at']))}</span></td>"
+        f"<td>{login}</td>"
         f"<td>{escape(rc)}</td>"
         "</tr>"
     )
