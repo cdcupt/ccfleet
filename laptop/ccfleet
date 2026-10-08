@@ -25,6 +25,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shlex
 import shutil
 import signal
@@ -43,16 +44,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
+from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
-CLIENT_VERSION = "0.2.2"
+CLIENT_VERSION = "0.2.3"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_FRAME = 2 * 1024 * 1024
+PROXY_CHUNK_SIZE = 64 * 1024
+PROXY_OUTBOUND_LIMIT = 256 * 1024
+PROXY_CONTROL_RESERVE = 4 * 1024
 SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
@@ -62,7 +67,7 @@ PROJECT_MAX_FRAME = 32 * 1024 * 1024
 PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
-INFERENCE_CLIENT_SHA256 = "c59232eba9b4e551b29ff953d1eccd69177b0a9624536bd0dcf5dad2d9a10530"
+INFERENCE_CLIENT_SHA256 = "8ee72d4c67dcb6098c585d472b10409842c9728007694312e7df44fc033c2f2a"
 CLIENT_EXPERIENCE_SHA256 = "479b274114c99c71ceecd0a279c1dc69e06137443f0a6ebfbfcaf67a2286e18f"
 LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
 CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
@@ -407,55 +412,197 @@ def open_websocket(endpoint: str, token: str) -> tuple[socket.socket, bytes]:
         raise CliError(f"could not open the broker connection: {exc}") from exc
 
 
-def proxy(device: dict[str, Any]) -> int:
-    sock, initial = open_websocket(device["endpoint"], device["device_token"])
-    lock, stopped = threading.Lock(), threading.Event()
+def _proxy_frame(buffer: bytearray) -> Optional[tuple[int, int, int]]:
+    """Inspect one bounded server frame without consuming a partial header."""
+    if len(buffer) < 2:
+        return None
+    first, second = buffer[:2]
+    if not first & 0x80 or first & 0x70 or second & 0x80:
+        raise CliError("broker sent an invalid WebSocket frame")
+    opcode, length, width = first & 0x0F, second & 0x7F, 2
+    if length in (126, 127):
+        width = 4 if length == 126 else 10
+        if len(buffer) < width:
+            return None
+        length = struct.unpack("!H" if width == 4 else "!Q", buffer[2:width])[0]
+    if length > MAX_FRAME or (opcode >= 8 and length > 125):
+        raise CliError("broker sent an oversized WebSocket frame")
+    if opcode not in (2, 8, 9, 10) or (opcode == 8 and length == 1):
+        raise CliError("broker sent non-binary or invalid control data")
+    return (opcode, width, length) if len(buffer) >= width + length else None
 
-    def send(payload: bytes, opcode: int = 2) -> None:
-        with lock:
-            sock.sendall(frame(payload, opcode))
 
-    def input_loop() -> None:
-        try:
-            while not stopped.is_set():
-                data = os.read(0, 64 * 1024)
-                if not data:
-                    send(b"", 8)
-                    return
-                send(data)
-        except OSError:
-            pass
-        finally:
-            stopped.set()
+def _proxy_stream(sock: socket.socket, initial: bytes = b"", *,
+                  input_fd: int = 0, output_fd: int = 1) -> int:
+    """Own every TLS operation; bound both directions and preserve pipe backpressure.
 
-    worker = threading.Thread(target=input_loop, name="ccfleet-proxy-input", daemon=True)
-    worker.start()
-    reader = FrameReader(sock, initial)
+    OpenSSH keeps the input pipe open until the transport ends. Its HUP is
+    cancellation, including while queued bytes cannot be sent. poll observes
+    that HUP without draining or forwarding a cancelled upload.
+    """
+    blocking: dict[int, bool] = {}
+    outgoing: deque[bytes] = deque()
+    queued = offset = 0
+    received, output = bytearray(initial), bytearray()
+    peer_closed = False
+    read_wait, write_wait = select.POLLIN, select.POLLOUT
+    retry_read = retry_write = False
+    receive_limit = MAX_FRAME + 14
+
+    def enqueue(payload: bytes, opcode: int = 2) -> None:
+        nonlocal queued
+        wire = frame(payload, opcode)
+        limit = PROXY_OUTBOUND_LIMIT + (PROXY_CONTROL_RESERVE if opcode != 2 else 0)
+        if queued + len(wire) > limit:
+            raise CliError("broker control traffic exceeded the transport buffer limit")
+        outgoing.append(wire)
+        queued += len(wire)
+
     try:
-        while not stopped.is_set():
-            opcode, payload = reader.read()
-            if opcode == 2:
-                remaining = memoryview(payload)
-                while remaining:
-                    written = os.write(1, remaining)
+        if len(received) > receive_limit:
+            raise CliError("broker exceeded the transport buffer limit")
+        socket_fd = sock.fileno()
+        if input_fd == output_fd or socket_fd in (input_fd, output_fd):
+            raise CliError("invalid broker transport descriptors")
+        for descriptor in (input_fd, output_fd):
+            blocking[descriptor] = os.get_blocking(descriptor)
+            os.set_blocking(descriptor, False)
+        sock.setblocking(False)
+        output_watch = select.poll()
+        output_watch.register(output_fd, select.POLLOUT)
+        while True:
+            # A completed frame can wait here while the SSH output pipe drains.
+            output_blocked = False
+            while received and not peer_closed:
+                parsed = _proxy_frame(received)
+                if parsed is None:
+                    break
+                opcode, width, length = parsed
+                if opcode == 2 and len(output) + length > MAX_FRAME:
+                    output_blocked = True
+                    break
+                payload = bytes(received[width:width + length])
+                del received[:width + length]
+                if opcode == 2:
+                    output.extend(payload)
+                elif opcode == 8:
+                    peer_closed = True
+                    received.clear()
+                    outgoing.clear()
+                    queued = offset = 0
+                elif opcode == 9:
+                    enqueue(payload, 10)
+            if peer_closed and not output:
+                return 0
+            if not output:
+                # macOS reports a lost pipe reader only when POLLOUT was
+                # requested. Check without making an idle writable pipe spin
+                # the main poller; its normal wait remains bounded below.
+                output_state = dict(output_watch.poll(0)).get(output_fd, 0)
+                if output_state & (select.POLLERR | select.POLLHUP | select.POLLNVAL):
+                    raise CliError("SSH input closed during the broker stream")
+            can_read = (not peer_closed and len(received) < receive_limit
+                        and len(output) < MAX_FRAME and not output_blocked)
+            can_input = (not peer_closed
+                         and queued + PROXY_CHUNK_SIZE + 14 <= PROXY_OUTBOUND_LIMIT)
+            poller = select.poll()
+            poller.register(input_fd, select.POLLIN if can_input else 0)
+            poller.register(output_fd, select.POLLOUT if output else 0)
+            socket_events = (read_wait if can_read else 0) | (write_wait if outgoing else 0)
+            if socket_events:
+                poller.register(socket_fd, socket_events)
+            # SSL may already hold decrypted bytes invisible to the OS poller.
+            pending = can_read and read_wait == select.POLLIN and getattr(
+                sock, "pending", lambda: 0)() > 0
+            immediate = pending or (can_read and retry_read) or (outgoing and retry_write)
+            ready = dict(poller.poll(0 if immediate else 250))
+            if ready.get(input_fd, 0) & select.POLLHUP:
+                return 0
+            bad = select.POLLERR | select.POLLNVAL
+            if ready.get(input_fd, 0) & bad:
+                raise CliError("SSH output closed during the broker stream")
+            if ready.get(output_fd, 0) & (bad | select.POLLHUP):
+                raise CliError("SSH input closed during the broker stream")
+            if ready.get(socket_fd, 0) & bad:
+                raise CliError("broker transport closed unexpectedly")
+            progressed = False
+            if output and ready.get(output_fd, 0) & select.POLLOUT:
+                try:
+                    written = os.write(output_fd, output[:PROXY_CHUNK_SIZE])
+                except (BlockingIOError, InterruptedError):
+                    written = None
+                if written is not None:
                     if written <= 0:
                         raise CliError("SSH input closed during the broker stream")
-                    remaining = remaining[written:]
-            elif opcode == 8:
-                break
-            elif opcode == 9:
-                send(payload, 10)
-            elif opcode != 10:
-                raise CliError("broker sent non-binary data")
-    except EOFError:
-        pass
+                    del output[:written]
+                    progressed = True
+            if can_input and ready.get(input_fd, 0) & select.POLLIN:
+                try:
+                    data = os.read(input_fd, PROXY_CHUNK_SIZE)
+                except (BlockingIOError, InterruptedError):
+                    data = None
+                if data == b"":
+                    return 0
+                if data:
+                    enqueue(data)
+                    progressed = True
+            socket_ready = ready.get(socket_fd, 0)
+            if outgoing and (socket_ready & write_wait or retry_write):
+                retry_write = False
+                try:
+                    sent = sock.send(memoryview(outgoing[0])[offset:])
+                except ssl.SSLWantReadError:
+                    write_wait = select.POLLIN
+                except (ssl.SSLWantWriteError, BlockingIOError, InterruptedError):
+                    write_wait = select.POLLOUT
+                else:
+                    if sent <= 0:
+                        raise CliError("broker transport made no write progress")
+                    offset += sent
+                    if offset == len(outgoing[0]):
+                        queued -= len(outgoing.popleft())
+                        offset = 0
+                    write_wait = select.POLLOUT
+                    retry_read = read_wait == select.POLLOUT
+                    progressed = True
+            if can_read and (socket_ready & (read_wait | select.POLLHUP)
+                             or pending or retry_read):
+                retry_read = False
+                try:
+                    data = sock.recv(min(PROXY_CHUNK_SIZE, receive_limit - len(received)))
+                except ssl.SSLWantWriteError:
+                    read_wait = select.POLLOUT
+                except (ssl.SSLWantReadError, BlockingIOError, InterruptedError):
+                    read_wait = select.POLLIN
+                else:
+                    if not data:
+                        if received:
+                            raise CliError("broker closed during a WebSocket frame")
+                        peer_closed = True
+                        outgoing.clear()
+                        queued = offset = 0
+                    else:
+                        received.extend(data)
+                    read_wait = select.POLLIN
+                    retry_write = write_wait == select.POLLIN
+                    progressed = True
+            if ready and not progressed:
+                # A TLS want can outlast an OS readiness indication. Keep that
+                # state without spinning while the opposite pipe is blocked.
+                time.sleep(0.01)
+    except (OSError, ValueError) as exc:
+        raise CliError("broker transport failed; no connection was retried") from exc
     finally:
-        stopped.set()
-        try:
+        for descriptor, original in blocking.items():
+            with contextlib.suppress(OSError):
+                os.set_blocking(descriptor, original)
+        with contextlib.suppress(OSError):
             sock.close()
-        except OSError:
-            pass
-    return 0
+
+
+def proxy(device: dict[str, Any]) -> int:
+    sock, initial = open_websocket(device["endpoint"], device["device_token"])
+    return _proxy_stream(sock, initial)
 
 
 def ssh_transport_command(device: dict[str, Any], *, tty: bool) -> list[str]:

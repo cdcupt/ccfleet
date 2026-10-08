@@ -94,6 +94,17 @@ the sole upstream POST, the relay rereads the credential after connecting TLS.
 It does not retry a POST to recover from an authentication race. Every request
 still has a fixed overall deadline.</p>
 <h2 id="4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</h2>
+<p>Client 0.2.3 gives one nonblocking loop exclusive ownership of the WebSocket TLS
+socket. Partial frames, short writes, TLS readiness changes and pipe backpressure
+are bounded; sender failure and pipe hangup wake cancellation. TLS operations are
+not split across concurrent reader and writer threads. Authenticated upgrades,
+host-key pins and the opaque inner SSH stream retain their existing contract.</p>
+<p>The local HTTP bridge bounds accepted connections separately from active model
+requests. Only validated HTTP/auth/header requests obtain a model permit before
+body buffering and SSH launch. Idle preconnections and rejected requests do not
+consume those model permits. Overload returns a fixed JSON category and retry
+hint; no request body or secret is reflected, and the bridge does not replay a
+model POST.</p>
 <p>The local bridge uses an ephemeral authentication nonce. Each computer has its
 own paired device token and SSH key; BWH carries the pinned inner SSH stream and
 does not receive plaintext model content or the slot's OAuth credential.

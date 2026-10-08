@@ -251,7 +251,8 @@ def _completed(process, status: int) -> None:
 def check_status(command: Command, environment: Environment = None,
                  timeout: float = 25) -> dict[str, Any]:
     """Verify the slot's gate/account without reading files or making a model call."""
-    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+    if (type(timeout) not in (int, float) or timeout <= 0
+            or timeout > threading.TIMEOUT_MAX or not math.isfinite(timeout)):
         raise ValueError("invalid relay readiness timeout")
     process = _spawn(command, environment)
     timer = threading.Timer(timeout, _kill, args=(process,))
@@ -299,6 +300,7 @@ class _HTTPServer(ThreadingHTTPServer):
     def __init__(self, bridge):
         self.bridge = bridge
         self.workers = threading.BoundedSemaphore(bridge.max_requests)
+        self.admissions = threading.BoundedSemaphore(bridge.max_requests + bridge.max_pending)
         self.processes: set[Any] = set()
         self.connections: set[socket.socket] = set()
         self.guard = threading.Lock()
@@ -306,21 +308,68 @@ class _HTTPServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _Handler)
 
     def process_request(self, request, client_address):
-        if self.stopping.is_set() or not self.workers.acquire(blocking=False):
-            with contextlib.suppress(OSError):
-                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
-                                b"Connection: close\r\n\r\n")
-            self.shutdown_request(request)
+        # Bound accepted connections and waiting threads before creating a thread.
+        # The accept loop never waits for a model stream to finish.
+        if self.stopping.is_set() or not self.admissions.acquire(blocking=False):
+            self.reject_busy(request)
             return
         with self.guard:
-            self.connections.add(request)
+            closing = self.stopping.is_set()
+            if not closing:
+                self.connections.add(request)
+        if closing:
+            self.admissions.release()
+            self.reject_busy(request)
+            return
         try:
             super().process_request(request, client_address)
         except BaseException:
             with self.guard:
                 self.connections.discard(request)
-            self.workers.release()
+            self.admissions.release()
             raise
+
+    def reject_busy(self, request):
+        message = ("Local inference bridge is shutting down; this request was not forwarded."
+                   if self.stopping.is_set() else
+                   "Local inference bridge is busy; this request was not forwarded. Retry shortly.")
+        body = json.dumps({"type": "error", "error": {
+            "type": "overloaded_error", "message": message}}).encode()
+        response = (b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                    b"Retry-After: 3\r\nConnection: close\r\nContent-Length: "
+                    + str(len(body)).encode() + b"\r\n\r\n" + body)
+        # Rejected uploads are not drained. Unread TCP input can reset an
+        # uploading peer before it consumes this best-effort JSON response.
+        with contextlib.suppress(OSError):
+            request.settimeout(1)
+            request.sendall(response)
+        self.shutdown_request(request)
+
+    @staticmethod
+    def peer_closed(request):
+        try:
+            readable, _, _ = select.select([request], [], [], 0)
+            return bool(readable and request.recv(1, socket.MSG_PEEK) == b"")
+        except (OSError, ValueError):
+            return True
+
+    def acquire_worker(self, request):
+        deadline = time.monotonic() + self.bridge.admission_timeout
+        while not self.stopping.is_set():
+            if self.peer_closed(request):
+                return False
+            if self.workers.acquire(blocking=False):
+                if self.stopping.is_set():
+                    self.workers.release()
+                    return False
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            # Closing wakes all waiters. Model permits are acquired only after
+            # HTTP/auth validation, before buffering the bounded request body.
+            self.stopping.wait(min(0.05, remaining))
+        return False
 
     def process_request_thread(self, request, client_address):
         try:
@@ -328,7 +377,7 @@ class _HTTPServer(ThreadingHTTPServer):
         finally:
             with self.guard:
                 self.connections.discard(request)
-            self.workers.release()
+            self.admissions.release()
 
     def stop_connections(self):
         self.stopping.set()
@@ -351,7 +400,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def setup(self):
         super().setup()
-        self.connection.settimeout(self.server.bridge.body_timeout)
+        self.connection.settimeout(self.server.bridge.header_timeout)
 
     def log_message(self, _format, *_args):
         pass
@@ -437,6 +486,16 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.fail(400, "invalid model request headers")
             return
+        if not self.server.acquire_worker(self.connection):
+            self.server.reject_busy(self.connection)
+            return
+        try:
+            self.connection.settimeout(self.server.bridge.body_timeout)
+            self._forward(size, headers)
+        finally:
+            self.server.workers.release()
+
+    def _forward(self, size, headers):
         try:
             body = sanitize_body(read_exact(self.rfile, size))
         except RelayError as exc:
@@ -455,6 +514,10 @@ class _Handler(BaseHTTPRequestHandler):
             with server.guard:
                 if server.stopping.is_set():
                     raise RelayError("local relay is closing")
+                # A queued upload can hide its FIN behind unread body bytes.
+                # Recheck after consuming the body, before launching any SSH.
+                if server.peer_closed(self.connection):
+                    return
                 process = _spawn(server.bridge.command, server.bridge.environment)
                 server.processes.add(process)
             timer = threading.Timer(server.bridge.request_timeout, _kill, args=(process,))
@@ -505,14 +568,21 @@ class Bridge:
     """Launch-scoped endpoint. The random secret is for the native local process only."""
 
     def __init__(self, command: Command, environment: Environment = None, *,
-                 max_requests: int = 4, request_timeout: float = 900,
+                 max_requests: int = 8, max_pending: int = 8, admission_timeout: float = 10,
+                 header_timeout: float = 5, request_timeout: float = 900,
                  body_timeout: float = 30):
         if (type(max_requests) is not int or not 1 <= max_requests <= 32
-                or any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
-                       for value in (request_timeout, body_timeout))):
+                or type(max_pending) is not int or not 0 <= max_pending <= 32
+                or any(type(value) not in (int, float) or value <= 0
+                       or value > threading.TIMEOUT_MAX or not math.isfinite(value)
+                       for value in (request_timeout, body_timeout, admission_timeout,
+                                     header_timeout))
+                or admission_timeout > 30 or header_timeout > 30):
             raise ValueError("invalid relay resource bounds")
         self.command, self.environment = command, environment
         self.max_requests, self.request_timeout = max_requests, request_timeout
+        self.max_pending, self.admission_timeout = max_pending, admission_timeout
+        self.header_timeout = header_timeout
         self.body_timeout = body_timeout
         self.secret = secrets.token_urlsafe(32)
         self.server = _HTTPServer(self)
