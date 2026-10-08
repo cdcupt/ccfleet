@@ -417,34 +417,95 @@ def test_secure_websocket_verifies_broker_hostname(local_client, handshake_peer,
 
 
 @pytest.fixture
-def proxy_peer(local_client, monkeypatch):
-    peer = SimpleNamespace(close=lambda: None)
-    frames = iter([(2, b"abcdefgh"), (8, b"")])
-    globals_ = local_client["proxy"].__globals__
-    monkeypatch.setitem(globals_, "open_websocket", lambda *_: (peer, b""))
-    monkeypatch.setitem(globals_, "FrameReader", lambda *_: SimpleNamespace(read=lambda: next(frames)))
-    monkeypatch.setitem(globals_, "threading", SimpleNamespace(
-        Lock=threading.Lock, Event=threading.Event,
-        Thread=lambda **_: SimpleNamespace(start=lambda: None)))
-    return {"endpoint": "unused", "device_token": "synthetic"}
+def proxy_peer():
+    sock, peer = socket.socketpair()
+    input_fd, input_writer = os.pipe()
+    output_reader, output_fd = os.pipe()
+    try:
+        yield sock, input_fd, output_fd
+    finally:
+        sock.close()
+        peer.close()
+        for descriptor in (input_fd, input_writer, output_reader, output_fd):
+            os.close(descriptor)
 
 
 def test_proxy_preserves_all_ssh_bytes_when_pipe_writes_are_partial(
         local_client, proxy_peer, monkeypatch):
     written = []
+    sock, input_fd, output_fd = proxy_peer
 
     def short_write(fd, data):
-        assert fd == 1
+        assert fd == output_fd
         written.append(bytes(data[:2]))
         return len(written[-1])
 
     monkeypatch.setattr(local_client["os"], "write", short_write)
-    assert local_client["proxy"](proxy_peer) == 0
+    initial = cli_access.websocket_frame(b"abcdefgh") + cli_access.websocket_frame(b"", 8)
+    assert local_client["_proxy_stream"](sock, initial, input_fd=input_fd,
+                                        output_fd=output_fd) == 0
     assert b"".join(written) == b"abcdefgh" and len(written) == 4
+    assert os.get_blocking(input_fd) and os.get_blocking(output_fd)
 
 
 def test_proxy_fails_instead_of_spinning_when_pipe_write_makes_no_progress(
         local_client, proxy_peer, monkeypatch):
+    sock, input_fd, output_fd = proxy_peer
     monkeypatch.setattr(local_client["os"], "write", lambda *_: 0)
     with pytest.raises(local_client["CliError"], match="SSH input closed"):
-        local_client["proxy"](proxy_peer)
+        local_client["_proxy_stream"](sock, cli_access.websocket_frame(b"abcdefgh"),
+                                      input_fd=input_fd, output_fd=output_fd)
+    assert os.get_blocking(input_fd) and os.get_blocking(output_fd)
+    assert sock.fileno() == -1
+
+
+def test_proxy_uses_one_validated_connection_without_reconnecting(local_client, monkeypatch):
+    scope = local_client["proxy"].__globals__
+    peer, calls = object(), []
+
+    def connected(endpoint, token):
+        calls.append((endpoint, token))
+        return peer, b"initial SSH frame"
+
+    def stream(sock, initial):
+        assert sock is peer and initial == b"initial SSH frame"
+        return 0
+
+    monkeypatch.setitem(scope, "open_websocket", connected)
+    monkeypatch.setitem(scope, "_proxy_stream", stream)
+    assert local_client["proxy"]({"endpoint": "unused", "device_token": "synthetic"}) == 0
+    assert calls == [("unused", "synthetic")]
+
+
+@pytest.mark.parametrize("wire", [
+    b"\x02\x00", b"\xc2\x00", b"\x82\x80", b"\x81\x00", b"\x88\x01X",
+    b"\x89\x7e\x00\x7e",
+    b"\x82\x7f" + (2 * 1024 * 1024 + 1).to_bytes(8, "big"),
+])
+def test_proxy_rejects_invalid_or_oversized_frames_before_buffering_payload(
+        local_client, proxy_peer, wire):
+    sock, input_fd, output_fd = proxy_peer
+    with pytest.raises(local_client["CliError"]) as failure:
+        local_client["_proxy_stream"](sock, wire + b"PRIVATE_SYNTHETIC_FRAME_TEXT",
+                                      input_fd=input_fd, output_fd=output_fd)
+    assert "PRIVATE" not in str(failure.value)
+    assert os.get_blocking(input_fd) and os.get_blocking(output_fd)
+    assert sock.fileno() == -1
+
+
+def test_proxy_does_not_accept_eof_inside_a_partial_websocket_frame(local_client):
+    sock, peer = socket.socketpair()
+    input_fd, input_writer = os.pipe()
+    output_reader, output_fd = os.pipe()
+    try:
+        peer.sendall(b"\x82")
+        peer.shutdown(socket.SHUT_WR)
+        with pytest.raises(local_client["CliError"], match="closed during a WebSocket frame"):
+            local_client["_proxy_stream"](sock, input_fd=input_fd, output_fd=output_fd)
+        assert os.get_blocking(input_fd) and os.get_blocking(output_fd)
+        assert sock.fileno() == -1
+    finally:
+        sock.close()
+        peer.close()
+        for descriptor in (input_fd, input_writer, output_reader, output_fd):
+            os.close(descriptor)

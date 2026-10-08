@@ -8,7 +8,9 @@ import json
 import socket
 import struct
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -392,7 +394,7 @@ def test_close_cancels_all_active_children_and_request_deadline_is_bounded(peer)
 
 def test_concurrency_is_resource_bounded_before_starting_extra_ssh(peer):
     command, _, _, calls = peer
-    with relay.Bridge(command(), max_requests=1, body_timeout=2) as bridge:
+    with relay.Bridge(command(), max_requests=1, max_pending=0, body_timeout=2) as bridge:
         first = socket.create_connection(("127.0.0.1", bridge.port), timeout=3)
         first.sendall((f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{bridge.port}\r\n"
                        f"Authorization: Bearer {bridge.secret}\r\n"
@@ -409,12 +411,267 @@ def test_concurrency_is_resource_bounded_before_starting_extra_ssh(peer):
                     response.begin()
                     assert response.status == 503
                     assert response.getheader("Connection") == "close"
-                    assert response.read() == b""
+                    assert response.getheader("Content-Type") == "application/json"
+                    assert response.getheader("Retry-After") == "3"
+                    body = response.read()
+                    assert json.loads(body)["error"]["type"] == "overloaded_error"
+                    assert b"not forwarded" in body and bridge.secret.encode() not in body
                 finally:
                     response.close()
             assert calls == []
         finally:
             first.close()
+
+
+def test_default_bridge_supports_parallel_native_agents_beyond_four(peer):
+    command, _, gate, calls = peer
+    connections = []
+    with relay.Bridge(command("stream")) as bridge:
+        try:
+            for _ in range(5):
+                connection, response = post(bridge)
+                connections.append((connection, response))
+                assert response.status == 200
+                assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+            assert calls == ["stream"] * 5 and len(bridge.server.processes) == 5
+            gate.touch()
+            for _, response in connections:
+                assert response.read() == b"data: second\n\n"
+        finally:
+            for connection, response in connections:
+                response.close()
+                connection.close()
+
+
+def test_silent_preconnection_does_not_occupy_model_capacity(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command(), max_requests=1, max_pending=1) as bridge:
+        with socket.create_connection(("127.0.0.1", bridge.port), timeout=3):
+            wait_until(lambda: len(bridge.server.connections) == 1)
+            connection, response = post(bridge)
+            assert response.status == 200 and response.read() == b"data: first\n\n"
+            connection.close()
+            assert calls == ["ok"]
+
+
+def test_idle_headers_expire_and_release_bounded_connection_capacity(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command(), max_requests=1, max_pending=0, header_timeout=0.15) as bridge:
+        with socket.create_connection(("127.0.0.1", bridge.port), timeout=3) as idle:
+            wait_until(lambda: len(bridge.server.connections) == 1)
+            assert idle.recv(1) == b""
+        wait_until(lambda: not bridge.server.connections)
+        assert calls == []
+        connection, response = post(bridge)
+        assert response.status == 200 and response.read() == b"data: first\n\n"
+        connection.close()
+
+
+def test_short_parallel_burst_waits_without_replaying_or_exceeding_model_capacity(peer):
+    command, _, gate, calls = peer
+    with relay.Bridge(command("stream"), max_requests=1, max_pending=1) as bridge:
+        first, response = post(bridge)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(post, bridge)
+            wait_until(lambda: len(bridge.server.connections) == 2)
+            assert calls == ["stream"] and len(bridge.server.processes) == 1
+            gate.touch()
+            assert response.read() == b"data: second\n\n"
+            first.close()
+            second, next_response = pending.result(timeout=3)
+            assert next_response.status == 200
+            assert next_response.read() == b"data: first\n\ndata: second\n\n"
+            second.close()
+        assert calls == ["stream", "stream"]
+
+
+def test_waiting_model_request_expires_with_safe_busy_json_and_does_not_start_ssh(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command("idle-stream"), max_requests=1, max_pending=1,
+                      admission_timeout=0.15) as bridge:
+        first, response = post(bridge)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        second, busy = post(bridge)
+        assert busy.status == 503 and busy.getheader("Retry-After") == "3"
+        body = busy.read()
+        assert json.loads(body)["error"]["type"] == "overloaded_error"
+        assert b"not forwarded" in body and bridge.secret.encode() not in body
+        second.close()
+        assert calls == ["idle-stream"] and len(bridge.server.processes) == 1
+        response.close()
+        first.close()
+        wait_until(lambda: not bridge.server.processes and not bridge.server.connections)
+        assert calls == ["idle-stream"]  # The expired request is never replayed.
+        third, recovered = post(bridge)
+        assert recovered.status == 200
+        assert recovered.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        recovered.close()
+        third.close()
+        assert calls == ["idle-stream", "idle-stream"]
+
+
+def test_invalid_auth_is_rejected_without_waiting_for_model_capacity(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command("idle-stream"), max_requests=1, max_pending=1) as bridge:
+        first, response = post(bridge)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        second, denied = post(bridge, headers={"Authorization": "Bearer invalid"})
+        assert denied.status == 401
+        denied.read()
+        second.close()
+        assert calls == ["idle-stream"]
+        response.close()
+        first.close()
+
+
+def test_invalid_json_releases_model_permit_before_the_next_request(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command(), max_requests=1, max_pending=1) as bridge:
+        fields = [("Host", f"127.0.0.1:{bridge.port}"),
+                  ("Authorization", "Bearer " + bridge.secret), ("Content-Length", "1"),
+                  ("Content-Type", "application/json")]
+        assert raw_request(bridge, fields, body=b"{")[0] == 400
+        assert calls == []
+        connection, response = post(bridge)
+        assert response.status == 200 and response.read() == b"data: first\n\n"
+        connection.close()
+        assert calls == ["ok"]
+
+
+def test_disconnected_pending_request_releases_connection_without_starting_ssh(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command("idle-stream"), max_requests=1, max_pending=1,
+                      admission_timeout=30) as bridge:
+        first, response = post(bridge)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        pending = socket.create_connection(("127.0.0.1", bridge.port), timeout=3)
+        pending.sendall((f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{bridge.port}\r\n"
+                         f"Authorization: Bearer {bridge.secret}\r\nContent-Type: application/json\r\n"
+                         "Content-Length: 2\r\n\r\n{}").encode())
+        wait_until(lambda: len(bridge.server.connections) == 2)
+        pending.close()
+        wait_until(lambda: len(bridge.server.connections) == 1)
+        assert calls == ["idle-stream"]
+        response.close()
+        first.close()
+
+
+def test_queued_large_body_with_fin_is_cancelled_after_read_before_ssh_spawn(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command("idle-stream"), max_requests=1, max_pending=1,
+                      admission_timeout=30) as bridge:
+        first, response = post(bridge)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        body = json.dumps({"model": "test", "messages": [
+            {"role": "user", "content": "x" * (128 * 1024)}]}).encode()
+        pending = socket.create_connection(("127.0.0.1", bridge.port), timeout=3)
+        try:
+            pending.sendall((f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{bridge.port}\r\n"
+                             f"Authorization: Bearer {bridge.secret}\r\n"
+                             "Content-Type: application/json\r\n"
+                             f"Content-Length: {len(body)}\r\n\r\n").encode() + body)
+            pending.shutdown(socket.SHUT_WR)
+            wait_until(lambda: len(bridge.server.connections) == 2)
+            # The unread body is larger than HTTP read-ahead, so MSG_PEEK still
+            # sees body data instead of EOF while the sole model permit is busy.
+            assert calls == ["idle-stream"]
+            response.close()
+            first.close()
+            wait_until(lambda: not bridge.server.connections and not bridge.server.processes)
+            assert calls == ["idle-stream"]
+            recovered, ready = post(bridge)
+            assert ready.status == 200
+            assert ready.read(len(b"data: first\n\n")) == b"data: first\n\n"
+            ready.close()
+            recovered.close()
+            assert calls == ["idle-stream", "idle-stream"]
+        finally:
+            pending.close()
+            response.close()
+            first.close()
+
+
+def test_large_upload_rejection_is_bounded_and_never_forwarded_even_if_tcp_resets(peer):
+    command, _, _, calls = peer
+    with relay.Bridge(command("idle-stream"), max_requests=1, max_pending=0) as bridge:
+        first, response = post(bridge)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        overloaded = socket.create_connection(("127.0.0.1", bridge.port), timeout=2)
+        sent = threading.Event()
+
+        def upload():
+            try:
+                overloaded.sendall((f"POST /v1/messages HTTP/1.1\r\n"
+                                    f"Host: 127.0.0.1:{bridge.port}\r\n"
+                                    f"Authorization: Bearer {bridge.secret}\r\n"
+                                    "Content-Type: application/json\r\n"
+                                    "Content-Length: 4194304\r\n\r\n").encode())
+                for _ in range(64):
+                    overloaded.sendall(b"x" * 65536)
+            except OSError:
+                pass  # Early refusal can reset a connection with unread upload bytes.
+            finally:
+                sent.set()
+
+        sender = threading.Thread(target=upload)
+        sender.start()
+        raw = bytearray()
+        began = time.monotonic()
+        try:
+            while True:
+                try:
+                    part = overloaded.recv(4096)
+                except OSError:
+                    break
+                if not part:
+                    break
+                raw.extend(part)
+                assert len(raw) <= 1024
+            assert sent.wait(3) and time.monotonic() - began < 3
+            if raw:
+                status_line = b"HTTP/1.1 503 Service Unavailable\r\n"
+                assert status_line.startswith(bytes(raw[:len(status_line)]))
+                headers, separator, body = bytes(raw).partition(b"\r\n\r\n")
+                if separator:
+                    assert b"Retry-After: 3\r\n" in headers + b"\r\n"
+                    length = int(next(line.split(b":", 1)[1] for line in headers.split(b"\r\n")
+                                      if line.startswith(b"Content-Length:")))
+                    assert 0 < length < 512 and len(body) <= length
+                    if len(body) == length:
+                        assert json.loads(body)["error"]["type"] == "overloaded_error"
+                    # A reset may interrupt delivery even after complete headers.
+            assert bridge.secret.encode() not in raw and calls == ["idle-stream"]
+            assert len(bridge.server.connections) == 1 and len(bridge.server.processes) == 1
+        finally:
+            overloaded.close()
+            sender.join(timeout=3)
+            assert not sender.is_alive()
+            response.close()
+            first.close()
+
+
+def test_shutdown_wakes_pending_model_requests_without_waiting_for_admission_deadline(peer):
+    command, _, _, calls = peer
+    bridge = relay.Bridge(command("idle-stream"), max_requests=1, max_pending=1,
+                          admission_timeout=30).start()
+    first, response = post(bridge)
+    assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+    pending = socket.create_connection(("127.0.0.1", bridge.port), timeout=3)
+    try:
+        pending.sendall((f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{bridge.port}\r\n"
+                         f"Authorization: Bearer {bridge.secret}\r\nContent-Type: application/json\r\n"
+                         "Content-Length: 2\r\n\r\n{}").encode())
+        wait_until(lambda: len(bridge.server.connections) == 2)
+        began = time.monotonic()
+        bridge.close()
+        wait_until(lambda: not bridge.server.connections and not bridge.server.processes)
+        assert time.monotonic() - began < 3 and calls == ["idle-stream"]
+    finally:
+        response.close()
+        first.close()
+        pending.close()
+        bridge.close()
 
 
 @pytest.mark.parametrize("value", [
@@ -430,7 +687,8 @@ def test_response_metadata_is_exact_and_strict(value):
         relay.metadata(io.BytesIO(struct.pack("!I", len(raw)) + raw))
 
 
-@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True, "25"])
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True, "25",
+                                 10 ** 400, 1e300])
 def test_timeouts_and_concurrency_bounds_must_be_finite_and_typed(peer, value):
     command = peer[0]()
     with pytest.raises(ValueError):
@@ -438,5 +696,23 @@ def test_timeouts_and_concurrency_bounds_must_be_finite_and_typed(peer, value):
     with pytest.raises(ValueError):
         relay.Bridge(command, body_timeout=value)
     with pytest.raises(ValueError):
+        relay.Bridge(command, header_timeout=value)
+    with pytest.raises(ValueError):
+        relay.Bridge(command, admission_timeout=value)
+    with pytest.raises(ValueError):
         relay.check_status(command, timeout=value)
+    assert peer[3] == []
+
+
+@pytest.mark.parametrize("value", [-1, 33, True, None, "8", 1.0, float("inf")])
+def test_pending_connections_are_finitely_bounded_before_listening(peer, value):
+    with pytest.raises(ValueError):
+        relay.Bridge(peer[0](), max_pending=value)
+    assert peer[3] == []
+
+
+@pytest.mark.parametrize("field", ["header_timeout", "admission_timeout"])
+def test_header_and_admission_deadlines_have_a_hard_upper_bound(peer, field):
+    with pytest.raises(ValueError):
+        relay.Bridge(peer[0](), **{field: 31})
     assert peer[3] == []
