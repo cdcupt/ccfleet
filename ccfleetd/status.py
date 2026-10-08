@@ -61,7 +61,8 @@ LEVELED_RULES = ("disk_high",)
 #:   no_heartbeat            the age of the last report is read directly (thresholds)
 #:   credentials_missing, token_stale, token_expired
 #:                           the holder's sign-in
-#:   slot_credentials_missing, slot_token_expired, slot_credential_renewal
+#:   slot_credentials_missing, slot_token_expired, slot_credential_renewal,
+#:   slot_sign_in_required, slot_login_expiring
 #:                           private hosted-account maintenance, not machine uptime
 #:   quota_high_session, quota_high_week
 #:                           the holder's usage limits
@@ -73,6 +74,7 @@ LEVELED_RULES = ("disk_high",)
 #:   version_mismatch        Claude Code behind its pin still runs
 EXCLUDED_RULES = ("no_heartbeat", "credentials_missing", "token_stale", "token_expired",
                   "slot_credentials_missing", "slot_token_expired", "slot_credential_renewal",
+                  "slot_sign_in_required", "slot_login_expiring",
                   "quota_high_session", "quota_high_week", "account_elsewhere",
                   "account_changed", "remote_control_down", "egress_changed",
                   "version_mismatch")

@@ -76,7 +76,7 @@ def test_credentials_summary_never_contains_tokens(tmp_path):
 
 def test_credentials_summary_missing_and_corrupt(tmp_path, monkeypatch):
     monkeypatch.setattr(agent.platform, "system", lambda: "Linux")
-    assert agent.credentials_summary(tmp_path) == {"present": False, "store": "file"}
+    assert agent.credentials_summary(tmp_path) == {"present": False, "store": "file", "refresh_available": False}
     monkeypatch.setattr(agent.platform, "system", lambda: "Darwin")
     assert agent.credentials_summary(tmp_path) == {"present": None, "store": "keychain"}
     (tmp_path / ".credentials.json").write_text("{not json")

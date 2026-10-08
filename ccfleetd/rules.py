@@ -11,10 +11,15 @@ from . import slots as slotstates
 from .config import Config
 from .credential_health import (
     ACCESS_MARGIN_S,
+    LOGIN_WARNING_S,
+    NATIVE_LOGIN_FAILURES,
     RENEWAL_WINDOW_S,
     TRANSITION_REASONS,
     access_expiry,
+    instant,
+    recovery_guidance,
     renewal_report,
+    sign_in_reason,
 )
 from .desired import is_channel
 
@@ -289,24 +294,44 @@ def _slot_credential_findings(slot_rows: Sequence[Mapping[str, Any]],
                 and credentials["account_fp"] != credentials["bound_fp"]):
             continue
         expires = access_expiry(credentials)
+        terminal = sign_in_reason(credentials, now)
         if expires is not None and expires <= now + ACCESS_MARGIN_S:
             findings.append(Finding(
                 f"slot_token_expired:{user}", LEVEL_CRITICAL if expires <= now else LEVEL_WARN,
                 f"{user}: access credential needs renewal; model relay is unavailable. "
-                "Check native maintenance, then request Sign in again if recovery is needed."))
+                + recovery_guidance(credentials, now)))
         elif credentials.get("present") is False or credentials.get("logged_in") is False:
             findings.append(Finding(
                 f"slot_credentials_missing:{user}", LEVEL_WARN,
-                f"{user}: Claude sign-in is unavailable; the holder may need Sign in again."))
+                f"{user}: Claude sign-in is unavailable; use Sign in again to restore access."))
+        elif terminal:
+            if terminal in NATIVE_LOGIN_FAILURES:
+                access_note = "native Claude requires a fresh sign-in. "
+            elif expires is None:
+                access_note = "current access could not be verified. "
+            else:
+                access_note = ("the reported access credential has not expired; live model "
+                               "access is unverified. ")
+            findings.append(Finding(
+                f"slot_sign_in_required:{user}", LEVEL_WARN,
+                f"{user}: {access_note}Sign in again to restore automatic renewal."))
         elif renewal.get("reason") in {"expiry_unknown", "credential_unavailable"}:
             findings.append(Finding(
                 f"slot_credential_renewal:{user}", LEVEL_WARN,
                 f"{user}: access credential cannot be verified; check native maintenance."))
         elif (expires is not None and expires <= now + RENEWAL_WINDOW_S
-                and renewal.get("state") == "retrying"):
+                and renewal.get("state") in {"needed", "retrying", "blocked"}):
             findings.append(Finding(
                 f"slot_credential_renewal:{user}", LEVEL_WARN,
-                f"{user}: native renewal is not yet confirmed; a bounded retry is scheduled."))
+                f"{user}: " + recovery_guidance(credentials, now)))
+        refresh_expiry = instant(credentials.get("refresh_expires_at"))
+        if (not terminal and credentials.get("logged_in") is True
+                and credentials.get("present") is not False
+                and refresh_expiry is not None and now < refresh_expiry <= now + LOGIN_WARNING_S):
+            findings.append(Finding(
+                f"slot_login_expiring:{user}", LEVEL_WARN,
+                f"{user}: longer-lived Claude sign-in expires within 3 days. "
+                "Sign in again before then to keep automatic renewal available."))
     return findings
 
 

@@ -43,6 +43,11 @@ native renewal without relying on a fresh quota-cache miss. It verifies expiry
 actually advanced, serializes attempts, and reports only safe health facts.
 The relay remains read-only with respect to credentials; see
 <a href="reliability-privacy.html">reliability and privacy decisions</a> for the exact boundaries.</p>
+<p>Temporary network failures, native refresh contention and unavailable probe locks
+remain recovery states rather than an automatic instruction to sign in again.
+The slot page distinguishes these retries from a missing or expired longer-lived
+login, and warns within three days of a known login expiry. Native Claude remains
+the only credential writer; the platform never restores old refresh-token copies.</p>
 <h2 id="one-command-setup">One-command setup</h2>
 <p>Use the same command for a new computer or an update:</p>
 <pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --setup

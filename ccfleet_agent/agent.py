@@ -42,6 +42,7 @@ import logging
 import math
 import os
 import platform
+import random
 import re
 import shlex
 import shutil
@@ -56,6 +57,7 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -295,9 +297,13 @@ def credentials_summary(config_dir: Path) -> dict[str, Any]:
                                        "store": "keychain"}
             summary.update({k: v for k, v in account.items() if k != "account"})
             return summary
-        return {"present": False, "store": "file"}
+        return {"present": False, "store": "file", "refresh_available": False}
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = None
     summary: dict[str, Any] = {"present": True, "store": "file",
-                               "mtime": path.stat().st_mtime, "expires_at": None,
+                               "mtime": mtime, "expires_at": None,
                                "subscription_type": None}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -305,9 +311,12 @@ def credentials_summary(config_dir: Path) -> dict[str, Any]:
         summary["parse_error"] = True
         return summary
     oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    summary["refresh_available"] = False
     if isinstance(oauth, dict):
+        summary["refresh_available"] = (isinstance(oauth.get("refreshToken"), str)
+                                        and bool(oauth["refreshToken"]))
         expires = oauth.get("expiresAt")
-        if isinstance(expires, (int, float)) and not isinstance(expires, bool):
+        if credential_expiry({"expires_at": expires}) is not None:
             summary["expires_at"] = expires
         sub = oauth.get("subscriptionType")
         if isinstance(sub, str):
@@ -866,10 +875,96 @@ def _native_probe_lock(probe: str, name: str = ".native-probe.lock") -> Optional
         return None
 
 
+NATIVE_PROBE_OUTCOMES = frozenset({
+    "native_refreshed", "native_refresh_not_due", "native_auth_rejected",
+    "native_login_expired", "native_network_error", "native_rate_limited",
+    "native_timeout", "native_launch_failed", "native_probe_busy",
+    "native_refresh_unconfirmed",
+})
+NATIVE_TERMINAL_REASONS = frozenset({
+    "refresh_unavailable", "refresh_expired", "native_login_expired", "native_auth_rejected",
+})
+NATIVE_RETRY_AFTER_MAX_S = 10 * 60
+NATIVE_PANE_LIMIT = 32 * 1024
+
+
+def native_probe_outcome(pane: str, now: float) -> dict[str, Any]:
+    """Reduce an isolated native screen to fixed codes, never retain its text.
+
+    A bare 401 or expired access token says nothing about refresh capability.
+    Native contention/network messages can themselves suggest /login, so those
+    recoverable markers take precedence over terminal login advice.
+    """
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", pane[:NATIVE_PANE_LIMIT])
+    lines = [line.strip().lstrip("⎿ ") for line in text.splitlines()]
+    network_advice = any(line.lower().startswith(
+        "this may be a temporary network issue, please try again") for line in lines)
+    outcome = None
+    for line in lines:
+        lower = line.lower()
+        if ("another claude code process is refreshing" in lower
+                or lower.startswith("could not refresh your login because another")):
+            outcome = "native_probe_busy"
+            break
+        if (lower.startswith("authentication error")
+                and ("temporary network" in lower or network_advice)
+                or re.match(r"^(?:api )?error: (?:connection error|fetch failed|econn|enotfound)",
+                            lower)
+                or lower.startswith("unable to connect to api")):
+            outcome = "native_network_error"
+            break
+        if re.match(r"^(?:api )?error: 429\b", lower) or lower.startswith("rate limit exceeded"):
+            outcome = "native_rate_limited"
+            break
+    if outcome is None:
+        for line in lines:
+            lower = line.lower()
+            if (lower.startswith("oauth token revoked") and "/login" in lower
+                    or lower.startswith("failed to refresh oauth token:")
+                    and "invalid_grant" in lower and "/login" in lower):
+                outcome = "native_auth_rejected"
+                break
+            if (lower.startswith("login expired") and "/login" in lower
+                    or lower.startswith("refresh token has expired")
+                    and ("/login" in lower or "log in again" in lower)):
+                outcome = "native_login_expired"
+                break
+            if re.fullmatch(r"(?:token )?refresh (?:is )?(?:not due|not required|not needed)[.!]?",
+                            lower):
+                outcome = "native_refresh_not_due"
+                break
+    result: dict[str, Any] = {"outcome": outcome or "native_refresh_unconfirmed"}
+    if outcome == "native_rate_limited":
+        for line in lines:
+            match = re.fullmatch(r"Retry-After:\s*([^\r\n]{1,80})", line, flags=re.I)
+            if not match:
+                continue
+            raw = match.group(1).strip()
+            delay = None
+            if re.fullmatch(r"[0-9]{1,8}", raw):
+                delay = float(raw)
+            else:
+                try:
+                    instant = parsedate_to_datetime(raw)
+                    if instant.tzinfo is not None:
+                        delay = instant.timestamp() - now
+                except (ValueError, TypeError, OverflowError):
+                    pass
+            if delay is not None and math.isfinite(delay) and delay >= 0:
+                result["retry_after_s"] = min(delay, NATIVE_RETRY_AFTER_MAX_S)
+                break
+    return result
+
+
 def read_quota(runner: Runner = subprocess.run,
                now: Optional[float] = None, *,
-               timeout: float = QUOTA_TIMEOUT_S) -> Optional[dict[str, Any]]:
+               timeout: float = QUOTA_TIMEOUT_S,
+               probe_result: Optional[dict[str, Any]] = None,
+               before_start: Optional[Callable[[], bool]] = None
+               ) -> Optional[dict[str, Any]]:
     """Drive `claude` to its /usage screen once and read the windows off it."""
+    observation = probe_result if probe_result is not None else {}
+    observation.update(outcome="native_launch_failed", probe_started=False)
     path = find_claude()
     if not path:
         return None
@@ -882,19 +977,39 @@ def read_quota(runner: Runner = subprocess.run,
     # history of anywhere anybody works.
     probe, why = quota_probe_dir()
     if probe is None:
+        observation["outcome"] = "native_probe_busy"
         log.warning("usage probe not started: %s", why)
         return None
     lock = _native_probe_lock(probe)
     if lock is None:
+        observation["outcome"] = "native_probe_busy"
         return None
     try:
-        return _read_quota_locked(path, probe, runner, now, timeout)
+        if before_start is not None and not before_start():
+            observation["outcome"] = "native_probe_busy"
+            return None
+        return _read_quota_locked(path, probe, runner, now, timeout, observation)
     finally:
         os.close(lock)
 
 
 def _read_quota_locked(path: str, probe: str, runner: Runner,
-                       now: Optional[float], timeout: float) -> Optional[dict[str, Any]]:
+                       now: Optional[float], timeout: float,
+                       observation: Optional[dict[str, Any]] = None
+                       ) -> Optional[dict[str, Any]]:
+    observation = observation if observation is not None else {}
+    original_runner = runner
+    cleaning = False
+
+    def observed_runner(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        try:
+            return original_runner(argv, **kwargs)
+        except subprocess.TimeoutExpired:
+            if not cleaning:
+                observation["outcome"] = "native_timeout"
+            raise
+
+    runner = observed_runner
     deadline = (time.time() if now is None else now) + min(timeout, QUOTA_TIMEOUT_S)
 
     def left() -> float:
@@ -913,14 +1028,20 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
     try:
         # A timeout or nonzero client result does not prove the tmux server
         # rejected creation. Always clean up after even an ambiguous launch.
+        observation.pop("probe_started", None)
         started = _tmux_ok_on(runner, QUOTA_TMUX_SOCKET, "new-session", "-d", "-s", QUOTA_SESSION,
                               "-c", probe, "-x", "180", "-y", "45", shlex.quote(path),
                               timeout=left())
         if not started:
             return None
+        observation.update(probe_started=True, outcome="native_refresh_unconfirmed")
         while time.time() < deadline:
             time.sleep(min(3.0, max(0.0, deadline - time.time())))
             pane = command("capture-pane", "-p", "-J", "-t", QUOTA_SESSION) or ""
+            classified = native_probe_outcome(pane, time.time())
+            if classified["outcome"] != "native_refresh_unconfirmed":
+                observation.update(classified)
+                break
             # A fresh working directory asks whether the folder is trusted. It is
             # the probe's own empty directory; answer once and carry on.
             if "trust this folder" in pane:
@@ -948,8 +1069,11 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
                     result = found
                 if "session" in found and "week" in found:
                     break
+        if result is None and observation.get("outcome") == "native_refresh_unconfirmed":
+            observation["outcome"] = "native_timeout"
     finally:
         # Cleanup has its own short allowance after the native-probe deadline.
+        cleaning = True
         _quota_tmux(runner, "kill-session", "-t", QUOTA_SESSION, timeout=5.0)
     return result
 
@@ -2132,9 +2256,11 @@ def _json_object(path: Path) -> dict[str, Any]:
 
 def _epoch_s(raw: Any) -> Optional[float]:
     """A time Claude Code wrote, in seconds. It writes milliseconds."""
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+    if (type(raw) not in (int, float) or not 0 < raw < 1e14
+            or not math.isfinite(raw)):
         return None
-    return raw / 1000 if raw > 1e11 else float(raw)
+    seconds = raw / 1000 if raw > 1e11 else raw
+    return finite_epoch(seconds)
 
 
 def slot_account_labels(config_dir: Path) -> dict[str, Any]:
@@ -2551,14 +2677,16 @@ def finite_epoch(value: Any) -> Optional[float]:
     if type(value) not in (int, float):
         return None
     try:
-        return float(value) if math.isfinite(value) and value > 0 else None
+        return float(value) if 0 < value < 1e11 and math.isfinite(value) else None
     except (OverflowError, ValueError):
         return None
 
 
 def credential_expiry(credentials: Mapping[str, Any]) -> Optional[float]:
-    value = finite_epoch(credentials.get("expires_at"))
-    return value / 1000 if value is not None else None
+    value = credentials.get("expires_at")
+    if type(value) not in (int, float) or not 0 < value < 1e14:
+        return None
+    return finite_epoch(value / 1000)
 
 
 def _slot_credential_facts(config_dir: Path, state: Mapping[str, Any],
@@ -2573,99 +2701,227 @@ def _slot_credential_facts(config_dir: Path, state: Mapping[str, Any],
     return credentials
 
 
+def native_retry_delay(outcome: str, failures: int, expiry: Optional[float], now: float,
+                       retry_after: Any = None) -> float:
+    """Bound temporary failures; only early eligibility checks converge on expiry."""
+    failures = min(10, max(0, failures))
+    base = min(NATIVE_RENEWAL_RETRY_S * 2 ** failures, NATIVE_RENEWAL_RETRY_MAX_S)
+    if outcome in {"native_probe_busy", "native_refresh_not_due"}:
+        base = NATIVE_RENEWAL_RETRY_S
+    delay = min(NATIVE_RENEWAL_RETRY_MAX_S, base + random.uniform(0, base * 0.2))
+    if outcome in {"native_refresh_not_due", "native_refresh_unconfirmed"}:
+        delay = min(delay, max(NATIVE_RENEWAL_RETRY_S, ((expiry or now) - now) / 2))
+    if (type(retry_after) in (int, float) and 0 <= retry_after <= NATIVE_RETRY_AFTER_MAX_S
+            and math.isfinite(retry_after)):
+        delay = max(delay, retry_after)
+    return max(NATIVE_RENEWAL_RETRY_S, min(delay, NATIVE_RENEWAL_RETRY_MAX_S))
+
+
+def _renewal_guard(credentials: Mapping[str, Any], previous: Mapping[str, Any],
+                   stamp: Optional[list[int]], now: float) -> Optional[str]:
+    if credentials.get("parse_error") or credentials.get("store") != "file":
+        return "credential_unavailable"
+    if credentials.get("refresh_available") is False:
+        return "refresh_unavailable"
+    refresh_expiry = finite_epoch(credentials.get("refresh_expires_at"))
+    if refresh_expiry is not None and refresh_expiry <= now:
+        return "refresh_expired"
+    # Explicit native rejection is sticky only for the exact file observed then.
+    # A normal native writer or completed sign-in changes the stamp and retries.
+    if (isinstance(previous.get("reason"), str)
+            and previous["reason"] in {"native_login_expired", "native_auth_rejected"}
+            and stamp is not None and previous.get("credential_stamp") == stamp):
+        return str(previous["reason"])
+    if credential_expiry(credentials) is None:
+        return "expiry_unknown"
+    return None
+
+
 def maintain_slot_credentials(state: Mapping[str, Any], request: Mapping[str, Any],
                               credentials: Mapping[str, Any], runner: Runner,
                               now: float, state_path: Path
                               ) -> tuple[dict[str, Any], dict[str, Any], bool]:
-    """Attempt one bounded native renewal, then verify expiry and account again.
-
-    'current' only describes local expiry, not live provider acceptance. A quota
-    screen or successful CLI exit is never evidence that renewal occurred.
-    Only the machine's chosen maintenance slot may run the expensive probe.
-    """
+    """Native Claude is the sole writer; retain only bounded maintenance facts."""
     state = dict(state)
     previous = state.get("native_renewal")
-    previous = previous if isinstance(previous, Mapping) else {}
+    previous = dict(previous) if isinstance(previous, Mapping) else {}
     report = {key: finite_epoch(previous.get(key)) for key in NATIVE_RENEWAL_TIMESTAMPS
               if finite_epoch(previous.get(key)) is not None}
-    report.update({"state": "needed", "checked_at": now})
+    for key in ("outcome", "probe_started"):
+        value = previous.get(key)
+        if (key == "outcome" and isinstance(value, str) and value in NATIVE_PROBE_OUTCOMES
+                and value not in NATIVE_TERMINAL_REASONS
+                or key == "probe_started" and isinstance(value, bool)):
+            report[key] = value
+    report.update(state="needed", checked_at=now)
     bound = state.get("bound_fp")
-    expiry = credential_expiry(credentials)
-    reason = None
-    if not bound:
-        reason = "account_unbound"
-    elif state.get("account_restart") or credentials.get("account_fp") != bound:
-        reason = "account_transition"
-    elif request.get("login") or state.get("login"):
-        reason = "sign_in_pending"
-    elif credentials.get("parse_error") or credentials.get("store") != "file":
-        reason = "credential_unavailable"
-    elif expiry is None:
-        reason = "expiry_unknown"
-    if reason:
-        report.update({"state": "blocked", "reason": reason})
-        return state, report, False
-    if expiry > now + NATIVE_RENEWAL_EARLY_S:
+    config_dir = Path.home() / ".claude"
+
+    def current_report(current: Mapping[str, Any]
+                       ) -> tuple[dict[str, Any], dict[str, Any], bool]:
         report["state"] = "current"
+        for key in ("reason", "outcome", "probe_started", "next_attempt_at"):
+            report.pop(key, None)
+        saved = {**previous, **report, "failures": 0,
+                 "credential_stamp": _credentials_stamp(config_dir)}
+        for key in ("reason", "outcome", "probe_started", "next_attempt_at"):
+            saved.pop(key, None)
+        return {**current, "native_renewal": saved}, report, False
+
+    def finish(reason: str, *, current_state: Optional[Mapping[str, Any]] = None,
+               facts: Optional[Mapping[str, Any]] = None
+               ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        nonlocal state
+        if current_state is not None:
+            state = dict(current_state)
+        report.update(state="blocked", reason=reason)
+        if facts is not None:
+            saved = {**previous, **report, "credential_stamp": _credentials_stamp(config_dir)}
+            if reason in NATIVE_PROBE_OUTCOMES:
+                report["outcome"] = saved["outcome"] = reason
+            else:
+                saved.pop("outcome", None)
+            saved.pop("next_attempt_at", None)
+            report.pop("next_attempt_at", None)
+            state["native_renewal"] = saved
         return state, report, False
-    next_at = finite_epoch(previous.get("next_attempt_at")) or 0
-    if next_at > now:
-        report.update({"state": "retrying", "reason": "native_refresh_unconfirmed"})
-        return state, report, False
+
+    if not bound:
+        return finish("account_unbound")
+    if state.get("account_restart") or credentials.get("account_fp") != bound:
+        return finish("account_transition")
+    if request.get("login") or state.get("login"):
+        return finish("sign_in_pending")
     if request.get("refresh_quota") is not True:
+        reason = _renewal_guard(credentials, previous, _credentials_stamp(config_dir), now)
+        if reason:
+            return finish(reason, facts=credentials)
+        if (credential_expiry(credentials) or 0) > now + NATIVE_RENEWAL_EARLY_S:
+            return current_report(state)
         return state, report, False
     probe, _why = quota_probe_dir()
     lock = _native_probe_lock(probe, ".renewal.lock") if probe else None
     if lock is None:
-        report.update({"state": "blocked", "reason": "maintenance_busy"})
+        report.update(state="retrying", reason="native_probe_busy",
+                      outcome="native_probe_busy", probe_started=False)
         return state, report, False
     try:
-        # Another run may have finished between our initial state read and lock.
         current = read_state(state_path)
         if (current.get("bound_fp", bound) != bound or current.get("account_restart")
                 or current.get("login")
                 or account_fingerprint(Path.home() / ".claude.json") != bound):
-            report.update({"state": "blocked", "reason": "account_transition"})
-            return dict(current), report, False
+            return finish("account_transition", current_state=current)
         latest = current.get("native_renewal")
-        latest = latest if isinstance(latest, Mapping) else {}
-        if (finite_epoch(latest.get("next_attempt_at")) or 0) > now:
-            report.update({key: latest[key] for key in NATIVE_RENEWAL_TIMESTAMPS
-                           if finite_epoch(latest.get(key)) is not None})
-            report.update({"state": "retrying", "reason": "native_refresh_unconfirmed"})
+        previous = dict(latest) if isinstance(latest, Mapping) else previous
+        for key in NATIVE_RENEWAL_TIMESTAMPS:
+            report.pop(key, None)
+            observed_at = finite_epoch(previous.get(key))
+            if observed_at is not None:
+                report[key] = observed_at
+        # A holder's independently running native Claude may already have rotated.
+        fresh = _slot_credential_facts(config_dir, current, {})
+        stamp = _credentials_stamp(config_dir)
+        reason = _renewal_guard(fresh, previous, stamp, now)
+        if reason:
+            return finish(reason, current_state=current, facts=fresh)
+        expiry = credential_expiry(fresh)
+        if expiry is not None and expiry > now + NATIVE_RENEWAL_EARLY_S:
+            return current_report(current)
+        if (finite_epoch(previous.get("next_attempt_at")) or 0) > now:
+            report.update({key: previous[key] for key in NATIVE_RENEWAL_TIMESTAMPS
+                           if finite_epoch(previous.get(key)) is not None})
+            outcome = previous.get("outcome")
+            outcome = (outcome if isinstance(outcome, str) and outcome in NATIVE_PROBE_OUTCOMES
+                       else "native_refresh_unconfirmed")
+            report.update(state="retrying", reason=outcome, outcome=outcome)
             return dict(current), report, False
         failures = previous.get("failures", 0)
         failures = min(failures, 10) if type(failures) is int and failures >= 0 else 0
-        delay = min(NATIVE_RENEWAL_RETRY_S * 2 ** failures, NATIVE_RENEWAL_RETRY_MAX_S)
-        # Native Claude may decline early refresh until its own renewal window.
-        # Converge toward expiry rather than backing off across that window;
-        # expired credentials retry once a minute, never in a tight loop.
-        expiry_delay = max(NATIVE_RENEWAL_RETRY_S, (expiry - now) / 2)
-        delay = min(delay, expiry_delay)
-        saved = {**report, "last_attempt_at": now, "next_attempt_at": now + delay,
-                 "failures": failures + 1, "state": "retrying",
-                 "reason": "native_refresh_unconfirmed"}
-        state["native_renewal"] = saved
-        # Durable before launching, so a killed probe does not cause a hot loop.
-        if not write_state(state_path, state):
-            report.update({"state": "blocked", "reason": "maintenance_busy"})
-            return state, report, False
-        read_quota(runner, timeout=NATIVE_RENEWAL_TIMEOUT_S)
-        fresh = credentials_summary(Path.home() / ".claude")
+        reservation: dict[str, Any] = {}
+        aborted: dict[str, Any] = {}
+
+        def before_start() -> bool:
+            # Called only while the quota lock is held, immediately before launch.
+            current = read_state(state_path)
+            facts = _slot_credential_facts(config_dir, current, {})
+            if (current.get("bound_fp") != bound or current.get("account_restart")
+                    or current.get("login") or facts.get("account_fp") != bound):
+                aborted.update(reason="account_transition", state=current)
+                return False
+            reason = _renewal_guard(facts, previous, _credentials_stamp(config_dir), now)
+            if reason:
+                aborted.update(reason=reason, state=current, facts=facts)
+                return False
+            if (credential_expiry(facts) or 0) > now + NATIVE_RENEWAL_EARLY_S:
+                aborted.update(reason="current", state=current)
+                return False
+            reservation.update({**report, "state": "retrying", "failures": failures,
+                                "next_attempt_at": now + native_retry_delay(
+                                    "native_refresh_unconfirmed", failures, expiry, now),
+                                "reason": "native_refresh_unconfirmed",
+                                "outcome": "native_refresh_unconfirmed",
+                                "credential_stamp": _credentials_stamp(config_dir)})
+            reservation.pop("probe_started", None)
+            # A durable reservation prevents hot retries after a killed process,
+            # without counting a launch/failure before one is confirmed.
+            if not write_state(state_path, {**current, "native_renewal": reservation}):
+                aborted.update(reason="maintenance_busy", state=current)
+                return False
+            return True
+
+        observation: dict[str, Any] = {}
+        read_quota(runner, timeout=NATIVE_RENEWAL_TIMEOUT_S,
+                   probe_result=observation, before_start=before_start)
+        if aborted:
+            if aborted["reason"] == "current":
+                return current_report(aborted["state"])
+            return finish(aborted["reason"], current_state=aborted["state"],
+                          facts=aborted.get("facts"))
+        fresh = _slot_credential_facts(config_dir, read_state(state_path), {})
         after = credential_expiry(fresh)
         current = read_state(state_path)
-        account = account_fingerprint(Path.home() / ".claude.json")
-        if (account != bound or current.get("bound_fp") != bound
+        outcome = observation.get("outcome")
+        outcome = (outcome if isinstance(outcome, str) and outcome in NATIVE_PROBE_OUTCOMES
+                   else "native_refresh_unconfirmed")
+        observed_stamp = _credentials_stamp(config_dir)
+        if (outcome in NATIVE_TERMINAL_REASONS
+                and observed_stamp != reservation.get("credential_stamp", stamp)):
+            # A concurrent native writer changed the file since this screen's
+            # session began. Its terminal advice cannot poison that new file,
+            # even if expiry is unchanged and renewal cannot be proven.
+            outcome = "native_refresh_unconfirmed"
+        started = observation.get("probe_started")
+        # Missing means an ambiguous tmux launch; schedule conservatively.
+        attempted = started is not False
+        saved = {**report, "state": "retrying", "reason": outcome, "outcome": outcome,
+                 "failures": failures + int(attempted and outcome != "native_refresh_not_due"),
+                 "next_attempt_at": now + native_retry_delay(
+                     outcome, failures, expiry, now, observation.get("retry_after_s")),
+                 "credential_stamp": observed_stamp}
+        saved.pop("probe_started", None)
+        if isinstance(started, bool):
+            saved["probe_started"] = started
+        if attempted:
+            saved["last_attempt_at"] = now
+        if (fresh.get("account_fp") != bound or current.get("bound_fp") != bound
                 or current.get("account_restart") or current.get("login")):
-            saved.update({"state": "blocked", "reason": "account_transition"})
-        elif after is not None and after > expiry and after > max(now, time.time()) + 30:
-            saved.update({"state": "renewed", "last_success_at": max(now, time.time()),
-                          "failures": 0})
+            saved.update(state="blocked", reason="account_transition")
+        elif (after is not None and expiry is not None and after > expiry
+              and after > max(now, time.time()) + 30):
+            saved.update(state="renewed", outcome="native_refreshed",
+                         last_success_at=max(now, time.time()), failures=0)
             saved.pop("reason", None)
             saved.pop("next_attempt_at", None)
+        else:
+            reason = _renewal_guard(fresh, {}, _credentials_stamp(config_dir), now)
+            if reason in NATIVE_TERMINAL_REASONS or outcome in NATIVE_TERMINAL_REASONS:
+                saved.update(state="blocked", reason=reason or outcome)
+                saved.pop("next_attempt_at", None)
         state = {**current, "native_renewal": saved}
         write_state(state_path, state)
-        return state, {key: value for key, value in saved.items() if key != "failures"}, True
+        public = {key: value for key, value in saved.items()
+                  if key not in ("failures", "credential_stamp")}
+        return state, public, attempted
     finally:
         os.close(lock)
 
@@ -2788,7 +3044,8 @@ def slot_facts(request: Mapping[str, Any], runner: Runner = subprocess.run,
             and not attempted and renewal.get("state") not in ("retrying", "needed")
             and renewal.get("reason") not in ("account_transition", "sign_in_pending",
                                                "maintenance_busy", "expiry_unknown",
-                                               "credential_unavailable")):
+                                               "credential_unavailable")
+            and renewal.get("reason") not in NATIVE_TERMINAL_REASONS):
         quota, remember = quota_summary(state, runner, now, config_dir=config_dir,
                                         wanted_at=request.get("quota_wanted_at"))
         if remember is not None:

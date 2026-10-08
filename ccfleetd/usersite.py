@@ -36,11 +36,16 @@ from . import slots as slotstates
 from .config import Config
 from .credential_health import (
     ACCESS_MARGIN_S,
+    NATIVE_LOGIN_FAILURES,
     RENEWAL_WINDOW_S,
     TRANSITION_REASONS,
     access_expiry,
     fresh_observation,
+    instant,
+    recovery_guidance,
     renewal_report,
+    renewal_warning,
+    sign_in_reason,
 )
 from .desired import is_login_url
 from .heartbeat import relay_report
@@ -976,8 +981,7 @@ def _account_health(slot: Mapping[str, Any], report: Mapping[str, Any],
     words = {
         "ready": ("ok", "Reported ready", "The latest slot report shows current credentials."),
         "renewal_pending": ("warn", "Renewal pending",
-                            "Native Claude maintenance is checking the sign-in. If access does "
-                            "not recover, use the sign-in controls below."),
+                            recovery_guidance(report.get("credentials") or {}, now)),
         "sign_in_required": ("warn", "Sign-in required",
                              "Use the Claude sign-in controls below. Your computer pairing "
                              "and saved local conversations are kept."),
@@ -992,6 +996,15 @@ def _account_health(slot: Mapping[str, Any], report: Mapping[str, Any],
             or (code == "ready" and slot.get("state") != slotstates.ACTIVE):
         code = "degraded"
     tone, title, detail = words[code]
+    warning = observation.get("renewal_warning")
+    if code == "ready" and warning == "login_expiring":
+        detail += (" Your longer-lived sign-in expires within 3 days. Sign in again before "
+                   "then to keep automatic renewal available.")
+    elif code == "ready" and sign_in_reason(report.get("credentials") or {}, now):
+        detail += (" The reported access credential has not expired; live model access is "
+                   "unverified. Sign in again before it expires to restore automatic renewal.")
+    elif code == "ready" and warning:
+        detail += " " + recovery_guidance(report.get("credentials") or {}, now)
     return (f'<div class="account-health" role="status" data-health="{code}" '
             f'aria-label="Reported account health"><p><span class="pill {tone}">{title}</span> '
             f'{detail}</p><p class="small muted">A heartbeat observation does not prove '
@@ -1086,26 +1099,49 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *,
     creds = report.get("credentials") or {}
     renewal = renewal_report(creds.get("renewal"))
     expires = access_expiry(creds)
-    if renewal.get("reason") in TRANSITION_REASONS:
+    terminal = sign_in_reason(creds, now)
+    if (renewal.get("reason") in TRANSITION_REASONS
+            or creds.get("account_fp") and creds.get("bound_fp")
+            and creds["account_fp"] != creds["bound_fp"]):
         return ("<p>Claude account maintenance is in progress. Wait for it to finish "
                 "before retrying model requests.</p>")
+    if terminal in NATIVE_LOGIN_FAILURES:
+        return ('<p class="lapsed">Native Claude requires a fresh sign-in. '
+                'Use Sign in again below. Your pairing, files and history are kept.</p>')
     if expires is not None and expires <= now + ACCESS_MARGIN_S:
         return ('<p class="lapsed">Model access needs credential renewal. '
-                + ("Native Claude maintenance checks this automatically. " if renewal else "")
-                + "If access does not recover, use Sign in again below or contact your "
-                "operator. Your pairing, files and history are kept.</p>")
-    if creds.get("logged_in") is False:
+                + recovery_guidance(creds, now)
+                + (" Use Sign in again below. " if terminal else
+                   " Contact your operator if access does not recover. ")
+                + "Your pairing, files and history are kept.</p>")
+    if creds.get("logged_in") is False or creds.get("present") is False:
         return "<p>Not signed in to Claude right now. Sign in below to use your slot.</p>"
+    if terminal and expires is None:
+        return ('<p class="lapsed">' + recovery_guidance(creds, now)
+                + ' Use Sign in again below. Your pairing, files and history are kept.</p>')
     if renewal.get("reason") in {"expiry_unknown", "credential_unavailable"}:
         return ('<p class="lapsed">Claude credential expiry could not be verified. '
                 'Contact your operator before assuming model access is ready.</p>')
+    if creds.get("logged_in") is not True:
+        return ('<p class="lapsed">Claude sign-in could not be verified from the current report. '
+                'Contact your operator before assuming model access is ready.</p>')
     plan = plans.label(creds.get("subscription_type"), creds.get("plan"))
     who = f" as {escape(str(creds['email']))}" if creds.get("email") else ""
-    left = _sign_in_left(creds.get("refresh_expires_at"), now)
+    left = _sign_in_left(instant(creds.get("refresh_expires_at")), now)
     lines = [f'<p class="signed">Signed in{who}'
              f"{(' · ' + escape(str(plan)) + ' plan') if plan else ''}"
              f"{' · sign-in ' + left if left else ''}.</p>"]
-    if renewal.get("state") == "retrying":
+    warning = renewal_warning(creds, now)
+    if terminal:
+        lines.append('<p class="lapsed">The reported access credential has not expired; live '
+                     'model access is unverified. Sign in again before expiry to restore automatic '
+                     'renewal. Your pairing, files and history are kept.</p>')
+    elif warning == "login_expiring":
+        lines.append('<p class="lapsed">Your longer-lived Claude sign-in expires within '
+                     '3 days. Sign in again before then to keep automatic renewal available.</p>')
+    elif warning and renewal.get("reason") != "native_refresh_unconfirmed":
+        lines.append('<p class="small muted">' + recovery_guidance(creds, now) + '</p>')
+    elif renewal.get("state") == "retrying":
         lines.append('<p class="small muted">Native credential renewal is not yet '
                      'confirmed; a bounded retry is scheduled.</p>')
     elif expires is not None and expires <= now + RENEWAL_WINDOW_S and renewal:
