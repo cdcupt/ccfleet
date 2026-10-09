@@ -122,6 +122,33 @@ the sole upstream POST, the relay rereads the credential after connecting TLS.
 It does not retry a POST to recover from an authentication race. Every request
 still has a fixed overall deadline.</p>
 <h2 id="4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</h2>
+<p>Hosted slots automatically validate a changed native binary, native version,
+relay implementation or Python/OpenSSL runtime. Checks cover the native
+authentication interface, a fresh isolated native usage observation, relay v2
+status framing and certificate/hostname verification policy. Cached results are
+attributed to the native version, code/runtime digest and bound account. Sign-in
+adoption invalidates the old result. A digest here identifies tested code and
+runtime bytes; it is not a JA3 measurement or proof of native TLS equivalence.</p>
+<p>Validation uses bounded, isolated maintenance commands, fixed reason codes,
+retry backoff and the existing probe locks. It does not send a model prompt,
+replay an inference POST, restore an old refresh token or restart an ordinary
+holder session. An authentication-source conflict blocks native usage attribution
+and requires operator review. A missing, stale or pending check cannot clear a
+previous validation failure; a new account does not inherit the old account's
+alert. Upgrade warnings remain separate from machine outages and current model
+readiness.</p>
+<p>Operational heartbeat logs retain numeric status and fixed outcome categories.
+They do not retain HTTP response excerpts. Access logs retain connection/path
+metadata with query strings, fragments and URL userinfo removed; parser errors
+do not reflect raw request text. Native installer failures also use fixed codes.
+These rules do not rewrite historical logs or remove the intentional content in
+private native histories and bounded job output.</p>
+<p>Client 0.2.4 adds allowlisted upgrade-validation observations and fixed guidance
+to status, doctor, support exports and optional MCP health. Account and runtime
+digests, raw native output and arbitrary error strings are excluded from those
+surfaces. Legacy servers without these observations remain supported. The client
+does not gate or replay an otherwise valid model request because a usage-parser
+check is pending.</p>
 <p>Client 0.2.3 gives one nonblocking loop exclusive ownership of the WebSocket TLS
 socket. Partial frames, short writes, TLS readiness changes and pipe backpressure
 are bounded; sender failure and pipe hangup wake cancellation. TLS operations are

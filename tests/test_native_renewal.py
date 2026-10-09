@@ -319,7 +319,7 @@ def test_ambiguous_native_probe_launch_always_cleans_up(slot, monkeypatch, failu
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     assert agent.read_quota(ambiguous, timeout=35) is None
-    assert [argv[3] for argv, _ in calls] == ["kill-session", "new-session", "kill-session"]
+    assert [argv[5] for argv, _ in calls] == ["kill-session", "new-session", "kill-session"]
     assert calls[-1][1] == 5
 
 

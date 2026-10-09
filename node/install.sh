@@ -346,6 +346,8 @@ if [ "$BYPASS" = yes ]; then
 fi
 
 step "6/8  agent and services"
+# Install the code-only guard first: an existing agent timer may run during an update.
+as_owner "curl -fsSL '$REPO_RAW/ccfleet_agent/compatibility.py' -o ~/.local/bin/compatibility.py && chmod 644 ~/.local/bin/compatibility.py"
 for f in ccfleet_agent/agent.py:ccfleet-agent node/backup.sh:ccfleet-backup node/exitip.sh:exitip node/upgrade-claude.sh:ccfleet-upgrade-claude; do
   src="${f%%:*}"; dst="${f##*:}"
   as_owner "curl -fsSL '$REPO_RAW/$src' -o ~/.local/bin/$dst && chmod 755 ~/.local/bin/$dst"

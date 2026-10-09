@@ -10,6 +10,7 @@ import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
+from . import compatibility
 from .credential_health import (
     ACCESS_MARGIN_S,
     NATIVE_LOGIN_FAILURES,
@@ -113,6 +114,13 @@ def health(slot: Mapping[str, Any], report: Mapping[str, Any], login: Any, *,
     if isinstance(version, str) and VERSION_RE.fullmatch(version):
         result["claude_version"] = version
     # Quota freshness and native credential readiness are distinct observations.
+    since = max((value for value in (slot.get("claimed_at"), slot.get("account_switched_at"))
+                 if type(value) in (int, float) and math.isfinite(value)), default=0)
+    validation = compatibility.observation(
+        report.get("compatibility"), claude, credentials, heard=heard, now=now,
+        max_age=max_age, since=since, listening_since=listening_since)
+    if validation:
+        result["compatibility"] = compatibility.public(validation)
     quota = quota_observation(report.get("quota"), slot, now)
     if quota and result["health"] != "switching":
         result["quota"] = quota

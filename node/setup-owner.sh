@@ -42,7 +42,8 @@ if ! grep -q 'DISABLE_AUTOUPDATER' "$HOME/.profile" 2>/dev/null; then
 fi
 grep -q '\.local/bin' "$HOME/.profile" 2>/dev/null || printf 'export PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.profile"
 
-# 3. Heartbeat agent (single file, standard library only) and helpers.
+# 3. Standard-library heartbeat agent and its code-only sibling guard.
+fetch ccfleet_agent/compatibility.py "$BIN/compatibility.py" 644
 fetch ccfleet_agent/agent.py "$BIN/ccfleet-agent" 755
 fetch node/backup.sh "$BIN/ccfleet-backup" 755
 fetch node/exitip.sh "$BIN/exitip" 755

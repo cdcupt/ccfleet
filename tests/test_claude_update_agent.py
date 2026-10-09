@@ -135,7 +135,7 @@ def test_an_update_that_fails_says_why_and_is_not_held_back(slot_home):
                              moving_claude(calls, install_rc=1), now=1_060.0)
     assert len(installs(calls)) == 1
     assert facts["claude_update"]["state"] == "failed"
-    assert "network down" in facts["claude_update"]["detail"]
+    assert facts["claude_update"]["detail"] == "native_install_failed"
 
 
 def test_an_update_never_cuts_an_open_session_short(slot_home):

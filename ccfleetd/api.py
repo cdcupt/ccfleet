@@ -65,6 +65,50 @@ HTML_HEADERS = {
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 
 
+def access_log_route(target: Any) -> str:
+    """Fixed routes/templates only; unknown targets and dynamic IDs never reach logs."""
+    if not isinstance(target, str):
+        return "unknown_route"
+    try:
+        path = urllib.parse.urlsplit(target).path
+    except ValueError:
+        return "unknown_route"
+    if path in {"/", "/healthz", "/account", "/privacy", "/status", "/auth/basic",
+                "/auth/google/start", "/auth/google/callback", "/auth/signout",
+                "/api/nodes", "/api/alerts", "/api/heartbeat", "/api/cli/status",
+                "/api/cli/connect", "/api/cli/register", "/api/cli/revoke",
+                "/account/claim", "/account/outage-emails", "/actions/node/add"}:
+        return path
+    if path.rstrip("/") == CONSOLE_PATH:
+        return CONSOLE_PATH
+    if path.rstrip("/") in customer_docs.PAGES:
+        return path.rstrip("/")
+    if path in ("/docs/library", "/docs/library/"):
+        return "/docs/library"
+    if reference_docs.relative_path(path) is not None:
+        return path
+    parts = path.strip("/").split("/")
+    if (len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[2]
+            and parts[3] in usersite.SLOT_ACTIONS):
+        return "/account/slots/{slot_id}/" + parts[3]
+    actions = {
+        "node": {"enable", "disable", "rc-on", "rc-off", "pin", "login-start", "token-start",
+                 "login-code", "login-cancel", "token-show", "token-done", "rotate-token",
+                 "remove"},
+        "machine": {"capacity", "slot-add", "reserve", "unreserve"},
+        "slot": {"reclaim", "quota", "remove"},
+        "account": {"allowance", "payment"},
+        "payment": {"void"},
+    }
+    if len(parts) == 4 and parts[0] == "actions":
+        kind, action = parts[1], parts[3]
+        if kind in actions and parts[2] and action in actions[kind]:
+            return "/actions/" + kind + "/{" + kind + "_id}/" + action
+        if kind == "price" and parts[2] == "slot" and action in {"set", "clear"}:
+            return "/actions/price/slot/" + action
+    return "unknown_route"
+
+
 class Context:
     def __init__(self, store: Store, cfg: Config, monitor: Monitor) -> None:
         self.store = store
@@ -198,7 +242,20 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         sys_version = ""
 
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D401
-            log.info("%s %s", self.address_string(), fmt % args)
+            # Parser/error messages can contain the raw request line or query.
+            # Response codes still reach the structured access log below.
+            pass
+
+        def log_request(self, code: Any = "-", size: Any = "-") -> None:
+            method = getattr(self, "command", None)
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+                              "CONNECT", "TRACE"}:
+                method = "-"
+            route = access_log_route(getattr(self, "path", None))
+            status = int(code) if isinstance(code, int) and not isinstance(code, bool) \
+                and 100 <= code <= 599 else "-"
+            log.info("%s method=%s path=%s status=%s", self.address_string(), method,
+                     json.dumps(route, ensure_ascii=True), status)
 
         # -- helpers -------------------------------------------------------
 
@@ -1105,7 +1162,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _rows(self, who: Identity) -> list[dict[str, Any]]:
             return build_rows(self._visible_nodes(who), ctx.store.latest_heartbeats(),
                               ctx.store.open_alerts(), time.time(),
-                              slots=ctx.store.list_slots())
+                              slots=ctx.store.list_slots(), max_age=ctx.cfg.heartbeat_max_age_s,
+                              listening_since=ctx.store.listening_since())
 
         def _dashboard(self, who: Identity) -> str:
             # An owner now has exactly one thing to submit — their own sign-in —

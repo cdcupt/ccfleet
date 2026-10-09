@@ -115,7 +115,8 @@ MAX_LOGIN_FIELD = 512
 EXIT_GRACE_S = 5.0
 # Only these reach the server from a slot's own report. Everything else in the
 # entry — presence, provisioning, wipes — is root's own knowledge.
-SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "upgrade", "relay")
+SLOT_FACT_KEYS = ("claude", "credentials", "remote_control", "quota", "usage", "upgrade", "relay",
+                  "compatibility")
 # The states in which a slot's Linux user exists and belongs to somebody: the
 # only ones whose Claude Code follows the machine's pin. A claiming slot is
 # still being made, and a releasing one is about to be deleted.
@@ -1046,7 +1047,8 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     status, text = core.send_heartbeat(cfg, payload, system.opener,  # type: ignore[arg-type]
                                        max_reply=MAX_REPLY_BYTES)
     if status != 200:
-        log.error("heartbeat rejected: status=%s body=%s", status, text.strip()[:200])
+        logged_status, category = core.heartbeat_log_fields(status)
+        log.error("heartbeat rejected: status=%s category=%s", logged_status, category)
         return status, {}, dict(state)
     desired = core.parse_desired(text)
     state = {**state, "heard": {u: f for u, f in heard.items() if u in users}}

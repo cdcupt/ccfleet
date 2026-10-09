@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from . import compatibility
 from . import names as slotnames
 from . import slots as slotstates
 from .config import Config
@@ -442,6 +443,29 @@ def _slot_account_findings(slot_rows: Sequence[Mapping[str, Any]],
     return findings
 
 
+def _slot_compatibility_findings(slot_rows: Sequence[Mapping[str, Any]],
+                                 payload: Mapping[str, Any], heard: float, now: float,
+                                 cfg: Config, listening: Optional[float]) -> list[Finding]:
+    reports = {entry.get("unix_user"): entry for entry in payload.get("slots", [])
+               if isinstance(entry, Mapping)}
+    findings = []
+    for slot in slot_rows:
+        if slot.get("state") != slotstates.ACTIVE:
+            continue
+        user = slot.get("unix_user")
+        entry = reports.get(user, {})
+        since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
+        checked = compatibility.observation(
+            entry.get("compatibility"), entry.get("claude"), entry.get("credentials"),
+            heard=heard, now=now, max_age=cfg.heartbeat_max_age_s, since=since,
+            listening_since=listening)
+        if (checked.get("state") == "failed"
+                or checked.get("reason") in compatibility.OPERATOR_REVIEW_REASONS):
+            findings.append(Finding(f"slot_native_compatibility:{user}", LEVEL_WARN,
+                                    f"{user}: " + compatibility.description(checked)))
+    return findings
+
+
 def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
              previous: Optional[Mapping[str, Any]], now: float,
              cfg: Config,
@@ -486,6 +510,8 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
             # Do not invent fresh expiry failures from a pre-restart reading.
             findings += [f for f in renewal if not listening_since
                          or float(latest["ts"]) >= listening_since or f.rule in raised]
+            findings += _slot_compatibility_findings(
+                slot_rows, payload, float(latest["ts"]), now, cfg, listening_since)
         return tuple(findings)
     findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg, grace("token_stale"))

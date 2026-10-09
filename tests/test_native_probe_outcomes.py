@@ -98,7 +98,7 @@ def test_ambiguous_launch_keeps_start_unknown_and_cleans_up(slot, monkeypatch, l
     assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
     assert observed["outcome"] == expected
     assert "probe_started" not in observed
-    assert calls[-1][3] == "kill-session"
+    assert calls[-1][5] == "kill-session"
 
 
 def test_terminal_result_survives_cleanup_timeout(slot, monkeypatch):
@@ -106,7 +106,7 @@ def test_terminal_result_survives_cleanup_timeout(slot, monkeypatch):
     observed = {}
     assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
     assert observed == {"probe_started": True, "outcome": "native_auth_rejected"}
-    assert calls[-1][3] == "kill-session"
+    assert calls[-1][5] == "kill-session"
     assert not any("send-keys" in call for call in calls)
 
 

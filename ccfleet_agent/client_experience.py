@@ -34,6 +34,61 @@ MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 VERSION = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,6}")
 MAX_PREFERENCES_BYTES = 128 * 1024
 MAX_PROJECTS = 512
+COMPATIBILITY_STATES = frozenset({"pending", "passed", "failed", "blocked"})
+COMPATIBILITY_CHECKS = frozenset({"native_version", "auth_interface", "usage_parser",
+                                 "relay_protocol", "tls_policy"})
+COMPATIBILITY_REASONS = frozenset({
+    "native_unavailable", "native_version_unknown", "native_version_changed", "native_timeout",
+    "native_interface_changed", "native_auth_source", "native_extensions", "usage_pending",
+    "usage_unavailable",
+    "relay_unavailable",
+    "relay_protocol_mismatch", "relay_tls_policy", "account_unbound", "account_transition",
+    "sign_in_pending", "credential_unavailable", "probe_busy", "check_interrupted",
+})
+COMPATIBILITY_VERSION = re.compile(r"[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}\Z")
+
+
+def _compatibility_report(value: Any, now: Optional[float] = None) -> dict[str, Any]:
+    """Copy only public check facts; never import the node-only validator or private digests."""
+    if not isinstance(value, Mapping):
+        return {}
+    state = value.get("state")
+    if not isinstance(state, str) or state not in COMPATIBILITY_STATES:
+        return {}
+    current = time.time() if now is None else now
+    out: dict[str, Any] = {"state": state}
+    for field in ("checked_at", "next_check_at", "last_success_at", "usage_observed_at"):
+        at = value.get(field)
+        if (type(at) in (int, float) and 0 < at < 1e11 and math.isfinite(at)):
+            if field != "next_check_at" and at > current + 60:
+                return {}
+            out[field] = float(at)
+    if "checked_at" not in out:
+        return {}
+    version = value.get("native_version")
+    if isinstance(version, str) and COMPATIBILITY_VERSION.fullmatch(version):
+        out["native_version"] = version
+    reason = value.get("reason")
+    if isinstance(reason, str) and reason in COMPATIBILITY_REASONS:
+        out["reason"] = reason
+    checks = value.get("checks")
+    if isinstance(checks, Mapping):
+        out["checks"] = {key: checks[key] for key in sorted(COMPATIBILITY_CHECKS)
+                         if isinstance(checks.get(key), bool)}
+    if state == "passed" and ("native_version" not in out or "usage_observed_at" not in out
+                              or any(out.get("checks", {}).get(key) is not True
+                                     for key in COMPATIBILITY_CHECKS)):
+        return {}
+    return out
+
+
+def _compatibility_check_code(value: Mapping[str, Any]) -> str:
+    if not value:
+        return "compatibility_unverified"
+    if value["state"] != "passed" and value.get("reason") in {
+            "native_auth_source", "native_extensions"}:
+        return "compatibility_operator_review"
+    return "compatibility_" + value["state"]
 
 
 class ExperienceError(ValueError):
@@ -370,6 +425,32 @@ CHECKS = {
         "The server reports degraded slot health.",
         "Check the slot page or contact your operator; keep the saved pairing.",
     ),
+    "compatibility_passed": (
+        "compatibility", "pass",
+        "The server reports compatibility checks passed; provider acceptance is unverified.",
+        "These checks do not prove provider acceptance.",
+    ),
+    "compatibility_pending": (
+        "compatibility", "warn", "Update compatibility validation is pending.",
+        "Check the slot page for maintenance progress; reported model readiness is separate.",
+    ),
+    "compatibility_failed": (
+        "compatibility", "warn",
+        "Update compatibility validation failed; operator review is needed.",
+        "Contact your operator to review the updated client or relay. Keep the saved pairing.",
+    ),
+    "compatibility_blocked": (
+        "compatibility", "warn", "Update compatibility validation is waiting for prerequisites.",
+        "Check the slot page for account maintenance or sign-in instructions.",
+    ),
+    "compatibility_operator_review": (
+        "compatibility", "warn", "Hosted native configuration needs operator review.",
+        "Contact your operator to review the hosted native settings. Keep the saved pairing.",
+    ),
+    "compatibility_unverified": (
+        "compatibility", "warn", "Update compatibility status could not be verified.",
+        "Check the slot page or contact your operator before assuming validation passed.",
+    ),
     "relay_ready": (
         "relay",
         "pass",
@@ -549,6 +630,7 @@ def _report(
     callbacks: Mapping[str, Callable[..., Any]], *, slot: str, privacy: bool, kind: str
 ) -> dict[str, Any]:
     checks = []
+    compatibility = {}
     if kind == "doctor":
         which = callbacks.get("which", shutil.which)
         try:
@@ -614,7 +696,12 @@ def _report(
         if "device_context" in callbacks:
             try:
                 context = callbacks["device_context"](device)
-                checks.extend(_device_context_checks(context))
+                context_checks = _device_context_checks(context)
+                checks.extend(context_checks)
+                if (context_checks[0]["code"] == "device_ready"
+                        and "compatibility" in context["slot"]):
+                    compatibility = _compatibility_report(context["slot"]["compatibility"])
+                    checks.append(_check(_compatibility_check_code(compatibility)))
             except Exception as exc:
                 code = {
                     401: "device_revoked",
@@ -637,13 +724,16 @@ def _report(
             checks.append(_check("relay_unchecked"))
     else:
         checks.append(_check("relay_unchecked"))
-    return {
+    result = {
         "schema": 1,
         "kind": kind,
         "ok": not any(c["state"] == "fail" for c in checks),
         "checks": checks,
         "privacy": list(PRIVACY) if privacy else [],
     }
+    if compatibility:
+        result["compatibility"] = compatibility
+    return result
 
 
 def doctor(
@@ -684,18 +774,34 @@ def safe_report(report: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise ExperienceError("unsupported native version in diagnostic report")
         checks.append(_check(code, version if isinstance(version, str) else ""))
-    return {
+    result = {
         "schema": 1,
         "kind": report["kind"],
         "ok": not any(c["state"] == "fail" for c in checks),
         "checks": checks,
         "privacy": list(PRIVACY) if report.get("privacy") else [],
     }
+    if "compatibility" in report:
+        compatibility = _compatibility_report(report["compatibility"])
+        if not compatibility or _compatibility_check_code(compatibility) not in {
+                item["code"] for item in checks}:
+            raise ExperienceError("unsupported compatibility observation in diagnostic report")
+        result["compatibility"] = compatibility
+    return result
 
 
 def render_report(report: Mapping[str, Any]) -> str:
     clean = safe_report(report)
-    lines = ["CC Fleet " + clean["kind"] + (": ready" if clean["ok"] else ": action needed")]
+    if not clean["ok"]:
+        title = ": action needed"
+    elif any(item["code"] in {"compatibility_failed", "compatibility_operator_review"}
+             for item in clean["checks"]):
+        title = ": operator review needed"
+    elif any(item["state"] == "warn" for item in clean["checks"]):
+        title = ": ready with warnings"
+    else:
+        title = ": ready"
+    lines = ["CC Fleet " + clean["kind"] + title]
     for item in clean["checks"]:
         line = f"[{item['state']}] {item['code']}: {item['message']}"
         if "version" in item:
@@ -901,6 +1007,8 @@ def _management_slot(status: Any, now: float) -> dict[str, Any]:
     # A malformed known status field invalidates every projection, not just
     # health. Missing/stale observations remain legitimate unknown/stale data.
     _management_observation(slot.get("observed_at"), now, MCP_FRESH_SECONDS)
+    if "compatibility" in slot and not _compatibility_report(slot["compatibility"], now):
+        raise ExperienceError("invalid management compatibility observation")
     return slot
 
 
@@ -927,10 +1035,13 @@ def management_health(status: Any, *, now: Optional[float] = None) -> dict[str, 
     slot = _management_slot(status, current)
     observation = _management_observation(slot.get("observed_at"), current,
                                           MCP_FRESH_SECONDS)
-    return {"source": "cached_slot_report", "slot_state": slot["state"],
+    result = {"source": "cached_slot_report", "slot_state": slot["state"],
             "health": slot["health"], "reason": slot["reason"], **observation,
             "reported_ready": slot["ready"] and observation["freshness"] == "fresh",
             "provider_acceptance_verified": False}
+    if "compatibility" in slot:
+        result["compatibility"] = _compatibility_report(slot["compatibility"], current)
+    return result
 
 
 def management_quota(status: Any, *, now: Optional[float] = None) -> dict[str, Any]:
@@ -1050,8 +1161,10 @@ def management_relay_usage(status: Any, *, now: Optional[float] = None) -> dict[
 
 _MCP_TOOLS = {
     "ccfleet_health": (management_health,
-        "Read cached health of the one paired slot. Reported readiness is not a live "
-        "connection or provider acceptance test. Returns fixed health codes and observation age."),
+        "Read cached health, optional public compatibility checks and observation age for the "
+        "one paired slot. These observations do not prove live connection or provider acceptance. "
+        "Failed update checks, unexpected native auth sources or extensions require "
+        "operator review."),
     "ccfleet_quota": (management_quota,
         "Read cached native subscription quota percentages and reset timestamps for the one "
         "paired slot. Missing observations are unknown, not zero. Does not refresh quota."),

@@ -25,6 +25,7 @@ from . import (
     claude_versions,
     cli_access,
     client_status,
+    compatibility,
     names,
     oauth,
     payments,
@@ -1005,6 +1006,16 @@ def _account_health(slot: Mapping[str, Any], report: Mapping[str, Any],
                    "unverified. Sign in again before it expires to restore automatic renewal.")
     elif code == "ready" and warning:
         detail += " " + recovery_guidance(report.get("credentials") or {}, now)
+    validation = observation.get("compatibility") or {}
+    checked = validation.get("state")
+    if checked in compatibility.LABELS:
+        label = compatibility.LABELS[checked]
+        explanation = compatibility.description(validation)
+        if code == "ready" and (checked == "failed"
+                                or validation.get("reason")
+                                in compatibility.OPERATOR_REVIEW_REASONS):
+            tone, title = "warn", compatibility.LABELS["failed"]
+        detail += " " + label + ". " + explanation
     return (f'<div class="account-health" role="status" data-health="{code}" '
             f'aria-label="Reported account health"><p><span class="pill {tone}">{title}</span> '
             f'{detail}</p><p class="small muted">A heartbeat observation does not prove '

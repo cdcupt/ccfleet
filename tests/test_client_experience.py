@@ -274,6 +274,118 @@ def test_status_uses_no_native_process_settings_or_model_calls(environment):
     assert "version_ready" not in codes(report)
 
 
+def compatibility_record(state="passed", reason=None):
+    now = ux.time.time()
+    return {"state": state, "checked_at": now - 10, "native_version": "2.1.295",
+            "usage_observed_at": now - 10, "last_success_at": now - 10,
+            "next_check_at": now + 300,
+            "checks": dict.fromkeys(ux.COMPATIBILITY_CHECKS, True),
+            **({"reason": reason} if reason else {})}
+
+
+def test_client_compatibility_enums_match_node_contract_without_runtime_dependency():
+    from ccfleet_agent import compatibility
+    assert ux.COMPATIBILITY_STATES == compatibility.STATES
+    assert ux.COMPATIBILITY_CHECKS == compatibility.CHECKS
+    assert ux.COMPATIBILITY_REASONS == compatibility.REASONS
+
+
+@pytest.mark.parametrize("kind", ["status", "doctor"])
+@pytest.mark.parametrize("state,reason", [("passed", None), ("pending", "usage_pending"),
+                                       ("failed", "native_interface_changed"),
+                                       ("blocked", "sign_in_pending")])
+def test_compatibility_warnings_are_visible_without_disabling_reported_model_readiness(
+        environment, kind, state, reason):
+    environment.context["slot"]["compatibility"] = compatibility_record(state, reason)
+    report = getattr(ux, kind)(environment.callbacks)
+    assert report["ok"] is True and "relay_ready" in codes(report)
+    assert "compatibility_" + state in codes(report)
+    assert report["compatibility"]["state"] == state
+    assert report["compatibility"]["native_version"] == "2.1.295"
+    assert environment.events.count("relay") == 1
+    assert not any(isinstance(event, tuple) and event[0] in {"local", "remote"}
+                   for event in environment.events)
+    rendered = ux.render_report(report)
+    if state == "failed":
+        assert rendered.startswith("CC Fleet " + kind + ": operator review needed")
+        assert "Contact your operator" in rendered
+    elif state != "passed":
+        assert rendered.startswith("CC Fleet " + kind + ": ready with warnings")
+    else:
+        assert "provider acceptance is unverified" in rendered
+
+
+def test_public_compatibility_metadata_and_exports_drop_fingerprints_and_raw_messages(environment):
+    raw = {**compatibility_record("failed", "relay_tls_policy"), "runtime_fp": SECRET,
+           "account_fp": SECRET, "raw_output": SECRET, "path": SECRET, "token": SECRET,
+           "message": SECRET}
+    raw["checks"][SECRET] = True
+    environment.context["slot"]["compatibility"] = raw
+    report = ux.doctor(environment.callbacks, privacy=True)
+    allowed = {"state", "reason", "native_version", "checked_at", "next_check_at",
+               "last_success_at", "usage_observed_at", "checks"}
+    assert set(report["compatibility"]) <= allowed
+    assert set(report["compatibility"]["checks"]) == ux.COMPATIBILITY_CHECKS
+    assert SECRET not in json.dumps(report) and SECRET not in ux.render_report(report)
+    target = environment.root / "compatibility-support.json"
+    ux.export_report(report, target)
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert SECRET not in target.read_text()
+    assert json.loads(target.read_text())["compatibility"] == report["compatibility"]
+
+
+@pytest.mark.parametrize("kind", ["status", "doctor"])
+@pytest.mark.parametrize("reason", ["native_auth_source", "native_extensions"])
+def test_blocked_native_configuration_requires_operator_review_without_model_denial(
+        environment, kind, reason):
+    environment.context["slot"]["compatibility"] = compatibility_record(
+        "blocked", reason)
+    report = getattr(ux, kind)(environment.callbacks)
+    assert report["ok"] is True and "relay_ready" in codes(report)
+    assert "compatibility_operator_review" in codes(report)
+    assert report["compatibility"]["state"] == "blocked"
+    rendered = ux.render_report(report)
+    assert rendered.startswith("CC Fleet " + kind + ": operator review needed")
+    assert "review the hosted native settings" in rendered
+    assert "Keep the saved pairing" in rendered and "Sign in again" not in rendered
+    assert environment.events.count("relay") == 1
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("state", SECRET), ("checked_at", SECRET), ("checked_at", True),
+    ("checked_at", 0), ("checked_at", float("nan")), ("checked_at", 10 ** 400),
+    ("native_version", SECRET), ("usage_observed_at", False),
+    ("checks", {"native_version": True}),
+    ("checks", {**dict.fromkeys(ux.COMPATIBILITY_CHECKS, True), "usage_parser": 1}),
+])
+def test_malformed_compatibility_is_unverified_without_echoing_data_or_blocking_access(
+        environment, field, bad):
+    raw = compatibility_record()
+    raw[field] = bad
+    environment.context["slot"]["compatibility"] = raw
+    report = ux.status(environment.callbacks)
+    assert report["ok"] and "relay_ready" in codes(report)
+    assert "compatibility_unverified" in codes(report) and "compatibility" not in report
+    assert SECRET not in json.dumps(report) and SECRET not in ux.render_report(report)
+
+
+def test_future_compatibility_check_is_not_claimed_passed(environment):
+    raw = compatibility_record()
+    raw["checked_at"] = ux.time.time() + 1000
+    environment.context["slot"]["compatibility"] = raw
+    assert "compatibility_unverified" in codes(ux.status(environment.callbacks))
+
+
+def test_diagnostic_export_rejects_conflicting_compatibility_state_without_private_error(environment):
+    environment.context["slot"]["compatibility"] = compatibility_record("failed", "relay_unavailable")
+    report = ux.status(environment.callbacks)
+    report["compatibility"] = compatibility_record("passed")
+    target = environment.root / "invalid-compatibility.json"
+    with pytest.raises(ux.ExperienceError) as error:
+        ux.export_report(report, target)
+    assert SECRET not in str(error.value) and not target.exists()
+
+
 @pytest.mark.parametrize(
     "status,code",
     [

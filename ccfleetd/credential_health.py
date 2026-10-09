@@ -15,18 +15,19 @@ RENEWAL_REASONS = frozenset({
     "expiry_unknown", "native_refresh_unconfirmed", "maintenance_busy",
     "refresh_unavailable", "refresh_expired", "native_login_expired", "native_auth_rejected",
     "native_network_error", "native_rate_limited", "native_timeout", "native_launch_failed",
-    "native_probe_busy", "native_refresh_not_due",
+    "native_probe_busy", "native_refresh_not_due", "native_auth_source", "native_extensions",
 })
 TRANSITION_REASONS = frozenset({"account_transition", "sign_in_pending", "account_unbound"})
 TERMINAL_REASONS = frozenset({"refresh_unavailable", "refresh_expired",
                               "native_login_expired", "native_auth_rejected"})
 NATIVE_LOGIN_FAILURES = frozenset({"native_login_expired", "native_auth_rejected"})
+NATIVE_CONTEXT_REASONS = frozenset({"native_auth_source", "native_extensions"})
 TRANSIENT_REASONS = frozenset({"native_network_error", "native_rate_limited", "native_timeout",
                                "native_launch_failed", "native_probe_busy", "maintenance_busy"})
 RENEWAL_OUTCOMES = frozenset({
     "native_refreshed", "native_refresh_not_due", "native_auth_rejected", "native_login_expired",
     "native_network_error", "native_rate_limited", "native_timeout", "native_launch_failed",
-    "native_probe_busy", "native_refresh_unconfirmed",
+    "native_probe_busy", "native_refresh_unconfirmed", "native_auth_source", "native_extensions",
 })
 RENEWAL_WARNING_CODES = (TERMINAL_REASONS | TRANSIENT_REASONS
                          | {"login_expiring", "native_renewal_pending", "renewal_due"})
@@ -102,6 +103,10 @@ def renewal_warning(credentials: Mapping[str, Any], now: float) -> Optional[str]
         reason = renewal.get("reason")
         if reason in TRANSIENT_REASONS:
             return reason
+        if reason in NATIVE_CONTEXT_REASONS:
+            # Keep the existing device protocol's warning enum; detailed fixed
+            # operator guidance is carried by the additive compatibility record.
+            return "native_renewal_pending"
         if renewal.get("state") in {"needed", "retrying"}:
             return "native_renewal_pending"
     return None
@@ -112,6 +117,9 @@ def recovery_guidance(credentials: Mapping[str, Any], now: float) -> str:
     if sign_in_reason(credentials, now):
         return "A fresh Claude sign-in is required; automatic renewal cannot recover this login."
     renewal = renewal_report(credentials.get("renewal"))
+    if renewal.get("reason") in NATIVE_CONTEXT_REASONS:
+        return ("Native maintenance configuration needs operator review. "
+                "Your computer pairing and local history are kept.")
     if renewal.get("reason") in TRANSIENT_REASONS:
         return "A temporary native renewal failure is being retried automatically."
     if renewal.get("state") in {"needed", "retrying"}:

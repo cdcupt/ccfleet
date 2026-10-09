@@ -9,8 +9,8 @@ from html import escape
 from shlex import quote as shq
 from typing import Any, Optional
 
+from . import compatibility, plans, resets
 from . import names as slotnames
-from . import plans, resets
 from . import slots as slotstates
 from .config import Config
 from .credential_health import access_expiry
@@ -490,7 +490,8 @@ def _slot_facts(node: Mapping[str, Any], payload: Mapping[str, Any],
 
 def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str, Any]],
                alerts: list[Mapping[str, Any]], now: float,
-               slots: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+               slots: Sequence[Mapping[str, Any]] = (), *, max_age: float = 15 * 60,
+               listening_since: Optional[float] = None) -> list[dict[str, Any]]:
     """Merge node records, latest heartbeats and open alerts into dashboard rows.
 
     ``slots`` are the store's slot rows. A node with a machine slot, or whose
@@ -534,6 +535,12 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "last_seen_ts": (hb or {}).get("ts"),
             "hostname": payload.get("hostname"),
             "claude_version": (facts.get("claude") or {}).get("version"),
+            "compatibility": compatibility.observation(
+                facts.get("compatibility"), facts.get("claude"), creds,
+                heard=(hb or {}).get("ts"), now=now, max_age=max_age,
+                listening_since=listening_since,
+                since=max(mine[0].get("claimed_at") or 0,
+                          mine[0].get("account_switched_at") or 0) if len(mine) == 1 else 0),
             "pinned_version": node["pinned_version"],
             "egress_ip": (payload.get("egress") or {}).get("ip"),
             "disk_used_pct": (payload.get("disk") or {}).get("used_pct"),
@@ -628,6 +635,14 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         version += (f'<br><span class="bad-text">upgrade to '
                     f'{escape(str(upgrade.get("to") or "?"))} failed</span>'
                     + (f' <span class="muted">{detail}</span>' if detail else ""))
+    validation = row.get("compatibility") or {}
+    check_state = validation.get("state")
+    if check_state in compatibility.LABELS:
+        tone = ("bad-text" if check_state == "failed"
+                or validation.get("reason") in compatibility.OPERATOR_REVIEW_REASONS else "muted")
+        version += (f'<br><span class="{tone}" '
+                    f'title="{escape(compatibility.description(validation))}">'
+                    f'{escape(compatibility.LABELS[check_state])}</span>')
     if free:
         # Its next holder gets a fresh installation. A cached report from the
         # previous holder says nothing about that installation.
