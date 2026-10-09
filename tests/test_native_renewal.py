@@ -16,6 +16,7 @@ NOW = 1_800_000_000.0
 @pytest.fixture
 def slot(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(agent.random, "uniform", lambda *args: 0)
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude.json").write_text(json.dumps({
         "oauthAccount": {"accountUuid": "synthetic-native-owner"}}))
@@ -30,6 +31,21 @@ def slot(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "sync_slot_terminal_unit", lambda *a: None)
     monkeypatch.setattr(agent, "retire_slot_remote_control", lambda *a: None)
     return tmp_path, state_path, state
+
+
+def install_native(monkeypatch, effect):
+    """A synthetic native writer honours the real prelaunch observation contract."""
+    def probe(*args, **kwargs):
+        before = kwargs.pop("before_start", None)
+        report = kwargs.pop("probe_result", None)
+        if before is not None and not before():
+            if report is not None:
+                report.update(outcome="native_probe_busy", probe_started=False)
+            return None
+        if report is not None:
+            report.update(outcome="native_refresh_unconfirmed", probe_started=True)
+        return effect(*args, **kwargs)
+    monkeypatch.setattr(agent, "read_quota", probe)
 
 
 def rotate(home, expiry):
@@ -63,7 +79,7 @@ def test_expiring_local_only_slot_forces_native_probe_despite_fresh_quota(slot, 
         rotate(home, NOW + 7200)
         return {"week": {"used_pct": 99}}
 
-    monkeypatch.setattr(agent, "read_quota", native)
+    install_native(monkeypatch, native)
     facts = agent.slot_facts({"refresh_quota": True}, runner, NOW)
     assert calls == [{"timeout": agent.NATIVE_RENEWAL_TIMEOUT_S}]
     assert facts["credentials"]["expires_at"] == (NOW + 7200) * 1000
@@ -76,7 +92,7 @@ def test_expiring_local_only_slot_forces_native_probe_despite_fresh_quota(slot, 
 
 def test_successful_quota_screen_is_not_proof_of_renewal_and_backoff_is_durable(slot, monkeypatch):
     calls = []
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: calls.append(k) or {"week": {}})
+    install_native(monkeypatch, lambda *a, **k: calls.append(k) or {"week": {}})
     original = (slot[0] / ".claude/.credentials.json").read_bytes()
     state, report, attempted = maintain(slot)
     assert attempted and report["state"] == "retrying"
@@ -90,14 +106,14 @@ def test_successful_quota_screen_is_not_proof_of_renewal_and_backoff_is_durable(
 
 
 def test_retry_backoff_caps_and_current_expiry_does_not_launch_native(slot, monkeypatch):
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: None)
+    install_native(monkeypatch, lambda *a, **k: None)
     now = NOW
     for _ in range(8):
         _, report, _ = maintain(slot, now)
         assert report["next_attempt_at"] <= now + 600
         now = report["next_attempt_at"]
     rotate(slot[0], now + 7200)
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("unneeded renewal"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("unneeded renewal"))
     assert maintain(slot, now)[1]["state"] == "current"
 
 
@@ -105,7 +121,7 @@ def test_unconfirmed_native_probes_converge_on_a_narrow_refresh_window(slot, mon
     expiry = NOW + 9 * 60
     rotate(slot[0], expiry)
     attempts = []
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: attempts.append(True))
+    install_native(monkeypatch, lambda *a, **k: attempts.append(True))
     now = NOW
     deadlines = []
     while now <= expiry:
@@ -131,14 +147,14 @@ def test_unconfirmed_native_probes_converge_on_a_narrow_refresh_window(slot, mon
 def test_binding_and_sign_in_guards_never_drive_native(slot, monkeypatch, change, reason):
     _, path, state = slot
     agent.write_state(path, {**state, **change})
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("guard bypassed"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("guard bypassed"))
     _, report, attempted = maintain(slot)
     assert not attempted and report["state"] == "blocked" and report["reason"] == reason
 
 
 def test_slot_not_chosen_for_maintenance_waits_even_if_expired(slot, monkeypatch):
     rotate(slot[0], NOW - 100)
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("not selected"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("not selected"))
     _, report, attempted = maintain(slot, request={"refresh_quota": False})
     assert not attempted and report["state"] == "needed"
 
@@ -147,7 +163,7 @@ def test_native_can_renew_expired_credential_without_auth_status_claim(slot, mon
     home, _, _ = slot
     rotate(home, NOW - 100)
     monkeypatch.setattr(agent, "auth_status", lambda *a: {"logged_in": False})
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: rotate(home, NOW + 7200))
+    install_native(monkeypatch, lambda *a, **k: rotate(home, NOW + 7200))
     facts = agent.slot_facts({"refresh_quota": True}, runner, NOW)
     assert facts["credentials"]["renewal"]["state"] == "renewed"
     assert facts["credentials"]["expires_at"] == (NOW + 7200) * 1000
@@ -160,7 +176,7 @@ def test_account_change_during_probe_is_not_success_or_overwritten(slot, monkeyp
         rotate(home, NOW + 7200)
         agent.write_state(path, {**state, "bound_fp": "new-account", "account_restart": "owed"})
 
-    monkeypatch.setattr(agent, "read_quota", native)
+    install_native(monkeypatch, native)
     state, report, attempted = maintain(slot)
     assert attempted and report["state"] == "blocked"
     assert report["reason"] == "account_transition"
@@ -179,7 +195,7 @@ def test_account_transition_before_locked_reread_survives_callers_final_write(sl
         return held
 
     monkeypatch.setattr(agent, "_native_probe_lock", lock_then_transition)
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("transition was ignored"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("transition was ignored"))
     facts = agent.slot_facts({"refresh_quota": True}, runner, NOW)
     saved = agent.read_state(path)
     assert saved["bound_fp"] == "next-owner" and saved["account_restart"] == "owed"
@@ -199,7 +215,7 @@ def test_newer_backoff_discovered_under_lock_is_not_overwritten(slot, monkeypatc
         return held
 
     monkeypatch.setattr(agent, "_native_probe_lock", lock_after_another_attempt)
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("overlapping attempt"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("overlapping attempt"))
     agent.slot_facts({"refresh_quota": True}, runner, NOW)
     assert agent.read_state(path)["native_renewal"]["failures"] == 3
 
@@ -208,10 +224,10 @@ def test_maintenance_lock_prevents_overlapping_native_probes(slot, monkeypatch):
     probe, _ = agent.quota_probe_dir()
     lock = agent._native_probe_lock(probe, ".renewal.lock")
     assert lock is not None
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("overlapping probe"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("overlapping probe"))
     try:
         _, report, attempted = maintain(slot)
-        assert not attempted and report["reason"] == "maintenance_busy"
+        assert not attempted and report["reason"] == "native_probe_busy"
     finally:
         os.close(lock)
 
@@ -239,15 +255,16 @@ def test_probe_lock_rejects_symlinks_and_does_not_modify_target(slot):
 def test_invalid_expiry_never_schedules_native(slot, monkeypatch, expiry):
     rotate(slot[0], 1)
     path = slot[0] / ".claude/.credentials.json"
-    path.write_text(json.dumps({"claudeAiOauth": {"expiresAt": expiry}}))
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("invalid expiry"))
+    path.write_text(json.dumps({"claudeAiOauth": {
+        "refreshToken": "synthetic-private-refresh", "expiresAt": expiry}}))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("invalid expiry"))
     _, report, attempted = maintain(slot)
     assert not attempted and report["reason"] == "expiry_unknown"
 
 
 def test_failed_state_write_does_not_launch_native(slot, monkeypatch):
     monkeypatch.setattr(agent, "write_state", lambda *a, **k: False)
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: pytest.fail("no durable backoff"))
+    install_native(monkeypatch, lambda *a, **k: pytest.fail("no durable backoff"))
     assert maintain(slot)[2] is False
 
 
@@ -310,6 +327,6 @@ def test_normal_quota_probe_reports_rotated_expiry_same_heartbeat(slot, monkeypa
     home, path, state = slot
     rotate(home, NOW + 7200)
     agent.write_state(path, {**state, "quota": {"ts": NOW - 7200}})
-    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: rotate(home, NOW + 14400))
+    install_native(monkeypatch, lambda *a, **k: rotate(home, NOW + 14400))
     facts = agent.slot_facts({"refresh_quota": True}, runner, NOW)
     assert facts["credentials"]["expires_at"] == (NOW + 14400) * 1000

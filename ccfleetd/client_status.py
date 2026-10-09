@@ -12,11 +12,15 @@ from typing import Any, Optional
 
 from .credential_health import (
     ACCESS_MARGIN_S,
+    NATIVE_LOGIN_FAILURES,
+    RENEWAL_WARNING_CODES,
     RENEWAL_WINDOW_S,
     TRANSITION_REASONS,
     access_expiry,
     fresh_observation,
     renewal_report,
+    renewal_warning,
+    sign_in_reason,
 )
 from .heartbeat import relay_report
 
@@ -66,6 +70,7 @@ def health(slot: Mapping[str, Any], report: Mapping[str, Any], login: Any, *,
     credentials = credentials if isinstance(credentials, Mapping) else {}
     renewal = renewal_report(credentials.get("renewal"))
     expiry = access_expiry(credentials)
+    terminal = sign_in_reason(credentials, now)
     result: dict[str, Any] = {"state": slot.get("state") if slot.get("state") in {
         "free", "claiming", "claimed", "active", "releasing"} else "unknown",
         "ready": False, "health": "degraded", "reason": "observation_stale",
@@ -84,21 +89,25 @@ def health(slot: Mapping[str, Any], report: Mapping[str, Any], login: Any, *,
         result.update(health="switching", reason="account_mismatch")
     elif not credentials.get("bound_fp") or not credentials.get("account_fp"):
         result.update(health="degraded", reason="account_unbound")
+    elif terminal in NATIVE_LOGIN_FAILURES:
+        result.update(health="sign_in_required", reason=("not_signed_in"
+                      if terminal == "native_auth_rejected" else "credential_expired"))
     elif credentials.get("logged_in") is False or credentials.get("present") is False:
         result.update(health="sign_in_required", reason="not_signed_in")
+    elif terminal and (expiry is None or expiry <= now + ACCESS_MARGIN_S):
+        result.update(health="sign_in_required", reason="credential_expired")
     elif expiry is None:
         result.update(health="degraded", reason="expiry_unknown")
     elif expiry <= now + ACCESS_MARGIN_S:
-        if renewal.get("state") in {"needed", "retrying"} and expiry > now - 600:
-            result.update(health="renewal_pending", reason="native_renewal_pending")
-        else:
-            result.update(health="sign_in_required", reason="credential_expired")
-    elif renewal.get("state") in {"needed", "retrying", "blocked"}:
         result.update(health="renewal_pending", reason="native_renewal_pending")
-    elif expiry <= now + RENEWAL_WINDOW_S:
-        result.update(health="renewal_pending", reason="renewal_due")
     elif credentials.get("logged_in") is True:
         result.update(health="ready", reason="credentials_current", ready=True)
+    if result["health"] not in {"switching", "degraded"}:
+        warning = renewal_warning(credentials, now)
+        if warning in RENEWAL_WARNING_CODES:
+            result["renewal_warning"] = warning
+        elif expiry is not None and now + ACCESS_MARGIN_S < expiry <= now + RENEWAL_WINDOW_S:
+            result["renewal_warning"] = "renewal_due"
     claude = report.get("claude")
     version = claude.get("version") if isinstance(claude, Mapping) else None
     if isinstance(version, str) and VERSION_RE.fullmatch(version):

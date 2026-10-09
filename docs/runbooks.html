@@ -173,6 +173,27 @@ This edits PAM, so keep a second SSH session open while you do it.</li>
 <li>Log out, back in, re-run <code>setup-owner.sh</code>.</li>
 </ol>
 <h2 id="credentials_missing-or-token_expired"><code>credentials_missing</code> or <code>token_expired</code></h2>
+<p>For hosted slots, first distinguish access renewal from a longer-lived login
+that needs authorization. The slot page and console show the latest verified
+observation; a stale heartbeat cannot prove recovery.</p>
+<ul>
+<li><strong>Renewal pending:</strong> native maintenance is retrying a temporary
+failure, or access expiry has not yet advanced. Inspect the fixed renewal outcome,
+probe-start observation and next-attempt timestamp. A busy probe is not a failed
+login. Preserve the slot, its files, pairing and credential store.</li>
+<li><strong>Login expiring:</strong> a known longer-lived login expires within three
+days. Ask the holder to complete <strong>Sign in again</strong> before it expires.
+Current access is reported independently; its timestamp does not establish live
+provider acceptance.</li>
+<li><strong>Sign-in required:</strong> native Claude explicitly reports an expired
+or rejected login, or access is unusable and refresh capability is absent or
+expired. The holder must authorize a fresh login. Do not restore a copied old
+refresh token or change the slot's bound account.</li>
+</ul>
+<p>Fixed outcomes contain no native pane text, credential values or provider
+response bodies. Unknown errors remain unconfirmed renewal; diagnose them
+without publishing raw output. These credential alerts do not trigger machine
+outage emails. Legacy owner nodes follow the sign-in procedure below.</p>
 <p>The owner needs to sign in again; nobody else can do it for them.</p>
 <ol>
 <li>The holder opens <code>/account</code>, presses <strong>Sign in again</strong>, completes Anthropic's

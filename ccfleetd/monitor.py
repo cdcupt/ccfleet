@@ -83,7 +83,8 @@ class Monitor:
         if latest and (latest.get("payload") or {}).get("mode") == slotstates.MACHINE_MODE:
             from .credential_health import fresh_observation
 
-            prefixes = {"slot_token_expired", "slot_credentials_missing", "slot_credential_renewal"}
+            prefixes = {"slot_token_expired", "slot_credentials_missing", "slot_credential_renewal",
+                        "slot_sign_in_required", "slot_login_expiring"}
             reports = {r.get("unix_user"): r for r in latest["payload"].get("slots", [])
                        if isinstance(r, dict)}
             uncertain = {s["unix_user"] for s in every_slot

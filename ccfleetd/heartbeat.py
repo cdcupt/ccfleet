@@ -15,7 +15,7 @@ from typing import Any, Optional
 from ccfleet_agent.relay_metrics import DAY_SECONDS, WINDOW_DAYS, MetricsError, validate_report
 
 from .config import CONTACT_EMAIL_RE
-from .credential_health import renewal_report
+from .credential_health import instant, renewal_report
 from .slots import MACHINE_MODE
 from .store import UNIX_USER_RE
 
@@ -176,7 +176,8 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "expires_at": _num(section.get("expires_at")),
         "mtime": _num(section.get("mtime")),
         "email": _email(section.get("email")),
-        "refresh_expires_at": _num(section.get("refresh_expires_at")),
+        "refresh_available": _bool_or_none(section.get("refresh_available")),
+        "refresh_expires_at": instant(section.get("refresh_expires_at")),
         "account_fp": account_fp(section.get("account_fp")),
         # The account the slot keeps (its first), to compare with the one above.
         "bound_fp": account_fp(section.get("bound_fp")),

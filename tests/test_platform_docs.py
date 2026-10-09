@@ -30,7 +30,9 @@ def badge(creds=None, *, login=None, heard=NOW, state="active"):
 
 @pytest.mark.parametrize("changes,label,code", [
     ({}, "Reported ready", "ready"),
-    ({"expires_at": (NOW + 100) * 1000}, "Renewal pending", "renewal_pending"),
+    ({"expires_at": (NOW + 100) * 1000}, "Reported ready", "ready"),
+    ({"expires_at": (NOW + 20) * 1000}, "Renewal pending", "renewal_pending"),
+    ({"expires_at": (NOW - 60) * 1000}, "Renewal pending", "renewal_pending"),
     ({"logged_in": False}, "Sign-in required", "sign_in_required"),
     ({"account_fp": "b" * 16}, "Account maintenance", "switching"),
     ({"bound_fp": None}, "Readiness unverified", "degraded"),
@@ -41,6 +43,18 @@ def test_health_badge_reports_distinct_recovery_states_without_acceptance_promis
     assert "A heartbeat observation does not prove" in body
     assert "Anthropic will accept a model request" in body
     assert "ccfleet doctor --privacy" in body
+
+
+def test_unexpired_access_keeps_reported_readiness_and_warns_about_renewal():
+    creds = credentials(expires_at=(NOW + 100) * 1000)
+    body = badge(creds)
+    assert 'data-health="ready"' in body and "Reported ready" in body
+    observation = usersite.client_status.health({"state": "active"}, {"credentials": creds},
+                                               None, heard=NOW, now=NOW, max_age=900)
+    assert observation["renewal_warning"] == "renewal_due"
+    assert "Access renewal has not been verified" in body
+    assert "Renewal pending" not in body and "Sign-in required" not in body
+    assert "A heartbeat observation does not prove" in body
 
 
 @pytest.mark.parametrize("heard", [None, NOW - 1000, NOW + 1000])

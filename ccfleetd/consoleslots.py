@@ -93,6 +93,10 @@ def _report_of(slot: Mapping[str, Any], payload: Mapping[str, Any]) -> Mapping[s
 def _plan_of(report: Mapping[str, Any]) -> Optional[str]:
     """The Claude plan of the account signed in on a slot, as it is sold."""
     creds = report.get("credentials") or {}
+    # Native account metadata survives signing out. It is the previous plan,
+    # so only display it while the report does not say the sign-in is gone.
+    if creds.get("present") is False or creds.get("logged_in") is False:
+        return None
     return plans.label(creds.get("subscription_type"), creds.get("plan"))
 
 

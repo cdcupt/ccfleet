@@ -111,6 +111,20 @@ def test_the_accounts_card_says_each_persons_plans(console):  # noqa: F811
     assert "holds 2 (Max 20x, Pro) · " in accounts and "Team" not in accounts
 
 
+@pytest.mark.parametrize("credentials", [{"present": False},
+                                        {"present": True, "logged_in": False}])
+def test_signed_out_slots_do_not_show_cached_plans_in_console_cards(console, credentials):  # noqa: F811
+    store, call = console
+    held_slot(store)
+    machine_said(store, {"unix_user": "slot01", "present": True,
+        "credentials": {**credentials, "subscription_type": "max",
+                        "plan": "default_claude_max_20x"}})
+    page = call("GET", "/admin").body
+    assert "Max 20x" not in slots_card(page)
+    accounts = page[page.index('id="accounts"'):page.index('id="price"')]
+    assert "Max 20x" not in accounts and "holds 1 · " in accounts
+
+
 def test_somebody_with_no_plan_says_none(console):  # noqa: F811
     store, call = console
     holder(store, email="bea@example.com")
