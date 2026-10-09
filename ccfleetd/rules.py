@@ -6,15 +6,21 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from . import compatibility
 from . import names as slotnames
 from . import slots as slotstates
 from .config import Config
 from .credential_health import (
     ACCESS_MARGIN_S,
+    LOGIN_WARNING_S,
+    NATIVE_LOGIN_FAILURES,
     RENEWAL_WINDOW_S,
     TRANSITION_REASONS,
     access_expiry,
+    instant,
+    recovery_guidance,
     renewal_report,
+    sign_in_reason,
 )
 from .desired import is_channel
 
@@ -289,24 +295,44 @@ def _slot_credential_findings(slot_rows: Sequence[Mapping[str, Any]],
                 and credentials["account_fp"] != credentials["bound_fp"]):
             continue
         expires = access_expiry(credentials)
+        terminal = sign_in_reason(credentials, now)
         if expires is not None and expires <= now + ACCESS_MARGIN_S:
             findings.append(Finding(
                 f"slot_token_expired:{user}", LEVEL_CRITICAL if expires <= now else LEVEL_WARN,
                 f"{user}: access credential needs renewal; model relay is unavailable. "
-                "Check native maintenance, then request Sign in again if recovery is needed."))
+                + recovery_guidance(credentials, now)))
         elif credentials.get("present") is False or credentials.get("logged_in") is False:
             findings.append(Finding(
                 f"slot_credentials_missing:{user}", LEVEL_WARN,
-                f"{user}: Claude sign-in is unavailable; the holder may need Sign in again."))
+                f"{user}: Claude sign-in is unavailable; use Sign in again to restore access."))
+        elif terminal:
+            if terminal in NATIVE_LOGIN_FAILURES:
+                access_note = "native Claude requires a fresh sign-in. "
+            elif expires is None:
+                access_note = "current access could not be verified. "
+            else:
+                access_note = ("the reported access credential has not expired; live model "
+                               "access is unverified. ")
+            findings.append(Finding(
+                f"slot_sign_in_required:{user}", LEVEL_WARN,
+                f"{user}: {access_note}Sign in again to restore automatic renewal."))
         elif renewal.get("reason") in {"expiry_unknown", "credential_unavailable"}:
             findings.append(Finding(
                 f"slot_credential_renewal:{user}", LEVEL_WARN,
                 f"{user}: access credential cannot be verified; check native maintenance."))
         elif (expires is not None and expires <= now + RENEWAL_WINDOW_S
-                and renewal.get("state") == "retrying"):
+                and renewal.get("state") in {"needed", "retrying", "blocked"}):
             findings.append(Finding(
                 f"slot_credential_renewal:{user}", LEVEL_WARN,
-                f"{user}: native renewal is not yet confirmed; a bounded retry is scheduled."))
+                f"{user}: " + recovery_guidance(credentials, now)))
+        refresh_expiry = instant(credentials.get("refresh_expires_at"))
+        if (not terminal and credentials.get("logged_in") is True
+                and credentials.get("present") is not False
+                and refresh_expiry is not None and now < refresh_expiry <= now + LOGIN_WARNING_S):
+            findings.append(Finding(
+                f"slot_login_expiring:{user}", LEVEL_WARN,
+                f"{user}: longer-lived Claude sign-in expires within 3 days. "
+                "Sign in again before then to keep automatic renewal available."))
     return findings
 
 
@@ -417,6 +443,29 @@ def _slot_account_findings(slot_rows: Sequence[Mapping[str, Any]],
     return findings
 
 
+def _slot_compatibility_findings(slot_rows: Sequence[Mapping[str, Any]],
+                                 payload: Mapping[str, Any], heard: float, now: float,
+                                 cfg: Config, listening: Optional[float]) -> list[Finding]:
+    reports = {entry.get("unix_user"): entry for entry in payload.get("slots", [])
+               if isinstance(entry, Mapping)}
+    findings = []
+    for slot in slot_rows:
+        if slot.get("state") != slotstates.ACTIVE:
+            continue
+        user = slot.get("unix_user")
+        entry = reports.get(user, {})
+        since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
+        checked = compatibility.observation(
+            entry.get("compatibility"), entry.get("claude"), entry.get("credentials"),
+            heard=heard, now=now, max_age=cfg.heartbeat_max_age_s, since=since,
+            listening_since=listening)
+        if (checked.get("state") == "failed"
+                or checked.get("reason") in compatibility.OPERATOR_REVIEW_REASONS):
+            findings.append(Finding(f"slot_native_compatibility:{user}", LEVEL_WARN,
+                                    f"{user}: " + compatibility.description(checked)))
+    return findings
+
+
 def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
              previous: Optional[Mapping[str, Any]], now: float,
              cfg: Config,
@@ -461,6 +510,8 @@ def evaluate(node: Mapping[str, Any], latest: Optional[Mapping[str, Any]],
             # Do not invent fresh expiry failures from a pre-restart reading.
             findings += [f for f in renewal if not listening_since
                          or float(latest["ts"]) >= listening_since or f.rule in raised]
+            findings += _slot_compatibility_findings(
+                slot_rows, payload, float(latest["ts"]), now, cfg, listening_since)
         return tuple(findings)
     findings += _claude_findings(node, payload, prev_payload)
     findings += _credential_findings(payload, now, cfg, grace("token_stale"))

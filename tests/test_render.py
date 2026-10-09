@@ -1,3 +1,5 @@
+import pytest
+
 from ccfleetd.render import build_rows, render_dashboard
 from tests.conftest import heartbeat, refresh_of
 
@@ -29,6 +31,22 @@ def test_rows_merge_alerts_and_escape_html(cfg):
 def test_empty_dashboard_has_hint(cfg):
     html = render_dashboard([], [], NOW, cfg)
     assert "No nodes yet" in html and "none" in html
+
+
+@pytest.mark.parametrize("expiry", [None, 0, -1, True, "0", float("nan"), float("inf"),
+                                    10 ** 400])
+def test_unavailable_token_expiry_is_not_a_time_in_1970(expiry):
+    from ccfleetd.render import _in, _row_html
+    row = _row_with(credentials={"present": False, "expires_at": expiry})
+    html = _row_html(row, NOW)
+    assert _in(NOW, expiry) == "unavailable"
+    assert "token unavailable" in html and "token 35d ago" not in html
+
+
+def test_real_token_expiry_keeps_its_relative_time():
+    from ccfleetd.render import _in
+    assert _in(NOW, (NOW + 3600) * 1000) == "in 60m"
+    assert _in(NOW, (NOW - 600) * 1000) == "10m ago"
 
 
 def test_add_result_page_is_escaped_and_complete(cfg):

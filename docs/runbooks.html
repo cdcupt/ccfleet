@@ -173,6 +173,27 @@ This edits PAM, so keep a second SSH session open while you do it.</li>
 <li>Log out, back in, re-run <code>setup-owner.sh</code>.</li>
 </ol>
 <h2 id="credentials_missing-or-token_expired"><code>credentials_missing</code> or <code>token_expired</code></h2>
+<p>For hosted slots, first distinguish access renewal from a longer-lived login
+that needs authorization. The slot page and console show the latest verified
+observation; a stale heartbeat cannot prove recovery.</p>
+<ul>
+<li><strong>Renewal pending:</strong> native maintenance is retrying a temporary
+failure, or access expiry has not yet advanced. Inspect the fixed renewal outcome,
+probe-start observation and next-attempt timestamp. A busy probe is not a failed
+login. Preserve the slot, its files, pairing and credential store.</li>
+<li><strong>Login expiring:</strong> a known longer-lived login expires within three
+days. Ask the holder to complete <strong>Sign in again</strong> before it expires.
+Current access is reported independently; its timestamp does not establish live
+provider acceptance.</li>
+<li><strong>Sign-in required:</strong> native Claude explicitly reports an expired
+or rejected login, or access is unusable and refresh capability is absent or
+expired. The holder must authorize a fresh login. Do not restore a copied old
+refresh token or change the slot's bound account.</li>
+</ul>
+<p>Fixed outcomes contain no native pane text, credential values or provider
+response bodies. Unknown errors remain unconfirmed renewal; diagnose them
+without publishing raw output. These credential alerts do not trigger machine
+outage emails. Legacy owner nodes follow the sign-in procedure below.</p>
 <p>The owner needs to sign in again; nobody else can do it for them.</p>
 <ol>
 <li>The holder opens <code>/account</code>, presses <strong>Sign in again</strong>, completes Anthropic's
@@ -431,6 +452,23 @@ pages never show one.</li>
 <h2 id="rotate-the-admin-token">Rotate the admin token</h2>
 <p><em>server</em>: change <code>CCFLEET_ADMIN_TOKEN</code> in the env file, restart <code>ccfleetd</code>,
 update the password saved in your browser.</p>
+<h2 id="upgrade-validation">Upgrade validation</h2>
+<p>Hosted upgrade validation runs again when the native binary, native version,
+relay/runtime code or account binding changes. Check the slot's update status
+and <code>ccfleet doctor --privacy</code>. Pending checks are not a sign-in
+failure. A reported pass covers the tested generation, not future provider
+acceptance.</p>
+<p>If validation reports an authentication-source or hosted-extension conflict,
+review the slot's provider overrides and managed/user native configuration.
+Fleet does not remove the holder's settings or replace credentials to bypass
+that conflict. Maintenance retains the original credential namespace, uses a
+clean environment and private probe workspace, and skips unsafe probes. Fix
+the configuration and let the next bounded check run. An older refresh-token
+snapshot is not a recovery method for provider-side rotation.</p>
+<p>Operational logs contain fixed outcome categories and HTTP route templates,
+not response text, authorization, request bodies, query values or dynamic path
+identifiers. Keep private native history and job output separate from support
+diagnostics. The new policy does not rewrite historical files.</p>
 <h2 id="quarterly">Quarterly</h2>
 <p>Re-read the pages quoted in <code>docs/compliance.html</code>; Anthropic's terms and the
 gateway requirements change. Check <code>claude --version</code> against the pin on every

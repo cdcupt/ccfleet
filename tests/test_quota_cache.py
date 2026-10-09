@@ -36,6 +36,9 @@ def saved(tmp_path, *, fetched=NOW - 60, owner=UUID, account=UUID, five=0, seven
     if owner is None:
         del data[agent.QUOTA_CACHE_KEY]["accountUuid"]
     (tmp_path / ".claude.json").write_text(json.dumps(data))
+    # quota_summary uses the native explicitly configured namespace; the direct
+    # cached_usage utility above also retains its default-home fixture coverage.
+    (config / ".claude.json").write_text(json.dumps(data))
     return config
 
 
@@ -101,7 +104,7 @@ def probe(monkeypatch, tmp_path):
     calls = []
     found = {"screen": {"session": {"used_pct": 50, "resets": "3pm (UTC)"}}, "writes": None}
 
-    def read_quota(runner, now):
+    def read_quota(runner, now, **kwargs):
         calls.append(now)
         if found["writes"]:
             found["writes"]()

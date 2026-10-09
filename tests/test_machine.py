@@ -498,6 +498,21 @@ def test_a_child_that_cannot_start():
 
 # -- the cycle -------------------------------------------------------------------
 
+@pytest.mark.parametrize("status,category", [(0, "unreachable"), (400, "client_error"),
+                                           (401, "client_error"), (503, "server_error")])
+def test_machine_heartbeat_errors_log_only_status_and_fixed_category(
+        cfg, monkeypatch, caplog, status, category):
+    response = json.dumps({"Authorization": "Bearer SYNTHETIC_AUTH_SECRET",
+                           "metadata": {"user_id": "SYNTHETIC_USER_ID"},
+                           "response_body": "SYNTHETIC_BODY_CONTENT"})
+    monkeypatch.setattr(machine.core, "send_heartbeat", lambda *a, **k: (status, response))
+    with caplog.at_level("INFO", logger=machine.log.name):
+        assert machine.run_cycle(cfg, {}, Fake().system())[0] == status
+    messages = [r.getMessage() for r in caplog.records if r.name == machine.log.name]
+    assert messages == [f"heartbeat rejected: status={status} category={category}"]
+    assert "SYNTHETIC_" not in caplog.text and "Authorization" not in caplog.text
+
+
 def test_one_run_reports_then_acts(cfg):
     fake = Fake(users=["slot02"], desired={"slots": [
         {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},

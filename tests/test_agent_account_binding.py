@@ -154,7 +154,7 @@ def test_an_owner_node_reports_the_fingerprint_and_nothing_else_about_the_accoun
     monkeypatch.setattr(agent.shutil, "which", lambda name: None)
     config = tmp_path / "claude"
     config.mkdir()
-    (tmp_path / "claude.json").write_text(json.dumps({"oauthAccount": {
+    (config / ".claude.json").write_text(json.dumps({"oauthAccount": {
         "accountUuid": MINE, "emailAddress": "owner@example.com", "fullName": "An Owner"}}))
     cfg = agent.AgentConfig(url="https://f.example", node_id="n", token="t",
                             claude_config_dir=config, egress_targets=("https://ip.example",))

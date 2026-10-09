@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from . import claude_versions, outage, rules, status
+from . import claude_versions, compatibility, outage, rules, status
 from . import slots as slotstates
 from .config import Config
 from .mail import Mailer, NoMailer
@@ -83,7 +83,8 @@ class Monitor:
         if latest and (latest.get("payload") or {}).get("mode") == slotstates.MACHINE_MODE:
             from .credential_health import fresh_observation
 
-            prefixes = {"slot_token_expired", "slot_credentials_missing", "slot_credential_renewal"}
+            prefixes = {"slot_token_expired", "slot_credentials_missing", "slot_credential_renewal",
+                        "slot_sign_in_required", "slot_login_expiring"}
             reports = {r.get("unix_user"): r for r in latest["payload"].get("slots", [])
                        if isinstance(r, dict)}
             uncertain = {s["unix_user"] for s in every_slot
@@ -91,9 +92,30 @@ class Monitor:
                          and not fresh_observation(
                              (reports.get(s["unix_user"]) or {}).get("credentials"),
                              latest["ts"], now, self._cfg.heartbeat_max_age_s, listening)}
+            active_slots = {s["unix_user"]: s for s in every_slot
+                            if s["node_id"] == node["id"] and s["state"] == slotstates.ACTIVE}
+            compatibility_states = {}
+            for user, slot in active_slots.items():
+                entry = reports.get(user) or {}
+                since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
+                checked = compatibility.observation(
+                    entry.get("compatibility"), entry.get("claude"), entry.get("credentials"),
+                    heard=latest["ts"], now=now, max_age=self._cfg.heartbeat_max_age_s,
+                    since=since, listening_since=listening)
+                compatibility_states[user] = (
+                    "failed" if checked.get("reason") in compatibility.OPERATOR_REVIEW_REASONS
+                    else checked.get("state"))
+            opened = {a["rule"]: a["opened_at"] for a in open_alerts
+                      if a["node_id"] == node["id"]}
 
             def unconfirmed(rule: str) -> bool:
                 kind, _, user = rule.partition(":")
+                if kind == "slot_native_compatibility" and user in active_slots:
+                    slot = active_slots[user]
+                    since = max(slot.get("claimed_at") or 0,
+                                slot.get("account_switched_at") or 0)
+                    return (opened.get(rule, 0) >= since
+                            and compatibility_states.get(user) not in {"passed", "failed"})
                 return kind in prefixes and user in uncertain
 
             preserve = frozenset(rule for rule in raised if unconfirmed(rule))

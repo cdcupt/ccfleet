@@ -14,8 +14,9 @@ from typing import Any, Optional
 
 from ccfleet_agent.relay_metrics import DAY_SECONDS, WINDOW_DAYS, MetricsError, validate_report
 
+from .compatibility import clean as compatibility_report
 from .config import CONTACT_EMAIL_RE
-from .credential_health import renewal_report
+from .credential_health import instant, renewal_report
 from .slots import MACHINE_MODE
 from .store import UNIX_USER_RE
 
@@ -176,7 +177,8 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "expires_at": _num(section.get("expires_at")),
         "mtime": _num(section.get("mtime")),
         "email": _email(section.get("email")),
-        "refresh_expires_at": _num(section.get("refresh_expires_at")),
+        "refresh_available": _bool_or_none(section.get("refresh_available")),
+        "refresh_expires_at": instant(section.get("refresh_expires_at")),
         "account_fp": account_fp(section.get("account_fp")),
         # The account the slot keeps (its first), to compare with the one above.
         "bound_fp": account_fp(section.get("bound_fp")),
@@ -204,8 +206,13 @@ def _upgrade(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     """
     if not any(section.get(k) is not None for k in ("from", "to", "ok", "error", "ts")):
         return None
+    error = section.get("error")
+    if error is not None:
+        error = error if isinstance(error, str) and error in {
+            "native_install_failed", "native_install_timeout", "native_install_unavailable",
+            "TimeoutExpired", "OSError", "CalledProcessError"} else "native_install_failed"
     return {"from": _str(section.get("from")), "to": _str(section.get("to")),
-            "ok": _bool_or_none(section.get("ok")), "error": _str(section.get("error")),
+            "ok": _bool_or_none(section.get("ok")), "error": error,
             "ts": _num(section.get("ts"))}
 
 
@@ -224,8 +231,14 @@ def _claude_update(section: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     requested_at = _num(section.get("requested_at"))
     if state not in UPDATE_REPORT_STATES or requested_at is None:
         return None
+    detail = section.get("detail")
+    if state == "failed":
+        detail = ("The native installer could not complete the update. "
+                  "Retry or contact your operator.")
+    else:
+        detail = None
     return {"requested_at": requested_at, "state": state,
-            "to": _str(section.get("to"), 40), "detail": _str(section.get("detail"))}
+            "to": _str(section.get("to"), 40), "detail": detail}
 
 
 def relay_report(value: Any, now: float) -> Optional[dict[str, Any]]:
@@ -287,6 +300,9 @@ def _slots(value: Any, now: float) -> list[dict[str, Any]]:
         relay = relay_report(entry.get("relay"), now)
         if relay is not None:
             out[-1]["relay"] = relay
+        compatibility = compatibility_report(entry.get("compatibility"), now)
+        if compatibility:
+            out[-1]["compatibility"] = compatibility
         progress = _login_progress(_section(entry, "login"))
         if progress:
             out[-1]["login"] = progress

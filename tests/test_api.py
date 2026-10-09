@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 
 from ccfleetd import cli_access, slots
-from ccfleetd.api import Context, build_server
+from ccfleetd.api import Context, build_server, make_handler
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.store import Store
@@ -42,6 +42,80 @@ def call(srv, method, path, body=None, headers=None):
 
 def basic(token):
     return {"Authorization": "Basic " + base64.b64encode(f"admin:{token}".encode()).decode()}
+
+
+@pytest.mark.parametrize("path,status", [
+    ("/healthz?code=SYNTHETIC_CODE_SECRET&token=SYNTHETIC_QUERY_TOKEN#SYNTHETIC_FRAGMENT", 200),
+    ("https://SYNTHETIC_USER:SYNTHETIC_PASSWORD@host.invalid/healthz?token=SYNTHETIC_QUERY_TOKEN", 404),
+])
+def test_http_access_logs_preserve_route_and_status_without_queries_or_authorization(
+        server, caplog, path, status):
+    srv, _ = server
+    with caplog.at_level("INFO", logger="ccfleetd.api"):
+        assert call(srv, "GET", path, headers={
+            "Authorization": "Bearer SYNTHETIC_HEADER_SECRET"})[0] == status
+    messages = [r.getMessage() for r in caplog.records if r.name == "ccfleetd.api"]
+    assert messages == [f'127.0.0.1 method=GET path="/healthz" status={status}']
+    assert "SYNTHETIC_" not in caplog.text and "Authorization" not in caplog.text
+
+
+def test_http_access_logs_do_not_record_request_or_response_bodies(server, caplog):
+    srv, store = server
+    token = store.add_node("node-a", "operator")
+    payload = {**heartbeat(time.time())["payload"],
+               "metadata": {"user_id": "SYNTHETIC_BODY_USER"},
+               "private_extra": "SYNTHETIC_REQUEST_BODY"}
+    with caplog.at_level("INFO", logger="ccfleetd.api"):
+        assert call(srv, "POST", "/api/heartbeat?code=SYNTHETIC_QUERY_SECRET", payload,
+                    {"Authorization": "Bearer " + token})[0] == 200
+    messages = [r.getMessage() for r in caplog.records if r.name == "ccfleetd.api"]
+    assert messages == ['127.0.0.1 method=POST path="/api/heartbeat" status=200']
+    assert token not in caplog.text and "SYNTHETIC_" not in caplog.text
+
+
+def test_http_parser_error_logging_never_interpolates_raw_request_details(cfg, caplog):
+    handler_type = make_handler(Context(None, cfg, None))
+    handler = handler_type.__new__(handler_type)
+    handler.client_address = ("127.0.0.1", 12345)
+    handler.command = "GET"
+    handler.path = "/healthz?code=SYNTHETIC_QUERY_SECRET"
+    with caplog.at_level("INFO", logger="ccfleetd.api"):
+        handler.log_message("code %d, message %s", 400, "SYNTHETIC_PARSER_SECRET")
+        handler.log_request(400)
+    assert "SYNTHETIC_" not in caplog.text
+    assert '127.0.0.1 method=GET path="/healthz" status=400' in caplog.text
+
+
+@pytest.mark.parametrize("path,route", [
+    ("/account/slots/PRIVATE_SLOT_ID/signin", "/account/slots/{slot_id}/signin"),
+    ("/actions/slot/PRIVATE_SLOT_ID/reclaim", "/actions/slot/{slot_id}/reclaim"),
+    ("/actions/node/PRIVATE_NODE_ID/pin", "/actions/node/{node_id}/pin"),
+    ("/actions/account/PRIVATE_EMAIL_ID/allowance", "/actions/account/{account_id}/allowance"),
+    ("/actions/payment/PRIVATE_PAYMENT_ID/void", "/actions/payment/{payment_id}/void"),
+    ("/PRIVATE_SECRET_PATH", "unknown_route"),
+    ("/actions/slot/PRIVATE_SLOT_ID/PRIVATE_SECRET_ACTION", "unknown_route"),
+    ("/docs/library/PRIVATE_DOCUMENT_NAME", "unknown_route"),
+])
+def test_access_logs_emit_templates_without_dynamic_identifiers_or_unknown_paths(
+        cfg, caplog, path, route):
+    handler_type = make_handler(Context(None, cfg, None))
+    handler = handler_type.__new__(handler_type)
+    handler.client_address = ("127.0.0.1", 12345)
+    handler.command = "POST"
+    handler.path = path + "?token=PRIVATE_QUERY_TOKEN#PRIVATE_FRAGMENT"
+    with caplog.at_level("INFO", logger="ccfleetd.api"):
+        handler.log_request(404)
+    messages = [r.getMessage() for r in caplog.records if r.name == "ccfleetd.api"]
+    assert messages == [f'127.0.0.1 method=POST path="{route}" status=404']
+    assert "PRIVATE_" not in caplog.text
+
+
+def test_unknown_secret_target_is_not_recorded_by_live_access_logger(server, caplog):
+    srv, _ = server
+    with caplog.at_level("INFO", logger="ccfleetd.api"):
+        assert call(srv, "GET", "/PRIVATE_SECRET_TARGET?code=PRIVATE_CODE")[0] == 404
+    assert '127.0.0.1 method=GET path="unknown_route" status=404' in caplog.text
+    assert "PRIVATE_" not in caplog.text
 
 
 def _ssh_key(byte=1):

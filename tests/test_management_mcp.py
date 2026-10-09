@@ -144,6 +144,68 @@ def test_health_is_reported_not_provider_verified_and_stale_readiness_is_false()
     assert not unknown["reported_ready"] and unknown["age_seconds"] is None
 
 
+def compatibility(state="passed", reason=None):
+    return {"state": state, "native_version": "2.1.295", "checked_at": NOW - 10,
+            "usage_observed_at": NOW - 10, "last_success_at": NOW - 10,
+            "next_check_at": NOW + 300,
+            "checks": dict.fromkeys(ux.COMPATIBILITY_CHECKS, True),
+            **({"reason": reason} if reason else {})}
+
+
+@pytest.mark.parametrize("state,reason", [("passed", None), ("pending", "usage_pending"),
+                                       ("failed", "relay_protocol_mismatch"),
+                                       ("blocked", "account_transition"),
+                                       ("blocked", "native_auth_source"),
+                                       ("blocked", "native_extensions")])
+def test_management_health_exports_fixed_compatibility_without_provider_acceptance_claim(state, reason):
+    source = observation()
+    source["slot"]["compatibility"] = {**compatibility(state, reason), "runtime_fp": SECRET,
+                                     "account_fp": SECRET, "message": SECRET, "token": SECRET}
+    result = ux.management_health(source, now=NOW)
+    assert result["reported_ready"] is True and result["provider_acceptance_verified"] is False
+    assert result["compatibility"] == compatibility(state, reason)
+    assert SECRET not in json.dumps(result)
+    # Compatibility is separate from cached quota/relay availability.
+    assert ux.management_quota(source, now=NOW)["available"] is True
+    assert ux.management_relay_usage(source, now=NOW)["available"] is False
+
+
+def test_management_tool_compatibility_metadata_does_not_reveal_private_fields():
+    source = observation()
+    source["slot"]["compatibility"] = {**compatibility("failed", "relay_tls_policy"),
+                                     "account_fp": SECRET, "runtime_fp": SECRET,
+                                     "raw_output": SECRET}
+    code, messages, events, output = run([*ready(), call()], lambda: source)
+    result = messages[-1]["result"]["structuredContent"]
+    assert code == 0 and events == ["GET status"] and SECRET not in output
+    assert result["compatibility"]["state"] == "failed"
+    assert result["reported_ready"] and not result["provider_acceptance_verified"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"state": SECRET}, {"reason": SECRET, "native_version": SECRET},
+    {"checked_at": True}, {"checked_at": 0}, {"checked_at": 10 ** 400},
+    {"checked_at": NOW + 61}, {"last_success_at": NOW + 61},
+    {"usage_observed_at": None}, {"checks": {"native_version": True}},
+])
+def test_malformed_compatibility_fails_closed_without_private_exception(changes):
+    source = observation()
+    source["slot"]["compatibility"] = {**compatibility(), **changes}
+    for projection in (ux.management_health, ux.management_quota, ux.management_relay_usage):
+        with pytest.raises(ux.ExperienceError) as error:
+            projection(source, now=NOW)
+        assert SECRET not in str(error.value)
+
+
+def test_cached_compatibility_pass_does_not_promote_stale_model_readiness():
+    source = observation()
+    source["slot"]["compatibility"] = compatibility()
+    source["slot"]["observed_at"] = NOW - ux.MCP_FRESH_SECONDS - 1
+    result = ux.management_health(source, now=NOW)
+    assert result["compatibility"]["state"] == "passed"
+    assert result["reported_ready"] is False and result["provider_acceptance_verified"] is False
+
+
 @pytest.mark.parametrize("health,reasons", list(ux.MCP_REASONS.items()))
 def test_all_known_health_reasons_project_fixed_codes(health, reasons):
     for reason in reasons:

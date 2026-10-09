@@ -172,6 +172,7 @@ def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
     for rel in ("ccfleet_agent/__init__.py", "ccfleet_agent/agent.py",
                 "ccfleet_agent/machine.py", "ccfleet_agent/local_relay.py",
                 "ccfleet_agent/inference_policy.py",
+                "ccfleet_agent/compatibility.py", "ccfleet_agent/inference_client.py",
                 "slot-add.sh", "slot-remove.sh",
                 "slot-entry.sh",
                 "systemd/ccfleet-shell.service"):

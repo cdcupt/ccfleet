@@ -76,7 +76,7 @@ def test_credentials_summary_never_contains_tokens(tmp_path):
 
 def test_credentials_summary_missing_and_corrupt(tmp_path, monkeypatch):
     monkeypatch.setattr(agent.platform, "system", lambda: "Linux")
-    assert agent.credentials_summary(tmp_path) == {"present": False, "store": "file"}
+    assert agent.credentials_summary(tmp_path) == {"present": False, "store": "file", "refresh_available": False}
     monkeypatch.setattr(agent.platform, "system", lambda: "Darwin")
     assert agent.credentials_summary(tmp_path) == {"present": None, "store": "keychain"}
     (tmp_path / ".credentials.json").write_text("{not json")
@@ -462,7 +462,8 @@ def test_a_failed_install_reports_why_and_then_backs_off(tmp_path, monkeypatch):
 
     desired = {"claude_version": "9.9.9"}
     result = agent.reconcile_version(desired, "2.1.90", {}, failing, now=100.0)
-    assert result["ok"] is False and result["error"] == "no such version"
+    assert result["ok"] is False and result["error"] == "native_install_failed"
+    assert result["exit_code"] == 1
 
     # Retrying every five minutes fixes neither a bad release nor a full disk.
     state = {"upgrade": result}
@@ -483,7 +484,7 @@ def test_an_installer_that_will_not_run_is_reported_not_raised(tmp_path, monkeyp
         raise subprocess.TimeoutExpired(argv, 300)
 
     result = agent.reconcile_version({"claude_version": "2.1.99"}, "2.1.90", {}, exploding, now=5.0)
-    assert result["ok"] is False and result["error"] == "TimeoutExpired"
+    assert result["ok"] is False and result["error"] == "native_install_timeout"
 
 
 def test_reconcile_is_skipped_when_claude_is_not_installed(monkeypatch):
@@ -1175,7 +1176,7 @@ def test_quota_summary_reads_rarely_and_remembers_between_times(monkeypatch):
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
     reads = []
 
-    def read(runner, now=None):
+    def read(runner, now=None, **kwargs):
         reads.append(now)
         return {"session": {"used_pct": 3}}
 
@@ -1196,7 +1197,7 @@ def test_quota_summary_reads_rarely_and_remembers_between_times(monkeypatch):
 
 def test_quota_summary_keeps_the_last_answer_when_a_read_fails(monkeypatch):
     """Blanking the card would read as "no quota", which is a different claim."""
-    monkeypatch.setattr(agent, "read_quota", lambda runner, now=None: None)
+    monkeypatch.setattr(agent, "read_quota", lambda runner, now=None, **kwargs: None)
     stale = {"session": {"used_pct": 3}, "checked_at": 500.0, "ts": 500.0}
     report, store = agent.quota_summary({"quota": stale}, fake_runner(),
                                         now=500.0 + agent.QUOTA_REFRESH_S + 1)
@@ -1207,7 +1208,8 @@ def test_quota_summary_keeps_the_last_answer_when_a_read_fails(monkeypatch):
 
 
 def test_quota_summary_ignores_a_corrupt_cache(monkeypatch):
-    monkeypatch.setattr(agent, "read_quota", lambda runner, now=None: {"week": {"used_pct": 9}})
+    monkeypatch.setattr(agent, "read_quota",
+                        lambda runner, now=None, **kwargs: {"week": {"used_pct": 9}})
     for junk in ("not a mapping", [1, 2], 7, None):
         report, store = agent.quota_summary({"quota": junk}, fake_runner(), now=1.0)
         assert report == {"week": {"used_pct": 9}, "checked_at": 1.0}
@@ -1863,6 +1865,37 @@ def _owner_cfg(tmp_path, config_dir, state_file="state.json"):
         "CCFLEET_CLAUDE_CONFIG_DIR": str(config_dir)})
 
 
+@pytest.mark.parametrize("status,category", [(200, "accepted"), (0, "unreachable"),
+                                           (401, "client_error"), (503, "server_error"),
+                                           (302, "unexpected_status")])
+def test_heartbeat_operational_logs_never_include_response_content_or_authorization(
+        claude_dir, tmp_path, monkeypatch, caplog, status, category):
+    cfg = _owner_cfg(tmp_path, claude_dir)
+    response = json.dumps({"Authorization": "Bearer SYNTHETIC_AUTH_SECRET",
+                           "metadata": {"user_id": "SYNTHETIC_USER_ID"},
+                           "response_body": "SYNTHETIC_BODY_CONTENT"})
+    monkeypatch.setattr(agent, "build_payload", lambda *a, **k: {"node_id": "node-a"})
+    monkeypatch.setattr(agent, "send_heartbeat", lambda *a, **k: (status, response))
+    with caplog.at_level("INFO", logger=agent.log.name):
+        agent.run_cycle(cfg, {}, reconcile=False)
+    messages = [r.getMessage() for r in caplog.records if r.name == agent.log.name]
+    outcome = "accepted" if status == 200 else "rejected"
+    assert messages == [f"heartbeat {outcome}: status={status} category={category}"]
+    assert "SYNTHETIC_" not in caplog.text and "Authorization" not in caplog.text
+
+
+@pytest.mark.parametrize("status", ["SYNTHETIC_STATUS_SECRET", True, 10 ** 400, float("nan")])
+def test_untrusted_heartbeat_status_is_not_interpolated_into_logs(
+        claude_dir, tmp_path, monkeypatch, caplog, status):
+    cfg = _owner_cfg(tmp_path, claude_dir)
+    monkeypatch.setattr(agent, "build_payload", lambda *a, **k: {})
+    monkeypatch.setattr(agent, "send_heartbeat", lambda *a, **k: (status, "SYNTHETIC_BODY"))
+    with caplog.at_level("INFO", logger=agent.log.name):
+        agent.run_cycle(cfg, {}, reconcile=False)
+    assert "heartbeat rejected: status=None category=unexpected_status" in caplog.text
+    assert "SYNTHETIC_" not in caplog.text
+
+
 def test_an_owner_node_tidies_its_history_once_and_keeps_the_mark_if_the_post_fails(
         claude_dir, tmp_path, monkeypatch):
     """The mark is saved with the tidy, not with the rest of the state after a
@@ -2334,7 +2367,8 @@ def test_a_slot_reports_what_an_owner_node_would_and_names_only_its_one_account(
     signed in to, for its holder's page. Nothing else that names anybody."""
     calls = []
     facts = agent.slot_facts({}, slot_runner(calls), now=1_700_000_000.0)
-    assert set(facts) <= {"claude", "credentials", "remote_control", "usage", "quota"}
+    assert set(facts) <= {"claude", "credentials", "remote_control", "usage", "quota",
+                          "compatibility"}
     assert facts["claude"] == {"version": "2.1.278"}, "the path names the slot's home"
     assert facts["credentials"]["logged_in"] is True
     assert facts["credentials"]["subscription_type"] == "max"
@@ -2619,7 +2653,8 @@ def test_nothing_to_follow_is_nothing_done(slot_home, request_):
 def test_a_failed_install_is_reported_and_not_retried_every_minute(slot_home):
     calls = []
     facts = agent.slot_facts(FOLLOW, moving_claude(calls, install_rc=1), now=1_000.0)
-    assert facts["upgrade"]["ok"] is False and "network down" in facts["upgrade"]["error"]
+    assert facts["upgrade"]["ok"] is False
+    assert facts["upgrade"]["error"] == "native_install_failed"
     assert RC_RESTART not in calls, "restarted onto a version that never arrived"
     # The back-off lives in the slot's own state, so the next run holds off.
     calls = []

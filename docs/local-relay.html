@@ -43,6 +43,11 @@ native renewal without relying on a fresh quota-cache miss. It verifies expiry
 actually advanced, serializes attempts, and reports only safe health facts.
 The relay remains read-only with respect to credentials; see
 <a href="reliability-privacy.html">reliability and privacy decisions</a> for the exact boundaries.</p>
+<p>Temporary network failures, native refresh contention and unavailable probe locks
+remain recovery states rather than an automatic instruction to sign in again.
+The slot page distinguishes these retries from a missing or expired longer-lived
+login, and warns within three days of a known login expiry. Native Claude remains
+the only credential writer; the platform never restores old refresh-token copies.</p>
 <h2 id="one-command-setup">One-command setup</h2>
 <p>Use the same command for a new computer or an update:</p>
 <pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh | bash -s -- --setup
@@ -111,7 +116,12 @@ those command meanings.</p>
 the menu, including <code>ccfleet start --mode plan</code>. An explicit local
 conversation name or cleanup consent is not forwarded to the remote-terminal
 option. Invalid background-job inputs are checked before stopping legacy live work.</p>
-<p>Client 0.2.3 supports parallel agents with eight bounded active model requests
+<p>Client 0.2.4 reports hosted
+upgrade-validation results through status, doctor, support exports and opt-in MCP
+health. Pending checks remain separate from model readiness; an interface or
+authentication-source problem gives fixed operator-review guidance. Native output,
+account digests and runtime digests are not included in those client reports.</p>
+<p>The transport permits eight bounded active model requests
 and up to sixteen accepted local connections. Idle connections do not consume
 model-request capacity. Busy requests may wait up to ten seconds before receiving
 a structured overload response and a three-second retry hint; rejected requests

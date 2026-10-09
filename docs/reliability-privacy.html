@@ -78,6 +78,34 @@ failing account cannot starve the other slots.</li>
 remains unchanged. Native process success or a quota screen alone is not proof.
 Credential facts are reread in the same heartbeat.</li>
 </ul>
+<p>Renewal diagnostics retain a fixed outcome category and, when known, whether
+the native probe started. A busy probe lock is not a launched renewal failure;
+an ambiguous tmux launch remains unknown and still receives cleanup. Before
+launching, maintenance rereads the credential so a rotation completed by another
+native process can satisfy the check without a redundant probe.</p>
+<p>Native network failures, timeouts, rate limiting and refresh-lock contention
+receive bounded retries. These outcomes do not establish that the holder's login
+has ended. Retry scheduling uses bounded jitter and honors a bounded numeric retry
+delay when native output supplies one. No native output is stored or forwarded.</p>
+<p>Missing or expired refresh capability stops futile maintenance attempts while
+the unexpired access credential remains separately reported. A local expiry time
+does not prove provider acceptance. Explicit native login-expiry or rejection
+evidence requires a fresh sign-in; generic authentication words or an expired
+access-token message are insufficient. A fresh observed rotation supersedes a
+stale failure from the probe.</p>
+<p>When the longer-lived login expiry is known, the holder page and console warn
+within three days, matching the advance warning in
+<a href="https://code.claude.com/docs/en/iam#renew-an-expiring-login">Anthropic's authentication guidance</a>.
+An unknown expiry is not fabricated into a countdown. Credential-only warnings
+remain separate from public machine availability and outage emails.</p>
+<p>Fleet serializes its own probes. Native Claude owns coordination of its rotating
+credentials across ordinary Claude sessions. Fleet does not acquire, remove or
+recover native OAuth lock files, and does not terminate a holder's ordinary
+session to renew credentials. Native release notes describe retryable refresh
+contention and concurrent stale-lock recovery fixes in
+<a href="https://github.com/anthropics/claude-code/releases/tag/v2.1.248">2.1.248</a>
+and <a href="https://github.com/anthropics/claude-code/releases/tag/v2.1.285">2.1.285</a>;
+those fixes do not establish a permanent-login guarantee.</p>
 <p>The server receives only allowlisted renewal states, timestamps and fixed reason
 codes—not tokens, raw CLI output, errors containing account data, or account IDs.
 Active-slot expiry and unconfirmed renewal can alert the operator. Old or missing
@@ -94,6 +122,33 @@ the sole upstream POST, the relay rereads the credential after connecting TLS.
 It does not retry a POST to recover from an authentication race. Every request
 still has a fixed overall deadline.</p>
 <h2 id="4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</h2>
+<p>Hosted slots automatically validate a changed native binary, native version,
+relay implementation or Python/OpenSSL runtime. Checks cover the native
+authentication interface, a fresh isolated native usage observation, relay v2
+status framing and certificate/hostname verification policy. Cached results are
+attributed to the native version, code/runtime digest and bound account. Sign-in
+adoption invalidates the old result. A digest here identifies tested code and
+runtime bytes; it is not a JA3 measurement or proof of native TLS equivalence.</p>
+<p>Validation uses bounded, isolated maintenance commands, fixed reason codes,
+retry backoff and the existing probe locks. It does not send a model prompt,
+replay an inference POST, restore an old refresh token or restart an ordinary
+holder session. An authentication-source conflict blocks native usage attribution
+and requires operator review. A missing, stale or pending check cannot clear a
+previous validation failure; a new account does not inherit the old account's
+alert. Upgrade warnings remain separate from machine outages and current model
+readiness.</p>
+<p>Operational heartbeat logs retain numeric status and fixed outcome categories.
+They do not retain HTTP response excerpts. Access logs retain connection/path
+metadata with query strings, fragments and URL userinfo removed; parser errors
+do not reflect raw request text. Native installer failures also use fixed codes.
+These rules do not rewrite historical logs or remove the intentional content in
+private native histories and bounded job output.</p>
+<p>Client 0.2.4 adds allowlisted upgrade-validation observations and fixed guidance
+to status, doctor, support exports and optional MCP health. Account and runtime
+digests, raw native output and arbitrary error strings are excluded from those
+surfaces. Legacy servers without these observations remain supported. The client
+does not gate or replay an otherwise valid model request because a usage-parser
+check is pending.</p>
 <p>Client 0.2.3 gives one nonblocking loop exclusive ownership of the WebSocket TLS
 socket. Partial frames, short writes, TLS readiness changes and pipe backpressure
 are bounded; sender failure and pipe hangup wake cancellation. TLS operations are

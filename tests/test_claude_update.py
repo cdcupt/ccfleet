@@ -340,7 +340,7 @@ def test_a_machine_says_what_it_did_in_one_shape_and_nothing_else_counts():
          "claude_update": {"requested_at": 100.0, "state": "installing"}}])
     out = validate_heartbeat(payload, "m1")["slots"]
     assert out[0]["claude_update"] == {"requested_at": 100.0, "state": "done",
-                                       "to": ("2.1.281" + "9" * 50)[:40], "detail": ""}
+                                       "to": ("2.1.281" + "9" * 50)[:40], "detail": None}
     assert "claude_update" not in out[1] and "claude_update" not in out[2]
 
 
@@ -348,10 +348,12 @@ def test_an_owners_node_says_it_under_its_own_reconcile():
     payload = heartbeat(time.time())["payload"]
     payload["node_id"] = "own-1"
     payload["reconcile"] = {"claude_update": {"requested_at": 7.0, "state": "failed",
-                                              "detail": "no space left"}}
+                                              "detail": "PRIVATE-INSTALLER-BODY"}}
     out = validate_heartbeat(payload, "own-1")["reconcile"]["claude_update"]
     assert out == {"requested_at": 7.0, "state": "failed", "to": None,
-                   "detail": "no space left"}
+                   "detail": ("The native installer could not complete the update. "
+                              "Retry or contact your operator.")}
+    assert "PRIVATE" not in json.dumps(out)
 
 
 def test_a_machine_closes_its_own_slots_update_and_nobody_elses(server):  # noqa: F811

@@ -7,13 +7,30 @@ from typing import Any, Optional
 
 ACCESS_MARGIN_S = 30  # The slot relay refuses credentials this close to expiry.
 RENEWAL_WINDOW_S = 10 * 60
+LOGIN_WARNING_S = 3 * 86400
 MAX_INSTANT = 1e11
 RENEWAL_STATES = frozenset({"current", "needed", "renewed", "retrying", "blocked"})
 RENEWAL_REASONS = frozenset({
     "account_unbound", "account_transition", "sign_in_pending", "credential_unavailable",
     "expiry_unknown", "native_refresh_unconfirmed", "maintenance_busy",
+    "refresh_unavailable", "refresh_expired", "native_login_expired", "native_auth_rejected",
+    "native_network_error", "native_rate_limited", "native_timeout", "native_launch_failed",
+    "native_probe_busy", "native_refresh_not_due", "native_auth_source", "native_extensions",
 })
 TRANSITION_REASONS = frozenset({"account_transition", "sign_in_pending", "account_unbound"})
+TERMINAL_REASONS = frozenset({"refresh_unavailable", "refresh_expired",
+                              "native_login_expired", "native_auth_rejected"})
+NATIVE_LOGIN_FAILURES = frozenset({"native_login_expired", "native_auth_rejected"})
+NATIVE_CONTEXT_REASONS = frozenset({"native_auth_source", "native_extensions"})
+TRANSIENT_REASONS = frozenset({"native_network_error", "native_rate_limited", "native_timeout",
+                               "native_launch_failed", "native_probe_busy", "maintenance_busy"})
+RENEWAL_OUTCOMES = frozenset({
+    "native_refreshed", "native_refresh_not_due", "native_auth_rejected", "native_login_expired",
+    "native_network_error", "native_rate_limited", "native_timeout", "native_launch_failed",
+    "native_probe_busy", "native_refresh_unconfirmed", "native_auth_source", "native_extensions",
+})
+RENEWAL_WARNING_CODES = (TERMINAL_REASONS | TRANSIENT_REASONS
+                         | {"login_expiring", "native_renewal_pending", "renewal_due"})
 
 
 def instant(value: Any) -> Optional[float]:
@@ -46,7 +63,69 @@ def renewal_report(value: Any) -> dict[str, Any]:
     reason = value.get("reason")
     if isinstance(reason, str) and reason in RENEWAL_REASONS:
         result["reason"] = reason
+    outcome = value.get("outcome")
+    if isinstance(outcome, str) and outcome in RENEWAL_OUTCOMES:
+        result["outcome"] = outcome
+    if isinstance(value.get("probe_started"), bool):
+        result["probe_started"] = value["probe_started"]
     return result
+
+
+def sign_in_reason(credentials: Mapping[str, Any], now: float) -> Optional[str]:
+    """Explicit renewal failure evidence; access expiry alone is never revocation.
+
+    Capability facts warn about continued access. A reported unexpired access
+    credential does not prove provider acceptance. Explicit native login failure
+    is distinct from capability-only warnings. Legacy missing fields establish nothing.
+    """
+    renewal = renewal_report(credentials.get("renewal"))
+    for field in ("reason", "outcome"):
+        if renewal.get(field) in TERMINAL_REASONS:
+            return renewal[field]
+    refresh_expiry = instant(credentials.get("refresh_expires_at"))
+    if refresh_expiry is not None and refresh_expiry <= now:
+        return "refresh_expired"
+    if credentials.get("refresh_available") is False:
+        return "refresh_unavailable"
+    return None
+
+
+def renewal_warning(credentials: Mapping[str, Any], now: float) -> Optional[str]:
+    """A fixed warning code, independently of whether current access works."""
+    terminal = sign_in_reason(credentials, now)
+    if terminal:
+        return terminal
+    refresh_expiry = instant(credentials.get("refresh_expires_at"))
+    if refresh_expiry is not None and refresh_expiry <= now + LOGIN_WARNING_S:
+        return "login_expiring"
+    renewal = renewal_report(credentials.get("renewal"))
+    if renewal.get("state") in {"needed", "retrying", "blocked"}:
+        reason = renewal.get("reason")
+        if reason in TRANSIENT_REASONS:
+            return reason
+        if reason in NATIVE_CONTEXT_REASONS:
+            # Keep the existing device protocol's warning enum; detailed fixed
+            # operator guidance is carried by the additive compatibility record.
+            return "native_renewal_pending"
+        if renewal.get("state") in {"needed", "retrying"}:
+            return "native_renewal_pending"
+    return None
+
+
+def recovery_guidance(credentials: Mapping[str, Any], now: float) -> str:
+    """Fixed recovery copy only; native output and tokens never enter this channel."""
+    if sign_in_reason(credentials, now):
+        return "A fresh Claude sign-in is required; automatic renewal cannot recover this login."
+    renewal = renewal_report(credentials.get("renewal"))
+    if renewal.get("reason") in NATIVE_CONTEXT_REASONS:
+        return ("Native maintenance configuration needs operator review. "
+                "Your computer pairing and local history are kept.")
+    if renewal.get("reason") in TRANSIENT_REASONS:
+        return "A temporary native renewal failure is being retried automatically."
+    if renewal.get("state") in {"needed", "retrying"}:
+        return "Native renewal is not yet confirmed; maintenance will retry automatically."
+    return ("Access renewal has not been verified. Access expiry alone does not mean "
+            "a revoked login.")
 
 
 def fresh_observation(credentials: Any, heard: Any, now: float, max_age: float,
