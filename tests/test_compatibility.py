@@ -423,6 +423,9 @@ def test_native_output_timeout_and_size_are_fixed_diagnostics():
         None, None, "native_timeout")
 
 
+@pytest.mark.skipif(not all(hasattr(os, key) for key in
+                           ("waitid", "WNOWAIT", "P_PID", "WEXITED")),
+                    reason="owned process guard requires waitid/WNOWAIT")
 def test_real_controlled_process_output_bound_and_owned_cleanup(tmp_path, monkeypatch):
     script = tmp_path / "synthetic-native"
     script.write_text(f"#!{sys.executable}\nimport sys,time\nsys.stdout.write('x'*65537)\n"
@@ -441,6 +444,9 @@ def test_real_controlled_process_output_bound_and_owned_cleanup(tmp_path, monkey
 
 
 @pytest.mark.parametrize("redirected", [False, True])
+@pytest.mark.skipif(not all(hasattr(os, key) for key in
+                           ("waitid", "WNOWAIT", "P_PID", "WEXITED")),
+                    reason="owned process guard requires waitid/WNOWAIT")
 def test_owned_group_descendants_are_stopped_after_leader_exits(tmp_path, monkeypatch, redirected):
     marker = tmp_path / "synthetic-child-pid"
     script = tmp_path / "synthetic-native"
@@ -459,7 +465,11 @@ def test_owned_group_descendants_are_stopped_after_leader_exits(tmp_path, monkey
     pid = int(marker.read_text())
     def running():
         status = Path(f"/proc/{pid}/stat")
-        if status.exists() and status.read_text().rsplit(')', 1)[1].split()[0] == 'Z':
+        try:
+            state = status.read_text().rsplit(')', 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        if state == 'Z':
             return False
         try:
             os.kill(pid, 0)
