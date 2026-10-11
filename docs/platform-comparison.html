@@ -21,20 +21,27 @@ tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-lef
 footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
-</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#primary-cc-host-sources">Primary CC Host sources</a></li><li class="level-2"><a href="#do-not-confuse-the-reference-guide-with-cc-hosts-internals">Do not confuse the reference guide with CC Host&#x27;s internals</a></li><li class="level-2"><a href="#improvements-selected-for-the-current-follow-up">Improvements selected for the current follow-up</a></li></ol></nav></details></aside><main><h1 id="cc-fleet-and-cc-host-evidence-based-comparison">CC Fleet and CC Host: evidence-based comparison</h1>
-<p>Reviewed 2026-09-30 UTC. CC Host entries below are current public documentation,
-not an independent runtime/security/performance audit. CC Fleet entries refer to
-implemented behavior; deployment evidence lives in
-<a href="local-relay-verification.html">the verification record</a>.</p>
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#current-gateway">What changed with the public gateway</a></li><li class="level-2"><a href="#primary-cc-host-sources">Primary CC Host sources</a></li><li class="level-2"><a href="#do-not-confuse-the-reference-guide-with-cc-hosts-internals">Do not confuse the reference guide with CC Host&#x27;s internals</a></li><li class="level-2"><a href="#improvements-selected-for-the-current-follow-up">Earlier delivery history</a></li></ol></nav></details></aside><main><h1 id="cc-fleet-and-cc-host-evidence-based-comparison">CC Fleet and CC Host: evidence-based comparison</h1>
+<p>CC Fleet implementation updated 2026-10-11. CC Host entries retain the public
+documentation review from 2026-09-30 UTC; they are not a fresh competitor audit
+or an independent runtime, security or performance assessment. Earlier bridge
+deployment evidence lives in <a href="local-relay-verification.html">the verification
+record</a>. The new gateway's live-verification status is recorded separately in
+<a href="public-gateway.html#verification">the public gateway guide</a>.</p>
 <p>There is not enough comparative evidence to call either platform best overall.
-CC Host currently documents a broader product. CC Fleet deliberately focuses on
-one user-owned Claude account per slot and a native local coding experience.</p>
+The reviewed CC Host documentation describes a broader product. CC Fleet focuses on
+a native local Claude experience, one bound Claude account per slot, and endpoint
+selection of one or several slots held by the same user.</p>
 <div class="notice"><strong>How to read “win” and “loss”.</strong> Our tested
-advantages are a fixed assigned-account contract, pinned inner SSH, individually
-revocable devices and deliberately smaller centralized analytics. These are
-engineering controls, not proof that CC Host lacks equivalent controls or that
-we win every dedicated-account scenario. Feature breadth, measured usability,
+controls include own-slot authorization, independently revocable endpoint and
+device keys, restricted pinned SSH to slots, and deliberately smaller stored
+analytics. The explicit legacy bridge also retains laptop-to-slot SSH encryption
+through BWH; the new HTTPS gateway lets BWH read model requests. These controls
+do not prove that CC Host lacks equivalent protections. Feature breadth, measured usability,
 privacy boundaries and availability must be scored separately.</div>
+<p>These differences support no blanket superiority claim: direct HTTPS makes
+client setup simpler and gives BWH access to model contents, while optional
+multi-slot routing provides backups only within a user's explicit selection.</p>
 <div class="table-scroll" role="region" aria-label="Scrollable table" tabindex="0"><table>
 <thead>
 <tr>
@@ -48,20 +55,20 @@ privacy boundaries and availability must be scored separately.</div>
 <tr>
 <td>Provider breadth</td>
 <td>Claude, Codex, Gemini, Grok, Kimi and Cursor</td>
-<td>Original Claude workflow with one assigned account</td>
+<td>Original Claude workflow; each slot holds one Claude account, while an endpoint selects one or several own slots</td>
 <td>CC Host has broader documented scope.</td>
 </tr>
 <tr>
 <td>Teams and commercial operations</td>
 <td>Groups, sharing, Stripe seat subscriptions, management MCP</td>
-<td>Individually paired/revocable devices and operator-managed allowance/payment records; no account pooling or sharing product</td>
+<td>Own-slot API endpoints, independently revocable keys/devices and operator-managed allowance/payment records; no cross-user account sharing or team seat-subscription product</td>
 <td>CC Host has more documented business features. Adding these would require explicit product/authentication/payment choices.</td>
 </tr>
 <tr>
 <td>Analytics</td>
 <td>Token/cache/model/request/session analysis</td>
-<td>Aggregate transfer outcomes/latencies plus numeric token/cache totals and explicit sample coverage; no central model/session identities</td>
-<td>CC Host has richer central detail. CC Fleet intentionally avoids central model/session identifiers and content.</td>
+<td>Saved numeric transfer/token/cache aggregates and sample coverage; bounded short-lived routing hashes for session affinity and model-specific cooldowns</td>
+<td>CC Host has richer documented central analysis. CC Fleet does not store prompts or native conversation history for analytics. Runtime routing hashes are separate from persistent usage records.</td>
 </tr>
 <tr><td>Read-only management MCP</td>
 <td>Remote browser-authorized tools for accounts, endpoints, quota, model/session analytics and billing</td>
@@ -70,14 +77,14 @@ privacy boundaries and availability must be scored separately.</div>
 <tr>
 <td>Native local coding</td>
 <td>Configure existing local clients through endpoints; CC Switch import</td>
-<td>Original local Claude/tools/history, guided setup/new/resume, project preferences and supervised local print jobs</td>
-<td>The basic local-native workflow is shared in principle. Documentation does not establish which is easier for real users.</td>
+<td>Original local Claude/tools/history, guided setup/new/resume, direct own-domain HTTPS, project preferences and supervised local print jobs</td>
+<td>Both offer a local client-to-API workflow. CC Fleet's configured gateway no longer needs a local HTTP listener or laptop SSH for model requests. Ease of use still needs a real-user comparison.</td>
 </tr>
 <tr>
 <td>Routing and availability</td>
 <td>Session affinity and multi-account routing/fallback</td>
-<td>Fixed assigned slot/account; secondary broker shares authorization, never changes accounts</td>
-<td>Different contracts. Account fallback is not something to copy into CC Fleet. Same-host brokers are not physical-host redundancy.</td>
+<td>Endpoint selects one own slot or an ordered own-slot pool; sticky conversation affinity or per-request priority; backup only for known-safe failures</td>
+<td>The direct API now supports the requested multi-account convenience while keeping one account per slot and refusing cross-user routing. No uncertain replay or failover after public response headers. Same-host brokers are not physical-host redundancy.</td>
 </tr>
 <tr>
 <td>Credential lifecycle</td>
@@ -88,17 +95,44 @@ privacy boundaries and availability must be scored separately.</div>
 <tr>
 <td>Privacy and transport</td>
 <td>Credentials stay in hosted environments; central request/account/endpoint metadata is documented</td>
-<td>Pinned inner SSH through BWH, hash-only server device tokens, local history and private diagnostics</td>
-<td>These are different controls. No blanket superiority or zero-disclosure claim is justified.</td>
+<td>Direct HTTPS terminates on BWH, then restricted pinned SSH reaches the slot. BWH can read model traffic. Hash-only endpoint/device tokens; local history; explicit legacy bridge preserves inner SSH through BWH.</td>
+<td>The API improves client convenience while changing BWH's visibility. Credential isolation and content visibility are separate. No blanket privacy winner or zero-disclosure claim is justified.</td>
 </tr>
 <tr>
 <td>Performance and operational maturity</td>
 <td>Public feature claims; no matching benchmark gathered here</td>
-<td>Real local/slot canaries, fault tests and readiness measurements</td>
-<td>Our own tests are not a CC Host benchmark or a sustained uptime/user pilot.</td>
+<td>Historical local/slot canaries plus current gateway authorization, routing and fault tests; public-gateway live verification recorded separately</td>
+<td>Implementation tests and configured readiness are not provider acceptance, a CC Host benchmark, or a sustained uptime/user pilot.</td>
 </tr>
 </tbody>
 </table></div>
+<section id="current-gateway"><h2>What changed with the public gateway</h2>
+<p>CC Fleet now offers the same general client setup shape as the documented
+CC Host endpoint workflow: a remote HTTPS Base URL and an application key. Our
+implementation is described in <a href="public-gateway.html">the public Messages
+gateway guide</a>; CC Host's internal transport and TLS implementation remain
+unverified.</p>
+<pre><code>Current gateway:
+local original Claude Code
+  → HTTPS on our domain / BWH: endpoint authentication and own-slot routing
+  → restricted pinned service SSH to the chosen slot
+  → HTTPS from that slot to Anthropic
+
+Explicit legacy bridge: ccfleet local --transport bridge
+local original Claude Code
+  → authenticated local HTTP listener
+  → laptop-to-slot SSH inside BWH's WebSocket byte broker
+  → HTTPS from the assigned slot to Anthropic</code></pre>
+<p>A user holding two slots can select just the first, or select both with an
+explicit priority. Sticky mode remembers a usable conversation identifier in
+bounded runtime memory; priority mode starts each request with the first eligible
+slot, subject to short failure cooldowns. Neither mode can select someone else's
+slot or combine several credentials inside one slot.</p>
+<p>Before model data is sent, a failed readiness check can move to the next selected
+slot. After sending, only an explicit rejection marked safe to retry qualifies.
+An uncertain connection failure is not replayed, and sending public response
+headers commits the response even before its first body byte. A one-slot endpoint
+or pinned launch never broadens to an unselected backup.</p></section>
 <h2 id="primary-cc-host-sources">Primary CC Host sources</h2>
 <ul>
 <li><a href="https://cchost.ai/docs/account-types">Account types</a>,
@@ -110,20 +144,23 @@ privacy boundaries and availability must be scored separately.</div>
 <li><a href="https://cchost.ai/docs/billing">Billing</a>, <a href="https://cchost.ai/docs/mcp">MCP</a>,
 <a href="https://cchost.ai/docs/security">security</a> and <a href="https://cchost.ai/terms">terms</a>.</li>
 </ul>
-<p>The anonymous <a href="https://cchost.ai/api/config">public configuration</a> currently
-reports premium-seat sales paused. That is
+<p>The 2026-09-30 review of the anonymous
+<a href="https://cchost.ai/api/config">public configuration</a> reported
+premium-seat sales paused. That was
 a sales condition, not proof that existing inference is unavailable. It should
-not be used as evidence that CC Fleet has better uptime.</p>
+not be used as evidence that CC Fleet has better uptime, or as a current sales
+status without checking it again.</p>
 <h2 id="do-not-confuse-the-reference-guide-with-cc-hosts-internals">Do not confuse the reference guide with CC Host's internals</h2>
 <p>The <a href="https://claude-code-relay-bilingual-guide-2026.cdcupt.chatgpt.site/en.html">bilingual reference guide</a>
 identifies itself as a companion to Wang Shuaiqi's ByteTech article, dated
 2026-04-13 and transcribed 2026-09-28. Its captured-identity, Node/undici and
 relay-owned OAuth examples do not establish CC Host's commercial implementation.
 CC Host's exact fingerprint/TLS stack and renewal algorithm remain unverified.</p>
-<h2 id="improvements-selected-for-the-current-follow-up">Improvements selected for the current follow-up</h2>
+<h2 id="improvements-selected-for-the-current-follow-up">Earlier delivery history</h2>
 <p>The protocol, transport cleanup, numeric usage and recovered-node changes in
 the list below were delivered in client 0.2.1; they are not remaining blockers.
-The public shared-edge activation gate is still outstanding.</p>
+This preserves the earlier audit history; the shared-edge activation gate
+mentioned there is a separate rollout from the current public Messages API.</p>
 <ol>
 <li>Fix direct backend WebSocket upgrade compliance without relaxing client TLS,
 pinning or HTTP-version checks.</li>
@@ -140,6 +177,11 @@ side-effect-free background-job preflight. Cached quota observations carry
 numeric timestamps and exclude samples predating assignment/account change.
 Release status and live evidence must be checked separately; implementation
 tests alone do not establish production deployment or market superiority.</p>
+<p>The current gateway adds separate endpoint credentials, own-slot single/multiple
+selection, sticky/priority routing, safe failover and direct HTTPS client setup.
+It changes the earlier fixed-slot-only comparison. Earlier bridge evidence should
+not be presented as proof that the new public model route has passed a live
+provider canary.</p>
 <p>Remaining gaps: broader providers, team/commercial management, full account-wide
 management queries, physical-host redundancy and a sustained comparative user pilot.
 Each should be evaluated on actual usability/reliability evidence, not a promise

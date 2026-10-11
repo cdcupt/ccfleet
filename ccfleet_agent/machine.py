@@ -45,6 +45,7 @@ import re
 import selectors
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -143,6 +144,12 @@ AUTHORIZED_KEY_OPTIONS = (
     f'command="{SLOT_ENTRY}",no-agent-forwarding,no-port-forwarding,'
     "no-X11-forwarding,no-user-rc"
 )
+GATEWAY_AUTHORIZED_KEY_OPTIONS = (
+    f'command="{SLOT_ENTRY} --gateway-only",no-pty,no-agent-forwarding,'
+    "no-port-forwarding,no-X11-forwarding,no-user-rc"
+)
+AUTHORIZED_KEYS_ROOT_UID = 0
+SLOT_LOGIN_SHELL = "/bin/dash"
 
 
 @dataclass(frozen=True)
@@ -334,9 +341,116 @@ def normalize_ssh_public_keys(value: Any) -> Optional[list[str]]:
     return out
 
 
+def normalize_gateway_public_keys(value: Any) -> Optional[list[str]]:
+    """A gateway service has one key, never an authorized-key options line."""
+    if not isinstance(value, list) or len(value) > 1:
+        return None
+    return normalize_ssh_public_keys(value)
+
+
 def _open_dir(path: Union[str, Path], *, dir_fd: Optional[int] = None) -> int:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     return os.open(path, flags, dir_fd=dir_fd)
+
+
+def _open_authorized_keys_directory(directory: Path) -> int:
+    """Walk only root-controlled directories, never through a symlink."""
+    if not directory.is_absolute() or ".." in directory.parts:
+        raise ValueError("managed key directory must be an absolute plain path")
+    current = _open_dir(directory.anchor)
+    try:
+        for part in (None, *directory.parts[1:]):
+            if part is not None:
+                child = _open_dir(part, dir_fd=current)
+                os.close(current)
+                current = child
+            info = os.fstat(current)
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != AUTHORIZED_KEYS_ROOT_UID
+                    or info.st_mode & 0o022):
+                raise ValueError("managed key directory ancestry is not root-controlled")
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def audit_slot_login_shell() -> tuple[bool, str]:
+    """Verify the Debian/Ubuntu noninteractive shell used before forced entry."""
+    directory_fd: Optional[int] = None
+    descriptor: Optional[int] = None
+    try:
+        resolved = Path(SLOT_LOGIN_SHELL).resolve(strict=True)
+        if resolved.name != "dash":
+            raise ValueError("unexpected shell executable")
+        directory_fd = _open_authorized_keys_directory(resolved.parent)
+        descriptor = os.open(resolved.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=directory_fd)
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != AUTHORIZED_KEYS_ROOT_UID
+                or info.st_mode & (0o022 | 0o6000) or not info.st_mode & 0o111):
+            raise ValueError("unsafe shell executable")
+        return True, "verified root-controlled /bin/dash slot login shell"
+    except (OSError, ValueError):
+        return False, "slot login shell requires an installed root-controlled executable /bin/dash"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def audit_authorized_key_files(directory: Path) -> tuple[bool, str]:
+    """Refuse unsafe or unforced existing keys before sshd configuration changes.
+
+    This is read-only: it never adds options, rewrites keys, or removes an
+    operator's file. Every accepted line must match a generated device/service
+    entry exactly, including its root-installed forced command.
+    """
+    directory_fd: Optional[int] = None
+    maximum = MAX_SSH_KEY_CHARS * (MAX_CLI_KEYS + 1) + 4096
+    count = 0
+    try:
+        directory_fd = _open_authorized_keys_directory(directory)
+        for name in os.listdir(directory_fd):
+            if not UNIX_USER_RE.fullmatch(name):
+                return False, "managed key directory contains an unrecognized file"
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory_fd)
+            try:
+                before = os.fstat(descriptor)
+                if (not stat.S_ISREG(before.st_mode)
+                        or before.st_uid != AUTHORIZED_KEYS_ROOT_UID
+                        or before.st_mode & 0o022 or before.st_nlink != 1
+                        or before.st_size > maximum):
+                    return False, f"{name}: managed key file is not safe and root-controlled"
+                raw = os.read(descriptor, maximum + 1)
+                after = os.fstat(descriptor)
+                if (len(raw) > maximum or len(raw) != before.st_size
+                        or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                        != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+                    return False, f"{name}: managed key file changed during the audit"
+            finally:
+                os.close(descriptor)
+            for line in raw.decode("ascii").splitlines():
+                entry = line.strip()
+                if not entry or entry.startswith("#"):
+                    continue
+                accepted = False
+                for options in (AUTHORIZED_KEY_OPTIONS, GATEWAY_AUTHORIZED_KEY_OPTIONS):
+                    prefix = options + " "
+                    if entry.startswith(prefix):
+                        key = entry[len(prefix):]
+                        accepted = normalize_ssh_public_key(key) == key
+                        break
+                if not accepted:
+                    return False, f"{name}: key line lacks a recognized exact forced command"
+            count += 1
+        return True, f"audited {count} root-managed key file(s); every key is forced"
+    except (OSError, UnicodeError, ValueError):
+        return False, "could not safely audit the root-managed authorized keys"
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def _remove_legacy_home_key(account: pwd.struct_passwd) -> None:
@@ -368,7 +482,18 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
     home would therefore be replaceable by the holder, defeating device
     revocation and the forced command. sshd reads this file from `/etc` instead.
     """
-    if isinstance(key, list):
+    service_keys: list[str] = []
+    if isinstance(key, Mapping):
+        if set(key) != {"device_keys", "gateway_keys"}:
+            return False, "server supplied invalid SSH key privileges"
+        normalized_keys = normalize_ssh_public_keys(key["device_keys"])
+        gateway_keys = normalize_gateway_public_keys(key["gateway_keys"])
+        if normalized_keys is None or gateway_keys is None:
+            return False, "server supplied invalid SSH public keys"
+        if set(normalized_keys) & set(gateway_keys):
+            return False, "one SSH key cannot hold both device and gateway privileges"
+        service_keys = gateway_keys
+    elif isinstance(key, list):
         normalized_keys = normalize_ssh_public_keys(key)
     else:
         one = normalize_ssh_public_key(key)
@@ -377,14 +502,23 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
         return False, "server supplied invalid SSH public keys"
     if not UNIX_USER_RE.fullmatch(account.pw_name):
         return False, "slot account has an invalid login name"
+    unsafe_shell = bool(service_keys and getattr(account, "pw_shell", "") != SLOT_LOGIN_SHELL)
+    if unsafe_shell:
+        # Revoke any obsolete service grant while keeping normal device keys.
+        # A login Bash could execute holder-writable rc files before the
+        # per-key forced command ever reaches our trusted entrypoint.
+        service_keys = []
+    answer = (not unsafe_shell,
+              "gateway service key refused: slot login shell must be /bin/dash"
+              if unsafe_shell else "")
     _remove_legacy_home_key(account)
     keys_fd: Optional[int] = None
     try:
         try:
             keys_fd = _open_dir(directory)
         except FileNotFoundError:
-            if not normalized_keys:
-                return True, ""
+            if not normalized_keys and not service_keys:
+                return answer
             return False, "managed authorized-keys directory is missing"
         if os.fstat(keys_fd).st_uid != os.geteuid():
             return False, "managed authorized-keys directory is not owned by the agent"
@@ -393,15 +527,18 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
         # Root ownership and no write bits are the revocation boundary.
         os.fchmod(keys_fd, 0o755)
         filename = account.pw_name
-        if not normalized_keys:
+        if not normalized_keys and not service_keys:
             try:
                 os.unlink(filename, dir_fd=keys_fd)
             except FileNotFoundError:
                 pass
-            return True, ""
+            return answer
         content = "".join(
             f"{AUTHORIZED_KEY_OPTIONS} {normalized}\n" for normalized in normalized_keys
-        ).encode("ascii")
+        ) + "".join(
+            f"{GATEWAY_AUTHORIZED_KEY_OPTIONS} {normalized}\n" for normalized in service_keys
+        )
+        content = content.encode("ascii")
         try:
             current_fd = os.open(
                 filename,
@@ -413,13 +550,13 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
             current_owned = False
         else:
             try:
-                current = os.read(current_fd, MAX_SSH_KEY_CHARS * MAX_CLI_KEYS + 4096)
+                current = os.read(current_fd, MAX_SSH_KEY_CHARS * (MAX_CLI_KEYS + 1) + 4096)
                 os.fchmod(current_fd, 0o644)
                 current_owned = os.fstat(current_fd).st_uid == os.geteuid()
             finally:
                 os.close(current_fd)
         if current == content and current_owned:
-            return True, ""
+            return answer
         temporary = f".{filename}.ccfleet.{os.getpid()}"
         try:
             fd = os.open(
@@ -447,7 +584,7 @@ def install_authorized_key(account: pwd.struct_passwd, key: Any,
             os.close(fd)
         os.rename(temporary, filename, src_dir_fd=keys_fd, dst_dir_fd=keys_fd)
         os.fsync(keys_fd)
-        return True, ""
+        return answer
     except OSError as exc:
         return False, f"could not update managed authorized keys ({exc.__class__.__name__})"
     finally:
@@ -550,6 +687,18 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
             # left by an interrupted older wipe. Releasing also revokes access
             # before a wipe that may fail and retry.
             item["ssh_public_keys"] = []
+        if "ssh_gateway_public_keys" in entry:
+            # Malformed service intent revokes the service privilege while
+            # preserving independently validated ordinary device keys.
+            gateway_keys = normalize_gateway_public_keys(entry.get("ssh_gateway_public_keys"))
+            safe = (state == "active" and item.get("inference_allowed") is True
+                    and not (login and login.get("kind") in ("login", "switch")))
+            device_keys = item.get("ssh_public_keys", [])
+            if "ssh_public_key" in item:
+                device_keys = [item["ssh_public_key"]] if item["ssh_public_key"] else []
+            if gateway_keys is None or set(device_keys) & set(gateway_keys or ()):
+                gateway_keys = []
+            item["ssh_gateway_public_keys"] = gateway_keys if safe else []
         # A read of its usage asked for from a page: a moment, or nothing.
         wanted = entry.get("quota_wanted_at")
         if (state in SIGN_IN_STATES and isinstance(wanted, (int, float))
@@ -947,8 +1096,14 @@ def converge_ssh_access(slots: list[dict[str, Any]], system: System) -> None:
             keys = slot["ssh_public_keys"]
         elif "ssh_public_key" in slot:
             keys = slot["ssh_public_key"]
+        elif "ssh_gateway_public_keys" in slot:
+            keys = []
         else:
             continue
+        if "ssh_gateway_public_keys" in slot:
+            if isinstance(keys, str):
+                keys = [keys] if keys else []
+            keys = {"device_keys": keys, "gateway_keys": slot["ssh_gateway_public_keys"]}
         account = system.lookup(slot["unix_user"])
         if account is None or not is_slot_account(account, system.groups_of(account)):
             continue
@@ -1179,10 +1334,23 @@ def main(argv: Optional[Sequence[str]] = None, system: Optional[System] = None) 
     parser.add_argument("--env-file", default=DEFAULT_ENV_FILE)
     parser.add_argument("--print", action="store_true", dest="print_only",
                         help="print the payload instead of sending it")
+    audits = parser.add_mutually_exclusive_group()
+    audits.add_argument("--audit-authorized-keys", type=Path,
+                        help="read-only audit of root-managed forced SSH key files")
+    audits.add_argument("--audit-login-shell", action="store_true",
+                        help="read-only validation of the root-installed /bin/dash shell")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
+    if args.audit_authorized_keys is not None or args.audit_login_shell:
+        if os.geteuid() != 0:
+            print("error: authorized-key audit must run as root", file=sys.stderr)
+            return 2
+        ok, detail = (audit_slot_login_shell() if args.audit_login_shell
+                      else audit_authorized_key_files(args.audit_authorized_keys))
+        print(detail, file=sys.stdout if ok else sys.stderr)
+        return 0 if ok else 2
     env = {**core.load_env_file(Path(args.env_file)), **os.environ}
     try:
         cfg = MachineConfig.from_env(env)

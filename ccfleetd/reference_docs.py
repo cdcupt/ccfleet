@@ -16,7 +16,8 @@ PUBLIC_FILES = frozenset({
     "gateway/README.html",
     *("docs/" + name + ".html" for name in (
         "index", "guidebook", "compliance", "design", "runbooks", "tunnel",
-        "local-relay", "reliability-privacy", "platform-comparison", "platform-improvements",
+        "local-relay", "public-gateway", "reliability-privacy", "platform-comparison",
+        "platform-improvements",
         "local-relay-verification", "live-folders-verification", "project-workspaces",
         "project-workspaces-verification",
     )),

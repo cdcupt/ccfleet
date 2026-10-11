@@ -26,6 +26,7 @@ from . import (
     cli_access,
     client_status,
     compatibility,
+    gateway_ui,
     names,
     oauth,
     payments,
@@ -109,6 +110,7 @@ NOTES = {
     "emails-on": ("ok", "Outage emails on: we email you when your slot's machine has been "
                         "down for five minutes, and again when it is back."),
     "emails-off": ("ok", "Outage emails off."),
+    **gateway_ui.NOTES,
 }
 
 # The pill says the state the way every page says a state: green running,
@@ -224,6 +226,8 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
     """Do what a form on this page asked, for this account and nobody else."""
     viewer = viewer_for(account, session_id, cfg, store)
     parts = path.strip("/").split("/")
+    if len(parts) == 3 and parts[:2] == ["account", "gateway"]:
+        return gateway_ui.act(store, cfg, account, path, form, now, session_id)
     if parts == ["account", "claim"]:
         return _claim(store, cfg, account, now)
     if parts == ["account", "outage-emails"] and cfg.emails_ready:
@@ -578,6 +582,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + banner
         + f'<div class="card allowance"><div><h2>Your allowance</h2>{allowance}</div>'
         f"{claim}</div>"
+        + gateway_ui.panel(store, cfg, account, csrf, held)
         + (f'<div class="slots">{cards}</div>' if cards else "")
         + (_outage_emails(account, csrf) if cfg.emails_ready else "")
         + '<p class="note">Your slot is a Linux account on a machine we operate, with its own '

@@ -43,7 +43,8 @@ def sandbox(tmp_path, monkeypatch):
     return root
 
 
-def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True):
+def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
+            keys_audit_ok=True, shell_audit_ok=True):
     """Root's view of the world: `id -u` is 0, and the rest just logs."""
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
@@ -51,14 +52,30 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True):
     calls.write_text("")
     password_set = tmp_path / "password-set.marker"
     stubs = {
-        "id": 'if [ "$1" = "-u" ]; then echo 0; exit 0; fi; exit 1',
+        "id": textwrap.dedent("""\
+            if [ "$1" = -u ] && [ $# = 1 ]; then echo 0; exit 0; fi
+            if [ "$1" = -u ]; then echo "${FAKE_SLOT_UID:-1001}"; exit 0; fi
+            if [ "$1" = -nG ]; then echo "${FAKE_SLOT_GROUPS:-ccfleet-slots}"; exit 0; fi
+            exit 1"""),
         "apt-get": 'echo "apt-get $*" >> "__LOG__"',
         "chown": 'echo "chown $*" >> "__LOG__"',
         "curl": 'echo "curl $*" >> "__LOG__"; exit 1',
         "getent": textwrap.dedent("""\
+            if [ "$1" = passwd ]; then
+              echo "$2:x:1001:1001::/home/$2:${FAKE_SLOT_SHELL:-/bin/bash}"
+              exit 0
+            fi
             if [ "$1" = group ] && [ "$2" = ccfleet-slots ] && [ -n "${FAKE_SLOT_MEMBERS:-}" ]; then
               echo "ccfleet-slots:x:999:$FAKE_SLOT_MEMBERS"
             fi"""),
+        "usermod": 'echo "usermod $*" >> "__LOG__"',
+        "python3": textwrap.dedent("""\
+            echo "python3 $*" >> "__LOG__"
+            case "$3" in
+              --audit-authorized-keys) exit __KEYS_AUDIT__ ;;
+              --audit-login-shell) exit __SHELL_AUDIT__ ;;
+            esac
+            exit 1"""),
         "passwd": textwrap.dedent("""\
             if [ "$1" = -S ]; then
               if [ -f "__PASSWORD_SET__" ]; then echo "$2 P 01/01/1970 0 99999 7 -1";
@@ -87,6 +104,8 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True):
                         .replace("__PASSWORD_SET__", str(password_set))
                         .replace("__TIMER__", timer_state)
                         .replace("__START__", "0" if first_run_ok else "1")
+                        .replace("__KEYS_AUDIT__", "0" if keys_audit_ok else "2")
+                        .replace("__SHELL_AUDIT__", "0" if shell_audit_ok else "2")
                         .replace("__SSHD__", "0" if sshd_ok else "1") + "\n")
         path.chmod(0o755)
     return bindir, calls
@@ -243,25 +262,72 @@ def test_it_restricts_slot_ssh_and_validates_before_reload(tmp_path, sandbox):
     assert run(GOOD, bindir).returncode == 0
     dropin = sandbox / "sshd" / "02-ccfleet-slots.conf"
     assert dropin.read_text() == textwrap.dedent(f"""\
-        # Slot keys live outside holder-writable homes. ForceCommand is repeated on
-        # each key as defense in depth, but sshd enforces it here even if a slot tries
-        # to create its own ~/.ssh/authorized_keys.
+        # Slot keys live only in root-controlled files, never holder-writable homes.
+        # Each audited key supplies its own forced command: a global ForceCommand
+        # would override the service key's inference-only command.
         Match Group ccfleet-slots
             AuthorizedKeysFile {sandbox / "etc" / "authorized_keys"}/%u
-            ForceCommand {sandbox / "lib"}/slot-entry.sh
+            AuthorizedKeysCommand none
+            TrustedUserCAKeys none
+            AuthenticationMethods publickey
             PubkeyAuthentication yes
             PasswordAuthentication no
             KbdInteractiveAuthentication no
             AllowAgentForwarding no
             AllowTcpForwarding no
+            AllowStreamLocalForwarding no
             X11Forwarding no
             PermitTunnel no
             PermitUserRC no
         Match all
         """)
     lines = calls.read_text().splitlines()
+    audit = f"python3 -I {sandbox / 'lib' / 'ccfleet_agent' / 'machine.py'} --audit-authorized-keys {sandbox / 'etc' / 'authorized_keys'}"
+    assert lines.index(audit) < lines.index(f"sshd -t -f {sandbox / 'sshd_config'}")
     assert lines.index(f"sshd -t -f {sandbox / 'sshd_config'}") < lines.index(
         "systemctl reload ssh")
+
+
+def test_unforced_key_audit_failure_preserves_existing_sshd_config(tmp_path, sandbox):
+    dropin = sandbox / "sshd" / "02-ccfleet-slots.conf"
+    original = "Match Group ccfleet-slots\n    ForceCommand /original-entry\n\n"
+    dropin.write_text(original)
+    bindir, calls = fakebin(tmp_path, keys_audit_ok=False)
+    result = run(GOOD, bindir)
+    assert result.returncode != 0 and "forced-command audit" in result.stderr
+    assert dropin.read_text() == original
+    assert not any(line.startswith("sshd ") or line.startswith("systemctl reload")
+                   for line in calls.read_text().splitlines())
+
+
+def test_shell_audit_failure_stops_before_slot_or_sshd_changes(tmp_path, sandbox):
+    bindir, calls = fakebin(tmp_path, shell_audit_ok=False)
+    result = run(GOOD, bindir)
+    assert result.returncode != 0 and "slot login shell is not safe" in result.stderr
+    assert not (sandbox / "sshd" / "02-ccfleet-slots.conf").exists()
+    assert not any(line.startswith(("usermod ", "sshd ", "systemctl reload"))
+                   for line in calls.read_text().splitlines())
+
+
+def test_existing_validated_slot_uses_dash_before_per_key_sshd_activation(tmp_path, sandbox, monkeypatch):
+    monkeypatch.setenv("FAKE_SLOT_MEMBERS", "slot01")
+    bindir, calls = fakebin(tmp_path)
+    result = run(GOOD, bindir)
+    assert result.returncode == 0, result.stderr
+    lines = calls.read_text().splitlines()
+    assert lines.index("usermod -s /bin/dash slot01") < lines.index("systemctl reload ssh")
+
+
+@pytest.mark.parametrize("uid,groups", [("0", "ccfleet-slots"), ("65534", "ccfleet-slots"),
+                                       ("1001", "ccfleet-slots sudo")])
+def test_setup_does_not_change_a_non_slot_or_privileged_account(tmp_path, monkeypatch, uid, groups):
+    monkeypatch.setenv("FAKE_SLOT_MEMBERS", "slot01")
+    monkeypatch.setenv("FAKE_SLOT_UID", uid)
+    monkeypatch.setenv("FAKE_SLOT_GROUPS", groups)
+    bindir, calls = fakebin(tmp_path)
+    assert run(GOOD, bindir).returncode != 0
+    assert not any(line.startswith(("usermod ", "sshd ", "systemctl reload"))
+                   for line in calls.read_text().splitlines())
 
 
 def test_it_makes_existing_locked_slots_public_key_eligible(tmp_path, monkeypatch):

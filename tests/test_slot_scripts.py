@@ -21,6 +21,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -190,8 +191,16 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
         # `env` so the assignments actually reach the command, HOME included.
         exec env $assignments "$@"
         """))
+    (bindir / "python3").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        if [ "$1" = -I ] && [ "$3" = --audit-login-shell ]; then
+          [ -z "${FAKE_SHELL_AUDIT_FAIL:-}" ]
+          exit $?
+        fi
+        exec "__PYTHON__" "$@"
+        """).replace("__PYTHON__", sys.executable))
     for name in INERT:
-        (bindir / name).write_text("#!/bin/sh\nexit 0\n")
+        (bindir / name).write_text(f'#!/bin/sh\necho "{name} $*" >> "{bindir / "calls.log"}"\nexit 0\n')
     for f in bindir.iterdir():
         f.chmod(0o755)
     return bindir
@@ -202,6 +211,22 @@ def as_root(script, tmp_path, *args, **kw):
     env["PATH"] = f"{fake_system(tmp_path, **kw)}:{env['PATH']}"
     return subprocess.run([str(script), *args], capture_output=True, text=True,
                           env=env, timeout=30)
+
+
+def test_slot_add_sets_explicit_non_startup_login_shell(tmp_path):
+    home = tmp_path / "slot01"
+    result = as_root(ADD, tmp_path, "--slot", "slot01", slot_home=home, exists=False)
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "fakebin" / "calls.log").read_text()
+    assert "adduser --disabled-password --shell /bin/dash --gecos  slot01" in calls
+    assert "usermod -s /bin/dash slot01" in calls
+
+
+def test_slot_add_refuses_an_unverified_login_shell_before_account_changes(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_SHELL_AUDIT_FAIL", "1")
+    result = as_root(ADD, tmp_path, "--slot", "slot01")
+    assert result.returncode != 0 and "root-controlled /bin/dash" in result.stderr
+    assert not (tmp_path / "fakebin" / "calls.log").exists()
 
 
 def run(script, *args):

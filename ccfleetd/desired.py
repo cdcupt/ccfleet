@@ -17,7 +17,7 @@ import urllib.parse
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from . import claude_versions, names
+from . import claude_versions, cli_access, names
 
 # A node may be pinned to an exact version, or told to track a channel. Anything
 # else is refused rather than passed to the installer: this string reaches
@@ -160,7 +160,8 @@ def _slot_block(slot: Mapping[str, Any],
                 node: Optional[Mapping[str, Any]] = None,
                 channels: Optional[Mapping[str, Any]] = None,
                 update: Optional[Mapping[str, Any]] = None,
-                cli_keys: Optional[list[str]] = None) -> dict[str, Any]:
+                cli_keys: Optional[list[str]] = None,
+                gateway_keys: Optional[list[str]] = None) -> dict[str, Any]:
     """What a shared machine should do about one of its slots.
 
     The state is the whole instruction: `claiming` means provision it,
@@ -191,6 +192,19 @@ def _slot_block(slot: Mapping[str, Any],
         # independent of the Claude login and may be several because one user
         # can work from several computers.
         block["ssh_public_keys"] = list(cli_keys or ())
+    if gateway_keys is not None:
+        # Service authentication is a distinct privilege and never turns into
+        # a CLI device key. Send a revocation even on an ineligible lifecycle.
+        safe_keys = []
+        eligible = (slot.get("kind") == "machine" and slot.get("state") == "active"
+                    and block.get("inference_allowed") is True
+                    and not (pending and pending.get("kind") in ("login", "switch")))
+        if eligible and isinstance(gateway_keys, list) and len(gateway_keys) <= 1:
+            for key in gateway_keys:
+                normalized = cli_access.normalize_public_key(key)
+                if normalized and normalized not in block.get("ssh_public_keys", ()):
+                    safe_keys.append(normalized)
+        block["ssh_gateway_public_keys"] = safe_keys
     # A read of its usage asked for now; the slot tries it once, and an agent
     # from before this reads it on its own schedule.
     wanted = slot.get("quota_wanted_at")
@@ -231,7 +245,8 @@ def desired_state(node: Mapping[str, Any],
                   channels: Optional[Mapping[str, Any]] = None,
                   slot_updates: Optional[Mapping[str, Mapping[str, Any]]] = None,
                   own_update: Optional[Mapping[str, Any]] = None,
-                  slot_cli_keys: Optional[Mapping[str, list[str]]] = None) -> dict[str, Any]:
+                  slot_cli_keys: Optional[Mapping[str, list[str]]] = None,
+                  slot_gateway_keys: Optional[Mapping[str, list[str]]] = None) -> dict[str, Any]:
     """What this node should look like, derived from its stored row.
 
     `slot_logins` maps a slot's id to its sign-in row, for a shared machine.
@@ -256,7 +271,10 @@ def desired_state(node: Mapping[str, Any],
         cli_keys = slot_cli_keys or {}
         desired["slots"] = [_slot_block(s, logins.get(s.get("id")), node, channels or {},
                                         updates.get(s.get("id")),
-                                        cli_keys.get(s.get("id"))) for s in slots]
+                                        cli_keys.get(s.get("id")),
+                                        ((slot_gateway_keys.get(s.get("id")) or [])
+                                         if slot_gateway_keys is not None else None))
+                            for s in slots]
     elif hostname is None:
         # An owner's own node: its pin is its owner's, so it is never a hold.
         own = claude_versions.slot_target({"kind": "owner"}, node)

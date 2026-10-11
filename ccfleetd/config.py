@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
@@ -77,6 +78,17 @@ class Config:
     telegram_chat_id: str = ""
     public_url: str = ""
     broker_only: bool = False
+    # Public model requests are an explicit, separate authority from opaque SSH.
+    gateway_enabled: bool = False
+    gateway_ssh_key_path: str = ""
+    gateway_ssh_public_key: str = ""
+    gateway_max_active: int = 16
+    gateway_max_per_key: int = 8
+    gateway_max_body_bytes: int = 16 * 1024 * 1024
+    gateway_body_budget_bytes: int = 32 * 1024 * 1024
+    gateway_max_connections: int = 128
+    gateway_header_timeout_s: int = 10
+    gateway_request_timeout_s: int = 900
     heartbeat_max_age_s: int = 15 * 60
     token_stale_s: int = 24 * 3600
     token_expired_grace_s: int = 3600
@@ -131,6 +143,12 @@ class Config:
         return bool(self.resend_api_key and self.email_from)
 
     @property
+    def gateway_ready(self) -> bool:
+        return bool(self.gateway_enabled and not self.broker_only
+                    and self.gateway_ssh_key_path and self.gateway_ssh_public_key
+                    and self.public_url)
+
+    @property
     def google_ready(self) -> bool:
         """Whether user sign-in can be offered at all."""
         return bool(self.google_client_id and self.google_client_secret
@@ -165,6 +183,17 @@ class Config:
             telegram_chat_id=env.get(ENV_PREFIX + "TELEGRAM_CHAT_ID", ""),
             public_url=env.get(ENV_PREFIX + "PUBLIC_URL", "").rstrip("/"),
             broker_only=_env_bool(env, "BROKER_ONLY", False),
+            gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
+            gateway_ssh_key_path=env.get(ENV_PREFIX + "GATEWAY_SSH_KEY_PATH", "").strip(),
+            gateway_ssh_public_key=env.get(ENV_PREFIX + "GATEWAY_SSH_PUBLIC_KEY", "").strip(),
+            gateway_max_active=_env_int(env, "GATEWAY_MAX_ACTIVE", 16, 1),
+            gateway_max_per_key=_env_int(env, "GATEWAY_MAX_PER_KEY", 8, 1),
+            gateway_max_body_bytes=_env_int(env, "GATEWAY_MAX_BODY_BYTES", 16*1024*1024, 1024),
+            gateway_body_budget_bytes=_env_int(
+                env, "GATEWAY_BODY_BUDGET_BYTES", 32*1024*1024, 1024),
+            gateway_max_connections=_env_int(env, "GATEWAY_MAX_CONNECTIONS", 128, 8),
+            gateway_header_timeout_s=_env_int(env, "GATEWAY_HEADER_TIMEOUT_S", 10, 1),
+            gateway_request_timeout_s=_env_int(env, "GATEWAY_REQUEST_TIMEOUT_S", 900, 1),
             heartbeat_max_age_s=_env_int(env, "HEARTBEAT_MAX_AGE_S", 15 * 60, 60),
             token_stale_s=_env_int(env, "TOKEN_STALE_S", 24 * 3600, 60),
             token_expired_grace_s=_env_int(env, "TOKEN_EXPIRED_GRACE_S", 3600, 0),
@@ -231,6 +260,24 @@ class Config:
                               f"{ENV_PREFIX}QUOTA_CRIT_PCT")
         if cfg.disk_warn_pct > cfg.disk_crit_pct:
             raise ConfigError("CCFLEET_DISK_WARN_PCT must not exceed CCFLEET_DISK_CRIT_PCT")
+        if (cfg.gateway_max_active > 64 or cfg.gateway_max_per_key > cfg.gateway_max_active
+                or cfg.gateway_max_connections > 256
+                or cfg.gateway_header_timeout_s > 30 or cfg.gateway_request_timeout_s > 1800
+                or cfg.gateway_max_body_bytes > 64 * 1024 * 1024
+                or cfg.gateway_body_budget_bytes < cfg.gateway_max_body_bytes
+                or cfg.gateway_body_budget_bytes > 128 * 1024 * 1024):
+            raise ConfigError("CCFLEET_GATEWAY resource limits are inconsistent or too large")
+        if cfg.gateway_enabled:
+            from . import cli_access
+            public = urllib.parse.urlsplit(cfg.public_url)
+            secure = public.scheme == "https" or (public.scheme == "http"
+                and public.hostname in {"localhost", "127.0.0.1", "::1"})
+            if (not cfg.gateway_ready or not os.path.isabs(cfg.gateway_ssh_key_path)
+                    or cli_access.normalize_public_key(cfg.gateway_ssh_public_key) is None
+                    or not secure or not public.hostname or public.username or public.password
+                    or public.path or public.query or public.fragment):
+                raise ConfigError("CCFLEET_GATEWAY needs its private service key path, "
+                                  "public key and HTTPS public URL (loopback HTTP for tests)")
         return cfg
 
     def require_admin_token(self) -> None:

@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from . import claude_versions, cli_access, names, payments, pricing
+from . import claude_versions, cli_access, gateway_access, names, payments, pricing
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -212,6 +212,23 @@ CREATE TABLE IF NOT EXISTS cli_devices (
     revoked_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_cli_devices_slot ON cli_devices(slot_id, revoked_at);
+-- Separate API credentials: selecting a slot never grants device/terminal
+-- access. claim_bindings pins each selection to its current rental, so a
+-- released slot cannot be silently re-adopted after another claim.
+CREATE TABLE IF NOT EXISTS gateway_keys (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    slot_ids TEXT NOT NULL,
+    claim_bindings TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'sticky',
+    generation INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    last_seen_at REAL NOT NULL DEFAULT 0,
+    revoked_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_gateway_keys_account ON gateway_keys(account_id, revoked_at);
 -- What somebody paid, as the operator wrote it down. A record, never an
 -- enforcer: nothing about slots or claiming reads this table (see
 -- ccfleetd/payments.py). A mistake is voided, not deleted, so the record
@@ -550,6 +567,16 @@ class Store:
             # (see request_slot_login): NULL for never, which every slot before
             # this is. The slot's own, so it goes when the slot is freed.
             self._add_missing_columns("slots", {"account_switched_at": "REAL"})
+            # Claim IDs survive ordinary account sign-in but change on every
+            # rental. The counter invalidates in-flight gateway requests when
+            # an account transition or lifecycle action starts.
+            self._add_missing_columns("slots", {
+                "gateway_claim_id": "TEXT NOT NULL DEFAULT ''",
+                "gateway_generation": "INTEGER NOT NULL DEFAULT 1",
+            })
+            self._conn.execute(
+                "UPDATE slots SET gateway_claim_id = lower(hex(randomblob(16))) "
+                "WHERE held_by IS NOT NULL AND gateway_claim_id = ''")
             # When its holder, or the operator, last asked for its usage to be
             # read again now (see request_quota_read). The slot's own, so it
             # goes when the slot is freed.
@@ -761,6 +788,9 @@ class Store:
                                                                  now) is not None:
                 raise StoreError(f"{slot_id} changed its Claude account less than a week ago")
             self._begin_login(conn, self._sign_in_key(row, slot_id), email, now, kind)
+            if kind in ("login", "switch"):
+                conn.execute("UPDATE slots SET gateway_generation = gateway_generation + 1 "
+                             "WHERE id = ?", (slot_id,))
 
     def get_login(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
@@ -999,7 +1029,12 @@ class Store:
         self._update_node(node_id, "pinned_version", version.strip())
 
     def set_enabled(self, node_id: str, enabled: bool) -> None:
-        self._update_node(node_id, "enabled", int(enabled))
+        with self._write_txn() as conn:
+            if conn.execute("UPDATE nodes SET enabled = ? WHERE id = ?",
+                            (int(enabled), node_id)).rowcount == 0:
+                raise StoreError(f"unknown node {node_id!r}")
+            conn.execute("UPDATE slots SET gateway_generation = gateway_generation + 1 "
+                         "WHERE node_id = ?", (node_id,))
 
     def set_rc_expected(self, node_id: str, expected: bool) -> None:
         self._update_node(node_id, "rc_expected", int(expected))
@@ -1027,6 +1062,8 @@ class Store:
                 "WHERE id = ?", (host, port, normalized, node_id)).rowcount
             if not changed:
                 raise StoreError(f"unknown node {node_id!r}")
+            conn.execute("UPDATE slots SET gateway_generation = gateway_generation + 1 "
+                         "WHERE node_id = ?", (node_id,))
 
     def clear_node_access(self, node_id: str) -> None:
         with self._write_txn() as conn:
@@ -1035,6 +1072,8 @@ class Store:
                 "WHERE id = ?", (node_id,)).rowcount
             if not changed:
                 raise StoreError(f"unknown node {node_id!r}")
+            conn.execute("UPDATE slots SET gateway_generation = gateway_generation + 1 "
+                         "WHERE node_id = ?", (node_id,))
 
     def _update_node(self, node_id: str, column: str, value: Any) -> None:
         if column not in {"token_hash", "pinned_version", "enabled", "rc_expected"}:
@@ -1993,6 +2032,38 @@ class Store:
                              (new, old))
             conn.execute("UPDATE logins SET node_id = ? WHERE node_id = ?",
                          (slot_login_key(new), slot_login_key(old)))
+            self._rename_gateway_slots(conn, old, new)
+
+    @staticmethod
+    def _rename_gateway_slots(conn: sqlite3.Connection, old: str, new: str) -> None:
+        """Move explicit selections without adopting a stale target rental.
+
+        The rental binding is preserved, never replaced from the current slot.
+        Endpoint generations change so old request/affinity snapshots expire.
+        """
+        for row in conn.execute("SELECT id, slot_ids, claim_bindings, mode FROM gateway_keys"):
+            try:
+                selected = json.loads(row["slot_ids"])
+                bindings = json.loads(row["claim_bindings"])
+            except (TypeError, ValueError):
+                continue  # malformed keys already resolve to no authorized targets
+            if (gateway_access.normalize_selection(selected, row["mode"]) is None
+                    or not isinstance(bindings, dict)):
+                continue
+            if old not in selected and old not in bindings:
+                continue
+            if old in selected:
+                # A row left under the new ID belongs to an earlier rental.
+                # It must not replace the old slot's binding or duplicate it.
+                selected = [new if slot_id == old else slot_id
+                            for slot_id in selected if slot_id != new]
+                bindings.pop(new, None)
+                bindings[new] = bindings.pop(old, "")
+            else:
+                bindings.pop(old, None)
+            conn.execute("UPDATE gateway_keys SET slot_ids = ?, claim_bindings = ?, "
+                         "generation = generation + 1 WHERE id = ?",
+                         (json.dumps(selected), json.dumps(bindings), row["id"]))
 
     def get_slot(self, slot_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -2184,6 +2255,243 @@ class Store:
             conn.execute("DELETE FROM cli_devices WHERE token_hash = ?", (digest,))
         return True
 
+    # -- public Messages gateway ----------------------------------------
+
+    @staticmethod
+    def _gateway_key_summary(row: sqlite3.Row) -> dict[str, Any]:
+        """Allowlist public fields; hashes and claim bindings stay internal."""
+        try:
+            selected = json.loads(row["slot_ids"])
+        except (TypeError, ValueError):
+            selected = []
+        if gateway_access.normalize_selection(selected, row["mode"]) is None:
+            selected = []
+        return {"id": row["id"], "account_id": row["account_id"], "name": row["name"],
+                "slot_ids": selected, "mode": row["mode"], "generation": row["generation"],
+                "created_at": row["created_at"], "last_seen_at": row["last_seen_at"],
+                "revoked_at": row["revoked_at"]}
+
+    @staticmethod
+    def _gateway_selection(conn: sqlite3.Connection, account_id: str,
+                           slot_ids: Any, mode: Any) -> tuple[list[str], dict[str, str]]:
+        selected = gateway_access.normalize_selection(slot_ids, mode)
+        if selected is None:
+            raise StoreError("select distinct hosted slots in priority order "
+                             "and sticky or priority mode")
+        if conn.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            raise StoreError("no account")
+        claims: dict[str, str] = {}
+        for slot_id in selected:
+            row = conn.execute(
+                "SELECT held_by, state, kind, gateway_claim_id FROM slots WHERE id = ?",
+                (slot_id,)).fetchone()
+            if row is None or row["held_by"] != account_id:
+                raise NotYours("every selected slot must be held by this account")
+            if (row["kind"] != slotstates.MACHINE_SLOT
+                    or row["state"] not in (slotstates.CLAIMING, *Store.SLOT_SIGN_IN_STATES)
+                    or not row["gateway_claim_id"]):
+                raise StoreError("select currently held hosted slots that are not being released")
+            claims[slot_id] = row["gateway_claim_id"]
+        return selected, claims
+
+    def create_gateway_key(self, account_id: str, name: str, slot_ids: list[str],
+                           mode: str = "sticky", *, now: float) -> dict[str, Any]:
+        """Mint one API credential for an ordered pool of the holder's slots."""
+        normalized_name = gateway_access.normalize_name(name)
+        if normalized_name is None:
+            raise StoreError("gateway key name must be 1-60 characters without controls")
+        secret = gateway_access.KEY_PREFIX + secrets.token_urlsafe(32)
+        key_id = "g" + secrets.token_hex(8)
+        with self._write_txn() as conn:
+            selected, claims = self._gateway_selection(conn, account_id, slot_ids, mode)
+            count = conn.execute("SELECT COUNT(*) FROM gateway_keys WHERE account_id = ? "
+                                 "AND revoked_at IS NULL", (account_id,)).fetchone()[0]
+            if count >= gateway_access.MAX_KEYS_PER_ACCOUNT:
+                raise StoreError("remove a gateway key before creating another")
+            conn.execute(
+                "INSERT INTO gateway_keys (id, account_id, token_hash, name, slot_ids, "
+                "claim_bindings, mode, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (key_id, account_id, gateway_access.token_hash(secret), normalized_name,
+                 json.dumps(selected), json.dumps(claims), mode, now))
+            row = conn.execute("SELECT * FROM gateway_keys WHERE id = ?", (key_id,)).fetchone()
+            answer = self._gateway_key_summary(row)
+        return {**answer, "key_token": secret}
+
+    def list_gateway_keys(self, account_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM gateway_keys WHERE account_id = ? "
+                                      "AND revoked_at IS NULL ORDER BY created_at, id",
+                                      (account_id,)).fetchall()
+            return [self._gateway_key_summary(row) for row in rows]
+
+    def update_gateway_key(self, key_id: str, account_id: str, slot_ids: list[str],
+                           mode: str, *, name: Optional[str] = None,
+                           now: Optional[float] = None) -> dict[str, Any]:
+        normalized_name = gateway_access.normalize_name(name) if name is not None else None
+        if name is not None and normalized_name is None:
+            raise StoreError("gateway key name must be 1-60 characters without controls")
+        with self._write_txn() as conn:
+            row = conn.execute("SELECT * FROM gateway_keys WHERE id = ? AND account_id = ? "
+                               "AND revoked_at IS NULL", (key_id, account_id)).fetchone()
+            if row is None:
+                raise NotYours("no active gateway key held by this account")
+            selected, claims = self._gateway_selection(conn, account_id, slot_ids, mode)
+            conn.execute("UPDATE gateway_keys SET slot_ids = ?, claim_bindings = ?, mode = ?, "
+                         "name = ?, generation = generation + 1 WHERE id = ?",
+                         (json.dumps(selected), json.dumps(claims), mode,
+                          normalized_name if name is not None else row["name"], key_id))
+            return self._gateway_key_summary(conn.execute(
+                "SELECT * FROM gateway_keys WHERE id = ?", (key_id,)).fetchone())
+
+    def revoke_gateway_key(self, key_id: str, account_id: str, *,
+                           now: Optional[float] = None) -> bool:
+        with self._write_txn() as conn:
+            return conn.execute(
+                "UPDATE gateway_keys SET revoked_at = ?, generation = generation + 1 "
+                "WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+                (time.time() if now is None else now, key_id, account_id)).rowcount > 0
+
+    def resolve_gateway_key(self, token: str, *, now: float,
+                            touch: bool = True) -> Optional[dict[str, Any]]:
+        if not gateway_access.valid_token(token):
+            return None
+        digest = gateway_access.token_hash(token)
+        transaction = self._write_txn() if touch else contextlib.nullcontext(self._conn)
+        with self._lock, transaction as conn:
+            row = conn.execute(
+                "SELECT k.* FROM gateway_keys k JOIN accounts a ON a.id = k.account_id "
+                "WHERE k.token_hash = ? AND k.revoked_at IS NULL", (digest,)).fetchone()
+            if row is None or not hmac.compare_digest(row["token_hash"], digest):
+                return None
+            answer = self._gateway_key_summary(row)
+            if gateway_access.normalize_selection(answer["slot_ids"], answer["mode"]) is None:
+                return None
+            if touch:
+                conn.execute("UPDATE gateway_keys SET last_seen_at = ? WHERE id = ?",
+                             (now, row["id"]))
+                answer["last_seen_at"] = now
+            return answer
+
+    @staticmethod
+    def _gateway_report_ready(conn: sqlite3.Connection, node_id: str, unix_user: str) -> bool:
+        """Do not dispatch through a slot the machine explicitly reported unhealthy.
+
+        A missing report is not a credential proof; the relay still authorizes
+        against the current native credential and root-owned policy before use.
+        """
+        latest = conn.execute("SELECT payload FROM heartbeats WHERE node_id = ? "
+                              "ORDER BY ts DESC, id DESC LIMIT 1", (node_id,)).fetchone()
+        if latest is None:
+            return True
+        try:
+            payload = json.loads(latest["payload"])
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        reports = payload.get("slots")
+        if not isinstance(reports, list):
+            return True
+        for report in reports:
+            if not isinstance(report, dict) or report.get("unix_user") != unix_user:
+                continue
+            if report.get("present") is False:
+                return False
+            credentials = report.get("credentials")
+            if not isinstance(credentials, dict):
+                return True
+            if credentials.get("logged_in") is False or credentials.get("present") is False:
+                return False
+            bound, actual = credentials.get("bound_fp"), credentials.get("account_fp")
+            return not (isinstance(bound, str) and bound and isinstance(actual, str)
+                        and actual and bound != actual)
+        return True
+
+    @staticmethod
+    def _gateway_targets(conn: sqlite3.Connection, key: sqlite3.Row) -> list[dict[str, Any]]:
+        if key["revoked_at"] is not None:
+            return []
+        try:
+            selected = json.loads(key["slot_ids"])
+            bindings = json.loads(key["claim_bindings"])
+        except (TypeError, ValueError):
+            return []
+        if (gateway_access.normalize_selection(selected, key["mode"]) is None
+                or not isinstance(bindings, dict)):
+            return []
+        targets = []
+        for slot_id in selected:
+            row = conn.execute(
+                "SELECT s.id AS slot_id, s.node_id, s.unix_user, s.claimed_at, "
+                "s.gateway_generation AS claim_generation, s.gateway_claim_id, "
+                "n.access_host, n.access_port, n.ssh_host_key "
+                "FROM slots s JOIN nodes n ON n.id = s.node_id "
+                "JOIN accounts a ON a.id = s.held_by "
+                "WHERE s.id = ? AND s.held_by = ? AND s.kind = ? AND s.state = ? "
+                "AND n.enabled = 1 AND n.access_host != '' AND n.ssh_host_key != '' "
+                "AND NOT EXISTS (SELECT 1 FROM logins l WHERE l.node_id = ? "
+                "AND l.kind IN ('login', 'switch') "
+                "AND l.state IN ('requested', 'url_ready', 'code_sent'))",
+                (slot_id, key["account_id"], slotstates.MACHINE_SLOT, slotstates.ACTIVE,
+                 slot_login_key(slot_id))).fetchone()
+            if (row is None or not bindings.get(slot_id)
+                    or bindings[slot_id] != row["gateway_claim_id"]):
+                continue
+            if not Store._gateway_report_ready(conn, row["node_id"], row["unix_user"]):
+                continue
+            target = dict(row)
+            target.pop("gateway_claim_id")
+            targets.append(target)
+        return targets
+
+    def gateway_targets(self, key: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Resolve operator-owned connections; caller descriptions are revalidated."""
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM gateway_keys WHERE id = ? AND account_id = ? "
+                                     "AND generation = ? AND revoked_at IS NULL",
+                                     (key.get("id"), key.get("account_id"),
+                                      key.get("generation"))).fetchone()
+            return self._gateway_targets(self._conn, row) if row is not None else []
+
+    def gateway_request_is_active(self, key_id: str, generation: int, slot_id: str,
+                                   claim_generation: int) -> bool:
+        """Fail closed throughout a stream after revocation or any access change."""
+        if (isinstance(generation, bool) or not isinstance(generation, int)
+                or isinstance(claim_generation, bool) or not isinstance(claim_generation, int)):
+            return False
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM gateway_keys WHERE id = ? AND generation = ? "
+                                     "AND revoked_at IS NULL", (key_id, generation)).fetchone()
+            if row is None:
+                return False
+            return any(target["slot_id"] == slot_id
+                       and target["claim_generation"] == claim_generation
+                       for target in self._gateway_targets(self._conn, row))
+
+    def gateway_public_keys(self, slot_id: str, service_public_key: str) -> list[str]:
+        """Only the public service key reaches the selected slot's desired state."""
+        normalized = cli_access.normalize_public_key(service_public_key)
+        if normalized is None:
+            return []
+        with self._lock:
+            # One key may never hold both service-only and terminal privileges.
+            device = self._conn.execute("SELECT 1 FROM cli_devices WHERE slot_id = ? "
+                                        "AND public_key = ? AND revoked_at IS NULL",
+                                        (slot_id, normalized)).fetchone()
+            if device is not None:
+                return []
+            slot = self._conn.execute("SELECT held_by FROM slots WHERE id = ?",
+                                      (slot_id,)).fetchone()
+            if slot is None or not slot["held_by"]:
+                return []
+            keys = self._conn.execute("SELECT * FROM gateway_keys WHERE account_id = ? "
+                                      "AND revoked_at IS NULL", (slot["held_by"],)).fetchall()
+            for key in keys:
+                if any(target["slot_id"] == slot_id
+                       for target in self._gateway_targets(self._conn, key)):
+                    return [normalized]
+            return []
+
     def move_slot(self, slot_id: str, to: str) -> bool:
         """Move a slot to `to`, or raise if the lifecycle forbids it.
 
@@ -2208,7 +2516,8 @@ class Store:
                     "clears the holder in the same statement")
             slotstates.check_move(frm, to)
             cur = self._conn.execute(
-                "UPDATE slots SET state = ? WHERE id = ? AND state = ?",
+                "UPDATE slots SET state = ?, gateway_generation = gateway_generation + 1 "
+                "WHERE id = ? AND state = ?",
                 (to, slot_id, frm))
             self._conn.commit()
         return cur.rowcount > 0
@@ -2246,7 +2555,8 @@ class Store:
             # Stop advertising the holder's key at the same moment the wipe
             # starts. The machine deletes the account shortly after; until it
             # does, no desired state grants the old holder access again.
-            conn.execute("UPDATE slots SET state = ?, ssh_public_key = '' WHERE id = ?",
+            conn.execute("UPDATE slots SET state = ?, ssh_public_key = '', "
+                         "gateway_generation = gateway_generation + 1 WHERE id = ?",
                          (slotstates.RELEASING, slot_id))
             conn.execute("DELETE FROM logins WHERE node_id = ?",
                          (slot_login_key(slot_id),))
@@ -2296,7 +2606,8 @@ class Store:
         cur = conn.execute(
             "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
             "released_at = ?, device_token_at = 0, name = NULL, claude_channel = NULL, "
-            "account_switched_at = NULL, quota_wanted_at = NULL, ssh_public_key = '' "
+            "account_switched_at = NULL, quota_wanted_at = NULL, ssh_public_key = '', "
+            "gateway_claim_id = '', gateway_generation = gateway_generation + 1 "
             "WHERE id = ? AND state = ?",
             (slotstates.FREE, now, slot_id, slotstates.RELEASING))
         if cur.rowcount > 0:
@@ -2352,7 +2663,8 @@ class Store:
                 if to == slotstates.FREE:
                     self._free_released(conn, row["id"], now)
                 else:
-                    conn.execute("UPDATE slots SET state = ? WHERE id = ?",
+                    conn.execute("UPDATE slots SET state = ?, "
+                                 "gateway_generation = gateway_generation + 1 WHERE id = ?",
                                  (to, row["id"]))
                 moved.append({"slot": row["id"], "from": row["state"], "to": to})
         for move in moved:
@@ -2619,9 +2931,10 @@ class Store:
             name = self._name_for(conn, account)
             cur = conn.execute(
                 "UPDATE slots SET state = ?, held_by = ?, claimed_at = ?, "
-                "released_at = NULL, name = ?, ssh_public_key = '' "
+                "released_at = NULL, name = ?, ssh_public_key = '', gateway_claim_id = ?, "
+                "gateway_generation = gateway_generation + 1 "
                 "WHERE id = ? AND state = ?",
-                (slotstates.CLAIMING, account_id, now, name,
+                (slotstates.CLAIMING, account_id, now, name, secrets.token_hex(16),
                  candidate["id"], slotstates.FREE))
             if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
                 raise NoSlotAvailable("the free slot was taken; try again")
