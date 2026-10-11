@@ -639,7 +639,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-09-29"
+PRIVACY_UPDATED = "2026-10-11"
 
 
 def _span(seconds: int) -> str:
@@ -713,8 +713,10 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "The seven-day local aggregate window is distinct from how long heartbeat snapshots "
         "are retained here. We keep these reports for "
         f"{_span(cfg.retention_days * 86400)}.</li></ul>"
-        "<p>Your slot never reports your prompts, your conversations, your files, your Claude "
-        "credential, or the name on your Claude account.</p></div>"
+        "<p>Your slot's heartbeat reports do not include prompts, conversations, file "
+        "contents, your Claude credential, or the name on your Claude account. This is "
+        "separate from model traffic: the HTTPS gateway on BWH receives and processes "
+        "the contents of model requests and responses.</p></div>"
         '<div class="card"><h2>Your Claude account</h2>'
         "<p>You sign in to Claude yourself, through Anthropic. The credential that creates is "
         "written on the machine, in your slot, and nowhere else: this server never stores "
@@ -725,11 +727,20 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "<p>When you connect the CC Fleet CLI, a single-use pairing code is kept only as a "
         "hash for ten minutes. Each connected computer has its own public SSH key and a "
         "random CC Fleet access token; only hashes of access tokens are kept here. These "
-        "authorize the encrypted path to your slot, not Anthropic or Claude. The broker sees "
-        "when a device connects and which slot it is assigned to, but the inner SSH encryption "
-        "prevents it from reading terminal or model-request contents.</p>"
-        "<p>For local Claude, the assigned slot relay sends supported model requests to "
-        "Anthropic using only the slot&#x27;s bound account. The slot credential is never "
+        "authorize the existing device/bridge path, not Anthropic or Claude. On the explicit "
+        "<code>--transport bridge</code> route, the BWH byte broker sees when a device "
+        "connects and which slot it is assigned to, but the inner SSH encryption prevents "
+        "it from reading terminal or model-request contents.</p>"
+        "<p>Direct HTTPS gateway access uses a separate revocable endpoint key. The server "
+        "stores its hash, name, selected own slot IDs and current rental bindings in "
+        "priority order, routing mode, "
+        "configuration generation, creation/last-use times and revocation time. A key can "
+        "select only slots held by its account, with one bound Claude account per slot. "
+        "Bounded short-lived routing hashes keep conversation affinity and failure cooldowns; "
+        "they are separate from the saved numeric usage reports.</p>"
+        "<p>The selected slot relay sends supported model requests to Anthropic using only "
+        "that slot&#x27;s bound account. Native Claude on the slot owns credential writing "
+        "and renewal. The slot credential is never "
         "returned to the laptop or BWH. Plain <code>ccfleet</code> retains the remote Claude "
         "terminal. Anthropic&#x27;s own terms and privacy policy apply.</p></div>"
         '<div class="card"><h2>Local Claude and model-request privacy</h2>'
@@ -738,18 +749,35 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         'or remote filesystem mount. Native permissions govern file and command access; '
         'the working directory is not a sandbox. Bypass mode can modify, delete or transmit '
         'local data without individual approval prompts.</p>'
-        '<p>The launch-scoped local bridge removes selected request headers and the '
-        'top-level structured <code>metadata</code> field. It does not redact arbitrary '
+        '<p>With a configured HTTPS gateway, Claude Code sends model requests directly to '
+        'our domain using its endpoint key. TLS ends at BWH, so <strong>BWH can read model '
+        'requests and responses</strong>, including any prompts, tool results and file '
+        'contents sent as context. That route needs no local HTTP listener or laptop-side '
+        'SSH. The BWH-to-slot connection uses restricted SSH, and the slot connects to '
+        'Anthropic over HTTPS. Encryption protects each hop, while BWH, the slot and '
+        'Anthropic are endpoints that can read the model contents.</p>'
+        '<p><code>ccfleet local --transport bridge</code> deliberately chooses the legacy '
+        'route: a temporary local HTTP listener and laptop-to-slot SSH through BWH. '
+        'That byte broker carries ciphertext; the slot and Anthropic still read model '
+        'contents. A configured gateway failure does not silently choose this alternative. '
+        'See the <a href="/docs/library/docs/public-gateway.html">public gateway guide</a> '
+        'for setup and routing choices.</p>'
+        '<p>The gateway and relays remove selected request headers and the '
+        'top-level structured <code>metadata</code> field. This filtering does not redact '
+        'arbitrary '
         'prompts, tool results or file contents. Native system prompts can include local '
         'OS, working directory and environment details. Relevant request content reaches '
-        'the slot and Anthropic; this is not a fingerprint-free or zero-metadata guarantee.</p>'
+        'the slot and Anthropic on both routes, and BWH on the gateway route; '
+        'this is not a fingerprint-free '
+        'or zero-metadata guarantee.</p>'
         '<p>Only supported model endpoints use the relay. MCP servers, hooks, plugins, '
         'shell tools, updates and other native CLI services may connect directly from '
         'the laptop. Optional telemetry controls are not an all-traffic firewall. Slot '
         'administrators have root and can inspect or alter relayed requests and responses; '
         'altered responses may influence local tool actions. Native permissions and trust '
-        'in the slot host remain important.</p>'
-        '<p>The broker can see your connection IP and timing, and SSH exposes client version. '
+        'in BWH and the slot host remain important.</p>'
+        '<p>BWH can see your connection IP and timing. The HTTPS gateway also sees model '
+        'contents; bridge SSH exposes client version. '
         'Remote-terminal sessions also send terminal dimensions. This is not anonymity. '
         'Native local history/settings are kept in their existing location. '
         '<code>--legacy-history</code> selects an earlier per-slot preview profile without '

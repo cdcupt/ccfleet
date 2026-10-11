@@ -34,9 +34,11 @@ def test_prompt_is_optional_inference_not_an_enforced_privacy_test(section):
                    "basic responsiveness", "zero metadata disclosure",
                    "not an enforced privacy safeguard", "Native context or hooks",
                    "local OS or directory information", "Do not ask Claude to print real IPs",
-                   "BWH sees connection metadata", "for relayed model requests",
+                   "BWH sees connection metadata", "For relayed model requests",
                    "slot's outbound IP", "Other native/tool network connections"):
         assert phrase in section
+    assert "--transport bridge" in section and "HTTPS gateway" in section
+    assert "reads model request and response contents" in section
     for instruction in ("git clone", "pytest", "ipify", "ifconfig", "tcpdump", "printenv"):
         assert instruction not in section
 
