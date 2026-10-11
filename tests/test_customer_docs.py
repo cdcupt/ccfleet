@@ -256,10 +256,31 @@ def test_how_it_works_scopes_persistence_and_broker_outages():
     page = render("/docs/how-it-works")
     assert "plain <code>ccfleet</code> remote-terminal command uses a persistent session" in page
     assert "<code>ccfleet local</code> instead runs on your computer" in page
-    assert "local model requests require the broker to be reachable" in page
+    assert "requests require their configured gateway or bridge broker to be reachable" in page
+    assert "A configured gateway failure does not silently start a bridge fallback" in page
     assert "your slot keeps working through one" not in page
     assert "Automatic updates are disabled during a CC Fleet launch" in page
     assert "update your local Claude installation separately" in page
+
+
+def test_public_guides_distinguish_gateway_content_visibility_from_legacy_bridge():
+    from tests.test_html_document_preservation import visible_html
+
+    for path in ("/docs/guide", "/docs/how-it-works"):
+        source = render(path)
+        text = visible_html(source)
+        assert "BWH can read" in text
+        assert "--transport bridge" in text
+        assert "endpoint key" in text and "own slot" in text
+        assert 'href="/docs/library/docs/public-gateway.html"' in source
+    how = render("/docs/how-it-works")
+    assert how.index("HTTPS gateway model request path") < how.index("Legacy bridge transport")
+    assert 'aria-labelledby="gateway-diag-t gateway-diag-d"' in how
+    assert 'aria-labelledby="legacy-diag-t legacy-diag-d"' in how
+    assert "It does not receive your prompts, conversations, files" not in how
+    assert "Those heartbeat reports do not contain prompts" in how
+    assert "direct HTTPS gateway on BWH receives and processes model requests" in how
+    assert "ccfleet gateway setup" in how and "without pairing again" in how
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():

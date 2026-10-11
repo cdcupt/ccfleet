@@ -782,6 +782,24 @@ def test_the_privacy_page_says_what_the_operator_can_see():
     assert "technically read any slot&#x27;s files, and its Claude credential" in page
 
 
+def test_the_privacy_page_discloses_gateway_contents_and_separate_endpoint_credentials():
+    from tests.test_html_document_preservation import visible_html
+
+    source = usersite.privacy_page(Config())
+    text = visible_html(source)
+    assert "BWH can read model requests and responses" in text
+    assert "TLS ends at BWH" in text
+    assert "--transport bridge" in text and "That byte broker carries ciphertext" in text
+    assert "separate revocable endpoint key" in text
+    assert "selected own slot IDs and current rental bindings" in text
+    assert "one bound Claude account per slot" in text
+    assert "Native Claude on the slot owns credential writing and renewal" in text
+    assert "This filtering does not redact arbitrary prompts, tool results or file contents" in text
+    assert "heartbeat reports do not include prompts" in text
+    assert "gateway on BWH receives and processes the contents" in text
+    assert 'href="/docs/library/docs/public-gateway.html"' in source
+
+
 def test_the_policy_lists_every_field_kept_about_a_person():
     """A privacy policy that leaves a stored field out is wrong, however kind its
     words. Each phrase stands for a column that holds something about you."""

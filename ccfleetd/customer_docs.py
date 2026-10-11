@@ -21,7 +21,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-09-29"
+DOCS_UPDATED = "2026-10-11"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -319,8 +319,9 @@ def _client_tools() -> str:
         '<h3 id="simple-verification">Simple readiness and response checks</h3>'
         '<p>With the current native-local client, first run this in your normal terminal, '
         'not inside Claude:</p><pre><code>ccfleet local --check</code></pre>'
-        '<p>This checks local Claude executable availability and assigned-slot relay '
-        'readiness. It does not scan projects, start a Claude session or make a model '
+        '<p>This checks local Claude executable availability and the configured gateway '
+        'or legacy bridge&#x27;s slot readiness. It does not scan projects, start a Claude session '
+        'or make a model '
         'request. Readiness is not proof that Anthropic will accept the next request.</p>'
         '<p>For an optional basic response check, open <code>ccfleet local</code> and '
         'paste this prompt:</p>'
@@ -332,8 +333,11 @@ def _client_tools() -> str:
         'is not an enforced privacy safeguard. Native context or hooks can still exist, '
         'and context may include local OS or directory information. Do not ask Claude '
         'to print real IPs, locations or environment values just to check privacy: those '
-        'outputs would enter the conversation. BWH sees connection metadata; for relayed '
-        'model requests, Anthropic sees the slot&#x27;s outbound IP. Other native/tool '
+        'outputs would enter the conversation. BWH sees connection metadata; the direct '
+        'HTTPS gateway also reads model request and response contents. The explicit '
+        '<code>--transport bridge</code> route keeps its inner SSH stream encrypted through '
+        'the BWH byte broker. For relayed model requests, Anthropic sees the slot&#x27;s '
+        'outbound IP. Other native/tool '
         'network connections are outside that statement.</p>'
         '<h3 id="management-mcp">Optional read-only management MCP (client 0.2.2)</h3>'
         '<p>Run <code>ccfleet mcp serve</code> as a local stdio MCP server, or explicitly add '
@@ -452,15 +456,25 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         'and retry. Adding <code>--yes</code> explicitly authorizes this cancellation.</li>'
         '<li><strong>Wait for readiness.</strong> Existing native Claude is preserved; '
         'if missing, setup installs the original local CLI from the fixed vendor URL. '
-        'Setup waits for a new device key to reach the slot and checks access without '
+        'Setup checks the configured route and waits for required slot access without '
         'uploading project files or making a model request. Old '
         '<code>ccfleet-connect</code> cleanup runs only after readiness succeeds.</li>'
         '<li><strong>Open a new terminal, then choose your project:</strong></li></ol>'
         '<pre><code>cd ~/code/my-project\nccfleet start</code></pre>'
         '<p>Original Claude Code now runs on your computer with local files, tools, '
-        'settings and history. Supported model requests use your assigned slot. Setup '
+        'settings and history. When gateway access is available, a fresh pairing creates '
+        'a separate endpoint key and model requests use HTTPS to our domain on BWH. Setup '
         'itself starts no Claude conversation. Choose new, continue or resume from the '
         'menu, or run <code>ccfleet local</code> directly.</p>'
+        '<p>If a previously paired computer is still using the bridge, enroll the '
+        'gateway with <code>ccfleet gateway setup</code>. Then use <code>ccfleet local</code> '
+        'normally. On <a href="/account#gateway">API endpoints</a>, select only one own '
+        'slot for a fixed account, or several own slots in priority order with conversation '
+        'affinity or safe failover. The endpoint key is separate from your Claude credential. '
+        'The gateway needs no local HTTP listener or laptop-side SSH for model requests. '
+        'Use <code>ccfleet local --transport bridge</code> to choose the legacy bridge '
+        'explicitly. See the <a href="/docs/library/docs/public-gateway.html">public '
+        'gateway guide</a> for routing and privacy.</p>'
         '<p>The installer verifies its digest-pinned helper. Pairing, configuration, '
         'slot sign-in and existing remote files stay in place. PATH changes preserve '
         'existing shell settings and keep a backup. Existing terminals keep their old '
@@ -535,9 +549,13 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
         '<p>Only supported model endpoints use the relay. MCP servers, hooks, plugins, '
         'shell tools, updates and other native CLI services can connect directly from '
         'the laptop. Optional telemetry controls are not an all-traffic firewall.</p>'
-        '<p>BWH sees your incoming IP address and connection metadata but cannot decrypt '
-        'the inner SSH model stream. SSH exposes client version; remote-terminal sessions '
-        'also send terminal dimensions. '
+        '<p>The direct HTTPS gateway terminates TLS on BWH, so <strong>BWH can read model '
+        'requests and responses</strong> before forwarding them to your selected slot. '
+        'Relevant prompts, tool results and file contents reach BWH, the slot and Anthropic. '
+        'Only the explicit <code>--transport bridge</code> route keeps the model stream '
+        'inside laptop-to-slot SSH: its BWH byte broker sees your incoming IP address and '
+        'connection metadata but cannot decrypt the inner SSH model stream. SSH exposes '
+        'client version; remote-terminal sessions also send terminal dimensions. '
         'Slot administrators have root and can inspect or alter relayed requests and '
         'responses, which can influence local tool actions. Trust and native local '
         'permissions remain important. Each paired device remains separately revocable.</p></div>'
@@ -663,38 +681,75 @@ def guide(cfg: Config, viewer: Optional[Viewer] = None, *,
 
 # -- how it works -----------------------------------------------------------------------
 
-#: Portrait, so it stays legible at phone width. The broker is in the network
-#: path, but the SSH session inside its WebSocket tunnel is encrypted through
-#: to the slot.
-PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img" aria-labelledby="diag-t diag-d">
-<title id="diag-t">Where your work runs</title>
-<desc id="diag-d">Original Claude Code runs locally. Supported model requests travel through
-encrypted SSH and the CC Fleet broker to the assigned slot relay, then Anthropic.
+#: The explicit legacy bridge, distinct from the current public HTTPS gateway.
+PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img"
+aria-labelledby="legacy-diag-t legacy-diag-d">
+<title id="legacy-diag-t">Legacy bridge transport</title>
+<desc id="legacy-diag-d">With --transport bridge, original Claude Code runs locally.
+A local HTTP bridge carries supported model requests through encrypted SSH and
+the BWH byte broker to the assigned slot relay, then Anthropic.
 Other native CLI services can connect directly from the laptop.</desc>
-<defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
+<defs><marker id="legacy-ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
 orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
-<marker id="af" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
+<marker id="legacy-af" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
 orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="box you" x="20" y="14" width="320" height="70" rx="12"/>
 <text x="180" y="44" text-anchor="middle">Local original Claude Code</text>
 <text class="sub" x="180" y="66" text-anchor="middle">local files, tools and history</text>
-<path class="arrow" d="M180,88 L180,126" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path class="arrow" d="M180,88 L180,126" marker-start="url(#legacy-ah)"
+marker-end="url(#legacy-ah)"/>
 <text class="sub" x="190" y="111">TLS + encrypted SSH</text>
 <rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
 <text x="180" y="160" text-anchor="middle">CC Fleet broker</text>
 <text class="sub" x="180" y="182" text-anchor="middle">authenticates device; relays bytes</text>
-<path class="arrow" d="M180,204 L180,242" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path class="arrow" d="M180,204 L180,242" marker-start="url(#legacy-ah)"
+marker-end="url(#legacy-ah)"/>
 <text class="sub" x="190" y="227">SSH to the slot</text>
 <rect class="slot" x="20" y="246" width="320" height="114" rx="12"/>
 <text x="180" y="276" text-anchor="middle">Your slot, on our machine</text>
 <text class="sub" x="180" y="300" text-anchor="middle">fixed upstream model relay</text>
 <text class="sub" x="180" y="322" text-anchor="middle">only your bound Claude account</text>
 <text class="sub" x="180" y="344" text-anchor="middle">credential stays on the slot</text>
-<path class="arrow" d="M180,364 L180,408" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path class="arrow" d="M180,364 L180,408" marker-start="url(#legacy-ah)"
+marker-end="url(#legacy-ah)"/>
 <text class="sub" x="190" y="392">Claude traffic from the slot</text>
 <rect class="box" x="20" y="412" width="320" height="82" rx="12"/>
 <text x="180" y="444" text-anchor="middle">Anthropic</text>
 <text class="sub" x="180" y="468" text-anchor="middle">relevant prompts and tool context</text>
+</svg>"""
+
+GATEWAY_PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img"
+aria-labelledby="gateway-diag-t gateway-diag-d">
+<title id="gateway-diag-t">HTTPS gateway model request path</title>
+<desc id="gateway-diag-d">Original Claude Code sends supported model requests over HTTPS
+to our gateway on BWH. BWH reads the request and chooses one of your selected own slots.
+A restricted SSH service connection reaches that slot, which uses its native Claude
+credential over HTTPS to Anthropic. Files, tools and history remain local.</desc>
+<defs><marker id="gateway-ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
+orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<rect class="box you" x="20" y="14" width="320" height="70" rx="12"/>
+<text x="180" y="44" text-anchor="middle">Local original Claude Code</text>
+<text class="sub" x="180" y="66" text-anchor="middle">local files, tools and history</text>
+<path class="arrow" d="M180,88 L180,126" marker-start="url(#gateway-ah)"
+marker-end="url(#gateway-ah)"/>
+<text class="sub" x="190" y="111">HTTPS + endpoint key</text>
+<rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
+<text x="180" y="160" text-anchor="middle">Our HTTPS gateway on BWH</text>
+<text class="sub" x="180" y="182" text-anchor="middle">BWH can read model contents</text>
+<path class="arrow" d="M180,204 L180,242" marker-start="url(#gateway-ah)"
+marker-end="url(#gateway-ah)"/>
+<text class="sub" x="190" y="227">Restricted service SSH</text>
+<rect class="slot" x="20" y="246" width="320" height="114" rx="12"/>
+<text x="180" y="276" text-anchor="middle">Your selected own slot</text>
+<text class="sub" x="180" y="300" text-anchor="middle">one bound Claude account</text>
+<text class="sub" x="180" y="322" text-anchor="middle">native authentication and renewal</text>
+<text class="sub" x="180" y="344" text-anchor="middle">credential stays on the slot</text>
+<path class="arrow" d="M180,364 L180,408" marker-start="url(#gateway-ah)"
+marker-end="url(#gateway-ah)"/>
+<text class="sub" x="190" y="392">HTTPS to Anthropic</text>
+<rect class="box" x="20" y="412" width="320" height="82" rx="12"/>
+<text x="180" y="444" text-anchor="middle">Anthropic</text>
+<text class="sub" x="180" y="468" text-anchor="middle">runs the model; streams the answer</text>
 </svg>"""
 
 
@@ -705,9 +760,16 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
     body = (
         '<div class="dochead"><h1>How it works</h1>'
         '<p class="lead"><code>ccfleet local</code> runs original Claude Code on your computer. '
-        'Supported model requests travel through encrypted SSH to your assigned slot relay. '
+        'With a configured gateway, supported model requests go over HTTPS to our domain '
+        'on BWH and then to one of your selected own slots. BWH can read those model contents. '
         'Plain <code>ccfleet</code> remains a remote-terminal compatibility command.</p></div>'
-        f'<div class="how"><figure class="card diagram">{PICTURE}</figure>'
+        f'<div class="how"><figure class="card diagram">{GATEWAY_PICTURE}'
+        '<figcaption>Current HTTPS gateway: no local HTTP listener or laptop-side SSH '
+        'for model requests.</figcaption><details><summary>Legacy bridge transport</summary>'
+        f'{PICTURE}<p><code>ccfleet local --transport bridge</code> uses a local HTTP bridge '
+        'and laptop-to-slot SSH through the BWH byte broker.</p></details>'
+        '<p><a href="/docs/library/docs/public-gateway.html">Public gateway architecture '
+        'and privacy</a></p></figure>'
         '<div class="how-text">'
         '<div class="card"><h2>Your slot</h2>'
         "<p>Your slot is a Linux account under the name you give it, with a private home "
@@ -722,8 +784,10 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "ccfleet&#x27;s server passes along the sign-in link and the code you paste, and "
         "never receives or keeps the resulting credential. Native Claude on the slot owns "
         "authentication and renewal. The slot relay uses that bound credential upstream, "
-        "not a credential sent to your laptop. No account rotation or pooling: one slot "
-        "keeps one account for one holder.</p></div>"
+        "not a credential sent to your laptop or BWH. One slot keeps one bound account "
+        "for one holder. A gateway endpoint may select one or several of that holder's "
+        "own slots; it does not combine credentials within a slot or use another user's "
+        "account.</p></div>"
         '<div class="card"><h2>Credential maintenance</h2>'
         '<p>Before access credentials expire, the machine attempts bounded renewal '
         'through native Claude in an isolated maintenance session. It checks that expiry '
@@ -740,12 +804,17 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         'model request or project scan. Support export is an explicit local-file operation, '
         'not an upload of your project or conversation.</p></div>'
         '<div class="card"><h2>Use it from anywhere</h2>'
-        "<p>Install <code>ccfleet</code> on each computer you use. It creates a device key, "
-        "pairs once with your held slot, and starts the local workflow without an SSH command. "
-        "The broker accepts an authenticated WebSocket and passes the already encrypted SSH "
-        "stream to that slot. It cannot read model request contents. A forced entrypoint "
-        "permits only the fixed relay and compatibility protocols, with forwarding disabled. "
-        "The model destination is not caller-selected.</p></div>"
+        "<p>Install <code>ccfleet</code> on each computer you use. A fresh setup pairs the "
+        "device and enrolls an endpoint key when gateway access is available. Previously "
+        "paired computers can run <code>ccfleet gateway setup</code> without pairing again. "
+        "Local Claude sends model requests directly over HTTPS using that separate key. "
+        "Choose one own slot, or an ordered own-slot pool with conversation affinity or safe "
+        "failover. BWH uses a restricted inference-only SSH key to the selected slot.</p>"
+        "<p>The explicit <code>--transport bridge</code> alternative starts a local HTTP "
+        "listener and sends laptop-to-slot SSH through an authenticated WebSocket. Its BWH "
+        "byte broker cannot read that encrypted model stream. The HTTPS gateway terminates "
+        "TLS on BWH and can read the stream's contents. Both routes keep the model "
+        "destination fixed; it is not caller-selected.</p></div>"
         '<div class="card"><h2>Native local files and history</h2>'
         '<p>Claude, its tools, settings and conversations run locally. There is no folder '
         'upload, mount or push/pull step, and no CC Fleet filesystem cap. Native permissions '
@@ -757,21 +826,26 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code is "
         "signed in, the email address and plan of the Claude account signed in on it, how "
         "much of your usage limits is used, token counts per hour, and which CC Fleet devices "
-        "are paired. It does not receive your prompts, conversations, files or Claude "
-        "credential. "
+        "are paired. Those heartbeat reports do not contain prompts, conversations, file "
+        "contents or the Claude credential. Separately, the direct HTTPS gateway on BWH "
+        "receives and processes model requests and responses, including any prompt, file "
+        "or tool-result context they contain. Its endpoint key is stored only as a hash "
+        "on the server; the native Claude credential remains on the slot. "
         '<a href="/privacy">The privacy page</a> lists everything, and for how long.</p>'
         "<p>Claude Code on your slot sends Anthropic less than it would by default: its "
         "error reports, bug reports and feedback surveys are switched off. The machines "
         "keep their clocks on UTC; your page shows times in your own time zone. That does "
-        "not make the service anonymous: BWH sees your connection IP, SSH has transport "
+        "not make the service anonymous: BWH sees your connection IP and the gateway's "
+        "model contents; SSH has transport "
         "metadata, and native prompts, tool results and file contents can identify you. "
         "Selected headers and top-level structured metadata are removed, but native system "
         "prompts can still include local OS, working directory or environment details. "
         "MCP servers, hooks, plugins, tools, updates and other native services can connect "
         "directly from the laptop. Optional telemetry controls are not an all-traffic firewall.</p>"
         "<p>One limit is worth saying plainly: the machines are ours, and their "
-        "administrators have root, so they can technically read any slot. No feature does "
-        "this and we do not look, but nothing can make it impossible. Keep nothing in a slot "
+        "administrators have root, so they can technically read any slot. The operator "
+        "console does not display native credentials or full file contents, but that "
+        "does not prevent an administrator from inspecting them. Keep nothing in a slot "
         "that you could not accept an administrator being able to read.</p></div>"
         '<div class="card"><h2>Kept up to date</h2><ul>'
         '<li><strong>Local Claude Code</strong>: CC Fleet setup preserves an existing '
@@ -793,8 +867,8 @@ def how_it_works(cfg: Config, viewer: Optional[Viewer] = None, *,
         "email you when your slot&#x27;s machine has been down for five minutes, and again "
         "when it is back. An outage of this website is told afterwards, since the website "
         "is what sends them. Existing slot processes may keep running, but local model "
-        "requests require the broker to be reachable; a broker outage interrupts that "
-        "path.</li></ul></div>"
+        "requests require their configured gateway or bridge broker to be reachable. "
+        "A configured gateway failure does not silently start a bridge fallback.</li></ul></div>"
         '<div class="card"><h2>Giving a slot back</h2>'
         "<p>When you give a slot back, the machine stops everything running in it and deletes "
         "your Linux account and every file in it. The slot is offered to anybody else only "

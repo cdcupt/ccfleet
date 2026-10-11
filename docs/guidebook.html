@@ -37,7 +37,8 @@ stay on the slot.</p>
 <p>This current-client check is separate from the historical hosted-terminal
 instructions below. With the current native-local client, run
 <code>ccfleet local --check</code> in your normal terminal, not inside Claude.</p>
-<p>It checks local Claude executable availability and assigned-slot relay readiness.
+<p>It checks local Claude executable availability and the configured gateway or
+legacy bridge's slot readiness.
 It does not scan projects, start a Claude session or make a model request.
 Readiness is not proof that Anthropic will accept the next request.</p>
 <p>For an optional basic response check, open <code>ccfleet local</code> and paste:</p>
@@ -49,11 +50,15 @@ routing, anonymity or zero metadata disclosure. The no-tools instruction is not
 an enforced privacy safeguard. Native context or hooks can still exist, and context
 may include local OS or directory information. Do not ask Claude to print real IPs,
 locations or environment values just to check privacy: those outputs would enter
-the conversation. BWH sees connection metadata; for relayed model requests,
-Anthropic sees the slot's outbound IP. Other native/tool network connections are
+the conversation. BWH sees connection metadata; with the direct HTTPS gateway,
+BWH also reads model request and response contents. Only the explicit
+<code>--transport bridge</code> route keeps its inner SSH model stream encrypted
+through the BWH byte broker. For relayed model requests, Anthropic sees the slot's
+outbound IP. Other native/tool network connections are
 outside that statement.</p>
 <p><a href="https://ccfleet.daichenlab.com/docs/guide#simple-verification">Current customer guide</a>
-· <a href="local-relay.html">Native local setup, sessions and privacy boundaries</a></p>
+· <a href="public-gateway.html">Current HTTPS gateway and privacy</a>
+· <a href="local-relay.html">Legacy bridge setup and privacy boundaries</a></p>
 </section>
 
 <div class="card note"><strong>The invariant</strong><p>One holder, one slot, one Claude
