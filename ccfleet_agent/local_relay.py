@@ -122,8 +122,28 @@ def read_metadata(stream: BinaryIO) -> dict[str, Any]:
     return value
 
 
-def write_metadata(stream: BinaryIO, status: int, headers: dict[str, str]) -> None:
-    data = json.dumps({"version": 2, "status": status, "headers": headers},
+class _GatewayOutput:
+    gateway_protocol = True
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self.stream = stream
+
+    def write(self, data: bytes):
+        return self.stream.write(data)
+
+    def flush(self):
+        return self.stream.flush()
+
+    def fileno(self):
+        return self.stream.fileno()
+
+
+def write_metadata(stream: BinaryIO, status: int, headers: dict[str, str], *,
+                   retryable: bool = False) -> None:
+    value = {"version": 2, "status": status, "headers": headers}
+    if getattr(stream, "gateway_protocol", False):
+        value["retryable"] = bool(retryable)
+    data = json.dumps(value,
                       separators=(",", ":")).encode()
     write_all(stream, struct.pack("!I", len(data)) + data)
 
@@ -134,8 +154,9 @@ def write_chunk(stream: BinaryIO, data: bytes) -> None:
     write_all(stream, struct.pack("!I", len(data)) + data)
 
 
-def send_error(stream: BinaryIO, status: int, message: str) -> None:
-    write_metadata(stream, status, {"content-type": "application/json"})
+def send_error(stream: BinaryIO, status: int, message: str, *,
+               retryable: bool = False) -> None:
+    write_metadata(stream, status, {"content-type": "application/json"}, retryable=retryable)
     body = json.dumps({"type": "error", "error": {
         "type": "ccfleet_relay_error", "message": message}}).encode()
     write_chunk(stream, body)
@@ -221,7 +242,8 @@ def send_upstream_error(stream: BinaryIO, status: int, headers: dict[str, str], 
                    ("invalid_request_error", "The model request was rejected. Check your "
                     "selected model and request options."))
         category, message = errors.get(status, default)
-    write_metadata(stream, status, {**headers, "content-type": "application/json"})
+    write_metadata(stream, status, {**headers, "content-type": "application/json"},
+                   retryable=status in {401, 403, 429, 502, 503, 504, 529})
     write_chunk(stream, json.dumps({"type": "error", "error": {
         "type": category, "message": message}}, separators=(",", ":")).encode())
     write_chunk(stream, b"")
@@ -503,9 +525,12 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
               policy: Callable[[], None] = require_enabled,
               connect: Callable[[], Any] = connect_upstream,
               request_ready: Callable[[], None] = lambda: None,
-              watch: bool = False) -> int:
+              watch: bool = False, gateway: bool = False, phase: str = "any") -> int:
+    if gateway:
+        output = _GatewayOutput(output)
     connection = upstream_socket = None
     began = False
+    request_sent = False
     account = None
     request_started = None
     timings: dict[str, float] = {}
@@ -517,6 +542,9 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
     try:
         policy()
         meta = read_metadata(input_)
+        if ((phase == "ready" and meta != {"version": 2, "operation": "status"})
+                or (phase == "request" and meta.get("operation") != "request")):
+            raise RelayError(400, "invalid gateway protocol phase")
         if meta.get("operation") == "request":
             request_started = time.monotonic()
         account = bound_account(home)
@@ -581,6 +609,7 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             upstream_socket.settimeout(READ_TIMEOUT)
         # Exactly one upstream POST. No retry, redirect following or alternative
         # account exists, including after an ambiguous connection failure.
+        request_sent = True
         connection.request("POST", path, body=body, headers=headers)
         response = connection.getresponse()
         if cancelled.is_set():
@@ -632,12 +661,14 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
     except RelayError as exc:
         outcome = "cancelled" if exc.status in {409, 504} else _outcome(exc.status)
         if not began:
-            send_error(output, exc.status, str(exc))
+            send_error(output, exc.status, str(exc),
+                       retryable=not request_sent and exc.status in {401, 403, 409, 429, 503, 504})
         return 2
     except (OSError, EOFError, http.client.HTTPException):
         outcome = "connection_errors" if connection is not None else "input_errors"
         if not began:
-            send_error(output, 502, "slot inference connection failed; no request was retried")
+            send_error(output, 502, "slot inference connection failed; no request was retried",
+                       retryable=not request_sent)
         return 2
     finally:
         finished.set()
@@ -652,7 +683,8 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    if argv != ["--protocol-v2"]:
+    gateway = argv == ["--gateway-protocol-v1"]
+    if argv != ["--protocol-v2"] and not gateway:
         print("The old local relay is retired; update CC Fleet for the inference v2 protocol.",
               file=sys.stderr)
         return 2
@@ -663,8 +695,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     signal.signal(signal.SIGALRM, expired)
     signal.alarm(INPUT_TIMEOUT)
     try:
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if gateway:
+            ready = serve_one(sys.stdin.buffer, sys.stdout.buffer, home,
+                              gateway=True, phase="ready")
+            if ready:
+                return ready
+            signal.alarm(INPUT_TIMEOUT)
         return serve_one(sys.stdin.buffer, sys.stdout.buffer,
-                         Path(pwd.getpwuid(os.getuid()).pw_dir), watch=True,
+                         home, watch=True, gateway=gateway,
+                         phase="request" if gateway else "any",
                          request_ready=lambda: signal.alarm(REQUEST_TIMEOUT))
     except (OSError, BrokenPipeError):
         return 2

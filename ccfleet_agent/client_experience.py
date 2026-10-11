@@ -289,6 +289,10 @@ class Preferences:
 # All diagnostic strings are fixed. Neither exception text nor callback output
 # is copied into a report. Even a saved device name may contain personal data.
 CHECKS = {
+    "gateway_ready": ("gateway", "pass", "Your selected HTTPS gateway route is ready.",
+                      "No model request was made."),
+    "gateway_unavailable": ("gateway", "fail", "Your HTTPS gateway route is unavailable.",
+                            "Check API endpoints and slot readiness on Your slots; keep the key."),
     "ssh_ready": ("ssh", "pass", "OpenSSH is available.", "No action needed."),
     "ssh_missing": ("ssh", "fail", "OpenSSH is missing.", "Install OpenSSH, then rerun setup."),
     "claude_ready": ("claude", "pass", "Original local Claude is available.", "No action needed."),
@@ -499,6 +503,29 @@ PRIVACY = (
     "A readiness check is not proof of an actual inference route or zero metadata disclosure.",
 )
 
+GATEWAY_PRIVACY = (
+    "This check does not scan project files, read conversation history or make a model request.",
+    "Model requests use HTTPS directly; no local HTTP listener or laptop SSH carries them.",
+    "Our gateway can read model requests; Claude credentials remain on their selected slots.",
+    "Native prompts and tool results can still contain paths, OS details and private content.",
+    "Hooks, plugins, MCP servers and tools may connect directly from this computer.",
+    "A readiness check is not proof of an actual inference route or zero metadata disclosure.",
+)
+
+
+def _gateway_facts(value: Any) -> dict[str, Any]:
+    if (not isinstance(value, Mapping) or value.get("transport") != "gateway"
+            or type(value.get("ready")) is not bool
+            or not isinstance(value.get("routing"), str)
+            or value["routing"] not in {"sticky", "priority"}
+            or type(value.get("selected_count")) is not int
+            or type(value.get("eligible_count")) is not int
+            or not 1 <= value["selected_count"] <= 100
+            or not 0 <= value["eligible_count"] <= value["selected_count"]):
+        return {}
+    return {field: value[field] for field in (
+        "transport", "ready", "routing", "selected_count", "eligible_count")}
+
 
 def _check(code: str, version: str = "") -> dict[str, str]:
     identifier, state, message, advice = CHECKS[code]
@@ -631,13 +658,25 @@ def _report(
 ) -> dict[str, Any]:
     checks = []
     compatibility = {}
-    if kind == "doctor":
-        which = callbacks.get("which", shutil.which)
+    gateway = None
+    if "gateway_context" in callbacks:
         try:
-            available = bool(which("ssh")) and bool(which("ssh-keygen"))
+            observed = callbacks["gateway_context"](slot)
+            if observed is not None:
+                gateway = _gateway_facts(observed)
+                checks.append(_check("gateway_ready" if gateway.get("ready") is True
+                                     else "gateway_unavailable"))
         except Exception:
-            available = False
-        checks.append(_check("ssh_ready" if available else "ssh_missing"))
+            gateway = {}
+            checks.append(_check("gateway_unavailable"))
+    if kind == "doctor":
+        if gateway is None:
+            which = callbacks.get("which", shutil.which)
+            try:
+                available = bool(which("ssh")) and bool(which("ssh-keygen"))
+            except Exception:
+                available = False
+            checks.append(_check("ssh_ready" if available else "ssh_missing"))
         try:
             binary = callbacks["find_local_claude"]()
             if not isinstance(binary, str) or not binary:
@@ -663,74 +702,80 @@ def _report(
                 checks.append(_check("settings_conflict"))
         else:
             checks.append(_check("settings_unchecked"))
-    device = None
-    try:
-        config = callbacks["load_config"]()
-        if not isinstance(config, dict) or not isinstance(config.get("devices"), dict):
-            raise ValueError("invalid")
-    except Exception:
-        checks.append(_check("pairing_invalid"))
-    else:
+    if gateway is None:
+        device = None
         try:
-            device = callbacks["choose_device"](config, slot)
-            required = ("device_id", "device_token", "slot_id", "server", "key", "known_hosts")
-            if not isinstance(device, dict) or any(
-                not isinstance(device.get(k), str) or not device[k] for k in required
-            ):
-                device = None
-                checks.append(_check("pairing_invalid"))
-            else:
-                checks.append(_check("pairing_ready"))
+            config = callbacks["load_config"]()
+            if not isinstance(config, dict) or not isinstance(config.get("devices"), dict):
+                raise ValueError("invalid")
         except Exception:
-            device = None
-            checks.append(_check("pairing_missing"))
-    if device is not None:
-        key_ok = _safe_saved_file(device.get("key"), private=True)
-        pin_ok = _safe_saved_file(device.get("known_hosts"), private=False)
-        checks.extend(
-            (
-                _check("key_ready" if key_ok else "key_invalid"),
-                _check("pin_ready" if pin_ok else "pin_invalid"),
-            )
-        )
-        if "device_context" in callbacks:
-            try:
-                context = callbacks["device_context"](device)
-                context_checks = _device_context_checks(context)
-                checks.extend(context_checks)
-                if (context_checks[0]["code"] == "device_ready"
-                        and "compatibility" in context["slot"]):
-                    compatibility = _compatibility_report(context["slot"]["compatibility"])
-                    checks.append(_check(_compatibility_check_code(compatibility)))
-            except Exception as exc:
-                code = {
-                    401: "device_revoked",
-                    403: "device_forbidden",
-                    404: "device_unchecked",
-                }.get(_http_status(exc), "device_connection")
-                checks.append(_check(code))
+            checks.append(_check("pairing_invalid"))
         else:
-            checks.append(_check("device_unchecked"))
-        if key_ok and pin_ok:
             try:
-                callbacks["check_inference"](device, timeout=10)
-                checks.append(_check("relay_ready"))
-            except Exception as exc:
-                code = {401: "relay_renewal", 403: "relay_disabled", 409: "relay_transition"}.get(
-                    _http_status(exc), "relay_connection"
+                device = callbacks["choose_device"](config, slot)
+                required = ("device_id", "device_token", "slot_id", "server", "key", "known_hosts")
+                if not isinstance(device, dict) or any(
+                    not isinstance(device.get(k), str) or not device[k] for k in required
+                ):
+                    device = None
+                    checks.append(_check("pairing_invalid"))
+                else:
+                    checks.append(_check("pairing_ready"))
+            except Exception:
+                device = None
+                checks.append(_check("pairing_missing"))
+        if device is not None:
+            key_ok = _safe_saved_file(device.get("key"), private=True)
+            pin_ok = _safe_saved_file(device.get("known_hosts"), private=False)
+            checks.extend(
+                (
+                    _check("key_ready" if key_ok else "key_invalid"),
+                    _check("pin_ready" if pin_ok else "pin_invalid"),
                 )
-                checks.append(_check(code))
+            )
+            if "device_context" in callbacks:
+                try:
+                    context = callbacks["device_context"](device)
+                    context_checks = _device_context_checks(context)
+                    checks.extend(context_checks)
+                    if (context_checks[0]["code"] == "device_ready"
+                            and "compatibility" in context["slot"]):
+                        compatibility = _compatibility_report(context["slot"]["compatibility"])
+                        checks.append(_check(_compatibility_check_code(compatibility)))
+                except Exception as exc:
+                    code = {
+                        401: "device_revoked",
+                        403: "device_forbidden",
+                        404: "device_unchecked",
+                    }.get(_http_status(exc), "device_connection")
+                    checks.append(_check(code))
+            else:
+                checks.append(_check("device_unchecked"))
+            if key_ok and pin_ok:
+                try:
+                    callbacks["check_inference"](device, timeout=10)
+                    checks.append(_check("relay_ready"))
+                except Exception as exc:
+                    code = {401: "relay_renewal", 403: "relay_disabled",
+                            409: "relay_transition"}.get(
+                        _http_status(exc), "relay_connection"
+                    )
+                    checks.append(_check(code))
+            else:
+                checks.append(_check("relay_unchecked"))
         else:
             checks.append(_check("relay_unchecked"))
-    else:
-        checks.append(_check("relay_unchecked"))
     result = {
         "schema": 1,
         "kind": kind,
         "ok": not any(c["state"] == "fail" for c in checks),
         "checks": checks,
-        "privacy": list(PRIVACY) if privacy else [],
+        "privacy": list(GATEWAY_PRIVACY if gateway is not None else PRIVACY) if privacy else [],
     }
+    if gateway is not None:
+        result["transport"] = "gateway"
+        if gateway:
+            result["gateway"] = gateway
     if compatibility:
         result["compatibility"] = compatibility
     return result
@@ -779,8 +824,16 @@ def safe_report(report: Mapping[str, Any]) -> dict[str, Any]:
         "kind": report["kind"],
         "ok": not any(c["state"] == "fail" for c in checks),
         "checks": checks,
-        "privacy": list(PRIVACY) if report.get("privacy") else [],
+        "privacy": list(GATEWAY_PRIVACY if report.get("transport") == "gateway" else PRIVACY)
+                   if report.get("privacy") else [],
     }
+    if report.get("transport") == "gateway":
+        result["transport"] = "gateway"
+        if "gateway" in report:
+            facts = _gateway_facts(report["gateway"])
+            if not facts:
+                raise ExperienceError("unsupported gateway observation in diagnostic report")
+            result["gateway"] = facts
     if "compatibility" in report:
         compatibility = _compatibility_report(report["compatibility"])
         if not compatibility or _compatibility_check_code(compatibility) not in {
@@ -809,6 +862,10 @@ def render_report(report: Mapping[str, Any]) -> str:
         lines.append(line)
         if item["state"] != "pass":
             lines.append("  " + item["advice"])
+    if "gateway" in clean:
+        gateway = clean["gateway"]
+        lines.append("Routing: " + gateway["routing"] + "; eligible slots: "
+                     + str(gateway["eligible_count"]) + "/" + str(gateway["selected_count"]))
     if clean["privacy"]:
         lines.extend(["", "Privacy boundaries:", *clean["privacy"]])
     return "\n".join(lines)
@@ -888,7 +945,7 @@ def menu(
     if not (sys.stdin.isatty() if is_tty is None else is_tty):
         raise ExperienceError("the menu needs a terminal; use ccfleet local or ccfleet doctor")
     output_fn(
-        "CC Fleet: local Claude uses this computer's files and your assigned slot's model relay.\n"
+        "CC Fleet: local Claude uses this computer's files and your selected model route.\n"
         "1. New local conversation\n2. Continue this folder's last conversation\n"
         "3. Native local resume picker\n4. Remote terminal (slot files)\n"
         "5. This project's new-session preferences\n6. Diagnose connection\n0. Quit"

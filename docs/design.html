@@ -105,10 +105,22 @@ user. Each installed key has these restrictions:</p>
 <pre><code class="language-text">command=&quot;/usr/local/lib/ccfleet/slot-entry.sh&quot;,no-agent-forwarding,
 no-port-forwarding,no-X11-forwarding,no-user-rc
 </code></pre>
-<p>The sshd <code>Match Group ccfleet-slots</code> block independently sets the same
-<code>ForceCommand</code>, disables forwarding and reads keys only from the root-controlled
-directory. A slot can use shell tools through Claude Code but cannot replace
-its own SSH authorization or escape device revocation.</p>
+<p>The sshd <code>Match Group ccfleet-slots</code> block reads keys only from the
+root-controlled directory, requires public-key authentication, disables alternate
+key-command/CA sources and forwarding, and ignores home authorized-key files.
+Each key supplies its own forced command. A group-wide <code>ForceCommand</code>
+would override the gateway service key's narrower <code>--gateway-only</code>
+entry, so it is removed only after a read-only audit confirms every existing
+managed key has one recognized exact forced command. Unsafe files or unmanaged
+lines stop the upgrade without rewriting permissions or inventing grants.</p>
+<p>Managed Debian/Ubuntu slot accounts use an explicitly verified root-installed
+<code>/bin/dash</code> login shell. OpenSSH starts a forced command through that
+shell's noninteractive <code>-c</code> path; it must reach the trusted entrypoint
+before any holder-writable startup file can run. Bash as the login shell could
+read <code>~/.bashrc</code> first. The entry script and native maintenance still
+invoke Bash explicitly where needed. Updating the account's login shell does not
+rewrite dotfiles or end tmux sessions. Service grants fail closed on a different
+login shell while retaining ordinary device keys.</p>
 <p>sshd reads an <code>AuthorizedKeysFile</code> using the target account's credentials, so
 the path is traversable/readable (<code>/etc/ccfleet</code> 0711, key directory 0755,
 public-key files 0644) but root-owned and never holder-writable. The adjacent

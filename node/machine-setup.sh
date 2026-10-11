@@ -92,22 +92,31 @@ fetch() {  # fetch <path in the repo> <destination> <mode>
 restrict_slot_sshd() {
   local dropin="$SSHD_DROPIN_DIR/02-ccfleet-slots.conf"
   local had=no was=""
+  # Removing the coarse ForceCommand is safe only when each root-managed key
+  # already carries its own exact device/service forced command. This audit
+  # never repairs or invents a grant; unsafe existing files stop the upgrade.
+  python3 -I "$LIB_DIR/ccfleet_agent/machine.py" \
+    --audit-authorized-keys "$ETC_DIR/authorized_keys" \
+    || die "managed SSH keys failed the forced-command audit; slot SSH configuration was not changed"
   if [ -f "$dropin" ]; then
     had=yes; was="$(cat "$dropin"; printf x)"; was="${was%x}"
   fi
   mkdir -p "$SSHD_DROPIN_DIR"
   cat > "$dropin" <<SSHD
-# Slot keys live outside holder-writable homes. ForceCommand is repeated on
-# each key as defense in depth, but sshd enforces it here even if a slot tries
-# to create its own ~/.ssh/authorized_keys.
+# Slot keys live only in root-controlled files, never holder-writable homes.
+# Each audited key supplies its own forced command: a global ForceCommand
+# would override the service key's inference-only command.
 Match Group ccfleet-slots
     AuthorizedKeysFile $ETC_DIR/authorized_keys/%u
-    ForceCommand $LIB_DIR/slot-entry.sh
+    AuthorizedKeysCommand none
+    TrustedUserCAKeys none
+    AuthenticationMethods publickey
     PubkeyAuthentication yes
     PasswordAuthentication no
     KbdInteractiveAuthentication no
     AllowAgentForwarding no
     AllowTcpForwarding no
+    AllowStreamLocalForwarding no
     X11Forwarding no
     PermitTunnel no
     PermitUserRC no
@@ -138,6 +147,38 @@ make_existing_slots_key_eligible() {
     changed=$((changed + 1))
   done
   [ "$changed" -eq 0 ] || note "made $changed existing slot account(s) public-key eligible"
+}
+
+make_existing_slots_shell_safe() {
+  local members user uid groups group shell validated=""
+  python3 -I "$LIB_DIR/ccfleet_agent/machine.py" --audit-login-shell \
+    || die "the installed slot login shell is not safe; slot SSH configuration was not changed"
+  members="$(getent group ccfleet-slots 2>/dev/null | cut -d: -f4 | tr ',' ' ')"
+  # Validate the entire managed set before changing any account's login shell.
+  for user in $members; do
+    printf '%s' "$user" | grep -qE '^[a-z][a-z0-9_-]{1,31}$' \
+      || die "the slot group contains an invalid account name"
+    uid="$(id -u "$user")"
+    { [ "$uid" -ge 1000 ] && [ "$uid" -le 59999 ]; } \
+      || die "$user is not an ordinary managed slot account"
+    groups="$(id -nG "$user")"
+    printf '%s\n' "$groups" | tr ' ' '\n' | grep -qx ccfleet-slots \
+      || die "$user is not a managed slot account"
+    for group in sudo admin wheel root docker lxd libvirt kvm adm disk shadow staff; do
+      if printf '%s\n' "$groups" | tr ' ' '\n' | grep -qx "$group"; then
+        die "$user has a privileged group; refusing to change its login shell"
+      fi
+    done
+    validated="$validated $user"
+  done
+  for user in $validated; do
+    shell="$(getent passwd "$user" | cut -d: -f7)"
+    [ -n "$shell" ] || die "could not read $user's login shell"
+    if [ "$shell" != /bin/dash ]; then
+      usermod -s /bin/dash "$user" \
+        || die "could not set the protected login shell for $user"
+    fi
+  done
 }
 
 step "1/6  packages"
@@ -196,6 +237,7 @@ note "$ETC_DIR/agent.env, readable by root only"
 # create it implicitly: existing owner/legacy machines must not gain access.
 
 step "4/6  slot SSH restrictions"
+make_existing_slots_shell_safe
 make_existing_slots_key_eligible
 restrict_slot_sshd
 note "slot keys are root-managed; project access stays off without a separate operator policy"

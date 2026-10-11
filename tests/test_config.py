@@ -107,3 +107,28 @@ def test_a_contact_address_that_is_not_one_address_is_refused(raw):
     """It goes on a public page, so it is checked rather than trusted."""
     with pytest.raises(ConfigError, match="CONTACT_EMAIL"):
         Config.from_env({"CCFLEET_CONTACT_EMAIL": raw})
+
+
+@pytest.mark.parametrize("url", [
+    "http://fleet.example.com", "https://name:password@fleet.example.com",
+    "https://fleet.example.com/v1/messages", "https://fleet.example.com?key=secret",
+    "https://fleet.example.com#fragment", "file:///tmp/service", "https://",
+])
+def test_gateway_refuses_insecure_or_ambiguous_public_origin(url):
+    from tests.test_gateway_end_to_end import public_key
+
+    with pytest.raises(ConfigError, match="GATEWAY"):
+        Config.from_env({"CCFLEET_GATEWAY_ENABLED": "true",
+                         "CCFLEET_GATEWAY_SSH_KEY_PATH": "/run/ccfleet/key",
+                         "CCFLEET_GATEWAY_SSH_PUBLIC_KEY": public_key(),
+                         "CCFLEET_PUBLIC_URL": url})
+
+
+@pytest.mark.parametrize("url", ["https://fleet.example.com", "http://127.0.0.1:8110"])
+def test_gateway_accepts_https_or_local_test_origin(url):
+    from tests.test_gateway_end_to_end import public_key
+
+    assert Config.from_env({"CCFLEET_GATEWAY_ENABLED": "true",
+                            "CCFLEET_GATEWAY_SSH_KEY_PATH": "/run/ccfleet/key",
+                            "CCFLEET_GATEWAY_SSH_PUBLIC_KEY": public_key(),
+                            "CCFLEET_PUBLIC_URL": url}).gateway_ready

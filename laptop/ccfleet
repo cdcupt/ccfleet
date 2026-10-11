@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""ccfleet CLI: the original Claude Code interface, running on your slot.
+"""ccfleet CLI: original Claude Code with the user's selected hosted accounts.
 
-The local process owns no Claude credential. It opens an authenticated WSS
-byte path through the ccfleet broker, then OpenSSH provides end-to-end
-encryption and host verification to the assigned slot. A forced remote entry
-attaches to a persistent tmux session whose program is the original ``claude``.
-The ``local`` command runs the original local Claude CLI and tools. Its model
-requests cross an ephemeral authenticated loopback bridge and the assigned
-slot's inference relay. Remote terminal and retired filesystem cleanup remain
-available; no folder upload or mount is needed for local Claude.
+The local process owns no provider credential. A configured gateway sends model
+requests directly over HTTPS using a separate revocable endpoint key, without a
+local HTTP listener or laptop SSH. Explicit legacy bridge launches use an
+authenticated WSS byte path and pinned OpenSSH to the assigned slot. Remote
+terminal sessions retain their existing forced SSH/tmux entry. Files, tools,
+preferences and native Claude history remain local for the ``local`` command.
 """
 
 from __future__ import annotations
@@ -49,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
-CLIENT_VERSION = "0.2.4"
+CLIENT_VERSION = "0.2.5"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -68,7 +66,7 @@ PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1d
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
 INFERENCE_CLIENT_SHA256 = "8ee72d4c67dcb6098c585d472b10409842c9728007694312e7df44fc033c2f2a"
-CLIENT_EXPERIENCE_SHA256 = "9979eb9a82bd9debcf0055a8b993514d26c315d1134790e34cb6b77a069c499f"
+CLIENT_EXPERIENCE_SHA256 = "623beb9f40aa00417c0776e4676de786dbd92dd4b663cbf22434a6c8c638fe16"
 LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
 CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
 SETUP_WAIT_SECONDS = 180
@@ -135,14 +133,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
-             method: str = "POST") -> dict[str, Any]:
+             method: str = "POST", *, timeout: float = 20) -> dict[str, Any]:
     body = json.dumps(payload).encode() if payload is not None else b""
     request = urllib.request.Request(
         url, data=body, method=method,
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": "application/json", "Accept": "application/json"})
     try:
-        with urllib.request.build_opener(_NoRedirect()).open(request, timeout=20) as response:
+        with urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
             result = json.loads(response.read(256 * 1024).decode())
     except urllib.error.HTTPError as exc:
         try:
@@ -156,6 +154,250 @@ def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
         raise CliError("ccfleet returned an invalid response")
     return result
 
+
+
+def _gateway_url(value: Any) -> str:
+    """A credential may be sent only to a clean HTTPS endpoint (loopback in tests)."""
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        raise CliError("gateway Base URL is invalid")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError as exc:
+        raise CliError("gateway Base URL is invalid") from exc
+    local = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    if (parsed.scheme != "https" and not local or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment or parsed.path not in ("", "/")
+            or any(ord(c) < 33 or ord(c) == 127 for c in value)):
+        raise CliError("gateway Base URL must be an HTTPS origin without credentials or a path")
+    try:
+        _port = parsed.port
+    except ValueError as exc:
+        raise CliError("gateway Base URL port is invalid") from exc
+    return value.rstrip("/")
+
+
+def _gateway_profile(value: Any) -> dict[str, Any]:
+    if (not isinstance(value, dict) or type(value.get("version")) is not int
+            or value["version"] != 1
+            or not isinstance(value.get("secret"), str)
+            or not re.fullmatch(r"ccf_api_[A-Za-z0-9_-]{43}", value["secret"])
+            or not isinstance(value.get("key_id"), str) or not value["key_id"]
+            or not isinstance(value.get("mode"), str)
+            or value["mode"] not in {"sticky", "priority"}
+            or not isinstance(value.get("slot_ids"), list) or not value["slot_ids"]
+            or len(value["slot_ids"]) > 100
+            or any(not isinstance(s, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", s)
+                   for s in value["slot_ids"])
+            or len(set(value["slot_ids"])) != len(value["slot_ids"])
+            or not isinstance(value.get("device_id"), str) or not value["device_id"]):
+        raise CliError("saved gateway configuration is invalid; rerun ccfleet gateway setup")
+    result = dict(value)
+    result["base_url"] = _gateway_url(value.get("base_url"))
+    return result
+
+
+def load_gateway() -> Optional[dict[str, Any]]:
+    """Keep endpoint secrets out of the pairing config and all diagnostic exports."""
+    try:
+        directory = os.open(home(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise CliError("gateway directory must be private and owned by this user")
+        try:
+            descriptor = os.open("gateway.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077 or info.st_nlink != 1):
+                raise CliError("gateway configuration must be a private user-owned file")
+            raw = stream.read(32769)
+        if len(raw) > 32768:
+            raise CliError("gateway configuration is too large")
+        return _gateway_profile(json.loads(raw))
+    except (OSError, ValueError) as exc:
+        raise CliError("gateway configuration could not be read safely") from exc
+    finally:
+        os.close(directory)
+
+
+def save_gateway(value: dict[str, Any]) -> None:
+    checked = _gateway_profile(value)
+    if home().is_symlink():
+        raise CliError("gateway directory must not be a symbolic link")
+    home().mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory = os.open(home(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary = ".gateway-" + secrets.token_hex(16)
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise CliError("gateway directory must be private and owned by this user")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(checked, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, "gateway.json", src_dir_fd=directory, dst_dir_fd=directory)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=directory)
+        os.close(directory)
+
+
+def check_gateway(profile: dict[str, Any], slot_id: str = "", *,
+                  timeout: Optional[float] = None) -> dict[str, Any]:
+    suffix = "?slot=" + urllib.parse.quote(slot_id, safe="") if slot_id else ""
+    try:
+        options = {"timeout": timeout} if timeout is not None else {}
+        answer = api_json(profile["base_url"] + "/api/gateway/status" + suffix,
+                          profile["secret"], method="GET", **options)
+    except CliError as exc:
+        raise CliError("gateway readiness check failed; check Your slots and API endpoints. "
+                       "No model request was sent and no bridge fallback was started",
+                       status=exc.status,
+                       code="connection" if exc.status is None or exc.status >= 500
+                       or exc.status == 429 else "gateway_denied") from None
+    current = answer.get("key")
+    if isinstance(current, dict):
+        refreshed = _gateway_profile({**profile, "slot_ids": current.get("slot_ids"),
+                                      "mode": current.get("mode")})
+        if current.get("id") != profile["key_id"]:
+            raise CliError("gateway returned a different endpoint identity")
+        profile.update(refreshed)
+    if answer.get("ready") is not True:
+        raise CliError("no selected gateway slot is ready; check Your slots. "
+                       "No model request or bridge fallback was started", code="gateway_pending")
+    return answer
+
+
+def wait_for_gateway_setup(profile: dict[str, Any]) -> None:
+    """Wait only for read-only readiness; enrollment and model requests are never retried."""
+    deadline = time.monotonic() + SETUP_WAIT_SECONDS
+    waiting = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CliError("gateway configuration is saved, but readiness is not yet confirmed. "
+                           "Rerun ccfleet gateway setup with the same slot selection; "
+                           "no new key, model request or bridge fallback is needed")
+        try:
+            check_gateway(profile, timeout=min(20, remaining))
+            return
+        except CliError as exc:
+            if exc.code not in {"connection", "gateway_pending"}:
+                raise CliError("gateway configuration is saved, "
+                               "but its readiness check was denied. "
+                               "Check API endpoints on Your slots; no model request was sent",
+                               status=exc.status) from None
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            if not waiting:
+                print("Gateway configured. Waiting for selected slots to accept the connection...",
+                      file=sys.stderr, flush=True)
+                waiting = True
+            time.sleep(min(5, remaining))
+
+
+def gateway_for_launch(config: dict[str, Any], device: dict[str, Any],
+                       transport: str = "auto") -> Optional[dict[str, Any]]:
+    if transport == "bridge":
+        return None
+    profile = load_gateway()
+    if profile is None:
+        if transport == "gateway":
+            raise CliError("run ccfleet gateway setup to configure direct HTTPS API access")
+        return None
+    pairing = config.get("devices", {}).get(profile["device_id"])
+    if (not isinstance(pairing, dict) or not isinstance(pairing.get("server"), str)
+            or _gateway_url(pairing["server"]) != profile["base_url"]
+            or _gateway_url(device.get("server")) != profile["base_url"]):
+        raise CliError("gateway endpoint does not match the selected pairing; "
+                       "rerun ccfleet gateway setup or choose --transport bridge")
+    return profile
+
+
+def cmd_gateway(args: argparse.Namespace) -> int:
+    config = load_config()
+    device = choose_device(config, args.slot)
+    if args.gateway_action in (None, "status"):
+        profile = gateway_for_launch(config, device, "gateway")
+        check_gateway(profile)
+        print("Direct HTTPS gateway ready.\nBase URL: " + profile["base_url"]
+              + "\nRouting: " + profile["mode"] + "\nSelected slots: "
+              + ", ".join(profile["slot_ids"]))
+        return 0
+    if args.gateway_action == "remove":
+        profile = load_gateway()
+        if profile is not None:
+            profile = gateway_for_launch(config, device, "gateway")
+            # Revocation happens first: losing a reply must never silently leave a live key.
+            api_json(profile["base_url"] + "/api/cli/gateway/revoke",
+                     device["device_token"], {"key_id": profile["key_id"]})
+            (home() / "gateway.json").unlink()
+        print("Gateway key revoked and local gateway configuration removed.")
+        return 0
+    server = _gateway_url(device.get("server"))
+    options = api_json(server + "/api/cli/gateway/options", device["device_token"], method="GET")
+    if options.get("available") is not True or _gateway_url(options.get("base_url")) != server:
+        raise CliError("direct HTTPS API access is not enabled on this server")
+    slots = options.get("slots")
+    if (not isinstance(slots, list) or len(slots) > 100
+            or any(not isinstance(s, dict) or not isinstance(s.get("id"), str)
+                   or not isinstance(s.get("name"), str) for s in slots)):
+        raise CliError("server returned invalid own-slot choices")
+    selected = []
+    for choice in args.slots or [device["slot_id"]]:
+        matches = [s["id"] for s in slots if choice in (s["id"], s["name"])]
+        if len(matches) != 1 or matches[0] in selected:
+            raise CliError("choose each of your own slots once, using its name or id")
+        selected.append(matches[0])
+    previous = load_gateway()
+    if (not getattr(args, "replace", False) and previous is not None
+            and previous["base_url"] == server
+            and previous["device_id"] == device["device_id"]
+            and previous["slot_ids"] == selected and previous["mode"] == args.routing):
+        wait_for_gateway_setup(previous)
+        if previous["slot_ids"] == selected and previous["mode"] == args.routing:
+            print("Existing gateway configuration kept. Base URL: " + server
+                  + "\nRun ccfleet local.")
+            return 0
+    answer = api_json(server + "/api/cli/gateway", device["device_token"],
+                      {"name": args.name or "This computer", "slot_ids": selected,
+                       "mode": args.routing})
+    key = answer.get("key")
+    if not isinstance(key, dict):
+        raise CliError("server returned incomplete gateway configuration")
+    profile = _gateway_profile({"version": 1, "base_url": answer.get("base_url"),
+                                "secret": answer.get("secret"), "key_id": key.get("id"),
+                                "mode": key.get("mode"), "slot_ids": key.get("slot_ids"),
+                                "device_id": device["device_id"]})
+    if profile["base_url"] != server or profile["slot_ids"] != selected:
+        raise CliError("server returned a different endpoint or slot selection")
+    try:
+        save_gateway(profile)
+    except (CliError, OSError, ValueError):
+        with contextlib.suppress(CliError):
+            api_json(server + "/api/cli/gateway/revoke", device["device_token"],
+                     {"key_id": profile["key_id"]})
+        raise CliError("gateway key could not be saved safely; "
+                       "check API endpoints before retrying") from None
+    wait_for_gateway_setup(profile)
+    if previous is not None and previous["base_url"] == server:
+        print("The previous endpoint key was kept so existing launches can finish. "
+              "Revoke older keys in API endpoints when they are no longer used.", file=sys.stderr)
+    print("Gateway configured. Your private endpoint key was saved without displaying it.\n"
+          "Base URL: " + profile["base_url"] + "\nRun ccfleet local. "
+          "Model requests use HTTPS directly; no local HTTP listener or laptop SSH is needed.\n"
+          "Manage routing and revoke keys on " + server + "/account#gateway")
+    return 0
 
 def generate_key() -> tuple[Path, str]:
     if shutil.which("ssh-keygen") is None:
@@ -245,6 +487,8 @@ def cmd_login(args: argparse.Namespace) -> int:
             "host_alias": alias,
             "server": server,
         }
+        if answer.get("gateway_available") is True:
+            config["devices"][device_id]["gateway_available"] = True
         config["active"] = device_id
         save_config(config)
     except BaseException:
@@ -748,6 +992,44 @@ def _local_options(values: dict[str, Any]) -> argparse.Namespace:
     return args
 
 
+
+def gateway_diagnostic_context(slot: str = "") -> Optional[dict[str, Any]]:
+    """Return closed, aggregate facts only; never provider/key/device secrets or paths."""
+    profile = load_gateway()
+    if profile is None:
+        return None
+    config = load_config()
+    device = choose_device(config, profile["device_id"])
+    profile = gateway_for_launch(config, device, "gateway")
+    answer = api_json(profile["base_url"] + "/api/gateway/status", profile["secret"], method="GET")
+    current = answer.get("key")
+    if isinstance(current, dict):
+        if current.get("id") != profile["key_id"]:
+            raise CliError("gateway returned a different endpoint identity")
+        profile = _gateway_profile({**profile, "slot_ids": current.get("slot_ids"),
+                                    "mode": current.get("mode")})
+    entries = answer.get("slots")
+    if not isinstance(entries, list):
+        entries = []
+    eligible = sum(1 for entry in entries if isinstance(entry, dict)
+                   and (entry.get("ready") is True or entry.get("eligible") is True))
+    if slot:
+        matches = [entry.get("id") for entry in entries if isinstance(entry, dict)
+                   and slot in (entry.get("id"), entry.get("name"))
+                   and entry.get("id") in profile["slot_ids"]]
+        if len(matches) != 1:
+            selected = choose_device(config, slot)["slot_id"]
+            if selected not in profile["slot_ids"]:
+                raise CliError("slot is not selected for this endpoint")
+        else:
+            selected = matches[0]
+        answer = api_json(profile["base_url"] + "/api/gateway/status?slot="
+                          + urllib.parse.quote(selected, safe=""), profile["secret"], method="GET")
+        eligible = 1 if answer.get("ready") is True else 0
+    return {"transport": "gateway", "ready": answer.get("ready") is True,
+            "routing": profile["mode"], "selected_count": 1 if slot else len(profile["slot_ids"]),
+            "eligible_count": eligible}
+
 def experience_callbacks() -> dict[str, Any]:
     def launch_local(values: dict[str, Any]) -> int:
         return cmd_local(_local_options(values))
@@ -763,6 +1045,7 @@ def experience_callbacks() -> dict[str, Any]:
     return {"load_config": load_config, "choose_device": choose_device,
             "find_local_claude": find_local_claude, "check_managed_route": check_managed_route,
             "check_inference": check_inference, "device_context": device_context,
+            "gateway_context": gateway_diagnostic_context,
             "launch_local": launch_local, "launch_remote": launch_remote}
 
 
@@ -1074,7 +1357,21 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"Already paired with {device['slot_name']}; keeping this device and its history.")
     print("[3/5] Checking the slot without uploading files or making a model request...",
           file=sys.stderr, flush=True)
-    wait_for_setup(device, newly_paired=newly_paired)
+    gateway = load_gateway()
+    enrolled_gateway = gateway is None and device.get("gateway_available") is True
+    if enrolled_gateway:
+        cmd_gateway(argparse.Namespace(gateway_action="setup", slot=device["device_id"],
+                                       slots=[device["slot_id"]], routing="sticky",
+                                       name=args.name or "This computer"))
+        gateway = load_gateway()
+    if gateway is not None:
+        gateway = gateway_for_launch(load_config(), device, "gateway")
+        if newly_paired and not enrolled_gateway:
+            wait_for_gateway_setup(gateway)
+        elif not enrolled_gateway:
+            check_gateway(gateway)
+    else:
+        wait_for_setup(device, newly_paired=newly_paired)
     print("[4/5] Checking previous connections before migration...", file=sys.stderr, flush=True)
     retire_live_grants(device, yes=getattr(args, "yes", False))
     if args.slot and config.get("active") != device["device_id"]:
@@ -1085,7 +1382,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         config["active"] = device["device_id"]
         save_config(config)
     print("[5/5] Setup complete.", file=sys.stderr, flush=True)
-    print(f"Ready: {device['slot_name']}. Pairing and local Claude relay verified.\n"
+    print(f"Ready: {device['slot_name']}. Pairing and Claude model route verified.\n"
           "No project was uploaded and no Claude session was started.")
     return 0
 
@@ -1812,14 +2109,15 @@ def native_extra_args(args: argparse.Namespace) -> list[str]:
 
 
 def native_settings(env: dict[str, str], base_url: str, secret: str, *,
-                    bare: bool) -> dict[str, Any]:
+                    bare: bool, slot_id: str = "") -> dict[str, Any]:
     # Process environment alone loses to saved settings.env in native Claude.
     # The last explicit settings file pins only routing/privacy, leaving tools,
     # permissions, project customizations and native history under user control.
     pinned = {"ANTHROPIC_BASE_URL": base_url,
               "ANTHROPIC_AUTH_TOKEN": "" if bare else secret,
               "ANTHROPIC_API_KEY": secret if bare else "",
-              "CLAUDE_CODE_OAUTH_TOKEN": "", "ANTHROPIC_CUSTOM_HEADERS": "",
+              "CLAUDE_CODE_OAUTH_TOKEN": "",
+              "ANTHROPIC_CUSTOM_HEADERS": "X-CCFleet-Slot: " + slot_id if slot_id else "",
               "CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "0",
               "CLAUDE_CODE_USE_FOUNDRY": "0", "CLAUDE_CODE_USE_ANTHROPIC_AWS": "0",
               "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "0", "CLAUDE_CODE_USE_MANTLE": "0",
@@ -1995,11 +2293,45 @@ def cmd_local(args: argparse.Namespace) -> int:
         raise CliError("use --print or a native positional prompt, not both")
     claude = find_local_claude()
     check_managed_route()
-    device = choose_device(load_config(), args.slot)
-    print("Checking the assigned slot's model relay...", file=sys.stderr, flush=True)
-    check_inference(device)
+    config = load_config()
+    transport_mode = getattr(args, "transport", "auto")
+    saved_gateway = load_gateway() if transport_mode != "bridge" else None
+    device = choose_device(config, saved_gateway["device_id"] if saved_gateway else args.slot)
+    gateway = gateway_for_launch(config, device, transport_mode)
+    gateway_slot = ""
+    migration_device = device
+    if gateway is not None:
+        if getattr(args, "reuse_transport", False):
+            raise CliError("--reuse-transport is only for --transport bridge")
+        print("Checking your direct HTTPS gateway...", file=sys.stderr, flush=True)
+        if args.slot:
+            try:
+                selected_device = choose_device(config, args.slot)
+            except CliError:
+                # An endpoint can include another owned slot without pairing an SSH key to it.
+                answer = check_gateway(gateway)
+                matches = [slot.get("id") for slot in answer.get("slots", [])
+                           if isinstance(slot, dict)
+                           and args.slot in (slot.get("id"), slot.get("name"))
+                           and slot.get("id") in gateway["slot_ids"]]
+                if len(matches) != 1:
+                    raise CliError("choose one of your endpoint's selected slots "
+                                   "by name or id") from None
+                gateway_slot = matches[0]
+            else:
+                if _gateway_url(selected_device.get("server")) != gateway["base_url"]:
+                    raise CliError("this slot belongs to a different endpoint")
+                gateway_slot = selected_device["slot_id"]
+                migration_device = selected_device
+        check_gateway(gateway, gateway_slot)
+        if gateway_slot and gateway_slot not in gateway["slot_ids"]:
+            raise CliError("this slot is not selected for your gateway endpoint; "
+                           "update the endpoint or use --transport bridge")
+    else:
+        print("Checking the assigned slot's model relay...", file=sys.stderr, flush=True)
+        check_inference(device)
     if args.check:
-        print("Ready: original local Claude Code and assigned-slot inference relay.\n"
+        print("Ready: original local Claude Code and selected model route.\n"
               "No project was scanned and no model request or Claude session was started.")
         return 0
     project = Path(args.project).expanduser().resolve(strict=True)
@@ -2011,8 +2343,8 @@ def cmd_local(args: argparse.Namespace) -> int:
         for name, value in client_experience().Preferences(home()).get(project).items():
             if getattr(args, name) is None:
                 setattr(args, name, value)
-    retire_live_grants(device, yes=args.yes)
-    helper = inference_client()
+    retire_live_grants(migration_device, yes=args.yes)
+    helper = inference_client() if gateway is None else None
     transport = None
 
     def model_command() -> list[str]:
@@ -2034,27 +2366,46 @@ def cmd_local(args: argparse.Namespace) -> int:
             transport = helper.TransportSession(
                 lambda: ssh_transport_command(device, tty=False),
                 project_environment, home()).start()
-        bridge = helper.Bridge(model_command, project_environment)
+        if gateway is None:
+            bridge = helper.Bridge(model_command, project_environment)
         descriptor, filename = tempfile.mkstemp(
             prefix=".inference-settings-", suffix=".json", dir=home())
         settings_path = Path(filename)
         env = dict(os.environ)
         if args.legacy_history:
-            profile = home() / "local" / hashlib.sha256(device["slot_id"].encode()).hexdigest()[:16]
+            history_slot = gateway_slot or device["slot_id"]
+            profile = home() / "local" / hashlib.sha256(history_slot.encode()).hexdigest()[:16]
             if not profile.is_dir():
                 raise CliError("no earlier local-preview history exists for this slot")
             env["CLAUDE_CONFIG_DIR"] = str(profile)
         native_proxy_exclusions(env, project, extra)
-        settings = native_settings(env, bridge.base_url, bridge.secret, bare="--bare" in options)
+        settings = native_settings(
+            env, gateway["base_url"] if gateway else bridge.base_url,
+            gateway["secret"] if gateway else bridge.secret, bare="--bare" in options,
+            slot_id=gateway_slot if gateway else "")
         with os.fdopen(descriptor, "w") as stream:
             descriptor = -1
             os.fchmod(stream.fileno(), 0o600)
             json.dump(settings, stream)
-        bridge.start()
+        if bridge is not None:
+            bridge.start()
         print("Starting original local Claude Code. Files, tools and history stay here.\n"
-              "Model requests use your assigned slot. Native prompts/tool results can still\n"
+              + ("Model requests use your HTTPS gateway. " if gateway else
+               "Model requests use your assigned slot. ")
+              + "Native prompts/tool results can still\n"
               "contain local context; this is not an anonymity guarantee.",
               file=sys.stderr, flush=True)
+        if gateway is not None:
+            if gateway_slot or len(gateway["slot_ids"]) == 1:
+                print("Model route: one fixed selected account; automatic switching is disabled.",
+                      file=sys.stderr, flush=True)
+            elif gateway["mode"] == "sticky":
+                print("Model route: your selected account pool. Conversations keep the account "
+                      "that last succeeded when the client supplies a session ID.",
+                      file=sys.stderr, flush=True)
+            else:
+                print("Model route: your selected account pool in priority order for each request.",
+                      file=sys.stderr, flush=True)
         command = local_claude_command(claude, args, settings_path, extra)
         if getattr(args, "_background_job", False):
             return subprocess.run(command, cwd=project, env=env,
@@ -2149,6 +2500,9 @@ def _prepare_local_job(args: argparse.Namespace, prompt: str
     if getattr(args, "resume", None) == "":
         raise CliError("a background job needs an explicit --resume ID or name; "
                        "use --continue for the latest conversation")
+    if getattr(args, "transport", "auto") != "auto":
+        raise CliError("background jobs use the configured default model route; "
+                       "explicit --transport is currently a foreground option")
     if getattr(args, "reuse_transport", False):
         raise CliError("transport reuse is currently a foreground option; background jobs "
                        "use ordinary pinned SSH connections")
@@ -2224,7 +2578,14 @@ def _prepare_local_job(args: argparse.Namespace, prompt: str
 
 def start_local_job(args: argparse.Namespace, prompt: str) -> int:
     helper, device, spec, command, timeout, max_jobs = _prepare_local_job(args, prompt)
-    check_inference(device)
+    gateway = gateway_for_launch(load_config(), device, getattr(args, "transport", "auto"))
+    if gateway is not None:
+        # Existing supervised jobs are assignment-bound; preserve their authorization scope.
+        if device["slot_id"] not in gateway["slot_ids"]:
+            raise CliError("select this background job's slot for the gateway endpoint first")
+        check_gateway(gateway, device["slot_id"])
+    else:
+        check_inference(device)
     # Ask only after inputs pass, while the user's interactive terminal exists.
     # The detached supervisor must not implicitly approve legacy cancellation.
     retire_live_grants(device, yes=getattr(args, "yes", False))
@@ -2371,6 +2732,20 @@ def parser() -> argparse.ArgumentParser:
                        help="explicitly approve ending this computer's old live-folder sessions")
     setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
                        help="server used only when pairing a new computer")
+    gateway = sub.add_parser("gateway", help="configure direct HTTPS access using your own slots")
+    gateway_sub = gateway.add_subparsers(dest="gateway_action")
+    for action in ("setup", "status", "remove"):
+        item = gateway_sub.add_parser(action)
+        item.add_argument("--slot", default="", help="paired device used for authorization")
+        if action == "setup":
+            item.add_argument("--replace", action="store_true",
+                              help="save a new key; the previous key stays active until revoked")
+            item.add_argument("--slots", nargs="+", help="your slot names in priority order")
+            item.add_argument("--routing", choices=("sticky", "priority"), default="sticky",
+                              help="sticky: keep a session on one account (default); "
+                                   "priority: try account order for each request")
+            item.add_argument("--name", default="This computer", help="endpoint key label")
+    gateway.set_defaults(slot="")
     attach = sub.add_parser("attach", aliases=["remote"],
                             help="open remote Claude with slot files and persistent tmux")
     attach.add_argument("--slot", default="", help="slot id or name")
@@ -2403,7 +2778,10 @@ def parser() -> argparse.ArgumentParser:
                            epilog="New: ccfleet local --new --name work | "
                            "Resume picker: ccfleet local --resume | "
                            "Check setup: ccfleet local --check")
-    local.add_argument("--slot", default="", help="paired slot id or name")
+    local.add_argument("--slot", default="",
+                       help="pin one selected slot by id or name, without account switching")
+    local.add_argument("--transport", choices=("auto", "gateway", "bridge"), default="auto",
+                       help="configured HTTPS gateway, or explicit legacy SSH bridge")
     local.add_argument("--project", default=".", help="local project directory (default: current)")
     local.add_argument("--remote-project", default="", metavar="ID",
                        help=argparse.SUPPRESS)
@@ -2574,6 +2952,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_login(args)
         if args.command == "setup":
             return cmd_setup(args)
+        if args.command == "gateway":
+            return cmd_gateway(args)
         if args.command in ("start", "menu"):
             return cmd_start(args)
         if args.command == "sessions":

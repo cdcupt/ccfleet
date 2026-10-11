@@ -91,7 +91,7 @@ user_systemctl() {
 }
 
 step "1/5  the account"
-getent group "$SLOT_GROUP" >/dev/null 2>&1 || addgroup --system "$SLOT_GROUP" >/dev/null
+EXISTING_SLOT=no
 if id "$SLOT" >/dev/null 2>&1; then
   # An account with this name already exists. If this tool did not create it,
   # it belongs to somebody else and is not ours to reshape: the steps below
@@ -106,12 +106,24 @@ if id "$SLOT" >/dev/null 2>&1; then
   EXISTING_UID="$(id -u "$SLOT")"
   { [ "$EXISTING_UID" -ge 1000 ] && [ "$EXISTING_UID" -le 59999 ]; } \
     || die "$SLOT has uid $EXISTING_UID, outside the ordinary login range 1000-59999. That is a system account, not a slot. Refusing."
+  EXISTING_SLOT=yes
   note "slot $SLOT already exists; continuing"
-else
-  adduser --disabled-password --gecos "" "$SLOT" >/dev/null
+fi
+# OpenSSH invokes a forced command through the account's login shell. Dash
+# does not read holder-writable startup files for its noninteractive -c call.
+# Native maintenance and slot-entry still invoke Bash explicitly where needed.
+# Validate any existing account first; verify the shell before account changes.
+MACHINE_AUDIT="$(dirname "$0")/ccfleet_agent/machine.py"
+[ -f "$MACHINE_AUDIT" ] || MACHINE_AUDIT="$(dirname "$0")/../ccfleet_agent/machine.py"
+python3 -I "$MACHINE_AUDIT" --audit-login-shell \
+  || die "an installed root-controlled /bin/dash is required for slot SSH"
+getent group "$SLOT_GROUP" >/dev/null 2>&1 || addgroup --system "$SLOT_GROUP" >/dev/null
+if [ "$EXISTING_SLOT" = no ]; then
+  adduser --disabled-password --shell /bin/dash --gecos "" "$SLOT" >/dev/null
   note "created $SLOT"
 fi
 adduser "$SLOT" "$SLOT_GROUP" >/dev/null 2>&1 || usermod -aG "$SLOT_GROUP" "$SLOT"
+usermod -s /bin/dash "$SLOT" || die "could not set the protected slot login shell"
 note "marked as a slot (member of $SLOT_GROUP)"
 
 # `adduser --disabled-password` leaves a shadow marker (`!` or `*`) that some

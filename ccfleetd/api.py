@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import re
@@ -23,6 +25,7 @@ from . import (
     client_status,
     consoleslots,
     customer_docs,
+    gateway,
     oauth,
     reference_docs,
     sessions,
@@ -77,7 +80,10 @@ def access_log_route(target: Any) -> str:
                 "/auth/google/start", "/auth/google/callback", "/auth/signout",
                 "/api/nodes", "/api/alerts", "/api/heartbeat", "/api/cli/status",
                 "/api/cli/connect", "/api/cli/register", "/api/cli/revoke",
-                "/account/claim", "/account/outage-emails", "/actions/node/add"}:
+                "/account/claim", "/account/outage-emails", "/actions/node/add",
+                "/v1/messages", "/v1/messages/count_tokens", "/api/cli/gateway",
+                "/api/cli/gateway/options", "/api/cli/gateway/revoke", "/api/gateway/status",
+                "/account/gateway/create", "/account/gateway/update", "/account/gateway/revoke"}:
         return path
     if path.rstrip("/") == CONSOLE_PATH:
         return CONSOLE_PATH
@@ -114,6 +120,7 @@ class Context:
         self.store = store
         self.cfg = cfg
         self.monitor = monitor
+        self.gateway = gateway.GatewayRuntime(cfg, store)
 
 
 @dataclass(frozen=True)
@@ -236,10 +243,70 @@ def _prefixed_bearer(header: Optional[str], prefix: str) -> Optional[str]:
     return value
 
 
+class _HeaderBudgetReader:
+    """Count aggregate pre-auth header bytes before http.server parses them."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.remaining = 65536
+
+    def readline(self, size=-1):
+        limit = self.remaining + 1
+        if size >= 0:
+            limit = min(limit, size)
+        line = self.stream.readline(limit)
+        self.remaining -= len(line)
+        if self.remaining < 0:
+            raise http.client.LineTooLong("request headers")
+        return line
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
 def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
     class FleetHandler(BaseHTTPRequestHandler):
         server_version = "ccfleetd"
         sys_version = ""
+
+        def setup(self) -> None:
+            super().setup()
+            if ctx.cfg.gateway_enabled:
+                self.connection.settimeout(ctx.cfg.gateway_header_timeout_s)
+                self.rfile = _HeaderBudgetReader(self.rfile)
+
+        def handle_one_request(self) -> None:
+            if isinstance(self.rfile, _HeaderBudgetReader):
+                self.rfile.remaining = 65536
+            self._header_timer = None
+            if ctx.cfg.gateway_enabled:
+                def expire_headers():
+                    with contextlib.suppress(OSError):
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                self._header_timer = threading.Timer(ctx.cfg.gateway_header_timeout_s,
+                                                     expire_headers)
+                self._header_timer.daemon = True
+                self._header_timer.start()
+            try:
+                super().handle_one_request()
+            except http.client.LineTooLong:
+                gateway.model_error(self, 431, "The request headers are too large.")
+            finally:
+                if self._header_timer is not None:
+                    self._header_timer.cancel()
+
+        def parse_request(self) -> bool:
+            try:
+                return super().parse_request()
+            finally:
+                if getattr(self, "_header_timer", None) is not None:
+                    self._header_timer.cancel()
+
+        def handle_expect_100(self) -> bool:
+            if getattr(self, "path", "").startswith("/v1/"):
+                gateway.model_error(self, 417, "Expect requests are not supported.")
+                return False
+            return super().handle_expect_100()
 
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D401
             # Parser/error messages can contain the raw request line or query.
@@ -588,7 +655,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if outcome.location:
                 self._redirect(outcome.location)
             else:
-                self._send(outcome.status, outcome.body.encode("utf-8"), HTML_HEADERS)
+                self._send(outcome.status, outcome.body.encode("utf-8"),
+                           {**HTML_HEADERS, "Cache-Control": "no-store"})
 
         def _clear_flow_cookie(self) -> str:
             """The half-finished sign-in is over, however it ended."""
@@ -624,6 +692,99 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             return self.rfile.read(length)
 
         # -- routes --------------------------------------------------------
+
+        def _paired_gateway_device(self):
+            if not ctx.gateway.enabled:
+                self._json(503, {"error": "gateway is not configured"})
+                return None
+            values = self.headers.get_all("Authorization", [])
+            token = (_prefixed_bearer(values[0], cli_access.DEVICE_PREFIX)
+                     if len(values) == 1 else None)
+            device = ctx.store.resolve_cli_device(token or "", now=time.time(), touch=False)
+            if device is None:
+                self._json(401, {"error": "device is not authorized"})
+            return device
+
+        def _gateway_options(self) -> None:
+            device = self._paired_gateway_device()
+            if device is None:
+                return
+            slots = ctx.store.list_slots(held_by=device["account_id"])
+            self._json(200, {"available": True, "base_url": ctx.cfg.public_url,
+                            "modes": ["sticky", "priority"], "slots": [
+                {"id": s["id"], "name": s.get("name") or s["id"], "state": s["state"]}
+                for s in slots if s["kind"] == slotstates.MACHINE_SLOT
+                and s["state"] in (slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)]})
+
+        def _gateway_enroll(self, *, revoke: bool = False) -> None:
+            device = self._paired_gateway_device()
+            if device is None:
+                return
+            self.close_connection = True
+            names = [name.lower() for name in self.headers]
+            lengths = self.headers.get_all("Content-Length", [])
+            if (len(names) != len(set(names)) or len(lengths) != 1
+                    or not lengths[0].isascii() or not lengths[0].isdigit()
+                    or len(lengths[0]) > 10 or str(int(lengths[0])) != lengths[0]
+                    or any(self.headers.get_all(name) for name in
+                           ("Transfer-Encoding", "Content-Encoding", "Expect",
+                            "Origin", "x-api-key"))
+                    or any(not gateway.wire._header_value(item) for item in self.headers.values())):
+                self._json(400, {"error": "invalid endpoint request framing"})
+                return
+            size = int(lengths[0])
+            if not 0 < size <= ctx.cfg.max_body_bytes:
+                self._json(413, {"error": "endpoint request is too large"})
+                return
+            def expire_body():
+                with contextlib.suppress(OSError):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+            timer = threading.Timer(10, expire_body)
+            timer.daemon = True
+            self.connection.settimeout(10)
+            timer.start()
+            try:
+                body = gateway.wire.read_exact(self.rfile, size)
+                gateway.check_json_complexity(body)
+                value = gateway.wire._json(body)
+                if not isinstance(value, dict):
+                    raise ValueError("object required")
+                if revoke:
+                    changed = ctx.store.revoke_gateway_key(
+                        value.get("key_id", ""), device["account_id"], now=time.time())
+                    self._json(200, {"revoked": bool(changed)})
+                    return
+                key = ctx.store.create_gateway_key(
+                    device["account_id"], value.get("name", "Claude Code"),
+                    value.get("slot_ids", [device["slot_id"]]),
+                    value.get("mode", "sticky"), now=time.time())
+            except (ValueError, TypeError, UnicodeError, RecursionError, StoreError):
+                self._json(400, {"error": "select your own slots and a valid routing mode"})
+                return
+            except (OSError, EOFError):
+                self._json(408, {"error": "endpoint request body did not arrive"})
+                return
+            finally:
+                timer.cancel()
+            secret = key.pop("key_token")
+            safe = {name: key[name] for name in ("id", "name", "slot_ids", "mode", "generation")}
+            self._json(201, {"secret": secret, "key": safe, "base_url": ctx.cfg.public_url},
+                       {"Referrer-Policy": "no-referrer"})
+
+        def _gateway_status(self) -> None:
+            if not ctx.gateway.enabled:
+                self._json(503, {"error": "gateway is not configured"})
+                return
+            key = gateway.authenticate(self.headers, ctx.store, now=time.time(), touch=False)
+            if key is None:
+                self._json(401, {"error": "endpoint is not authorized"})
+                return
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            pins = query.get("slot", [])
+            if len(pins) > 1 or (pins and pins[0] not in key["slot_ids"]):
+                self._json(403, {"error": "slot is not selected for this endpoint"})
+                return
+            self._json(200, ctx.gateway.status(key, pins[0] if pins else ""))
 
         def _cli_register(self) -> None:
             token = _prefixed_bearer(self.headers.get("Authorization"),
@@ -663,6 +824,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 "slot_name": device["name"] or device["slot_id"],
                 "user": device["unix_user"],
                 "host_key": device["ssh_host_key"],
+                "gateway_available": ctx.gateway.enabled,
+                "gateway_base_url": ctx.cfg.public_url if ctx.gateway.enabled else "",
             })
 
         def _cli_connect(self) -> None:
@@ -711,6 +874,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 finally:
                     self.protocol_version = protocol
                 self.close_connection = True
+                self.connection.settimeout(None)
                 cli_access.relay_websocket(
                     self.connection, upstream,
                     lambda: ctx.store.cli_device_is_active(device["device_id"]))
@@ -727,6 +891,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path in ("/api/cli/gateway/options", "/api/gateway/status"):
+                if not self._product_site() or ctx.cfg.broker_only:
+                    self._json(404, {"error": "not found"})
+                elif path == "/api/cli/gateway/options":
+                    self._gateway_options()
+                else:
+                    self._gateway_status()
+                return
             if ctx.cfg.broker_only and path not in {
                     "/healthz", "/api/cli/connect", "/api/cli/status"}:
                 self._json(404, {"error": "not found"})
@@ -755,6 +927,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._json(401, {"error": "device is not authorized"})
                     return
                 answer = client_status.device_status(ctx.store, ctx.cfg, device, time.time())
+                answer.update({"gateway_available": ctx.gateway.enabled,
+                               "gateway_base_url": (ctx.cfg.public_url
+                                                    if ctx.gateway.enabled else "")})
                 # Recheck after building the response: release/revocation can
                 # occur while the status snapshot is being assembled.
                 if not ctx.store.cli_device_is_active(device["device_id"]):
@@ -874,6 +1049,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path in ("/v1/messages", "/v1/messages/count_tokens"):
+                if not self._product_site() or ctx.cfg.broker_only:
+                    gateway.model_error(self, 404, "This endpoint is not available on this host.")
+                else:
+                    ctx.gateway.handle(self)
+                return
+            if path in ("/api/cli/gateway", "/api/cli/gateway/revoke"):
+                if not self._product_site() or ctx.cfg.broker_only:
+                    self._json(404, {"error": "not found"})
+                else:
+                    self._gateway_enroll(revoke=path.endswith("/revoke"))
+                return
             if ctx.cfg.broker_only and path != "/api/cli/revoke":
                 self._json(404, {"error": "not found"})
                 return
@@ -964,7 +1151,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     slot_updates={s["id"]: ctx.store.get_claude_update(s["id"]) for s in slots},
                     own_update=ctx.store.get_claude_update(owned[0]["id"]) if owned else None,
                     slot_cli_keys={s["id"]: ctx.store.cli_public_keys(s["id"])
-                                   for s in slots}),
+                                   for s in slots},
+                    slot_gateway_keys={s["id"]: ctx.store.gateway_public_keys(
+                        s["id"], ctx.cfg.gateway_ssh_public_key) for s in slots}
+                        if ctx.gateway.enabled else None),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
 
@@ -1187,11 +1377,40 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
     return FleetHandler
 
 
+class _BoundedHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address, handler, maximum: int):
+        self.admissions = threading.BoundedSemaphore(maximum)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        if not self.admissions.acquire(blocking=False):
+            with contextlib.suppress(OSError):
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"
+                                b"Content-Length: 0\r\nRetry-After: 3\r\n\r\n")
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.admissions.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.admissions.release()
+
+
 def build_server(ctx: Context, host: Optional[str] = None,
                  port: Optional[int] = None) -> ThreadingHTTPServer:
     host = ctx.cfg.bind_host if host is None else host
     port = ctx.cfg.bind_port if port is None else port
-    server = ThreadingHTTPServer((host, port), make_handler(ctx))
+    server = (_BoundedHTTPServer((host, port), make_handler(ctx), ctx.cfg.gateway_max_connections)
+              if ctx.cfg.gateway_enabled else ThreadingHTTPServer((host, port), make_handler(ctx)))
     server.daemon_threads = True
     return server
 
@@ -1216,4 +1435,5 @@ def serve(ctx: Context) -> None:
         server.serve_forever()
     finally:
         stop.set()
+        ctx.gateway.stopping.set()
         server.server_close()
