@@ -190,11 +190,22 @@ def test_the_status_page_is_public_on_the_product_and_absent_from_the_console(sp
 def test_every_public_page_links_it_from_the_footer_and_the_front_page_from_its_body(split):  # noqa: F811
     _, browser, _ = split
     for path in ("/", "/docs/guide", "/privacy"):
-        foot = browser(PRODUCT).call("GET", path).body
-        foot = foot[foot.index('<footer class="sitefoot">'):]
+        page = browser(PRODUCT).call("GET", path).body
+        nav = page[page.index('<nav class="doc-nav">'):].split("</nav>", 1)[0]
+        assert 'href="/status"' in nav and "Status" in nav, path
+        foot = page[page.index('<footer class="sitefoot">'):]
         assert 'href="/status"' in foot, path
     front = browser(PRODUCT).call("GET", "/").body
     assert 'href="/status"' in front[:front.index('<footer class="sitefoot">')]
+    for prefix in ("/en", "/zh"):
+        landing = browser(PRODUCT).call("GET", prefix + "/").body
+        nav = landing[landing.index('<nav class="doc-nav">'):].split("</nav>", 1)[0]
+        target = "/zh/status" if prefix == "/zh" else "/status"
+        assert f'href="{target}"' in nav
+        assert ("服务状态" if prefix == "/zh" else "Status") in nav
+        destination = browser(PRODUCT).call("GET", target)
+        assert destination.status == 200
+        assert f'<a href="{target}" class="here">' in destination.body
 
 
 def test_signed_in_the_only_address_on_it_is_the_viewers_own_in_their_menu(site):  # noqa: F811
