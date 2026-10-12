@@ -259,4 +259,4 @@ def test_library_head_returns_length_of_projected_get_without_body(library_serve
 def test_customer_pages_link_to_the_public_html_library(cfg):
     for page in (customer_docs.overview, customer_docs.guide, customer_docs.how_it_works,
                  customer_docs.terms):
-        assert '<a href="/docs/library">HTML reference library</a>' in page(cfg)
+        assert '<a href="/docs/library">Documentation</a>' in page(cfg)
