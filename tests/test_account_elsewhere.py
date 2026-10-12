@@ -385,7 +385,7 @@ def test_a_legacy_token_failure_is_explained_without_offering_the_removed_flow(s
     slot = in_use(store, erik)
     refuse(store, slot, kind="token")
     page = erik.page()
-    assert "The previous local setup did not finish:" in page
+    assert "The connection setup did not finish:" in page
     assert ">Set up this computer<" not in page and ">Sign in again<" in page
 
 
@@ -439,12 +439,13 @@ def test_another_slots_alert_is_not_this_slots(site):
 
 def test_the_privacy_page_says_what_the_fingerprint_is_and_is_for():
     page = usersite.privacy_page(Config())
-    assert "a fingerprint of that account" in page
-    assert "cannot be turned back into the id or your address" in page
-    assert "signed in on two machines" in page
+    assert "one-way account and bound-account fingerprints" in page
+    assert "cannot be turned back into the account ID or email" in page
+    assert "detect an account used on two machines" in page
 
 
 def test_the_guide_says_a_slot_keeps_its_account():
     from ccfleetd import customer_docs
     guide = customer_docs.page_for("/docs/guide")(Config())
-    assert "and keeps it" in guide and "works with that account only" in guide
+    assert "A slot is signed in to one Claude account, your own" in guide
+    assert "uses that account only" in guide

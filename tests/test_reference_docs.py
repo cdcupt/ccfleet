@@ -16,6 +16,9 @@ from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.store import Store
 
+CURRENT_DOCUMENTS = frozenset({"docs/index.html", "docs/public-gateway.html",
+                               "docs/platform-comparison.html"})
+
 
 @pytest.fixture
 def assets(tmp_path, monkeypatch):
@@ -24,7 +27,10 @@ def assets(tmp_path, monkeypatch):
     for name in reference_docs.PUBLIC_FILES:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"<!doctype html><html><body>" + name.encode() + b"</body></html>")
+        copy = (b'<span class="copy-en">' + name.encode() + b'</span>'
+                + '<span class="copy-zh">当前中文指南</span>'.encode()
+                if name in CURRENT_DOCUMENTS else name.encode())
+        path.write_bytes(b"<!doctype html><html><body>" + copy + b"</body></html>")
         path.chmod(0o644)
     monkeypatch.setattr(reference_docs, "candidate_roots", lambda: (root,))
     return root
@@ -203,7 +209,8 @@ def test_library_entry_redirects_to_tree_preserving_index_only_on_product(librar
 
 
 @pytest.mark.parametrize("name", sorted(reference_docs.PUBLIC_FILES))
-def test_all_public_library_routes_have_html_type_and_unchanged_body(library_server, assets, name):
+def test_library_routes_project_current_guides_and_preserve_historical_body(library_server,
+                                                                          assets, name):
     server, broker_only = library_server
     status, version, headers, body = request(server, reference_docs.ROUTE_PREFIX + name)
     assert version == 10
@@ -213,7 +220,12 @@ def test_all_public_library_routes_have_html_type_and_unchanged_body(library_ser
         assert status == 200
         assert headers["Content-Type"] == "text/html; charset=utf-8"
         assert headers["X-Content-Type-Options"] == "nosniff"
-        assert body == (assets / name).read_bytes()
+        if name in CURRENT_DOCUMENTS:
+            assert b'<html lang="en">' in body and b'data-language="en"' in body
+            assert name.encode() in body
+            assert "当前中文指南".encode() not in body
+        else:
+            assert body == (assets / name).read_bytes()
 
 
 @pytest.mark.parametrize("host", ["admin.example.com", "127.0.0.1", "localhost"])
@@ -232,17 +244,19 @@ def test_unknown_and_encoded_library_paths_are_404_without_path_disclosure(libra
         assert status == 404 and json.loads(body) == {"error": "not found"}
 
 
-def test_library_head_returns_length_without_body(library_server, assets):
+def test_library_head_returns_length_of_projected_get_without_body(library_server):
     server, broker_only = library_server
     status, _, headers, body = request(server, reference_docs.INDEX_PATH, method="HEAD")
     assert body == b""
     if broker_only:
         assert status == 404
     else:
-        assert status == 200 and int(headers["Content-Length"]) == len((assets / "docs/index.html").read_bytes())
+        get_status, _, _, get_body = request(server, reference_docs.INDEX_PATH)
+        assert status == get_status == 200
+        assert int(headers["Content-Length"]) == len(get_body)
 
 
 def test_customer_pages_link_to_the_public_html_library(cfg):
     for page in (customer_docs.overview, customer_docs.guide, customer_docs.how_it_works,
                  customer_docs.terms):
-        assert '<a href="/docs/library">HTML reference library</a>' in page(cfg)
+        assert '<a href="/docs/library">Documentation</a>' in page(cfg)

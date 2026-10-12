@@ -186,8 +186,8 @@ def test_the_privacy_page_says_a_slots_name_is_never_from_your_address(site):  #
     store, sign_in, _ = site
     erik = sign_in()
     page = erik.call("GET", "/privacy").body
-    assert "never anything from your address" in page and "slot-4821" in page
-    assert "Anthropic can see it too" in page
+    assert "never a name derived from your email address" in page and "slot-4821" in page
+    assert "which Anthropic can see" in page
     assert "named after you" not in page and "before the @" not in page
 
 
@@ -200,5 +200,7 @@ def test_the_docs_say_a_slot_is_an_isolated_linux_account_under_a_name_you_choos
         assert "named after you" not in page and "before the @" not in page, path
     assert "pick anything but your email address" in customer_docs.page_for(
         "/docs/guide")(Config())
-    assert "Other slots on the same machine" in customer_docs.page_for(
-        "/docs/how-it-works")(Config())
+    details = customer_docs.page_for("/docs/how-it-works")(Config())
+    assert "A slot is a separate Linux account" in details
+    assert "private home directory" in details
+    assert "Slots may share a physical machine and its internet address" in details

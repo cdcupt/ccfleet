@@ -91,6 +91,20 @@ def _day_title(day: status.Day, group: bool = False) -> str:
     return said_up + (f", down {day.down} min" if day.down else "")
 
 
+def _day_title_zh(day: status.Day, group: bool = False) -> str:
+    if day.colour == status.NO_DATA:
+        return f"{day.day}（UTC）：没有数据"
+    if group:
+        said = [f"全部机器离线 {day.down} 分钟"] if day.down else []
+        if day.degraded:
+            said.append(f"部分机器异常 {day.degraded} 分钟")
+        return f"{day.day}（UTC）：" + ("，".join(said) or "全部正常")
+    percent = status.percent(day.up, day.up + day.down)
+    return (
+        f"{day.day}（UTC）：在线率 {percent}"
+    ) + (f"，离线 {day.down} 分钟" if day.down else "")
+
+
 def _component(name: str, level: str, word: str, days: Sequence[status.Day],
                minutes: tuple[int, int], group: bool = False) -> str:
     """One part of the service: its state now, and its days as a bar.
@@ -103,8 +117,18 @@ def _component(name: str, level: str, word: str, days: Sequence[status.Day],
     chart_label = (f"{name}: {pct} uptime over the last {len(days)} days; "
              f"{trouble} {'day' if trouble == 1 else 'days'} with trouble"
              if counted else f"{name}: no data yet")
-    squares = "".join(f'<span class="d {DAY_CLASS[d.colour]}" '
-                      f'title="{escape(_day_title(d, group))}"></span>' for d in days)
+    chart_label_zh = ((
+        f"{COMPONENT_ZH[name]}：过去 {len(days)} 天在线率 "
+        f"{pct}，{trouble} 天出现异常"
+    )
+                      if counted else COMPONENT_ZH[name] + "：尚无数据")
+    squares = "".join((
+        f'<span class="d {DAY_CLASS[d.colour]}" '
+        f'title="{escape(_day_title(d, group))}" '
+        f'data-title-en="{escape(_day_title(d, group))}" '
+        f'data-title-zh="{escape(_day_title_zh(d, group))}"></'
+        f'span>'
+    ) for d in days)
     return (f'<div class="st-comp"><div class="st-head">'
             f'<span class="st-dot {level}" aria-hidden="true"></span>'
             '<h2>' + label(name, COMPONENT_ZH[name], inline=True) + '</h2>'
@@ -113,7 +137,9 @@ def _component(name: str, level: str, word: str, days: Sequence[status.Day],
                     inline=True) + (
                         '</span></div>'
                         f'<div class="st-bar" role="img" '
-                        f'aria-label="{escape(chart_label)}">{squares}</div>'
+                        f'aria-label="{escape(chart_label)}" '
+                        f'data-aria-label-en="{escape(chart_label)}" '
+                        f'data-aria-label-zh="{escape(chart_label_zh)}">{squares}</div>'
                     )
             + '<div class="st-scale"><span><span class="d90">'
             + label("90 days ago", "90 天前", inline=True) + '</span><span class="d30">'
@@ -225,7 +251,9 @@ def pill(level: Optional[str]) -> str:
             '<a class="pill st-pill" href="/status">'
         ) + label("Status", "服务状态", inline=True) + '</a>'
     return (f'<a class="pill st-pill {PILL_CLASS[level]}" href="/status" '
-            f'aria-label="Status: {BANNERS[level]} / {BANNERS_ZH[level]}">'
+            f'aria-label="Status: {BANNERS[level]}" '
+            f'data-aria-label-en="Status: {BANNERS[level]}" '
+            f'data-aria-label-zh="服务状态：{BANNERS_ZH[level]}">'
             + label(BANNERS[level], BANNERS_ZH[level], inline=True) + '</a>')
 
 

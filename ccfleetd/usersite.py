@@ -221,7 +221,15 @@ class Viewer:
                        ("operator", "管理员"), ("Signed in as", "当前账号"),
                        ("Sign out", "退出登录")):
             menu = menu.replace(f">{en}</", f">{label(en, zh, inline=True)}</")
-        return menu
+        email = str(self.account.get("email") or "")
+        old_label = "Account menu for " + email
+        menu = menu.replace('aria-label="' + escape(old_label) + '"',
+                            'aria-label="' + escape(old_label) + '" '
+                            'data-aria-label-en="' + escape(old_label) + '" '
+                            'data-aria-label-zh="' + escape("账号菜单：" + email) + '"')
+        return menu.replace('aria-label="Your account"',
+                            'aria-label="Your account" data-aria-label-en="Your account" '
+                            'data-aria-label-zh="你的账号"')
 
 
 def viewer_for(account: Optional[Mapping[str, Any]], session_id: str, cfg: Config,
@@ -398,7 +406,6 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
 # doors, and the progress a slot shows while the machine works on it.
 USER_CSS = CSS + """
 body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
-body[data-language="both"] .how .diagram{top:138px}
 .site main [id]{scroll-margin-top:144px}
 @media(max-width:760px){.site main [id]{scroll-margin-top:164px}}
 .site main{flex:1 0 auto;width:100%}
@@ -588,15 +595,18 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
     corner = (viewer.menu() if viewer is not None else "" if door else
               '<a class="btn primary" href="/account">'
               + label("Sign in", "登录", inline=True) + '</a>')
+    title_text = {"sign in": "Sign in", "your slots": "Your slots", "privacy": "Privacy",
+                  "status": "Service status", "console": "Console",
+                  "connect a computer": "Connect a computer"}.get(title, title)
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"{refresh}<title>ccfleet · {escape(title)}</title>"
+            f"{refresh}<title>CC Fleet · {escape(title_text)}</title>"
             f'<link rel="icon" href="{FAVICON}">'
             + (f'<link rel="canonical" href="{escape(canonical)}">' if canonical else "")
             + (
                 f"<style>{USER_CSS}{BILINGUAL_CSS}{extra_css}</style></head"
                 f">"
-                '<body class="site" data-language="both"><header '
+                '<body class="site" data-language="en"><header '
                 'class="topbar"><div class="topbar-in">'
                 f'<a class="brand" href="/">{MARK}<span>ccfleet</span></a>'
                 f'<nav class="doc-nav">{links}</nav>'
@@ -610,8 +620,11 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
                           (
                               'Claude Code 在本机运行，使用你选择的账号槽位。'
                           ), inline=True) + (
-                              "</p></div>"
-                              '<nav aria-label="More · 更多">'
+
+                                  "</p></div>"
+                                  '<nav aria-label="More" data-aria-label-en="More" '
+                                  'data-aria-label-zh="更多">'
+
                           )
             + ''.join(f'<a href="{path}">{label(en, zh, inline=True)}</a>'
                       for path, en, zh in (("/account", "Your slots", "我的槽位"),
@@ -631,7 +644,7 @@ _HERE = ' class="here"'
 FORM_ZH = {
     "Claim a slot": "领取槽位", "Sign in again": "重新登录", "Sign in to Claude": "登录 Claude",
     "Change account": "更换账号", "Send code": "提交授权码", "Cancel": "取消",
-    "Cancel old setup": "取消旧设置", "Back to Stable": "切回稳定版", "Refresh": "刷新用量",
+    "Cancel setup": "取消设置", "Back to Stable": "切回稳定版", "Refresh": "刷新用量",
     "Rename": "重命名", "Give this slot back": "归还并清空槽位", "Remove": "移除电脑",
     "Connect another computer": "连接另一台电脑", "Connect this computer": "连接电脑",
     "Turn on": "开启", "Turn off": "关闭", "Sign out": "退出登录",
@@ -871,518 +884,570 @@ def _span(seconds: int) -> str:
 
 
 def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
-    """What ccfleet keeps about the people who use it, in plain words.
-
-    Every length of time on it is read from the settings in force, so the page
-    cannot drift from what the server does. Public: Google links to it from the
-    sign-in screen, and nobody should need an account to read it.
-    """
-    contact = (f'<a href="mailto:{escape(cfg.contact_email)}">{escape(cfg.contact_email)}</a>'
-               if cfg.contact_email else
-               "the support address Google shows on ccfleet&#x27;s sign-in screen")
+    """Current service privacy: local work, HTTPS model context and slot credentials."""
+    contact = (
+        f'<a href="mailto:{escape(cfg.contact_email)}">{escape(cfg.contact_email)}</a>'
+        if cfg.contact_email
+        else "the support address Google shows on ccfleet&#x27;s sign-in screen"
+    )
     contact_zh = contact if cfg.contact_email else "Google 登录页上显示的支持邮箱"
     attempt = _span(LOGIN_MAX_AGE_S)
-    body = (
+    attempt_zh = _span_zh(LOGIN_MAX_AGE_S)
 
-            '<div class="pagehead"><h1>Privacy</h1>'
-            f'<p class="sub">Last updated {escape(PRIVACY_UPDATED)}</p>'
-            f'</div>'
-            '<div class="card"><h2>What ccfleet is</h2>'
-            '<p>ccfleet gives you a slot on a machine we operate: '
-            'your own Linux account there, '
-            'with Claude Code, signed in to your own Claude account. '
-            'The operator decides who '
-            f"gets slots. To reach the operator, write to {contact}.</p"
-            f"></div>"
-            '<div class="card"><h2>What we get from Google</h2>'
-            '<p>When you sign in with Google we ask for your email '
-            'address, whether Google has '
-            'verified it, and the id Google gives your account. We '
-            'keep the address and the id. '
-            'We do not ask for your name, your photo, your contacts, '
-            'or access to your Gmail, '
-            'Drive or anything else in your Google account.</p></div>'
-            '<div class="card"><h2>What we keep because you use '
-            'ccfleet</h2><ul>'
-            '<li>Your account: the address and id above, whether you '
-            'are an operator, how many '
-            'slots you may hold, when you first signed in, when you '
-            'last visited, and whether '
-            "you asked for outage emails.</li>"
-            '<li>The slots you hold, when you claimed each one, and '
-            'when you last moved it to '
-            "another Claude account, which a "
-            'slot may do once a week. Each slot you hold has a name: '
-            'a neutral one like '
-            'slot-4821 when you claim it, never anything from your '
-            'address, or the one you give '
-            'it on your page (or, if you asked, a name the operator '
-            'set for you). That name '
-            'also becomes its machine hostname, so Anthropic can see '
-            'it too. '
-            'The name and the date go when you give the slot back.'
-            '</li>'
-            '<li>Your sign-in here: a random value in a cookie, of '
-            'which we store only a hash, '
-            "with when it began and when it ends. "
-            f"It lasts {_span(cfg.session_ttl_s)}, or until you sign ou"
-            f"t.</li>"
-            '<li>Payments the operator has recorded for you: the '
-            'amount, the currency, the day '
-            'it covers you to, the operator&#x27;s own note, when '
-            'and by whom it was recorded, '
-            "and whether it was later voided.</li>"
-            '<li>What your slot reports about itself: which version '
-            'of Claude Code is installed, '
-            'whether it is signed in, the email address and plan of '
-            'the one Claude account '
-            'signed in on it, so your page can show which of your '
-            'accounts it is, a '
-            'fingerprint of that account (a one-way digest of '
-            'Anthropic&#x27;s id for it, which '
-            'cannot be turned back into the id or your address) and '
-            'of the account the slot '
-            'keeps, so we can tell when one account is signed in on '
-            'two machines, or a slot on '
-            'another account than its own, which ccfleet does not '
-            'allow, that '
-            'plan&#x27;s rate-limit tier, when that sign-in expires, '
-            'how much of your Claude usage '
-            'limits is used and when they reset, credential-renewal '
-            'state and attempt timestamps '
-            'with fixed reason codes (never tokens or raw native '
-            'errors), and how '
-            'many tokens were used each hour over the last week. The '
-            'token counts are worked '
-            'out on the machine, from Claude Code&#x27;s own records '
-            'in your slot; only the '
-            'numbers leave it. Separately, relay measurements report '
-            'request counts, completed '
-            'transfers and fixed error categories over seven UTC '
-            'calendar days, together with '
-            'connection, first-body-byte and total-request timing '
-            'sample counts, means and maxima, '
-            'the observation time and last completed-transfer time. '
-            'Validated input/output and '
-            'cache-read/cache-write token totals have explicit '
-            'completed-response sample coverage; '
-            'missing or partial usage is unknown, not a zero or a '
-            'bill. These metrics contain no '
-            'model names, request IDs, headers, bodies, paths, email '
-            'addresses or credentials. '
-            'The seven-day local aggregate window is distinct from '
-            'how long heartbeat snapshots '
-            'are retained here. We keep these reports for '
-            f"{_span(cfg.retention_days * 86400)}.</li></ul>"
-            "<p>Your slot's heartbeat reports do not include prompts,"
-            ' conversations, file '
-            'contents, your Claude credential, or the name on your '
-            'Claude account. This is '
-            'separate from model traffic: the HTTPS gateway on BWH '
-            'receives and processes '
-            'the contents of model requests and responses.</p></div>'
-            '<div class="card"><h2>Your Claude account</h2>'
-            '<p>You sign in to Claude yourself, through Anthropic. '
-            'The credential that creates is '
-            'written on the machine, in your slot, and nowhere else: '
-            'this server never stores '
-            f"it. While a sign-in is in progress, its link, the code yo"
-            f"u paste and its progress "
-            f"are held here for at most {attempt}. If one does not go t"
-            f"hrough, why is kept for "
-            f"your page, and nothing else of it, for at most {attempt},"
-            f" and so is how a change "
-            f"of account ended.</p>"
-            '<p>When you connect the CC Fleet CLI, a single-use '
-            'pairing code is kept only as a '
-            'hash for ten minutes. Each connected computer has its '
-            'own public SSH key and a '
-            'random CC Fleet access token; only hashes of access '
-            'tokens are kept here. These '
-            'authorize the existing device/bridge path, not '
-            'Anthropic or Claude. On the explicit '
-            '<code>--transport bridge</code> route, the BWH byte '
-            'broker sees when a device '
-            'connects and which slot it is assigned to, but the '
-            'inner SSH encryption prevents '
-            'it from reading terminal or model-request contents.</p>'
-            '<p>Direct HTTPS gateway access uses a separate '
-            'revocable endpoint key. The server '
-            'stores its hash, name, selected own slot IDs and '
-            'current rental bindings in '
-            "priority order, routing mode, "
-            'configuration generation, creation/last-use times and '
-            'revocation time. A key can '
-            'select only slots held by its account, with one bound '
-            'Claude account per slot. '
-            'Bounded short-lived routing hashes keep conversation '
-            'affinity and failure cooldowns; '
-            'they are separate from the saved numeric usage reports.'
-            '</p>'
-            '<p>The selected slot relay sends supported model '
-            'requests to Anthropic using only '
-            'that slot&#x27;s bound account. Native Claude on the '
-            'slot owns credential writing '
-            'and renewal. The slot credential is never '
-            'returned to the laptop or BWH. Plain '
-            '<code>ccfleet</code> retains the remote Claude '
-            'terminal. Anthropic&#x27;s own terms and privacy policy '
-            'apply.</p></div>'
-            '<div class="card"><h2>Local Claude and model-request '
-            'privacy</h2>'
-            '<p><code>ccfleet local</code> runs the original Claude '
-            'CLI, its tools, files, '
-            'settings and conversation history on your computer. '
-            'There is no folder upload '
-            'or remote filesystem mount. Native permissions govern '
-            'file and command access; '
-            'the working directory is not a sandbox. Bypass mode can '
-            'modify, delete or transmit '
-            'local data without individual approval prompts.</p>'
-            '<p>With a configured HTTPS gateway, Claude Code sends '
-            'model requests directly to '
-            'our domain using its endpoint key. TLS ends at BWH, so '
-            '<strong>BWH can read model '
-            'requests and responses</strong>, including any prompts, '
-            'tool results and file '
-            'contents sent as context. That route needs no local '
-            'HTTP listener or laptop-side '
-            'SSH. The BWH-to-slot connection uses restricted SSH, '
-            'and the slot connects to '
-            'Anthropic over HTTPS. Encryption protects each hop, '
-            'while BWH, the slot and '
-            'Anthropic are endpoints that can read the model '
-            'contents.</p>'
-            '<p><code>ccfleet local --transport bridge</code> '
-            'deliberately chooses the legacy '
-            'route: a temporary local HTTP listener and '
-            'laptop-to-slot SSH through BWH. '
-            'That byte broker carries ciphertext; the slot and '
-            'Anthropic still read model '
-            'contents. A configured gateway failure does not '
-            'silently choose this alternative. '
-            'See the <a href="/docs/library/docs/public-gateway.'
-            'html">public gateway guide</a> '
-            'for setup and routing choices.</p>'
-            '<p>The gateway and relays remove selected request '
-            'headers and the '
-            'top-level structured <code>metadata</code> field. This '
-            'filtering does not redact '
-            'arbitrary '
-            'prompts, tool results or file contents. Native system '
-            'prompts can include local '
-            'OS, working directory and environment details. Relevant '
-            'request content reaches '
-            'the slot and Anthropic on both routes, and BWH on the '
-            'gateway route; '
-            'this is not a fingerprint-free '
-            'or zero-metadata guarantee.</p>'
-            '<p>Only supported model endpoints use the relay. MCP '
-            'servers, hooks, plugins, '
-            'shell tools, updates and other native CLI services may '
-            'connect directly from '
-            'the laptop. Optional telemetry controls are not an '
-            'all-traffic firewall. Slot '
-            'administrators have root and can inspect or alter '
-            'relayed requests and responses; '
-            'altered responses may influence local tool actions. '
-            'Native permissions and trust '
-            'in BWH and the slot host remain important.</p>'
-            '<p>BWH can see your connection IP and timing. The HTTPS '
-            'gateway also sees model '
-            'contents; bridge SSH exposes client version. '
-            'Remote-terminal sessions also send terminal dimensions. '
-            'This is not anonymity. '
-            'Native local history/settings are kept in their '
-            'existing location. '
-            '<code>--legacy-history</code> selects an earlier '
-            'per-slot preview profile without '
-            'copying or deleting it. Disconnecting or revoking a '
-            'device does not undo writes '
-            'or erase content already received or saved in native '
-            'history.</p>'
-            '<p>Project preferences are private local settings '
-            'indexed by a directory hash. '
-            'Managed background jobs keep their prompts, options, '
-            'project paths and bounded '
-            'stdout/stderr logs in private files on your computer; '
-            'those files can contain '
-            'sensitive content and are retained until deliberately '
-            'removed. Job listings '
-            'do not display prompt or path contents. Doctor/status '
-            'exports contain only '
-            'allowlisted health facts and fixed recovery guidance, '
-            'not job logs, credentials '
-            'or project contents. An export is saved only to the '
-            'local file you request; '
-            'it is never automatically uploaded to the operator.</p>'
-            '<p>Earlier live-folder grants may remain active until '
-            'explicit cleanup. Setup '
-            'asks before stopping their connectors and associated '
-            'remote live-folder sessions; '
-            'approval cancels pending work, but preserves '
-            'files/history and ordinary remote '
-            'tmux sessions. Earlier snapshot copies, transfer '
-            'manifests and recovery backups '
-            'are not deleted by this migration. Giving the slot back '
-            'stops its access and wipes '
-            'its stored copies, not your local files. See the '
-            '<a href="/docs/guide#migration">migration guide</a> for '
-            'cleanup and recovery.</p></div>'
-            '<div class="card"><h2>What the operator can see</h2>'
-            '<p>The machines are ours, and their administrators have '
-            'root. That means they can '
-            'technically read any slot&#x27;s files, and its Claude '
-            'credential. The operator '
-            'console does not expose their contents, but no setting '
-            'can make root access '
-            "impossible, so "
-            'please keep nothing on a slot that you could not accept '
-            'an administrator being '
-            "able to read.</p>"
-            '<p>In the console, the operator sees your email address,'
-            ' your allowance, the slots '
-            'you hold, when you last visited, and the payments '
-            'recorded for you.</p></div>'
-            '<div class="card"><h2>Cookies</h2>'
-            '<p>Two, both needed to sign you in: your session cookie,'
-            ' and one that ties '
-            'Google&#x27;s answer to the browser that asked for it, '
-            'which lasts '
-            f"{_span(oauth.FLOW_TTL_S)}; the server keeps a matching re"
-            f"cord of that sign-in "
-            'for the same time. There is no analytics, no '
-            'advertising and no third-party '
-            'script on any page. Your language preference is saved '
-            'only in your browser.</p></div>'
-            '<div class="card"><h2>Sharing, keeping and deleting</h2>'
-            '<p>We do not sell what we keep, and we do not give it '
-            'to anyone, but for one thing '
-            'you choose: if you turn on outage emails, your address '
-            'and your slot&#x27;s name go '
-            'to Resend, the service that delivers them, each time '
-            'there is an outage to tell '
-            'you about. The servers run at hosting companies we rent '
-            'them from, and Google and '
-            'Anthropic see what you do with their own services: '
-            'signing in, and using '
-            "Claude.</p>"
-            '<p>Giving a slot back deletes its Linux account and '
-            'every file in it. Your account '
-            'and the payments recorded for you stay while your '
-            'account exists. To have your '
-            'account deleted, write to the operator: it is done by '
-            'hand, once any slot you hold '
-            "has been given back and wiped.</p>"
-            '<p>If any of this changes, this page changes, and the '
-            'date at the top says when.</p>'
-            "</div>"
+    def card(en: str, zh: str, paragraphs: list[tuple[str, str]]) -> str:
+        return (
+            '<div class="card"><h2>'
+            + label(en, zh, inline=True)
+            + "</h2>"
+            + "".join(_notice(english, chinese) for english, chinese in paragraphs)
+            + "</div>"
         )
-    body = _blocks(body, [
-        "隐私说明", f"最近更新：{escape(PRIVACY_UPDATED)}",
-        "CC Fleet 提供什么",
-        "CC Fleet 在我们运营的机器上为你提供一个槽位：独立的 Linux 账号、Claude Code，"
-        "以及你自己的 Claude 登录。槽位由运营方分配。联系运营方：" + contact_zh + "。",
-        "从 Google 获取的信息",
-        "Google 登录会提供邮箱、邮箱是否经过验证，以及账号的固定 ID。我们只保留邮箱和 ID；"
-        "不会请求你的姓名、照片、联系人，或 Gmail、Drive 等其他 Google 服务的访问权限。",
-        "使用 Fleet 时保存的信息",
-        (
-            'Fleet 账号：上述邮箱和 ID、是否为管理员、槽位额度、'
-            '首次登录及最近访问时间，以及是否开启故障邮件。'
-        ),
-        (
-            '你持有的槽位、领取时间和最近更换 Claude 账号的时间；'
-            '每个槽位每周最多更换一次账号。'
-            '新槽位使用 slot-4821 这样的中性名称，不从邮箱生成。'
-            '你可以自行改名，或请运营方代为设置。'
-            '这个名称也会成为机器主机名，Anthropic 因此也能看到；'
-            '归还槽位时删除其名称和这些日期。'
-        ),
-        "Fleet 登录会话：Cookie 中是随机值，服务器只存其哈希，以及会话开始和结束时间。"
-        f"有效期为 {_span_zh(cfg.session_ttl_s)}，退出登录会提前终止。",
-        (
-            '运营方记录的付款：金额、币种、服务到期日、备注、'
-            '记录时间及记录人，以及是否后来作废。'
-        ),
-        (
-            '槽位健康报告：Claude Code 版本、登录状态、'
-            '该槽位所用 Claude 账号的邮箱和套餐、'
-            '账号及绑定账号的单向指纹。'
-            '指纹无法还原成账号 ID 或邮箱，'
-            '用于发现同一账号登录多台机器、或槽位登录了其他账号。'
-            '还包括套餐限流等级、登录到期时间、用量及重置时间、'
-            '凭据续期状态、尝试时间和固定原因码；'
-            '不包含凭据值或原始错误。过去一周的小时 Token '
-            '数在槽位上计算，只有数字上报。'
-            '另有过去七个 UTC 日的转发统计：请求数、完成传输数、'
-            '固定错误分类、连接/首个响应字节/总时长的样本数、'
-            '均值和最大值，以及观测和最近完成时间。输入、'
-            '输出与缓存 Token 只统计完整响应中的已验证样本，'
-            '并注明覆盖率。'
-            '缺失或不完整的数据表示未知，不是零，也不是账单。'
-            '这些统计不包含模型名、请求 ID、请求头、正文、路径、'
-            '邮箱或凭据。'
-            '七日统计窗口与健康报告的保存期限不同。'
-            f"服务器保留这些报告 "
-            f"{_span_zh(cfg.retention_days * 86400)}。"
-        ),
-        "健康报告不包含提示词、对话、文件内容、Claude 凭据或 Claude 账号显示名。"
-        "这与模型流量不同：BWH 上的 HTTPS 网关会接收并处理模型请求及回复的内容。",
-        "你的 Claude 账号",
-        (
-            '你通过 Anthropic 自行登录 Claude。'
-            '登录凭据只写入槽位所在机器，Fleet 服务器不保存它。'
-            f"登录期间，授权链接、你粘贴的授权码及进度最多暂存 "
-            f"{_span_zh(LOGIN_MAX_AGE_S)}。"
-            f"未完成的登录只保留用于页面说明的原因，最多 "
-            f"{_span_zh(LOGIN_MAX_AGE_S)}；更换账号的结果同样如此。"
-        ),
-        (
-            '连接 Fleet CLI 时，一次性配对码只保存哈希，'
-            '十分钟后过期。每台电脑有独立的 SSH 公钥和随机 Fleet '
-            '访问令牌，'
-            '服务器只存令牌哈希。这些用于电脑连接和旧 bridge '
-            '路线，不是 Anthropic 或 Claude 凭据。'
-            '显式选择 <code>--transport bridge</code> 时，BWH '
-            '可以知道连接时间和目标槽位，但内层 SSH '
-            '加密使其无法读取终端或模型请求正文。'
-        ),
-        (
-            '直接 HTTPS 网关使用另一把可撤销的接入密钥。'
-            '服务器保存其哈希、名称、按优先级排列的自有槽位 ID '
-            '和当前租用绑定、'
-            '路由模式、配置版本、创建/最近使用时间和撤销时间。'
-            '密钥只能选用所属用户持有的槽位，每个槽位绑定一个 '
-            'Claude 账号。'
-            '会话保持和失败冷却使用数量、寿命受限的短期路由哈希，'
-            '与保存的用量统计分开。'
-        ),
-        (
-            '选中的槽位只使用它绑定的账号，'
-            '把受支持的模型请求转发给 Anthropic。槽位上的原版 '
-            'Claude 负责写入和续期凭据，'
-            '凭据不会返回电脑或 BWH。直接运行 '
-            '<code>ccfleet</code> 仍会打开远程 Claude 终端。'
-            'Anthropic 自身的条款和隐私政策同时适用。'
-        ),
-        "本地 Claude 与模型内容",
-        (
-            '<code>ccfleet local</code> 在你的电脑上运行原版 '
-            'Claude CLI；工具、文件、设置和对话历史也在本机。'
-            '不上传整个项目，也不挂载远程文件系统。'
-            '文件和命令权限由原版 Claude 管理，工作目录不是沙箱。'
-            '跳过权限确认的模式可以直接修改、删除或传输本地数据。'
-        ),
-        (
-            '配置 HTTPS 网关后，Claude Code '
-            '用接入密钥直接向我们的域名发送模型请求。TLS 在 BWH '
-            '终止，'
-            '所以 <strong>BWH 能读取模型请求和回复</strong>，'
-            '包括作为上下文发送的提示词、工具结果和文件内容。'
-            '电脑无需启动本地 HTTP 服务或 SSH。BWH '
-            '到槽位使用受限 SSH，槽位到 Anthropic 使用 HTTPS。'
-            '加密保护每一段传输，但 BWH、槽位和 Anthropic '
-            '作为处理端，都可以读取模型内容。'
-        ),
-        (
 
-                '<code>ccfleet local --transport bridge</code> '
-                '明确选择旧路线：'
-                '临时本地 HTTP 服务，以及经 BWH 转发的电脑到槽位 '
-                'SSH。'
-                'BWH 转发的是密文；槽位和 Anthropic '
-                '仍能读取模型内容。已配置网关发生故障时，'
-                '不会悄悄切换到 '
-                'bridge。'
-                '设置和路由选项见 <a href="/docs/library/docs/public-'
-                'gateway.'
-                'html">HTTPS 接入指南</a>。'
-
+    body = (
+        '<div class="pagehead"><h1>'
+        + label("Privacy", "隐私说明", inline=True)
+        + "</h1>"
+        + _notice(
+            f"Last updated {escape(PRIVACY_UPDATED)}", f"最近更新：{escape(PRIVACY_UPDATED)}", "sub"
+        )
+        + "</div>"
+    )
+    body += card(
+        "What ccfleet is",
+        "Fleet 如何工作",
+        [
+            (
+                (
+                    "ccfleet gives you a slot on a machine we operate: "
+                    "your own Linux account there, "
+                    "with Claude Code, signed in to your own Claude "
+                    "account. The operator decides who gets "
+                    f"slots. To reach the operator, write to {contact}."
+                ),
+                (
+                    "Fleet 槽位是在我们运营的机器上的独立 Linux 账号，"
+                    "安装 Claude Code 并登录你自己的 Claude 账号。"
+                    f"槽位由运营方分配。联系运营方：{contact_zh}。"
+                ),
+            ),
+            (
+                (
+                    "Think of Fleet as the desk that connects your "
+                    "computer to your selected account. "
+                    "Your computer does the file and tool work. It sends "
+                    "selected model context over HTTPS "
+                    "to Fleet; Fleet chooses one of your selected slots "
+                    "and uses its Claude sign-in to "
+                    "request a reply from Anthropic. The reply returns "
+                    "to your computer."
+                ),
+                (
+                    "可以把 Fleet 看作接待台：电脑负责文件和工具操作，"
+                    "需要模型回复时，把选定的上下文通过 HTTPS 发给 "
+                    "Fleet。"
+                    "Fleet 选择你指定的槽位，使用它的 Claude 登录向 "
+                    "Anthropic 请求回复，再把回复送回电脑。"
+                ),
+            ),
+        ],
+    )
+    body += card(
+        "What we get from Google",
+        "Google 登录提供什么",
+        [
+            (
+                (
+                    "When you sign in with Google we ask for your email "
+                    "address, whether Google has verified "
+                    "it, and the id Google gives your account. We keep "
+                    "the address and the id. We do not ask "
+                    "for your name, your photo, your contacts, or access "
+                    "to your Gmail, Drive or anything else "
+                    "in your Google account."
+                ),
+                (
+                    "Google 提供邮箱、邮箱验证状态和固定账号 ID。"
+                    "我们只保留邮箱和 ID，不请求姓名、照片、联系人，"
+                    "也不获取 Gmail、Drive 等其他 Google 服务的访问权限。"
+                ),
+            ),
+        ],
+    )
+    saved = [
+        (
+            (
+                "Your account: the address and id above, whether you "
+                "are an operator, how many slots you "
+                "may hold, when you first signed in, when you last "
+                "visited, and whether you asked for outage emails."
+            ),
+            (
+                "Fleet 账号：邮箱和 ID、是否为管理员、槽位额度、"
+                "首次登录及最近访问时间，以及是否开启故障邮件。"
+            ),
         ),
         (
-            '网关与槽位转发器移除部分请求头和顶层 '
-            '<code>metadata</code> 字段，但不会自动删除提示词、'
-            '工具结果或文件内容中的敏感信息。'
-            '原版系统提示词可能包含本地操作系统、'
-            '工作目录和环境信息。两条路线都会把相关模型内容发送给'
-            '槽位与 Anthropic，'
-            'HTTPS 路线还会经过 BWH；这不代表没有指纹或元数据。'
+            (
+                "The slots you hold, when you claimed each one, and "
+                "when you last moved it to another "
+                "Claude account, which a slot may do once a week. A "
+                "new slot gets a neutral name such as "
+                "slot-4821, never a name derived from your email "
+                "address. You or the operator can rename "
+                "it. The name also becomes the machine hostname, "
+                "which Anthropic can see. These slot "
+                "names and dates are deleted when you give the slot "
+                "back."
+            ),
+            (
+                "持有的槽位、领取时间及最近更换 Claude 账号的时间；"
+                "每个槽位每周最多更换一次账号。新名称为 "
+                "slot-4821 这样的中性名称，不从邮箱生成。"
+                "你或运营方可以改名；它也会成为 Anthropic "
+                "可见的主机名。"
+                "归还槽位时删除这些名称和日期。"
+            ),
         ),
         (
-            '只有受支持的模型接口经过转发器。MCP、hooks、插件、'
-            'Shell 工具、更新及其他原版 CLI '
-            '服务可能从电脑直接联网。'
-            '可选的遥测设置不是覆盖所有流量的防火墙。'
-            '槽位管理员有 root 权限，能查看或修改请求与回复；'
-            '被修改的回复可能影响本地工具操作。原版权限控制，'
-            '以及对 BWH 和槽位主机的信任，仍然重要。'
+            (
+                "Your sign-in here: a random value in a cookie, of "
+                "which we store only a hash, with when "
+                f"it began and when it ends. It lasts "
+                f"{_span(cfg.session_ttl_s)}, or until you sign out."
+            ),
+            "Fleet 登录会话：Cookie 中是随机值，服务器只保存哈希及开始、结束时间。"
+            f"有效期为 {_span_zh(cfg.session_ttl_s)}，退出登录会提前结束。",
         ),
         (
-            'BWH 可以看到连接 IP 和时间；HTTPS '
-            '网关还能看到模型内容，bridge SSH '
-            '则会暴露客户端版本。'
-            '远程终端还会传送终端尺寸，因此这不是匿名服务。'
-            '本地历史和设置仍保留在原位置。'
-            '<code>--legacy-history</code> '
-            '选择旧的槽位独立预览配置，不会复制或删除它。'
-            '断开连接或撤销电脑访问，'
-            '不会撤销已写入的内容，也不会清除已经收到或保存到原版'
-            '历史里的数据。'
+            (
+                "Payments the operator has recorded for you: the "
+                "amount, currency, paid-through day, "
+                "the operator’s note, when and by whom it was "
+                "recorded, and whether it was later voided."
+            ),
+            ("付款记录：金额、币种、服务到期日、运营方备注、记录时间和记录人，以及是否后来作废。"),
         ),
         (
-            '项目偏好是本地私有设置，以目录哈希索引。'
-            '后台任务的提示词、选项、'
-            '项目路径及有大小限制的输出/错误日志，'
-            '保存在电脑的私有文件里，可能包含敏感内容，'
-            '直到你主动删除。任务列表不展示提示词或路径。'
-            'doctor/status 导出只包含允许的健康字段与固定恢复建议'
-            '，不包含任务日志、凭据或项目内容。'
-            '导出只写入你指定的本地文件，不会自动上传给运营方。'
+            (
+                "The slot reports its version, sign-in health, usage "
+                "and fixed maintenance results so "
+                "your account page can show them. These are "
+                "observations, not a guarantee that Anthropic "
+                "will accept the next model request."
+            ),
+            (
+                "槽位上报版本、登录健康、用量和固定维护结果，"
+                "供账号页面展示。这些是观测记录，不能保证 Anthropic "
+                "一定接受下一次模型请求。"
+            ),
         ),
-        (
-            '以前授权的实时文件夹连接可能仍有效，需要显式清理。'
-            '设置程序会先询问是否停止这些连接及对应远程会话；'
-            '批准后会取消待处理工作，但保留文件、历史和普通远程 '
-            'tmux 会话。迁移不会删除旧快照、传输清单或恢复备份。'
-            '归还槽位会停止访问并清除槽位上的副本，'
-            '不删除本地文件。'
-            '清理与恢复方法见 <a href="/docs/guide#migration">迁'
-            '移指南</a>。'
-        ),
+    ]
+    body += (
+        '<div class="card"><h2>'
+        + label(("What we keep because you use ccfleet"), "保存哪些资料", inline=True)
+        + "</h2><ul>"
+        + "".join("<li>" + bi(en, zh, inline=True) + "</li>" for en, zh in saved)
+        + "</ul><details><summary>"
+        + label("Health and usage details", "健康与用量明细", inline=True)
+        + "</summary>"
+        + _notice(
+            (
+                "Reports include the email address and plan of the "
+                "one Claude account signed in "
+                "on the slot, and one-way account and bound-account "
+                "fingerprints. They cannot be "
+                "turned back into the account ID or email. The "
+                "fingerprints detect an account "
+                "used on two machines or a slot signed in to another "
+                "account than its own. "
+                "Reports also include the plan’s rate-limit tier, "
+                "when that sign-in expires, "
+                "quota readings and reset times, credential-renewal "
+                "state and attempt timestamps "
+                "with fixed reason codes, never tokens or raw native "
+                "errors. Hourly token counts "
+                "for the past week are calculated on the slot; only "
+                "the numbers leave it."
+            ),
+            (
+                "报告包含该槽位所用 Claude 账号的邮箱、套餐，"
+                "以及账号和绑定账号的单向指纹；指纹无法还原成账号 "
+                "ID 或邮箱，用来发现同一账号用于两台机器、"
+                "或槽位登录了其他账号。还包含套餐限流等级、"
+                "登录到期时间、"
+                "用量与重置时间、凭据续期状态、尝试时间和固定原因码，"
+                "不包含凭据值或原始错误。过去一周的小时 Token "
+                "数在槽位上计算，只有数字上报。"
+            ),
+        )
+        + _notice(
+            (
+                "Relay measurements report request counts, completed "
+                "transfers and fixed error "
+                "categories over seven UTC calendar days. Connection,"
+                " first-body-byte and "
+                "total-request timing have sample counts, means and "
+                "maxima, observation time "
+                "and last completed-transfer time. Validated "
+                "input/output and cache-read/cache-write "
+                "token totals show their completed-response sample "
+                "coverage. Missing or partial "
+                "usage is unknown, not zero or a bill. These metrics "
+                "contain no model names, "
+                "request IDs, headers, bodies, paths, email "
+                "addresses or credentials. The seven-day "
+                "aggregate window is distinct from how long heartbeat snapshots "
+                "are retained here. We keep"
+                f" these reports for "
+                f"{_span(cfg.retention_days * 86400)}."
+            ),
+            (
+                "转发统计按七个 UTC 日汇总请求数、"
+                "完成传输数和固定错误分类；连接、"
+                "首个正文响应字节和总时长有样本数、"
+                "均值、最大值及观测时间、最近完成时间。输入、"
+                "输出及缓存 Token 总数注明完整响应样本覆盖率；"
+                "缺失或部分 "
+                "数据表示未知，不是零或账单。统计不含模型名、请求 "
+                "ID、请求头、正文、路径、邮箱或凭据。七日汇总窗口与 "
+                f"健康快照的保存期限不同；服务器保留这些报告 "
+                f"{_span_zh(cfg.retention_days * 86400)}。"
+            ),
+        )
+        + "</details>"
+        + _notice(
+            (
+                "Your slot’s heartbeat reports do not include "
+                "prompts, conversations, file "
+                "contents, your Claude credential, or the name on "
+                "your Claude account. This is "
+                "separate from model traffic: the HTTPS gateway on "
+                "BWH receives and processes "
+                "the contents of model requests and responses."
+            ),
+            (
+                "健康报告不包含提示词、对话、文件内容、Claude 凭据或 "
+                "Claude 账号显示名。模型流量是另一回事："
+                "BWH 上的 HTTPS 网关会接收并处理模型请求及回复内容。"
+            ),
+        )
+        + "</div>"
+    )
+    body += card(
+        "Your Claude account and access keys",
+        "Claude 登录与访问密钥",
+        [
+            (
+                (
+                    "You sign in to Claude yourself, through Anthropic. "
+                    "The credential is written only "
+                    "on the machine in your slot; this server never "
+                    "stores it. While a sign-in is in progress, "
+                    f"its link, the code you paste and its progress are he"
+                    f"ld here for at most {attempt}. "
+                    "If it fails, its reason is retained for "
+                    "your page, "
+                    f"for at most {attempt}. Account-change results follow"
+                    f" the same limit."
+                ),
+                (
+                    "你通过 Anthropic 自行登录 Claude，"
+                    "凭据只写入槽位所在机器，Fleet 服务器不保存。"
+                    "登录期间，授权链接、"
+                    f"你粘贴的授权码和进度最多暂存 {attempt_zh}。失败原因保"
+                    f"留在你的页面中，最多 "
+                    f"{attempt_zh}；更换账号的结果同样如此。"
+                ),
+            ),
+            (
+                (
+                    "When you connect the Fleet CLI, its single-use "
+                    "pairing code is stored only as a hash "
+                    "for ten minutes. Each connected computer has its "
+                    "own public SSH key and random Fleet "
+                    "access token; the server stores only the token hash."
+                    " A Fleet key grants Fleet access; "
+                    "it is not your Claude credential."
+                ),
+                (
+                    "Fleet CLI 的一次性配对码只保存哈希，十分钟后过期。"
+                    "每台已连接电脑有自己的 SSH 公钥和随机 Fleet "
+                    "访问令牌，服务器只保存令牌哈希。Fleet 密钥用于访问 "
+                    "Fleet，不是 Claude 登录凭据。"
+                ),
+            ),
+            (
+                (
+                    "HTTPS model access uses a separate revocable "
+                    "endpoint key. The server stores its hash, "
+                    "name, selected own slot IDs and current rental "
+                    "bindings in priority order, routing mode, "
+                    "configuration generation, creation/last-use times "
+                    "and revocation time. A key selects "
+                    "only slots held by its account, with one bound "
+                    "Claude account per slot. Short-lived "
+                    "routing hashes keep conversation affinity and "
+                    "failure cooldowns separately from usage statistics."
+                ),
+                (
+                    "HTTPS 模型访问使用另一把可撤销的接入密钥。"
+                    "服务器保存哈希、名称、按优先级排列的自有槽位 ID "
+                    "和当前租用绑定、"
+                    "路由模式、配置版本、创建/最近使用时间及撤销时间。"
+                    "只能选用所属用户持有的槽位，每个槽位绑定一个 Claude "
+                    "账号。"
+                    "短期路由哈希用于会话保持和失败冷却，与用量统计分开。"
+                ),
+            ),
+            (
+                (
+                    "The selected slot sends supported model requests to "
+                    "Anthropic using its bound account. "
+                    "Native Claude on the slot owns credential writing "
+                    "and renewal. The slot credential is "
+                    "never returned to your computer or BWH. Anthropic’s "
+                    "own terms and privacy policy apply."
+                ),
+                (
+                    "选中的槽位只使用其绑定账号，把受支持的模型请求发给 "
+                    "Anthropic。槽位上的原版 Claude 负责写入和续期凭据，"
+                    "凭据不会返回电脑或 BWH。Anthropic "
+                    "自身的条款和隐私政策同时适用。"
+                ),
+            ),
+        ],
+    )
+    body += card(
+        "Your local work and model context",
+        "本地工作与模型上下文",
+        [
+            (
+                (
+                    "<code>ccfleet local</code> runs the original Claude "
+                    "CLI, tools, files, settings and "
+                    "conversation history on your computer. It does not "
+                    "upload your whole project. File "
+                    "excerpts, prompts and tool results selected as "
+                    "model context are sent with model requests."
+                ),
+                (
+                    "<code>ccfleet local</code> 在本机运行原版 Claude "
+                    "CLI，文件、工具、设置和会话历史留在电脑上。"
+                    "不会上传整个项目，但选作模型上下文的文件片段、"
+                    "提示词和工具结果会随请求发送。"
+                ),
+            ),
+            (
+                (
+                    "HTTPS encrypts traffic in transit. TLS ends at BWH, "
+                    "so <strong>BWH can read model "
+                    "requests and responses</strong>, including sent "
+                    "prompts, tool results and file contents. "
+                    "The selected slot and Anthropic also process that "
+                    "model context. Your account credential "
+                    "stays on the slot. Read the <a "
+                    'href="/docs/library/docs/public-gateway.'
+                    'html">connection guide</a> '
+                    "for setup and account selection."
+                ),
+                (
+                    "HTTPS 加密传输过程，TLS 在 BWH 终止，因此 "
+                    "<strong>BWH 能读取模型请求和回复</strong>，"
+                    "包括发送的提示词、工具结果和文件内容。选中的槽位和 "
+                    "Anthropic 也会处理这些上下文；账号凭据仍在槽位上。"
+                    '设置与账号选择见 <a href="/docs/library/docs/public-'
+                    'gateway.html">连接指南</a>。'
+                ),
+            ),
+            (
+                (
+                    "Native permissions govern file and command access; "
+                    "the working directory is not a "
+                    "sandbox. Bypass mode can modify, delete or transmit "
+                    "local data without individual "
+                    "approval prompts. MCP servers, hooks, plugins, "
+                    "shell tools, updates and other native "
+                    "services may connect directly from your computer. "
+                    "Optional telemetry controls are "
+                    "not an all-traffic firewall."
+                ),
+                (
+                    "文件和命令权限由原版 Claude 管理，工作目录不是沙箱。"
+                    "跳过权限确认的模式可以直接修改、删除或传输本地数据。"
+                    "MCP、hooks、插件、Shell 工具、"
+                    "更新及其他原版服务可能从电脑直接联网；"
+                    "可选遥测设置不是覆盖所有流量的防火墙。"
+                ),
+            ),
+            (
+                (
+                    "The gateway and slot relay remove selected request "
+                    "headers and the top-level "
+                    "<code>metadata</code> field. This filtering does "
+                    "not redact arbitrary prompts, tool "
+                    "results or file contents. Native prompts may "
+                    "include local OS, working directory "
+                    "and environment details. BWH can also see your "
+                    "connection IP and timing. This is not anonymity."
+                ),
+                (
+                    "网关和槽位转发器移除部分请求头及顶层 "
+                    "<code>metadata</code> 字段，不会自动删除提示词、"
+                    "工具结果或文件内容中的 "
+                    "敏感信息。原版提示词可能包含操作系统、"
+                    "工作目录和环境信息。BWH 还能看到连接 IP 和时间；"
+                    "这不是匿名服务。"
+                ),
+            ),
+            (
+                (
+                    "Native local history/settings remain in their "
+                    "existing location. Setup does not "
+                    "automatically erase existing files or saved history."
+                    " Disconnecting or revoking a "
+                    "computer does not undo writes or erase content "
+                    "already received or saved in native history."
+                ),
+                (
+                    "原版历史和设置保留在现有位置。"
+                    "设置程序不会自动清除已有文件或保存的历史。"
+                    "断开或撤销电脑访问，不会撤销已写入的 "
+                    "内容，也不会删除已经收到或保存到原版历史中的数据。"
+                ),
+            ),
+            (
+                (
+                    "Project preferences are private local settings "
+                    "indexed by a directory hash. Background "
+                    "jobs keep prompts, options, project paths and "
+                    "bounded stdout/stderr logs in private "
+                    "files on your computer; they may contain sensitive content and are "
+                    "retained until deliberately removed. "
+                    "Job listings hide prompt and path contents. "
+                    "Doctor/status exports contain only "
+                    "allowlisted health facts and fixed recovery "
+                    "guidance, not job logs, credentials or "
+                    "project contents. Exports are saved only to your "
+                    "requested local file and never automatically uploaded to the operator."
+                ),
+                (
+                    "项目偏好是以目录哈希索引的本地私有设置。"
+                    "后台任务的提示词、选项、"
+                    "项目路径及有大小限制的输出/错误日志保存在 "
+                    "电脑的私有文件中，可能包含敏感内容，直到你主动删除；"
+                    "任务列表不展示提示词或路径。doctor/status "
+                    "导出只包含 "
+                    "允许的健康字段和固定恢复建议，不包含任务日志、"
+                    "凭据或项目内容；只写入你指定的本地文件，"
+                    "不会自动上传。"
+                ),
+            ),
+        ],
+    )
+    body += card(
+        "What the operator can see",
         "运营方能看到什么",
-        (
-            '机器由我们运营，管理员有 root 权限，'
-            '因此技术上能读取任何槽位的文件和 Claude 凭据。'
-            '管理后台不直接展示这些内容，但设置无法消除 root '
-            '权限。请不要在槽位存放你无法接受管理员读取的内容。'
-        ),
-        "管理后台会展示你的邮箱、槽位额度、持有的槽位、最近访问时间，以及为你记录的付款。",
-        "Cookie",
-        (
-            '我们使用两类必要 Cookie：Fleet 登录会话，以及把 '
-            'Google 授权回复绑定到发起登录的浏览器的 Cookie。'
-            f"后者有效期为 {_span_zh(oauth.FLOW_TTL_S)}；服务器的对"
-            f"应登录记录保留同样时间。"
-            '页面没有分析追踪、广告或第三方脚本。'
-            '语言选择偏好保存在你的浏览器中。'
-        ),
+        [
+            (
+                (
+                    "The machines are ours, and their administrators "
+                    "have root. They can technically read "
+                    "any slot&#x27;s files, and its Claude credential. "
+                    "The operator console does not expose "
+                    "these contents, but root access can inspect or "
+                    "alter model requests and responses. "
+                    "Altered replies may influence local tool actions. "
+                    "Use the service only if you trust "
+                    "the operator and slot host."
+                ),
+                (
+                    "机器由我们运营，管理员有 root 权限，"
+                    "技术上可以读取槽位文件及 Claude 凭据。"
+                    "管理后台不直接展示这些内容，"
+                    "但 root 权限能够查看或修改模型请求与回复；"
+                    "被修改的回复可能影响本地工具操作。使用服务前，"
+                    "需要信任运营方及槽位主机。"
+                ),
+            ),
+            (
+                (
+                    "The console shows your email address, allowance, "
+                    "held slots, last visit and recorded payments."
+                ),
+                "管理后台展示邮箱、槽位额度、持有的槽位、最近访问时间及付款记录。",
+            ),
+        ],
+    )
+    body += card(
+        "Cookies and language",
+        "Cookie 与页面语言",
+        [
+            (
+                (
+                    "Two necessary cookies support sign-in: your session "
+                    "cookie and the one that ties "
+                    "Google’s reply to the browser that requested it, "
+                    f"which lasts {_span(oauth.FLOW_TTL_S)}; the server ke"
+                    f"eps a matching record for the same time. "
+                    "There is no analytics, advertising or third-party "
+                    "script. Page language is selected "
+                    "by the English or Chinese URL."
+                ),
+                (
+                    "登录使用两类必要 Cookie：Fleet 会话，以及把 Google "
+                    "授权回复绑定到发起登录的浏览器的 Cookie。"
+                    f"后者有效期为 {_span_zh(oauth.FLOW_TTL_S)}，服务器的对"
+                    f"应记录保留相同时间。没有分析追踪、广告或第三方脚本。"
+                    "英语或中文由页面地址选择。"
+                ),
+            ),
+        ],
+    )
+    body += card(
+        "Sharing, keeping and deleting",
         "共享、保存与删除",
-        (
-            '我们不出售这些资料。你开启故障邮件后，'
-            '发生故障或恢复时，邮箱和槽位名称会发送给负责投递的 '
-            'Resend。'
-            '服务器由我们租用的托管公司提供；Google 和 Anthropic '
-            '也会处理你在其自身服务中的登录和 Claude 使用。'
-        ),
-        (
-            '归还槽位会删除其 Linux 账号及所有文件。Fleet '
-            '账号仍存在期间，账号信息和付款记录继续保留。'
-            '要删除 Fleet 账号，请联系运营方；'
-            '待所有槽位归还并清空后，由运营方手动处理。'
-        ),
-        "如果这些处理方式发生变化，本页会更新，并在顶部注明日期。",
-    ])
+        [
+            (
+                (
+                    "We do not sell what we keep. If you choose outage "
+                    "emails, your address and slot name "
+                    "go to Resend for delivery only when there is an "
+                    "outage or recovery to report. Servers "
+                    "run at hosting companies we rent from. Google and "
+                    "Anthropic handle your use of their "
+                    "own services: Google sign-in and Claude."
+                ),
+                (
+                    "我们不出售这些资料。开启故障邮件后，"
+                    "需要通知故障或恢复时，邮箱和槽位名称会发送给投递服务"
+                    " Resend。"
+                    "服务器由我们租用的托管公司提供；Google 和 Anthropic "
+                    "分别处理你在其自身服务中的登录和 Claude 使用。"
+                ),
+            ),
+            (
+                (
+                    "Giving a slot back deletes its Linux account and "
+                    "every file in it, not your local "
+                    "files or Claude account. Your Fleet account and "
+                    "recorded payments remain while that "
+                    "account exists. To delete it, contact the operator: "
+                    "deletion is done by hand after "
+                    "all held slots have been returned and wiped. If "
+                    "these practices change, we update this page and its "
+                    "date."
+                ),
+                (
+                    "归还槽位会删除其 Linux 账号和所有文件，"
+                    "不删除本地文件或 Claude 账号。Fleet 账号存在期间，"
+                    "账号信息和付款记录 "
+                    "继续保留。要删除 Fleet 账号，请联系运营方；"
+                    "待全部槽位归还并清空后，由运营方手动处理。"
+                    "处理方式变化时会更新本页及日期。"
+                ),
+            ),
+        ],
+    )
     return _shell("privacy", body, here="/privacy", width="doc", viewer=viewer)
 
 
@@ -1438,7 +1503,7 @@ SWITCH_ENDED = {
                                         "nothing changed."),
 }
 #: What a flow that did not go through was, by its kind.
-NOT_DONE = {"token": "The previous local setup did not finish",
+NOT_DONE = {"token": "The connection setup did not finish",
             "switch": "The change of account did not go through"}
 
 
@@ -1523,20 +1588,28 @@ def _slot_card(
             "</span> &mdash; your slot may be unreachable"
         )
         machine_zh = (
-            f'<span class="bad-text">已 {_age(now, heard)} 未收到报告</span>；槽位可能无法连接'
+
+                f'<span class="bad-text">已 {_age(now, heard)} 未收到报'
+                f'告</span>；槽位可能无法连接'
+
         )
     else:
         machine = f"last heard {escape(_age(now, heard))} ago"
         machine_zh = f"最近报告：{escape(_age(now, heard))} 前"
     region = f" · {escape(node['region'])}" if node.get("region") else ""
     claimed = (
-        f" · claimed {escape(_age(now, slot['claimed_at']))} ago" if slot.get("claimed_at") else ""
+        (
+            f" · claimed {escape(_age(now, slot['claimed_at']))} a"
+            f"go"
+        ) if slot.get("claimed_at") else ""
     )
     # The holder sees the slot by this name on every paired computer.
     name = names.display(slot)
     about = f"{region}{claimed}".lstrip(" ·")
     claimed_zh = (
-        f" · 领取于 {escape(_age(now, slot['claimed_at']))} 前" if slot.get("claimed_at") else ""
+        (
+            f" · 领取于 {escape(_age(now, slot['claimed_at']))} 前"
+        ) if slot.get("claimed_at") else ""
     )
     about_zh = f"{region}{claimed_zh}".lstrip(" ·")
     # Somebody's own node, said beside its name rather than lost in the small
@@ -1689,7 +1762,8 @@ COMPATIBILITY_DETAILS_ZH = {
 
 
 def _notice(english: str, chinese: str, cls: str = "") -> str:
-    return f'<p class="{cls}">' + bi(english, chinese, inline=True) + '</p>'
+    opening = '<p' + (f' class="{cls}"' if cls else '') + '>'
+    return opening + bi(english, chinese, inline=True) + '</p>'
 
 
 def _account_health(
@@ -1712,7 +1786,9 @@ def _account_health(
         listening_since=listening,
     )
     words = {
-        "ready": ("ok", "Reported ready", ("The latest slot report shows current credentials.")),
+        "ready": ("ok", "Reported ready", (
+            'The latest slot report shows current credentials.'
+        )),
         "renewal_pending": (
             "warn",
             "Renewal pending",
@@ -1784,7 +1860,10 @@ def _account_health(
         detail_zh += " 长期登录会在三天内到期，请提前重新登录，以保持自动续期。"
     elif code == "ready" and sign_in_reason(report.get("credentials") or {}, now):
         detail_zh += (
-            " 报告中的访问凭据尚未过期，但实时模型访问未经验证；请在到期前重新登录，恢复自动续期。"
+
+                ' 报告中的访问凭据尚未过期，但实时模型访问未经验证；'
+                '请在到期前重新登录，恢复自动续期。'
+
         )
     elif code == "ready" and warning:
         detail_zh += " " + _guidance_zh(report.get("credentials") or {}, now)
@@ -1800,16 +1879,23 @@ def _account_health(
         )
         detail_zh += " " + COMPATIBILITY_ZH[checked] + "。" + explanation_zh
     source = (
-        f'<div class="account-health" role="status" '
-        f'data-health="{code}" '
-        'aria-label="Reported account health · 账号健康报告"><p>'
-        f'<span class="pill {tone}">{title}</span> {detail}</p>'
-        '<p class="small muted">A heartbeat observation does not '
-        "prove "
-        "that Anthropic will accept a model request. Use "
-        "<code>ccfleet status --json</code> "
-        "or <code>ccfleet doctor --privacy</code> for connection "
-        "checks.</p></div>"
+
+            f'<div class="account-health" role="status" '
+            f'data-health="{code}" '
+            'aria-label="Reported account health" '
+            'data-aria-label-en="Reported account health" '
+            'data-aria-label-zh="账号健康报告"><p>'
+            f'<span class="pill {tone}">{title}</span> {detail}</p'
+            f'>'
+            '<p class="small muted">A heartbeat observation does '
+            'not '
+            "prove "
+            'that Anthropic will accept a model request. Use '
+            '<code>ccfleet status --json</code> '
+            'or <code>ccfleet doctor --privacy</code> for '
+            'connection '
+            "checks.</p></div>"
+
     )
     return _blocks(
         source,
@@ -1900,12 +1986,18 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
         value = report["latencies"][key]
         samples = "sample" if value["count"] == 1 else "samples"
         measured = (
-            f"{value['mean']:.1f} ms mean · {value['max']:.1f} ms max · {value['count']} {samples}"
+            (
+                f"{value['mean']:.1f} ms mean · {value['max']:.1f} ms "
+                f"max · {value['count']} {samples}"
+            )
             if value["count"]
             else "No timing samples"
         )
         measured_zh = (
-            (f"均值 {value['mean']:.1f} ms · 最大 {value['max']:.1f} ms · {value['count']} 个样本")
+            ((
+                f"均值 {value['mean']:.1f} ms · 最大 "
+                f"{value['max']:.1f} ms · {value['count']} 个样本"
+            ))
             if value["count"]
             else "没有时长样本"
         )
@@ -2184,14 +2276,19 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
     elif renewal.get("state") == "retrying":
         lines.append(
             _notice(
-                "Native credential renewal is not yet confirmed; a bounded retry is scheduled.",
+                (
+                    'Native credential renewal is not yet confirmed; a '
+                    'bounded retry is scheduled.'
+                ),
                 "原版凭据续期尚未确认，已安排有限次数的重试。",
                 "small muted",
             )
         )
     elif expires is not None and expires <= now + RENEWAL_WINDOW_S and renewal:
         lines.append(
-            _notice(("Automatic credential renewal is due."), "已到自动续期时间。", "small muted")
+            _notice(((
+                'Automatic credential renewal is due.'
+            )), "已到自动续期时间。", "small muted")
         )
     elif renewal.get("last_success_at"):
         age = _age(now, renewal["last_success_at"])
@@ -2248,7 +2345,10 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             )
             spent += bi(
                 caption,
-                (f'<div class="usage-nums muted">{unit_zh} Token · 过去 {escape(span_zh)}</div>'),
+                (
+                    f'<div class="usage-nums muted">{unit_zh} Token · 过去'
+                    f' {escape(span_zh)}</div>'
+                ),
             )
     if bars:
         bars = (
@@ -2294,35 +2394,49 @@ def _sign_in_left(expires: Any, now: float) -> str:
 
 
 def _ways_to_use(_report: Mapping[str, Any]) -> str:
-    """Local native Claude is primary; the slot terminal remains compatible."""
-    body = (
-        '<div class="ways" aria-label="How to use this slot · 使用方法">'
-        '<div class="way"><b>Claude Code CLI</b><p>Run <code>ccfleet local</code> on your '
-        'computer for original Claude Code with local files, tools and history. Supported '
-        'model requests use this slot. Use <code>--continue</code> or '
-        '<code>--resume</code> to reopen saved local conversations. Plain '
-        '<code>ccfleet</code> remains the remote-terminal command, with remote files '
-        'and persistent tmux.</p><p><code>ccfleet start</code> offers a guided local '
-        'new/continue/resume menu; <code>ccfleet sessions</code> opens native history. '
-        '<a href="/docs/guide#client-tools">Diagnostics, preferences, updates and '
-        'background jobs</a> are in the guide.</p></div></div>')
-    return _blocks(body, [
-        (
-            '在电脑上运行 <code>ccfleet local</code>，使用原版 '
-            'Claude Code；文件、工具与历史留在本机，'
-            '受支持的模型请求使用你的槽位。用 '
-            '<code>--continue</code> 或 <code>--resume</code> '
-            '继续本地对话。'
-            '直接运行 <code>ccfleet</code> 则打开远程终端，'
-            '使用远程文件和持久 tmux 会话。'
-        ),
-        (
-            '<code>ccfleet start</code> 提供新建/继续/恢复菜单；'
-            '<code>ccfleet sessions</code> 打开原版历史列表。'
-            '<a href="/docs/guide#client-tools">诊断、偏好、'
-            '更新与后台任务</a> 见使用指南。'
-        ),
-    ])
+    """Explain the current local CLI and HTTPS model connection."""
+    return ('<div class="ways" aria-label="How to use this slot" '
+            'data-aria-label-en="How to use this slot" data-aria-label-zh="使用方法">'
+            '<div class="way"><b>Claude Code CLI</b>'
+            + _notice(
+                (
+                    'Run <code>ccfleet local</code> on your computer. '
+                    'Claude Code runs its tools '
+                    'and reads your files locally. When it needs a model '
+                    'reply, it sends the '
+                    'selected context over HTTPS to Fleet. Fleet chooses '
+                    'one of your selected '
+                    'slots, uses that slot’s Claude sign-in, and returns '
+                    'the reply to your computer.'
+                ),
+                (
+                    '在电脑上运行 <code>ccfleet local</code>。Claude '
+                    'Code 在本机运行工具、读取文件；'
+                    '需要模型回复时，把选定的上下文通过 HTTPS 发给 '
+                    'Fleet。Fleet 选择你指定的槽位，'
+                    '使用该槽位的 Claude 登录，再把回复送回电脑。'
+                ))
+            + _notice(
+                (
+                    'Your files, settings and conversation history stay '
+                    'on your computer, but '
+                    'file excerpts and tool results selected as model '
+                    'context are sent with the request. '
+                    '<code>ccfleet start</code> offers a '
+                    'new/continue/resume menu; '
+                    '<code>ccfleet sessions</code> opens native history. '
+                    '<a href="/docs/guide#client-tools">Client tools and '
+                    'diagnostics</a> are in the guide.'
+                ),
+                (
+                    '文件、设置和会话历史保留在电脑上；'
+                    '被选作模型上下文的文件片段、工具结果会随请求发送。'
+                    '<code>ccfleet start</code> 提供新建/继续/恢复菜单；'
+                    '<code>ccfleet sessions</code> 打开原版历史列表。'
+                    '<a href="/docs/guide#client-tools">客户端工具与诊断<'
+                    '/a> 见使用指南。'
+                ))
+            + '</div></div>')
 
 
 def _ended(login: Mapping[str, Any]) -> str:
@@ -2350,22 +2464,19 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
         return ('<div class="row-line stacked flow"><div class="row-name">Claude</div>'
                 '<p class="muted small">' + label(
                     (
-                        'A previous local setup is still pending. Cancel it '
+                        'A connection setup is still pending. Cancel it '
                         'before signing in again.'
                     ),
-                    "旧的本地设置流程尚未结束，请先取消，再重新登录。", inline=True) + '</p>'
-                + _form(f"{base}/cancel", csrf, "Cancel old setup", cls="danger") + "</div>")
+                    "连接设置尚未结束，请先取消，再重新登录。", inline=True) + '</p>'
+                + _form(f"{base}/cancel", csrf, "Cancel setup", cls="danger") + "</div>")
     state = login.get("state") if login.get("kind") != "token" else None
     if not state:
         signed_in = (report.get("credentials") or {}).get("logged_in") is True
         field = ("" if signed_in else
-                 (
-                     '<input type="email" name="email" placeholder="your '
-                     'Claude email (optional) / Claude 邮箱（可选）" '
-                     'data-placeholder-en="your Claude email (optional)" '
-                     'data-placeholder-zh="Claude 邮箱（可选）" aria-label="Claude '
-                     'email · Claude 邮箱">'
-                 ))
+                 '<input type="email" name="email" placeholder="your Claude email (optional)" '
+                 'data-placeholder-en="your Claude email (optional)" '
+                 'data-placeholder-zh="Claude 邮箱（可选）" aria-label="Claude email" '
+                 'data-aria-label-en="Claude email" data-aria-label-zh="Claude 邮箱">')
         return ('<div class="row-line"><div class="row-name">Claude</div>'
                 '<div class="actions">'
                 + _form(f"{base}/signin", csrf, "Sign in again" if signed_in else
@@ -2392,12 +2503,17 @@ def _sign_in(slot: Mapping[str, Any], report: Mapping[str, Any],
     if state == "url_ready":
         body += _form(f"{base}/code", csrf, "Send code",
                       (
-                          '<input type="text" name="code" placeholder="paste the '
-                          'code / 粘贴授权码" '
-                          'data-placeholder-en="paste the code" '
-                          'data-placeholder-zh="粘贴授权码" '
-                          'aria-label="Authorization code · 授权码" '
-                          'autocomplete="off" required>'
+
+                              '<input type="text" name="code" placeholder="paste '
+                              'the '
+                              'code / 粘贴授权码" '
+                              'data-placeholder-en="paste the code" '
+                              'data-placeholder-zh="粘贴授权码" '
+                              'aria-label="Authorization code" '
+                              'data-aria-label-en="Authorization code" '
+                              'data-aria-label-zh="授权码" '
+                              'autocomplete="off" required>'
+
                       ), "primary")
     body += " " + _form(f"{base}/cancel", csrf, "Cancel", cls="danger")
     return (f'<div class="row-line stacked flow"><div class="row-name">Claude</div>'
@@ -2608,10 +2724,16 @@ def _rename(slot: Mapping[str, Any], csrf: str) -> str:
     return ('<div class="row-line stacked"><div class="row-name">'
             + label('Name', '槽位名称', inline=True) + '</div>'
             + _form(f"/account/slots/{escape(slot['id'])}/rename", csrf, "Rename",
-                    '<input type="text" name="name" maxlength="30" autocomplete="off" '
-                    'required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,28}[A-Za-z0-9]" '
-                    f'placeholder="{escape(names.display(slot))}" '
-                    'aria-label="A new name for this slot">')
+                    (
+                        '<input type="text" name="name" maxlength="30" '
+                        'autocomplete="off" '
+                        'required pattern="[A-Za-z0-9][A-Za-z0-9-]{0,'
+                        '28}[A-Za-z0-9]" '
+                        f'placeholder="{escape(names.display(slot))}" '
+                        'aria-label="A new name for this slot" '
+                        'data-aria-label-en="A new name for this slot" '
+                        'data-aria-label-zh="槽位的新名称">'
+                    ))
             + '<p class="small muted">' + label(
                 (
                     'What claude.ai shows for this machine, so Anthropic '
@@ -2708,109 +2830,135 @@ def console_door(account: Optional[Mapping[str, Any]], session_id: str, cfg: Con
                   door=True)
 
 
-def cli_pairing_page(slot: Mapping[str, Any], token: str,
-                     viewer: Optional[Viewer] = None) -> str:
-    """The single-use code that binds one local key to this held slot."""
+def cli_pairing_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewer] = None) -> str:
+    """A single-use device pairing code, followed by current HTTPS setup."""
+    name = escape(str(slot.get("name") or slot["id"]))
     body = (
-
-            '<div class="pagehead"><h1>Connect a computer</h1>'
-            f"<p class=\"sub\">This pairing code connects your computer"
-            f" to "
-            f"<strong>{escape(str(slot.get('name') or slot['id']))}</st"
-            f"rong>.</p></div>"
-            '<div class="card"><h2>1. Run one-command setup</h2>'
-            '<pre>curl -fsSL https://raw.githubusercontent.'
-            'com/cdcupt/ccfleet/main/'
-            'laptop/install.sh | bash -s -- --setup</pre>'
-            '<p>Use the same command for a new computer, an update, '
-            'or an old '
-            '<code>ccfleet-connect</code> installation. It checks '
-            'readiness before legacy '
-            'token cleanup and configures your shell PATH. Existing '
-            'native Claude is kept; '
-            'if missing, the original local CLI is installed from '
-            'the fixed vendor URL. '
-            'No project is uploaded during setup.</p>'
-            '<p>If old live-folder access is found, setup asks '
-            'before stopping its connector '
-            'and associated remote sessions. Finish that work first, '
-            'or explicitly approve '
-            'cancellation. Files/history and ordinary remote tmux '
-            'sessions are kept.</p></div>'
-            '<div class="card"><h2>2. Enter this code only if '
-            'asked</h2>'
-            f"<p>A new computer needs this pairing code. It works once "
-            f"and expires in "
-            f"{_span(cli_access.PAIRING_TTL_S)}.</p>"
-            f'<pre class="token">{escape(token)}</pre>'
-            '<p>Already paired? Setup keeps your existing connection;'
-            ' you do not need to '
-            'use this code. To deliberately pair another slot, use '
-            '<code>ccfleet login</code> '
-            "and enter its code.</p></div>"
-            '<div class="card"><h2>3. Choose your project</h2>'
-            '<pre>cd /path/to/your-project\nccfleet start</pre>'
-            '<p>Open a new terminal first so PATH changes take '
-            'effect. Original Claude Code, '
-            'files, tools, settings and history run locally; '
-            'supported model requests use '
-            'your assigned slot. Choose new, continue or resume in '
-            'the menu, or run '
-            '<code>ccfleet local</code> directly. No upload, mount '
-            'or push/pull step is needed.</p>'
-            '<p class="muted">Plain <code>ccfleet</code> still opens '
-            'the ordinary remote '
-            'workspace, without sharing a local folder. Its default '
-            'session bypasses permission '
-            'prompts, as do new local conversations. Choose '
-            '<code>--mode manual</code> for prompts. '
-            'Use native <code>--resume</code> or '
-            '<code>--continue</code> for local history; '
-            '<code>--legacy-history</code> selects earlier isolated '
-            'preview history. See the '
-            '<a href="/docs/guide#migration">setup and migration '
-            'guide</a>.</p></div>'
-            '<p><a class="back" href="/account">&larr; your '
-            'slots</a></p>'
+        '<div class="pagehead"><h1>'
+        + label("Connect a computer", "连接电脑", inline=True)
+        + "</h1>"
+        + _notice(
+            (f"This pairing code connects your computer to <strong>{name}</strong>."),
+            (f"此配对码会把电脑连接到槽位 <strong>{name}</strong>。"),
+            "sub",
         )
-    body = _blocks(body, [
-        "连接电脑", "此配对码会把电脑连接到槽位 "
-        + f"<strong>{escape(str(slot.get('name') or slot['id']))}</strong>。",
-        "1. 运行一键设置",
-        (
-            '新电脑、更新客户端，或从旧 '
-            '<code>ccfleet-connect</code> 迁移，都使用上方命令。'
-            '设置程序先检查可用性，再清理旧令牌并配置 PATH。'
-            '已有原版 Claude 保留；若未安装，'
-            '会从固定官方地址安装。'
-            "设置过程中不会上传项目。"
-        ),
-        "发现旧的实时文件夹访问时，会先询问是否停止连接器及相关远程会话。"
-        "请先完成待处理工作，或明确批准取消；文件、历史和普通远程 tmux 会话会保留。",
-        "2. 仅在提示时输入配对码",
-        f"新电脑需要这个一次性配对码，有效期为 {_span_zh(cli_access.PAIRING_TTL_S)}。",
-        (
-            '已经配对的电脑会继续使用现有连接，不必再次输入。'
-            '要主动配对另一槽位，请运行 <code>ccfleet '
-            'login</code>，输入其配对码。'
-        ),
-        "3. 打开你的项目",
-        (
-            '先打开新终端，使 PATH 生效。原版 Claude Code、文件、'
-            '工具、设置和历史都在本机；'
-            '受支持的模型请求使用分配的槽位。菜单可新建、'
-            '继续或恢复对话，也可直接运行 <code>ccfleet '
-            'local</code>。'
-            "无需上传、挂载或手动同步。"
-        ),
-        (
-            '直接运行 <code>ccfleet</code> 仍进入普通远程工作区，不共享本地文件夹。'
-            '默认远程会话和新建本地对话会跳过权限确认；'
-            '需要逐次确认时使用 <code>--mode manual</code>。用 '
-            '<code>--resume</code> 或 <code>--continue</code> 打开本地历史；'
-            '<code>--legacy-history</code> 选择旧的独立预览历史。详见 <a '
-            'href="/docs/guide#migration">设置与迁移指南</a>。'
-        ),
-        '<a class="back" href="/account">&larr; 我的槽位</a>',
-    ])
+        + "</div>"
+        + '<div class="card"><h2>'
+        + label("1. Install or update Fleet", "1. 安装或更新 Fleet", inline=True)
+        + "</h2><pre>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/"
+        "laptop/install.sh | bash -s -- --setup</pre>"
+        + _notice(
+            (
+                "The same command sets up a new computer or updates "
+                "your Fleet client. "
+                "It checks the connection and configures your shell "
+                "PATH. Existing native "
+                "Claude is kept; if missing, setup installs the "
+                "original local CLI from the "
+                "fixed vendor URL. No project is uploaded during "
+                "setup."
+            ),
+            (
+                "新电脑或更新 Fleet 客户端都使用这个命令。"
+                "设置程序检查连接并配置 PATH；已有原版 Claude 保留，"
+                "未安装时会从固定官方地址安装。"
+                "设置过程中不会上传项目。"
+            ),
+        )
+        + "</div>"
+        + '<div class="card"><h2>'
+        + label(("2. Enter this code only if asked"), "2. 仅在提示时输入配对码", inline=True)
+        + "</h2>"
+        + _notice(
+            (
+                f"A new computer needs this pairing code. It works onc"
+                f"e and expires in {_span(cli_access.PAIRING_TTL_S)}."
+            ),
+            (f"新电脑需要这个一次性配对码，有效期为 {_span_zh(cli_access.PAIRING_TTL_S)}。"),
+        )
+        + f'<pre class="token">{escape(token)}</pre>'
+        + _notice(
+            (
+                "Already paired? Setup keeps your existing "
+                "connection; you do not need to "
+                "use this code. To deliberately pair another slot, "
+                "use <code>ccfleet login</code> "
+                "and enter its code."
+            ),
+            (
+                "已经配对的电脑会继续使用现有连接，不必再次输入。"
+                "要主动配对另一槽位，请运行 "
+                "<code>ccfleet login</code>，输入其配对码。"
+            ),
+        )
+        + "</div>"
+        + '<div class="card"><h2>'
+        + label(
+            ("3. Connect Claude and open your project"), "3. 连接 Claude 并打开项目", inline=True
+        )
+        + "</h2><pre>ccfleet gateway setup\ncd /path/to/your-project\nccfleet local</pre>"
+        + _notice(
+            (
+                "Open a new terminal first so PATH changes take "
+                "effect. Gateway setup "
+                "creates or reuses a private Fleet connection key. "
+                "Claude Code does file and "
+                "tool work on your computer; its model requests "
+                "travel over HTTPS to Fleet, "
+                "use your selected slot’s Claude account, and return "
+                "the reply to your computer."
+            ),
+            (
+                "先打开新终端，使 PATH 生效。"
+                "网关设置会创建或复用私密的 Fleet 连接密钥。Claude "
+                "Code "
+                "在本机处理文件和工具操作；模型请求通过 HTTPS 发给 "
+                "Fleet，使用你选定槽位的 Claude 账号，"
+                "再把回复送回电脑。"
+            ),
+        )
+        + _notice(
+            (
+                "Your saved history and files stay local. Selected "
+                "prompts, file excerpts "
+                "and tool results are sent as model context. Fleet’s "
+                "gateway can read those "
+                "requests and replies while forwarding them. Setup "
+                "does not automatically "
+                "erase existing files or history."
+            ),
+            (
+                "保存的历史和文件留在本机；选定的提示词、文件片段、"
+                "工具结果会作为模型上下文发送。Fleet "
+                "网关转发时能读取这些请求与回复。"
+                "设置程序不会自动清除已有文件或历史。"
+            ),
+        )
+        + _notice(
+            (
+                "Use <code>ccfleet start</code> for a "
+                "new/continue/resume menu, or native "
+                "<code>--resume</code> and <code>--continue</code> "
+                "to reopen local history. "
+                "New local conversations default to bypassing "
+                "permission prompts. Choose "
+                "<code>--mode manual</code> for approval prompts. "
+                "See the "
+                '<a href="/docs/guide">connection and usage '
+                "guide</a>."
+            ),
+            (
+                "<code>ccfleet start</code> 提供新建/继续/恢复菜单，"
+                "也可用原版 <code>--resume</code> "
+                "或 <code>--continue</code> 打开本地历史。"
+                "新建本地对话默认跳过权限确认，需要逐次确认时使用 "
+                "<code>--mode manual</code>。详见 <a "
+                'href="/docs/guide">连接与使用指南</a>。'
+            ),
+            "muted",
+        )
+        + '</div><p><a class="back" href="/account">'
+        + label("Back to your slots", "返回我的槽位", inline=True)
+        + "</a></p>"
+    )
     return _shell("connect a computer", body, viewer=viewer)

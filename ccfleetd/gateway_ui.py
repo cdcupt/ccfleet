@@ -51,9 +51,10 @@ def _choices(held: list[Mapping[str, Any]], selected: list[str]) -> str:
                     + '<input type="number" min="1" max="100" step="1" name="slot.'
                     + escape(identifier, quote=True) + '" value="'
                     + str(positions.get(identifier, ""))
-                    + '" aria-label="Priority for '
-                    + escape(name, quote=True) + ' / ' + escape(name, quote=True)
-                    + ' 的顺序" placeholder="—"></span></label>')
+                    + '" aria-label="Priority for ' + escape(name, quote=True)
+                    + '" data-aria-label-en="Priority for ' + escape(name, quote=True)
+                    + '" data-aria-label-zh="' + escape(name + ' 的顺序', quote=True)
+                    + '" placeholder="—"></span></label>')
     return ('<fieldset class="gateway-slots"><legend>'
             + label("Choose your accounts", "选择要使用的账号", inline=True) + '</legend>'
             + bi('<p class="gateway-hint">Enter <b>1</b> for your first choice, '
@@ -73,7 +74,7 @@ def _option(value: str, en: str, zh: str, selected: bool) -> str:
     return ('<option value="' + value + '" data-copy-en="' + escape(en, quote=True)
             + '" data-copy-zh="' + escape(zh, quote=True) + '"'
             + (' selected' if selected else '') + '>'
-            + escape(en + ' · ' + zh) + '</option>')
+            + escape(en) + '</option>')
 
 
 def _routing(mode: str) -> str:
@@ -128,123 +129,188 @@ def _form(action: str, csrf: str, held: list[Mapping[str, Any]], *,
                else label("Save changes", "保存修改", inline=True)) + '</button></div></form>')
 
 
-def panel(store: Any, cfg: Any, account: Mapping[str, Any], csrf: str,
-          held: list[Mapping[str, Any]]) -> str:
+def panel(
+    store: Any, cfg: Any, account: Mapping[str, Any], csrf: str, held: list[Mapping[str, Any]]
+) -> str:
     if not available(cfg):
-        return ''
+        return ""
     keys = store.list_gateway_keys(account["id"])
     active = [key for key in keys if not key.get("revoked_at")]
-    base_url = cfg.public_url.rstrip('/')
+    base_url = cfg.public_url.rstrip("/")
     entries = []
     for key in active:
-        count = len(key.get('slot_ids') or [])
-        routing = (label("One fixed account", "固定一个账号", inline=True) if count == 1
-                   else label("Keep conversations together", "保持会话", inline=True)
-                   if key.get("mode") == 'sticky'
-                   else label("Priority order", "按顺序选择", inline=True))
-        revoke = ('<form method="post" action="/account/gateway/revoke">' + _csrf(csrf)
-                  + '<input type="hidden" name="key_id" value="'
-                  + escape(str(key["id"]), quote=True) + '">'
-                  '<button class="btn danger" type="submit">'
-                  + label("Revoke key", "撤销密钥", inline=True) + '</button></form>')
-        entries.append('<details class="gateway-endpoint"><summary>'
-                       '<span class="gateway-endpoint-name">'
-                       + escape(str(key.get("name") or "Connection")) + '</span>'
-                       '<span class="gateway-badges"><span class="gateway-badge">'
-                       + routing + '</span><span class="gateway-badge">'
-                       + label(f'{count} selected', f'已选 {count} 个槽位', inline=True)
-                       + '</span></span></summary><div class="gateway-endpoint-body">'
-                       + _form('update', csrf, held, key=key)
-                       + '<div class="gateway-revoke">'
-                       + bi('<p class="small muted">Revoking stops this key, including its '
-                            'requests in progress. It does not release your slots.</p>',
-                            '<p class="small muted">撤销后，此密钥以及它正在进行的请求会停止。'
-                            '你的槽位不会被释放。</p>') + revoke + '</div>'
-                       + '<p class="small muted gateway-key-reference">'
-                       + label("Key reference", "密钥编号", inline=True) + ': <code>'
-                       + escape(str(key['id'])) + '</code></p></div></details>')
+        count = len(key.get("slot_ids") or [])
+        routing = (
+            label("One fixed account", "固定一个账号", inline=True)
+            if count == 1
+            else label("Keep conversations together", "保持会话", inline=True)
+            if key.get("mode") == "sticky"
+            else label("Priority order", "按顺序选择", inline=True)
+        )
+        revoke = (
+            '<form method="post" action="/account/gateway/revoke">'
+            + _csrf(csrf)
+            + '<input type="hidden" name="key_id" value="'
+            + escape(str(key["id"]), quote=True)
+            + '">'
+            '<button class="btn danger" type="submit">'
+            + label("Revoke key", "撤销密钥", inline=True)
+            + "</button></form>"
+        )
+        entries.append(
+            '<details class="gateway-endpoint"><summary>'
+            '<span class="gateway-endpoint-name">'
+            + escape(str(key.get("name") or "Connection"))
+            + "</span>"
+            '<span class="gateway-badges"><span class="gateway-badge">'
+            + routing
+            + '</span><span class="gateway-badge">'
+            + label(f"{count} selected", f"已选 {count} 个槽位", inline=True)
+            + '</span></span></summary><div class="gateway-endpoint-body">'
+            + _form("update", csrf, held, key=key)
+            + '<div class="gateway-revoke">'
+            + bi(
+                '<p class="small muted">Revoking stops this key, including its '
+                "requests in progress. It does not release your slots.</p>",
+                '<p class="small muted">撤销后，此密钥以及它正在进行的请求会停止。'
+                "你的槽位不会被释放。</p>",
+            )
+            + revoke
+            + "</div>"
+            + '<p class="small muted gateway-key-reference">'
+            + label("Key reference", "密钥编号", inline=True)
+            + ": <code>"
+            + escape(str(key["id"]))
+            + "</code></p></div></details>"
+        )
     if _selectable(held):
-        create = ('<details class="gateway-create"' + ('' if active else ' open')
-                  + '><summary>' + label("New connection key", "新建连接密钥", inline=True)
-                  + '</summary><div class="gateway-endpoint-body">'
-                  + bi('<p class="gateway-hint">For an app you configure yourself. '
-                       'Give it a name, choose your accounts, then save the key shown once.</p>',
-                       '<p class="gateway-hint">适合手动配置的应用。为连接取个名字，选好账号，'
-                       '然后保存只显示一次的密钥。</p>')
-                  + _form('create', csrf, held) + '</div></details>')
+        create = (
+            '<details class="gateway-create"'
+            + ("" if active else " open")
+            + "><summary>"
+            + label("New connection key", "新建连接密钥", inline=True)
+            + '</summary><div class="gateway-endpoint-body">'
+            + bi(
+                '<p class="gateway-hint">For an app you configure yourself. '
+                "Give it a name, choose your accounts, then save the key shown once.</p>",
+                '<p class="gateway-hint">适合手动配置的应用。为连接取个名字，选好账号，'
+                "然后保存只显示一次的密钥。</p>",
+            )
+            + _form("create", csrf, held)
+            + "</div></details>"
+        )
     else:
-        create = ('<div class="gateway-empty">'
-                  + bi('<h3>Start with a slot</h3><p>Claim a slot above, then sign in to '
-                       'your own Claude account. You can create a connection '
-                       'after claiming it.</p>',
-                       '<h3>先准备一个槽位</h3><p>在上方领取槽位，再登录你自己的 Claude 账号。'
-                       '领取后，就可以创建连接。</p>')
-                  + '<a href="/docs">' + label("How to get a slot", "如何获得槽位", inline=True)
-                  + '</a></div>')
-    return ('<section class="card gateway-card" id="gateway" aria-labelledby="gateway-title">'
-            '<div class="gateway-heading"><div><h2 id="gateway-title">'
-            + label("Connect Claude", "连接 Claude", inline=True) + '</h2>'
-            + bi('<p>Use Claude Code on your computer, with your own accounts. '
-                 'Your files, tools and conversation history stay local.</p>',
-                 '<p>在自己的电脑上运行 Claude Code，使用你自己槽位里的账号。'
-                 '文件、工具和会话历史都保留在本地。</p>')
-            + '</div><span class="gateway-badge gateway-https">HTTPS</span></div>'
-            '<div class="gateway-address"><div>'
-            + label("Base URL", "连接地址", inline=True) + '</div><code>'
-            + escape(base_url) + '</code></div>'
-            '<div class="gateway-start"><div><h3>'
-            + label("With the Fleet CLI", "使用 Fleet 命令行", inline=True) + '</h3>'
-            + bi('<p>On an already paired computer, run these in order:</p>',
-                 '<p>在已配对的电脑上，依次运行：</p>')
-            + '<pre><code>ccfleet gateway setup\nccfleet local</code></pre>'
-            + bi('<p class="small muted">Setup creates or reuses its own key. '
-                 'It does not import a key created on this page.</p>',
-                 '<p class="small muted">设置命令会创建或复用自己的密钥，'
-                 '不会导入本页手动创建的密钥。</p>')
-            + '</div><div><h3>'
-            + label("With another app", "连接其他应用", inline=True) + '</h3>'
-            + bi('<p>For original Claude Code or a compatible Messages API app, '
-                 'create a connection key below and use it with this base URL.</p>',
-                 '<p>原版 Claude Code 或兼容 Messages API 的应用，也可以使用下方创建的'
-                 '连接密钥和上面的地址。</p>')
-            + '<a href="/docs/library/docs/public-gateway.html#keys">'
-            + label("Connection guide", "查看连接说明", inline=True) + '</a></div></div>'
-            '<div class="gateway-section-heading"><h3>'
-            + label("Your connection keys", "你的连接密钥", inline=True) + '</h3>'
-            '<span class="gateway-count">' + str(len(active)) + '</span></div>'
-            + ('' if active else bi('<p class="gateway-hint">No saved connections yet. '
-                                   'Choose guided CLI setup above, or create a key below.</p>',
-                                   '<p class="gateway-hint">还没有保存的连接。'
-                                   '可以用上面的命令引导设置，也可以在下方创建密钥。</p>'))
-            + ''.join(entries) + create
-            + '<details class="gateway-help gateway-technical"><summary>'
-            + label("Switching, privacy and advanced setup", "切换、隐私与进阶设置", inline=True)
-            + '</summary>'
-            + bi('<p>Only slots you own can be selected. The gateway can try a selected '
-                 'backup after a confirmed eligible rejection or a connection failure '
-                 'before a model request was sent. It does not make another attempt when '
-                 'the outcome is unknown or after response headers have been sent. '
-                 'Applications may have their own retry behavior.</p>'
-                 '<p>HTTPS encrypts traffic in transit, but our gateway can read model '
-                 'requests and replies while forwarding them. Your Claude account credential '
-                 'remains on its slot.</p>'
-                 '<p>For several slots, use <code>ccfleet gateway setup --slots first-slot '
-                 'backup-slot --routing sticky</code>. Replace the example names with yours. '
-                 'Use <code>ccfleet local --slot first-slot</code> to pin one selected slot '
-                 'for a launch, with no automatic switch to another account.</p>'
-                 '<p>A released or reclaimed slot needs its endpoint selection saved again '
-                 'before its new account can be used.</p>',
-                 '<p>只能选择你自己的槽位。已确认属于可安全切换的拒绝，或确定还没把模型请求'
-                 '发出去就连接失败时，网关可以尝试已选的备用槽位。如果不知道请求是否已经送达，'
-                 '或已向客户端发出响应头，就不会再次尝试。应用本身可能有另外的重试规则。</p>'
-                 '<p>HTTPS 会加密传输过程，但我们的网关在转发时能够读取模型请求和回复。'
-                 '你的 Claude 账号登录凭据仍保留在对应槽位上。</p>'
-                 '<p>选择多个槽位可以用 <code>ccfleet gateway setup --slots first-slot '
-                 'backup-slot --routing sticky</code>，请换成自己的槽位名。'
-                 '<code>ccfleet local --slot first-slot</code> 会让这次启动只用所选的一个槽位，'
-                 '不会自动切换到其他账号。</p>'
-                 '<p>槽位释放后重新领取，需要再次保存它的连接选择，才能使用这次领取后的账号。</p>')
-            + '</details><style>' + GATEWAY_CSS + '</style></section>')
+        create = (
+            '<div class="gateway-empty">'
+            + bi(
+                "<h3>Start with a slot</h3><p>Claim a slot above, then sign in to "
+                "your own Claude account. You can create a connection "
+                "after claiming it.</p>",
+                "<h3>先准备一个槽位</h3><p>在上方领取槽位，再登录你自己的 Claude 账号。"
+                "领取后，就可以创建连接。</p>",
+            )
+            + '<a href="/docs">'
+            + label("How to get a slot", "如何获得槽位", inline=True)
+            + "</a></div>"
+        )
+    return (
+        '<section class="card gateway-card" id="gateway" aria-labelledby="gateway-title">'
+        '<div class="gateway-heading"><div><h2 id="gateway-title">'
+        + label("Connect Claude", "连接 Claude", inline=True)
+        + "</h2>"
+        + bi(
+            "<p>Use Claude Code on your computer. It sends a model request over "
+            "HTTPS to Fleet; Fleet chooses one of your selected accounts and sends "
+            "the reply back. Files, tools and saved history stay local, while "
+            "selected file excerpts and tool results travel as model context.</p>",
+            "<p>在电脑上运行 Claude Code。需要模型回复时，请求通过 HTTPS 发给 Fleet；"
+            "Fleet 使用你选定的账号，再把回复送回电脑。文件、工具和已保存的历史留在本机，"
+            "被选作上下文的文件片段、工具结果会随请求发送。</p>",
+        )
+        + '</div><span class="gateway-badge gateway-https">HTTPS</span></div>'
+        '<div class="gateway-address"><div>'
+        + label("Base URL", "连接地址", inline=True)
+        + "</div><code>"
+        + escape(base_url)
+        + "</code></div>"
+        '<div class="gateway-start"><div><h3>'
+        + label("With the Fleet CLI", "使用 Fleet 命令行", inline=True)
+        + "</h3>"
+        + bi(
+            "<p>On an already paired computer, run these in order:</p>",
+            "<p>在已配对的电脑上，依次运行：</p>",
+        )
+        + "<pre><code>ccfleet gateway setup\nccfleet local</code></pre>"
+        + bi(
+            '<p class="small muted">Setup creates or reuses its own key. '
+            "It does not import a key created on this page.</p>",
+            '<p class="small muted">设置命令会创建或复用自己的密钥，'
+            "不会导入本页手动创建的密钥。</p>",
+        )
+        + "</div><div><h3>"
+        + label("With another app", "连接其他应用", inline=True)
+        + "</h3>"
+        + bi(
+            "<p>For original Claude Code or a compatible Messages API app, "
+            "create a connection key below and use it with this base URL.</p>",
+            "<p>原版 Claude Code 或兼容 Messages API 的应用，也可以使用下方创建的"
+            "连接密钥和上面的地址。</p>",
+        )
+        + '<a href="/docs/library/docs/public-gateway.html#keys">'
+        + label("Connection guide", "查看连接说明", inline=True)
+        + "</a></div></div>"
+        '<div class="gateway-section-heading"><h3>'
+        + label("Your connection keys", "你的连接密钥", inline=True)
+        + "</h3>"
+        '<span class="gateway-count">'
+        + str(len(active))
+        + "</span></div>"
+        + (
+            ""
+            if active
+            else bi(
+                '<p class="gateway-hint">No saved connections yet. '
+                "Choose guided CLI setup above, or create a key below.</p>",
+                '<p class="gateway-hint">还没有保存的连接。'
+                "可以用上面的命令引导设置，也可以在下方创建密钥。</p>",
+            )
+        )
+        + "".join(entries)
+        + create
+        + '<details class="gateway-help gateway-technical"><summary>'
+        + label("Switching, privacy and advanced setup", "切换、隐私与进阶设置", inline=True)
+        + "</summary>"
+        + bi(
+            "<p>Only slots you own can be selected. The gateway can try a selected "
+            "backup after a confirmed eligible rejection or a connection failure "
+            "before a model request was sent. It does not make another attempt when "
+            "the outcome is unknown or after response headers have been sent. "
+            "Applications may have their own retry behavior.</p>"
+            "<p>HTTPS encrypts traffic in transit, but our gateway can read model "
+            "requests and replies, including selected model context. "
+            "Your Claude account credential "
+            "remains on its slot.</p>"
+            "<p>For several slots, use <code>ccfleet gateway setup --slots first-slot "
+            "backup-slot --routing sticky</code>. Replace the example names with yours. "
+            "Use <code>ccfleet local --slot first-slot</code> to pin one selected slot "
+            "for a launch, with no automatic switch to another account.</p>"
+            "<p>A released or reclaimed slot needs its endpoint selection saved again "
+            "before its new account can be used.</p>",
+            "<p>只能选择你自己的槽位。已确认属于可安全切换的拒绝，或确定还没把模型请求"
+            "发出去就连接失败时，网关可以尝试已选的备用槽位。如果不知道请求是否已经送达，"
+            "或已向客户端发出响应头，就不会再次尝试。应用本身可能有另外的重试规则。</p>"
+            "<p>HTTPS 会加密传输过程，但我们的网关在转发时能够读取模型请求和回复。"
+            "你的 Claude 账号登录凭据仍保留在对应槽位上。</p>"
+            "<p>选择多个槽位可以用 <code>ccfleet gateway setup --slots first-slot "
+            "backup-slot --routing sticky</code>，请换成自己的槽位名。"
+            "<code>ccfleet local --slot first-slot</code> 会让这次启动只用所选的一个槽位，"
+            "不会自动切换到其他账号。</p>"
+            "<p>槽位释放后重新领取，需要再次保存它的连接选择，才能使用这次领取后的账号。</p>",
+        )
+        + "</details><style>"
+        + GATEWAY_CSS
+        + "</style></section>"
+    )
 
 
 GATEWAY_CSS = """

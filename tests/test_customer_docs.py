@@ -16,7 +16,7 @@ import threading
 
 import pytest
 
-from ccfleetd import customer_docs, usersite
+from ccfleetd import bilingual, customer_docs, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
@@ -74,6 +74,7 @@ def two_sites():
 
 # -- who can read them ---------------------------------------------------------------
 
+
 @pytest.mark.parametrize("path", [*DOC_PATHS, "/docs/", "/docs/guide/"])
 def test_every_page_is_public(one_site, path):
     status, body = one_site(path)
@@ -92,6 +93,7 @@ def test_with_two_sites_the_pages_belong_to_the_product(two_sites, path):
 
 
 # -- what they say -------------------------------------------------------------------
+
 
 def render(path, **settings):
     return customer_docs.page_for(path)(Config(**settings))
@@ -166,68 +168,80 @@ def test_the_operators_address_appears_only_once_they_chose_one():
 
 
 def test_the_guide_quotes_labels_the_user_site_really_shows():
-    guide = render("/docs/guide")
+    from tests.test_html_document_preservation import visible_html
+
+    guide = visible_html(render("/docs/guide"))
     states = {words for _, words, _ in usersite.STATE_WORDS.values()}
     for label in ("Setting up", "Ready to sign in", "In use"):
-        assert label in states and f">{label}</span>" in guide
+        assert label in states and label in guide
     source = inspect.getsource(usersite)
-    for label in ("Claim a slot", "Sign in to Claude", "Send code",
-                  "Connect this computer", "Connect another computer",
-                  "Give this slot back", "Sign in again", "Back to Stable",
-                  "Change account"):
-        assert f'"{label}"' in source, f"the user site has no button {label!r}"
-        assert f">{label}</span>" in guide
+    for label in (
+        "Claim a slot",
+        "Sign in to Claude",
+        "Send code",
+        "Connect this computer",
+        "Connect another computer",
+        "Give this slot back",
+        "Sign in again",
+        "Back to Stable",
+        "Change account",
+    ):
+        assert f'"{label}"' in source and label in guide
 
 
 def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
-    """The public guide and pairing page describe the one supported CLI path."""
+    import runpy
+    import shlex
     from pathlib import Path
 
+    from tests.test_html_document_preservation import Document
+
     root = Path(__file__).parents[1]
-    script = (root / "laptop" / "ccfleet").read_text()
-    pages = {"guide": render("/docs/guide"),
-             "pairing page": usersite.cli_pairing_page(
-                 {"id": "s1", "name": "slot-1"}, "ccf_pair_" + "x" * 40)}
-    for where, page in pages.items():
-        assert "ccfleet login" in page and ">ccfleet<" in page, where
-        assert "login" in script and "attach" in script
-        assert "ANTHROPIC_BASE_URL" not in page and "CLAUDE_CODE_OAUTH_TOKEN" not in page
-    assert "ccfleet new research --mode plan" in pages["guide"]
-    assert "ccfleet restart --session research --mode auto" in pages["guide"]
-    assert "ccfleet new research --model fable --effort xhigh" in pages["guide"]
-    assert "<code>/model</code>" in pages["guide"]
-    assert "<code>/effort</code>" in pages["guide"]
-    assert pages["guide"].count('class="code-wrap"') >= 4
+    parser = runpy.run_path(str(root / "laptop/ccfleet"), run_name="docs_parser")["parser"]()
+    page = Document(bilingual.project_html(render("/docs/guide"), "en"))
+    checked = []
+    for block in page.pre_codes:
+        for line in block.splitlines():
+            if line.startswith("ccfleet "):
+                checked.append(parser.parse_args(shlex.split(line)[1:]))
+    assert {"local", "gateway", "start", "sessions", "update", "doctor"} <= {
+        command.command for command in checked
+    }
+    assert "/model" in page.text and "/effort" in page.text
+    assert "ANTHROPIC_BASE_URL" not in page.text and "CLAUDE_CODE_OAUTH_TOKEN" not in page.text
+    assert "ccfleet new" not in page.text and "ccfleet remote" not in page.text
 
 
 def test_the_guide_matches_the_session_defaults_and_native_controls():
+    import runpy
     from pathlib import Path
 
-    script = (Path(__file__).parents[1] / "node" / "slot-add.sh").read_text()
-    unit = (Path(__file__).parents[1] / "node/systemd/ccfleet-shell.service").read_text()
-    guide = render("/docs/guide")
-    assert "setdefault('model', 'opus')" in script and "<strong>Opus</strong>" in guide
-    assert "--model opus --effort max" in unit and "max effort" in guide
+    from tests.test_html_document_preservation import visible_html
+
+    root = Path(__file__).parents[1]
+    parser = runpy.run_path(str(root / "laptop/ccfleet"), run_name="defaults_docs")["parser"]()
+    parsed = parser.parse_args(["local"])
+    guide = visible_html(render("/docs/guide"))
+    assert parsed.command == "local"
+    for phrase in ("bypassPermissions", "Opus", "max effort", "/model", "/effort"):
+        assert phrase in guide
     assert "CLAUDE_CODE_EFFORT_LEVEL" not in guide
-    assert "ultracode" in guide and "xhigh (extreme high)" in guide
 
 
-def test_how_it_works_says_what_slot_add_switches_off():
-    """The page promises nothing optional reaches Anthropic; slot-add is what
-    keeps that promise, so the two are checked together."""
-    from pathlib import Path
+def test_how_it_works_scopes_local_network_and_supported_telemetry_controls():
+    from tests.test_html_document_preservation import visible_html
 
-    script = (Path(__file__).parents[1] / "node" / "slot-add.sh").read_text()
-    for key in ("DISABLE_ERROR_REPORTING", "DISABLE_BUG_COMMAND",
-                "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"):
-        assert f"'{key}'" in script, key
-    page = render("/docs/how-it-works")
-    assert "error reports, bug reports and feedback surveys are switched off" in page
-    # The page makes no claim that telemetry is disabled; it only names the
-    # controls slot-add actually sets.
-    assert "'DISABLE_TELEMETRY'" not in script
-    switched_off = page.split("are switched off")[0].rsplit(":", 1)[-1]
-    assert "telemetry" not in switched_off, "the list of what is off must not name it"
+    guide = visible_html(render("/docs/guide"))
+    for phrase in (
+        "disables supported optional telemetry",
+        "not an all-traffic firewall",
+        "MCP servers",
+        "hooks",
+        "plugins",
+        "directly from the laptop",
+    ):
+        assert phrase in guide
+    assert "all telemetry is disabled" not in guide.lower()
 
 
 def test_the_guide_says_what_the_usage_numbers_count():
@@ -237,50 +251,54 @@ def test_the_guide_says_what_the_usage_numbers_count():
 
 
 def test_the_guide_distinguishes_new_local_history_and_account_changes():
-    guide = render("/docs/guide")
-    assert "Running <code>ccfleet local</code> again starts a new conversation" in guide
-    assert "<code>--new</code> makes that choice explicit. Existing history is kept" in guide
-    assert "<code>--continue</code> selects the last local conversation for this directory" in guide
-    assert "<code>--resume</code> uses Claude&#x27;s native history picker or an ID/name" in guide
-    assert "Quit a new local session normally with <code>/exit</code>" in guide
-    assert "does not automatically close your local Claude process or delete its history" in guide
-    assert "cancels an in-flight request if that account changes" in guide
-    assert "new requests then use its current bound account" in guide
+    from tests.test_html_document_preservation import visible_html
+
+    guide = visible_html(render("/docs/guide"))
+    for phrase in (
+        "again starts a new conversation",
+        "Existing history is kept",
+        "native history picker",
+        "last local conversation for this directory",
+        "Quit with /exit",
+        "does not automatically close your local Claude process",
+        "cancels an in-flight request if that account changes",
+        "new requests then use its current bound account",
+        "An account change is visible to the operator",
+    ):
+        assert phrase in guide
     assert "any open terminal session ends" not in guide
-    assert "An account change is visible to the operator" in guide
-    assert 'href="/privacy">the privacy page</a> explains which account information' in guide
-    assert "never which account it is" not in guide
 
 
-def test_how_it_works_scopes_persistence_and_broker_outages():
-    page = render("/docs/how-it-works")
-    assert "plain <code>ccfleet</code> remote-terminal command uses a persistent session" in page
-    assert "<code>ccfleet local</code> instead runs on your computer" in page
-    assert "requests require their configured gateway or bridge broker to be reachable" in page
-    assert "A configured gateway failure does not silently start a bridge fallback" in page
-    assert "your slot keeps working through one" not in page
-    assert "Automatic updates are disabled during a CC Fleet launch" in page
-    assert "update your local Claude installation separately" in page
+def test_how_it_works_scopes_local_execution_and_gateway_outages():
+    from tests.test_html_document_preservation import visible_html
+
+    page = visible_html(render("/docs/how-it-works"))
+    for phrase in (
+        "runs original Claude Code on your computer",
+        "configured gateway",
+        "eligible slot",
+        "outage reports an error",
+        "Automatic updates are disabled during a CC Fleet launch",
+        "update your local Claude installation separately",
+    ):
+        assert phrase in page
+    assert "persistent remote" not in page and "--transport bridge" not in page
 
 
-def test_public_guides_distinguish_gateway_content_visibility_from_legacy_bridge():
+def test_public_guides_explain_current_gateway_visibility_and_own_slots():
     from tests.test_html_document_preservation import visible_html
 
     for path in ("/docs/guide", "/docs/how-it-works"):
         source = render(path)
         text = visible_html(source)
-        assert "BWH can read" in text
-        assert "--transport bridge" in text
-        assert "endpoint key" in text and "own slot" in text
-        assert 'href="/docs/library/docs/public-gateway.html"' in source
+        for phrase in ("BWH can read", "own slot", "connection key", "local"):
+            assert phrase in text
+        assert 'href="/docs/library/docs/public-gateway.html' in source
+        assert "--transport bridge" not in text
     how = render("/docs/how-it-works")
-    assert how.index("HTTPS gateway model request path") < how.index("Legacy bridge transport")
     assert 'aria-labelledby="gateway-diag-t gateway-diag-d"' in how
-    assert 'aria-labelledby="legacy-diag-t legacy-diag-d"' in how
-    assert "It does not receive your prompts, conversations, files" not in how
     assert "Those heartbeat reports do not contain prompts" in how
-    assert "direct HTTPS gateway on BWH receives and processes model requests" in how
-    assert "ccfleet gateway setup" in how and "without pairing again" in how
+    assert "direct HTTPS gateway on BWH receives" in how
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
@@ -291,11 +309,15 @@ def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
 
 # -- the way in ----------------------------------------------------------------------
 
+
 def test_the_bare_address_is_the_front_page(one_site):
-    """The overview itself, never a redirect to it: the same page /docs is."""
+    from tests.test_html_document_preservation import Document
+
     status, body = one_site("/")
     assert status == 200 and LANDING in body
-    assert body == one_site("/docs")[1]
+    other = one_site("/docs")[1]
+    assert Document(body).headings == Document(other).headings
+    assert 'data-language="en"' in body and 'class="copy-zh"' not in body.split("<body", 1)[1]
     assert one_site("/?signin=cancelled")[0] == 200
 
 
@@ -320,17 +342,21 @@ def test_the_front_page_names_the_bare_address_as_its_own(one_site):
         assert 'rel="canonical"' not in one_site(path)[1], path
 
 
-def test_the_wordmark_and_the_overview_link_go_to_the_bare_address(one_site):
+def test_the_wordmark_and_the_overview_link_go_to_the_language_home(one_site):
+    from tests.test_html_document_preservation import Document
+
     for path in ("/", *DOC_PATHS, "/privacy", "/account"):
         body = one_site(path)[1]
-        assert body.count('<a class="brand" href="/">') == 2, path  # the bar and the footer
-        nav = body[body.index('<nav class="doc-nav">'):]
-        nav = nav[:nav.index("</nav>")]
-        overview = re.search(r'<a href="/"( class="here")?>.*?</a>', nav)
-        assert overview, path
-        assert re.sub(r'<[^>]+>', '', overview[0]).strip().startswith('Overview'), path
-        assert '概览' in overview[0], path
-        assert 'href="/docs"' not in nav, path
+        document = Document(body)
+        brands = [
+            (tag, attrs)
+            for tag, attrs in document.tags
+            if tag == "a" and attrs.get("class") == "brand"
+        ]
+        assert len(brands) == 2
+        assert all(attrs["href"] in {"/", "/en/"} for _, attrs in brands)
+        nav = body[body.index('<nav class="doc-nav">') :].split("</nav>", 1)[0]
+        assert "Overview" in nav and "概览" not in nav
 
 
 def _way_on(page):

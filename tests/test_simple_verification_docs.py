@@ -1,4 +1,5 @@
 """Simple user checks are separated from privacy guarantees and model audits."""
+
 import pytest
 
 from ccfleetd import customer_docs
@@ -29,13 +30,40 @@ def test_simple_check_uses_current_client_and_no_system_inspection(section):
     assert PROMPT in section
 
 
-def test_prompt_is_optional_inference_not_an_enforced_privacy_test(section):
-    for phrase in ("optional", "makes a model request", "plan allowance",
-                   "basic responsiveness", "zero metadata disclosure",
-                   "not an enforced privacy safeguard", "Native context or hooks",
-                   "local OS or directory information", "Do not ask Claude to print real IPs",
-                   "BWH sees connection metadata", "For relayed model requests",
-                   "slot's outbound IP", "Other native/tool network connections"):
+def test_prompt_is_optional_inference_not_an_enforced_privacy_test(section, request):
+    if request.node.callspec.params["section"] == "website":
+        for phrase in (
+            "optional",
+            "makes a model request",
+            "plan allowance",
+            "basic responsiveness",
+            "not an enforced privacy safeguard",
+            "native context or hooks",
+            "Do not ask Claude to print real IPs",
+            "BWH can read model requests and replies",
+            "slot's outbound IP",
+            "directly from the laptop",
+        ):
+            assert phrase in section
+        assert "--transport bridge" not in section
+        for instruction in ("git clone", "pytest", "ipify", "ifconfig", "tcpdump", "printenv"):
+            assert instruction not in section
+        return
+    for phrase in (
+        "optional",
+        "makes a model request",
+        "plan allowance",
+        "basic responsiveness",
+        "zero metadata disclosure",
+        "not an enforced privacy safeguard",
+        "Native context or hooks",
+        "local OS or directory information",
+        "Do not ask Claude to print real IPs",
+        "BWH sees connection metadata",
+        "For relayed model requests",
+        "slot's outbound IP",
+        "Other native/tool network connections",
+    ):
         assert phrase in section
     assert "--transport bridge" in section and "HTTPS gateway" in section
     assert "reads model request and response contents" in section

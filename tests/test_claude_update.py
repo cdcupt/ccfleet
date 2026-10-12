@@ -18,7 +18,7 @@ import time
 import pytest
 
 from ccfleetd import claude_versions, slots, usersite
-from ccfleetd.bilingual import label
+from ccfleetd.bilingual import label, project_html
 from ccfleetd.claude_versions import Target
 from ccfleetd.desired import IDLE_POLL_S, LOGIN_POLL_S, desired_state
 from ccfleetd.heartbeat import validate_heartbeat
@@ -71,7 +71,7 @@ def assert_version_button(row, slot_id, action, english, chinese, cls, csrf):
                      + re.escape(target) + r'">(.*?)</form>', row, flags=re.S)
     assert form is not None, f"missing POST form for {target}"
     expected = (f'<button class="{cls}" type="submit">'
-                + label(english, chinese, inline=True) + '</button>')
+                + project_html(label(english, chinese, inline=True), 'en') + '</button>')
     assert expected in form[1]
     assert f'<input type="hidden" name="csrf" value="{csrf}">' in form[1]
     assert form[1].count('<button') == 1 and form[1].count('name="csrf"') == 1
@@ -558,7 +558,7 @@ def test_an_unread_channel_claims_nothing(site):  # noqa: F811
                             (claude_versions.SETTING_KEY,))
         store._conn.commit()
     row = cc_row(erik.page())
-    assert text(row) == "Claude Code2.1.267 · Stable2.1.267 · 稳定版"
+    assert text(row) == "Claude Code2.1.267 · Stable"
 
 
 def test_an_owners_own_node_has_the_row_and_its_pin_moves(site):  # noqa: F811

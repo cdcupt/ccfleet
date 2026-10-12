@@ -33,7 +33,8 @@ from . import (
     usersite,
 )
 from . import slots as slotstates
-from .bilingual import SCRIPT_CSP as BILINGUAL_CSP
+from .bilingual import SCRIPT_CSP as LANGUAGE_LINKS_CSP
+from .bilingual import localized_url, project_html, route_target
 from .config import Config
 from .desired import desired_state, machine_hostname
 from .heartbeat import HeartbeatError, validate_heartbeat
@@ -61,10 +62,11 @@ HTML_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     # Images: data: only, which is the icon in the tab; default-src 'none'
-    # blocked it on every page. Scripts: the one that says reset times in the
-    # viewer's zone and the authored bilingual language control, by their hashes.
+    # blocked it on every page. Small helpers for reset times and retaining
+    # the current anchor in language links are allowed by their exact hashes.
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
-                                f"img-src data:; script-src {LOCAL_TIMES_CSP} {BILINGUAL_CSP}"),
+                                f"img-src data:; script-src {LOCAL_TIMES_CSP} "
+                                f"{LANGUAGE_LINKS_CSP}"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 
@@ -73,8 +75,11 @@ def access_log_route(target: Any) -> str:
     """Fixed routes/templates only; unknown targets and dynamic IDs never reach logs."""
     if not isinstance(target, str):
         return "unknown_route"
+    routed = route_target(target) or route_target(target, method="POST")
+    if routed is None:
+        return "unknown_route"
     try:
-        path = urllib.parse.urlsplit(target).path
+        path = urllib.parse.urlsplit(routed[0]).path
     except ValueError:
         return "unknown_route"
     if path in {"/", "/healthz", "/account", "/privacy", "/status", "/auth/basic",
@@ -327,7 +332,74 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- helpers -------------------------------------------------------
 
+        def _page_route(self, method: str) -> Optional[str]:
+            """Resolve only authored UI language aliases, freshly for each request."""
+            self._page_language = "en"
+            self._page_target = self.path
+            self._localized_page = False
+            routed = route_target(self.path, method=method)
+            if routed is None:
+                self._json(404, {"error": "not found"})
+                return None
+            original = urllib.parse.urlsplit(self.path)
+            if original.scheme or original.netloc:
+                self._json(404, {"error": "not found"})
+                return None
+            self._page_target, self._page_language, self._localized_page = routed
+            if self._localized_page and not self._product_site():
+                self._json(404, {"error": "not found"})
+                return None
+            # Keep the existing canonical request semantics. Only an explicit
+            # language alias changes routing; an absolute request target must
+            # not acquire the authority of its apparent local path.
+            return (urllib.parse.urlsplit(self._page_target).path if self._localized_page
+                    else self.path.split("?", 1)[0])
+
+        def _html_page_route(self) -> bool:
+            """Current public UI and form results; historical files stay unchanged."""
+            path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
+            current = {"/", "/account", "/privacy", "/status", "/docs/library",
+                       "/docs/library/", "/docs/library/docs/index.html",
+                       "/docs/library/docs/public-gateway.html",
+                       "/docs/library/docs/platform-comparison.html"}
+            return (path in current or customer_docs.page_for(path) is not None
+                    or (self.command == "POST" and path.startswith("/account/")))
+
+        def _page_location(self, location: str) -> str:
+            if getattr(self, "_localized_page", False) and self._product_site():
+                return localized_url(location, self._page_language,
+                                     canonical_target=self._page_target,
+                                     public_origin=ctx.cfg.public_url)
+            return location
+
+        def _legacy_language_redirect(self) -> bool:
+            """Old bookmarked language queries now select a distinct UI page."""
+            if ctx.cfg.broker_only or not self._product_site() or not self._html_page_route():
+                return False
+            parts = urllib.parse.urlsplit(self._page_target)
+            original = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qsl(original.query, keep_blank_values=True)
+            choices = [value for key, value in query if key == "lang"]
+            if not choices:
+                return False
+            language = "zh" if choices[0] == "zh" else "en"
+            clean = urllib.parse.urlunsplit(("", "", parts.path,
+                urllib.parse.urlencode([(key, value) for key, value in query if key != "lang"]),
+                parts.fragment))
+            destination = localized_url(clean, language, canonical_target=self._page_target,
+                                        public_origin=ctx.cfg.public_url)
+            # The explicit old query wins over an alias prefix for this redirect.
+            self._localized_page = False
+            self._redirect(destination)
+            return True
+
         def _send(self, status: int, body: bytes, headers: dict[str, str]) -> None:
+            if (headers.get("Content-Type", "").startswith("text/html")
+                    and self._product_site() and self._html_page_route()):
+                body = project_html(body.decode("utf-8"),
+                                    language=getattr(self, "_page_language", "en"),
+                                    target=getattr(self, "_page_target", self.path),
+                                    public_origin=ctx.cfg.public_url).encode("utf-8")
             self.send_response(status)
             for key, value in headers.items():
                 self.send_header(key, value)
@@ -575,7 +647,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             if query.get("error"):
                 # The person pressed cancel on Google's consent screen.
-                self._redirect_with_cookies("/?signin=cancelled",
+                return_page = route_target(flow["next_url"])
+                cancelled = (localized_url("/?signin=cancelled", return_page[1],
+                                            public_origin=ctx.cfg.public_url)
+                             if return_page is not None and return_page[2]
+                             else "/?signin=cancelled")
+                self._redirect_with_cookies(cancelled,
                                             [self._clear_flow_cookie()])
                 return
             try:
@@ -675,7 +752,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _redirect_with_cookies(self, location: str,
                                    cookies: list[str]) -> None:
             self.send_response(303)
-            self.send_header("Location", location)
+            self.send_header("Location", self._page_location(location))
             for cookie in cookies:
                 self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Length", "0")
@@ -891,7 +968,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             self._json(200, {"ok": True})
 
         def do_GET(self) -> None:  # noqa: N802
-            path = self.path.split("?", 1)[0]
+            path = self._page_route("GET")
+            if path is None or self._legacy_language_redirect():
+                return
             if path in ("/api/cli/gateway/options", "/api/gateway/status"):
                 if not self._product_site() or ctx.cfg.broker_only:
                     self._json(404, {"error": "not found"})
@@ -1044,12 +1123,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _redirect(self, location: str) -> None:
             self.send_response(303)
-            self.send_header("Location", location)
+            self.send_header("Location", self._page_location(location))
             self.send_header("Content-Length", "0")
             self.end_headers()
 
         def do_POST(self) -> None:  # noqa: N802
-            path = self.path.split("?", 1)[0]
+            path = self._page_route("POST")
+            if path is None:
+                return
             if path in ("/v1/messages", "/v1/messages/count_tokens"):
                 if not self._product_site() or ctx.cfg.broker_only:
                     gateway.model_error(self, 404, "This endpoint is not available on this host.")

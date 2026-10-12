@@ -187,10 +187,10 @@ def _page(
 ) -> str:
     """A docs page with its current navigation link marked."""
     body += bi(
-        '<p class="sub"><a href="/docs/library">HTML reference library</a> &mdash; '
-        "architecture, operations and verification records.</p>",
-        '<p class="sub"><a href="/docs/library">HTML 参考资料库</a>：架构、运维与按日期'
-        "记录的验证结果。</p>",
+        '<p class="sub"><a href="/docs/library">Documentation</a> &mdash; '
+        "the gateway explained simply, account choices and platform comparison.</p>",
+        '<p class="sub"><a href="/docs/library">使用文档</a>：'
+        "网关通俗说明、账号选择与平台对比。</p>",
     )
     return _shell(
         title, body, extra_css=DOCS_CSS, here=here, width=width, viewer=viewer, canonical=canonical
@@ -353,17 +353,15 @@ def overview(
             "<h1>Claude Code 在本地运行，账号留在你的槽位</h1>",
         )
         + bi(
-            '<p class="lead">ccfleet gives you a <strong>slot</strong>: your own Linux '
-            "account on a machine we run, with Claude Code installed and signed in to "
-            "<em>your own</em> Claude account. Run <code>ccfleet local</code> for original "
-            "Claude Code, files, tools and history on your computer, with supported model "
-            "requests relayed through that slot. Plain <code>ccfleet</code> keeps the "
-            "remote terminal available for earlier work.</p>",
-            '<p class="lead">CC Fleet 为你提供一个<strong>槽位</strong>：我们托管的机器上的'
-            "独立 Linux 用户环境，安装原版 Claude Code，并登录<em>你自己的</em> Claude "
-            "账号。运行 <code>ccfleet local</code>，代码、工具、设置和会话记录都留在你的电"
-            "脑；支持的模型请求经过你选择的槽位。需要继续以前的远程工作时，仍可使用 "
-            "<code>ccfleet</code> 打开远程终端。</p>",
+            '<p class="lead">ccfleet gives you a <strong>slot</strong>: a separate Linux '
+            "account on a machine we run, signed in to <em>your own</em> Claude account. "
+            "Run <code>ccfleet local</code> for original Claude Code, files, tools and "
+            "history on your computer. Supported model requests go over HTTPS to our "
+            "gateway, then through a slot you selected.</p>",
+            '<p class="lead">CC Fleet 提供一个<strong>槽位</strong>：托管机器上的独立 '
+            "Linux 用户环境，登录<em>你自己的</em> Claude 账号。运行 <code>ccfleet "
+            "local</code>，原版 Claude Code、文件、工具和历史在你的电脑上；支持的模型请求通"
+            "过 HTTPS 到网关，再经过你选中的槽位。</p>",
         )
         + way_in
         + "</div>"
@@ -569,8 +567,8 @@ def _model_connections(cfg: Config) -> str:
             "<code>2</code>; leave any excluded slot blank. Priorities must be unique. "
             "Choose your routing mode, then save. Only your own held slots are selectable, "
             "and each needs a usable Claude sign-in before it can receive requests.</p>",
-            '<p><strong>在网页上：</strong>打开<a href="/account#gateway">我的槽位 → '
-            "连接 Claude</a>。只用 A 时，仅给 A 填 <code>1</code>；需要 B 备选时，再给 B 填 "
+            '<p><strong>在网页上：</strong>打开<a href="/account#gateway">我的槽位 → 连接 '
+            "Claude</a>。只用 A 时，仅给 A 填 <code>1</code>；需要 B 备选时，再给 B 填 "
             "<code>2</code>。不想使用的槽位留空，排序数字不能重复。选择路由方式后保存。只能"
             "选择你自己持有的槽位，而且各槽位需要有效的 Claude 登录才能接收请求。</p>",
         )
@@ -653,20 +651,24 @@ def _model_connections(cfg: Config) -> str:
             "件内容都不会离开电脑。</p>",
         )
         + bi(
-            '<p>For diagrams and the comparison with CC Host, read the <a href="https://ccf'
-            'leet-security-report-2026-10-09.cdcupt.chatgpt.site/?lang=en#host-comparison" '
-            'target="_blank" rel="noopener noreferrer">current comparison report</a>. The '
-            "original October 9 audit is historical; the current gateway update is dated "
-            "October 11. The live verification used one actual account; multi-slot routing "
-            "and failures were tested with controlled peers, not two live accounts. "
-            'Technical details are in the <a href="/docs/library/docs/public-gateway.html">'
-            "gateway reference</a>.</p>",
-            '<p>路线图与 CC Host 对比见<a href="https://ccfleet-security-report-2026-10-09.'
-            'cdcupt.chatgpt.site/?lang=zh#host-comparison" target="_blank" rel="noopener '
-            'noreferrer">最新对比报告</a>。10 月 9 日的原始审计是历史记录，当前网关更新标注'
-            "为 10 月 11 日。真实线上验证使用了一个实际账号；多槽位路由和故障切换使用受控测"
-            '试，并非两个真实账号的线上实测。技术细节见<a href="/docs/library/docs/public-g'
-            'ateway.html">网关参考指南</a>。</p>',
+            "<p>Machine administrators have root access and can inspect your slot. "
+            "They may also alter relayed replies, which can influence local tool actions. "
+            "Choose local permissions accordingly and keep only data you trust them to handle.</p>",
+            "<p>机器管理员拥有 root 权限，能检查你的槽位，也可能修改转发的回复，"
+            "进而影响本地工具行为。请选择合适的本地权限，"
+            "并只放入你愿意信任服务方处理的数据。</p>",
+        )
+        + bi(
+            '<p>For diagrams and the comparison with CC Host, read the <a href="/docs/libra'
+            'ry/docs/platform-comparison.html">comparison guide</a>. The recorded '
+            "verification on October 11, 2026 used one actual live account; multi-slot "
+            "routing and faults used controlled peers, not two live accounts. See <a "
+            'href="/docs/library/docs/public-gateway.html#verification">verification '
+            "scope</a> for the evidence.</p>",
+            '<p>路线图与 CC Host 对比见<a href="/docs/library/docs/platform-comparison.html'
+            '">对比指南</a>。2026 年 10 月 11 日记录的真实线上验证使用了一个实际账号；多槽'
+            "位路由和故障使用受控测试，并非两个真实账号的线上实测。证据范围见<a "
+            'href="/docs/library/docs/public-gateway.html#verification">验证说明</a>。</p>',
         )
         + "</div>"
     )
@@ -697,248 +699,203 @@ def _version_choices() -> str:
             "slots</a>, find the Claude Code row and choose <strong>Update to</strong> the "
             "offered version. This also selects the Latest channel. <strong>Back to "
             "Stable</strong> selects the stable channel instead. An operator-held version "
-            "has no update button. New remote sessions use the new version; existing ones "
+            "has no update button. New Claude processes use the new version; existing ones "
             "are not interrupted. Updating the slot does not change your local Claude "
             "Code.</p>",
             '<p><strong>槽位上的 Claude Code：</strong>打开<a href="/account">我的槽位</a>'
             "，在 Claude Code 一栏点击<strong>更新至</strong>提供的新版本，同时会切换为 "
             "Latest 渠道。<strong>返回稳定版</strong>则选择 Stable "
-            "渠道。运营者固定的版本没有更新按钮。新远程会话使用新版，已有会话不被打断；更新"
-            "槽位不会改变你电脑上的 Claude Code。</p>",
+            "渠道。运营者固定的版本没有更新按钮。新 Claude 进程使用新版，已有进程不被打断；"
+            "更新槽位不会改变你电脑上的 Claude Code。</p>",
         )
         + "</div>"
     )
 
 
+def _prompt_example(commands: str, prompt_en: str, prompt_zh: str) -> str:
+    """Localize sample prompt prose while keeping one shared command example."""
+    code = escape(commands, quote=False).replace(
+        escape(prompt_en, quote=False), label(prompt_en, prompt_zh, inline=True), 1
+    )
+    return "<pre><code>" + code + "</code></pre>"
+
+
 def _client_tools() -> str:
-    """Local controls, distinct from remote commands."""
-    body = (
+    """Current local controls; commands are shared between the language pages."""
+    return (
         '<div class="card" id="client-tools">'
-        + bi("<h2>Your everyday terminal controls</h2>", "<h2>日常终端操作</h2>")
-        + bi("<h3>Choose a session and save defaults</h3>", "<h3>选择会话与保存偏好</h3>")
+        + bi("<h2>Everyday commands</h2>", "<h2>日常操作</h2>")
+        + bi(
+            "<p>Use the menu to start a new conversation, continue your last one, or "
+            "resume a saved conversation. Your native Claude history stays private on this "
+            "computer; CC Fleet does not import or synchronize conversations.</p>",
+            "<p>通过菜单可以新建会话、继续上一次工作，或恢复保存的会话。原生 Claude "
+            "历史留在这台电脑上，CC Fleet 不会导入或同步会话。</p>",
+        )
         + "<pre><code>ccfleet start\nccfleet sessions\nccfleet preferences set --model "
         "opus --effort high --mode plan\nccfleet preferences show\nccfleet preferences "
         "clear</code></pre>"
         + bi(
-            "<p><code>ccfleet start</code> (also <code>ccfleet menu</code>) offers local "
-            "new, continue and resume choices. <code>ccfleet sessions</code> opens the "
-            "original Claude history picker; CC Fleet does not import or synchronize "
-            "conversations. Preferences apply to new local sessions in this project, or "
-            "use <code>--project PATH</code>. Explicit launch choices win; resuming keeps "
-            "the saved model and effort unless changed deliberately. Clearing preferences "
-            "does not clear history. Bare <code>ccfleet</code> still means the remote "
-            "terminal; <code>ccfleet remote</code> selects it explicitly.</p>",
-            "<p><code>ccfleet start</code>（也可写作 <code>ccfleet menu</code>）提供新建、"
-            "继续和恢复本地会话的菜单。<code>ccfleet sessions</code> 打开 Claude "
-            "原生历史选择器，CC Fleet 不会导入或同步会话。偏好用于当前项目的新本地会话，也"
-            "可用 <code>--project PATH</code> 指定项目。启动时明确指定的选项优先；恢复会保"
-            "留原有模型和推理强度，除非主动更改。清除偏好不会清除历史。单独运行 "
-            "<code>ccfleet</code> 仍打开远程终端；<code>ccfleet remote</code> "
-            "可以明确选择它。</p>",
-        )
-        + bi("<h3>Check readiness and get local help</h3>", "<h3>检查连接与导出诊断</h3>")
-        + "<pre><code>ccfleet status --json\nccfleet doctor --privacy --json --export "
-        "./ccfleet-support.json</code></pre>"
-        + bi(
-            "<p>These checks make no model request and do not scan a project. Doctor "
-            "separates installation, pairing, broker/relay and account-health problems. "
-            "The support report is written only to the new local file you request; it is "
-            "not uploaded and does not include prompts, file contents, local paths, tokens "
-            "or account email. Review it before sharing it yourself. A reported-ready "
-            "heartbeat is an observation, not proof that Anthropic will accept the next "
-            "request. Renewal pending, sign-in required, account maintenance and stale "
-            "observations remain distinct; keep your pairing and use the existing sign-in "
-            "controls when needed.</p>",
-            "<p>这些检查不会调用模型，也不会扫描项目。Doctor 会区分安装、配对、转发连接和账"
-            "号状态问题。诊断报告只写入你指定的新本地文件，不会上传，也不包含提示词、文件内"
-            "容、本地路径、token 或账号邮箱。请先自行检查，再决定是否分享。机器报告“就绪”只"
-            "是一次状态观察，不保证 Anthropic 会接受下一条请求。待续期、需要重新登录、账号"
-            "维护和过期的状态信息会分别显示；请保留已有配对，必要时使用现有登录按钮。</p>",
+            "<p>Preferences apply to new local sessions in this project, or use "
+            "<code>--project PATH</code>. Explicit launch choices win. Resuming keeps the "
+            "saved model and effort unless changed deliberately. Clearing preferences does "
+            "not clear history.</p>",
+            "<p>偏好用于当前项目的新会话，也可用 <code>--project PATH</code> "
+            "指定项目。启动时明确选择的选项优先。恢复时保留原有模型和推理强度，除非你主动修"
+            "改；清除偏好不会删除历史。</p>",
         )
         + '<h3 id="simple-verification">'
-        + bi("Simple readiness and response checks", "简单检查：连接就绪与基本回复", inline=True)
+        + label("Check the connection first", "先检查连接", inline=True)
         + "</h3>"
         + bi(
-            "<p>With the current native-local client, first run this in your normal "
-            "terminal, not inside Claude:</p>",
-            "<p>使用当前原生本地客户端时，先在普通终端中运行下面的命令，不要在 Claude "
-            "会话中输入：</p>",
+            "<p>With the current native-local client, run this in your normal terminal, "
+            "not inside Claude. It checks installation and slot readiness. It does not "
+            "scan projects, start a Claude session or make a model request.</p>",
+            "<p>使用当前本地客户端时，在普通终端中运行下面的命令，不要在 Claude "
+            "会话中输入。它检查安装和槽位是否就绪，不扫描项目、不启动 Claude "
+            "会话，也不调用模型。</p>",
         )
-        + "<pre><code>ccfleet local --check</code></pre>"
+        + "<pre><code>ccfleet local --check\nccfleet status --json\nccfleet doctor "
+        "--privacy --json --export ./ccfleet-support.json</code></pre>"
         + bi(
-            "<p>This checks local Claude executable availability and the configured "
-            "gateway or legacy bridge&#x27;s slot readiness. It does not scan projects, "
-            "start a Claude session or make a model request. Readiness is not proof that "
-            "Anthropic will accept the next request.</p>",
-            "<p>它检查本地 Claude 是否可用，以及当前网关或旧桥接方式所需的槽位是否就绪。不"
-            "扫描项目、不启动 Claude 会话，也不调用模型。“就绪”不等于 Anthropic "
-            "一定会接受下一条请求。</p>",
+            "<p>Doctor separates installation, pairing, connection and account-health "
+            "problems. The support report is a new local file, not an upload. It omits "
+            "prompts, file contents, local paths, tokens and account email; review it "
+            "before sharing. Reported readiness is an observation, not proof that "
+            "Anthropic will accept the next request. Keep an existing working pairing "
+            "while you investigate an error.</p>",
+            "<p>Doctor 区分安装、配对、连接和账号状态问题。诊断报告只写入新的本地文件，不会"
+            "上传，也不包含提示、文件内容、本地路径、token 或账号邮箱；请先检查再分享。显示"
+            "“就绪”是一次状态观察，不保证 Anthropic 会接受下一条消息。排查问题时，请保留仍"
+            "然有效的配对。</p>",
         )
         + bi(
             "<p>For an optional basic response check, open <code>ccfleet local</code> and "
-            "paste this prompt:</p>",
-            "<p>如需额外检查基本回复，可以打开 <code>ccfleet local</code>，粘贴下面的提示：</p>",
+            "paste this prompt. It makes a model request and may use your plan "
+            "allowance:</p>",
+            "<p>如需额外检查基本回复，打开 <code>ccfleet local</code>，粘贴下面的提示。它会"
+            "调用模型，并可能消耗订阅额度：</p>",
         )
-        + "<blockquote>"
         + bi(
-            "<p>Do not use tools, read files, or inspect my system or network.<br>Reply "
-            "only: <code>CCFLEET_OK</code></p>",
-            "<p>不要使用工具、读取文件，或检查我的系统和网络。<br>只回复：<code>CCFLEET_OK<"
-            "/code></p>",
+            "<blockquote><p>Do not use tools, read files, or inspect my system or "
+            "network.<br>Reply only: <code>CCFLEET_OK</code></p></blockquote>",
+            "<blockquote><p>不要使用工具、读取文件，或检查我的系统与网络。<br>"
+            "只回复：<code>CCFLEET_OK</code></p></blockquote>",
         )
-        + "</blockquote>"
         + bi(
-            "<p>The optional prompt makes a model request and may use your plan allowance. "
-            "A matching reply checks only basic responsiveness; it does not independently "
-            "prove routing, anonymity or zero metadata disclosure. The no-tools "
-            "instruction is not an enforced privacy safeguard. Native context or hooks can "
-            "still exist, and context may include local OS or directory information. Do "
-            "not ask Claude to print real IPs, locations or environment values just to "
-            "check privacy: those outputs would enter the conversation. BWH sees "
-            "connection metadata; the direct HTTPS gateway also reads model request and "
-            "response contents. The explicit <code>--transport bridge</code> route keeps "
-            "its inner SSH stream encrypted through the BWH byte broker. For relayed model "
-            "requests, Anthropic sees the slot&#x27;s outbound IP. Other native/tool "
-            "network connections are outside that statement.</p>",
-            "<p>这条可选提示会调用模型，并可能消耗订阅额度。收到相同回复，只说明基本响应正"
-            "常，不能单独证明路由、匿名性或没有元数据披露。“不要使用工具”是提示要求，不是强"
-            "制的隐私隔离；原生上下文或 hooks 仍可能存在，上下文也可能包含本地系统和目录信"
-            "息。不要为了验证隐私，让 Claude 打印真实 IP、位置或环境变量，否则这些内容会进"
-            "入会话。BWH 能看到连接元数据，HTTPS 网关还能读取模型请求和回复；明确使用 "
-            "<code>--transport bridge</code> 时，内部 SSH 模型流经过 BWH "
-            "仍保持加密。对于转发的模型请求，Anthropic 看到的是槽位的出口 "
-            "IP；这不涵盖其他原生服务或工具的联网。</p>",
+            "<p>A matching reply checks basic responsiveness only. The no-tools "
+            "instruction is not an enforced privacy safeguard: native context or hooks can "
+            "still exist. Do not ask Claude to print real IPs, locations or environment "
+            "values just to check privacy. BWH can read model requests and replies, and "
+            "Anthropic sees the selected slot&#x27;s outbound IP for those requests. Other "
+            "tool or native network connections can go directly from the laptop.</p>",
+            "<p>收到相同回复，只说明基本响应正常。“不要使用工具”是提示要求，不是强制隔离，"
+            "原生上下文或 hooks 仍可能存在。不要为了检查隐私，让 Claude 打印真实 "
+            "IP、位置或环境变量。BWH 可以读取模型消息与回复；对于这些请求，Anthropic "
+            "看到的是选中槽位的出口 IP。其他工具或原生服务仍可能从电脑直接联网。</p>",
         )
         + '<h3 id="management-mcp">'
-        + bi(
-            "Optional read-only management MCP (client 0.2.2)",
-            "可选：只读管理 MCP（客户端 0.2.2 起）",
-            inline=True,
-        )
+        + label("Optional read-only status tools", "可选的只读状态工具", inline=True)
         + "</h3>"
         + bi(
-            "<p>Run <code>ccfleet mcp serve</code> as a local stdio MCP server, or "
-            'explicitly add <code class="code-wrap">claude mcp add --transport stdio '
-            "ccfleet -- ccfleet mcp serve</code> to your original local Claude client. Use "
-            "<code>/mcp</code> to review the tools. Nothing is registered automatically. "
-            "The three tools report cached slot health, native quota percentages/reset "
-            "times and numeric relay usage with observation age and sample coverage. "
-            "Missing observations are unknown, not zero. Usage covers seven UTC calendar "
-            "days, not billing or just today.</p>",
-            "<p>可以将 <code>ccfleet mcp serve</code> 作为本地 stdio MCP 服务运行，或用 "
-            '<code class="code-wrap">claude mcp add --transport stdio ccfleet -- ccfleet '
-            "mcp serve</code> 主动添加到原版本地 Claude；然后用 <code>/mcp</code> "
-            "查看工具。系统不会自动注册它。三个工具提供缓存的槽位状态、原生配额百分比与重置"
-            "时间，以及数字化的转发用量，并标明观察时间和样本覆盖范围。没有记录表示未知，不"
-            "表示零。用量覆盖七个 UTC 自然日，不是账单，也不只是今天的用量。</p>",
+            "<p>You can explicitly add the local management MCP to Claude. Nothing is "
+            "registered automatically. Its tools report cached slot health, quota "
+            "percentages/reset times and numeric relay usage with observation age and "
+            "sample coverage. Missing observations are unknown, not zero.</p>",
+            "<p>可以主动把本地管理 MCP 添加到 Claude；不会自动注册。它提供缓存的槽位状态、"
+            "配额百分比与重置时间，以及转发用量数值，并标明观察时间和样本覆盖范围。没有记录"
+            "表示未知，不表示零。</p>",
         )
+        + "<pre><code>claude mcp add --transport stdio ccfleet -- ccfleet mcp "
+        "serve\nclaude mcp remove ccfleet</code></pre>"
         + bi(
-            "<p>Enabling these tools intentionally makes their fixed health codes and "
-            "numeric results available to the calling AI. They omit account/device "
-            "identifiers, names, emails, IP addresses, local paths, prompts, logs and "
-            "model/session identifiers. They only read status for one existing pairing; "
-            "they cannot invoke Claude, refresh quota, scan projects, run commands or "
+            "<p>These fixed health codes and numeric results become available to the "
+            "calling AI. They omit account/device identifiers, names, emails, IP "
+            "addresses, local paths, prompts, logs and model/session identifiers. The "
+            "tools cannot invoke Claude, refresh quota, scan projects, run commands or "
             "change account state. Pairing/account changes require a fresh MCP process. "
-            "Remove it with <code>claude mcp remove ccfleet</code>.</p>",
-            "<p>启用后，调用它的 AI 会看到固定状态码与数值结果。结果不含账号或设备标识、名"
-            "称、邮箱、IP、本地路径、提示词、日志，以及模型或会话标识。工具只读取现有单个配"
-            "对的状态，不能调用 Claude、刷新配额、扫描项目、执行命令或修改账号。更换配对或"
-            "账号后需要重新启动 MCP。删除方式：<code>claude mcp remove ccfleet</code>。</p>",
+            "Usage covers seven UTC calendar days, not billing or just today.</p>",
+            "<p>启用后，调用它的 AI 会看到固定状态码与数值。结果不含账号或设备标识、名称、"
+            "邮箱、IP、本地路径、提示、日志，以及模型或会话标识。工具不能调用 "
+            "Claude、刷新配额、扫描项目、执行命令或修改账号。更换配对或账号后，需要重启 "
+            "MCP。用量覆盖七个 UTC 自然日，不是账单，也不只是今天的用量。</p>",
         )
-        + bi("<h3>Update or return to the previous client</h3>", "<h3>更新客户端或回退上一版</h3>")
+        + "<h3>"
+        + label("Update the Fleet client", "更新 Fleet 客户端", inline=True)
+        + "</h3>"
         + "<pre><code>ccfleet version --json\nccfleet update\nccfleet update "
         "--rollback</code></pre>"
         + bi(
-            "<p>The updater verifies a signed release channel against the client&#x27;s "
-            "pinned Ed25519 key, then verifies an immutable manifest and every helper "
-            "before atomic activation. A failed verification or download leaves the "
-            "current client in place. Rollback selects the preserved previous client "
-            "without changing pairing, local files or native history. A restored legacy "
-            "bootstrap is not labelled signature-verified. The version report "
-            "distinguishes bootstrap and verified releases; an absent or expired signed "
-            "channel is an error, not permission to install unsigned code. These commands "
+            "<p>The updater verifies the signed release channel with its pinned Ed25519 "
+            "key, then the immutable manifest and every helper before activation. A failed "
+            "verification or download leaves the current client in place. Rollback selects "
+            "the preserved previous client without changing pairing, local files or native "
+            "history. An absent or expired signed channel is an error. These commands "
             "update CC Fleet, not Anthropic&#x27;s original Claude executable.</p>",
-            "<p>更新程序会用客户端内置的 Ed25519 公钥验证发布渠道签名，再验证不可变的版本清"
-            "单和每个辅助文件，全部通过后才切换版本。验证或下载失败时会保留当前客户端。回退"
-            "使用保留的上一版，不改变配对、本地文件或原生历史。恢复旧版引导程序不会被标为“"
-            "签名已验证”；版本报告会区分引导程序与已验证发布版。签名渠道缺失或过期时会报错"
-            "，不会退而安装未签名代码。这里更新的是 CC Fleet 客户端，不是 Anthropic 的原版 "
-            "Claude Code。</p>",
+            "<p>更新程序先用内置的 Ed25519 公钥验证发布渠道签名，再验证不可变清单和每个辅助"
+            "文件，通过后才切换版本。验证或下载失败时保留当前客户端。回退使用保留的上一版，"
+            "不改变配对、本地文件或原生历史。签名渠道缺失或过期时会报错。这里更新的是 CC "
+            "Fleet，不是 Anthropic 的原版 Claude Code。</p>",
         )
         + '</div><div class="card" id="background-jobs">'
-        + bi("<h2>Managed local background jobs</h2>", "<h2>受管理的本地后台任务</h2>")
-        + '<pre><code>ccfleet jobs start --prompt "Review this project and summarize '
-        'findings"\nccfleet jobs list\nccfleet jobs status JOB_ID\nccfleet jobs logs '
-        "JOB_ID\nccfleet jobs logs JOB_ID --stream stderr\nccfleet jobs stop "
-        "JOB_ID\nccfleet jobs archive JOB_ID</code></pre>"
+        + bi("<h2>Local background tasks</h2>", "<h2>本地后台任务</h2>")
         + bi(
-            "<p>Copy the job ID returned by start. An equivalent launch form is <code "
-            'class="code-wrap">ccfleet local --background --print "Summarize this '
-            'project"</code>. This runs local Claude print-mode work under a supervisor '
-            "and keeps its configured model connection alive after the starting terminal "
-            "closes. Your computer must stay running and connected. It is not a remote "
-            "job, native detached <code>--bg</code>, or an interactive session you can "
-            "attach to. For saved context choose an explicit <code>--resume NAME_OR_ID</cod"
-            "e> or <code>--continue</code>, not a history picker.</p>",
-            '<p>保存 start 返回的任务 ID。也可以用 <code class="code-wrap">ccfleet local '
-            '--background --print "Summarize this project"</code> 启动。程序会管理本地 '
-            "Claude 的 print-mode 工作；关闭启动终端后，所需的连接仍会维持。你的电脑必须继"
-            "续开机并联网。这不是远程任务，也不是原生脱离管理的 <code>--bg</code>，不能像交"
-            "互会话那样重新 attach。要使用已有上下文，请明确指定 <code>--resume "
-            "NAME_OR_ID</code> 或 <code>--continue</code>，不要使用历史选择器。</p>",
+            "<p>A managed task keeps local Claude print-mode work running after you close "
+            "the starting terminal. Your computer must stay running and connected. Copy "
+            "the job ID returned by start, then use it to view output or stop the task.</p>",
+            "<p>受管理的任务可以在关闭启动终端后继续运行本地 Claude 的 print-mode "
+            "工作。你的电脑必须保持开机并联网。保存 start 返回的任务 "
+            "ID，用它查看输出或停止任务。</p>",
+        )
+        + _prompt_example(
+            'ccfleet jobs start --prompt "Review this project and summarize findings"\n'
+            "ccfleet jobs list\n"
+            "ccfleet jobs status JOB_ID\n"
+            "ccfleet jobs logs JOB_ID\n"
+            "ccfleet jobs stop JOB_ID\n"
+            "ccfleet jobs archive JOB_ID",
+            "Review this project and summarize findings",
+            "检查这个项目并总结发现",
         )
         + bi(
-            "<p>The default timeout is one hour; <code>--timeout SECONDS</code> allows at "
-            "most 24 hours. The default concurrency limit is four, with <code>--max-jobs</c"
-            "ode> allowing at most 16. Prompts, job specifications and output stay in "
-            "private local files; each stdout/stderr log is capped at 4 MiB and can "
-            "contain sensitive content. Logs are shown only when requested, not included "
-            "in support exports. Jobs never automatically restart or replay failed "
-            "inference.</p>",
-            "<p>默认超时一小时；<code>--timeout SECONDS</code> 最长可设 24 "
-            "小时。默认同时运行四个任务，<code>--max-jobs</code> 最多允许 16 "
-            "个。提示、任务配置和输出保存在私有的本地文件中，每份 stdout/stderr 日志最多 4 "
-            "MiB，可能含敏感内容。日志只有主动请求时才会显示，不会进入诊断导出。任务失败后"
-            "不会自动重启或重新发送推理请求。</p>",
+            "<p>For existing context, choose <code>--resume NAME_OR_ID</code> or "
+            "<code>--continue</code>. The default timeout is one hour, with a maximum of "
+            "24 hours; the default concurrency is four, with at most 16. Prompts and "
+            "output stay in private local files. Each log is capped at 4 MiB, can contain "
+            "sensitive content, and is not included in support exports. Jobs never "
+            "automatically restart or replay failed inference.</p>",
+            "<p>要使用已有上下文，明确选择 <code>--resume NAME_OR_ID</code> 或 "
+            "<code>--continue</code>。默认超时一小时，最长 24 小时；默认同时运行四个任务，"
+            "最多 16 个。提示和输出保存在私有本地文件中，每份日志最多 4 "
+            "MiB，可能含敏感内容，不会进入诊断导出。失败后不会自动重启或重发模型请求。</p>",
         )
         + bi(
-            "<p>Stop, timeout, device revocation or supervisor loss ends the owned process "
-            "group and connection. Authorization is checked periodically, not "
-            "instantaneously. A sign-in/account transition or changed computer pairing "
-            "stops old jobs; they do not silently continue under a different account. "
-            "Shutdown is reported as confirmed only after cleanup is verified; an "
-            "interrupted or unresponsive record is not proof it stopped. Tools that "
-            "deliberately detach into another process group are not sandbox-contained. "
-            "Native permissions still govern local data, including bypass mode. Job "
-            "records are retained, not silently deleted. Archive an inactive, confirmed "
-            "record with <code>ccfleet jobs archive JOB_ID</code> to keep its private "
-            "files while freeing record capacity. An unconfirmed record requires "
-            "<code>--acknowledge-unconfirmed</code>; archiving never claims its cleanup "
-            "succeeded and never stops an active job.</p>",
-            "<p>停止、超时、设备撤销或管理进程丢失，会结束所管理的进程组及连接。授权按周期"
-            "检查，不是瞬时生效。登录或账号状态改变、电脑配对改变时，旧任务会停止，不会悄悄"
-            "换账号继续。只有清理经过验证才会报告“已确认停止”；中断或无响应的记录不能证明任"
-            "务已结束。工具若主动脱离进程组，不会因此受到沙箱限制；本地数据仍由原生权限决定"
-            "，包括跳过确认的模式。任务记录不会自动删除。对已确认结束的任务运行 "
-            "<code>ccfleet jobs archive JOB_ID</code>，可保留私有文件并释放记录名额。未确认"
-            "结束的记录还需要 <code>--acknowledge-unconfirmed</code>；归档不代表清理成功，"
-            "也不会停止活动任务。</p>",
+            "<p>Stop, timeout, revocation or loss of the supervisor ends the owned process "
+            "group. Authorization is checked periodically. Only verified cleanup is "
+            "reported as confirmed; an unresponsive record is not proof it stopped. Tools "
+            "that deliberately detach are not sandbox-contained. Native permissions still "
+            "govern local files. Archive an inactive record to preserve its private files "
+            "while freeing capacity; archiving never stops an active job.</p>",
+            "<p>停止、超时、撤销授权或管理进程丢失时，会结束所管理的进程组；授权按周期检查"
+            "。只有清理经过验证才会报告“已确认”，无响应的记录不能证明任务已停止。工具主动脱"
+            "离管理时不会因此受到沙箱限制，本地文件仍由原生权限决定。归档已结束的记录可以保"
+            "留私有文件并释放名额，不会停止活动任务。</p>",
         )
         + "</div>"
     )
-    return body
 
 
 def guide(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None
 ) -> str:
-    paying = (
-        f"and pay them: {_cost(price)}, paid directly to them; this site takes no card. They switch"
+    price_en = (
+        f"A slot costs {_cost(price)}, paid directly to the operator; this site "
+        "takes no card and no payment."
         if price is not None
-        else "and pay them. They switch"
+        else "Price and payment are agreed directly with the operator."
     )
-    paying_zh = (
-        f"槽位费用为{_cost_zh(price)}，直接支付给运营者，本站不收集银行卡。"
+    price_zh = (
+        f"槽位费用为{_cost_zh(price)}，直接支付给运营者；本站不收集银行卡，也不代收款项。"
         if price is not None
         else "价格与付款方式直接和运营者约定。"
     )
@@ -946,715 +903,234 @@ def guide(
         '<div class="dochead">'
         + bi("<h1>Getting started</h1>", "<h1>开始使用</h1>")
         + bi(
-            '<p class="lead">From buying a slot to your first Claude Code session. It '
-            "takes a few minutes, most of which is the machine setting your slot up.</p>",
-            '<p class="lead">从开通槽位到第一次使用 Claude Code，按下面几步操作即可。准备槽'
-            "位通常需要几分钟。</p>",
-        )
-        + bi(
-            '<p>Already using CC Fleet? Start with the <a href="#migration">migration '
-            'guide</a>. For the native local workflow, see <a href="#project-workspaces">lo'
-            "cal files and history</a>.</p>",
-            '<p>已经在使用 CC Fleet？先看<a href="#migration">安装与迁移</a>。想了解本地文'
-            '件和会话记录，请看<a href="#project-workspaces">本地工作方式</a>。</p>',
+            '<p class="lead">Your computer does the work; your own Claude account on a '
+            "slot handles model access. Follow these steps to get both ready.</p>",
+            '<p class="lead">你的电脑负责工作，槽位上你自己的 Claude '
+            "账号负责模型访问。按下面几步，把两边准备好。</p>",
         )
         + '</div><ol class="steps">'
         + "<li>"
         + bi(
-            '<h3>Sign in</h3><p>Open <a href="/account">your page</a> and choose <span '
-            'class="btnlabel">Continue with Google</span>. That makes your account; it '
-            "says you have no slots yet, which is expected.</p>",
-            '<h3>登录本站</h3><p>打开<a href="/account">账号页面</a>，选择 <span '
-            'class="btnlabel">使用 Google 继续</span>。首次登录会创建你的用户账号，此时没有'
-            "槽位是正常的。</p>",
+            '<h3>Sign in</h3><p>Open <a href="/account">Your slots</a> and choose <span '
+            'class="btnlabel">Continue with Google</span>. This creates your Fleet '
+            "account. Seeing no slots yet is expected.</p>",
+            '<h3>登录本站</h3><p>打开<a href="/account">我的槽位</a>，选择 <span '
+            'class="btnlabel">使用 Google 继续</span>。这会创建 Fleet '
+            "用户账号；此时没有槽位是正常的。</p>",
         )
         + "</li>"
         + "<li>"
         + bi(
-            f"<h3>Get a slot</h3><p>Ask {contact(cfg)} for a slot, tell them the "
-            f"Google "
-            f"address you signed in with, {paying} your slot on for that "
-            f"account.</p>",
-            f"<h3>开通槽位</h3><p>联系 {_contact_zh(cfg)}，"
-            f"告诉对方你登录本站所用的 Google 邮箱。{paying_zh} 开通后，"
-            f"这个用户账号就可以领取槽位。</p>",
+            f"<h3>Get a slot</h3><p>Ask {contact(cfg)} for a slot using the Google "
+            f"address you signed in with. {price_en} The operator enables access "
+            "for that account.</p>",
+            f"<h3>开通槽位</h3><p>联系 {_contact_zh(cfg)}，提供登录本站所用的 Google "
+            f"邮箱。{price_zh} 运营者会为这个用户账号开通领取权限。</p>",
         )
         + "</li>"
         + "<li>"
         + bi(
-            '<h3>Claim it</h3><p>Press <span class="btnlabel">Claim a slot</span>. The '
+            '<h3>Claim it</h3><p>Choose <span class="btnlabel">Claim a slot</span>. The '
             'card shows <span class="pill busy">Setting up</span> while the machine '
-            "creates your Linux account and installs Claude Code, which takes a few "
-            "minutes. The page updates itself.</p>",
-            '<h3>领取槽位</h3><p>点击 <span class="btnlabel">领取槽位</span>。机器会创建独'
-            '立的 Linux 用户并安装 Claude Code；此时卡片显示 <span class="pill '
-            'busy">正在准备</span>，页面会自动更新。</p>',
+            "creates your separate Linux account and installs Claude Code. This takes a "
+            "few minutes; the page updates itself.</p>",
+            '<h3>领取槽位</h3><p>点击 <span class="btnlabel">领取槽位</span>。机器会建立独'
+            '立的 Linux 用户环境并安装 Claude Code，此时显示 <span class="pill '
+            'busy">正在准备</span>。通常需要几分钟，页面会自动更新。</p>',
         )
         + "</li>"
         + "<li>"
         + bi(
-            '<h3>Sign in to Claude</h3><p>When the card says <span class="pill warn">Ready '
-            'to sign in</span>, press <span class="btnlabel">Sign in to Claude</span> and '
-            "open the link it shows. Sign in with your own Claude account, copy the code "
-            'Claude gives you, paste it into the box and press <span class="btnlabel">Send '
-            'code</span>. The card turns <span class="pill ok">In use</span>.</p>',
-            '<h3>登录你的 Claude 账号</h3><p>卡片显示 <span class="pill warn">可以登录</spa'
-            'n> 后，点击 <span class="btnlabel">登录 Claude</span> '
-            "并打开登录链接。用你自己的 Claude 账号完成登录，把 Claude "
-            '提供的代码复制到输入框，再点击 <span class="btnlabel">提交代码</span>。完成后'
-            '会显示 <span class="pill ok">使用中</span>。</p>',
+            '<h3>Sign in to Claude</h3><p>At <span class="pill warn">Ready to sign '
+            'in</span>, choose <span class="btnlabel">Sign in to Claude</span>. Open the '
+            "link, sign in with your own paid Claude account, copy its code and paste it "
+            'back. Choose <span class="btnlabel">Send code</span>. A completed sign-in '
+            'shows <span class="pill ok">In use</span>.</p>',
+            '<h3>登录你的 Claude 账号</h3><p>显示 <span class="pill warn">可以登录</span> '
+            '后，点击 <span class="btnlabel">登录 Claude</span>。打开链接，用你自己的付费 '
+            'Claude 账号登录，把提供的代码复制回来，再点击 <span class="btnlabel">提交代码<'
+            '/span>。成功后显示 <span class="pill ok">使用中</span>。</p>',
         )
         + "</li>"
         + "<li>"
         + bi(
-            '<h3>Connect this computer</h3><p>Run the <a href="#migration">one-command '
-            "setup below</a>. It reuses an existing pairing. Only if it asks for a code, "
-            'press <span class="btnlabel">Connect this computer</span> on your slot and '
-            "paste the fresh single-use pairing code.</p>",
-            '<h3>连接这台电脑</h3><p>运行下面的<a href="#migration">安装命令</a>。已配对的'
-            "电脑会沿用原有连接；只有命令提示输入配对码时，才点击槽位上的 <span "
-            'class="btnlabel">连接这台电脑</span>，粘贴新生成的一次性配对码。</p>',
+            "<h3>Install on your computer</h3><p>Run the command below in your normal "
+            "terminal. It keeps an existing pairing and local Claude installation; if "
+            "Claude is missing, it installs the original local CLI from the fixed vendor "
+            'URL. Only if asked, choose <span class="btnlabel">Connect this computer</span>'
+            " on your slot and paste a fresh pairing code.</p>",
+            "<h3>在电脑上安装</h3><p>在普通终端运行下面的命令。已有配对和本地 Claude "
+            "安装会保留；尚未安装 Claude 时，会从固定的官方地址安装原版客户端。只有终端要求"
+            '输入配对码时，才点击槽位上的 <span class="btnlabel">连接这台电脑</span>，输入'
+            "新生成的配对码。</p>",
         )
-        + "</li>"
-        + '</ol><div class="card" id="migration">'
-        + bi("<h2>One-command setup and migration</h2>", "<h2>安装与迁移：使用同一条命令</h2>")
+        + "</li></ol>"
+        + '<div class="card" id="setup">'
+        + bi("<h2>Install, check, then start</h2>", "<h2>安装、检查，然后开始</h2>")
+        + "<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/la"
+        "ptop/install.sh | bash -s -- --setup\n\ncd ~/code/my-project\nccfleet local "
+        "--check\nccfleet local</code></pre>"
         + bi(
-            "<p>New computer, already paired, or still using <code>ccfleet-connect</code>: "
-            "use the same command. You do not need to choose a migration mode.</p>",
-            "<p>新电脑、已经配对的电脑，或仍在使用 <code>ccfleet-connect</code> "
-            "的电脑，都使用同一条命令，无需自己选择迁移模式。</p>",
-        )
-        + "<ol>"
-        + "<li>"
-        + bi(
-            "<strong>Finish old work first.</strong> An old live-folder connector may "
-            "still be running after its terminal closes. Finish that work before approving "
-            "migration; do not assume a closed terminal stopped folder access.",
-            "<strong>先结束旧工作。</strong>旧的文件夹连接器可能在终端关闭后仍继续运行。确"
-            "认相关工作已经结束，再批准迁移；关闭终端不代表文件夹访问已经停止。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi("<strong>Run setup:</strong>", "<strong>运行安装命令：</strong>", inline=True)
-        + "</li>"
-        + "</ol><pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/ma"
-        'in/laptop/install.sh | bash -s -- --setup</code></pre><ol start="3">'
-        + "<li>"
-        + bi(
-            "<strong>Follow the pairing prompt.</strong> An already-paired computer reuses "
-            "its existing pairing; do not pair again. Only if this computer is not paired, "
-            'open <a href="/account">your slot page</a>, choose <span class="btnlabel">Conn'
-            "ect this computer</span>, and paste one fresh pairing code when asked. No SSH "
-            "command or slot Claude credential is needed.",
-            "<strong>按提示完成配对。</strong>已配对的电脑会沿用原有连接，不要重新配对。只"
-            '有尚未配对时，才打开<a href="/account">槽位页面</a>，点击 <span class="btnlabe'
-            'l">连接这台电脑</span>，输入新生成的配对码。无需自己运行 '
-            "SSH，也无需复制槽位上的 Claude 凭证。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Approve old access cleanup only when ready.</strong> Setup asks in "
-            "the controlling terminal before stopping old live-folder connectors and their "
-            "associated remote live-folder sessions. This cancels pending work and "
-            "invalidates open mount handles. Files and history are kept; ordinary remote "
-            "tmux sessions are untouched. If you decline or cleanup fails, follow the "
-            "reported instructions and retry. Adding <code>--yes</code> explicitly "
-            "authorizes this cancellation.",
-            "<strong>准备好后再清理旧的文件夹访问。</strong>安装程序会在终端询问你，确认后"
-            "才停止旧连接器及其对应的远程文件夹会话。这会取消未完成的工作，并让已打开的挂载"
-            "连接失效；文件、历史记录和普通远程 tmux 会话会保留。拒绝或清理失败时，按提示处"
-            "理后重试。添加 <code>--yes</code> 表示你明确同意取消这些旧工作。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Wait for readiness.</strong> Existing native Claude is preserved; if "
-            "missing, setup installs the original local CLI from the fixed vendor URL. "
-            "Setup checks the configured route and waits for required slot access without "
-            "uploading project files or making a model request. Old <code>ccfleet-connect</"
-            "code> cleanup runs only after readiness succeeds.",
-            "<strong>等待检查完成。</strong>现有的原版 Claude Code "
-            "会保留；尚未安装时，程序会从固定的官方地址安装。本次检查只确认连接方式和所需的"
-            "槽位访问，不上传项目，也不向模型发送消息。只有检查通过后，才清理旧的 "
-            "<code>ccfleet-connect</code>。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Open a new terminal, then choose your project:</strong>",
-            "<strong>打开新终端，再进入你的项目：</strong>",
-            inline=True,
-        )
-        + "</li>"
-        + "</ol><pre><code>cd ~/code/my-project\nccfleet start</code></pre>"
-        + bi(
-            "<p>Original Claude Code now runs on your computer with local files, tools, "
-            "settings and history. When gateway access is available, a fresh pairing "
-            "creates a separate endpoint key and model requests use HTTPS to our domain on "
-            "BWH. Setup itself starts no Claude conversation. Choose new, continue or "
-            "resume from the menu, or run <code>ccfleet local</code> directly.</p>",
-            "<p>现在，原版 Claude Code 在你的电脑上运行，使用本地文件、工具、设置和会话记录"
-            "。如果已开通网关，新配对会生成独立的连接密钥，模型请求通过 HTTPS 发往我们在 "
-            "BWH 上的域名。安装本身不会发起 Claude 会话；在菜单中选择新会话、继续或恢复，也"
-            "可直接运行 <code>ccfleet local</code>。</p>",
+            "<p>Open a new terminal after installation if the command is not found. Setup "
+            "preserves pairing, configuration and slot sign-in, verifies its digest-pinned "
+            "helper, and keeps a backup when it adjusts PATH. Setup and the readiness "
+            "check make no model request and upload no project files. The check may wait "
+            "for the selected slot to become ready.</p>",
+            "<p>安装后若找不到命令，请打开新终端。安装会保留配对、配置和槽位登录，验证固定"
+            "摘要的辅助程序；调整 PATH 时会保留备份。安装和就绪检查都不调用模型、不上传项目"
+            "文件。检查可能需要等待所选槽位准备好。</p>",
         )
         + bi(
-            "<p>If a previously paired computer is still using the bridge, enroll the "
-            "gateway with <code>ccfleet gateway setup</code>. Then use <code>ccfleet "
-            'local</code> normally. On <a href="/account#gateway">Connect Claude</a>, '
-            "select only one own slot for a fixed account, or several own slots in "
-            "priority order with conversation affinity or safe failover. The endpoint key "
-            "is separate from your Claude credential. The gateway needs no local HTTP "
-            "listener or laptop-side SSH for model requests. Use <code>ccfleet local "
-            "--transport bridge</code> to choose the legacy bridge explicitly. See the <a "
-            'href="/docs/library/docs/public-gateway.html">public gateway guide</a> for '
-            "routing and privacy.</p>",
-            "<p>以前已配对、仍使用桥接方式的电脑，先运行 <code>ccfleet gateway "
-            "setup</code> 配置 HTTPS 网关，然后照常运行 <code>ccfleet local</code>。在<a "
-            'href="/account#gateway">连接 Claude</a>中，可以只选自己的一个槽位，也可以按顺序选'
-            "择多个自己的槽位。连接密钥与 Claude 登录凭证是两回事。网关模式下，模型请求不需"
-            "要本地 HTTP 服务，也不需要电脑端 SSH；如果要明确使用旧桥接方式，运行 "
-            "<code>ccfleet local --transport bridge</code>。详细的路由与隐私说明见<a "
-            'href="/docs/library/docs/public-gateway.html">网关参考指南</a>。</p>',
-        )
-        + bi(
-            "<p>The installer verifies its digest-pinned helper. Pairing, configuration, "
-            "slot sign-in and existing remote files stay in place. PATH changes preserve "
-            "existing shell settings and keep a backup. Existing terminals keep their old "
-            "environment; custom token exports outside the managed setup are not "
-            "removed.</p>",
-            "<p>安装程序会验证固定摘要的辅助程序。现有配对、配置、槽位登录和远程文件会保留"
-            "；修改 PATH 时也会保留原有 shell 设置并创建备份。已打开的终端仍使用旧环境；安"
-            "装程序不会清理你在管理范围之外自行导出的 token。</p>",
-        )
-        + bi(
-            '<p>Optional: add <code>--name "Personal Mac"</code> after <code>--setup</code>'
-            " to label a new device, or <code>--slot SLOT</code> to choose an existing "
-            "pairing. Install-only, manual <code>ccfleet login</code>, and legacy "
-            "<code>--migrate</code> remain compatibility options. Setup does not "
-            "automatically revoke an Anthropic credential. Revoke an old setup-token "
-            "yourself only if nothing else uses it.</p>",
-            '<p>可选：在 <code>--setup</code> 后添加 <code>--name "Personal '
-            'Mac"</code>，为新电脑设置名称；或使用 <code>--slot SLOT</code> '
-            "选择已有配对。仅安装、手动 <code>ccfleet login</code> 和旧版 <code>--migrate</"
-            "code> 仍可使用。安装不会自动撤销 Anthropic 凭证；只有确认其他地方已不再使用旧 "
-            "token，才自行撤销它。</p>",
-        )
-        + bi(
-            "<p><strong>Availability:</strong> inference relay access requires an "
-            "upgraded, operator-enabled assigned slot. Installing the client or running "
-            "the check does not activate access. <code>ccfleet local --check</code> sends "
-            "no project files and makes no model request. A working old terminal or mount "
-            "does not prove the relay is enabled; follow any readiness error before "
-            "starting work.</p>",
-            "<p><strong>访问条件：</strong>槽位必须已经升级，并由运营者开通模型转发。安装客"
-            "户端或运行检查，不会自动开通访问。<code>ccfleet local --check</code> "
-            "不发送项目文件，也不调用模型。旧远程终端或挂载能工作，并不代表模型转发已启用；"
-            "请先处理检查中显示的问题。</p>",
+            "<p>When gateway access is enabled, setup saves a separate private connection "
+            "key and the HTTPS address. <code>ccfleet local</code> launches original "
+            "Claude Code on your computer. Files, tools, settings and history run locally; "
+            "supported model requests go through the gateway and your selected own slot. "
+            "If this computer is already paired but has no gateway configuration, run "
+            "<code>ccfleet gateway setup</code>. Installing the client alone does not "
+            "enable a slot that the operator has not activated.</p>",
+            "<p>网关开放时，安装会保存独立的私有连接密钥和 HTTPS 地址。<code>ccfleet "
+            "local</code> 在你的电脑上启动原版 Claude Code，文件、工具、设置和历史在本地；"
+            "支持的模型请求经过网关和你选中的自己的槽位。已配对但还没有网关配置的电脑，运行"
+            " <code>ccfleet gateway setup</code> 即可。单独安装客户端不会自动开通运营者尚未"
+            "启用的槽位。</p>",
         )
         + "</div>"
         + _model_connections(cfg)
-        + _version_choices()
-        + '<div class="card" id="project-workspaces">'
-        + bi(
-            "<h2>Local Claude, local files and history</h2>", "<h2>Claude、本地文件和会话记录</h2>"
-        )
+        + '<div class="card" id="local-work">'
+        + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
         + bi(
             "<p><code>ccfleet local</code> launches the original local Claude CLI. It does "
             "not upload a project, mount your filesystem on the slot, or require "
             "push/pull. There are no CC Fleet filesystem count/size caps or Git-ignore "
-            "filters. Use <code>--project PATH</code> or <code>cd</code>; home works "
-            "too:</p>",
-            "<p><code>ccfleet local</code> 启动原版的本地 Claude Code，不会上传整个项目、把"
-            "你的文件系统挂载到槽位，也不需要 push/pull。CC Fleet 不对本地文件数量、大小或 "
-            "Git-ignore 规则另设限制。使用 <code>--project PATH</code> 或先 <code>cd</code>"
-            " 进入目录；也可以在主目录开始：</p>",
+            "filters. Use <code>cd</code> or <code>--project PATH</code> to choose where "
+            "you work.</p>",
+            "<p><code>ccfleet local</code> 启动原版本地 Claude Code，不上传整个项目、不把文"
+            "件系统挂载到槽位，也不需要 push/pull。CC Fleet 不对本地文件数量、大小或 "
+            "Git-ignore 另设限制。先 <code>cd</code> 进入项目，或用 <code>--project "
+            "PATH</code> 指定目录。</p>",
         )
-        + "<pre><code>cd ~\nccfleet local</code></pre>"
+        + _prompt_example(
+            "ccfleet local --new --name work\n"
+            "ccfleet local --new --name research --mode plan --model opus --effort high\n"
+            "ccfleet local --resume\n"
+            "ccfleet local --resume work\n"
+            "ccfleet local --continue\n"
+            "ccfleet local --resume work --fork-session\n"
+            'ccfleet local --print "Summarize this project"',
+            "Summarize this project",
+            "总结这个项目",
+        )
+        + bi(
+            "<p>Running <code>ccfleet local</code> again starts a new conversation; "
+            "<code>--new</code> makes that choice explicit. Existing history is kept. "
+            "<code>--resume</code> uses Claude&#x27;s native history picker or an ID/name; "
+            "<code>--continue</code> selects the last local conversation for this "
+            "directory. Quit with <code>/exit</code> and resume later. Native Claude "
+            "settings/history, including an existing <code>CLAUDE_CONFIG_DIR</code>, stay "
+            "on this computer.</p>",
+            "<p>再次运行 <code>ccfleet local</code> 会新建会话，<code>--new</code> "
+            "明确表示新建；已有历史保留。<code>--resume</code> 打开原生历史选择器，或按 "
+            "ID/名称恢复；<code>--continue</code> 继续当前目录最近的本地会话。使用 "
+            "<code>/exit</code> 退出，以后再恢复。原生 Claude 设置与历史，包括已有的 "
+            "<code>CLAUDE_CONFIG_DIR</code>，仍保存在这台电脑上。</p>",
+        )
         + bi(
             "<p>The working directory is not a sandbox. Native Claude permissions govern "
-            "local file and tool access, including outside that directory. New "
-            "conversations default to <code>bypassPermissions</code>, Opus and max effort, "
-            "so local tools can modify, delete or transmit data without individual "
-            "approval prompts. Choose another mode when appropriate:</p>",
-            "<p>工作目录不是安全沙箱。文件和工具权限由原版 Claude Code "
-            "决定，也可能涉及该目录之外的文件。新会话默认使用 <code>bypassPermissions</code"
-            ">、Opus 和 max effort，工具可能不逐次询问就修改、删除或传输数据。需要逐步确认"
-            "时，请选择合适的权限模式：</p>",
-        )
-        + "<pre><code>ccfleet local --new --name work\nccfleet local --new --name "
-        "research --mode plan --model opus --effort high\nccfleet local --resume\nccfle"
-        "et local --resume work\nccfleet local --continue\nccfleet local --resume work "
-        '--fork-session\nccfleet local --print "Summarize this project"</code></pre>'
-        + bi(
-            "<p>These are native local conversations, not remote tmux sessions. Running "
-            "<code>ccfleet local</code> again starts a new conversation; <code>--new</code>"
-            " makes that choice explicit. Existing history is kept. <code>--resume</code> "
-            "uses Claude&#x27;s native history picker or an ID/name; <code>--continue</code"
-            "> selects the last local conversation for this directory. Use <code>/model</co"
-            "de> and <code>/effort</code> inside Claude. Resuming preserves the saved "
-            "model and effort unless you request changes. Additional supported native "
-            "arguments go after <code>--</code>; routing/authentication overrides are not "
-            "alternate CC Fleet modes.</p>",
-            "<p>这些是本地原生会话，不是远程 tmux 会话。再次运行 <code>ccfleet "
-            "local</code> 会新建会话；<code>--new</code> 明确表示新建，原有历史不会删除。<c"
-            "ode>--resume</code> 打开 Claude 的历史选择器，或按 ID/名称恢复；<code>--contin"
-            "ue</code> 继续当前目录最近的本地会话。会话内可使用 <code>/model</code> 和 "
-            "<code>/effort</code>。恢复时会保留原有模型和推理强度，除非你主动修改。其他受支"
-            "持的原生参数放在 <code>--</code> 后；覆盖路由或登录参数并不是 CC Fleet "
-            "的另一种模式。</p>",
+            "file and tool access, including outside that directory. New conversations "
+            "default to <code>bypassPermissions</code>, Opus and max effort, so tools can "
+            "modify, delete or transmit data without individual approval prompts. Choose "
+            "<code>--mode plan</code> or another supported mode when appropriate. Inside "
+            "Claude, <code>/model</code> and <code>/effort</code> change your choices. "
+            "Higher effort usually uses more of your plan allowance.</p>",
+            "<p>工作目录不是沙箱。原生 Claude 权限决定文件与工具访问，也可能涉及目录外的文"
+            "件。新会话默认使用 <code>bypassPermissions</code>、Opus 和 max "
+            "effort，工具可能不逐次询问就修改、删除或传输数据。需要时，选择 <code>--mode "
+            "plan</code> 或其他受支持的模式。会话内可用 <code>/model</code> 和 "
+            "<code>/effort</code> 调整；更高推理强度通常消耗更多额度。</p>",
         )
         + bi(
-            "<p>Foreground interactive sessions, <code>--print</code>, native resume and "
-            "multiple normal terminal sessions are supported. Native <code>--bg</code> / "
-            "<code>--background</code> is explicitly rejected when forwarded after "
-            '<code>--</code>: it would bypass supervision. Use the <a href="#background-job'
-            's">managed local background jobs</a> below, or another regular terminal for '
-            "parallel interactive work.</p>",
-            "<p>支持前台交互、<code>--print</code>、原生恢复，以及在多个普通终端中同时工作"
-            "。通过 <code>--</code> 转发原生 <code>--bg</code> 或 <code>--background</code>"
-            ' 会被拒绝，因为这样会绕过进程管理。请使用下方的<a href="#background-jobs">受管'
-            "理的本地后台任务</a>，或另开普通终端进行交互工作。</p>",
-        )
-        + bi("<h3>Keep your native settings and history</h3>", "<h3>保留原生设置与历史</h3>")
-        + bi(
-            "<p>The default uses native Claude settings/history, including an existing "
-            "<code>CLAUDE_CONFIG_DIR</code>. Nothing is imported or deleted. To reopen an "
-            'earlier per-slot relay-preview profile, use <code class="code-wrap">ccfleet '
-            "local --legacy-history --resume</code>. This selects that old local profile; "
-            "it does not merge it into native history. Old remote history remains on the "
-            "slot.</p>",
-            "<p>默认沿用 Claude 原生设置与会话记录，包括已有的 <code>CLAUDE_CONFIG_DIR</cod"
-            "e>，不会导入或删除历史。如果要打开以前按槽位保存的预览版配置，使用 <code "
-            'class="code-wrap">ccfleet local --legacy-history --resume</code>。这只是选择旧'
-            "配置，不会把旧记录合并到原生历史中；远程会话记录仍在槽位上。</p>",
-        )
-        + bi(
-            "<p>A temporary private settings overlay pins the selected model route and "
-            "authentication, using the remote HTTPS gateway or the legacy loopback bridge, "
-            "clears conflicting provider/authentication overrides, and disables supported "
+            "<p>A temporary private settings overlay fixes the gateway route and "
+            "authentication, clears conflicting provider overrides and disables supported "
             "optional telemetry. Ordinary customizations remain; native settings files are "
-            "not permanently rewritten.</p>",
-            "<p>启动时会创建临时的私有设置层，固定当前模型连接地址和认证信息，清除冲突的供"
-            "应商或登录覆盖项，并关闭受支持的可选遥测。HTTPS 模式使用远程网关地址；旧桥接模"
-            "式使用本地回环地址。常规自定义设置会保留，原生设置文件不会被永久改写。</p>",
-        )
-        + bi("<h3>Stopping and recovering older work</h3>", "<h3>结束会话与恢复旧工作</h3>")
-        + bi(
-            "<p>Quit a new local session normally with <code>/exit</code>, then use native "
-            "resume later. A closed terminal does not create a persistent remote version "
-            "of this local agent. Interrupted inference is not silently replayed by CC "
-            "Fleet.</p>",
-            "<p>用 <code>/exit</code> 正常退出本地会话，以后通过原生恢复功能继续。关闭终端"
-            "不会把本地会话变成持续运行的远程任务。CC Fleet 不会悄悄重新发送已经中断的模型"
-            "请求。</p>",
-        )
-        + bi(
-            "<p><code>ccfleet local --disconnect</code> is only for explicitly cleaning up "
-            "an old live-folder grant and its associated remote sessions. It can cancel "
-            "pending work. <code>--reset-link</code> is retired and provides migration "
-            "guidance. Old <code>ccfleet project</code> commands remain for deliberate "
-            "snapshot recovery, not for the current local workflow.</p>",
-            "<p><code>ccfleet local --disconnect</code> 只用于主动清理旧的文件夹访问授权及"
-            "关联的远程会话，可能取消未完成的工作。<code>--reset-link</code> "
-            "已停用，会显示迁移指引。旧的 <code>ccfleet project</code> "
-            "命令仅用于主动恢复历史快照，不属于当前本地工作方式。</p>",
-        )
-        + bi("<h3>Routing and privacy limits</h3>", "<h3>哪些内容会经过网关</h3>")
-        + bi(
-            "<p>The relay removes selected headers and the top-level structured "
-            "<code>metadata</code> field before forwarding. It does not redact arbitrary "
-            "prompts or tool results. Native system prompts may include local OS, working "
-            "directory and environment details; files and paths may identify you and reach "
-            "the slot and Anthropic. This is not a fingerprint-free or zero-metadata "
-            "guarantee.</p>",
-            "<p>转发时会移除部分请求头，以及顶层结构化的 <code>metadata</code> "
-            "字段；不会自动删去提示词或工具结果中的任意个人信息。原生系统提示可能包含本地操"
-            "作系统、工作目录和环境信息；文件内容与路径也可能识别你的身份，并到达槽位和 "
-            "Anthropic。这里没有“零元数据”或“没有指纹”的保证。</p>",
-        )
-        + bi(
-            "<p>Only supported model endpoints use the relay. MCP servers, hooks, plugins, "
-            "shell tools, updates and other native CLI services can connect directly from "
-            "the laptop. Optional telemetry controls are not an all-traffic firewall.</p>",
-            "<p>只有受支持的模型接口走转发路径。MCP 服务、hooks、插件、shell "
-            "工具、更新和其他原生服务，仍可能从你的电脑直接联网。可选遥测设置不是拦截所有网"
-            "络访问的防火墙。</p>",
-        )
-        + bi(
-            "<p>The direct HTTPS gateway terminates TLS on BWH, so <strong>BWH can read "
-            "model requests and responses</strong> before forwarding them to your selected "
-            "slot. Relevant prompts, tool results and file contents reach BWH, the slot "
-            "and Anthropic. Only the explicit <code>--transport bridge</code> route keeps "
-            "the model stream inside laptop-to-slot SSH: its BWH byte broker sees your "
-            "incoming IP address and connection metadata but cannot decrypt the inner SSH "
-            "model stream. SSH exposes client version; remote-terminal sessions also send "
-            "terminal dimensions. Slot administrators have root and can inspect or alter "
-            "relayed requests and responses, which can influence local tool actions. Trust "
-            "and native local permissions remain important. Each paired device remains "
-            "separately revocable.</p>",
-            "<p>HTTPS 网关在 BWH 上结束 TLS 连接，因此<strong>BWH 可以读取模型请求和回复</s"
-            "trong>，再转发给你选择的槽位。消息中包含的提示、工具结果和文件内容会到达 "
-            "BWH、槽位和 Anthropic。只有明确选择 <code>--transport bridge</code>，消息才始"
-            "终位于电脑到槽位的 SSH 加密流中；这时 BWH 的字节转发服务能看到连接 IP "
-            "与元数据，但无法解密内部的 SSH 模型消息。SSH 会暴露客户端版本，远程终端还会发"
-            "送终端尺寸。槽位管理员拥有 root 权限，能查看或修改请求和回复，进而影响本地工具"
-            "行为。你仍需要信任服务方，并选择合适的本地权限。每台已配对的电脑都可以单独撤销"
-            "。</p>",
+            "not permanently rewritten. Only supported model endpoints use the gateway. "
+            "MCP servers, hooks, plugins, shell tools, updates and other native services "
+            "can connect directly from the laptop. Optional telemetry controls are not an "
+            "all-traffic firewall.</p>",
+            "<p>启动时使用临时的私有设置层，固定网关地址和认证信息，清除冲突的供应商设置，"
+            "并关闭受支持的可选遥测。常规自定义设置保留，原生设置文件不会被永久改写。只有受"
+            "支持的模型接口走网关；MCP、hooks、插件、shell 工具、更新和其他原生服务仍可能从"
+            "电脑直接联网。可选遥测控制不是拦截所有流量的防火墙。</p>",
         )
         + "</div>"
+        + _version_choices()
         + _client_tools()
-        + '<div class="card">'
-        + bi("<h2>Remote-terminal compatibility</h2>", "<h2>继续使用远程终端</h2>")
+        + '<div class="card" id="slot-care">'
+        + bi("<h2>Look after your slot</h2>", "<h2>管理你的槽位</h2>")
         + bi(
-            "<p>The commands below run on the slot, not in a local Claude conversation.</p>",
-            "<p>下面的操作在槽位上执行，不是本地 Claude 会话。</p>",
-        )
-        + "<ul>"
-        + "<li>"
-        + bi(
-            "<strong>The command.</strong> Run <code>ccfleet</code> in a normal terminal. "
-            "It opens the original Claude Code interface running in your slot. You never "
-            "type an SSH command and your computer receives no Claude credential.",
-            "<strong>打开终端。</strong>在普通终端运行 <code>ccfleet</code>，就会打开槽位上"
-            "的原版 Claude Code。无需手动输入 SSH，电脑也不会收到 Claude 凭证。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Where work runs.</strong> Claude Code, its shell tools and model "
-            "requests run on the slot for this compatibility command. Files live in its "
-            "remote workspace; use <code>ccfleet local</code> for local Claude and local "
-            "files.",
-            "<strong>工作在哪里运行。</strong>这种兼容方式的 Claude Code、shell "
-            "工具和模型请求都在槽位运行，文件在远程工作目录中。要使用本地 Claude "
-            "与本地文件，请运行 <code>ccfleet local</code>。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Permission mode.</strong> Hosted sessions start with permission "
-            "prompts off. Claude can run tools without asking as your slot user. The slot "
-            "has no sudo, but Claude can read, change, delete or send anything that user "
-            "can access. Start a named session with another mode using <code>ccfleet new "
-            "research --mode plan</code>; later use <code>ccfleet attach --session "
-            "research</code>. To change a running session deliberately, use <code "
-            'class="code-wrap">ccfleet restart --session research --mode auto</code>.',
-            "<strong>权限模式。</strong>托管会话默认跳过权限确认，Claude "
-            "会以槽位用户身份执行工具。槽位没有 sudo，但 Claude "
-            "可以读取、修改、删除或发送这个用户能访问的内容。用 <code>ccfleet new research "
-            "--mode plan</code> 新建其他模式的会话，之后用 <code>ccfleet attach --session "
-            'research</code> 恢复。需要主动替换正在运行的进程时，使用 <code class="code-wra'
-            'p">ccfleet restart --session research --mode auto</code>。',
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Model and effort.</strong> The default is Opus at max effort. For a "
-            'new named session, choose both at launch: <code class="code-wrap">ccfleet new '
-            "research --model fable --effort xhigh</code>. In a running Claude Code "
-            "session, use <code>/model</code> or <code>/effort</code> to change it without "
-            "losing the conversation.",
-            "<strong>模型与推理强度。</strong>默认为 Opus、max effort。新建命名会话时可指定"
-            ' <code class="code-wrap">ccfleet new research --model fable --effort '
-            "xhigh</code>。会话中用 <code>/model</code> 或 <code>/effort</code> "
-            "调整，不必丢弃对话。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Projects.</strong> Keep projects in <code>~/workspace</code> on the "
-            "slot. Clone with Git or fetch them from another service from inside Claude "
-            "Code. CC Fleet does not silently upload or mount files from the computer "
-            'where you run the client. For local Claude instead, see <a href="#project-work'
-            'spaces">local files and history</a>.',
-            "<strong>项目文件。</strong>项目放在槽位的 <code>~/workspace</code> 中，可通过 "
-            "Git 克隆，或在 Claude Code 中从其他服务获取。CC Fleet "
-            '不会悄悄上传或挂载你运行客户端的电脑文件。需要本地方式，请看<a href="#project-'
-            'workspaces">本地文件与历史</a>。',
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Reconnect.</strong> Claude Code runs inside a persistent session. If "
-            "Wi-Fi changes, the laptop sleeps or the terminal closes, run <code>ccfleet</co"
-            "de> again and it reattaches to the same session.",
-            "<strong>重新连接。</strong>远程 Claude Code 在持久会话中运行。Wi-Fi "
-            "改变、电脑休眠或终端关闭后，再运行 <code>ccfleet</code> 会连接回同一会话。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            '<strong>More computers.</strong> Press <span class="btnlabel">Connect another '
-            "computer</span> for each device. Each receives its own key and can be removed "
-            "from your slot page without changing your Claude sign-in.",
-            '<strong>连接其他电脑。</strong>每台设备分别点击 <span class="btnlabel">连接另'
-            "一台电脑</span>。每台电脑有自己的密钥，之后可以单独在槽位页面撤销，不必更改 "
-            "Claude 登录。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Your usage.</strong> The 5-hour and weekly bars cover the whole "
-            "Claude account. Beside them, the token count covers what Claude Code used on "
-            "this slot. That slot token count is not a complete local-relay usage meter. "
-            'The limits are read every five minutes; <span class="btnlabel">Refresh</span> '
-            "reads them now.",
-            "<strong>查看用量。</strong>五小时和每周进度条表示整个 Claude "
-            "账号的用量；旁边的 token 数表示这个槽位上的 Claude Code "
-            "使用量，不是完整的本地转发用量统计。配额每五分钟读取一次，点击 <span "
-            'class="btnlabel">刷新</span> 可立即读取。',
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            '<strong>Giving it back.</strong> Tick the box and press <span class="btnlabel"'
-            ">Give this slot back</span>. Your Linux account and every file in it are "
-            "deleted; your Claude account is not touched. Push your work somewhere first.",
-            '<strong>归还槽位。</strong>勾选确认框，再点击 <span class="btnlabel">归还这个'
-            "槽位</span>。这会删除 Linux 用户及其所有文件，不会删除你的 Claude "
-            "账号。请先推送或备份远程工作。",
-            inline=True,
-        )
-        + "</li>"
-        + '</ul></div><div class="card">'
-        + bi("<h2>One Claude account per slot</h2>", "<h2>每个槽位对应一个 Claude 账号</h2>")
-        + bi(
-            "<p>A slot is signed in to one Claude account, your own, and keeps it: <span "
-            'class="btnlabel">Sign in again</span> works with that account only. To move '
-            'your slot to another Claude account of yours, press <span class="btnlabel">Cha'
-            "nge account</span> (once a week). To use two accounts at once, hold two "
-            "slots. For the legacy bridge: Each local CC Fleet profile is bound to exactly "
-            "one slot. A current HTTPS endpoint may select your own slot pool, while each "
-            "request uses just one bound account.</p>",
-            '<p>槽位只绑定你自己的一个 Claude 账号；<span class="btnlabel">重新登录</span> '
-            '只能登录原账号。要换成另一个自己的账号，使用 <span class="btnlabel">更换账号</'
-            "span>，每周一次。需要同时保留两个账号，就持有两个槽位。旧桥接配置仍固定单个槽"
-            "位；HTTPS 模型连接则可以选择自己的一个或多个槽位，每次请求仍只使用一个槽位的账"
-            "号。</p>",
+            '<p>A slot is signed in to one Claude account, your own. <span class="btnlabel"'
+            ">Sign in again</span> uses that account only. To bind another Claude account "
+            'of yours, choose <span class="btnlabel">Change account</span> (once a week). '
+            "To use two accounts at once, hold two slots. Keep each account on one "
+            "machine; a duplicate machine sign-in is flagged to you and the operator.</p>",
+            '<p>每个槽位绑定你自己的一个 Claude 账号，<span class="btnlabel">重新登录</span'
+            '> 只用于这个账号。要换成另一个自己的账号，点击 <span class="btnlabel">更换账号'
+            "</span>，每周一次。需要同时保留两个账号，就持有两个槽位。同一账号应保持在一台"
+            "机器上；同时在两台机器登录时，会向你和运营者提示。</p>",
         )
         + bi(
-            "<p>One account also stays on one machine: signed in on two at once, it is "
-            "flagged to you and to the operator.</p>",
-            "<p>同一个账号也应保持在同一台机器上；同时在两台机器登录时，会向你和运营者显示"
-            "提示。</p>",
+            "<p>Account changes keep files and settings but invalidate requests using the "
+            "previous binding. CC Fleet does not automatically close your local Claude "
+            "process or delete its history. It cancels an in-flight request if that "
+            'account changes. Wait for the slot to show <span class="pill ok">In '
+            "use</span> before retrying deliberately; new requests then use its current "
+            "bound account. An account change is visible to the operator.</p>",
+            "<p>更换账号保留文件与设置，但旧绑定的请求会失效。CC Fleet 不会自动关闭本地 "
+            "Claude 进程，也不会删除历史；账号改变时，会取消正在进行的请求。等槽位重新显示 "
+            '<span class="pill ok">使用中</span>，再主动重试；新的请求使用当前绑定账号。运'
+            "营者能看到账号更换。</p>",
         )
         + bi(
-            "<p>Your slot is a Linux account with a name of its own: a neutral one like "
-            "slot-4821 when you claim it, never anything from your address, and whatever "
-            "you rename it to on your page. CC Fleet shows that name on every paired "
-            "computer, and the slot uses it as its hostname, so Anthropic can see it: pick "
-            "anything but your email address. When you give it back, the name goes with "
-            "it.</p>",
-            "<p>领取时，槽位会使用类似 slot-4821 的中性 Linux 用户名，不从你的邮箱生成。之"
-            "后可在页面重命名。配对的电脑会显示这个名称，槽位也把它用作 hostname，因此 "
-            "Anthropic 可能看到它，请不要用邮箱当名称。归还槽位时，这个名称也随之删除。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Changing to another Claude account</h2>", "<h2>更换槽位绑定的 Claude 账号</h2>")
-        + bi(
-            '<p>On a slot in use, <span class="btnlabel">Change account</span> moves it to '
-            "another Claude account of yours. Open the link it shows, sign in with the "
-            "account the slot should use from now on, and paste the code as you did the "
-            "first time. Your files and settings stay; only the Claude sign-in changes.</p>",
-            '<p>在使用中的槽位点击 <span class="btnlabel">更换账号</span>，可以换成另一个你'
-            "自己的 Claude 账号。打开链接，用以后要使用的账号登录，再像第一次一样粘贴代码。"
-            "文件与设置保留，只更换 Claude 登录。</p>",
+            "<p>Your slot name is also its hostname, which Anthropic can see: pick "
+            "anything but your email address. Other slots on the same machine use separate "
+            "Linux accounts. There is no administrator access (sudo) in a slot.</p>",
+            "<p>槽位名称也用作 hostname，Anthropic 可能看到它，请不要使用邮箱。同一台机器上"
+            "的不同槽位使用独立的 Linux 用户，槽位内没有管理员权限（sudo）。</p>",
         )
         + bi(
-            "<p>Until that sign-in finishes, the slot keeps its current account; if it "
-            "does not go through, or you sign in with the account the slot already has, "
-            "the account does not change. Once it finishes, the slot&#x27;s Claude "
-            "sessions end so they no longer keep the old account; plain <code>ccfleet</code"
-            "> opens a new remote session. Connected computers stay paired because their "
-            "CC Fleet keys are separate from the Claude credential.</p>",
-            "<p>新登录完成前，槽位继续绑定原账号；登录失败或仍登录同一账号时，不会改变绑定"
-            "。完成后，槽位上的 Claude 会话会结束，防止继续使用旧账号；运行 <code>ccfleet</"
-            "code> 会打开新的远程会话。电脑配对仍然保留，因为 CC Fleet 密钥与 Claude "
-            "凭证是独立的。</p>",
+            "<p>The 5-hour and weekly bars cover the whole Claude account. The token count "
+            "covers what Claude Code used on this slot, not complete local-relay usage. "
+            'Quota is read every five minutes; <span class="btnlabel">Refresh</span> reads '
+            'it now. Pair more devices with <span class="btnlabel">Connect another '
+            "computer</span>; each device is independently revocable.</p>",
+            "<p>五小时和每周进度条表示整个 Claude 账号的用量；token 数表示这个槽位上的 "
+            "Claude Code 使用量，不是完整的本地转发统计。配额每五分钟读取一次，点击 <span "
+            'class="btnlabel">刷新</span> 可立即读取。通过 <span class="btnlabel">连接另一'
+            "台电脑</span> 添加设备，之后可单独撤销。</p>",
         )
         + bi(
-            "<p>For <code>ccfleet local</code>, CC Fleet does not automatically close your "
-            "local Claude process or delete its history. The relay checks the slot&#x27;s "
-            "account for every request and cancels an in-flight request if that account "
-            'changes. Wait until the slot is <span class="pill ok">In use</span> again '
-            "before retrying deliberately; new requests then use its current bound "
-            "account. CC Fleet does not silently replay interrupted requests.</p>",
-            "<p>对于 <code>ccfleet local</code>，CC Fleet 不会自动关闭本地 Claude "
-            "进程，也不会删除历史。转发服务每次请求都会检查槽位账号；账号改变时，会取消正在"
-            '进行的请求。等槽位重新显示 <span class="pill ok">使用中</span>，再主动重试；新'
-            "的请求使用当前绑定账号。CC Fleet 不会悄悄重发被中断的请求。</p>",
+            "<p>Your slot is <strong>not backed up</strong>. Before choosing <span "
+            'class="btnlabel">Give this slot back</span>, save any slot files in Git or '
+            "storage you own. Giving it back deletes the Linux account and every file in "
+            "it; it does not delete your Claude account or local history. For a connection "
+            "problem, keep your working pairing, check status and ask your operator.</p>",
+            '<p>槽位<strong>没有备份</strong>。点击 <span class="btnlabel">归还这个槽位</sp'
+            "an> 之前，请把槽位文件保存在 Git 或自己的存储中。归还会删除 Linux "
+            "用户及其中所有文件，不会删除 Claude 账号或本地历史。遇到连接问题，请保留有效配"
+            "对、检查状态，再联系运营者。</p>",
         )
         + bi(
-            "<p>A slot can change account once a week; after a change, your slot card says "
-            "when it can change again. An account change is visible to the operator; <a "
-            'href="/privacy">the privacy page</a> explains which account information is '
-            "reported to CC Fleet.</p>",
-            "<p>每周只能更换一次账号，卡片会显示下次可更换的时间。运营者能看到账号更换；哪"
-            '些账号信息会报告给 CC Fleet，见<a href="/privacy">隐私说明</a>。</p>',
+            f'<p>Questions: ask {contact(cfg)}. <a href="/privacy">The privacy page</a> '
+            "explains what the service processes and stores.</p>",
+            f'<p>有问题请联系 {_contact_zh(cfg)}。<a href="/privacy">隐私说明</a>'
+            "列出服务处理与保存的信息。</p>",
         )
-        + '</div><div class="card">'
-        + bi("<h2>Keeping Claude Code up to date</h2>", "<h2>更新槽位上的 Claude Code</h2>")
-        + bi(
-            "<p>Your slot card has a <strong>Claude Code</strong> row: the version your "
-            "slot runs and, when Anthropic has published a newer one, its number. The "
-            "button beside it, <strong>Update to</strong> and that number, installs it "
-            "now. Your slot then follows Anthropic&#x27;s latest release and keeps itself "
-            "current from then on.</p>",
-            "<p>槽位卡片的 <strong>Claude Code</strong> 一栏会显示当前版本和可用的新版本。"
-            "点击 <strong>更新至</strong>及版本号，会立即安装新版，并切换为 Latest "
-            "渠道，之后自动跟随 Anthropic 的最新发布。</p>",
-        )
-        + bi(
-            "<p>A session that is open keeps running on the version it started with; new "
-            "sessions start on the new one.</p>",
-            "<p>已经打开的远程会话继续使用启动时的版本；新会话才使用新版。</p>",
-        )
-        + bi(
-            '<p>To go back to Anthropic&#x27;s stable release, press <span class="btnlabel"'
-            ">Back to Stable</span>. A version <strong>held by the operator</strong> has "
-            "been fixed on purpose, for example while a release misbehaves, and there is "
-            "nothing to press.</p>",
-            '<p>要切回 Anthropic 的稳定渠道，点击 <span class="btnlabel">返回稳定版</span>'
-            "。如果显示<strong>由运营者固定版本</strong>，表示版本被主动锁定，例如避开有问"
-            "题的发布，此时没有更新按钮。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Model and effort</h2>", "<h2>模型与推理强度</h2>")
-        + bi(
-            "<p>Claude Code on your slot starts on <strong>Opus</strong> at <strong>max "
-            "effort</strong>, so it thinks as hard as it can about everything you ask. "
-            "That also uses your Claude plan&#x27;s limits fastest; the bars on your slot "
-            "card show how fast.</p>",
-            "<p>槽位上的 Claude Code 默认使用 <strong>Opus</strong> 和 <strong>max "
-            "effort</strong>。更高的推理强度通常消耗更多订阅额度；可以在卡片上观察用量。</p"
-            ">",
-        )
-        + bi(
-            "<p>Inside a running session, <code>/model</code> changes models and "
-            "<code>/effort</code> changes effort without ending the conversation. At "
-            'launch, use <code class="code-wrap">ccfleet new NAME --model fable --effort '
-            "xhigh</code>. Model choices include Opus, Fable and Sonnet when your Claude "
-            "account offers them. Effort choices are low, medium, high, xhigh (extreme "
-            "high), max and ultracode. Ultracode combines xhigh with Claude Code workflow "
-            'orchestration; it is not an "extreme max" level.</p>',
-            "<p>会话内使用 <code>/model</code> 或 <code>/effort</code> "
-            '修改，无需结束对话。远程启动时可使用 <code class="code-wrap">ccfleet new NAME '
-            "--model fable --effort xhigh</code>。账号支持时可选择 Opus、Fable 或 "
-            "Sonnet；推理强度包括 low、medium、high、xhigh、max 和 ultracode。Ultracode "
-            "组合 xhigh 与 Claude Code 工作流编排，不是比 max 更高的单一推理等级。</p>",
-        )
-        + bi(
-            "<p><code>ccfleet attach --session NAME</code> resumes that named session. Use "
-            '<code class="code-wrap">ccfleet restart --session NAME --model opus --effort '
-            "max</code> only when you deliberately want to end its current Claude process "
-            "and replace it.</p>",
-            "<p><code>ccfleet attach --session NAME</code> 恢复指定的远程会话。只有要主动结"
-            '束原进程并替换它时，才使用 <code class="code-wrap">ccfleet restart --session '
-            "NAME --model opus --effort max</code>。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Good to know</h2>", "<h2>使用小贴士</h2>")
-        + "<ul>"
-        + "<li>"
-        + bi(
-            "Your slot is <strong>not backed up</strong>. Keep your work in git, or "
-            "anywhere else that is yours.",
-            "槽位<strong>没有备份</strong>，请把远程工作保存在 Git 或你自己的存储中。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "You can install tools in your home directory; there is no administrator "
-            "access (sudo) in a slot.",
-            "可以在主目录安装工具，但槽位没有管理员权限（sudo）。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "If Claude asks you to sign in again, your slot card offers <span "
-            'class="btnlabel">Sign in again</span>.',
-            '需要重新登录 Claude 时，卡片会提供 <span class="btnlabel">重新登录</span>。',
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<code>ccfleet</code> cannot connect? Check that the slot says <span "
-            'class="pill ok">In use</span>, then rerun the setup command. If it still '
-            "fails, contact your operator before removing a working pairing. A "
-            "disconnected session continues on the slot.",
-            '<code>ccfleet</code> 无法连接时，先确认槽位显示 <span class="pill '
-            'ok">使用中</span>，再运行安装命令。仍失败时，先联系运营者，不要急着删除有效配'
-            "对。远程会话在断开连接后仍继续运行。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            f"Anything else: ask {contact(cfg)}.",
-            f"其他问题，请联系 {_contact_zh(cfg)}。",
-            inline=True,
-        )
-        + "</li>"
-        + "</ul></div>"
+        + "</div>"
     )
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
 # -- how it works -----------------------------------------------------------------------
 
-#: The explicit legacy bridge, distinct from the current public HTTPS gateway.
-PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img"
-aria-labelledby="legacy-diag-t legacy-diag-d">
-<title id="legacy-diag-t">Legacy bridge transport</title>
-<desc id="legacy-diag-d">With --transport bridge, original Claude Code runs locally.
-A local HTTP bridge carries supported model requests through encrypted SSH and
-the BWH byte broker to the assigned slot relay, then Anthropic.
-Other native CLI services can connect directly from the laptop.</desc>
-<defs><marker id="legacy-ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
-orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
-<marker id="legacy-af" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
-orient="auto-start-reverse"><path class="headfaint" d="M0,0 L10,5 L0,10 z"/></marker></defs>
-<rect class="box you" x="20" y="14" width="320" height="70" rx="12"/>
-<text x="180" y="44" text-anchor="middle">Local original Claude Code</text>
-<text class="sub" x="180" y="66" text-anchor="middle">local files, tools and history</text>
-<path class="arrow" d="M180,88 L180,126" marker-start="url(#legacy-ah)"
-marker-end="url(#legacy-ah)"/>
-<text class="sub" x="190" y="111">TLS + encrypted SSH</text>
-<rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
-<text x="180" y="160" text-anchor="middle">CC Fleet broker</text>
-<text class="sub" x="180" y="182" text-anchor="middle">authenticates device; relays bytes</text>
-<path class="arrow" d="M180,204 L180,242" marker-start="url(#legacy-ah)"
-marker-end="url(#legacy-ah)"/>
-<text class="sub" x="190" y="227">SSH to the slot</text>
-<rect class="slot" x="20" y="246" width="320" height="114" rx="12"/>
-<text x="180" y="276" text-anchor="middle">Your slot, on our machine</text>
-<text class="sub" x="180" y="300" text-anchor="middle">fixed upstream model relay</text>
-<text class="sub" x="180" y="322" text-anchor="middle">only your bound Claude account</text>
-<text class="sub" x="180" y="344" text-anchor="middle">credential stays on the slot</text>
-<path class="arrow" d="M180,364 L180,408" marker-start="url(#legacy-ah)"
-marker-end="url(#legacy-ah)"/>
-<text class="sub" x="190" y="392">Claude traffic from the slot</text>
-<rect class="box" x="20" y="412" width="320" height="82" rx="12"/>
-<text x="180" y="444" text-anchor="middle">Anthropic</text>
-<text class="sub" x="180" y="468" text-anchor="middle">relevant prompts and tool context</text>
-</svg>"""
 
 GATEWAY_PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img"
 aria-labelledby="gateway-diag-t gateway-diag-d">
@@ -1694,8 +1170,8 @@ marker-end="url(#gateway-ah)"/>
 def _diagram_zh(svg: str, namespace: str, text: dict[str, str]) -> str:
     """Translate a trusted static SVG, including its accessible description.
 
-    Both diagrams can appear in bilingual mode, so every translated ID and
-    corresponding reference has its own namespace.
+    Each authored variant has its own IDs and references. The HTTP response
+    includes only the selected language's diagram.
     """
     translated = svg.replace(namespace + "-", namespace + "-zh-")
     for english, chinese in sorted(text.items(), key=lambda item: len(item[0]), reverse=True):
@@ -1709,31 +1185,6 @@ _DIAGRAM_COMMON = {
     "credential stays on the slot": "登录凭证留在槽位",
 }
 
-PICTURE_ZH = _diagram_zh(
-    PICTURE,
-    "legacy",
-    {
-        **_DIAGRAM_COMMON,
-        "Legacy bridge transport": "旧版桥接方式",
-        "With --transport bridge, original Claude Code runs locally.\nA local HTTP "
-        "bridge carries supported model requests through encrypted SSH and\nthe BWH "
-        "byte broker to the assigned slot relay, then Anthropic.\nOther native CLI "
-        "services can connect directly from the laptop.": (
-            "选择 --transport bridge 时，原版 Claude Code 在电脑上运行。本地 HTTP "
-            "服务把支持的模型请求送进 SSH 加密流，经 BWH 字节转发到指定槽位，再到 "
-            "Anthropic。其他原生服务仍可能直接从电脑联网。"
-        ),
-        "TLS + encrypted SSH": "TLS + SSH 加密",
-        "CC Fleet broker": "CC Fleet 字节转发服务",
-        "authenticates device; relays bytes": "验证设备；转发加密字节",
-        "SSH to the slot": "SSH 到槽位",
-        "Your slot, on our machine": "托管机器上的你的槽位",
-        "fixed upstream model relay": "固定上游的模型转发",
-        "only your bound Claude account": "只使用你绑定的 Claude 账号",
-        "Claude traffic from the slot": "从槽位发出的模型请求",
-        "relevant prompts and tool context": "包含相关提示与工具上下文",
-    },
-)
 
 GATEWAY_PICTURE_ZH = _diagram_zh(
     GATEWAY_PICTURE,
@@ -1765,291 +1216,139 @@ GATEWAY_PICTURE_ZH = _diagram_zh(
 def how_it_works(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None
 ) -> str:
-    """Nothing here is about paying; `price` is taken so every page is called
-    the same way."""
     body = (
         '<div class="dochead">'
         + bi("<h1>How it works</h1>", "<h1>CC Fleet 如何工作</h1>")
         + bi(
-            '<p class="lead"><code>ccfleet local</code> runs original Claude Code on your '
-            "computer. With a configured gateway, supported model requests go over HTTPS "
-            "to our domain on BWH and then to one of your selected own slots. BWH can read "
-            "those model contents. Plain <code>ccfleet</code> remains a remote-terminal "
-            "compatibility command.</p>",
-            '<p class="lead"><code>ccfleet local</code> 在你的电脑上运行原版 Claude '
-            "Code。配置网关后，支持的模型请求通过 HTTPS 到达我们在 BWH "
-            "上的域名，再使用你选中的某个自己的槽位。BWH 可以读取这些模型消息。单独运行 "
-            "<code>ccfleet</code> 仍打开兼容的远程终端。</p>",
+            '<p class="lead">Think of the gateway as a reception desk and your slot as a '
+            "seat reserved for your own Claude account. Your computer sends the question; "
+            "the desk chooses one of your selected seats; Anthropic runs the model.</p>",
+            '<p class="lead">把网关想成收件前台，把槽位想成留给你自己的 Claude '
+            "账号的座位。电脑送出问题，前台从你选中的座位里挑一个，Anthropic "
+            "运行模型并回答。</p>",
         )
         + '</div><div class="how"><figure class="card diagram">'
         + bi(GATEWAY_PICTURE, GATEWAY_PICTURE_ZH)
         + "<figcaption>"
         + bi(
-            "Current HTTPS gateway: no local HTTP listener or laptop-side SSH for model requests.",
-            "当前 HTTPS 方式：模型请求无需本地 HTTP 服务，也无需电脑端 SSH。",
+            "Model requests go over HTTPS. Your files, tools and history stay local; model "
+            "context can contain their contents.",
+            "模型请求通过 HTTPS 发送。文件、工具和历史留在本地；模型上下文仍可能包含它们的内容。",
             inline=True,
         )
-        + "</figcaption>"
-        + "<details>"
-        + "<summary>"
-        + bi("Legacy bridge transport", "旧版桥接方式", inline=True)
-        + "</summary>"
-        + bi(PICTURE, PICTURE_ZH)
-        + bi(
-            "<p><code>ccfleet local --transport bridge</code> uses a local HTTP bridge and "
-            "laptop-to-slot SSH through the BWH byte broker.</p>",
-            "<p><code>ccfleet local --transport bridge</code> 会启动本地 HTTP "
-            "桥接服务，通过 BWH 的字节转发服务建立电脑到槽位的 SSH 加密连接。</p>",
-        )
-        + "</details>"
-        + bi(
-            '<p><a href="/docs/library/docs/public-gateway.html">Public gateway '
-            "architecture and privacy</a></p>",
-            '<p><a href="/docs/library/docs/public-gateway.html">网关架构与隐私参考</a></p>',
-        )
-        + '</figure><div class="how-text">'
-        + _model_connections(cfg)
+        + '</figcaption></figure><div class="how-text">'
         + '<div class="card">'
-        + bi("<h2>Your slot</h2>", "<h2>槽位是什么</h2>")
+        + bi("<h2>One question, step by step</h2>", "<h2>跟着一个问题走一遍</h2>")
         + bi(
-            "<p>Your slot is a Linux account under the name you give it, with a private "
-            "home directory and the original Claude Code. The plain <code>ccfleet</code> "
-            "remote-terminal command uses a persistent session that keeps running when "
-            "your computer disconnects; <code>ccfleet local</code> instead runs on your "
-            "computer. There is no administrator access inside a slot. Other slots on the "
-            "same machine use different operating-system accounts and Claude sign-ins.</p>",
-            "<p>槽位是以你选定名称运行的 Linux 用户环境，拥有自己的主目录与原版 Claude "
-            "Code。单独运行 <code>ccfleet</code> 会连接持久的远程会话，电脑断开后远程会话仍"
-            "运行；<code>ccfleet local</code> 则在你的电脑上运行。槽位内没有管理员权限。同"
-            "一台机器上的不同槽位使用不同的系统用户和 Claude 登录。</p>",
+            "<p><code>ccfleet local</code> runs original Claude Code on your computer. "
+            "Local tools may read a file and include relevant text in the model request. "
+            "The request goes over HTTPS to our gateway on BWH with a separate Fleet "
+            "connection key.</p>",
+            "<p><code>ccfleet local</code> 在你的电脑上运行原版 Claude "
+            "Code。本地工具可能读取文件，把相关文字放进模型请求，再带上独立的 Fleet "
+            "连接密钥，通过 HTTPS 发给 BWH 上的网关。</p>",
+        )
+        + bi(
+            "<p>The gateway checks your key and ownership, then chooses one of your "
+            "selected own slots. BWH uses a restricted inference-only SSH connection to "
+            "that slot. The slot uses its bound native Claude credential over HTTPS to "
+            "Anthropic. The answer streams back along this route; permitted tools execute "
+            "on your computer. Credentials are not copied to your laptop or BWH.</p>",
+            "<p>网关验证密钥与槽位归属，从你选中的自己的槽位中选择一个。BWH "
+            "通过只允许模型转发的受限 SSH 连接到槽位。槽位使用绑定的原生 Claude 凭证，通过 "
+            "HTTPS 请求 Anthropic。回答沿原路分段返回，获准的工具仍在你的电脑上执行；Claude"
+            " 凭证不会复制到电脑或 BWH。</p>",
         )
         + '</div><div class="card">'
-        + bi("<h2>Your Claude account</h2>", "<h2>Claude 账号与登录凭证</h2>")
+        + bi("<h2>Your seat and your account</h2>", "<h2>你的槽位与你的账号</h2>")
         + bi(
-            "<p>You sign in to Claude yourself, through Anthropic&#x27;s own sign-in. The "
-            "credential that creates is written on the machine, in your slot, and nowhere "
-            "else: ccfleet&#x27;s server passes along the sign-in link and the code you "
-            "paste, and never receives or keeps the resulting credential. Native Claude on "
-            "the slot owns authentication and renewal. The slot relay uses that bound "
-            "credential upstream, not a credential sent to your laptop or BWH. One slot "
-            "keeps one bound account for one holder. A gateway endpoint may select one or "
-            "several of that holder's own slots; it does not combine credentials within a "
-            "slot or use another user's account.</p>",
-            "<p>你通过 Anthropic 的登录流程亲自登录 Claude。产生的凭证只写在机器上的槽位中"
-            "；CC Fleet 服务转发登录链接与粘贴的代码，不接收或保存最终的 Claude "
-            "凭证。认证与续期由槽位上的原版 Claude 管理；槽位转发程序使用该槽位绑定的凭证访"
-            "问上游，不把凭证传到电脑或 BWH。每个槽位绑定持有者的一个账号。一个 HTTPS "
-            "模型连接可以选择同一用户自己的一个或多个槽位，不会在一个槽位中合并凭证，也不会"
-            "使用其他用户的账号。</p>",
+            "<p>A slot is a separate Linux account on a machine we operate. It has a "
+            "private home directory and one bound Claude account. Slots may share a "
+            "physical machine and its internet address. You sign in yourself through "
+            "Anthropic; native Claude owns authentication and renewal. Renewal can fail or "
+            "be revoked, so the page may ask you to <strong>Sign in again</strong>.</p>",
+            "<p>槽位是我们托管机器上的独立 Linux 用户环境，有自己的主目录，并绑定一个 "
+            "Claude 账号。多个槽位可能共用一台物理机器和公网地址。你通过 Anthropic "
+            "亲自登录，认证与续期由原版 Claude 管理。续期可能失败，登录也可能被撤销，因此页"
+            "面仍可能要求<strong>重新登录</strong>。</p>",
         )
-        + '</div><div class="card">'
-        + bi("<h2>Credential maintenance</h2>", "<h2>登录状态怎样维护</h2>")
-        + bi(
-            "<p>Before access credentials expire, the machine attempts bounded renewal "
-            "through native Claude in an isolated maintenance session. It checks that "
-            "expiry actually advanced, preserves the bound account, and backs off on "
-            "failure. The relay never writes or independently refreshes credentials. Your "
-            "page reports unconfirmed renewal or stale health information instead of "
-            "claiming readiness. Revocation or an expired sign-in can still require "
-            "<strong>Sign in again</strong>; this is not a guarantee of permanent account "
-            "access.</p>",
-            "<p>访问凭证到期前，机器会通过原版 Claude 在隔离的维护会话中尝试续期。它确认有"
-            "效期确实延长、账号绑定未改变；失败时限制重试频率。模型转发程序不会自行写入或刷"
-            "新凭证。页面会明确显示续期尚未确认或状态已过期，而不是冒充就绪。凭证被撤销或登"
-            "录过期时，仍可能需要<strong>重新登录</strong>，没有“永久可用”的保证。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Reported health and local diagnostics</h2>", "<h2>状态观察与本地诊断</h2>")
         + bi(
             "<p>Your slot card distinguishes reported ready, renewal pending, sign-in "
             "required and account maintenance. Stale observations do not claim readiness. "
-            "A heartbeat does not prove provider acceptance; <code>ccfleet doctor "
-            "--privacy</code> and <code>ccfleet status --json</code> perform read-only "
-            "connection checks without a model request or project scan. Support export is "
-            "an explicit local-file operation, not an upload of your project or "
-            "conversation.</p>",
-            "<p>卡片会区分已报告就绪、等待续期、需要登录和账号维护；过期的观察不会被当作当"
-            "前就绪。状态报告不能证明供应商会接受下一条消息。<code>ccfleet doctor "
-            "--privacy</code> 与 <code>ccfleet status --json</code> "
-            "只做连接检查，不调用模型、不扫描项目。诊断导出是主动写入本地文件的操作，不上传"
-            "项目或会话。</p>",
+            "A heartbeat does not prove provider acceptance. Read-only diagnostics check "
+            "connections without a model request or project scan. Machines keep their "
+            "clocks on UTC; slot cards display reset times in your own time zone.</p>",
+            "<p>卡片区分已报告就绪、等待续期、需要登录和账号维护。过期状态不会被当作当前就"
+            "绪。机器状态报告不保证服务商会接受下一条消息；只读诊断不调用模型，也不扫描项目"
+            "。机器时钟使用 UTC；槽位卡片上的额度重置时间按你所在的时区显示。</p>",
+        )
+        + "</div>"
+        + _model_connections(cfg)
+        + '<div class="card">'
+        + bi("<h2>Who can read what</h2>", "<h2>谁能看到什么</h2>")
+        + bi(
+            "<p><strong>BWH can read model requests and responses.</strong> HTTPS protects "
+            "each connection, but the gateway decrypts messages to route them. BWH, the "
+            "selected slot and Anthropic process model context, including any prompts, "
+            "file contents and tool results it contains. Local files stay local as files; "
+            "relevant contents can still be sent to the model.</p>",
+            "<p><strong>BWH 可以读取模型请求和回复。</strong>HTTPS "
+            "保护每段连接，但网关为路由会解密消息。BWH、选中的槽位和 Anthropic "
+            "都会处理模型上下文，包括其中的提示、文件内容和工具结果。文件本身仍在本地，但相"
+            "关内容可能发给模型。</p>",
+        )
+        + bi(
+            "<p>The Fleet server receives slot sign-in state, the bound Claude email and "
+            "plan, quota observations, hourly token counts and paired-device facts. Those "
+            "heartbeat reports do not contain prompts, conversations, file contents or the "
+            "Claude credential. Separately, the direct HTTPS gateway on BWH receives and "
+            "processes model requests. The server stores only a hash of your connection "
+            "key; the native Claude credential remains on the slot.</p>",
+            "<p>Fleet 服务收到槽位登录状态、绑定的 Claude 邮箱与订阅、配额观察、按小时的 "
+            "token 数和设备配对信息。这样的状态报告不包含提示、会话、文件内容或 Claude "
+            "凭证；BWH 上的 HTTPS 网关则另外接收和处理模型消息。服务端只保存连接密钥的哈希"
+            "，原生 Claude 凭证留在槽位。</p>",
+        )
+        + bi(
+            "<p>The relay removes selected headers and top-level structured metadata. It "
+            "does not redact arbitrary prompts or tool results. Native system prompts may "
+            "include local OS, working directory or environment details. This is not "
+            "anonymity or a zero-metadata guarantee. MCP servers, hooks, plugins, tools "
+            "and updates may connect directly from the laptop.</p>",
+            "<p>转发时会移除部分请求头和顶层结构化 metadata，但不会自动删去提示或工具结果中"
+            "的任意个人信息。原生系统提示可能包含本地系统、工作目录或环境信息。这不是匿名或"
+            "零元数据保证。MCP、hooks、插件、工具和更新仍可能从电脑直接联网。</p>",
+        )
+        + bi(
+            "<p>Machine administrators have root and can technically inspect any slot. The "
+            "operator console does not display native credentials or full file contents, "
+            'but that does not remove root access. Read <a href="/privacy">Privacy</a> for '
+            "the full data scope and retention.</p>",
+            "<p>机器管理员拥有 root 权限，技术上能检查任意槽位。管理界面不显示原生凭证或完"
+            '整文件，但这不消除 root 访问能力。完整数据范围与保存时长见<a href="/privacy">'
+            "隐私说明</a>。</p>",
         )
         + '</div><div class="card">'
-        + bi("<h2>Use it from anywhere</h2>", "<h2>在不同电脑上使用</h2>")
+        + bi("<h2>Updates, outages and returning a slot</h2>", "<h2>更新、故障与归还</h2>")
         + bi(
-            "<p>Install <code>ccfleet</code> on each computer you use. A fresh setup pairs "
-            "the device and enrolls an endpoint key when gateway access is available. "
-            "Previously paired computers can run <code>ccfleet gateway setup</code> "
-            "without pairing again. Local Claude sends model requests directly over HTTPS "
-            "using that separate key. Choose one own slot, or an ordered own-slot pool "
-            "with conversation affinity or safe failover. BWH uses a restricted "
-            "inference-only SSH key to the selected slot.</p>",
-            "<p>每台电脑分别安装 <code>ccfleet</code>。首次安装会配对设备，网关开放时也会创"
-            "建独立的连接密钥。以前已配对的电脑可运行 <code>ccfleet gateway "
-            "setup</code>，无需重新配对。本地 Claude 使用这个独立密钥直接通过 HTTPS "
-            "发送模型请求。你可以只选自己的一个槽位，也可以配置自己的槽位顺序、会话保持和安"
-            "全切换。BWH 用权限受限、仅用于模型转发的 SSH 密钥连接选中的槽位。</p>",
+            "<p>Local Claude updates separately from the slot and the Fleet client. "
+            "Automatic updates are disabled during a CC Fleet launch; update your local "
+            "Claude installation separately, outside that session. Machine security "
+            "updates install daily; necessary reboots are scheduled by the operator. Check "
+            '<a href="/status">Status</a> for website and machine availability.</p>',
+            "<p>电脑上的 Claude、槽位上的 Claude 和 Fleet 客户端分别更新。CC Fleet "
+            "启动期间关闭 Claude 自动更新，请在会话外单独更新本地安装。机器每天安装安全更新"
+            '，需要重启时由运营者安排。网站和机器是否在线，可以查看<a href="/status">服务状'
+            "态</a>。</p>",
         )
         + bi(
-            "<p>The explicit <code>--transport bridge</code> alternative starts a local "
-            "HTTP listener and sends laptop-to-slot SSH through an authenticated "
-            "WebSocket. Its BWH byte broker cannot read that encrypted model stream. The "
-            "HTTPS gateway terminates TLS on BWH and can read the stream's contents. Both "
-            "routes keep the model destination fixed; it is not caller-selected.</p>",
-            "<p>明确选择 <code>--transport bridge</code> 时，会启动本地 HTTP "
-            "服务，通过已认证的 WebSocket 承载电脑到槽位的 SSH。BWH "
-            "字节转发服务无法读取内部加密的模型流。HTTPS 网关则在 BWH 解密 TLS，因此 BWH "
-            "能读取模型消息。两种方式的模型上游都由服务固定，不允许调用方指定任意上游地址。"
-            "</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Native local files and history</h2>", "<h2>文件、工具与历史在本地</h2>")
-        + bi(
-            "<p>Claude, its tools, settings and conversations run locally. There is no "
-            "folder upload, mount or push/pull step, and no CC Fleet filesystem cap. "
-            "Native permissions apply; bypass mode can read, modify, delete or transmit "
-            'local data without prompts. <a href="/docs/guide#migration">The migration '
-            "guide</a> explains explicit cleanup of retired live-folder grants and the "
-            "optional <code>--legacy-history</code> profile.</p>",
-            "<p>本地方式的 Claude、工具、设置和会话都在你的电脑上运行，不需要上传文件夹、挂"
-            "载或 push/pull，也没有 CC Fleet 另设的文件系统上限。原生权限仍然生效；跳过权限"
-            '确认时，工具可以不逐次询问就读取、修改、删除或发送本地数据。<a href="/docs/gui'
-            'de#migration">迁移指南</a>说明如何主动清理已退役的文件夹授权，以及如何选择旧的'
-            " <code>--legacy-history</code> 配置。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>What we can and cannot see</h2>", "<h2>服务方能看到什么</h2>")
-        + bi(
-            "<p>ccfleet&#x27;s server receives facts about your slot: whether Claude Code "
-            "is signed in, the email address and plan of the Claude account signed in on "
-            "it, how much of your usage limits is used, token counts per hour, and which "
-            "CC Fleet devices are paired. Those heartbeat reports do not contain prompts, "
-            "conversations, file contents or the Claude credential. Separately, the direct "
-            "HTTPS gateway on BWH receives and processes model requests and responses, "
-            "including any prompt, file or tool-result context they contain. Its endpoint "
-            "key is stored only as a hash on the server; the native Claude credential "
-            'remains on the slot. <a href="/privacy">The privacy page</a> lists '
-            "everything, and for how long.</p>",
-            "<p>CC Fleet 会收到槽位状态：Claude 是否登录、登录账号的邮箱与订阅、已用配额、"
-            "按小时的 token 数，以及已配对的设备。这样的状态报告不包含提示、会话、文件内容"
-            "或 Claude 凭证。另一方面，BWH 上的 HTTPS 网关会接收和处理模型请求与回复，也能"
-            "读取其中的提示、文件或工具结果。服务端只保存连接密钥的哈希；原生 Claude "
-            '凭证仍在槽位上。完整数据范围与保存时长见<a href="/privacy">隐私说明</a>。</p>',
-        )
-        + bi(
-            "<p>Claude Code on your slot sends Anthropic less than it would by default: "
-            "its error reports, bug reports and feedback surveys are switched off. The "
-            "machines keep their clocks on UTC; your page shows times in your own time "
-            "zone. That does not make the service anonymous: BWH sees your connection IP "
-            "and the gateway's model contents; SSH has transport metadata, and native "
-            "prompts, tool results and file contents can identify you. Selected headers "
-            "and top-level structured metadata are removed, but native system prompts can "
-            "still include local OS, working directory or environment details. MCP "
-            "servers, hooks, plugins, tools, updates and other native services can connect "
-            "directly from the laptop. Optional telemetry controls are not an all-traffic "
-            "firewall.</p>",
-            "<p>槽位上的 Claude Code 关闭了错误报告、bug 报告和反馈问卷。机器使用 "
-            "UTC，网页按你的时区显示时间。这不代表匿名：BWH 看得到连接 IP 和网关消息，SSH "
-            "也有传输元数据；提示、工具结果和文件内容可能识别你。虽然会移除部分请求头和顶层"
-            "结构化 metadata，原生系统提示仍可能包含本地系统、工作目录和环境信息。MCP、hook"
-            "s、插件、工具、更新和其他原生服务可能从电脑直接联网；可选遥测控制不是拦截所有"
-            "流量的防火墙。</p>",
-        )
-        + bi(
-            "<p>One limit is worth saying plainly: the machines are ours, and their "
-            "administrators have root, so they can technically read any slot. The operator "
-            "console does not display native credentials or full file contents, but that "
-            "does not prevent an administrator from inspecting them. Keep nothing in a "
-            "slot that you could not accept an administrator being able to read.</p>",
-            "<p>机器管理员拥有 root 权限，技术上能读取任意槽位。管理界面不会显示原生凭证或"
-            "完整文件内容，但这不阻止管理员直接检查。请只在槽位保存你能接受管理员有能力读取"
-            "的内容。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Kept up to date</h2>", "<h2>更新与服务状态</h2>")
-        + "<ul>"
-        + "<li>"
-        + bi(
-            "<strong>Local Claude Code</strong>: CC Fleet setup preserves an existing "
-            "local installation and installs it if missing. Automatic updates are disabled "
-            "during a CC Fleet launch; update your local Claude installation separately, "
-            "outside that session.",
-            "<strong>电脑上的 Claude Code：</strong>安装 CC Fleet "
-            "时保留现有版本，缺少时才安装。CC Fleet 启动期间关闭自动更新；需要更新时，在会"
-            "话外单独更新电脑上的 Claude Code。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Claude Code</strong> in your slot is updated automatically to "
-            "Anthropic&#x27;s latest release, or to its stable release if you choose that "
-            "on your page. A session that is running is never interrupted; the new version "
-            "is used from the next one.",
-            "<strong>槽位上的 Claude Code：</strong>自动跟随 Anthropic "
-            "最新发布，也可在页面选择稳定渠道。正在运行的会话不会因更新被中断，下次新建会话"
-            "使用新版。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Security updates</strong> for the machine install every day.",
-            "<strong>系统安全更新：</strong>机器每天自动安装。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Reboots</strong>: when an update needs one, the machine says so and "
-            "the operator reboots it at a quiet time. Your slot and its services come back "
-            "by themselves.",
-            "<strong>重启：</strong>更新需要重启时，机器会报告，运营者选择较空闲的时间执行"
-            "。槽位及其服务会自动恢复。",
-            inline=True,
-        )
-        + "</li>"
-        + "<li>"
-        + bi(
-            "<strong>Status</strong>: whether this site and the machines are up, now and "
-            'over the last 90 days, is on <a href="/status">the status page</a>; your own '
-            "page says how your slot&#x27;s machine is. Turn on <strong>outage "
-            "emails</strong> there, and we email you when your slot&#x27;s machine has "
-            "been down for five minutes, and again when it is back. An outage of this "
-            "website is told afterwards, since the website is what sends them. Existing "
-            "slot processes may keep running, but local model requests require their "
-            "configured gateway or bridge broker to be reachable. A configured gateway "
-            "failure does not silently start a bridge fallback.",
-            '<strong>服务状态：</strong><a href="/status">状态页</a>显示网站和机器的当前状'
-            "态及过去 90 天记录，槽位页面显示对应机器状态。开启<strong>故障邮件</strong>后"
-            "，机器断线五分钟及恢复时会发邮件；网站故障只能恢复后通知，因为邮件由网站发送。"
-            "槽位已有进程可能继续运行，但本地模型请求仍需要已配置的网关或桥接服务在线。网关"
-            "失败时，不会悄悄切换到旧桥接方式。",
-            inline=True,
-        )
-        + "</li>"
-        + '</ul></div><div class="card">'
-        + bi("<h2>Giving a slot back</h2>", "<h2>归还槽位时发生什么</h2>")
-        + bi(
-            "<p>When you give a slot back, the machine stops everything running in it and "
-            "deletes your Linux account and every file in it. The slot is offered to "
-            "anybody else only after the machine itself confirms your account is gone, so "
-            "nobody is ever handed your files.</p>",
-            "<p>归还槽位后，机器会停止其中运行的程序，删除 Linux "
-            "用户及所有文件。只有机器确认删除完成，槽位才会再次开放领取，避免把原用户的文件"
-            "交给下一位。</p>",
-        )
-        + '</div><div class="card">'
-        + bi("<h2>Where</h2>", "<h2>托管位置与源代码</h2>")
-        + bi(
-            "<p>The hosted machines are in California. A slot is a separate Linux account; "
-            "slots may share a physical machine and its internet address. ccfleet&#x27;s "
-            'code is open source: <a href="https://github.com/cdcupt/ccfleet" '
-            'target="_blank" rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>.</p>',
-            "<p>托管机器位于加利福尼亚。槽位是独立的 Linux 用户环境，多个槽位可能共用同一台"
-            '物理机器与公网地址。CC Fleet 代码开源：<a href="https://github.com/cdcupt/ccfl'
-            'eet" target="_blank" rel="noopener noreferrer">github.com/cdcupt/ccfleet</a>。'
-            "</p>",
+            "<p>Model requests need the configured gateway and an eligible slot. A gateway "
+            "outage reports an error. Giving a slot back stops its processes and deletes "
+            "the Linux account and all slot files. It is offered again only after the "
+            "machine confirms deletion; local files and history are not deleted.</p>",
+            "<p>模型请求需要网关在线，并有可用的所选槽位。网关故障会报错。归还槽位会停止其"
+            "中的进程，删除 Linux 用户与所有槽位文件；只有机器确认删除完成，槽位才会再次开"
+            "放领取。本地文件和历史不会因此删除。</p>",
         )
         + "</div></div></div>"
     )

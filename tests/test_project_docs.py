@@ -1,8 +1,8 @@
 """Current local-Claude guidance never inherits retired slot-only/privacy claims."""
 
-import re
 from pathlib import Path
 
+from ccfleetd import bilingual
 from ccfleetd.config import Config
 from ccfleetd.customer_docs import guide, how_it_works, overview
 from ccfleetd.usersite import cli_pairing_page, privacy_page
@@ -14,125 +14,161 @@ SETUP_COMMAND = ("curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/ma
 
 
 def visible(page):
-    return visible_html(page)
+    return visible_html(bilingual.project_html(page, "en"))
 
 
 def test_guide_keeps_one_setup_command_and_reuses_existing_pairing():
     page = guide(Config())
-    migration = page.split('id="migration"', 1)[1].split('id="project-workspaces"', 1)[0]
-    text = visible(migration)
-    assert 'href="#migration"' in page
-    assert migration.count(SETUP_COMMAND) == 1
-    for phrase in ("One-command setup and migration", "reuses its existing pairing",
-                   "Only if this computer is not paired", "one fresh pairing code",
-                   "No SSH command or slot Claude credential is needed",
-                   "without uploading project files or making a model request"):
+    text = visible(page)
+    assert 'id="setup"' in page and page.count(SETUP_COMMAND) == 1
+    for phrase in (
+        "keeps an existing pairing",
+        "Only if asked",
+        "fresh pairing code",
+        "ccfleet local --check",
+        "ccfleet local",
+        "make no model request",
+        "upload no project files",
+    ):
         assert phrase in text
-    assert "laptop/install.sh | bash -s -- --migrate" not in migration
+    assert "ccfleet-connect" not in text and "--migrate" not in text
 
 
 def test_setup_installs_missing_native_claude_and_preserves_existing_configuration():
     text = visible(guide(Config()))
-    for phrase in ("Existing native Claude is preserved", "installs the original local CLI",
-                   "fixed vendor URL", "verifies its digest-pinned helper",
-                   "Pairing, configuration, slot sign-in and existing remote files stay in place",
-                   "PATH changes preserve existing shell settings", "keep a backup",
-                   "does not automatically revoke an Anthropic credential"):
+    for phrase in (
+        "local Claude installation",
+        "installs the original local CLI",
+        "fixed vendor URL",
+        "digest-pinned helper",
+        "preserves pairing",
+        "configuration and slot sign-in",
+        "backup when it adjusts PATH",
+    ):
         assert phrase in text
-    assert '--name "Personal Mac"' in text and "--slot SLOT" in text
+    assert "saves a separate private connection key" in text
 
 
-def test_migration_requires_explicit_end_user_cancellation_and_preserves_other_work():
+def test_current_setup_does_not_teach_retired_cleanup_workflows():
     text = visible(guide(Config()))
-    for phrase in ("asks in the controlling terminal before stopping old live-folder connectors",
-                   "associated remote live-folder sessions", "cancels pending work",
-                   "invalidates open mount handles", "Files and history are kept",
-                   "ordinary remote tmux sessions are untouched", "If you decline or cleanup fails",
-                   "Adding --yes explicitly authorizes this cancellation"):
-        assert phrase in text
-    assert "old live-folder connector may still be running after its terminal closes" in text
+    for removed in (
+        "live-folder",
+        "migration",
+        "--yes",
+        "--migrate",
+        "--reset-link",
+        "--disconnect",
+        "ccfleet-connect",
+    ):
+        assert removed not in text
+    assert "Setup and the readiness check make no model request" in text
 
 
 def test_primary_workflow_is_native_local_without_mount_or_filesystem_product_caps():
     text = visible(guide(Config()))
-    for phrase in ("Local Claude, local files and history", "launches the original local Claude CLI",
-                   "does not upload a project, mount your filesystem on the slot",
-                   "no CC Fleet filesystem count/size caps or Git-ignore filters",
-                   "working directory is not a sandbox", "including outside that directory"):
+    for phrase in (
+        "launches the original local Claude CLI",
+        "does not upload a project",
+        "mount your filesystem on the slot",
+        "no CC Fleet filesystem count/size caps",
+        "working directory is not a sandbox",
+        "including outside that directory",
+    ):
         assert phrase in text
-    assert "cd ~" in text
     assert "No local Claude Code installation is required" not in text
     assert "Tools execute on Linux" not in text
 
 
 def test_native_session_controls_and_local_permission_defaults_are_documented():
     text = visible(guide(Config()))
-    for command in ("ccfleet local --new --name work", "ccfleet local --resume",
-                    "ccfleet local --resume work", "ccfleet local --continue",
-                    "ccfleet local --resume work --fork-session",
-                    'ccfleet local --print "Summarize this project"',
-                    "--mode plan --model opus --effort high"):
+    for command in (
+        "ccfleet local --new --name work",
+        "ccfleet local --resume",
+        "ccfleet local --resume work",
+        "ccfleet local --continue",
+        "ccfleet local --resume work --fork-session",
+        'ccfleet local --print "Summarize this project"',
+        "--mode plan --model opus --effort high",
+    ):
         assert command in text
     assert "default to bypassPermissions" in text
     assert "without individual approval prompts" in text
-    assert "native local conversations, not remote tmux sessions" in text
     assert "/model" in text and "/effort" in text
-    assert "Resuming preserves the saved model and effort unless you request changes" in text
+    assert "Resuming keeps the saved model and effort unless changed deliberately" in text
 
 
-def test_native_history_is_default_and_legacy_history_is_selection_not_import():
+def test_native_history_is_private_and_no_old_profiles_are_taught():
     text = visible(guide(Config()))
-    for phrase in ("native Claude settings/history", "existing CLAUDE_CONFIG_DIR",
-                   "Nothing is imported or deleted", "ccfleet local --legacy-history --resume",
-                   "does not merge it into native history", "Old remote history remains on the slot",
-                   "temporary private settings overlay", "not permanently rewritten"):
+    for phrase in (
+        "Native Claude settings/history",
+        "existing CLAUDE_CONFIG_DIR",
+        "stay on this computer",
+        "does not import or synchronize conversations",
+        "temporary private settings overlay",
+        "not permanently rewritten",
+    ):
         assert phrase in text
+    assert "--legacy-history" not in text and "Old remote history" not in text
 
 
-def test_cleanup_flags_are_not_presented_as_current_session_controls():
+def test_current_exit_and_failover_do_not_imply_replay_or_retired_controls():
     text = visible(guide(Config()))
-    assert "Quit a new local session normally with /exit" in text
-    assert "Interrupted inference is not silently replayed" in text
-    assert "ccfleet local --disconnect is only for explicitly cleaning up" in text
-    assert "--reset-link is retired and provides migration guidance" in text
-    assert "Old ccfleet project commands remain for deliberate snapshot recovery" in text
+    assert "Quit with /exit and resume later" in text
+    assert "result is uncertain, the gateway stops" in text
+    for removed in ("--disconnect", "--reset-link", "ccfleet project", "ccfleet remote"):
+        assert removed not in text
 
 
-def test_foreground_bridge_does_not_claim_native_background_agent_support():
+def test_current_background_jobs_are_local_and_require_a_running_computer():
     text = visible(guide(Config()))
-    assert re.search(r"Foreground interactive sessions,\s+--print\s*,\s*native resume", text)
-    assert "multiple normal terminal sessions are supported" in text
-    assert "Native --bg / --background is explicitly rejected" in text
-    assert "Managed local background jobs" in text
-    assert re.search(r"It is not a remote job, native detached\s+--bg\s*, or an", text)
-    assert "computer must stay running and connected" in text
+    for phrase in (
+        "local Claude print-mode",
+        "computer must stay running and connected",
+        "job ID",
+        "private local files",
+        "never automatically restart",
+        "not sandbox-contained",
+        "archiving never stops an active job",
+    ):
+        assert phrase in text
+    assert "bridge" not in text
 
 
-def test_privacy_distinguishes_structured_filtering_from_native_context_and_direct_network():
+def test_privacy_distinguishes_local_files_from_model_context_and_direct_network():
     for page in (guide(Config()), privacy_page(Config()), how_it_works(Config())):
         text = visible(page)
-        for phrase in ("working directory", "MCP", "hooks", "plugins",
-                       "directly from the laptop", "all-traffic firewall"):
+        for phrase in ("MCP", "hooks", "plugins", "BWH", "file contents"):
             assert phrase in text
-        assert "metadata" in text
-    text = visible(guide(Config()))
-    for phrase in ("selected headers", "top-level structured metadata",
-                   "does not redact arbitrary prompts or tool results",
-                   "Native system prompts may include local OS",
-                   "not a fingerprint-free or zero-metadata guarantee",
-                   "Slot administrators have root and can inspect or alter",
-                   "influence local tool actions", "cannot decrypt the inner SSH model stream"):
+        assert "directly from the laptop" in text or "directly from your computer" in text
+        assert "root" in text and "Claude credential" in text
+    text = visible(how_it_works(Config()))
+    for phrase in (
+        "selected headers",
+        "structured metadata",
+        "does not redact arbitrary prompts",
+        "Native system prompts",
+        "working directory",
+        "not anonymity",
+        "BWH can read model requests and responses",
+    ):
         assert phrase in text
 
 
-def test_privacy_page_preserves_history_and_discloses_old_grant_cleanup():
+def test_privacy_page_preserves_history_and_discloses_current_model_context():
     text = visible(privacy_page(Config()))
-    for phrase in ("Local Claude and model-request privacy", "Native local history/settings",
-                   "--legacy-history", "without copying or deleting",
-                   "does not undo writes or erase", "associated remote live-folder sessions",
-                   "ordinary remote tmux sessions", "recovery backups",
-                   "connection IP and timing", "This is not anonymity", "operator console"):
+    for phrase in (
+        "Your local work and model context",
+        "Native local history/settings",
+        "does not automatically erase existing files or saved history",
+        "does not undo writes or erase",
+        "connection IP and timing",
+        "This is not anonymity",
+        "operator console",
+        "BWH can read model requests and responses",
+    ):
         assert phrase in text
+    for removed in ("--transport bridge", "--legacy-history", "live-folder", "migration"):
+        assert removed not in text
 
 
 def test_overview_and_how_it_works_describe_local_execution_without_slot_only_overclaim():
@@ -141,12 +177,12 @@ def test_overview_and_how_it_works_describe_local_execution_without_slot_only_ov
     assert "files, tools and history on your computer" in summary
     details = visible(how_it_works(Config()))
     assert "runs original Claude Code on your computer" in details
-    assert "remote-terminal compatibility command" in details
-    assert "slots may share a physical machine and its internet address" in details
+    assert "Slots may share a physical machine and its internet address" in details
     assert "only Claude Code on the slot talks to Anthropic" not in details
+    assert "remote-terminal" not in details
 
 
-def test_pairing_page_shares_setup_and_native_launch_without_embedding_code_in_command():
+def test_pairing_page_shares_current_setup_without_embedding_code_in_command():
     token = "ccf_pair_FAKE_DISPLAY_ONLY"
     page = cli_pairing_page({"id": "test-slot", "name": "Example slot"}, token)
     text = visible(page)
@@ -154,11 +190,20 @@ def test_pairing_page_shares_setup_and_native_launch_without_embedding_code_in_c
     assert "Enter this code only if asked" in page
     assert "Setup keeps your existing connection" in page
     assert page.count(token) == 1 and f'class="token">{token}</pre>' in page
-    assert "if missing, the original local CLI is installed from the fixed vendor URL" in text
-    assert "files, tools, settings and history run locally" in text
-    assert "finish" in text.lower() and "approve cancellation" in text
-    assert "No project is uploaded during setup" in text
-    assert "--legacy-history" in text and "--mode manual" in text
+    for phrase in (
+        "setup installs the original local CLI",
+        "fixed vendor URL",
+        "No project is uploaded during setup",
+        "ccfleet gateway setup",
+        "model requests travel over HTTPS to Fleet",
+        "Your saved history and files stay local",
+        "Fleet’s gateway can read those requests and replies",
+        "does not automatically erase",
+    ):
+        assert phrase in text
+    assert "--mode manual" in text
+    for removed in ("--legacy-history", "--transport bridge", "live-folder", "ccfleet-connect"):
+        assert removed not in text
 
 
 def test_readme_and_current_relay_guide_share_setup_and_native_semantics():
