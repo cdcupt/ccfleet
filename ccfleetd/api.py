@@ -26,6 +26,7 @@ from . import (
     consoleslots,
     customer_docs,
     gateway,
+    machine_health,
     oauth,
     reference_docs,
     sessions,
@@ -127,6 +128,9 @@ class Context:
         self.cfg = cfg
         self.monitor = monitor
         self.gateway = gateway.GatewayRuntime(cfg, store)
+        self.machine_health = (machine_health.Observer()
+                               if cfg.public_machine_metrics_enabled and not cfg.broker_only
+                               else None)
 
 
 @dataclass(frozen=True)
@@ -1052,8 +1056,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            HTML_HEADERS)
             elif path == "/status":
                 # Public: whether the site and the machines are up, never who is on them.
+                now = time.time()
+                machine_report = (ctx.machine_health.snapshot(now)
+                                  if ctx.machine_health is not None else None)
                 self._send(200, statuspage.page(ctx.store, ctx.cfg, self._viewer(),
-                                                time.time()).encode("utf-8"), HTML_HEADERS)
+                                                now, machine_report=machine_report).encode("utf-8"),
+                           HTML_HEADERS)
             elif customer_docs.page_for(path):
                 # Public, for people deciding whether to buy a slot and then using one.
                 self._docs_page(customer_docs.page_for(path))
@@ -1505,6 +1513,11 @@ def serve(ctx: Context) -> None:
                               name="ccfleet-monitor", daemon=True)
     if not ctx.cfg.broker_only:
         worker.start()
+    metrics_worker = None
+    if ctx.machine_health is not None:
+        metrics_worker = threading.Thread(target=ctx.machine_health.run, args=(stop,),
+                                          name="ccfleet-machine-metrics", daemon=True)
+        metrics_worker.start()
 
     def _shutdown(_signum: int, _frame: Any) -> None:
         stop.set()
@@ -1519,3 +1532,5 @@ def serve(ctx: Context) -> None:
         stop.set()
         ctx.gateway.stopping.set()
         server.server_close()
+        if metrics_worker is not None:
+            metrics_worker.join(timeout=2)

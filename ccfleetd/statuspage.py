@@ -10,6 +10,7 @@ pill that links here (Erik, 2026-09-25).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from html import escape
 from typing import Any, Optional
@@ -86,6 +87,8 @@ font-variant-numeric:tabular-nums;letter-spacing:-.015em;overflow-wrap:anywhere}
 .st-perf-help summary{cursor:pointer;color:var(--acc);font-weight:600;font-size:14px}
 .st-perf-help p,.st-perf-help li{font-size:13px;line-height:1.65}
 .st-perf-help ul{margin-bottom:8px}
+.st-machine-service{grid-template-columns:repeat(2,minmax(0,1fr))}
+.st-machine-subhead{font-size:14px;font-weight:620;margin:20px 0 10px}
 @media (max-width:560px){.st-bar{gap:1px;height:30px}
 .st-bar .d:nth-child(-n+60){display:none}.st-scale .d90{display:none}
 .st-scale .d30{display:inline}.st-overall{margin-left:0;flex-basis:100%}
@@ -317,9 +320,11 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
                 "Waiting for enough aggregated data", "等待足够的汇总数据")
         note = '<p class="st-perf-note"><strong>' + label(*message, inline=True) + '</strong> '
         note += label(
-            "Numbers appear only after enough recorded traffic from several different accounts. "
+            "At least 20 recorded attempts from 3 different Fleet accounts are needed before "
+            "traffic figures appear. Each timing needs its own 20 samples from 3 accounts. "
             "A dash means unknown, not zero.",
-            "有多个不同账号参与，且记录量足够时，才展示数字。横线表示未知，不是零。",
+            "至少有 3 个不同 Fleet 账号、合计 20 次已记录的尝试，才展示流量数字。"
+            "每项计时也要单独达到 3 个账号、20 个样本。横线表示未知，不是零。",
             inline=True) + '</p>'
     timing_notes = ''
     if ready:
@@ -397,6 +402,163 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
     )
 
 
+def _machine_number(value: Any) -> Optional[float]:
+    """The public panel formats only finite, non-negative numeric totals."""
+    if type(value) not in (int, float) or value < 0:
+        return None
+    try:
+        return float(value) if math.isfinite(value) else None
+    except (OverflowError, ValueError):
+        return None
+
+
+def _machine_percent(value: Any) -> str:
+    number = _machine_number(value)
+    shown = f"{number:,.1f}%" if number is not None else "—"
+    return label(shown, shown, inline=True)
+
+
+def _machine_bytes(value: Any) -> str:
+    number = _machine_number(value)
+    if number is None:
+        return "—"
+    unit = "B"
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if number < 1024 or unit == "PiB":
+            break
+        number /= 1024
+    return f"{number:,.0f} {unit}" if unit == "B" else f"{number:,.1f} {unit}"
+
+
+def _machine_capacity(used: Any, total: Any) -> str:
+    return label(_machine_bytes(used) + " / " + _machine_bytes(total),
+                 _machine_bytes(used) + " / " + _machine_bytes(total), inline=True)
+
+
+def _machine_cards(cards: Sequence[tuple[str, str, str, str]], service: bool = False) -> str:
+    style = 'st-perf-grid st-machine-service' if service else 'st-perf-grid'
+    return '<dl class="' + style + '">' + ''.join(
+        '<div class="st-perf-metric"><dt>' + label(en, zh, inline=True)
+        + '</dt><dd>' + value + '<p>' + note + '</p></dd></div>'
+        for en, zh, value, note in cards
+    ) + '</dl>'
+
+
+def machine_panel(report: Mapping[str, Any], now: float) -> str:
+    """Infrastructure totals are independent of the account-cohort traffic gate."""
+    state = report.get("state")
+    visible = state in ("ready", "partial")
+    groups = {}
+    for key in ("host", "service", "storage"):
+        candidate = report.get(key) if visible else None
+        groups[key] = candidate if isinstance(candidate, Mapping) else {}
+    host, service, storage = groups["host"], groups["service"], groups["storage"]
+    cards = (
+        ("Host CPU use", "主机 CPU 占用", _machine_percent(host.get("cpu_pct")),
+         label("Across the whole shared VPS; averaged over the sample interval.",
+               "整台共享 VPS 的执行占用，按采样区间计算平均值。", inline=True)),
+        ("Estimated host memory used", "主机内存估算占用",
+         _machine_percent(host.get("memory_pct")),
+         _machine_capacity(host.get("memory_used_bytes"), host.get("memory_total_bytes"))
+         + '<br>' + label("Used / total · based on memory available to apps.",
+                          "已用 / 总量 · 根据系统可供应用使用的内存估算。", inline=True)),
+        ("Fleet data filesystem", "Fleet 数据所在文件系统",
+         _machine_percent(storage.get("used_pct")),
+         _machine_capacity(storage.get("used_bytes"), storage.get("total_bytes"))
+         + '<br>' + label("Used / total · storage capacity, not disk speed.",
+                          "已用 / 总量 · 表示容量占用，不是磁盘速度。", inline=True)),
+    )
+    quota = _machine_number(service.get("cpu_quota_cores"))
+    budget = label(
+        f"CPU limit: {quota:,.2f} cores" if quota is not None else "CPU limit: unknown",
+        f"CPU 配额：{quota:,.2f} 核" if quota is not None else "CPU 配额：未知", inline=True)
+    service_cards = (
+        ("Fleet CPU budget used", "Fleet CPU 配额占用",
+         _machine_percent(service.get("cpu_budget_pct")), budget),
+        ("Fleet memory budget used", "Fleet 内存配额占用",
+         _machine_percent(service.get("memory_pct")),
+         _machine_capacity(service.get("memory_used_bytes"), service.get("memory_limit_bytes"))
+         + '<br>' + label("Usage / limit · includes cache and kernel memory.",
+                          "统计占用 / 上限 · 包含缓存与内核内存。", inline=True)),
+    )
+    notes = {
+        "partial": ("Some measurements are not available yet. A dash means unknown, not zero.",
+                    "部分指标暂时不可用。横线表示未知，不是零。"),
+        "stale": ("The machine report is out of date. Waiting for a fresh sample; old values "
+                  "are hidden.", "主机上报已过期，正在等待新样本；旧数值暂不展示。"),
+    }
+    note = ''
+    if state != "ready":
+        message = notes.get(state, (
+            "Waiting for a machine sample. A dash means unknown, not zero.",
+            "正在等待主机采样。横线表示未知，不是零。"))
+        note = '<p class="st-perf-note"><strong>' + label(*message, inline=True) + '</strong></p>'
+    observed = _machine_number(report.get("observed_at"))
+    if observed is not None and observed <= now + 60 and state in ("ready", "partial", "stale"):
+        stamp = ("Last report:", "最近一次上报：") if state == "stale" else ("Updated:", "更新于：")
+        note += '<p class="st-perf-note">' + label(*stamp, inline=True)
+        note += ' ' + _report_time(observed, now) + '</p>'
+    details = ''
+    cores = _machine_number(host.get("logical_cpus"))
+    load = _machine_number(host.get("load_1m"))
+    core_text = f"{cores:,.0f}" if cores is not None else "—"
+    load_text = f"{load:,.2f}" if load is not None else "—"
+    details += '<li>' + label(
+        f"Logical CPUs: {core_text} · one-minute load average: {load_text}",
+        f"逻辑 CPU 数：{core_text} · 一分钟平均负载：{load_text}", inline=True) + '</li>'
+    details += '<li>' + label("Host I/O wait: ", "主机 I/O 等待：", inline=True)
+    details += _machine_percent(host.get("io_wait_pct")) + ' · '
+    details += label("VPS CPU steal: ", "VPS 等待宿主机 CPU：", inline=True)
+    details += _machine_percent(host.get("steal_pct")) + '</li>'
+    details += '<li>' + label("Data filesystem space available: ",
+                             "数据所在文件系统可用空间：", inline=True)
+    available = _machine_bytes(storage.get("available_bytes"))
+    details += label(available, available, inline=True) + '</li>'
+    help_ = (
+        '<details class="st-perf-help"><summary>'
+        + label("What these measurements mean", "这些指标怎么看", inline=True) + '</summary>'
+        + '<p>' + label(
+            "Think of the gateway as a junction that passes requests along. These numbers show "
+            "how busy that junction is. High CPU use, little available memory, long I/O waits "
+            "or a nearly full disk can help explain slow replies. They do not prove that "
+            "Bandwagon is the bottleneck: your network, the slot machine and Anthropic can "
+            "also affect response time.",
+            "把网关想成转交请求的路口，这些数字告诉你路口有多忙。CPU 很忙、可用内存很少、"
+            "I/O 等待较多，或磁盘快满时，都可能影响回复速度。但它们不能直接证明搬瓦工是瓶颈："
+            "你的网络、槽位主机和 Anthropic 也会影响响应时间。", inline=True) + '</p>'
+        + '<ul>' + details + '</ul><p>' + label(
+            "Host CPU counts time executing work; I/O wait and CPU time taken by the VPS "
+            "provider are shown separately. Load average includes tasks running or waiting "
+            "for I/O, so it is not a CPU percentage. Host memory used is total minus available "
+            "memory. The storage card measures the filesystem that holds Fleet data, including "
+            "other files on that filesystem; it does not measure all disks or disk throughput.",
+            "主机 CPU 占用只统计执行工作所用的时间；I/O 等待、VPS 等待宿主机提供 CPU 的时间另列。"
+            "平均负载包含运行中或等待 I/O 的任务，不是 CPU 百分比。内存估算占用为总量减去可用内存。"
+            "磁盘卡片统计 Fleet 数据所在文件系统，也包含该文件系统上的其他文件；不代表所有磁盘，"
+            "也不测量磁盘读写速度。", inline=True) + '</p><p>' + label(
+            "Fleet CPU use is a percentage of the service's configured CPU limit, rather than "
+            "a percentage of the whole VPS. Fleet memory is container usage counted toward "
+            "the limit, including cache and kernel memory; it differs from estimated host "
+            "memory. Samples update "
+            "about every 15 seconds; this page refreshes every minute. Missing or stale values "
+            "remain unknown. Machine totals do not need the three-account traffic threshold.",
+            "Fleet CPU 占用按服务自身的 CPU 配额计算，不是整台 VPS 的百分比。Fleet 内存为容器"
+            "计入配额的占用，包含缓存和内核内存，与主机内存估算口径不同。约每 15 秒采样一次，"
+            "页面每分钟刷新。缺失或过期的数值仍显示为未知。主机汇总指标不受三个账号的流量门槛限制。",
+            inline=True) + '</p></details>'
+    )
+    return (
+        '<section class="card st-performance" id="gateway-machine" '
+        'aria-labelledby="gateway-machine-title"><h2 id="gateway-machine-title">'
+        + label("Gateway machine resources", "网关主机资源", inline=True) + '</h2><p class="sub">'
+        + label("Bandwagon VPS · shared with other apps. Host figures cover the entire VPS.",
+                "搬瓦工 VPS · 与其他应用共享。主机指标覆盖整台 VPS。", inline=True) + '</p>'
+        + _machine_cards(cards) + '<h3 class="st-machine-subhead">'
+        + label("Fleet service allocation", "Fleet 服务自身的配额", inline=True) + '</h3>'
+        + _machine_cards(service_cards, service=True) + note + help_ + '</section>'
+    )
+
+
 def now_state(store: object, now: float) -> tuple[list[status.State], status.State]:
     """Every machine that counts, as it is now, and the service as one: what
     the banner says, on this page and in the front page's pill. The site is up
@@ -428,7 +590,8 @@ def pill(level: Optional[str]) -> str:
             + label(BANNERS[level], BANNERS_ZH[level], inline=True) + '</a>')
 
 
-def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> str:
+def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float,
+         machine_report: Optional[Mapping[str, Any]] = None) -> str:
     """The whole page."""
     states, group = now_state(store, now)
     history = status.history(store, now)
@@ -473,6 +636,7 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> st
         )
         + "</span></div>"
         + performance_panel(performance.summary(store, cfg, now), now)
+        + (machine_panel(machine_report, now) if machine_report is not None else '')
         + '<div class="card st-list">'
         + _component(
             SITE_NAME, status.GREEN, status.WORDS[status.GREEN], history.site, history.site_minutes

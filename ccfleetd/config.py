@@ -99,6 +99,8 @@ class Config:
     check_interval_s: int = 60
     retention_days: int = 30
     max_body_bytes: int = 64 * 1024
+    # Public infrastructure figures are an operator opt-in, separate from user traffic.
+    public_machine_metrics_enabled: bool = False
     # Off by default: bypass removes every permission prompt on a node whose owner
     # also holds passwordless sudo. An operator turns it on for their own fleet;
     # it never becomes the default for somebody else's.
@@ -204,6 +206,7 @@ class Config:
             check_interval_s=_env_int(env, "CHECK_INTERVAL_S", 60, 5),
             retention_days=_env_int(env, "RETENTION_DAYS", 30, 1),
             max_body_bytes=_env_int(env, "MAX_BODY_BYTES", 64 * 1024, 1024),
+            public_machine_metrics_enabled=_env_bool(env, "PUBLIC_MACHINE_METRICS_ENABLED", False),
             bypass_by_default=_env_bool(env, "BYPASS_BY_DEFAULT", False),
             google_client_id=env.get(ENV_PREFIX + "GOOGLE_CLIENT_ID", ""),
             google_client_secret=env.get(ENV_PREFIX + "GOOGLE_CLIENT_SECRET", ""),
