@@ -10,12 +10,14 @@ the console says that a slot changed account, never which.
 
 from __future__ import annotations
 
+import re
 import time
 
 import pytest
 
 from ccfleet_agent import agent
 from ccfleetd import resets, slots, usersite
+from ccfleetd.bilingual import label
 from ccfleetd.desired import desired_state
 from ccfleetd.store import NotYours, Store, StoreError, slot_login_key
 
@@ -220,7 +222,14 @@ def test_a_slot_in_use_offers_change_account_beside_sign_in_again(site):
     erik = sign_in(quota=1)
     slot = in_use(store, erik)
     page = erik.page()
-    assert CHANGE.format(slot["id"]) in page and ">Change account</button>" in page
+    assert CHANGE.format(slot["id"]) in page
+    form = re.search(r'<form class="inline" method="post" '
+                     + re.escape(CHANGE.format(slot["id"])) + r'>(.*?)</form>', page, flags=re.S)
+    assert form is not None
+    assert ('<button class="" type="submit">'
+            + label("Change account", "更换账号", inline=True) + '</button>') in form[1]
+    assert f'<input type="hidden" name="csrf" value="{erik.token()}">' in form[1]
+    assert form[1].count('<button') == 1 and form[1].count('name="csrf"') == 1
     assert "Sign in again" in page
 
 
@@ -267,8 +276,8 @@ def test_for_a_week_after_a_change_the_card_says_when_it_can_change_again(site):
     page = erik.page()
     assert "Your slot now uses the new Claude account." in page
     assert CHANGE.format(slot["id"]) not in page
-    assert (f'You can change account again <time datetime="{resets.iso(at + WEEK)}" '
-            'data-local>in 6d 23h</time>') in page
+    assert (label("You can change account again", "下次可更换账号：", inline=True)
+            + f' <time datetime="{resets.iso(at + WEEK)}" data-local>in 6d 23h</time>') in page
     reply = erik.press(f"/account/slots/{slot['id']}/switch")
     assert reply.getheader("Location").startswith("/account?note=not-now")
     assert store.get_login(slot_login_key(slot["id"]))["state"] == "done"

@@ -20,6 +20,8 @@ import pytest
 
 from ccfleetd import oauth, payments, sessions, slots, usersite
 from ccfleetd.api import Context, build_server
+from ccfleetd.bilingual import SCRIPT_TAG as LANGUAGE_TAG
+from ccfleetd.bilingual import label
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -430,7 +432,8 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     # The windows are the account's, used anywhere; said under them, so a week
     # at 30% beside 900 tokens here does not read as a mistake.
     assert usersite.ACCOUNT_WIDE in shown
-    assert "your Claude account &middot; every device" in shown
+    assert label("your Claude account · every device", "Claude 账号用量 · 所有设备合计",
+                 inline=True) in shown
     assert "Sign in again" in shown
 
 
@@ -475,8 +478,9 @@ def test_a_note_is_chosen_by_code_never_written_by_the_link(site):
     evil = erik.call("GET", "/account?note=" + urllib.parse.quote(
         "<script>alert(1)</script>Your account is locked, call +1-555"))
     assert "alert(1)" not in evil.body and "locked" not in evil.body
-    # The one script on the page is the site's own, the one its policy allows.
-    assert evil.body.count("<script") == 1 and LOCAL_TIMES_TAG in evil.body
+    # Only the two authored scripts are present; CSP allows their explicit hashes.
+    assert evil.body.count("<script") == 2
+    assert LOCAL_TIMES_TAG in evil.body and LANGUAGE_TAG in evil.body
     known = erik.call("GET", "/account?note=released")
     assert usersite.NOTES["released"][1] in known.body
 
@@ -731,14 +735,16 @@ def test_the_privacy_page_is_public(site):
     anybody = Browser(sign_in().port)
     anybody.jar.clear()
     reply = anybody.call("GET", "/privacy")
-    assert reply.status == 200 and "<h1>Privacy</h1>" in reply.body
+    assert reply.status == 200
+    assert "<h1>" + label("Privacy", "隐私说明", inline=True) + "</h1>" in reply.body
     assert "What the operator can see" in reply.body
 
 
 def test_every_page_of_the_user_site_links_the_policy(site):
     store, sign_in, cfg = site
     assert 'href="/privacy"' in sign_in(quota=1).page()
-    assert 'href="/privacy">Privacy</a>' in usersite.page(store, cfg, None, "", time.time())
+    assert ('href="/privacy">' + label("Privacy", "隐私", inline=True) + "</a>"
+            in usersite.page(store, cfg, None, "", time.time()))
 
 
 def test_the_privacy_page_quotes_the_settings_in_force():
@@ -835,7 +841,7 @@ def test_the_policy_no_longer_says_the_account_address_stays_on_the_machine():
 # -- the corner of the bar: who is looking -------------------------------------------
 
 PUBLIC = ("/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms", "/privacy")
-SIGN_IN = 'href="/account">Sign in</a>'
+SIGN_IN = 'href="/account">' + label("Sign in", "登录", inline=True) + "</a>"
 
 
 def corner(page):
@@ -926,12 +932,14 @@ def test_only_an_operator_is_offered_the_console(site):
     erik = sign_in()
     for path in (*PUBLIC, "/account"):
         mine = corner(erik.call("GET", path).body)
-        assert "<span>Console</span>" not in mine, path
-        assert '"menu-pill">operator<' not in mine, "the operator pill without the console"
+        assert "Console" not in mine, path
+        assert "operator" not in mine, "the operator pill without the console"
     store.set_account_role(erik.account["id"], "admin")
     for path in (*PUBLIC, "/account"):
-        assert ('<a href="/admin"><span>Console</span><span class="menu-pill">operator</span>'
-                in corner(erik.call("GET", path).body)), path
+        expected = ('<a href="/admin"><span>' + label("Console", "管理后台", inline=True)
+                    + '</span><span class="menu-pill">' + label("operator", "管理员", inline=True)
+                    + '</span>')
+        assert expected in corner(erik.call("GET", path).body), path
     # The console's own corner is the same menu, for the operator it signed in.
     console = erik.call("GET", "/admin")
     assert console.status == 200
@@ -957,9 +965,12 @@ def test_your_slots_carries_this_accounts_own_count(site):
     for browser, count in ((erik, 2), (ana, 1)):
         for path in ("/docs", "/account"):
             mine = corner(browser.call("GET", path).body)
-            assert f'<span>Your slots</span><span class="menu-pill">{count}</span>' in mine, path
+            expected = ('<span>' + label("Your slots", "我的槽位", inline=True)
+                        + f'</span><span class="menu-pill">{count}</span>')
+            assert expected in mine, path
     empty = corner(bo.call("GET", "/docs").body)
-    assert "<span>Your slots</span></a>" in empty and "menu-pill" not in empty
+    expected = '<span>' + label("Your slots", "我的槽位", inline=True) + '</span></a>'
+    assert expected in empty and "menu-pill" not in empty
 
 
 def test_signing_out_from_the_menu_is_this_sessions_post(site):

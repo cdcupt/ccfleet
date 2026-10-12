@@ -15,6 +15,7 @@ from html import escape
 from typing import Optional
 
 from . import status
+from .bilingual import bi, label
 from .config import Config
 from .usersite import Viewer, _shell
 
@@ -22,6 +23,10 @@ SITE_NAME = "Website and account pages"
 MACHINES_NAME = "Slot machines"
 BANNERS = {status.GREEN: "All systems operational", status.YELLOW: "Partial outage",
            status.RED: "Major outage"}
+BANNERS_ZH = {status.GREEN: "监测中的机器运行正常", status.YELLOW: "部分机器异常",
+              status.RED: "全部监测机器离线"}
+COMPONENT_ZH = {SITE_NAME: "网站与账号页面", MACHINES_NAME: "槽位主机"}
+WORDS_ZH = {status.GREEN: "正常", status.YELLOW: "性能或容量异常", status.RED: "离线"}
 #: The front page's pill, in the colours of the site's other pills (render.CSS).
 PILL_CLASS = {status.GREEN: "ok", status.YELLOW: "warn", status.RED: "critical"}
 #: A day's colour, as the class its square in the bar takes.
@@ -95,20 +100,27 @@ def _component(name: str, level: str, word: str, days: Sequence[status.Day],
     up, counted = minutes
     pct = status.percent(up, counted)
     trouble = sum(1 for d in days if d.colour in (status.YELLOW, status.RED))
-    label = (f"{name}: {pct} uptime over the last {len(days)} days; "
+    chart_label = (f"{name}: {pct} uptime over the last {len(days)} days; "
              f"{trouble} {'day' if trouble == 1 else 'days'} with trouble"
              if counted else f"{name}: no data yet")
     squares = "".join(f'<span class="d {DAY_CLASS[d.colour]}" '
                       f'title="{escape(_day_title(d, group))}"></span>' for d in days)
     return (f'<div class="st-comp"><div class="st-head">'
             f'<span class="st-dot {level}" aria-hidden="true"></span>'
-            f"<h2>{escape(name)}</h2>"
-            f'<span class="st-word {level}">{escape(word)}</span></div>'
-            f'<div class="st-bar" role="img" aria-label="{escape(label)}">{squares}</div>'
-            '<div class="st-scale"><span><span class="d90">90 days ago</span>'
-            '<span class="d30">30 days ago</span></span>'
-            f"<span>{escape(pct + ' uptime' if counted else pct)}</span>"
-            "<span>Today</span></div></div>")
+            '<h2>' + label(name, COMPONENT_ZH[name], inline=True) + '</h2>'
+            + f'<span class="st-word {level}">'
+            + label(word, _machines_zh_from_word(word) if group else WORDS_ZH[level],
+                    inline=True) + (
+                        '</span></div>'
+                        f'<div class="st-bar" role="img" '
+                        f'aria-label="{escape(chart_label)}">{squares}</div>'
+                    )
+            + '<div class="st-scale"><span><span class="d90">'
+            + label("90 days ago", "90 天前", inline=True) + '</span><span class="d30">'
+            + label("30 days ago", "30 天前", inline=True) + '</span></span><span>'
+            + label(pct + ' uptime' if counted else pct,
+                    pct + ' 在线率' if counted else '暂无数据', inline=True)
+            + '</span><span>' + label("Today", "今天", inline=True) + '</span></div></div>')
 
 
 def machines_word(states: Sequence[status.State]) -> str:
@@ -124,22 +136,68 @@ def machines_word(states: Sequence[status.State]) -> str:
     return " · ".join(said)
 
 
+def _machines_zh_from_word(word: str) -> str:
+    """The machine summary contains only aggregate counts, never identities."""
+    if word == "No slot machines yet":
+        return "暂无监测中的槽位主机"
+    pieces = word.split(" · ")
+    first = pieces[0].split()
+    result = [f"{first[2]} 台中 {first[0]} 台正常"]
+    for piece in pieces[1:]:
+        count, state = piece.split()
+        result.append(f"{count} 台{'异常' if state == 'degraded' else '离线'}")
+    return " · ".join(result)
+
+
 KEY = (
-    '<div class="card st-key"><h2>Reading this page</h2><ul>'
-    '<li><span class="sq g"></span>Up all day</li>'
-    '<li><span class="sq y"></span>Degraded, or down for less than 5 minutes</li>'
-    '<li><span class="sq r"></span>Down for 5 minutes or more</li>'
-    '<li><span class="sq"></span>No data: before counting began</li></ul>'
-    f"<p><strong>{SITE_NAME}</strong> is this site: signing in, your page and these "
-    "pages. While it is down your slot keeps working, because you reach it through "
-    "claude.ai/code or the Claude app, not through this site.</p>"
-    f"<p><strong>{MACHINES_NAME}</strong> are the machines slots run on, counted together; "
-    "your own page says how yours is. A machine is down when it has not reported for "
-    "5 minutes, or a check of the machine itself fails; degraded when it reports late or a "
-    "check warns, such as a disk nearly full. Your own sign-in and usage limits are never "
-    "counted against it.</p>"
-    '<p class="muted small">The squares are UTC days; times are in your own time zone. '
-    "This page refreshes itself every minute.</p></div>")
+    '<div class="card st-key"><h2>' + label("Reading this page", "如何理解状态", inline=True)
+    + '</h2><ul>'
+    + ''.join('<li><span class="sq ' + cls + '"></span>'
+              + label(en, zh, inline=True) + '</li>' for cls, en, zh in (
+                  ("g", "Up all day", "全天正常"),
+                  ("y", (
+                      'Degraded, or down for less than 5 minutes'
+                  ), "出现异常，或离线不足五分钟"),
+                  ("r", "Down for 5 minutes or more", "离线至少五分钟"),
+                  ("", "No data: before counting began", "尚未开始统计，没有数据")))
+    + '</ul><p>' + bi(
+        (
+            f'<strong>{SITE_NAME}</strong> covers sign-in and account p'
+            f'ages. The chart records '
+            'whether the website was available; it does not verify '
+            'model-request readiness. '
+            'If the HTTPS gateway is unavailable, model requests '
+            'through it may also fail. '
+            'An already open remote session may keep running if its '
+            'slot machine remains available.'
+        ),
+        '<strong>网站与账号页面</strong> 包括登录和槽位管理。图表记录网站是否可用，'
+        '不代表下一次模型请求一定成功。HTTPS 网关不可用时，经它发送的模型请求也可能失败；'
+        '如果槽位机器仍在线，已经打开的远程会话可能继续运行。', inline=True)
+    + '</p><p>' + bi(
+        (
+            f'<strong>{MACHINES_NAME}</strong> are the machines slots r'
+            f'un on, counted together; '
+            'your own page says how yours is. A machine is down when '
+            'it has not reported for '
+            '5 minutes, or a check of the machine itself fails; '
+            'degraded when it reports late or a '
+            'check warns, such as a disk nearly full. Your own '
+            'sign-in and usage limits are never '
+            'counted against it.'
+        ),
+        (
+            '<strong>槽位主机</strong> 汇总承载槽位的机器，'
+            '不公开各用户的名称。你的机器状态见“我的槽位”。'
+            '五分钟没有上报、或机器检查失败，判为离线；上报延迟、'
+            '磁盘将满等告警，判为异常。'
+            '你的 Claude 登录状态和用量限制不计入机器故障。'
+        ), inline=True)
+    + '</p><p class="muted small">' + label(
+        'The squares are UTC days; times are in your own time zone. '
+        'This page refreshes itself every minute.',
+        '每日方块按 UTC 统计；具体时间按你的本地时区显示。页面每分钟自动刷新。', inline=True)
+    + '</p></div>')
 
 
 def now_state(store: object, now: float) -> tuple[list[status.State], status.State]:
@@ -163,31 +221,71 @@ def pill(level: Optional[str]) -> str:
     colour. Nothing measured yet, it says only "Status", never a green that
     nobody saw."""
     if level is None:
-        return '<a class="pill st-pill" href="/status">Status</a>'
+        return (
+            '<a class="pill st-pill" href="/status">'
+        ) + label("Status", "服务状态", inline=True) + '</a>'
     return (f'<a class="pill st-pill {PILL_CLASS[level]}" href="/status" '
-            f'aria-label="Status: {BANNERS[level]}">{BANNERS[level]}</a>')
+            f'aria-label="Status: {BANNERS[level]} / {BANNERS_ZH[level]}">'
+            + label(BANNERS[level], BANNERS_ZH[level], inline=True) + '</a>')
 
 
 def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> str:
     """The whole page."""
     states, group = now_state(store, now)
     history = status.history(store, now)
-    since = (f'<span class="st-since">since {status.since_html(group.since, now)}</span>'
-             if group.since is not None else "")
+    since = (
+        '<span class="st-since">'
+        + label("since", "始于", inline=True)
+        + " "
+        + status.since_html(group.since, now)
+        + "</span>"
+        if group.since is not None
+        else ""
+    )
     up, counted = history.overall_minutes
-    overall = (f"{status.percent(up, counted)} uptime over the last "
-               f"{status.HISTORY_DAYS} days" if counted else "No uptime counted yet")
+    overall = (
+        f"{status.percent(up, counted)} uptime over the last {status.HISTORY_DAYS} days"
+        if counted
+        else "No uptime counted yet"
+    )
     body = (
-        '<div class="pagehead"><h1>Status</h1>'
-        '<p class="sub">Whether ccfleet is up, now and over the last 90 days.</p></div>'
-        f'<div class="st-banner {group.level}">'
-        f'<span class="st-dot {group.level}" aria-hidden="true"></span>'
-        f"<strong>{BANNERS[group.level]}</strong>{since}"
-        f'<span class="st-overall">{escape(overall)}</span></div>'
+        '<div class="pagehead"><h1>' + label("Status", "服务状态", inline=True) + "</h1>"
+        '<p class="sub">'
+        + label(
+            "Whether ccfleet is up, now and over the last 90 days.",
+            ("查看当前状态，以及过去 90 天的在线记录。"),
+            inline=True,
+        )
+        + (
+            "</p></div>"
+            f'<div class="st-banner {group.level}">'
+            f'<span class="st-dot {group.level}" aria-hidden="true'
+            f'"></span>'
+            "<strong>"
+        )
+        + label(BANNERS[group.level], BANNERS_ZH[group.level], inline=True)
+        + f'</strong>{since}<span class="st-overall">'
+        + label(
+            overall,
+            f"过去 {status.HISTORY_DAYS} 天在线率 {status.percent(up, counted)}"
+            if counted
+            else "尚无在线率数据",
+            inline=True,
+        )
+        + "</span></div>"
         '<div class="card st-list">'
-        + _component(SITE_NAME, status.GREEN, status.WORDS[status.GREEN], history.site,
-                     history.site_minutes)
-        + _component(MACHINES_NAME, group.level, machines_word(states), history.machines,
-                     history.machines_minutes, group=True)
-        + "</div>" + KEY)
+        + _component(
+            SITE_NAME, status.GREEN, status.WORDS[status.GREEN], history.site, history.site_minutes
+        )
+        + _component(
+            MACHINES_NAME,
+            group.level,
+            machines_word(states),
+            history.machines,
+            history.machines_minutes,
+            group=True,
+        )
+        + "</div>"
+        + KEY
+    )
     return _shell("status", body, REFRESH, STATUS_CSS, viewer=viewer)

@@ -13,6 +13,8 @@ import time
 import pytest
 
 from ccfleetd import render, status, statuspage, usersite
+from ccfleetd.bilingual import SCRIPT_TAG as LANGUAGE_TAG
+from ccfleetd.bilingual import label
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -20,6 +22,7 @@ from ccfleetd.rules import LEVEL_WARN
 from tests.conftest import refresh_of
 from tests.test_admin_host import ADMIN, PRODUCT, split  # noqa: F401  (the fixture)
 from tests.test_usersite import report, site  # noqa: F401  (the fixture, by name)
+from tests.test_usersite_bilingual import Page
 from tests.test_usersite_v2 import one_slot_machine, whole_card
 
 NOW = 1_790_000_040.0
@@ -108,10 +111,11 @@ def test_the_page_names_no_machine_and_nobody(store, cfg):
         assert name not in raw, name
 
 
-def test_the_page_carries_no_script_but_the_local_times_one(store, cfg):
+def test_the_page_carries_only_the_two_authored_scripts(store, cfg):
     fleet(store)
     raw = page_of(store, cfg)
-    assert raw.count("<script") == 1 and render.LOCAL_TIMES_TAG in raw
+    assert raw.count("<script") == 2
+    assert render.LOCAL_TIMES_TAG in raw and LANGUAGE_TAG in raw
 
 
 def test_the_page_refreshes_itself_every_minute(store, cfg):
@@ -337,7 +341,7 @@ def test_status_is_recorded_under_the_monitor_lock(store, cfg):
 
 def pill_on(page):
     """The front page's status pill: the link that says the banner's words."""
-    found = re.search(r'<a class="pill st-pill[^"]*" href="/status"[^>]*>[^<]*</a>', page)
+    found = re.search(r'<a class="pill st-pill[^"]*" href="/status"[^>]*>.*?</a>', page, re.S)
     assert found, "no status pill"
     return found.group(0)
 
@@ -353,11 +357,14 @@ def test_the_pill_says_what_the_banner_says_in_its_colour(store, cfg, ages, aler
     if alert:
         store.open_alert("pool-8", alert[0], alert[1], "x", NOW - 120)
     banner = statuspage.BANNERS[level]
-    assert f"<strong>{banner}</strong>" in page_of(store, cfg)
+    assert ("<strong>" + label(banner, statuspage.BANNERS_ZH[level], inline=True)
+            + "</strong>") in page_of(store, cfg)
     assert statuspage.health(store, NOW) == level
     pill = statuspage.pill(level)
-    assert shown(pill).strip() == banner and f'class="pill st-pill {cls}"' in pill
-    assert f'aria-label="Status: {banner}"' in pill
+    assert Page(pill).copy('en').strip() == banner
+    assert Page(pill).copy('zh').strip() == statuspage.BANNERS_ZH[level]
+    assert f'class="pill st-pill {cls}"' in pill
+    assert f'aria-label="Status: {banner} / {statuspage.BANNERS_ZH[level]}"' in pill
 
 
 def test_with_no_machine_counted_the_pill_is_a_plain_link_never_a_green(store):
@@ -365,7 +372,9 @@ def test_with_no_machine_counted_the_pill_is_a_plain_link_never_a_green(store):
     saying it too would vouch for machines nobody has measured."""
     assert statuspage.health(store, NOW) is None
     pill = statuspage.pill(None)
-    assert shown(pill).strip() == "Status" and pill.startswith('<a class="pill st-pill"')
+    assert Page(pill).copy('en').strip() == "Status"
+    assert Page(pill).copy('zh').strip() == "服务状态"
+    assert pill.startswith('<a class="pill st-pill"')
     assert "ok" not in pill and "operational" not in pill
 
 
@@ -376,8 +385,10 @@ def test_the_front_page_says_it_at_its_top_and_no_other_page_does(split):  # noq
         page = browser(PRODUCT).call("GET", path).body
         main = page[page.index("<main"):]
         assert main.index('class="pill st-pill') < main.index("<h1>"), path
-        assert shown(pill_on(page)).strip() == "All systems operational", path
-        assert page.count("<script") == 1, "no script of its own"
+        assert Page(pill_on(page)).copy('en').strip() == "All systems operational", path
+        assert Page(pill_on(page)).copy('zh').strip() == statuspage.BANNERS_ZH[status.GREEN], path
+        assert page.count("<script") == 2, "only the two shared authored scripts"
+        assert render.LOCAL_TIMES_TAG in page and LANGUAGE_TAG in page
         assert ".st-pill{" in page and ".pill.ok{" in page, "styled, from the theme's tokens"
     assert 'class="pill st-pill' not in browser(PRODUCT).call("GET", "/docs/guide").body
 
@@ -386,14 +397,17 @@ def test_the_front_page_says_trouble_and_names_nobody(split):  # noqa: F811
     store, browser, _ = split
     fleet(store, now=time.time(), ages=(20, 30, 400))
     page = browser(PRODUCT).call("GET", "/").body
-    assert shown(pill_on(page)).strip() == "Partial outage"
+    assert Page(pill_on(page)).copy('en').strip() == "Partial outage"
+    assert Page(pill_on(page)).copy('zh').strip() == statuspage.BANNERS_ZH[status.YELLOW]
     for name in NAMES:
         assert name not in page, name
 
 
 def test_a_front_page_with_no_machine_yet_says_only_status(split):  # noqa: F811
     _, browser, _ = split
-    assert shown(pill_on(browser(PRODUCT).call("GET", "/").body)).strip() == "Status"
+    pill = pill_on(browser(PRODUCT).call("GET", "/").body)
+    assert Page(pill).copy('en').strip() == "Status"
+    assert Page(pill).copy('zh').strip() == "服务状态"
 
 
 # -- the server's own silence is not the machines' ---------------------------------------------

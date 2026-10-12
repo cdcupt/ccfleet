@@ -113,13 +113,14 @@ def test_what_is_printed_is_shown_not_run():
     assert "<b>" not in bar and "&lt;b&gt;soon&lt;/b&gt;" in bar
 
 
-def test_the_one_script_is_allowed_by_its_hash_and_nothing_else():
+def test_only_authored_time_and_language_scripts_are_allowed_by_hash():
+    from ccfleetd.bilingual import SCRIPT_CSP as BILINGUAL_CSP
     digest = base64.b64encode(hashlib.sha256(LOCAL_TIMES_JS.encode()).digest()).decode()
     assert LOCAL_TIMES_CSP == f"'sha256-{digest}'"
     policy = HTML_HEADERS["Content-Security-Policy"]
     assert "default-src 'none'" in policy
     script = re.search(r"script-src ([^;]*)", policy).group(1).split()
-    assert script == [LOCAL_TIMES_CSP], "no unsafe-inline, no other source"
+    assert script == [LOCAL_TIMES_CSP, BILINGUAL_CSP], "no unsafe-inline or remote source"
     # The tab's icon is a data: image, and images may be nothing else.
     assert re.search(r"img-src ([^;]*)", policy).group(1).split() == ["data:"]
     assert LOCAL_TIMES_TAG == f"<script>{LOCAL_TIMES_JS}</script>"
