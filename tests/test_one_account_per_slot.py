@@ -71,6 +71,7 @@ def raw(st, sql, *args):
 
 # -- what a machine is told -----------------------------------------------------------
 
+
 def test_a_machine_is_never_told_about_a_second_account(store):
     """Rows the several-accounts server wrote — a request to switch, a sign-in
     aimed at "another account" — must not turn into instructions now."""
@@ -96,6 +97,7 @@ def test_a_new_sign_in_clears_the_word_an_old_row_carried(store):
 
 
 # -- what a machine may say -------------------------------------------------------------
+
 
 def machine_payload(entry):
     return {"node_id": "m1", "mode": "machine", "slots": [{"unix_user": "slot01", **entry}]}
@@ -152,6 +154,7 @@ def test_an_owner_node_never_keeps_an_address():
 
 
 # -- the holder's page ---------------------------------------------------------------
+
 
 def in_use(store, browser, **credentials):
     slot = claimed(store, browser)
@@ -227,11 +230,15 @@ def test_the_switching_buttons_are_gone_from_the_server_too(site, action):
 
 # -- what the documents say ----------------------------------------------------------
 
-def test_the_guide_says_one_account_per_slot_and_what_to_do_instead():
-    guide = customer_docs.page_for("/docs/guide")(Config())
-    assert "<h2>One Claude account per slot</h2>" in guide
-    assert "To use two accounts at once, hold two slots." in guide
-    assert "Each local CC Fleet profile is bound to exactly one slot." in guide
+
+def test_the_guide_says_one_account_per_slot_and_own_slot_pool():
+    from tests.test_html_document_preservation import visible_html
+
+    guide = visible_html(customer_docs.page_for("/docs/guide")(Config()))
+    assert "A slot is signed in to one Claude account, your own" in guide
+    assert "To use two accounts at once, hold two slots" in guide
+    assert "Only your own held slots are selectable" in guide
+    assert "Each local CC Fleet profile" not in guide
 
 
 @pytest.mark.parametrize("path", ["/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms"])
@@ -248,6 +255,7 @@ def test_the_pairing_page_does_not_suggest_several_accounts_on_one_computer():
 
 
 # -- the live database ---------------------------------------------------------------
+
 
 def test_a_database_from_before_slot_accounts_opens_and_keeps_everything(tmp_path):
     """The schema exactly as main had it before several accounts, frozen from

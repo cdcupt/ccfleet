@@ -21,7 +21,7 @@ import pytest
 from ccfleetd import oauth, payments, sessions, slots, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.bilingual import SCRIPT_TAG as LANGUAGE_TAG
-from ccfleetd.bilingual import label
+from ccfleetd.bilingual import label, project_html
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -425,15 +425,18 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     assert "In use" in shown and "Max plan" in shown
     assert "Claude Code CLI" in shown and "claude.ai/code" not in shown
     assert "Run <code>ccfleet local</code>" in shown
-    assert "local files, tools and history" in shown
-    assert "remote-terminal command, with remote files and persistent tmux" in shown
+    assert "reads your files locally" in shown
+    assert "sends the selected context over HTTPS to Fleet" in shown
+    assert "uses that slot’s Claude sign-in" in shown
+    assert "file excerpts and tool results selected as model context" in shown
+    assert "remote-terminal command" not in shown
     assert "A dropped network connection resumes the same session" not in shown
     assert "900</b> tokens run on this slot itself" in shown
     # The windows are the account's, used anywhere; said under them, so a week
     # at 30% beside 900 tokens here does not read as a mistake.
     assert usersite.ACCOUNT_WIDE in shown
-    assert label("your Claude account · every device", "Claude 账号用量 · 所有设备合计",
-                 inline=True) in shown
+    assert project_html(label("your Claude account · every device", "Claude 账号用量 · 所有设备合计",
+                              inline=True), 'en') in shown
     assert "Sign in again" in shown
 
 
@@ -736,7 +739,7 @@ def test_the_privacy_page_is_public(site):
     anybody.jar.clear()
     reply = anybody.call("GET", "/privacy")
     assert reply.status == 200
-    assert "<h1>" + label("Privacy", "隐私说明", inline=True) + "</h1>" in reply.body
+    assert "<h1>" + project_html(label("Privacy", "隐私说明", inline=True), 'en') + "</h1>" in reply.body
     assert "What the operator can see" in reply.body
 
 
@@ -795,7 +798,10 @@ def test_the_privacy_page_discloses_gateway_contents_and_separate_endpoint_crede
     text = visible_html(source)
     assert "BWH can read model requests and responses" in text
     assert "TLS ends at BWH" in text
-    assert "--transport bridge" in text and "That byte broker carries ciphertext" in text
+    assert "sends selected model context over HTTPS to Fleet" in text
+    assert "Setup does not automatically erase existing files or saved history" in text
+    assert "--transport bridge" not in text and "--legacy-history" not in text
+    assert "live-folder" not in text
     assert "separate revocable endpoint key" in text
     assert "selected own slot IDs and current rental bindings" in text
     assert "one bound Claude account per slot" in text
@@ -841,7 +847,8 @@ def test_the_policy_no_longer_says_the_account_address_stays_on_the_machine():
 # -- the corner of the bar: who is looking -------------------------------------------
 
 PUBLIC = ("/docs", "/docs/guide", "/docs/how-it-works", "/docs/terms", "/privacy")
-SIGN_IN = 'href="/account">' + label("Sign in", "登录", inline=True) + "</a>"
+SIGN_IN = ('href="/account">'
+           + project_html(label("Sign in", "登录", inline=True), 'en') + "</a>")
 
 
 def corner(page):
@@ -936,8 +943,9 @@ def test_only_an_operator_is_offered_the_console(site):
         assert "operator" not in mine, "the operator pill without the console"
     store.set_account_role(erik.account["id"], "admin")
     for path in (*PUBLIC, "/account"):
-        expected = ('<a href="/admin"><span>' + label("Console", "管理后台", inline=True)
-                    + '</span><span class="menu-pill">' + label("operator", "管理员", inline=True)
+        expected = ('<a href="/admin"><span>' + project_html(label("Console", "管理后台", inline=True), 'en')
+                    + '</span><span class="menu-pill">'
+                    + project_html(label("operator", "管理员", inline=True), 'en')
                     + '</span>')
         assert expected in corner(erik.call("GET", path).body), path
     # The console's own corner is the same menu, for the operator it signed in.
@@ -965,11 +973,12 @@ def test_your_slots_carries_this_accounts_own_count(site):
     for browser, count in ((erik, 2), (ana, 1)):
         for path in ("/docs", "/account"):
             mine = corner(browser.call("GET", path).body)
-            expected = ('<span>' + label("Your slots", "我的槽位", inline=True)
+            expected = ('<span>' + project_html(label("Your slots", "我的槽位", inline=True), 'en')
                         + f'</span><span class="menu-pill">{count}</span>')
             assert expected in mine, path
     empty = corner(bo.call("GET", "/docs").body)
-    expected = '<span>' + label("Your slots", "我的槽位", inline=True) + '</span></a>'
+    expected = ('<span>' + project_html(label("Your slots", "我的槽位", inline=True), 'en')
+                + '</span></a>')
     assert expected in empty and "menu-pill" not in empty
 
 

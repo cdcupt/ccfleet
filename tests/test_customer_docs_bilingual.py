@@ -4,7 +4,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from ccfleetd import customer_docs, pricing, usersite
+from ccfleetd import bilingual, customer_docs, pricing, usersite
 from ccfleetd.config import Config
 from tests.test_html_document_preservation import Document, normalized
 
@@ -58,9 +58,15 @@ def test_complete_public_guidance_has_authored_english_and_chinese(page, english
     copy = LanguageCopy(source)
     assert english in copy.text("en")
     assert chinese in copy.text("zh-Hans")
-    assert 'data-language="both"' in source
+    assert 'data-language="en"' in source
     assert "Claude" in copy.text("en") and "Claude" in copy.text("zh-Hans")
     assert 'lang="zh-Hans"' in source
+    for language, expected, omitted in (("en", english, chinese), ("zh", chinese, english)):
+        projected = bilingual.project_html(source, language, "/docs/guide")
+        text = Document(projected).text
+        assert expected in text and omitted not in text
+        assert 'data-language="both"' not in projected
+        assert "data-language-choice" not in projected
     document = Document(source)
     assert not document.duplicate_ids
     for target in (link[1:] for link in document.links if link.startswith("#")):
@@ -100,7 +106,7 @@ def test_native_commands_stay_shared_and_website_is_an_alternative_to_cli():
         "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/"
         "laptop/install.sh | bash -s -- --setup"
     )
-    assert codes.count(install) == 1
+    assert sum(code.count(install) for code in codes) == 1
     assert (
         sum(
             code.count("ccfleet gateway setup --slots A B --routing sticky --replace")
@@ -149,7 +155,7 @@ def test_terms_and_prices_do_not_imply_included_claude_or_reveal_raw_markup():
 def test_diagrams_and_privacy_have_distinct_language_ids_and_plain_explanations():
     source = customer_docs.how_it_works(Config())
     document = Document(source)
-    for namespace in ("gateway", "legacy", "gateway-zh", "legacy-zh"):
+    for namespace in ("gateway", "gateway-zh"):
         assert f"{namespace}-diag-t" in document.ids
         assert f'aria-labelledby="{namespace}-diag-t {namespace}-diag-d"' in source
     assert not document.duplicate_ids
@@ -158,3 +164,24 @@ def test_diagrams_and_privacy_have_distinct_language_ids_and_plain_explanations(
     assert "BWH 可以读取模型消息" in copy.text("zh-Hans")
     assert "机器管理员拥有 root 权限" in copy.text("zh-Hans")
     assert "真实线上验证使用了一个实际账号" in copy.text("zh-Hans")
+
+
+@pytest.mark.parametrize(
+    "page",
+    [customer_docs.overview, customer_docs.guide, customer_docs.how_it_works, customer_docs.terms],
+)
+def test_customer_pages_only_teach_the_current_workflow(page):
+    text = Document(page(Config())).text
+    for removed in (
+        "--transport bridge",
+        "--legacy-history",
+        "ccfleet-connect",
+        "migration guide",
+        "live-folder",
+        "Remote-terminal compatibility",
+        "old remote history",
+        "旧桥接",
+        "旧路线",
+        "迁移指南",
+    ):
+        assert removed not in text

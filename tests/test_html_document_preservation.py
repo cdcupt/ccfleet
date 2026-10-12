@@ -1,4 +1,5 @@
 """Canonical HTML docs retain visible guidance, literal commands and working links."""
+
 from __future__ import annotations
 
 import hashlib
@@ -169,14 +170,31 @@ def test_every_canonical_page_is_standalone_utf8_and_mobile_ready():
 
 
 def test_all_local_document_links_and_fragments_resolve_inside_the_repository():
+    from ccfleetd import bilingual, reference_docs
+
     pages = {path.resolve(): read_document(path) for path in canonical_pages()}
     for path, page in pages.items():
         for href in page.links:
             parsed = urlsplit(href)
             if parsed.scheme or parsed.netloc:
-                assert not parsed.scheme or parsed.scheme.lower() in {"http", "https", "mailto"}, href
+                assert not parsed.scheme or parsed.scheme.lower() in {"http", "https", "mailto"}, (
+                    href
+                )
                 continue
-            target = ((path.parent / unquote(parsed.path)).resolve() if parsed.path else path)
+            if parsed.path.startswith("/"):
+                routed = bilingual.route_target(parsed.path)
+                assert routed is not None, (path, href)
+                canonical = urlsplit(routed[0]).path
+                if canonical.startswith("/docs/library/"):
+                    relative = canonical[len("/docs/library/") :]
+                    assert relative in reference_docs.PUBLIC_FILES, (path, href)
+                    destination = pages[(ROOT / relative).resolve()]
+                    if parsed.fragment:
+                        assert parsed.fragment in destination.ids, (path, href)
+                else:
+                    assert canonical in bilingual.CURRENT_PAGES, (path, href)
+                continue
+            target = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path
             assert target.is_relative_to(ROOT.resolve()), (path, href)
             assert target.exists(), (path, href)
             assert target.suffix.lower() != ".md", (path, href)
@@ -256,8 +274,12 @@ def test_comparison_tables_have_their_own_horizontal_scroll_wrapper():
     page = read_document(ROOT / "docs/platform-comparison.html")
     assert page.tables
     assert all(scrollable(ancestors, "".join(page.styles)) for ancestors in page.tables)
-    for phrase in ("CC Host documents", "CC Fleet", "Assessment", "no blanket superiority",
-                   "exact fingerprint/TLS stack and renewal algorithm remain unverified"):
+    for phrase in (
+        "Vendor documentation",
+        "CC Fleet",
+        "no blanket superiority",
+        "exact fingerprint/TLS stack and renewal algorithm remain unverified",
+    ):
         assert phrase.lower() in page.text.lower()
 
 

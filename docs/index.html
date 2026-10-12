@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HTML document library · CC Fleet</title><style>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title data-title-en="CC Fleet documentation · CC Fleet" data-title-zh="CC Fleet 文档">CC Fleet documentation · CC Fleet</title><style>
 :root{color-scheme:light;--ink:#17202b;--muted:#5c6876;--line:#d8dee8;--accent:#4932c5;--soft:#f3f4f8}
 *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}
 body{margin:0;background:#fff;color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -21,66 +21,37 @@ tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-lef
 footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
-</style><style>
+
+.bi>.copy-en,.bi>.copy-zh{display:block}.bi-inline>.copy-en,.bi-inline>.copy-zh{display:inline}
+body[data-language="en"] .copy-zh,body[data-language="zh"] .copy-en{display:none}
+.copy-zh{font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.8}
+.language-control{margin-left:auto;display:flex;gap:8px}.language-control a{padding:4px 9px;
+border:1px solid var(--line);border-radius:6px;text-decoration:none;font-weight:600}
+.route{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;list-style:none;padding:0}
+.route li{border:1px solid var(--line);border-radius:10px;background:var(--soft);padding:16px}
+.route strong{display:block;margin-bottom:8px}.route .bi-inline{display:block}
+.help-note{border:1px solid var(--line);padding:18px;border-radius:10px;background:var(--soft)}
+@media(max-width:760px){.route{grid-template-columns:1fr}.language-control{margin-left:0}}
+
 .bi>.copy-en,.bi>.copy-zh{display:block}
-.bi>.copy-en+.copy-zh{margin-top:.45em}
 .bi-inline>.copy-en,.bi-inline>.copy-zh{display:inline}
-body[data-language="both"] .bi-inline>.copy-zh::before{content:" / ";color:var(--muted,#667085)}
 body[data-language="en"] .copy-zh,body[data-language="zh"] .copy-en{display:none!important}
-body[data-language="en"] .bi>.copy-en,body[data-language="zh"] .bi>.copy-zh{margin-top:0}
 .copy-zh{font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
 letter-spacing:0;line-height:1.8}
 .language-control{display:inline-flex;align-items:center;gap:3px;padding:3px;
 border:1px solid var(--rule,#d8dee8);border-radius:10px;background:var(--panel,#fff);
 flex-shrink:0;max-width:100%}
-.language-control button{appearance:none;border:0;border-radius:7px;padding:6px 9px;
-background:transparent;color:var(--muted,#667085);font:600 12px/1.4 system-ui;
-cursor:pointer;white-space:nowrap}
-.language-control button[aria-pressed="true"]{background:var(--acc-soft,#f0efff);
+.language-control a{display:inline-block;border-radius:7px;padding:6px 9px;
+color:var(--muted,#667085);font:600 12px/1.4 system-ui;text-decoration:none;white-space:nowrap}
+.language-control a[aria-current="page"]{background:var(--acc-soft,#f0efff);
 color:var(--acc,#4932c5)}
-.language-control button:focus-visible{outline:2px solid var(--acc,#4932c5);outline-offset:2px}
-@media print{.language-control{display:none}.bi>.copy-en+.copy-zh{margin-top:.3em}}
-
-.doc-nav{align-items:center}.doc-nav .language-control{margin-left:auto}
-.catalog .bi-inline>.copy-en,.catalog .bi-inline>.copy-zh{display:block}
-.catalog .bi-inline>.copy-zh::before{content:none!important}
-.catalog .bi-inline>.copy-zh{margin-top:5px}
-.reference-catalog{border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin-top:30px}
-.reference-catalog>summary{cursor:pointer;font-weight:650;line-height:1.7}
-</style></head><body data-language="both"><div class="shell"><nav class="doc-nav" aria-label="Document library / 文档"><a href="index.html"><span class="bi-inline"><span class="copy-en" lang="en">Documentation</span><span class="copy-zh" lang="zh-Hans">文档</span></span></a><a href="https://ccfleet.daichenlab.com/"><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet home</span><span class="copy-zh" lang="zh-Hans">CC Fleet 首页</span></span></a><a href="https://ccfleet.daichenlab.com/docs/guide"><span class="bi-inline"><span class="copy-en" lang="en">User guide</span><span class="copy-zh" lang="zh-Hans">使用指南</span></span></a><div class="language-control" role="group" aria-label="Language / 语言"><button type="button" data-language-choice="en" aria-pressed="false">English</button><button type="button" data-language-choice="zh" aria-pressed="false">中文</button><button type="button" data-language-choice="both" aria-pressed="true">双语 / Both</button></div></nav><p class="eyebrow"><span class="bi-inline"><span class="copy-en" lang="en">Current user guides</span><span class="copy-zh" lang="zh-Hans">当前使用指南</span></span></p><div class="layout" style="display:block"><main><h1 id="html-document-library"><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet documentation</span><span class="copy-zh" lang="zh-Hans">CC Fleet 文档</span></span></h1><p><span class="bi-inline"><span class="copy-en" lang="en">Start with the bilingual user guide, then explore account routing and the model-request path. Operator references and historical evidence are listed separately below.</span><span class="copy-zh" lang="zh-Hans">先看双语使用指南，再了解账号选择与模型请求路线。运维参考和历史验证记录列在下方。</span></span></p><h2><span class="bi-inline"><span class="copy-en" lang="en">Start here</span><span class="copy-zh" lang="zh-Hans">从这里开始</span></span></h2><div class="catalog"><a href="https://ccfleet.daichenlab.com/docs/guide"><strong><span class="bi-inline"><span class="copy-en" lang="en">Getting started</span><span class="copy-zh" lang="zh-Hans">使用指南</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Install, connect your computer, choose accounts and launch local Claude Code.</span><span class="copy-zh" lang="zh-Hans">安装客户端、连接电脑、选择账号，并启动本机 Claude Code。</span></span></span></a><a href="public-gateway.html"><strong><span class="bi-inline"><span class="copy-en" lang="en">HTTPS gateway explained</span><span class="copy-zh" lang="zh-Hans">HTTPS 网关通俗说明</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Follow one request, understand the URL and safely choose A or A/B.</span><span class="copy-zh" lang="zh-Hans">跟着一次请求走完整条路线，理解 URL，并选择固定 A 或 A／B 备用。</span></span></span></a><a href="platform-comparison.html"><strong><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet and CC Host</span><span class="copy-zh" lang="zh-Hans">CC Fleet 与 CC Host</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Current diagrams, account policies, privacy boundaries and verification limits.</span><span class="copy-zh" lang="zh-Hans">当前路线图、账号规则、隐私边界与验证范围。</span></span></span></a><a href="https://ccfleet.daichenlab.com/docs/how-it-works"><strong><span class="bi-inline"><span class="copy-en" lang="en">How it works</span><span class="copy-zh" lang="zh-Hans">工作原理</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">See where your tools run, where credentials stay and who can read model context.</span><span class="copy-zh" lang="zh-Hans">了解工具在哪里运行、登录凭证放在哪里，以及谁能读取模型上下文。</span></span></span></a></div><h2><span class="bi-inline"><span class="copy-en" lang="en">Privacy and service terms</span><span class="copy-zh" lang="zh-Hans">隐私与服务条款</span></span></h2><div class="catalog"><a href="https://ccfleet.daichenlab.com/privacy"><strong><span class="bi-inline"><span class="copy-en" lang="en">Privacy</span><span class="copy-zh" lang="zh-Hans">隐私说明</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">How the service handles accounts, keys, diagnostics and local history.</span><span class="copy-zh" lang="zh-Hans">账号、密钥、诊断记录和本机历史怎样处理。</span></span></span></a><a href="https://ccfleet.daichenlab.com/docs/terms"><strong><span class="bi-inline"><span class="copy-en" lang="en">Service terms</span><span class="copy-zh" lang="zh-Hans">服务条款</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Your own Claude plan, slot access, backups and operational limits.</span><span class="copy-zh" lang="zh-Hans">自带 Claude 套餐、槽位访问、备份与运行限制。</span></span></span></a></div><details class="reference-catalog"><summary><span class="bi-inline"><span class="copy-en" lang="en">Operator references and historical records</span><span class="copy-zh" lang="zh-Hans">运维参考与历史记录</span></span></summary><p><span class="bi-inline"><span class="copy-en" lang="en">The remaining canonical reference library retains its existing English source and dated evidence. It is useful for operators and deeper implementation checks.</span><span class="copy-zh" lang="zh-Hans">其余权威参考文档保留现有英文原文与带日期的验证记录，供运维和进一步核对实现时使用。</span></span></p><p>All project documents are canonical, self-contained HTML. Start with the current native-local guide; historical pages remain available with their original evidence and limits.</p><h2>Start here</h2><div class="catalog"><a href="../README.html"><strong>CC Fleet</strong><span>Start here</span></a><a href="public-gateway.html"><strong>Public HTTPS Messages gateway</strong><span>Local Claude Code, your own slots, priority and conversation routing</span></a><a href="local-relay.html"><strong>Local Claude Code with a dedicated-slot inference relay</strong><span>Start here</span></a><a href="reliability-privacy.html"><strong>Long-term account reliability and privacy</strong><span>Start here</span></a><a href="compliance.html"><strong>Compliance notes</strong><span>Start here</span></a></div><h2>Product and verified delivery</h2><div class="catalog"><a href="platform-comparison.html"><strong>CC Fleet and CC Host: evidence-based comparison</strong><span>Product and verified delivery</span></a><a href="platform-improvements.html"><strong>Platform improvements and delivery gates</strong><span>Product and verified delivery</span></a><a href="local-relay-verification.html"><strong>Native local relay verification</strong><span>Product and verified delivery</span></a></div><h2>Operator references</h2><div class="catalog"><a href="runbooks.html"><strong>Runbooks</strong><span>Operator references</span></a><a href="tunnel.html"><strong>Reporting over an SSH tunnel</strong><span>Operator references</span></a></div><h2>Historical / compatibility records</h2><div class="catalog"><a href="guidebook.html"><strong>Historical hosted-terminal guidebook</strong><span>Historical / compatibility records</span></a><a href="design.html"><strong>CC Fleet remote-terminal compatibility design</strong><span>Historical / compatibility records</span></a><a href="project-workspaces.html"><strong>Retired remote workspaces: migration and recovery</strong><span>Historical / compatibility records</span></a><a href="project-workspaces-verification.html"><strong>Project workspace release verification</strong><span>Historical / compatibility records</span></a><a href="live-folders-verification.html"><strong>Live-folder release verification</strong><span>Historical / compatibility records</span></a><a href="../gateway/README.html"><strong>Pass-through gateway (optional)</strong><span>Historical / compatibility records</span></a></div></details></main></div><footer><span class="bi-inline"><span class="copy-en" lang="en">Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</span><span class="copy-zh" lang="zh-Hans">这里提供当前使用说明与带日期的参考记录。外部来源链接需要联网。</span></span></footer></div><script>(()=>{
-'use strict';
-const modes=new Set(['en','zh','both']);
-const storageKey='ccfleet.language';
-const buttons=document.querySelectorAll('[data-language-choice]');
-function choose(mode,remember){
-  if(!modes.has(mode))mode='both';
-  document.body.dataset.language=mode;
-  document.documentElement.lang=mode==='zh'?'zh-Hans':'en';
-  buttons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.languageChoice===mode)));
-  document.querySelectorAll('option[data-copy-en][data-copy-zh]').forEach(option=>{
-    option.textContent=mode==='en'?option.dataset.copyEn:mode==='zh'?option.dataset.copyZh:
-      option.dataset.copyEn+' / '+option.dataset.copyZh;
+.language-control a:focus-visible{outline:2px solid var(--acc,#4932c5);outline-offset:2px}
+@media print{.language-control{display:none}}
+</style></head><body data-language="en"><div class="shell"><nav class="doc-nav" aria-label="Documentation" data-aria-label-en="Documentation" data-aria-label-zh="文档"><a href="index.html"><span class="bi-inline"><span class="copy-en" lang="en">Documentation</span><span class="copy-zh" lang="zh-Hans">文档</span></span></a><a href="/"><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet home</span><span class="copy-zh" lang="zh-Hans">CC Fleet 首页</span></span></a><a href="/docs/guide"><span class="bi-inline"><span class="copy-en" lang="en">User guide</span><span class="copy-zh" lang="zh-Hans">使用指南</span></span></a><nav class="language-control" aria-label="Language" data-language-links><a href="/en/docs/library/docs/index.html" data-language-link="en" lang="en">English</a><a href="/zh/docs/library/docs/index.html" data-language-link="zh" lang="zh-Hans">中文</a></nav></nav><main><h1><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet documentation</span><span class="copy-zh" lang="zh-Hans">CC Fleet 文档</span></span></h1><div class="bi"><div class="copy-en" lang="en"><p>Start with setup, then learn how your computer, gateway and own account work together. Each page has a separate English and Chinese address.</p></div><div class="copy-zh" lang="zh-Hans"><p>先完成安装，再了解电脑、网关和自己的账号如何配合。每页都有独立的英文和中文地址。</p></div></div><h2><span class="bi-inline"><span class="copy-en" lang="en">Start here</span><span class="copy-zh" lang="zh-Hans">从这里开始</span></span></h2><div class="catalog"><a href="/docs/guide"><strong><span class="bi-inline"><span class="copy-en" lang="en">Getting started</span><span class="copy-zh" lang="zh-Hans">开始使用</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Install, connect this computer, choose your accounts and open Claude Code.</span><span class="copy-zh" lang="zh-Hans">安装客户端、连接电脑、选择自己的账号，然后打开 Claude Code。</span></span></span></a><a href="public-gateway.html"><strong><span class="bi-inline"><span class="copy-en" lang="en">The gateway, explained simply</span><span class="copy-zh" lang="zh-Hans">网关通俗说明</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">A reception desk, your account seats, one HTTPS address and safe backup rules.</span><span class="copy-zh" lang="zh-Hans">用前台和账号座位理解 HTTPS 地址，以及什么情况下可以切换备用账号。</span></span></span></a><a href="platform-comparison.html"><strong><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet and CC Host</span><span class="copy-zh" lang="zh-Hans">CC Fleet 与 CC Host</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Current request diagrams, account choices and honest verification limits.</span><span class="copy-zh" lang="zh-Hans">当前请求路线图、账号选择方式，以及已经验证到哪一步。</span></span></span></a><a href="/docs/how-it-works"><strong><span class="bi-inline"><span class="copy-en" lang="en">How it works</span><span class="copy-zh" lang="zh-Hans">工作原理</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Where tools run, where credentials stay and who can read model context.</span><span class="copy-zh" lang="zh-Hans">工具在哪里运行、凭证留在哪里，以及谁能读取模型上下文。</span></span></span></a></div><h2><span class="bi-inline"><span class="copy-en" lang="en">Privacy and terms</span><span class="copy-zh" lang="zh-Hans">隐私与条款</span></span></h2><div class="catalog"><a href="/privacy"><strong><span class="bi-inline"><span class="copy-en" lang="en">Privacy</span><span class="copy-zh" lang="zh-Hans">隐私说明</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Data, keys, diagnostics and local history.</span><span class="copy-zh" lang="zh-Hans">数据、密钥、诊断和本地历史的处理方式。</span></span></span></a><a href="/docs/terms"><strong><span class="bi-inline"><span class="copy-en" lang="en">Service terms</span><span class="copy-zh" lang="zh-Hans">服务条款</span></span></strong><span><span class="bi-inline"><span class="copy-en" lang="en">Bring your own Claude plan; understand slot access, deletion and backups.</span><span class="copy-zh" lang="zh-Hans">自带 Claude 订阅，了解槽位访问、删除与备份。</span></span></span></a></div><div class="bi"><div class="copy-en" lang="en"><p>Administrators can use the separate <a href="/docs/library/docs/runbooks.html" hreflang="en">English operator reference</a>.</p></div><div class="copy-zh" lang="zh-Hans"><p>管理员可阅读独立的<a href="/docs/library/docs/runbooks.html" hreflang="en">英文运维参考</a>。</p></div></div></main><footer><span class="bi-inline"><span class="copy-en" lang="en">Current customer documentation. Choose the page language above.</span><span class="copy-zh" lang="zh-Hans">当前使用文档。可在顶部选择页面语言。</span></span></footer></div><script>(()=>{'use strict';
+document.querySelectorAll('a[data-language-link]').forEach(link=>{
+  link.addEventListener('click',()=>{
+    const target=new URL(link.href,location.href);
+    if(target.origin===location.origin){target.hash=location.hash;link.href=target.href;}
   });
-  document.querySelectorAll('[data-placeholder-en][data-placeholder-zh]').forEach(input=>{
-    input.placeholder=mode==='en'?input.dataset.placeholderEn:mode==='zh'?input.dataset.placeholderZh:
-      input.dataset.placeholderEn+' / '+input.dataset.placeholderZh;
-  });
-  document.querySelectorAll('[data-label-en][data-label-zh]').forEach(cell=>{
-    cell.dataset.label=mode==='en'?cell.dataset.labelEn:mode==='zh'?cell.dataset.labelZh:
-      cell.dataset.labelEn+' / '+cell.dataset.labelZh;
-  });
-  if(remember){
-    try{localStorage.setItem(storageKey,mode);}catch(_error){}
-    try{const url=new URL(location.href);url.searchParams.set('lang',mode);
-      history.replaceState(null,'',url);}catch(_error){}
-  }
-}
-let preferred='both';
-try{const saved=localStorage.getItem(storageKey);
-  if(modes.has(saved))preferred=saved;}catch(_error){}
-try{const explicit=new URL(location.href).searchParams.get('lang');
-  if(modes.has(explicit)){preferred=explicit;
-    try{localStorage.setItem(storageKey,explicit);}catch(_error){}}}catch(_error){}
-choose(preferred,false);
-buttons.forEach(button=>button.addEventListener('click',()=>choose(button.dataset.languageChoice,true)));
+});
 })();</script></body></html>

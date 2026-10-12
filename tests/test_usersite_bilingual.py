@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 import pytest
 
 from ccfleetd import slots, statuspage, usersite
-from ccfleetd.bilingual import SCRIPT_TAG
+from ccfleetd.bilingual import SCRIPT_TAG, project_html
 from ccfleetd.config import Config
 from ccfleetd.render import LOCAL_TIMES_TAG
 from ccfleetd.store import Store
@@ -55,8 +55,9 @@ class Page(HTMLParser):
 
 def test_shell_has_only_authored_scripts_and_no_translation_network_dependency():
     source = usersite._shell("example", "<p>Untranslated dynamic content</p>")
-    assert 'data-language="both"' in source
-    assert source.count('data-language-choice=') == 3
+    assert 'data-language="en"' in source
+    assert source.count('data-language-link=') == 2
+    assert 'data-language-choice=' not in source and '双语 / Both' not in source
     assert source.count('<script') == 2
     assert SCRIPT_TAG in source and LOCAL_TIMES_TAG in source
     assert '<script src=' not in source
@@ -88,7 +89,10 @@ def test_privacy_translation_uses_real_retention_values_and_escapes_contact():
     assert '45 days' in page.copy('en') and '45 天' in page.copy('zh')
     assert 'BWH can read model requests and responses' in page.copy('en')
     assert 'BWH 能读取模型请求和回复' in page.copy('zh')
-    assert '内层 SSH 加密' in page.copy('zh')
+    assert '通过 HTTPS 发给 Fleet' in page.copy('zh')
+    assert '不会自动清除已有文件或保存的历史' in page.copy('zh')
+    for removed in ('--transport bridge', '--legacy-history', 'live-folder'):
+        assert removed not in source
     assert 'help&desk@example.com' not in source
     assert 'mailto:help&amp;desk@example.com' in source
     assert all(link.get('href') == 'mailto:help&desk@example.com' for link in page.links
@@ -156,3 +160,56 @@ def test_status_translation_does_not_claim_a_website_chart_checks_models():
 def test_bilingual_block_translation_rejects_incomplete_authored_templates():
     with pytest.raises(ValueError, match='different number'):
         usersite._blocks('<h1>Example</h1><p>Body</p>', ['示例'])
+
+
+def test_projected_product_pages_have_one_language_and_no_old_setup_tours():
+    cfg = Config(public_url='https://fleet.example', google_client_id='client',
+                 google_client_secret='secret', cookie_secret='x' * 32)
+    for target, source in (
+        ('/privacy', usersite.privacy_page(cfg)),
+        ('/account/slots/slot-01/cli', usersite.cli_pairing_page(SLOT, 'fake-pairing-code')),
+        ('/account', usersite._signed_out(cfg)),
+    ):
+        english = project_html(source, 'en', target, cfg.public_url)
+        chinese = project_html(source, 'zh', target, cfg.public_url)
+        assert Page(english).copy('zh') == ''
+        assert Page(chinese).copy('en') == ''
+        assert 'data-language="en"' in english and 'data-language="zh"' in chinese
+        assert 'lang="en"' in english and 'lang="zh-Hans"' in chinese
+        assert 'data-language-link="both"' not in english + chinese
+        for removed in ('--transport bridge', '--legacy-history', 'live-folder', 'ccfleet-connect'):
+            assert removed not in english + chinese
+    assert 'fake-pairing-code' not in usersite.privacy_page(cfg)
+
+
+def test_single_language_projection_keeps_release_authority_and_confirmation():
+    raw = usersite._release(SLOT, CSRF)
+    english = Page(project_html(raw, 'en', '/account'))
+    chinese = Page(project_html(raw, 'zh', '/account'))
+    assert english.forms == [{'class': 'inline', 'method': 'post',
+                             'action': '/account/slots/slot-01/release'}]
+    assert chinese.forms == [{'class': 'inline', 'method': 'post',
+                             'action': '/zh/account/slots/slot-01/release'}]
+    assert chinese.inputs == english.inputs == [
+        {'type': 'hidden', 'name': 'csrf', 'value': CSRF},
+        {'type': 'checkbox', 'name': 'confirm', 'value': 'wipe', 'required': None},
+    ]
+    assert 'Delete everything on it' in english.copy('en') and english.copy('zh') == ''
+    assert '删除槽位中的文件、会话和 Claude 登录信息' in chinese.copy('zh') and chinese.copy('en') == ''
+
+
+def test_single_language_signin_fields_keep_form_names_and_localize_accessible_labels():
+    raw = usersite._sign_in(SLOT, {}, {}, CSRF, NOW)
+    english = Page(project_html(raw, 'en', '/account'))
+    chinese = Page(project_html(raw, 'zh', '/account'))
+    en_field = next(field for field in english.inputs if field.get('name') == 'email')
+    zh_field = next(field for field in chinese.inputs if field.get('name') == 'email')
+    assert en_field['aria-label'] == 'Claude email'
+    assert zh_field['aria-label'] == 'Claude 邮箱'
+    assert en_field['placeholder'] == 'your Claude email (optional)'
+    assert zh_field['placeholder'] == 'Claude 邮箱（可选）'
+    assert en_field['type'] == zh_field['type'] == 'email'
+    assert all(field['value'] == CSRF for field in english.inputs + chinese.inputs
+               if field.get('name') == 'csrf')
+    assert english.forms[0]['action'] == '/account/slots/slot-01/signin'
+    assert chinese.forms[0]['action'] == '/zh/account/slots/slot-01/signin'

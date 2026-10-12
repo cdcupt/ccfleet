@@ -27,12 +27,13 @@ from tests.test_admin_host import Browser
 
 ADMIN_TOKEN = "admin-token-long-enough-to-pass"
 NO_PRICE_OVERVIEW = "Slots are sold directly by the operator; price and payment are agreed with them."
-NO_PRICE_GUIDE = "and pay them. They switch your slot on for that account."
+NO_PRICE_GUIDE = "Price and payment are agreed directly with the operator."
 NO_PRICE_TERMS = ("Price and payment are agreed directly with the operator, who switches your slot "
                   "on when you pay.")
 
 
 # -- what a price may be --------------------------------------------------------------
+
 
 @pytest.mark.parametrize("amount,currency,want", [
     ("20", "USD", pricing.Price("20", "USD")),
@@ -109,6 +110,7 @@ def test_what_is_stored_is_read_back_and_checked_again():
 
 
 # -- the store ------------------------------------------------------------------------
+
 
 @pytest.fixture
 def store():
@@ -187,6 +189,7 @@ def test_a_database_written_before_settings_still_opens(tmp_path):
 
 
 # -- the console ----------------------------------------------------------------------
+
 
 @pytest.fixture
 def console():
@@ -356,6 +359,7 @@ def test_a_customer_session_is_no_console_identity(monkeypatch):
 
 # -- the public pages -----------------------------------------------------------------
 
+
 def render(path, price=None):
     return customer_docs.page_for(path)(Config(), price=price)
 
@@ -393,7 +397,7 @@ def test_the_price_on_a_page_is_escaped():
 
 
 def test_the_how_it_works_page_takes_the_same_arguments():
-    assert "Where" in render("/docs/how-it-works", pricing.Price("20", "USD"))
+    assert "How it works" in render("/docs/how-it-works", pricing.Price("20", "USD"))
 
 
 def test_the_pages_over_http_show_the_operators_price(console):
@@ -407,6 +411,7 @@ def test_the_pages_over_http_show_the_operators_price(console):
 
 
 # -- the command line -----------------------------------------------------------------
+
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ccfleetd import customer_docs, usersite
+from ccfleetd import bilingual, customer_docs, usersite
 from ccfleetd.config import Config
 from ccfleetd.store import Store
 from tests.test_cli_access import active_slot
@@ -127,35 +127,59 @@ def test_documented_new_command_examples_are_accepted_by_the_real_parser():
     parser = runpy.run_path(str(ROOT / "laptop/ccfleet"), run_name="ccfleet_docs")["parser"]()
     fragment = customer_docs._client_tools()
     parsed = []
-    for sample in re.findall(r"<code(?: [^>]*)?>(.*?)</code>", fragment, flags=re.S):
-        for line in html.unescape(sample).splitlines():
+    from tests.test_html_document_preservation import Document
+    examples = Document(bilingual.project_html(fragment, "en")).pre_codes
+    for sample in examples:
+        for line in sample.splitlines():
             if line.startswith("ccfleet "):
                 parsed.append(parser.parse_args(shlex.split(line)[1:]))
     commands = {args.command for args in parsed}
-    assert {"start", "sessions", "preferences", "doctor", "status", "version", "update",
-            "jobs", "local", "remote"} <= commands
+    assert {
+        "start",
+        "sessions",
+        "preferences",
+        "doctor",
+        "status",
+        "version",
+        "update",
+        "jobs",
+        "local",
+    } <= commands
     assert any(args.command == "update" and args.rollback for args in parsed)
-    assert any(args.command == "doctor" and args.privacy and args.json and args.export
-               for args in parsed)
+    assert any(
+        args.command == "doctor" and args.privacy and args.json and args.export for args in parsed
+    )
 
 
-def test_public_guide_distinguishes_managed_local_jobs_from_native_detached_agents():
+def test_public_guide_explains_current_managed_local_jobs():
     body = customer_docs.guide(Config())
     assert 'id="client-tools"' in body and 'id="background-jobs"' in body
-    for text in ("local Claude print-mode", "not a remote job", "interactive session",
-                 "24 hours", "at most 16", "4 MiB", "never automatically restart",
-                 "not sandbox-contained", "not included in support exports"):
+    for text in (
+        "local Claude print-mode",
+        "24 hours",
+        "at most 16",
+        "4 MiB",
+        "never automatically restart",
+        "not sandbox-contained",
+        "not included in support exports",
+        "computer must stay running",
+    ):
         assert text in body
-    assert "This is not background-agent support" not in body
-    assert "Bare <code>ccfleet</code> still means the remote terminal" in body
+    assert "--transport bridge" not in body and "ccfleet remote" not in body
 
 
-def test_release_guidance_does_not_claim_bootstrap_is_signature_verified():
+def test_release_guidance_requires_verified_current_updates():
     body = customer_docs.guide(Config())
-    assert "pinned Ed25519 key" in html.unescape(re.sub(r"<[^>]+>", "", body))
-    assert "legacy bootstrap is not labelled signature-verified" in body
-    assert "expired signed channel is an error" in body
-    assert "not Anthropic&#x27;s original Claude executable" in body
+    for phrase in (
+        "pinned Ed25519 key",
+        "immutable manifest",
+        "every helper",
+        "failed verification or download leaves the current client",
+        "absent or expired signed channel is an error",
+        "not Anthropic's original Claude executable",
+    ):
+        assert phrase in html.unescape(re.sub(r"<[^>]+>", "", body))
+    assert "bootstrap" not in body
 
 
 def test_public_privacy_covers_local_job_retention_without_hiding_root_access():
