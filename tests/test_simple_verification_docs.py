@@ -40,7 +40,7 @@ def test_prompt_is_optional_inference_not_an_enforced_privacy_test(section, requ
             "not an enforced privacy safeguard",
             "native context or hooks",
             "Do not ask Claude to print real IPs",
-            "BWH can read model requests and replies",
+            "The gateway can read model requests and replies",
             "slot's outbound IP",
             "directly from the laptop",
         ):

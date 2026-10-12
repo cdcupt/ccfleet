@@ -160,8 +160,8 @@ def test_diagrams_and_privacy_have_distinct_language_ids_and_plain_explanations(
         assert f'aria-labelledby="{namespace}-diag-t {namespace}-diag-d"' in source
     assert not document.duplicate_ids
     copy = LanguageCopy(source)
-    assert "BWH can read model contents" in copy.text("en")
-    assert "BWH 可以读取模型消息" in copy.text("zh-Hans")
+    assert "Can read model contents" in copy.text("en")
+    assert "可读取模型消息" in copy.text("zh-Hans")
     assert "机器管理员拥有 root 权限" in copy.text("zh-Hans")
     assert "真实线上验证使用了一个实际账号" in copy.text("zh-Hans")
 

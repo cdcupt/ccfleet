@@ -53,7 +53,7 @@ def test_current_library_pages_have_unique_anchors_and_exact_language_script(nam
 
 def test_comparison_keeps_known_transport_and_unknown_competitor_internals_separate():
     html = (ROOT / "docs/platform-comparison.html").read_text()
-    assert "BWH 上的 HTTPS 网关" in html
+    assert "我们的 HTTPS 网关" in html
     assert "厂商公开文档；内部实现未审计" in html
     assert "默认随机策略" in html and "只使用你自己持有且明确选中的槽位" in html
     assert "no live second-account switch was exercised" in html

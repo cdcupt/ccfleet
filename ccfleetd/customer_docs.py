@@ -630,22 +630,22 @@ def _model_connections(cfg: Config) -> str:
             "not create a local server or store messages there. <code>/v1/messages</code> "
             "is the Messages API-compatible path on our service. The path name does not "
             "mean this hostname is owned by Anthropic. Our gateway receives the HTTPS "
-            "request on BWH, selects your slot, and that slot connects to Anthropic. The "
+            "request, selects your slot, and that slot connects to Anthropic. The "
             "connection key authenticates you to CC Fleet; it is not a Claude credential "
             "or an Anthropic paid API key.</p>",
             "<p>Base URL 是客户端保存的服务地址。保存地址不会创建本地服务器，也不表示消息存"
             "放在这里。<code>/v1/messages</code> 是我们服务上的 Messages API "
-            "兼容路径；路径名称相同，不代表这个域名归 Anthropic 所有。HTTPS 请求先到 BWH "
-            "的网关，由网关选槽位，再由槽位连接 Anthropic。连接密钥用于向 CC Fleet "
+            "兼容路径；路径名称相同，不代表这个域名归 Anthropic 所有。HTTPS 请求先到我们的"
+            "网关，由网关选槽位，再由槽位连接 Anthropic。连接密钥用于向 CC Fleet "
             "证明访问权限，不是 Claude 登录凭证，也不是 Anthropic 付费 API key。</p>",
         )
         + bi(
-            "<p><strong>Privacy:</strong> your laptop encrypts the connection to BWH, but "
-            "BWH decrypts it to route the request and can read model messages and replies. "
+            "<p><strong>Privacy:</strong> your laptop encrypts the connection to the gateway, but "
+            "the gateway decrypts it to route the request and can read model messages and replies. "
             "The slot keeps its native Claude credential. Local tools may include file "
             "contents in model context; keeping files local does not mean that no file "
             "content can leave the computer.</p>",
-            "<p><strong>隐私边界：</strong>电脑到 BWH 的连接有加密，但 BWH "
+            "<p><strong>隐私边界：</strong>电脑到网关的连接有加密，但网关"
             "为了路由会解密，因此可以读取模型消息和回复。原生 Claude "
             "凭证仍保存在槽位。工具可能把文件内容放入模型上下文；文件留在本地，不等于任何文"
             "件内容都不会离开电脑。</p>",
@@ -786,12 +786,12 @@ def _client_tools() -> str:
             "<p>A matching reply checks basic responsiveness only. The no-tools "
             "instruction is not an enforced privacy safeguard: native context or hooks can "
             "still exist. Do not ask Claude to print real IPs, locations or environment "
-            "values just to check privacy. BWH can read model requests and replies, and "
+            "values just to check privacy. The gateway can read model requests and replies, and "
             "Anthropic sees the selected slot&#x27;s outbound IP for those requests. Other "
             "tool or native network connections can go directly from the laptop.</p>",
             "<p>收到相同回复，只说明基本响应正常。“不要使用工具”是提示要求，不是强制隔离，"
             "原生上下文或 hooks 仍可能存在。不要为了检查隐私，让 Claude 打印真实 "
-            "IP、位置或环境变量。BWH 可以读取模型消息与回复；对于这些请求，Anthropic "
+            "IP、位置或环境变量。网关可以读取模型消息与回复；对于这些请求，Anthropic "
             "看到的是选中槽位的出口 IP。其他工具或原生服务仍可能从电脑直接联网。</p>",
         )
         + '<h3 id="management-mcp">'
@@ -1136,7 +1136,7 @@ GATEWAY_PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img"
 aria-labelledby="gateway-diag-t gateway-diag-d">
 <title id="gateway-diag-t">HTTPS gateway model request path</title>
 <desc id="gateway-diag-d">Original Claude Code sends supported model requests over HTTPS
-to our gateway on BWH. BWH reads the request and chooses one of your selected own slots.
+to our gateway. The gateway reads the request and chooses one of your selected own slots.
 A restricted SSH service connection reaches that slot, which uses its native Claude
 credential over HTTPS to Anthropic. Files, tools and history remain local.</desc>
 <defs><marker id="gateway-ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
@@ -1148,8 +1148,8 @@ orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
 marker-end="url(#gateway-ah)"/>
 <text class="sub" x="190" y="111">HTTPS + endpoint key</text>
 <rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
-<text x="180" y="160" text-anchor="middle">Our HTTPS gateway on BWH</text>
-<text class="sub" x="180" y="182" text-anchor="middle">BWH can read model contents</text>
+<text x="180" y="160" text-anchor="middle">Our HTTPS gateway</text>
+<text class="sub" x="180" y="182" text-anchor="middle">Can read model contents</text>
 <path class="arrow" d="M180,204 L180,242" marker-start="url(#gateway-ah)"
 marker-end="url(#gateway-ah)"/>
 <text class="sub" x="190" y="227">Restricted service SSH</text>
@@ -1193,16 +1193,16 @@ GATEWAY_PICTURE_ZH = _diagram_zh(
         **_DIAGRAM_COMMON,
         "HTTPS gateway model request path": "HTTPS 网关模型请求路线",
         "Original Claude Code sends supported model requests over HTTPS\nto our "
-        "gateway on BWH. BWH reads the request and chooses one of your selected own "
+        "gateway. The gateway reads the request and chooses one of your selected own "
         "slots.\nA restricted SSH service connection reaches that slot, which uses its "
         "native Claude\ncredential over HTTPS to Anthropic. Files, tools and history "
-        "remain local.": "原版 Claude Code 通过 HTTPS 将支持的模型请求发给 BWH 上的网关。BWH "
+        "remain local.": "原版 Claude Code 通过 HTTPS 将支持的模型请求发给我们的网关。网关"
         "读取请求，在你选中的自己的槽位里选择一个。权限受限的 SSH "
         "服务连接到该槽位，再由槽位用原生 Claude 凭证通过 HTTPS 访问 "
         "Anthropic。文件、工具和历史仍在电脑上。",
         "HTTPS + endpoint key": "HTTPS + 连接密钥",
-        "Our HTTPS gateway on BWH": "BWH 上的 HTTPS 网关",
-        "BWH can read model contents": "BWH 可以读取模型消息",
+        "Our HTTPS gateway": "我们的 HTTPS 网关",
+        "Can read model contents": "可读取模型消息",
         "Restricted service SSH": "权限受限的服务 SSH",
         "Your selected own slot": "你选中的自己的槽位",
         "one bound Claude account": "绑定一个 Claude 账号",
@@ -1242,22 +1242,22 @@ def how_it_works(
         + bi(
             "<p><code>ccfleet local</code> runs original Claude Code on your computer. "
             "Local tools may read a file and include relevant text in the model request. "
-            "The request goes over HTTPS to our gateway on BWH with a separate Fleet "
+            "The request goes over HTTPS to our gateway with a separate Fleet "
             "connection key.</p>",
             "<p><code>ccfleet local</code> 在你的电脑上运行原版 Claude "
             "Code。本地工具可能读取文件，把相关文字放进模型请求，再带上独立的 Fleet "
-            "连接密钥，通过 HTTPS 发给 BWH 上的网关。</p>",
+            "连接密钥，通过 HTTPS 发给我们的网关。</p>",
         )
         + bi(
             "<p>The gateway checks your key and ownership, then chooses one of your "
-            "selected own slots. BWH uses a restricted inference-only SSH connection to "
+            "selected own slots. The gateway uses a restricted inference-only SSH connection to "
             "that slot. The slot uses its bound native Claude credential over HTTPS to "
             "Anthropic. The answer streams back along this route; permitted tools execute "
-            "on your computer. Credentials are not copied to your laptop or BWH.</p>",
-            "<p>网关验证密钥与槽位归属，从你选中的自己的槽位中选择一个。BWH "
+            "on your computer. Credentials are not copied to your laptop or the gateway.</p>",
+            "<p>网关验证密钥与槽位归属，从你选中的自己的槽位中选择一个。网关"
             "通过只允许模型转发的受限 SSH 连接到槽位。槽位使用绑定的原生 Claude 凭证，通过 "
             "HTTPS 请求 Anthropic。回答沿原路分段返回，获准的工具仍在你的电脑上执行；Claude"
-            " 凭证不会复制到电脑或 BWH。</p>",
+            " 凭证不会复制到电脑或网关。</p>",
         )
         + '</div><div class="card">'
         + bi("<h2>Your seat and your account</h2>", "<h2>你的槽位与你的账号</h2>")
@@ -1287,13 +1287,13 @@ def how_it_works(
         + '<div class="card">'
         + bi("<h2>Who can read what</h2>", "<h2>谁能看到什么</h2>")
         + bi(
-            "<p><strong>BWH can read model requests and responses.</strong> HTTPS protects "
-            "each connection, but the gateway decrypts messages to route them. BWH, the "
+            "<p><strong>The gateway can read model requests and responses.</strong> HTTPS protects "
+            "each connection, but the gateway decrypts messages to route them. The gateway, the "
             "selected slot and Anthropic process model context, including any prompts, "
             "file contents and tool results it contains. Local files stay local as files; "
             "relevant contents can still be sent to the model.</p>",
-            "<p><strong>BWH 可以读取模型请求和回复。</strong>HTTPS "
-            "保护每段连接，但网关为路由会解密消息。BWH、选中的槽位和 Anthropic "
+            "<p><strong>网关可以读取模型请求和回复。</strong>HTTPS "
+            "保护每段连接，但网关为路由会解密消息。网关、选中的槽位和 Anthropic "
             "都会处理模型上下文，包括其中的提示、文件内容和工具结果。文件本身仍在本地，但相"
             "关内容可能发给模型。</p>",
         )
@@ -1301,12 +1301,12 @@ def how_it_works(
             "<p>The Fleet server receives slot sign-in state, the bound Claude email and "
             "plan, quota observations, hourly token counts and paired-device facts. Those "
             "heartbeat reports do not contain prompts, conversations, file contents or the "
-            "Claude credential. Separately, the direct HTTPS gateway on BWH receives and "
+            "Claude credential. Separately, the direct HTTPS gateway receives and "
             "processes model requests. The server stores only a hash of your connection "
             "key; the native Claude credential remains on the slot.</p>",
             "<p>Fleet 服务收到槽位登录状态、绑定的 Claude 邮箱与订阅、配额观察、按小时的 "
             "token 数和设备配对信息。这样的状态报告不包含提示、会话、文件内容或 Claude "
-            "凭证；BWH 上的 HTTPS 网关则另外接收和处理模型消息。服务端只保存连接密钥的哈希"
+            "凭证；我们的 HTTPS 网关则另外接收和处理模型消息。服务端只保存连接密钥的哈希"
             "，原生 Claude 凭证留在槽位。</p>",
         )
         + bi(

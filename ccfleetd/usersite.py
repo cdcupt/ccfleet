@@ -1124,14 +1124,14 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "prompts, conversations, file "
                 "contents, your Claude credential, or the name on "
                 "your Claude account. This is "
-                "separate from model traffic: the HTTPS gateway on "
-                "BWH receives and processes "
+                "separate from model traffic: the HTTPS gateway "
+                "receives and processes "
                 "the contents of model requests and responses."
             ),
             (
                 "健康报告不包含提示词、对话、文件内容、Claude 凭据或 "
                 "Claude 账号显示名。模型流量是另一回事："
-                "BWH 上的 HTTPS 网关会接收并处理模型请求及回复内容。"
+                "我们的 HTTPS 网关会接收并处理模型请求及回复内容。"
             ),
         )
         + "</div>"
@@ -1208,13 +1208,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "Anthropic using its bound account. "
                     "Native Claude on the slot owns credential writing "
                     "and renewal. The slot credential is "
-                    "never returned to your computer or BWH. Anthropic’s "
+                    "never returned to your computer or the gateway. Anthropic’s "
                     "own terms and privacy policy apply."
                 ),
                 (
                     "选中的槽位只使用其绑定账号，把受支持的模型请求发给 "
                     "Anthropic。槽位上的原版 Claude 负责写入和续期凭据，"
-                    "凭据不会返回电脑或 BWH。Anthropic "
+                    "凭据不会返回电脑或网关。Anthropic "
                     "自身的条款和隐私政策同时适用。"
                 ),
             ),
@@ -1242,8 +1242,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
             (
                 (
-                    "HTTPS encrypts traffic in transit. TLS ends at BWH, "
-                    "so <strong>BWH can read model "
+                    "HTTPS encrypts traffic in transit. TLS ends at the gateway. "
+                    "<strong>The gateway can read model "
                     "requests and responses</strong>, including sent "
                     "prompts, tool results and file contents. "
                     "The selected slot and Anthropic also process that "
@@ -1254,8 +1254,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "for setup and account selection."
                 ),
                 (
-                    "HTTPS 加密传输过程，TLS 在 BWH 终止，因此 "
-                    "<strong>BWH 能读取模型请求和回复</strong>，"
+                    "HTTPS 加密传输过程，TLS 在网关终止，因此 "
+                    "<strong>网关能读取模型请求和回复</strong>，"
                     "包括发送的提示词、工具结果和文件内容。选中的槽位和 "
                     "Anthropic 也会处理这些上下文；账号凭据仍在槽位上。"
                     '设置与账号选择见 <a href="/docs/library/docs/public-'
@@ -1290,7 +1290,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "not redact arbitrary prompts, tool "
                     "results or file contents. Native prompts may "
                     "include local OS, working directory "
-                    "and environment details. BWH can also see your "
+                    "and environment details. The gateway can also see your "
                     "connection IP and timing. This is not anonymity."
                 ),
                 (
@@ -1298,7 +1298,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "<code>metadata</code> 字段，不会自动删除提示词、"
                     "工具结果或文件内容中的 "
                     "敏感信息。原版提示词可能包含操作系统、"
-                    "工作目录和环境信息。BWH 还能看到连接 IP 和时间；"
+                    "工作目录和环境信息。网关还能看到连接 IP 和时间；"
                     "这不是匿名服务。"
                 ),
             ),

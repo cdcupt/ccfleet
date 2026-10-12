@@ -137,7 +137,7 @@ def test_current_background_jobs_are_local_and_require_a_running_computer():
 def test_privacy_distinguishes_local_files_from_model_context_and_direct_network():
     for page in (guide(Config()), privacy_page(Config()), how_it_works(Config())):
         text = visible(page)
-        for phrase in ("MCP", "hooks", "plugins", "BWH", "file contents"):
+        for phrase in ("MCP", "hooks", "plugins", "gateway", "file contents"):
             assert phrase in text
         assert "directly from the laptop" in text or "directly from your computer" in text
         assert "root" in text and "Claude credential" in text
@@ -149,7 +149,7 @@ def test_privacy_distinguishes_local_files_from_model_context_and_direct_network
         "Native system prompts",
         "working directory",
         "not anonymity",
-        "BWH can read model requests and responses",
+        "The gateway can read model requests and responses",
     ):
         assert phrase in text
 
@@ -164,7 +164,7 @@ def test_privacy_page_preserves_history_and_discloses_current_model_context():
         "connection IP and timing",
         "This is not anonymity",
         "operator console",
-        "BWH can read model requests and responses",
+        "The gateway can read model requests and responses",
     ):
         assert phrase in text
     for removed in ("--transport bridge", "--legacy-history", "live-folder", "migration"):

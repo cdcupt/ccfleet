@@ -87,8 +87,8 @@ def test_privacy_translation_uses_real_retention_values_and_escapes_contact():
     page = Page(source)
     assert '36 hours' in page.copy('en') and '36 小时' in page.copy('zh')
     assert '45 days' in page.copy('en') and '45 天' in page.copy('zh')
-    assert 'BWH can read model requests and responses' in page.copy('en')
-    assert 'BWH 能读取模型请求和回复' in page.copy('zh')
+    assert 'The gateway can read model requests and responses' in page.copy('en')
+    assert '网关能读取模型请求和回复' in page.copy('zh')
     assert '通过 HTTPS 发给 Fleet' in page.copy('zh')
     assert '不会自动清除已有文件或保存的历史' in page.copy('zh')
     for removed in ('--transport bridge', '--legacy-history', 'live-folder'):

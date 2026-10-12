@@ -96,7 +96,7 @@ def test_safe_failover_and_content_visibility_keep_current_proof_limits():
         "uncertain result is not replayed",
         "After public response headers",
         "even if no visible text",
-        "BWH can read model messages and replies",
+        "The gateway can read model messages and replies",
         "directly from the laptop",
         "bypass mode",
         "root access",
