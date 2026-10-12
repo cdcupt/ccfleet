@@ -50,13 +50,13 @@ def projected(report, language="en"):
     return project_html(statuspage.machine_panel(report, NOW), language, "/status")
 
 
-def test_machine_card_exposes_totals_with_clear_shared_host_and_service_scopes():
+def test_machine_card_exposes_totals_with_clear_gateway_host_and_service_scopes():
     raw = projected(ready_report())
     text = Text(raw).shown()
     assert 'id="gateway-machine"' in raw
     assert 'aria-labelledby="gateway-machine-title"' in raw
     assert "Gateway machine resources" in text
-    assert "Bandwagon VPS · shared with other apps" in text
+    assert "Gateway VPS dedicated to Fleet" in text
     assert "Host figures cover the entire VPS" in text
     assert "Host CPU use 12.3%" in text
     assert "Estimated host memory used 37.5% 3.0 GiB / 8.0 GiB" in text
@@ -72,7 +72,7 @@ def test_machine_card_exposes_totals_with_clear_shared_host_and_service_scopes()
 def test_machine_explanations_do_not_equate_capacity_or_cpu_with_proven_bottleneck():
     text = Text(projected(ready_report())).shown()
     assert "storage capacity, not disk speed" in text
-    assert "do not prove that Bandwagon is the bottleneck" in text
+    assert "do not prove that the gateway is the bottleneck" in text
     assert "your network, the slot machine and Anthropic" in text
     assert "total minus available memory" in text
     assert "including other files on that filesystem" in text
@@ -150,13 +150,13 @@ def test_english_and_chinese_are_actual_separate_copy_including_notes_and_detail
     assert "Gateway machine resources" not in chinese and "copy-en" not in chinese
     text = Text(chinese).shown()
     assert "网关主机资源" in text
-    assert "搬瓦工 VPS · 与其他应用共享" in text
+    assert "Fleet 专用网关 VPS" in text
     assert "主机 CPU 占用 12.3%" in text
     assert "主机内存估算占用 37.5%" in text
     assert "Fleet 数据所在文件系统 25.0%" in text
     assert "Fleet CPU 配额占用 5.5% CPU 配额：1.00 核" in text
     assert "更新于： 不到一分钟前" in text
-    assert "不能直接证明搬瓦工是瓶颈" in text
+    assert "不能直接证明网关是瓶颈" in text
     assert "these measurements" not in text
     stale = ready_report()
     stale.update(state="stale", observed_at=NOW - 120)

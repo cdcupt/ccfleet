@@ -1347,10 +1347,10 @@ def how_it_works(
         )
         + bi(
             '<p>The <a href="/status#gateway-machine">gateway machine resources</a> panel '
-            "shows the shared VPS and Fleet service resource use. A busy CPU, low available "
+            "shows the Fleet gateway VPS and Fleet service resource use. A busy CPU, low available "
             "memory or a nearly full data filesystem can indicate pressure. These readings "
             "alone do not prove where a slow request spends its time.</p>",
-            '<p><a href="/status#gateway-machine">网关主机资源</a>面板展示共享 VPS 和 Fleet '
+            '<p><a href="/status#gateway-machine">网关主机资源</a>面板展示 Fleet 网关 VPS 和 Fleet '
             "服务的资源占用。CPU 繁忙、可用内存少或数据所在文件系统快满，都可能提示资源压力；"
             "这些数值本身不能证明一次慢请求把时间花在了哪里。</p>",
         )

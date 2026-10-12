@@ -1420,14 +1420,14 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "公开的主机资源",
         [
             (
-                "When the operator enables it, Status also shows shared gateway-VPS "
+                "When the operator enables it, Status also shows Fleet's dedicated gateway-VPS "
                 "CPU, memory and data-filesystem capacity, plus Fleet's own container "
-                "CPU and memory consumption against its limits. Shared-host figures "
-                "include other applications on that VPS. They do not list processes, "
+                "CPU and memory consumption against its limits. Host figures cover "
+                "the whole VPS, including system services. They do not list processes, "
                 "users, IP addresses, individual requests or their contents.",
-                "运营方开启后，服务状态页还会展示网关 VPS 的整体 CPU、内存、数据所在文件"
-                "系统容量，以及 Fleet 容器的 CPU 和内存占用与配额。共享主机数值包含同一台 "
-                "VPS 上的其他应用，不列出进程、用户、IP 地址、单条请求或内容。",
+                "运营方开启后，服务状态页还会展示 Fleet 专用网关 VPS 的整体 CPU、内存、数据所在文件"
+                "系统容量，以及 Fleet 容器的 CPU 和内存占用与配额。主机数值覆盖整台 VPS，"
+                "包括系统服务，不列出进程、用户、IP 地址、单条请求或内容。",
             ),
             (
                 "The service samples these numeric kernel counters every fifteen "
