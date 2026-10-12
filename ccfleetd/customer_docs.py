@@ -1346,6 +1346,15 @@ def how_it_works(
             "达到参与用户和样本数量要求后，展示上游平均时长及传输完成率，不列出单个账号。</p>",
         )
         + bi(
+            '<p>The <a href="/status#gateway-machine">gateway machine resources</a> panel '
+            "shows the shared VPS and Fleet service resource use. A busy CPU, low available "
+            "memory or a nearly full data filesystem can indicate pressure. These readings "
+            "alone do not prove where a slow request spends its time.</p>",
+            '<p><a href="/status#gateway-machine">网关主机资源</a>面板展示共享 VPS 和 Fleet '
+            "服务的资源占用。CPU 繁忙、可用内存少或数据所在文件系统快满，都可能提示资源压力；"
+            "这些数值本身不能证明一次慢请求把时间花在了哪里。</p>",
+        )
+        + bi(
             "<p>Model requests need the configured gateway and an eligible slot. A gateway "
             "outage reports an error. Giving a slot back stops its processes and deletes "
             "the Linux account and all slot files. It is offered again only after the "

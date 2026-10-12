@@ -1416,6 +1416,32 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         ],
     )
     body += card(
+        "Public machine resources",
+        "公开的主机资源",
+        [
+            (
+                "When the operator enables it, Status also shows shared gateway-VPS "
+                "CPU, memory and data-filesystem capacity, plus Fleet's own container "
+                "CPU and memory consumption against its limits. Shared-host figures "
+                "include other applications on that VPS. They do not list processes, "
+                "users, IP addresses, individual requests or their contents.",
+                "运营方开启后，服务状态页还会展示网关 VPS 的整体 CPU、内存、数据所在文件"
+                "系统容量，以及 Fleet 容器的 CPU 和内存占用与配额。共享主机数值包含同一台 "
+                "VPS 上的其他应用，不列出进程、用户、IP 地址、单条请求或内容。",
+            ),
+            (
+                "The service samples these numeric kernel counters every fifteen "
+                "seconds and keeps the latest observation in memory. Values older "
+                "than one minute are hidden; restarting resets the observations. "
+                "These infrastructure figures do not need the traffic panel's "
+                "three-account threshold. Viewing them makes no model request.",
+                "服务每十五秒采样一次系统的数值计数器，只在内存中保留最新观测。超过一分钟"
+                "的数值不再显示，重启会重置观测。基础设施数值不受转发统计的三个账号门槛"
+                "限制，查看它们不会调用模型。",
+            ),
+        ],
+    )
+    body += card(
         "Cookies and language",
         "Cookie 与页面语言",
         [
