@@ -1276,10 +1276,11 @@ def how_it_works(
             "<p>Your slot card distinguishes reported ready, renewal pending, sign-in "
             "required and account maintenance. Stale observations do not claim readiness. "
             "A heartbeat does not prove provider acceptance. Read-only diagnostics check "
-            "connections without a model request or project scan.</p>",
+            "connections without a model request or project scan. Machines keep their "
+            "clocks on UTC; slot cards display reset times in your own time zone.</p>",
             "<p>卡片区分已报告就绪、等待续期、需要登录和账号维护。过期状态不会被当作当前就"
             "绪。机器状态报告不保证服务商会接受下一条消息；只读诊断不调用模型，也不扫描项目"
-            "。</p>",
+            "。机器时钟使用 UTC；槽位卡片上的额度重置时间按你所在的时区显示。</p>",
         )
         + "</div>"
         + _model_connections(cfg)
