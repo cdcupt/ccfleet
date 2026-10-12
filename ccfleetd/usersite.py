@@ -871,7 +871,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-11"
+PRIVACY_UPDATED = "2026-10-12"
 
 
 def _span(seconds: int) -> str:
@@ -1379,6 +1379,40 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         ],
     )
     body += card(
+        "Public performance measurements",
+        "公开的性能统计",
+        [
+            (
+                "The public Status page combines existing numeric relay measurements "
+                "from current, fresh slot reports. It shows transfer completion and "
+                "average slot-side timing over seven UTC calendar days, including today. "
+                "It does not publish individual user or slot statistics, names, emails, "
+                "prompts, credentials or response contents.",
+                "公开的服务状态页只汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
+                "七个 UTC 日的传输完成率和槽位端平均响应时长。不公开单个用户或槽位的统计，"
+                "也不公开名称、邮箱、提示词、凭据或回复内容。",
+            ),
+            (
+                "Traffic figures appear only when at least three contributing Fleet "
+                "users and twenty observed attempts are included. Each timing separately "
+                "needs twenty samples from three users. Until then, the panel "
+                "shows that more aggregate data is needed. A completed transfer requires "
+                "a successful HTTP reply (2xx) delivered in full; error replies, "
+                "cancellations and interrupted transfers are not successes. "
+                "These sampled relay attempts "
+                "can include a backup attempt for one request; they do not cover gateway "
+                "failures before a slot is reached or measure answer quality. Viewing "
+                "Status makes no extra model request.",
+                "只有至少三个 Fleet 用户提供了统计，且合计有二十次观测到的转发尝试时，"
+                "才公开流量数值；每项计时也需要三个用户提供二十个样本。此前页面会提示"
+                "需要更多汇总数据。成功传输要求 HTTP 回复状态为 2xx，且内容完整传完；错误"
+                "回复、取消或中断的传输不算成功。一条请求可能因使用备用"
+                "账号而产生多次转发尝试。这些统计不包含请求到达槽位前的网关失败，也不评价"
+                "答案质量。查看状态页不会额外调用模型。",
+            ),
+        ],
+    )
+    body += card(
         "Cookies and language",
         "Cookie 与页面语言",
         [
@@ -1389,15 +1423,15 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "Google’s reply to the browser that requested it, "
                     f"which lasts {_span(oauth.FLOW_TTL_S)}; the server ke"
                     f"eps a matching record for the same time. "
-                    "There is no analytics, advertising or third-party "
-                    "script. Page language is selected "
+                    "We do not use browser-tracking analytics, advertising or "
+                    "third-party scripts. Page language is selected "
                     "by the English or Chinese URL."
                 ),
                 (
                     "登录使用两类必要 Cookie：Fleet 会话，以及把 Google "
                     "授权回复绑定到发起登录的浏览器的 Cookie。"
                     f"后者有效期为 {_span_zh(oauth.FLOW_TTL_S)}，服务器的对"
-                    f"应记录保留相同时间。没有分析追踪、广告或第三方脚本。"
+                    f"应记录保留相同时间。不使用浏览器追踪分析、广告或第三方脚本。"
                     "英语或中文由页面地址选择。"
                 ),
             ),

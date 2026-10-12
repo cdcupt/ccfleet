@@ -1335,11 +1335,15 @@ def how_it_works(
             "Automatic updates are disabled during a CC Fleet launch; update your local "
             "Claude installation separately, outside that session. Machine security "
             "updates install daily; necessary reboots are scheduled by the operator. Check "
-            '<a href="/status">Status</a> for website and machine availability.</p>',
+            '<a href="/status">Status</a> for website and machine availability, and '
+            'the <a href="/status#performance">fleet performance panel</a> for combined '
+            "relay measurements. It shows average upstream timing and transfer completion "
+            "when enough users contribute data, without listing individual accounts.</p>",
             "<p>电脑上的 Claude、槽位上的 Claude 和 Fleet 客户端分别更新。CC Fleet "
             "启动期间关闭 Claude 自动更新，请在会话外单独更新本地安装。机器每天安装安全更新"
             '，需要重启时由运营者安排。网站和机器是否在线，可以查看<a href="/status">服务状'
-            "态</a>。</p>",
+            '态</a>；<a href="/status#performance">整体性能面板</a>汇总转发统计。'
+            "达到参与用户和样本数量要求后，展示上游平均时长及传输完成率，不列出单个账号。</p>",
         )
         + bi(
             "<p>Model requests need the configured gateway and an eligible slot. A gateway "
