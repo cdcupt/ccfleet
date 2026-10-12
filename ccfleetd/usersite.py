@@ -398,6 +398,9 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
 # doors, and the progress a slot shows while the machine works on it.
 USER_CSS = CSS + """
 body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
+body[data-language="both"] .how .diagram{top:138px}
+.site main [id]{scroll-margin-top:144px}
+@media(max-width:760px){.site main [id]{scroll-margin-top:164px}}
 .site main{flex:1 0 auto;width:100%}
 .site .page{max-width:1120px;padding-block:34px 64px}
 .site .page.narrow{max-width:880px}

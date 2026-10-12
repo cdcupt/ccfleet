@@ -11,6 +11,7 @@ import urllib.error
 import pytest
 
 from ccfleetd import mail, outage, slots, status
+from ccfleetd.bilingual import label
 from ccfleetd.config import Config
 from ccfleetd.mail import Email
 from ccfleetd.monitor import Monitor
@@ -393,7 +394,8 @@ def test_outage_emails_are_off_until_turned_on_and_can_be_turned_off(mail_site):
     store, sign_in, _ = mail_site
     erik = sign_in(quota=1)
     page = erik.page()
-    assert "<h2>Outage emails</h2>" in page and "Turn on" in page and "Resend" in page
+    assert "<h2>" + label("Outage emails", "故障邮件", inline=True) + "</h2>" in page
+    assert "Turn on" in page and "Resend" in page
     assert erik.press("/account/outage-emails", on="1").status == 303
     assert store.get_account(erik.account["id"])["outage_emails"] == 1
     assert "Turn off" in erik.page()
