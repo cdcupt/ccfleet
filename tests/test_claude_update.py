@@ -18,6 +18,7 @@ import time
 import pytest
 
 from ccfleetd import claude_versions, slots, usersite
+from ccfleetd.bilingual import label
 from ccfleetd.claude_versions import Target
 from ccfleetd.desired import IDLE_POLL_S, LOGIN_POLL_S, desired_state
 from ccfleetd.heartbeat import validate_heartbeat
@@ -61,6 +62,19 @@ def cc_row(page):
         return ""
     end = page.find('<div class="row-line', start + 1)
     return page[start:end if end > 0 else len(page)]
+
+
+def assert_version_button(row, slot_id, action, english, chinese, cls, csrf):
+    """A translated label remains one submit control in the same protected POST."""
+    target = f"/account/slots/{slot_id}/{action}"
+    form = re.search(r'<form class="inline" method="post" action="'
+                     + re.escape(target) + r'">(.*?)</form>', row, flags=re.S)
+    assert form is not None, f"missing POST form for {target}"
+    expected = (f'<button class="{cls}" type="submit">'
+                + label(english, chinese, inline=True) + '</button>')
+    assert expected in form[1]
+    assert f'<input type="hidden" name="csrf" value="{csrf}">' in form[1]
+    assert form[1].count('<button') == 1 and form[1].count('name="csrf"') == 1
 
 
 # -- the release channels ----------------------------------------------------------
@@ -446,7 +460,8 @@ def test_a_newer_release_is_offered_with_one_press(site):  # noqa: F811
     erik, slot = on_the_page(store, sign_in)
     row = cc_row(erik.page())
     assert "2.1.267 · Stable · latest is 2.1.281" in text(row)
-    assert ">Update to 2.1.281</button>" in row and 'class="primary"' in row
+    assert_version_button(row, slot['id'], 'update', 'Update to 2.1.281',
+                          '更新到 2.1.281', 'primary', erik.token())
     assert usersite.UPDATE_NOTE in text(row)
     assert "Back to Stable" not in row
 
@@ -469,7 +484,9 @@ def test_on_latest_and_current_it_says_so_with_a_way_back(site):  # noqa: F811
     page = erik.page()
     row = cc_row(page)
     assert "2.1.281 · up to date · follows the latest release" in text(row)
-    assert ">Back to Stable</button>" in row and "Update to" not in row
+    assert_version_button(row, slot['id'], 'stable', 'Back to Stable',
+                          '切回稳定版', 'quiet', erik.token())
+    assert "Update to" not in row
     assert refresh_of(page)[0] == usersite.IDLE_REFRESH_S
     assert "note=stable" in erik.press(f"/account/slots/{slot['id']}/stable").getheader(
         "Location")
@@ -496,7 +513,10 @@ def test_a_failure_is_said_and_the_button_stays(site):  # noqa: F811
     row = cc_row(erik.page())
     assert "Update failed: <img src=x onerror=alert(1)>" in text(row)
     assert "<img" not in row, "a machine's words are shown as text"
-    assert ">Update to 2.1.281</button>" in row and ">Back to Stable</button>" in row
+    assert_version_button(row, slot['id'], 'update', 'Update to 2.1.281',
+                          '更新到 2.1.281', 'primary', erik.token())
+    assert_version_button(row, slot['id'], 'stable', 'Back to Stable',
+                          '切回稳定版', 'quiet', erik.token())
 
 
 def test_a_held_machine_offers_nothing_and_refuses_the_press(site):  # noqa: F811
@@ -538,7 +558,7 @@ def test_an_unread_channel_claims_nothing(site):  # noqa: F811
                             (claude_versions.SETTING_KEY,))
         store._conn.commit()
     row = cc_row(erik.page())
-    assert text(row) == "Claude Code2.1.267 · Stable"
+    assert text(row) == "Claude Code2.1.267 · Stable2.1.267 · 稳定版"
 
 
 def test_an_owners_own_node_has_the_row_and_its_pin_moves(site):  # noqa: F811
@@ -552,7 +572,8 @@ def test_an_owners_own_node_has_the_row_and_its_pin_moves(site):  # noqa: F811
         "credentials": {"logged_in": True}, "remote_control": {"state": "active"}})
     row = cc_row(erik.page())
     assert "2.1.200 · pinned · latest is 2.1.281" in text(row), "their pin, not a hold"
-    assert ">Update to 2.1.281</button>" in row
+    assert_version_button(row, 'erik-1', 'update', 'Update to 2.1.281',
+                          '更新到 2.1.281', 'primary', erik.token())
     erik.press("/account/slots/erik-1/update")
     assert store.get_node("erik-1")["pinned_version"] == "latest"
 

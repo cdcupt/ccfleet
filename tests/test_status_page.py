@@ -13,6 +13,7 @@ import time
 import pytest
 
 from ccfleetd import render, status, statuspage, usersite
+from ccfleetd.bilingual import SCRIPT_TAG as LANGUAGE_TAG
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -108,10 +109,11 @@ def test_the_page_names_no_machine_and_nobody(store, cfg):
         assert name not in raw, name
 
 
-def test_the_page_carries_no_script_but_the_local_times_one(store, cfg):
+def test_the_page_carries_only_the_two_authored_scripts(store, cfg):
     fleet(store)
     raw = page_of(store, cfg)
-    assert raw.count("<script") == 1 and render.LOCAL_TIMES_TAG in raw
+    assert raw.count("<script") == 2
+    assert render.LOCAL_TIMES_TAG in raw and LANGUAGE_TAG in raw
 
 
 def test_the_page_refreshes_itself_every_minute(store, cfg):

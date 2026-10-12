@@ -326,7 +326,10 @@ def test_the_wordmark_and_the_overview_link_go_to_the_bare_address(one_site):
         assert body.count('<a class="brand" href="/">') == 2, path  # the bar and the footer
         nav = body[body.index('<nav class="doc-nav">'):]
         nav = nav[:nav.index("</nav>")]
-        assert re.search(r'<a href="/"( class="here")?>Overview</a>', nav), path
+        overview = re.search(r'<a href="/"( class="here")?>.*?</a>', nav)
+        assert overview, path
+        assert re.sub(r'<[^>]+>', '', overview[0]).strip().startswith('Overview'), path
+        assert '概览' in overview[0], path
         assert 'href="/docs"' not in nav, path
 
 

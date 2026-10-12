@@ -33,6 +33,7 @@ from . import (
     usersite,
 )
 from . import slots as slotstates
+from .bilingual import SCRIPT_CSP as BILINGUAL_CSP
 from .config import Config
 from .desired import desired_state, machine_hostname
 from .heartbeat import HeartbeatError, validate_heartbeat
@@ -61,9 +62,9 @@ HTML_HEADERS = {
     "Referrer-Policy": "no-referrer",
     # Images: data: only, which is the icon in the tab; default-src 'none'
     # blocked it on every page. Scripts: the one that says reset times in the
-    # viewer's zone, by its hash.
+    # viewer's zone and the authored bilingual language control, by their hashes.
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
-                                f"img-src data:; script-src {LOCAL_TIMES_CSP}"),
+                                f"img-src data:; script-src {LOCAL_TIMES_CSP} {BILINGUAL_CSP}"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 

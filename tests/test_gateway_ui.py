@@ -112,11 +112,11 @@ def test_endpoint_guidance_distinguishes_fixed_pool_and_gateway_retry_boundary(c
     c.store.create_gateway_key("alice", "Fixed", [c.one["id"]], now=NOW)
     c.store.create_gateway_key("alice", "Pool", [c.one["id"], c.two["id"]], now=NOW)
     html = gateway_ui.panel(c.store, c.cfg, c.account, "csrf", c.store.list_slots(held_by="alice"))
-    assert "Fixed · one fixed account" in html
-    assert "Pool · conversation routing" in html
+    assert "Fixed" in html and "One fixed account" in html
+    assert "Pool" in html and "Keep conversations together" in html
     assert "without one, requests use priority order" in html
     assert "X-CCFleet-Session" in html and "long idle period" in html
-    assert "recently failed accounts may be skipped briefly" in html
+    assert "briefly move behind other choices" in html
     assert "outcome is unknown" in html and "after response headers have been sent" in html
     assert "Applications may have their own retry behavior" in html
     assert "with no automatic switch to another account" in html
