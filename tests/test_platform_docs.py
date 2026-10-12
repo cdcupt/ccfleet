@@ -199,6 +199,16 @@ def test_repository_guides_include_the_new_controls_and_preserve_privacy_boundar
                         "ccfleet update --rollback", "ccfleet jobs stop JOB_ID"):
             assert command in source, (path.name, command)
         assert "not a" in source and "sandbox" in source
-        assert "BWH sees" in source and "Slot root can inspect" in source
         normalized = " ".join(source.split())
-        assert "no account pool" in normalized or "does not pool accounts" in normalized
+        if path.name == "README.html":
+            assert "The gateway can read model messages and replies" in source
+            assert "The gateway sees connection IP/transport metadata and model contents" in source
+            assert "Gateway and slot administrators can inspect or alter requests/responses" in source
+            assert "no credential pool or shared inference account" in normalized
+            assert "holder's own slots" in normalized
+        else:
+            assert "direct HTTPS gateway can read model requests" in source
+            assert "The broker sees the incoming IP and connection/routing metadata" in source
+            assert "Slot root can inspect or alter relayed requests and responses" in source
+            assert "does not pool accounts" in normalized
+            assert "specific own slot or several own slots in priority order" in normalized

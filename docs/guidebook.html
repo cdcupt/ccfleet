@@ -25,6 +25,12 @@ padding:10px 8px}th{font-size:13px;color:var(--muted)}
 </style>
 </head>
 <body><main class="wrap"><div class="card note" id="historical-guidebook"><strong>Historical hosted-terminal guidebook.</strong><p>The dated workflow below is retained for compatibility and operator reference; it is not the current primary native-local experience. Read <a href="local-relay.html">local Claude setup and migration</a>, <a href="../README.html">the current overview</a>, and <a href="index.html">the HTML library</a> first.</p></div>
+<div class="card note" id="fleet-hosting-update-20261012"><p><strong>Hosting update — October 12, 2026.</strong>
+The Fleet platform now runs on a dedicated DMIT VPS; slot execution remains on the
+existing slot machines. BWH names in the dated hosted-terminal instructions below
+refer to the former platform host. Those instructions remain a historical record;
+current connection and privacy guidance is in the native-local section below and
+the <a href="public-gateway.html">HTTPS gateway guide</a>.</p></div>
 <p class="eyebrow">CC Fleet · guidebook · 2026-09-28</p>
 <h1>Claude Code anywhere, one account per slot</h1>
 <p class="lead">CC Fleet hosts the original Claude Code CLI in a private Linux slot. A
@@ -32,10 +38,11 @@ small local command connects your terminal to it; the Claude credential and mode
 stay on the slot.</p>
 
 <section class="card note" id="simple-verification">
-<p class="eyebrow">Current native-local guidance · added 2026-09-30</p>
+<p class="eyebrow">Current native-local guidance · updated 2026-10-12</p>
 <h2>Simple readiness and response checks</h2>
 <p>This current-client check is separate from the historical hosted-terminal
-instructions below. With the current native-local client, run
+instructions below. Signed Fleet client <strong>0.2.5</strong> uses its saved HTTPS
+gateway configuration by default; the bridge remains a legacy transport. Run
 <code>ccfleet local --check</code> in your normal terminal, not inside Claude.</p>
 <p>It checks local Claude executable availability and the configured gateway or
 legacy bridge's slot readiness.
@@ -50,10 +57,10 @@ routing, anonymity or zero metadata disclosure. The no-tools instruction is not
 an enforced privacy safeguard. Native context or hooks can still exist, and context
 may include local OS or directory information. Do not ask Claude to print real IPs,
 locations or environment values just to check privacy: those outputs would enter
-the conversation. BWH sees connection metadata; with the direct HTTPS gateway,
-BWH also reads model request and response contents. Only the explicit
+the conversation. The Fleet platform sees connection metadata; the direct HTTPS
+gateway also reads model request and response contents. The explicit
 <code>--transport bridge</code> route keeps its inner SSH model stream encrypted
-through the BWH byte broker. For relayed model requests, Anthropic sees the slot's
+through the byte broker. For relayed model requests, Anthropic sees the slot's
 outbound IP. Other native/tool network connections are
 outside that statement.</p>
 <p><a href="https://ccfleet.daichenlab.com/docs/guide#simple-verification">Current customer guide</a>

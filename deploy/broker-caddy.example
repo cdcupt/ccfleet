@@ -1,8 +1,11 @@
 # Add this matcher/handler to the existing CC Fleet host, before its normal proxy.
+# Docker Caddy must join the same Compose network to resolve these service names.
+# Host-installed Caddy: replace ccfleetd:8110 with 127.0.0.1:8110 and
+# ccfleet-broker:8110 with 127.0.0.1:8113 from the Compose loopback bindings.
 # Validate and reload only the owning tenant's configuration under the edge runbook.
 @ccfleet_transport path /api/cli/connect /api/cli/status /api/cli/revoke
 handle @ccfleet_transport {
-    reverse_proxy ccfleet:8110 ccfleet-broker:8110 {
+    reverse_proxy ccfleetd:8110 ccfleet-broker:8110 {
         lb_policy first
         health_uri /healthz
         health_interval 10s
@@ -18,5 +21,5 @@ handle @ccfleet_transport {
     }
 }
 handle {
-    reverse_proxy ccfleet:8110
+    reverse_proxy ccfleetd:8110
 }

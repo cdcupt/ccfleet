@@ -498,7 +498,7 @@ PRIVACY = (
     "and structured metadata are removed.",
     "Native prompts and tool results can still contain paths, OS details and private content.",
     "Hooks, plugins, MCP servers and tools may connect directly from this computer.",
-    "BWH sees connection metadata, not the inner SSH stream; "
+    "The Fleet broker sees connection metadata, not the inner SSH stream; "
     "the slot administrator can inspect relayed content.",
     "A readiness check is not proof of an actual inference route or zero metadata disclosure.",
 )

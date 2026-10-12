@@ -72,7 +72,7 @@ def _parser() -> argparse.ArgumentParser:
     hold.add_argument("--unix-user", default=None,
                       help="their Linux login on it; defaults to the node's owner")
     access = node.add_parser(
-        "access", help="set the BWH-to-slot SSH endpoint used by the local ccfleet CLI")
+        "access", help="set the fleet server's SSH endpoint to a slot for the local ccfleet CLI")
     access.add_argument("node_id")
     access.add_argument("--host", default="", help="hostname or IP reachable from the server")
     access.add_argument("--port", type=int, default=22)

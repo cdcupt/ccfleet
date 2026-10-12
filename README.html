@@ -22,24 +22,39 @@ footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-si
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
 </style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="docs/index.html">HTML library</a><a href="README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#customer-setup-and-migration">Customer setup and migration</a></li><li class="level-2"><a href="#native-local-files-sessions-and-settings">Native local files, sessions and settings</a></li><li class="level-2"><a href="#diagnostics-signed-updates-and-background-work">Diagnostics, signed updates and background work</a></li><li class="level-2"><a href="#privacy-and-routing-scope">Privacy and routing scope</a></li><li class="level-2"><a href="#remote-terminal-compatibility">Remote-terminal compatibility</a></li><li class="level-2"><a href="#what-runs-where">What runs where</a></li><li class="level-2"><a href="#server-quickstart">Server quickstart</a></li><li class="level-2"><a href="#lifecycle-rules">Lifecycle rules</a></li><li class="level-2"><a href="#security-and-privacy-boundary">Security and privacy boundary</a></li><li class="level-2"><a href="#operations">Operations</a></li><li class="level-2"><a href="#development">Development</a></li><li class="level-2"><a href="#license">License</a></li></ol></nav></details></aside><main><h1 id="cc-fleet">CC Fleet</h1>
-<p>CC Fleet pairs each user with a dedicated Linux slot and that user's own Claude
-account. <strong>One holder, one slot, one Claude account:</strong> no account pool, account
-rotation, credential fallback, or shared inference account.</p>
+<p>CC Fleet pairs each user with dedicated Linux slots and that user's own Claude
+accounts. <strong>One holder, one slot, one bound Claude account:</strong> no credential pool
+or shared inference account. A gateway connection can explicitly select several
+of the holder's own slots; their credentials and subscription limits remain separate.</p>
+<p><strong>Hosting update (2026-10-12):</strong> the production website, gateway and broker
+now run on DMIT. Public URLs and existing device pairings are unchanged. The
+server and broker names below describe their roles, independent of hosting provider.</p>
 <p>The primary command, <code>ccfleet local</code>, runs the original Claude Code CLI on the
 user's computer. Files, tools, settings and conversation history stay in their
-native local locations. Supported model requests travel through the assigned
-slot; its Claude credential is never returned to the laptop or BWH.</p>
-<pre><code class="language-text">local original Claude Code → authenticated loopback bridge
-    → pinned SSH carried through the BWH WSS broker
-    → assigned slot's inference relay → Anthropic
+native local locations. With a saved gateway, the current signed 0.2.5 client sends
+supported model requests directly over HTTPS using a separate Fleet connection key:
+</p>
+<pre><code class="language-text">original Claude Code on laptop: files, tools, history
+    → direct HTTPS to the CC Fleet gateway
+    → restricted SSH to a selected slot's inference relay
+    → Anthropic
 </code></pre>
-<p>BWH cannot decrypt the inner SSH stream. The slot relay can read model requests
-and uses only its bound account. This is an inference relay, not proof of
-slot-only agent execution or metadata-free requests. Plain <code>ccfleet</code> remains a
-remote-terminal compatibility command with remote files and persistent tmux.</p>
+<p><strong>The gateway can read model messages and replies.</strong> It terminates the
+laptop's HTTPS connection and routes requests to a selected slot. The slot uses
+only its own bound account; its Claude credential is never returned to the laptop
+or gateway. This route starts no local HTTP listener and uses no laptop-side SSH.
+See <a href="docs/public-gateway.html">the current gateway guide</a> for account selection,
+safe failover, connection-key management and privacy.</p>
+<p><code>ccfleet local --transport bridge</code> retains the earlier local loopback bridge
+and pinned inner SSH carried through the WebSocket broker. Only that bridge and
+the remote-terminal compatibility path keep model content encrypted through the
+broker. Plain <code>ccfleet</code> remains a remote-terminal command with remote files and
+persistent tmux. These are distinct transport boundaries, not proof of slot-only
+agent execution or metadata-free requests.</p>
 <p>This implements the requested local-CLI/dedicated-slot relay workflow; it is not
 a claim of complete CC Host feature parity or zero metadata disclosure. See the
-<a href="docs/local-relay-verification.html">verified release scope and test evidence</a>.
+<a href="docs/public-gateway.html#verification">gateway release evidence</a> and
+<a href="docs/local-relay-verification.html">dated bridge release evidence</a>.
 The <a href="docs/reliability-privacy.html">reliability and privacy design</a> explains expiry-driven
 native renewal, identity minimization, verified TLS, and per-device transport.</p>
 <h2 id="customer-setup-and-migration">Customer setup and migration</h2>
@@ -54,8 +69,9 @@ Claude</strong> with your own account. That credential remains on the slot.</p>
 </code></pre>
 </li>
 <li>
-<p>Existing pairing and native Claude installation are reused. If the original
-local Claude CLI is missing, setup installs it from the fixed vendor URL.
+<p>Existing pairing and native Claude installation are reused. Setup creates or
+reuses the saved HTTPS gateway when available. If the original local Claude CLI
+is missing, setup installs it from the fixed vendor URL.
 Only if asked, obtain one fresh ten-minute pairing code from <strong>Connect this
 computer</strong> on <a href="https://ccfleet.daichenlab.com/account">your slot page</a>.</p>
 </li>
@@ -78,6 +94,10 @@ It preserves configuration/history and backs up shell settings when adjusting
 PATH. Legacy <code>ccfleet-connect</code> cleanup happens only after readiness succeeds.
 It does not automatically revoke an Anthropic credential: revoke an old
 setup-token yourself only if it is no longer used anywhere else.</p>
+<p>An already paired computer without a saved gateway can run
+<code>ccfleet gateway setup</code>. A saved gateway is the default for <code>ccfleet local</code>;
+a failed gateway readiness check does not silently start the bridge. Use
+<code>ccfleet local --transport bridge</code> only when choosing the compatibility route.</p>
 <p>Optional <code>--name &quot;Personal Mac&quot;</code> labels a new device; <code>--slot SLOT</code> chooses an
 existing pairing. Install-only (omit <code>--setup</code>), manual <code>ccfleet login</code>, and
 legacy <code>--migrate</code> remain compatibility options. No SSH command or slot Claude
@@ -145,21 +165,25 @@ ccfleet jobs stop JOB_ID
 ccfleet local --background --print &quot;Summarize this project&quot;
 </code></pre>
 <p>These are managed <strong>local print-mode jobs</strong>, not native detached <code>--bg</code>, remote
-agents or interactive attachable sessions. The supervisor owns the bridge after
-the starting terminal closes; the computer must stay running and connected. Use
+agents or interactive attachable sessions. Jobs use the configured default model
+route and pin the starting slot, so gateway backup switching is disabled for that
+job. The supervisor owns the native process and any bridge transport after the
+starting terminal closes; the computer must stay running and connected. Use
 an explicit <code>--resume NAME_OR_ID</code> or <code>--continue</code> for existing context. Passing
 native <code>--bg</code> / <code>--background</code> after <code>--</code> remains rejected.</p>
 <p>Jobs default to one hour (<code>--timeout</code>, maximum 24 hours) and four concurrent jobs
 (<code>--max-jobs</code>, maximum 16). Private stdout/stderr logs are each bounded to 4 MiB;
 they may contain sensitive content and are displayed only on request. Stop,
-timeout, revocation and supervisor loss close the owned process group/bridge;
+timeout, revocation and supervisor loss close the owned process group and transport;
 uncertain cleanup is reported as such. Deliberately detached tool processes are
 not sandbox-contained. Jobs never automatically restart or replay inference.</p>
 <p>Native settings/history, including an existing <code>CLAUDE_CONFIG_DIR</code>, are preserved
 by default. <code>--legacy-history</code> selects the earlier per-slot relay-preview profile
 without importing or deleting it. A temporary private settings overlay pins the
-loopback model route and nonce, clears conflicting provider/auth overrides, and
-disables supported optional telemetry without permanently editing native settings.</p>
+selected model route and authentication, clears conflicting provider/auth overrides,
+and disables supported optional telemetry without permanently editing native
+settings. Gateway launches use the saved HTTPS URL and Fleet connection key;
+explicit bridge launches use the loopback endpoint and launch-scoped nonce.</p>
 <p>The previous live-folder mount is retired. <code>ccfleet local --disconnect</code> remains
 an explicit cleanup action for it; <code>--reset-link</code> is retired. Earlier snapshot
 commands are only for recovery. See <a href="docs/local-relay.html">local relay and migration</a>
@@ -176,14 +200,16 @@ See <a href="docs/local-relay.html#management-mcp">setup and disclosure boundari
 <p>The relay removes selected headers and the top-level structured <code>metadata</code> field.
 It does not redact arbitrary prompts or tool results. Native system prompts can
 include OS, working-directory and environment details; file contents and paths
-can identify users and reach the slot and Anthropic. Do not claim fingerprint-free
-requests or that Anthropic sees only slot information.</p>
+can identify users and reach the gateway, selected slot and Anthropic. Do not claim
+fingerprint-free requests or that Anthropic sees only slot information.</p>
 <p>Only supported model endpoints use the relay. MCP servers, hooks, plugins, shell
 tools, updates and other native CLI services can connect directly from the
 laptop. Optional telemetry controls are not an all-traffic firewall or anonymity
-guarantee. BWH sees connection IP/transport metadata. Slot root can inspect or
-alter requests/responses, which can influence local tool actions. Native local
-permissions and trust in the slot host remain important.</p>
+guarantee. The gateway sees connection IP/transport metadata and model contents.
+Gateway and slot administrators can inspect or alter requests/responses, which
+can influence local tool actions. In the explicit SSH bridge, the broker sees
+connection metadata but cannot decrypt the inner SSH stream. Native local
+permissions and trust in the gateway and slot hosts remain important.</p>
 <p>Relay access requires upgraded nodes and operator activation. A previous remote
 terminal or live-mount deployment does not establish relay availability or
 provider authorization; validate the canary and actual deployment separately.
@@ -201,31 +227,51 @@ ccfleet restart --session research --model opus --effort max --mode auto
 remote <code>restart</code> terminates that session before replacing it.</p>
 <h2 id="what-runs-where">What runs where</h2>
 <ul>
-<li><code>laptop/ccfleet</code> starts native local Claude and a launch-scoped loopback bridge;
-it also retains the remote-terminal compatibility commands.</li>
-<li><code>ccfleet_agent/inference_client.py</code> implements the authenticated local model
-transport; <code>ccfleet_agent/local_relay.py</code> handles fixed-upstream slot inference.</li>
-<li><code>ccfleetd/</code> handles the website, pairing, device authorization, operational state
-and encrypted byte broker, not plaintext model bodies or slot credentials.</li>
+<li><code>laptop/ccfleet</code> starts native local Claude using the saved direct HTTPS
+gateway. It retains the explicit local bridge and remote-terminal compatibility
+commands.</li>
+<li><code>ccfleetd/gateway.py</code> handles authenticated Messages API requests and safe
+routing among explicitly selected own slots; it can read model bodies and replies.</li>
+<li><code>ccfleet_agent/inference_client.py</code> implements the legacy authenticated local
+bridge; <code>ccfleet_agent/local_relay.py</code> handles fixed-upstream slot inference.</li>
+<li><code>ccfleetd/</code> also handles the website, pairing, device authorization,
+operational state and encrypted byte broker. Slot Claude credentials stay on
+their slots; the broker's opaque SSH boundary does not apply to the HTTPS gateway.</li>
 <li><code>ccfleet_agent/machine.py</code> manages slot users and root-owned device keys.</li>
 <li><code>node/slot-entry.sh</code> dispatches only fixed protocols with forwarding disabled.</li>
 <li><code>project_files.py</code>, <code>project_access.py</code>, and the live-folder helpers retain
 legacy recovery/cleanup responsibilities; they are not the local agent.</li>
 </ul>
 <h2 id="server-quickstart">Server quickstart</h2>
-<p>Run the server behind TLS:</p>
+<p>For a new deployment, run the primary <code>ccfleetd</code> service behind TLS:</p>
 <pre><code class="language-bash">git clone https://github.com/cdcupt/ccfleet.git
 cd ccfleet
 cp deploy/ccfleetd.env.example deploy/ccfleetd.env
 # Set CCFLEET_ADMIN_TOKEN, CCFLEET_PUBLIC_URL, Google OAuth and cookie secrets.
 docker compose -f deploy/docker-compose.yml up -d --build
 </code></pre>
+<p>For host-installed Caddy, adapt <code>deploy/Caddyfile.example</code> with the public
+hostname. It forwards HTTPS traffic to the service's loopback port
+<code>127.0.0.1:8110</code>. Validate the active host Caddy configuration, then reload the
+host Caddy service. Use DNS-only records for direct gateway HTTPS. The optional
+secondary byte-broker overlay is <code>deploy/broker-compose.yml</code>.
+<code>deploy/broker-caddy.example</code> uses Docker service names and requires Caddy
+to join the same private Compose network. For host-installed Caddy, adapt that
+example's upstreams to <code>127.0.0.1:8110</code> for the primary and
+<code>127.0.0.1:8113</code> for the broker. Keep the named Fleet access/error log
+discard in either topology.</p>
+<p>Run server administration commands inside the running primary container so they
+use its live environment and mounted SQLite database. The examples below use the
+repository Compose layout. For an existing deployment, use its active Compose
+file and project; see <a href="docs/runbooks.html#move-the-fleet-platform">the platform
+migration runbook</a>. A separate host-native CLI invocation can otherwise create
+or modify a different local database.</p>
 <p>The bare public URL serves the product website. <code>/account</code> is the customer
 page; <code>/admin</code> is the operator console. <code>CCFLEET_ADMIN_HOST</code> can move the
 console to a separate hostname.</p>
 <p>Create a shared machine and its slots:</p>
-<pre><code class="language-bash">ccfleetd node add pool-1 --owner ops --region us-west
-ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node add pool-1 --owner ops --region us-west
+docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
 </code></pre>
 <p>On a fresh Ubuntu machine, first install base hardening and then the shared
 machine agent:</p>
@@ -240,18 +286,20 @@ curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-se
       --node pool-1 \
       --token &lt;node-token&gt;
 </code></pre>
-<p>Configure the fixed endpoint the BWH server uses to reach that machine. Copy
-the node's public SSH host key to a file on the server first:</p>
-<pre><code class="language-bash">ccfleetd node access pool-1 \
-  --host &lt;address-reachable-from-bwh&gt; \
+<p>Configure the fixed endpoint the CC Fleet server uses to reach that machine. Copy
+the node's public SSH host key over an authenticated operator channel to a
+readable file inside the primary container, for example
+<code>/data/pool-1-ssh_host_ed25519_key.pub</code>:</p>
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node access pool-1 \
+  --host &lt;address-reachable-from-server&gt; \
   --port 22 \
-  --host-key-file /secure/path/pool-1-ssh_host_ed25519_key.pub
+  --host-key-file /data/pool-1-ssh_host_ed25519_key.pub
 </code></pre>
-<p>Only the broker needs network access to the node's SSH port. The customer uses
+<p>Only the CC Fleet server needs network access to the node's SSH port. The customer uses
 the public HTTPS/WSS service and never receives the node address.</p>
 <p>Grant a signed-in customer an allowance:</p>
-<pre><code class="language-bash">ccfleetd account quota alice@example.com 1
-ccfleetd account role you@example.com admin
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd account quota alice@example.com 1
+docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd account role you@example.com admin
 </code></pre>
 <h2 id="lifecycle-rules">Lifecycle rules</h2>
 <ul>
@@ -271,6 +319,14 @@ session. New sessions use the installed version.</li>
 <p>The public site documents the current product at <code>/</code>, <code>/docs/guide</code>,
 <code>/docs/how-it-works</code>, <code>/docs/terms</code> and <code>/privacy</code>.</p>
 <h2 id="security-and-privacy-boundary">Security and privacy boundary</h2>
+<p>For the current HTTPS gateway, TLS protects each connection in transit. The
+gateway decrypts model requests and replies and reaches the selected slot through
+restricted, host-pinned SSH. The Fleet connection key is independently revocable
+and distinct from the slot's Claude credential. See
+<a href="docs/public-gateway.html#privacy">gateway privacy</a> and
+<a href="docs/public-gateway.html#keys">connection-key management</a>.</p>
+<p>The following controls describe the explicit SSH bridge and remote-terminal
+compatibility path:</p>
 <ul>
 <li>The outer connection is TLS/WSS to the broker.</li>
 <li>The inner OpenSSH connection is encrypted end-to-end and pins the slot host
@@ -311,8 +367,12 @@ unit; it is not an alternative product mode.</p>
 </thead>
 <tbody>
 <tr>
+<td><code>docs/public-gateway.html</code></td>
+<td>current HTTPS model route, account selection and privacy</td>
+</tr>
+<tr>
 <td><code>docs/design.html</code></td>
-<td>architecture and trust boundaries</td>
+<td>historical remote-terminal architecture and trust boundaries</td>
 </tr>
 <tr>
 <td><code>docs/runbooks.html</code></td>

@@ -10,6 +10,18 @@ services:
       - "127.0.0.1:8110:8110"
     volumes:
       - ccfleet-data:/data
+      # Optional Messages gateway: provision a separate inference-only SSH key
+      # before enabling CCFLEET_GATEWAY_ENABLED in ccfleetd.env. The directory
+      # must belong to service UID 10001 (0700), with its private key 0600.
+      # Set CCFLEET_GATEWAY_SSH_KEY_PATH=/run/ccfleet-secrets/gateway_ed25519
+      # and the matching public key in the environment; never store private
+      # key contents in the environment, image or repository. Then uncomment:
+      # - /srv/ccfleet/gateway-secrets:/run/ccfleet-secrets:ro
+    mem_limit: 768m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
 volumes:
   ccfleet-data:

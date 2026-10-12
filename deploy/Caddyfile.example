@@ -1,4 +1,17 @@
-# TLS in front of the dashboard. ccfleetd itself listens on loopback only.
+# Host-native Caddy. The Compose example publishes ccfleetd only on host loopback.
+# A Docker Caddy must join the same private Compose network and proxy to
+# ccfleetd:8110 instead; its own 127.0.0.1 is not the application container.
+{
+    log fleet_errors {
+        include http.log.error.fleet
+        output discard
+    }
+}
+
 fleet.example.com {
+    log fleet {
+        output discard
+    }
+    log_name fleet
     reverse_proxy 127.0.0.1:8110
 }

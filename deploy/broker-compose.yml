@@ -1,5 +1,7 @@
-# Add with: docker compose -f docker-compose.yml -f src/deploy/broker-compose.yml up -d
-# Same-host process resilience; physical-host redundancy requires another broker host.
+# From the repository root, add this overlay to deploy/docker-compose.yml:
+# docker compose -f deploy/docker-compose.yml -f deploy/broker-compose.yml up -d --build
+# Same-host process resilience, not physical-host redundancy.
+# Both services use the project's default private network and the SAME SQLite volume.
 services:
   ccfleet-broker:
     image: ccfleetd:local
@@ -8,12 +10,12 @@ services:
     env_file: ccfleetd.env
     environment:
       CCFLEET_BROKER_ONLY: "1"
+      CCFLEET_GATEWAY_ENABLED: "false"
+      CCFLEET_PUBLIC_MACHINE_METRICS_ENABLED: "false"
     ports:
       - "127.0.0.1:8113:8110"
     volumes:
       - ccfleet-data:/data
-    networks:
-      - 9relay_default
     mem_limit: 128m
     cpus: 0.25
     logging:

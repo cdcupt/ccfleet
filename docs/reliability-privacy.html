@@ -21,16 +21,23 @@ tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-lef
 footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
-</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#1-identity-minimization-not-captured-identity-replay">1. Identity minimization, not captured-identity replay</a></li><li class="level-2"><a href="#2-keep-standard-verified-outgoing-tls">2. Keep standard, verified outgoing TLS</a></li><li class="level-2"><a href="#3-one-credential-writer-native-claude">3. One credential writer: native Claude</a></li><li class="level-2"><a href="#4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</a></li><li class="level-2"><a href="#5-local-controls-diagnostics-and-supervised-jobs">5. Local controls, diagnostics and supervised jobs</a></li><li class="level-2"><a href="#6-authenticated-client-release-activation">6. Authenticated client release activation</a></li><li class="level-2"><a href="#boundaries-and-acceptance-evidence">Boundaries and acceptance evidence</a></li></ol></nav></details></aside><main><h1 id="long-term-account-reliability-and-privacy">Long-term account reliability and privacy</h1>
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#1-identity-minimization-not-captured-identity-replay">1. Identity minimization, not captured-identity replay</a></li><li class="level-2"><a href="#2-keep-standard-verified-outgoing-tls">2. Keep standard, verified outgoing TLS</a></li><li class="level-2"><a href="#3-one-credential-writer-native-claude">3. One credential writer: native Claude</a></li><li class="level-2"><a href="#4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable gateway and bridge access</a></li><li class="level-2"><a href="#5-local-controls-diagnostics-and-supervised-jobs">5. Local controls, diagnostics and supervised jobs</a></li><li class="level-2"><a href="#6-authenticated-client-release-activation">6. Authenticated client release activation</a></li><li class="level-2"><a href="#boundaries-and-acceptance-evidence">Boundaries and acceptance evidence</a></li></ol></nav></details></aside><main><h1 id="long-term-account-reliability-and-privacy">Long-term account reliability and privacy</h1>
 <p>This records the engineering choices for the native local Claude workflow.
 It is not a claim of complete CC Host parity, permanent account availability,
 provider approval, or zero metadata disclosure.</p>
+<p>The current signed 0.2.5 client uses a saved <a href="public-gateway.html">direct
+HTTPS gateway</a>: original local Claude sends supported model requests to the
+gateway, which reaches a selected own slot through restricted, host-pinned SSH.
+The gateway can read model messages and replies; the slot's Claude credential
+stays on the slot. This default path starts no local HTTP listener or laptop-side
+SSH. The explicit <code>ccfleet local --transport bridge</code> and remote-terminal
+compatibility paths retain the earlier inner SSH encryption through the broker.</p>
 <h2 id="1-identity-minimization-not-captured-identity-replay">1. Identity minimization, not captured-identity replay</h2>
-<p>Both ends of the model bridge allowlist semantic request headers and remove
+<p>The gateway and slot relay allowlist semantic request headers and remove
 top-level <code>metadata</code> and the explicitly enumerated direct identity fields.
 Unknown headers, including local SDK/runtime fingerprint headers, are not sent
 upstream. The slot identifies its relay truthfully as <code>ccfleet-slot-relay/2</code>.</p>
-<p>Client 0.2.2 also normalizes allowed header values independently before SSH
+<p>The earlier bridge implementation in client 0.2.2 also normalizes allowed header values independently before SSH
 and before the slot's upstream request. JSON Content-Type is canonical;
 Accept keeps supported JSON/SSE/wildcard media ranges and valid quality values,
 not unrelated parameters. Version dates and bounded beta feature lists must be
@@ -52,7 +59,10 @@ This trades detailed provider diagnostics for a smaller error-reflection surface
 <h2 id="2-keep-standard-verified-outgoing-tls">2. Keep standard, verified outgoing TLS</h2>
 <p>The slot uses Python HTTPS with certificate and hostname verification to the fixed
 <code>api.anthropic.com</code> destination. Caller-selected upstreams, redirects, proxy
-environment routing and account fallback are not supported. There is no evidence
+environment routing are not supported. Each slot relay uses only its own bound
+account. Gateway priority or sticky routing can try another explicitly selected
+own slot only under its documented safe-failover conditions; it never chooses an
+unselected or shared account. There is no evidence
 here that switching to Node/undici would improve account survival or privacy.
 Either implementation can use secure TLS; neither proves absence of identifying
 information in the application payload. No TLS-fingerprint equivalence is claimed.</p>
@@ -121,7 +131,16 @@ missing, invalid or expired credentials cancel the stream. Immediately before
 the sole upstream POST, the relay rereads the credential after connecting TLS.
 It does not retry a POST to recover from an authentication race. Every request
 still has a fixed overall deadline.</p>
-<h2 id="4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable, pinned client transport</h2>
+<h2 id="4-keep-individually-revocable-pinned-client-transport">4. Keep individually revocable gateway and bridge access</h2>
+<p>A gateway connection uses its own Fleet key in private local configuration.
+The server stores a hash, and the slot's Claude credential is not returned to the
+gateway or computer. The key can be revoked without changing the slot's Claude
+login. Only selected held slots are eligible; release or account transitions
+invalidate access. Priority/sticky routing and supported explicit rejection or
+known pre-send failure can use an eligible selected backup. An uncertain send is
+not replayed, and routing stops switching after public response headers start.
+See <a href="public-gateway.html#keys">gateway keys</a> and
+<a href="public-gateway.html#failover">safe failover</a> for the current contract.</p>
 <p>Hosted slots automatically validate a changed native binary, native version,
 relay implementation or Python/OpenSSL runtime. Checks cover the native
 authentication interface, a fresh isolated native usage observation, relay v2
@@ -149,7 +168,9 @@ digests, raw native output and arbitrary error strings are excluded from those
 surfaces. Legacy servers without these observations remain supported. The client
 does not gate or replay an otherwise valid model request because a usage-parser
 check is pending.</p>
-<p>Client 0.2.3 gives one nonblocking loop exclusive ownership of the WebSocket TLS
+<p>The following bridge transport details apply to explicit
+<code>--transport bridge</code> and remote-terminal compatibility, rather than the direct
+HTTPS gateway. Client 0.2.3 gives one nonblocking loop exclusive ownership of the WebSocket TLS
 socket. Partial frames, short writes, TLS readiness changes and pipe backpressure
 are bounded; sender failure and pipe hangup wake cancellation. TLS operations are
 not split across concurrent reader and writer threads. Authenticated upgrades,
@@ -161,7 +182,7 @@ consume those model permits. Overload returns a fixed JSON category and retry
 hint; no request body or secret is reflected, and the bridge does not replay a
 model POST.</p>
 <p>The local bridge uses an ephemeral authentication nonce. Each computer has its
-own paired device token and SSH key; BWH carries the pinned inner SSH stream and
+own paired device token and SSH key; the broker carries the pinned inner SSH stream and
 does not receive plaintext model content or the slot's OAuth credential.
 This preserves a concrete confidentiality boundary and individual revocation,
 without replacing it with a shared secret that every computer must rotate.</p>
@@ -179,7 +200,7 @@ operator opt-out denies managed gates immediately. Legacy manual gates remain
 compatible until explicitly disabled or taken under managed policy. See
 <a href="local-relay.html#operator-verification">operator activation</a>.</p>
 <h2 id="5-local-controls-diagnostics-and-supervised-jobs">5. Local controls, diagnostics and supervised jobs</h2>
-<p>The 0.2.1 follow-up scopes HTTP/1.1 to a WebSocket upgrade response, leaving
+<p>For bridge compatibility, the 0.2.1 follow-up scopes HTTP/1.1 to a WebSocket upgrade response, leaving
 ordinary REST connection-close behavior unchanged. Optional foreground SSH reuse
 now has an isolated live group owner and anonymous parent-liveness pipe so
 parent-only hard kill terminates its owned transport. This is not a promise to
@@ -205,8 +226,11 @@ device fingerprints or local paths are added to those aggregates. Existing
 seven-day slot storage and historical heartbeat retention still apply.</p>
 <p>Managed background jobs are local native print-mode work, not vendor-native
 detached agents or attachable remote sessions. Each supervisor has private
-authenticated local control, periodically checks device authorization and keeps
-the model bridge alive. Its lifetime guardian stays in the owned process group
+authenticated local control and periodically checks device authorization. It owns
+the native process and selected model transport after the starting terminal closes;
+the computer must remain running and connected. Gateway jobs use the configured
+route pinned to their starting slot; an older configuration without a gateway
+keeps its model bridge alive. Its lifetime guardian stays in the owned process group
 through foreground exit; cleanup does not signal a PID loaded from disk. Logs
 are bounded and private, but may contain sensitive user data. Normal reports and
 support exports exclude prompts, project paths and log contents.</p>
@@ -246,7 +270,9 @@ the running process. This is opt-in disclosure of the stated numeric observation
 not a claim that no information reaches a model.</p>
 <p>Prompts, system context, paths and tool results can still contain private data.
 MCP, hooks, shell tools and other native services can use their own networking.
-BWH sees connection metadata; slot root can inspect decrypted requests. The
+The gateway can read model contents and connection metadata; slot root can inspect
+decrypted requests. For explicit bridge compatibility, the broker sees connection
+metadata but cannot decrypt the inner SSH stream. The
 working directory is not a filesystem sandbox, especially in bypass mode.</p>
 <p>Tests use synthetic credentials and controlled peers to cover refresh scheduling,
 atomic rotation observation, account-transition races, lock contention, interrupted
