@@ -488,4 +488,4 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float) -> st
         + "</div>"
         + KEY
     )
-    return _shell("status", body, REFRESH, STATUS_CSS, viewer=viewer)
+    return _shell("status", body, REFRESH, STATUS_CSS, viewer=viewer, here="/status")

@@ -564,6 +564,8 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 .topbar-in{padding:10px 16px;gap:6px 12px}
 .doc-nav{order:3;flex:1 0 100%;margin:0 -8px}
 .doc-nav a{padding:6px 8px;font-size:13.5px}
+.site .topbar .doc-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+text-align:center}
 .site .page{padding-block:24px 48px;padding-left:16px;padding-right:16px}
 .card.slot{scroll-margin-top:124px}
 .slot-head,.slot-body{padding-left:16px;padding-right:16px}
@@ -575,7 +577,8 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 
 #: The pages anybody can read, in the order the bar on top shows them.
 NAV = (("/", "Overview"), ("/docs/guide", "Guide"),
-       ("/docs/how-it-works", "How it works"), ("/privacy", "Privacy"),
+       ("/docs/how-it-works", "How it works"), ("/status", "Status"),
+       ("/privacy", "Privacy"),
        ("/docs/terms", "Terms"))
 def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
            here: str = "", viewer: Optional[Viewer] = None, door: bool = False,
@@ -589,7 +592,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
     at more than one address names the one to keep in ``canonical``.
     """
     nav_zh = {"Overview": "概览", "Guide": "使用指南", "How it works": "工作原理",
-              "Privacy": "隐私", "Terms": "条款"}
+              "Status": "服务状态", "Privacy": "隐私", "Terms": "条款"}
     links = "".join(f'<a href="{path}"{_HERE if path == here else ""}>'
                     f'{label(name, nav_zh[name], inline=True)}</a>' for path, name in NAV)
     corner = (viewer.menu() if viewer is not None else "" if door else
