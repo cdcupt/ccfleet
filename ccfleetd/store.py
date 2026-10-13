@@ -707,6 +707,9 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise StoreError(f"node {node_id!r} already exists") from exc
+            # Re-registering an internal id creates new hardware lineage and
+            # a new public number; never adopt the removed node's uptime.
+            conn.execute("DELETE FROM status_minutes WHERE component = ?", (f"node:{node_id}",))
             self._save_public_status_high_water(conn, number, now=now)
         return token
 

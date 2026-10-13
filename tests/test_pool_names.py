@@ -239,6 +239,47 @@ def test_corrupt_public_sequence_fails_without_assigning_a_reused_number(store):
     assert store.get_node("new") is None
 
 
+def test_reregistered_node_starts_empty_history_without_changing_group_or_site(store):
+    store.add_node("personal-id", "operator")
+    old_number = store.get_node("personal-id")["public_status_number"]
+    for component, state in (("node:personal-id", "red"), ("machines", "green"), ("site", "yellow")):
+        store.count_status(component, state, 2_000_000_000.0, grace=2)
+    shared_history = [row for row in store.status_minutes(since_day="1970-01-01")
+                      if row["component"] != "node:personal-id"]
+    store.remove_node("personal-id")
+    store.add_node("personal-id", "operator")
+    assert store.get_node("personal-id")["public_status_number"] > old_number
+    assert store.status_minutes(since_day="1970-01-01") == shared_history
+
+
+def test_duplicate_node_insert_preserves_its_history_and_shared_counts(store):
+    store.add_node("personal-id", "operator")
+    for component in ("node:personal-id", "machines", "site"):
+        store.count_status(component, "red", 2_000_000_000.0, grace=2)
+    before = store.status_minutes(since_day="1970-01-01")
+    node = store.get_node("personal-id")
+    with pytest.raises(StoreError, match="already exists"):
+        store.add_node("personal-id", "operator")
+    assert store.status_minutes(since_day="1970-01-01") == before
+    assert store.get_node("personal-id") == node
+
+
+def test_failed_node_transaction_restores_deleted_orphan_history_and_sequence(store):
+    for component in ("node:personal-id", "machines", "site"):
+        store.count_status(component, "red", 2_000_000_000.0, grace=2)
+    before = store.status_minutes(since_day="1970-01-01")
+    store._conn.execute("CREATE TRIGGER refuse_sequence BEFORE UPDATE ON settings "
+                        "WHEN NEW.key = 'public_status_number_high_water' "
+                        "BEGIN SELECT RAISE(ABORT, 'synthetic sequence failure'); END")
+    store._conn.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="synthetic sequence failure"):
+        store.add_node("personal-id", "operator")
+    assert store.get_node("personal-id") is None
+    assert store.status_minutes(since_day="1970-01-01") == before
+    assert store._conn.execute("SELECT value FROM settings WHERE key = ?",
+                               (PUBLIC_STATUS_SEQUENCE_KEY,)).fetchone()[0] == "0"
+
+
 def test_free_display_uses_only_a_valid_pool_alias():
     assert names.display({"id": "old", "state": "free", "name": "private", "pool_name": "pool-3"}) == "pool-3"
     assert names.display({"id": "old", "state": "free", "pool_name": "private-name"}) == "old"

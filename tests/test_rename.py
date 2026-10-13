@@ -164,6 +164,47 @@ def test_renaming_a_node_is_invisible_to_the_machine(st):
     assert machine_hears(st, "erik-2") == heard
 
 
+def test_node_rename_preserves_public_number_and_prefixed_uptime_history(st):
+    fleet(st)
+    st.count_status("node:old-m", "green", NOW, grace=2)
+    st.count_status("node:old-m", "yellow", NOW + 60, grace=2)
+    st.count_status("node:bystander", "red", NOW, grace=2)
+    before = st.status_minutes(since_day="1970-01-01")
+    number = st.get_node("old-m")["public_status_number"]
+    st.rename_node("old-m", "erik-2")
+    assert st.get_node("erik-2")["public_status_number"] == number
+    expected = [{**row, "component": "node:erik-2"}
+                if row["component"] == "node:old-m" else row for row in before]
+    assert st.status_minutes(since_day="1970-01-01") == sorted(
+        expected, key=lambda row: (row["component"], row["day"]))
+
+
+def test_node_rename_replaces_orphan_destination_uptime_without_adopting_it(st):
+    fleet(st)
+    st.count_status("node:old-m", "green", NOW, grace=2)
+    own = st.status_minutes(since_day="1970-01-01")
+    st.count_status("node:gone", "red", NOW, grace=2)
+    st.count_status("node:gone", "red", NOW + 60, grace=2)
+    st.rename_node("old-m", "gone")
+    assert st.status_minutes(since_day="1970-01-01") == [
+        {**row, "component": "node:gone"} for row in own]
+
+
+def test_late_node_rename_failure_restores_both_prefixed_histories_and_public_number(st):
+    fleet(st)
+    st.count_status("node:old-m", "green", NOW, grace=2)
+    st.count_status("node:gone", "red", NOW, grace=2)
+    node = st.get_node("old-m")
+    minutes = st.status_minutes(since_day="1970-01-01")
+    st._conn.execute("CREATE TRIGGER refuse_rename BEFORE UPDATE ON logins "
+                     "BEGIN SELECT RAISE(ABORT, 'synthetic late failure'); END")
+    st._conn.commit()
+    with pytest.raises(Exception, match="synthetic late failure"):
+        st.rename_node("old-m", "gone")
+    assert st.get_node("old-m") == node and st.get_node("gone") is None
+    assert st.status_minutes(since_day="1970-01-01") == minutes
+
+
 @pytest.mark.parametrize("new", ["", "x", "Erik-2", "erik_2", "erik 2", "-erik", "slot:x",
                                  "a" * 41])
 def test_a_node_name_the_node_id_rule_refuses_is_refused(st, new):
