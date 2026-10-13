@@ -21,10 +21,102 @@ tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-lef
 footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
-</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#naming-machines-and-slots">Naming machines and slots</a></li><li class="level-2"><a href="#add-an-owner">Add an owner</a></li><li class="level-2"><a href="#add-a-shared-machine">Add a shared machine</a></li><li class="level-2"><a href="#timers-never-run-after-setup">Timers never run after setup</a></li><li class="level-2"><a href="#credentials_missing-or-token_expired">credentials_missing or token_expired</a></li><li class="level-2"><a href="#token_stale">token_stale</a></li><li class="level-2"><a href="#no_heartbeat">no_heartbeat</a></li><li class="level-2"><a href="#version_mismatch">version_mismatch</a></li><li class="level-2"><a href="#staged-upgrade-of-the-fleet">Staged upgrade of the fleet</a></li><li class="level-2"><a href="#egress_changed">egress_changed</a></li><li class="level-2"><a href="#disk_high">disk_high</a></li><li class="level-2"><a href="#remote_control_down-legacy-owner-nodes-only">remote_control_down (legacy owner nodes only)</a></li><li class="level-2"><a href="#slot_wipe_faileduser">slot_wipe_failed:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_occupieduser">slot_occupied:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_missinguser">slot_missing:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_provision_faileduser">slot_provision_failed:&lt;user&gt;</a></li><li class="level-2"><a href="#quota_high_session-or-quota_high_week">quota_high_session or quota_high_week</a></li><li class="level-2"><a href="#account_elsewhere-or-account_elsewhereuser">account_elsewhere or account_elsewhere:&lt;user&gt;</a></li><li class="level-2"><a href="#account_changeduser">account_changed:&lt;user&gt;</a></li><li class="level-2"><a href="#a-holder-wants-their-slot-on-another-claude-account">A holder wants their slot on another Claude account</a></li><li class="level-2"><a href="#rebuild-a-node">Rebuild a node</a></li><li class="level-2"><a href="#rename-a-machine">Rename a machine</a></li><li class="level-2"><a href="#count-an-owners-own-node-as-their-slot-legacy">Count an owner&#x27;s own node as their slot (legacy)</a></li><li class="level-2"><a href="#keep-a-machine-for-one-account">Keep a machine for one account</a></li><li class="level-2"><a href="#remove-an-owner">Remove an owner</a></li><li class="level-2"><a href="#rotate-the-admin-token">Rotate the admin token</a></li><li class="level-2"><a href="#quarterly">Quarterly</a></li></ol></nav></details></aside><main><h1 id="runbooks">Runbooks</h1>
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide">Current user guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#move-the-fleet-platform">Back up, move or recover the Fleet server</a></li><li class="level-2"><a href="#naming-machines-and-slots">Naming machines and slots</a></li><li class="level-2"><a href="#add-an-owner">Add an owner</a></li><li class="level-2"><a href="#add-a-shared-machine">Add a shared machine</a></li><li class="level-2"><a href="#timers-never-run-after-setup">Timers never run after setup</a></li><li class="level-2"><a href="#credentials_missing-or-token_expired">credentials_missing or token_expired</a></li><li class="level-2"><a href="#token_stale">token_stale</a></li><li class="level-2"><a href="#no_heartbeat">no_heartbeat</a></li><li class="level-2"><a href="#version_mismatch">version_mismatch</a></li><li class="level-2"><a href="#staged-upgrade-of-the-fleet">Staged upgrade of the fleet</a></li><li class="level-2"><a href="#egress_changed">egress_changed</a></li><li class="level-2"><a href="#disk_high">disk_high</a></li><li class="level-2"><a href="#remote_control_down-legacy-owner-nodes-only">remote_control_down (legacy owner nodes only)</a></li><li class="level-2"><a href="#slot_wipe_faileduser">slot_wipe_failed:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_occupieduser">slot_occupied:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_missinguser">slot_missing:&lt;user&gt;</a></li><li class="level-2"><a href="#slot_provision_faileduser">slot_provision_failed:&lt;user&gt;</a></li><li class="level-2"><a href="#quota_high_session-or-quota_high_week">quota_high_session or quota_high_week</a></li><li class="level-2"><a href="#account_elsewhere-or-account_elsewhereuser">account_elsewhere or account_elsewhere:&lt;user&gt;</a></li><li class="level-2"><a href="#account_changeduser">account_changed:&lt;user&gt;</a></li><li class="level-2"><a href="#a-holder-wants-their-slot-on-another-claude-account">A holder wants their slot on another Claude account</a></li><li class="level-2"><a href="#rebuild-a-node">Rebuild a node</a></li><li class="level-2"><a href="#rename-a-machine">Rename a machine</a></li><li class="level-2"><a href="#count-an-owners-own-node-as-their-slot-legacy">Count an owner&#x27;s own node as their slot (legacy)</a></li><li class="level-2"><a href="#keep-a-machine-for-one-account">Keep a machine for one account</a></li><li class="level-2"><a href="#remove-an-owner">Remove an owner</a></li><li class="level-2"><a href="#rotate-the-admin-token">Rotate the admin token</a></li><li class="level-2"><a href="#quarterly">Quarterly</a></li></ol></nav></details></aside><main><h1 id="runbooks">Runbooks</h1>
 <p>Short procedures for the situations the dashboard will put in front of you.
 Commands marked <em>node</em> run as the owner on the node; <em>server</em> runs where
 <code>ccfleetd</code> lives.</p>
+<p><strong>Hosting update (2026-10-12):</strong> production server commands now run on
+the DMIT deployment. Use the current operator access details; public URLs and
+existing device pairings are unchanged.</p>
+<h2 id="move-the-fleet-platform">Back up, move or recover the Fleet server</h2>
+<p>The website, HTTPS gateway and internal broker form one deployment. The primary
+and broker share the <strong>same SQLite file and volume</strong>; this is not a
+replica on a second host. Only the primary runs monitoring and outage email,
+but broker authorization and revocation can also write to the shared database.
+Keep one authoritative writable deployment.</p>
+<p><strong>Use the live service environment.</strong> A <em>server</em> CLI command below
+means the CLI inside the current primary, with its actual environment and
+<code>CCFLEET_DB</code>. In this repository's Compose example:</p>
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec -T ccfleetd ccfleetd node list
+</code></pre>
+<p>Use the actual project name, service name and Compose files for your deployment. A native
+installation must load the running service's environment. Do not accidentally
+run a host CLI against its default path or a spare copied database.</p>
+<p><strong>Back up SQLite safely.</strong> A live database uses WAL: recent commits
+may be in <code>-wal</code>, so copying only the live <code>.db</code> is unsafe.
+Use SQLite's online backup API, check integrity, and keep the completed backup
+private. This example creates a unique <code>0600</code> backup as the service user:</p>
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec -T ccfleetd python - &lt;&lt;'PY'
+import os
+import sqlite3
+import time
+
+os.umask(0o077)
+live_path = os.environ["CCFLEET_DB"]
+backup_path = live_path + ".backup-" + str(time.time_ns())
+source = sqlite3.connect("file:" + live_path + "?mode=ro", uri=True)
+destination = sqlite3.connect(backup_path)
+try:
+    source.backup(destination)
+    if destination.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+        raise SystemExit("backup integrity check failed")
+finally:
+    destination.close()
+    source.close()
+print(backup_path)
+PY
+</code></pre>
+<p>Copy completed backups to a protected off-host location and compare checksums.
+Backups, environment files and private keys never belong in the repository or
+public reports. Package public reference HTML as regular,
+single-link <code>0644</code> files and verify the built image can load it as UID
+<code>10001</code>; the library rejects group/world-writable documents.</p>
+<p><strong>Move the server without splitting state.</strong></p>
+<ol>
+<li>Prepare the tested images, private volume, TLS edge and configuration on the
+new host. Keep a copied primary unstarted: serving it starts a monitor, updates
+state and can send emails. Preserve the public URL, cookie/OAuth secrets,
+account and slot records, device grants and gateway claim bindings.</li>
+<li>Verify the new host can reach every configured node SSH port with the existing
+host-key pin. Update any source-address firewall allowlist narrowly. Reporting
+over the same public HTTPS URL needs no node change; a fixed-IP reporting tunnel
+needs its target and independently verified server pin updated. Native Claude
+credentials, histories and projects remain on their existing slots/computers.</li>
+<li>Pause new Fleet work and drain active model, SSH and WebSocket streams. Stop
+<strong>both</strong> source primary and broker and fence their automatic startup
+and deployment paths. Take the final backup from the stopped volume with a
+SQLite-only helper, not a serving copy. For the example above, replace its first
+line with <code>docker compose -f deploy/docker-compose.yml run --rm --no-deps -T --entrypoint python ccfleetd - &lt;&lt;'PY'</code>.
+The helper inherits the volume and environment without starting <code>ccfleetd</code>.
+Verify integrity, transfer the completed backup, compare checksums and durable
+account/slot/device/key projections before first serve.</li>
+<li>Give the new data volume its service ownership (UID <code>10001</code>). Keep
+the dedicated inference-only SSH key mounted read-only, owned by that UID with
+<code>0600</code> mode and a <code>0700</code> parent. Preserve per-key forced commands,
+no-PTY/no-forwarding controls and node pins; never substitute an operator,
+device or provider credential. Start one primary; start the same-volume broker
+with <code>CCFLEET_BROKER_ONLY=1</code> and its gateway and machine metrics disabled.
+An HTTP <code>/healthz</code> 200 can precede Docker's first 60-second health check;
+wait for healthy and fresh reports from every node.</li>
+<li>Route the public hostname to the new deployment. A temporary old-edge forward
+must also send all Fleet requests there while the old apps stay fenced. Verify
+TLS using the public hostname before DNS changes; for an HTTPS forward, set
+<code>tls_server_name</code> and upstream <code>Host</code> to that hostname and never
+skip certificate verification. Retain Fleet's named access-log discard and
+scoped <code>http.log.error.fleet</code> discard. Validate before reloading an edge;
+for a shared source edge, coordinate upgraded streams across all tenants and
+verify the other domains after changing only Fleet's routing.</li>
+</ol>
+<p>Health, pins and state preservation do not prove a model request succeeded.
+Readiness checks make no model call. If no active gateway grant exists, do not
+enroll a new account or key merely to obtain a passing migration probe.</p>
+<p><strong>Rollback with current data.</strong> After the new deployment accepts
+heartbeats or user changes, the old snapshot is stale. Prefer a schema-compatible
+image rollback on the new host after backing up its current database. To move
+back, drain and fence the new primary and broker, take a fresh WAL-safe backup,
+verify and restore that current state, then start only the restored deployment
+and switch routing. Never reactivate the source's stale database or overwrite
+legitimate new activity to force an old baseline comparison.</p>
 <h2 id="naming-machines-and-slots">Naming machines and slots</h2>
 <p>One machine is one slot, and one name per machine, used everywhere: its node
 id, its slot's id and its hostname. Named by role:</p>
@@ -110,9 +202,9 @@ validates an sshd match block that forces that entrypoint and disables
 agent, port and X11 forwarding, tunnels and user rc files for the
 <code>ccfleet-slots</code> group before reloading SSH.</li>
 <li><em>root</em>: copy <code>/etc/ssh/ssh_host_ed25519_key.pub</code> to a root-owned file on the
-BWH server over an authenticated operator channel. <em>server</em>: configure the
-endpoint that only BWH uses:
-<code>ccfleetd node access &lt;machine&gt; --host &lt;address-reachable-from-bwh&gt; --port 22 --host-key-file &lt;copied-public-host-key&gt;</code>.
+CC Fleet server over an authenticated operator channel. <em>server</em>: configure the
+endpoint that only the broker uses:
+<code>ccfleetd node access &lt;machine&gt; --host &lt;address-reachable-from-server&gt; --port 22 --host-key-file &lt;copied-public-host-key&gt;</code>.
 Do not put the node address on the customer page.</li>
 <li><em>server</em>: within a couple of minutes <code>ccfleetd slot list --machine &lt;machine&gt;</code>
 shows its slot <code>free</code> and <code>on machine</code> <code>no</code>: the machine itself has
@@ -137,7 +229,7 @@ discarded; the sshd checks above are what keep password login impossible.</li>
 </ul>
 <p>Slot holders are not given an SSH workflow or the node address. They install
 the <code>ccfleet</code> command, pair a device from <code>/account</code>, and run <code>ccfleet</code>. Under
-the surface the client opens SSH through the BWH WebSocket broker. Every key
+the surface the client opens SSH through the CC Fleet WebSocket broker. Every key
 has a forced command and forwarding disabled. After a test pairing, inspect
 <code>/etc/ccfleet/authorized_keys/slot01</code>: it must name <code>slot-entry.sh</code> and the
 no-forwarding options. The slot's own <code>~/.ssh/authorized_keys</code> is not an sshd

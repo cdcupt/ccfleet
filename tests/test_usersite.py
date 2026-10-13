@@ -796,8 +796,8 @@ def test_the_privacy_page_discloses_gateway_contents_and_separate_endpoint_crede
 
     source = usersite.privacy_page(Config())
     text = visible_html(source)
-    assert "BWH can read model requests and responses" in text
-    assert "TLS ends at BWH" in text
+    assert "The gateway can read model requests and responses" in text
+    assert "TLS ends at the gateway" in text
     assert "sends selected model context over HTTPS to Fleet" in text
     assert "Setup does not automatically erase existing files or saved history" in text
     assert "--transport bridge" not in text and "--legacy-history" not in text
@@ -808,7 +808,7 @@ def test_the_privacy_page_discloses_gateway_contents_and_separate_endpoint_crede
     assert "Native Claude on the slot owns credential writing and renewal" in text
     assert "This filtering does not redact arbitrary prompts, tool results or file contents" in text
     assert "heartbeat reports do not include prompts" in text
-    assert "gateway on BWH receives and processes the contents" in text
+    assert "gateway receives and processes the contents" in text
     assert 'href="/docs/library/docs/public-gateway.html"' in source
 
 

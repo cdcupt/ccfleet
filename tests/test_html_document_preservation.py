@@ -211,7 +211,7 @@ def test_all_local_document_links_and_fragments_resolve_inside_the_repository():
     ]),
     ("docs/runbooks.html", [
         "ccfleetd node add <node-id> --owner <name> --region <region> [--rc-expected]",
-        "ccfleetd node access <machine> --host <address-reachable-from-bwh> --port 22 "
+        "ccfleetd node access <machine> --host <address-reachable-from-server> --port 22 "
         "--host-key-file <copied-public-host-key>",
         "echo '/swapfile none swap sw 0 0' >> /etc/fstab",
     ]),
@@ -227,19 +227,22 @@ def test_full_shell_commands_survive_as_literal_escaped_code(relative, commands)
         assert any(command in value for value in code), (relative, command)
 
 
-# Captured from all fenced code blocks immediately before the 2026-09-30 HTML
-# conversion. Whitespace is normalized, but no command, operator, placeholder,
-# quote or diagram character may disappear in a format-only migration.
+# Baselines were captured before the 2026-09-30 HTML conversion. Strict counts
+# and hashes protect literal commands and diagrams during format-only edits.
+# Intentional current-document updates are reviewed and dated below; historical
+# snapshots retain their original conversion baselines.
 @pytest.mark.parametrize("relative,count,digest", [
-    ("README.html", 13, "f35a13ca10677cce50548f5c0c270ee5e47cbd61870ca89015d4a90d8da6169c"),
+    # 2026-10-12: current HTTPS route and administration in the live container.
+    ("README.html", 13, "697e33e2b83f9b0322373144017a9af521a9500090a3696602417059c9a892e9"),
     ("gateway/README.html", 2, "05a5875a4103537bf322ea6a96eaf76efd2d1b47bdaa9da8d1ec89921a9feb69"),
     ("docs/compliance.html", 1, "2ded188e10c277d7ba59ba03370ff9b307bcae82bf0704dba331489a5a70208d"),
     ("docs/design.html", 4, "7f419e01e1cc8c555781096ad52e2c6b3cdb122d828a16e0801be29e047efb2b"),
-    ("docs/local-relay.html", 11, "a2a25b87109667446ed60fe08276a98b9951e5bdda60bb2e9a61eab375212232"),
+    # 2026-10-12: provider-neutral broker role in the explicit bridge diagram.
+    ("docs/local-relay.html", 11, "7afe6a67167912b362e71c8b10e5b8099cca9d1fc0675f5a91d5fbce7d63c5a1"),
     ("docs/project-workspaces.html", 3, "4ffcd619921bc03a4b1a8e660378d00f67b01746ceb7b34ee10553917c4538e0"),
     ("docs/tunnel.html", 8, "d5068c44dd70fc6f7dc50e6ffd9d8abae4f0fb160ab3917aedd732558743e492"),
 ])
-def test_all_pre_conversion_code_blocks_are_preserved(relative, count, digest):
+def test_document_code_blocks_match_reviewed_snapshots(relative, count, digest):
     blocks = [normalized(value) for value in read_document(ROOT / relative).pre_codes]
     assert len(blocks) == count, relative
     actual = hashlib.sha256(json.dumps(blocks, ensure_ascii=False,

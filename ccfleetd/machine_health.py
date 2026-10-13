@@ -1,6 +1,6 @@
 """Cached, numeric-only health of the primary service's Linux machine.
 
-The Linux proc view describes the shared VPS, not its provider's physical
+The Linux proc view describes the gateway VPS, not its provider's physical
 hardware. The cgroup v2 view describes this service and its configured limits,
 not reserved resources. The data filesystem may be shared with other services;
 statvfs measures capacity, not the size of Fleet's files or disk I/O speed.

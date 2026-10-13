@@ -155,7 +155,7 @@ def test_cli_registration_returns_only_the_fixed_client_configuration(cfg):
         assert answer["endpoint"] == "wss://fleet.example.com/api/cli/connect"
         assert answer["device_token"].startswith(cli_access.DEVICE_PREFIX)
         assert answer["host_key"] == _ssh_key(9) and answer["user"] == "slot01"
-        assert "192.0.2.44" not in body.decode(), "the private node endpoint stays on BWH"
+        assert "192.0.2.44" not in body.decode(), "the private node endpoint stays on the Fleet server"
         assert call(srv, "POST", "/api/cli/register",
                     {"public_key": _ssh_key(2), "device_name": "replay"},
                     {"Authorization": f"Bearer {code}"})[0] == 400

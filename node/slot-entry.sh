@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-# BWH's Messages gateway has a separate service key. Its forced command
+# Fleet's Messages gateway has a separate service key. Its forced command
 # cannot open a terminal, access projects, or use a legacy device protocol.
 if [ "${1:-}" = --gateway-only ]; then
   [ "$#" = 1 ] && [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-gateway-v1 ] \

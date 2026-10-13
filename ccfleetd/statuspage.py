@@ -455,8 +455,8 @@ def machine_panel(report: Mapping[str, Any], now: float) -> str:
     host, service, storage = groups["host"], groups["service"], groups["storage"]
     cards = (
         ("Host CPU use", "主机 CPU 占用", _machine_percent(host.get("cpu_pct")),
-         label("Across the whole shared VPS; averaged over the sample interval.",
-               "整台共享 VPS 的执行占用，按采样区间计算平均值。", inline=True)),
+         label("Across the whole gateway VPS; averaged over the sample interval.",
+               "整台网关 VPS 的执行占用，按采样区间计算平均值。", inline=True)),
         ("Estimated host memory used", "主机内存估算占用",
          _machine_percent(host.get("memory_pct")),
          _machine_capacity(host.get("memory_used_bytes"), host.get("memory_total_bytes"))
@@ -521,10 +521,10 @@ def machine_panel(report: Mapping[str, Any], now: float) -> str:
             "Think of the gateway as a junction that passes requests along. These numbers show "
             "how busy that junction is. High CPU use, little available memory, long I/O waits "
             "or a nearly full disk can help explain slow replies. They do not prove that "
-            "Bandwagon is the bottleneck: your network, the slot machine and Anthropic can "
+            "the gateway is the bottleneck: your network, the slot machine and Anthropic can "
             "also affect response time.",
             "把网关想成转交请求的路口，这些数字告诉你路口有多忙。CPU 很忙、可用内存很少、"
-            "I/O 等待较多，或磁盘快满时，都可能影响回复速度。但它们不能直接证明搬瓦工是瓶颈："
+            "I/O 等待较多，或磁盘快满时，都可能影响回复速度。但它们不能直接证明网关是瓶颈："
             "你的网络、槽位主机和 Anthropic 也会影响响应时间。", inline=True) + '</p>'
         + '<ul>' + details + '</ul><p>' + label(
             "Host CPU counts time executing work; I/O wait and CPU time taken by the VPS "
@@ -551,8 +551,8 @@ def machine_panel(report: Mapping[str, Any], now: float) -> str:
         '<section class="card st-performance" id="gateway-machine" '
         'aria-labelledby="gateway-machine-title"><h2 id="gateway-machine-title">'
         + label("Gateway machine resources", "网关主机资源", inline=True) + '</h2><p class="sub">'
-        + label("Bandwagon VPS · shared with other apps. Host figures cover the entire VPS.",
-                "搬瓦工 VPS · 与其他应用共享。主机指标覆盖整台 VPS。", inline=True) + '</p>'
+        + label("Gateway VPS dedicated to Fleet. Host figures cover the entire VPS.",
+                "Fleet 专用网关 VPS。主机指标覆盖整台 VPS。", inline=True) + '</p>'
         + _machine_cards(cards) + '<h3 class="st-machine-subhead">'
         + label("Fleet service allocation", "Fleet 服务自身的配额", inline=True) + '</h3>'
         + _machine_cards(service_cards, service=True) + note + help_ + '</section>'

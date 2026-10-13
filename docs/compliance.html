@@ -21,7 +21,13 @@ tr:last-child td{border-bottom:0}.notice{border:1px solid var(--line);border-lef
 footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-size:13px;color:var(--muted)}
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
-</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide#migration">Website migration guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#hosted-claude-code">Hosted Claude Code</a></li><li class="level-2"><a href="#historical-hosted-terminal-mapping-only">Historical hosted-terminal mapping only</a></li><li class="level-2"><a href="#remote-terminal-distinction-terminal-broker-not-model-gateway">Remote-terminal distinction: terminal broker, not model gateway</a></li><li class="level-2"><a href="#current-local-inference-relay">Current local inference relay</a></li><li class="level-2"><a href="#project-data-and-metadata">Project data and metadata</a></li><li class="level-2"><a href="#branding">Branding</a></li><li class="level-2"><a href="#regions-and-policies">Regions and policies</a></li><li class="level-2"><a href="#launch-gate">Launch gate</a></li></ol></nav></details></aside><main><h1 id="compliance-notes">Compliance notes</h1>
+</style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.daichenlab.com/docs/guide">Current user guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#hosted-claude-code">Hosted Claude Code</a></li><li class="level-2"><a href="#historical-hosted-terminal-mapping-only">Historical hosted-terminal mapping only</a></li><li class="level-2"><a href="#remote-terminal-distinction-terminal-broker-not-model-gateway">Remote-terminal distinction: terminal broker, not model gateway</a></li><li class="level-2"><a href="#current-local-inference-relay">Current local inference relay</a></li><li class="level-2"><a href="#project-data-and-metadata">Project data and metadata</a></li><li class="level-2"><a href="#branding">Branding</a></li><li class="level-2"><a href="#regions-and-policies">Regions and policies</a></li><li class="level-2"><a href="#launch-gate">Launch gate</a></li></ol></nav></details></aside><main><h1 id="compliance-notes">Compliance notes</h1>
+<div class="notice" id="fleet-hosting-update-20261012"><p><strong>Hosting update — October 12, 2026.</strong>
+The Fleet platform now runs on a dedicated DMIT VPS; slot execution remains on the
+existing slot machines. BWH names in the historical mapping below refer to the
+former platform host. The current relay section describes the HTTPS gateway and
+explicit bridge transport. This hosting update does not re-verify the policy
+sources or establish provider authorization.</p></div>
 <p>Last re-verified against Anthropic's published documentation: 2026-09-28.</p>
 <p>This is an engineering constraint record, not legal advice. Re-check the linked
 terms before a production launch and obtain the commercial agreement or written
@@ -87,15 +93,26 @@ endpoint. It never receives the Claude OAuth token and does not inspect or
 rewrite Claude model requests.</p>
 <p>The legacy <code>gateway/</code> experiment is not part of this remote-terminal path.
 Do not configure <code>ANTHROPIC_BASE_URL</code> for that compatibility flow. The current
-local launcher instead sets a temporary loopback model endpoint, as described
-below; it must not be represented as the same architecture.</p>
+local launcher instead uses the configured Fleet HTTPS gateway by default; the
+explicit bridge transport uses a local loopback endpoint. These model relays have
+different execution and privacy boundaries from the hosted terminal.</p>
 <h2 id="current-local-inference-relay">Current local inference relay</h2>
 <p>Original Claude Code, files, tools, native settings and conversation history run
-on the laptop. The local bridge removes selected headers and top-level structured
-metadata, then sends supported model requests through encrypted SSH to the
-assigned slot. The slot relay authenticates upstream with that slot's bound
-credential; it does not distribute the credential to BWH or the laptop, pool
-accounts, or select another account on failure. Native slot Claude owns renewal.</p>
+on the laptop. With a saved gateway configuration, supported model requests go
+over HTTPS to the Fleet gateway by default. It verifies the connection key and
+selects only from the holder's
+chosen own slots. The gateway uses restricted SSH to the selected slot; that slot
+uses its bound native Claude credential over HTTPS to Anthropic. The credential
+is not distributed to the Fleet platform or laptop. Native slot Claude owns
+credential writing and renewal.</p>
+<p>One fixed slot or an ordered own-slot pool can be selected. Switching is limited
+to failures known to be safe to retry. Requests are not replayed after uncertain
+sending or after public response headers have started. There is no operator-shared
+account pool.
+The explicit <code>--transport bridge</code> route instead carries the model stream
+inside laptop-to-slot SSH through the byte broker. These transports have different
+content-access boundaries; see the <a href="public-gateway.html">current gateway
+and privacy guide</a>.</p>
 <p>This design intermediates model traffic and slot authentication. The earlier
 hosted-terminal reasoning does not establish that such a relay is permitted.
 Any applicable agreement or authorization must cover this actual architecture,
@@ -109,10 +126,13 @@ local OS, working-directory paths, environment details and personal information
 may reach the slot and Anthropic. MCP, hooks, tools, updates and other native
 services can make independent laptop connections outside the model relay.</p>
 <p>Do not promise anonymity or that nothing about the user is visible anywhere.
-BWH sees connection IP/routing metadata, SSH exposes transport properties, and
-the slot host's root administrator can inspect the data processed there. The
-local launcher is not a laptop OS sandbox. One-account-per-slot isolation,
-credential placement and network encryption remain distinct from these limits.</p>
+The Fleet platform sees connection IP/routing metadata, and the direct HTTPS
+gateway decrypts and can read model requests and responses. The gateway and slot
+relay remove selected headers and top-level structured metadata, not arbitrary
+prompt or tool contents. SSH exposes transport properties, and the slot host's
+root administrator can inspect the data processed there. The local launcher is
+not a laptop OS sandbox. One-account-per-slot isolation, credential placement and
+network encryption remain distinct from these limits.</p>
 <h2 id="branding">Branding</h2>
 <p>Anthropic's page permits accurately stating in plain text that a product has
 Claude Code preinstalled or runs Claude Code, but restricts use of Anthropic or
@@ -130,7 +150,7 @@ regional or account restriction.</p>
 <ol>
 <li>confirm the deployment uses the unmodified Claude Code binary;</li>
 <li>confirm every user authenticates their own account through Anthropic;</li>
-<li>confirm BWH and the local client never receive Claude credential values;</li>
+<li>confirm the Fleet platform and local client never receive slot Claude credential values;</li>
 <li>confirm pricing is for the hosted slot, not resold Claude usage;</li>
 <li>review the then-current Commercial Terms and hosted-product conditions;</li>
 <li>contact Anthropic sales when the intended arrangement needs written

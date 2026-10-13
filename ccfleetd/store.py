@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS cli_pairings (
     expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_cli_pairings_expires ON cli_pairings(expires_at);
--- One local ccfleet installation. The token authorizes only the BWH byte
+-- One local ccfleet installation. The token authorizes only the Fleet byte
 -- broker; the public key independently authorizes the end-to-end SSH session
 -- on the slot. Neither is a Claude credential.
 CREATE TABLE IF NOT EXISTS cli_devices (

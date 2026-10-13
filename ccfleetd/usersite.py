@@ -1124,14 +1124,14 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "prompts, conversations, file "
                 "contents, your Claude credential, or the name on "
                 "your Claude account. This is "
-                "separate from model traffic: the HTTPS gateway on "
-                "BWH receives and processes "
+                "separate from model traffic: the HTTPS gateway "
+                "receives and processes "
                 "the contents of model requests and responses."
             ),
             (
                 "健康报告不包含提示词、对话、文件内容、Claude 凭据或 "
                 "Claude 账号显示名。模型流量是另一回事："
-                "BWH 上的 HTTPS 网关会接收并处理模型请求及回复内容。"
+                "我们的 HTTPS 网关会接收并处理模型请求及回复内容。"
             ),
         )
         + "</div>"
@@ -1208,13 +1208,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "Anthropic using its bound account. "
                     "Native Claude on the slot owns credential writing "
                     "and renewal. The slot credential is "
-                    "never returned to your computer or BWH. Anthropic’s "
+                    "never returned to your computer or the gateway. Anthropic’s "
                     "own terms and privacy policy apply."
                 ),
                 (
                     "选中的槽位只使用其绑定账号，把受支持的模型请求发给 "
                     "Anthropic。槽位上的原版 Claude 负责写入和续期凭据，"
-                    "凭据不会返回电脑或 BWH。Anthropic "
+                    "凭据不会返回电脑或网关。Anthropic "
                     "自身的条款和隐私政策同时适用。"
                 ),
             ),
@@ -1242,8 +1242,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
             (
                 (
-                    "HTTPS encrypts traffic in transit. TLS ends at BWH, "
-                    "so <strong>BWH can read model "
+                    "HTTPS encrypts traffic in transit. TLS ends at the gateway. "
+                    "<strong>The gateway can read model "
                     "requests and responses</strong>, including sent "
                     "prompts, tool results and file contents. "
                     "The selected slot and Anthropic also process that "
@@ -1254,8 +1254,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "for setup and account selection."
                 ),
                 (
-                    "HTTPS 加密传输过程，TLS 在 BWH 终止，因此 "
-                    "<strong>BWH 能读取模型请求和回复</strong>，"
+                    "HTTPS 加密传输过程，TLS 在网关终止，因此 "
+                    "<strong>网关能读取模型请求和回复</strong>，"
                     "包括发送的提示词、工具结果和文件内容。选中的槽位和 "
                     "Anthropic 也会处理这些上下文；账号凭据仍在槽位上。"
                     '设置与账号选择见 <a href="/docs/library/docs/public-'
@@ -1290,7 +1290,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "not redact arbitrary prompts, tool "
                     "results or file contents. Native prompts may "
                     "include local OS, working directory "
-                    "and environment details. BWH can also see your "
+                    "and environment details. The gateway can also see your "
                     "connection IP and timing. This is not anonymity."
                 ),
                 (
@@ -1298,7 +1298,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "<code>metadata</code> 字段，不会自动删除提示词、"
                     "工具结果或文件内容中的 "
                     "敏感信息。原版提示词可能包含操作系统、"
-                    "工作目录和环境信息。BWH 还能看到连接 IP 和时间；"
+                    "工作目录和环境信息。网关还能看到连接 IP 和时间；"
                     "这不是匿名服务。"
                 ),
             ),
@@ -1420,14 +1420,14 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "公开的主机资源",
         [
             (
-                "When the operator enables it, Status also shows shared gateway-VPS "
+                "When the operator enables it, Status also shows Fleet's dedicated gateway-VPS "
                 "CPU, memory and data-filesystem capacity, plus Fleet's own container "
-                "CPU and memory consumption against its limits. Shared-host figures "
-                "include other applications on that VPS. They do not list processes, "
+                "CPU and memory consumption against its limits. Host figures cover "
+                "the whole VPS, including system services. They do not list processes, "
                 "users, IP addresses, individual requests or their contents.",
-                "运营方开启后，服务状态页还会展示网关 VPS 的整体 CPU、内存、数据所在文件"
-                "系统容量，以及 Fleet 容器的 CPU 和内存占用与配额。共享主机数值包含同一台 "
-                "VPS 上的其他应用，不列出进程、用户、IP 地址、单条请求或内容。",
+                "运营方开启后，服务状态页还会展示 Fleet 专用网关 VPS 的整体 CPU、内存、数据所在文件"
+                "系统容量，以及 Fleet 容器的 CPU 和内存占用与配额。主机数值覆盖整台 VPS，"
+                "包括系统服务，不列出进程、用户、IP 地址、单条请求或内容。",
             ),
             (
                 "The service samples these numeric kernel counters every fifteen "

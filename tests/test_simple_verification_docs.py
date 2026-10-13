@@ -22,8 +22,13 @@ def section(request, cfg):
     return visible_html(source)
 
 
-def test_simple_check_uses_current_client_and_no_system_inspection(section):
-    for phrase in ("current native-local client", "normal terminal", "not inside Claude",
+def test_simple_check_uses_current_client_and_no_system_inspection(section, request):
+    if request.node.callspec.params["section"] == "website":
+        assert "current native-local client" in section
+    else:
+        assert "Signed Fleet client 0.2.5" in section
+        assert "saved HTTPS gateway configuration by default" in section
+    for phrase in ("normal terminal", "not inside Claude",
                    "ccfleet local --check", "does not scan projects", "start a Claude session",
                    "make a model request", "not proof that Anthropic will accept"):
         assert phrase in section
@@ -40,7 +45,7 @@ def test_prompt_is_optional_inference_not_an_enforced_privacy_test(section, requ
             "not an enforced privacy safeguard",
             "native context or hooks",
             "Do not ask Claude to print real IPs",
-            "BWH can read model requests and replies",
+            "The gateway can read model requests and replies",
             "slot's outbound IP",
             "directly from the laptop",
         ):
@@ -59,7 +64,7 @@ def test_prompt_is_optional_inference_not_an_enforced_privacy_test(section, requ
         "Native context or hooks",
         "local OS or directory information",
         "Do not ask Claude to print real IPs",
-        "BWH sees connection metadata",
+        "The Fleet platform sees connection metadata",
         "For relayed model requests",
         "slot's outbound IP",
         "Other native/tool network connections",

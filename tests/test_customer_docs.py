@@ -291,14 +291,14 @@ def test_public_guides_explain_current_gateway_visibility_and_own_slots():
     for path in ("/docs/guide", "/docs/how-it-works"):
         source = render(path)
         text = visible_html(source)
-        for phrase in ("BWH can read", "own slot", "connection key", "local"):
+        for phrase in ("The gateway can read", "own slot", "connection key", "local"):
             assert phrase in text
         assert 'href="/docs/library/docs/public-gateway.html' in source
         assert "--transport bridge" not in text
     how = render("/docs/how-it-works")
     assert 'aria-labelledby="gateway-diag-t gateway-diag-d"' in how
     assert "Those heartbeat reports do not contain prompts" in how
-    assert "direct HTTPS gateway on BWH receives" in how
+    assert "direct HTTPS gateway receives" in how
 
 
 def test_the_terms_are_dated_and_say_slots_are_not_backed_up():
