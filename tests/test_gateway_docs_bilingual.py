@@ -111,3 +111,45 @@ def test_safe_failover_and_content_visibility_keep_current_proof_limits():
     assert "回执丢了" in text_zh
     assert "即使还没看到文字" in text_zh
     assert "一个实际账号" in text_zh and "不等于第二个真实账号" in text_zh
+
+
+def test_public_performance_discloses_single_contributor_aggregates_and_sample_limits():
+    source = GUIDE.read_text()
+    english = Document(bilingual.project_html(source, "en", TARGET)).text
+    chinese = Document(bilingual.project_html(source, "zh", TARGET)).text
+    for phrase in (
+        "completed-transfer rate, observed relay attempts",
+        "average upstream connection time",
+        "average time to the first upstream response body byte",
+        "average full-transfer time",
+        "Each timing has its own sample count",
+        "observations of reported traffic, not an active benchmark",
+        "at least twenty observed attempts",
+        "even if only one Fleet user contributes",
+        "total or average can therefore reflect that one user’s traffic",
+        "per-user or per-slot breakdowns are never listed",
+        "twenty samples; those samples can all come from a single Fleet user",
+        "Missing, old or insufficient data stays unavailable",
+        "Opening Status does not call a model",
+    ):
+        assert phrase in english
+    for phrase in (
+        "传输完成率、观测到的转发尝试次数",
+        "连接上游的平均时长",
+        "收到上游首个正文响应字节的平均等待时间",
+        "完整传输的平均时长",
+        "每项计时分别注明样本数量",
+        "已上报流量的观测，不是主动运行的基准测试",
+        "至少二十次尝试",
+        "即使只有一个 Fleet 用户提供了统计",
+        "总量或平均值因此可能反映这一个用户的流量",
+        "不会按用户或槽位分别展示统计",
+        "每项计时分别需要二十个样本",
+        "这些样本可以全部来自一个 Fleet 用户",
+        "数据缺失、过期或不足时，暂不显示数值",
+        "打开状态页不会调用模型",
+    ):
+        assert phrase in chinese
+    assert "three contributing Fleet users" not in english
+    assert "three contributing accounts" not in english
+    assert "三个 Fleet 用户" not in chinese and "三个账号参与" not in chinese

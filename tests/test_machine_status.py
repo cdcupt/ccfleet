@@ -1,4 +1,4 @@
-"""Public machine totals are separate from cohort-gated request performance."""
+"""Public machine totals are separate from sample-gated request performance."""
 from copy import deepcopy
 from html.parser import HTMLParser
 
@@ -81,7 +81,7 @@ def test_machine_explanations_do_not_equate_capacity_or_cpu_with_proven_bottlene
     assert "rather than a percentage of the whole VPS" in text
     assert "about every 15 seconds" in text
     assert "page refreshes every minute" in text
-    assert "do not need the three-account traffic threshold" in text
+    assert "Machine resource totals are independent of transfer samples" in text
 
 
 @pytest.mark.parametrize("report", [{}, {"state": "unavailable"}])
@@ -202,6 +202,6 @@ def test_hidden_transfer_note_explains_threshold_without_disclosing_current_cont
     text = Text(project_html(statuspage.performance_panel({"state": "limited_data"}, NOW),
                              "en", "/status")).shown()
     before_details = text.split("How we measure this", 1)[0]
-    assert "At least 20 recorded attempts from 3 different Fleet accounts" in before_details
-    assert "Each timing needs its own 20 samples from 3 accounts" in before_details
+    assert "At least 20 recorded attempts" in before_details
+    assert "Each timing needs its own 20 samples" in before_details
     assert "A dash means unknown, not zero" in before_details

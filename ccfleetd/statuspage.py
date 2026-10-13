@@ -99,8 +99,8 @@ overflow-wrap:anywhere}
 .st-machine-table tbody th{font-weight:620;text-transform:none;letter-spacing:normal}
 .st-machine-table tbody tr:last-child th,.st-machine-table tbody tr:last-child td{border-bottom:0}
 .st-machine-row{scroll-margin-top:100px}
-.st-machine-state{display:inline-flex;align-items:center;gap:7px;max-width:100%}
-.st-machine-state .st-word{margin:0;font-size:13px}
+.st-machine-state{display:inline-flex;align-items:center;gap:7px;max-width:100%;white-space:nowrap}
+.st-machine-state .st-word{margin:0;font-size:13px;white-space:nowrap}
 .st-machine-name{display:block;color:var(--muted);font-size:12px;font-weight:400;margin-top:2px}
 .st-machine-table time{font-size:13px;color:var(--muted)}
 .st-machine-empty{color:var(--muted)}
@@ -113,7 +113,10 @@ overflow-wrap:anywhere}
 .st-perf-grid{grid-template-columns:minmax(0,1fr);gap:8px}
 .st-perf-metric{padding:12px 14px}
 .st-perf-metric dd{font-size:25px;margin:5px 0}
-.st-machines{padding:18px 16px}.st-machine-table th,.st-machine-table td{padding:9px 6px}}
+.st-machines{padding:18px 16px}.st-machine-table{table-layout:auto}
+.st-machine-table th:first-child,.st-machine-table th:nth-child(2){width:auto}
+.st-machine-table thead th:first-child,.st-machine-table tbody th>.bi-inline{white-space:nowrap}
+.st-machine-table th,.st-machine-table td{padding:9px 6px}}
 """
 
 
@@ -278,6 +281,16 @@ def _latency_text(sample: Mapping[str, Any]) -> str:
     return label(number + " ms", number + " 毫秒", inline=True)
 
 
+def _timing_samples_text(sample: Mapping[str, Any]) -> str:
+    """A publishable timing's sample count, never a contributor count."""
+    count = sample.get("count")
+    if count is None:
+        return label("More aggregate samples needed", "还需要更多汇总样本", inline=True)
+    if count == 0:
+        return label("No timing samples", "暂无计时样本", inline=True)
+    return label(f"{count:,} timing samples", f"{count:,} 个计时样本", inline=True)
+
+
 def _report_time(observed: float, now: float) -> str:
     """Localize the oldest included observation with a useful no-script age."""
     minutes = max(0, int((now - observed) // 60))
@@ -342,26 +355,39 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
     """Only the publishable aggregate; suppressed states never disclose numbers."""
     ready = report.get("state") == "ready"
     latencies = report.get("latencies", {}) if ready else {}
+    connect = latencies.get("connect_ms", {})
     first = latencies.get("first_byte_ms", {})
+    total = latencies.get("total_ms", {})
     requests = report.get("requests") if ready else None
     completed = report.get("completed") if ready else None
     rate = (status.percent(completed, requests) if requests and completed is not None else "—")
     count = f"{requests:,}" if requests is not None else "—"
+    completion_samples = (label(f"{completed:,} of {requests:,} transfers completed",
+                                f"{requests:,} 次传输中有 {completed:,} 次完成", inline=True)
+                          if completed is not None and requests is not None else '')
     cards = (
         ("Transfer completion", "传输完成率", label(rate, rate, inline=True),
          "How often a successful HTTP reply was fully delivered.",
-         "记录中的尝试，有多少完整收到成功的 HTTP 回复。"),
+         "记录中的尝试，有多少完整收到成功的 HTTP 回复。", completion_samples),
         ("Average first response byte", "平均首字节等待时间", _latency_text(first),
          "How long a slot waited for the reply to start arriving.",
-         "槽位等多久，才收到回复正文的开头。"),
+         "槽位等多久，才收到回复正文的开头。", _timing_samples_text(first)),
         ("Observed relay attempts", "已记录的转发尝试", label(count, count, inline=True),
          "Each attempt is counted; a retry may add another.",
-         "每次尝试各计一次；切换后重试可能多计一次。"),
+         "每次尝试各计一次；切换后重试可能多计一次。", ''),
+        ("Average upstream connection", "平均上游连接时间", _latency_text(connect),
+         "How long a slot took to connect to the upstream.",
+         "槽位与上游建立连接所需的时间。", _timing_samples_text(connect)),
+        ("Average full transfer", "平均完整传输时间", _latency_text(total),
+         "Recorded transfer duration; answer length affects it.",
+         "记录中的传输时长，也受回复长度影响。", _timing_samples_text(total)),
     )
     grid = '<dl class="st-perf-grid">' + ''.join(
         '<div class="st-perf-metric"><dt>' + label(en, zh, inline=True)
-        + '</dt><dd>' + value + '<p>' + label(help_en, help_zh, inline=True)
-        + '</p></dd></div>' for en, zh, value, help_en, help_zh in cards
+        + '</dt><dd>' + value
+        + ('<p class="st-perf-samples">' + samples + '</p>' if samples else '')
+        + '<p>' + label(help_en, help_zh, inline=True)
+        + '</p></dd></div>' for en, zh, value, help_en, help_zh, samples in cards
     ) + '</dl>'
     if ready:
         freshness = (
@@ -382,11 +408,11 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
                 "Waiting for enough aggregated data", "等待足够的汇总数据")
         note = '<p class="st-perf-note"><strong>' + label(*message, inline=True) + '</strong> '
         note += label(
-            "At least 20 recorded attempts from 3 different Fleet accounts are needed before "
-            "traffic figures appear. Each timing needs its own 20 samples from 3 accounts. "
+            "At least 20 recorded attempts are needed before traffic figures appear. "
+            "Each timing needs its own 20 samples. "
             "A dash means unknown, not zero.",
-            "至少有 3 个不同 Fleet 账号、合计 20 次已记录的尝试，才展示流量数字。"
-            "每项计时也要单独达到 3 个账号、20 个样本。横线表示未知，不是零。",
+            "至少有 20 次已记录的尝试，才展示流量数字。"
+            "每项计时也要单独达到 20 个样本。横线表示未知，不是零。",
             inline=True) + '</p>'
     timing_notes = ''
     if ready:
@@ -395,16 +421,9 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
                 ("first_byte_ms", "Average first response body byte", "平均回复正文首字节时间"),
                 ("total_ms", "Average full transfer", "平均完整传输时间")):
             sample = latencies.get(key, {})
-            count = sample.get("count")
-            samples = (
-                label("More aggregate samples needed", "还需要更多汇总样本", inline=True)
-                if count is None else label("No timing samples", "暂无计时样本", inline=True)
-                if count == 0 else label(
-                    f"{count:,} timing samples", f"{count:,} 个计时样本", inline=True)
-            )
             timing_notes += (
                 '<li>' + label(en + ': ', zh + '：', inline=True) + _latency_text(sample)
-                + ' · ' + samples + '</li>'
+                + ' · ' + _timing_samples_text(sample) + '</li>'
             )
         timing_notes = '<ul>' + timing_notes + '</ul>'
     help_ = (
@@ -439,24 +458,26 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
             "或百分位数；各项计时的样本数可能不同。", inline=True) + '</p>'
         + timing_notes
         + '<p>' + label(
-            "Traffic figures require at least 20 attempts from 3 different Fleet accounts. "
-            "Each timing separately requires at least 20 samples from 3 different accounts, "
+            "Traffic figures require at least 20 attempts. "
+            "Each timing separately requires at least 20 samples, "
             "so a timing may remain unknown even when traffic totals can be shown.",
-            "至少有 3 个不同 Fleet 账号、合计 20 次尝试，才公开流量数字。每项计时也必须单独达到"
-            "至少 3 个不同账号、合计 20 个样本。因此，即使流量总数可以公开，某项计时仍可能未知。",
+            "至少有 20 次尝试，才公开流量数字。每项计时也必须单独达到"
+            "至少 20 个样本。因此，即使流量总数可以公开，某项计时仍可能未知。",
             inline=True) + '</p>'
         + '<p>' + label(
-            "Only combined numbers are public. This panel shows no account names, slots, "
+            "Only combined numbers are public, even if only one account contributes. "
+            "This panel shows no account names, slots, "
             "messages, or individual request records.",
-            "公开页面只显示汇总数字，不展示账号名称、具体槽位、消息内容或单条请求记录。",
+            "即使只有一个账号贡献数据，公开页面也只显示汇总数字。"
+            "不展示账号名称、具体槽位、消息内容或单条请求记录。",
             inline=True) + '</p></details>'
     )
     return (
         '<section class="card st-performance" id="performance" aria-labelledby="performance-title">'
         '<h2 id="performance-title">' + label("Fleet performance", "Fleet 性能", inline=True)
         + '</h2><p class="sub">' + label(
-            "Recent transfer measurements, combined across participating accounts.",
-            "汇总参与统计账号的近期传输表现。", inline=True)
+            "Recent transfer measurements, combined from usable relay reports.",
+            "汇总有效转发上报中的近期传输表现。", inline=True)
         + '<span class="st-perf-window">' + label(
             "Last 7 UTC calendar days, including today", "最近 7 个 UTC 日期，包含今天",
             inline=True)
@@ -507,7 +528,7 @@ def _machine_cards(cards: Sequence[tuple[str, str, str, str]], service: bool = F
 
 
 def machine_panel(report: Mapping[str, Any], now: float) -> str:
-    """Infrastructure totals are independent of the account-cohort traffic gate."""
+    """Infrastructure totals are independent of transfer-sample minima."""
     state = report.get("state")
     visible = state in ("ready", "partial")
     groups = {}
@@ -603,10 +624,10 @@ def machine_panel(report: Mapping[str, Any], now: float) -> str:
             "the limit, including cache and kernel memory; it differs from estimated host "
             "memory. Samples update "
             "about every 15 seconds; this page refreshes every minute. Missing or stale values "
-            "remain unknown. Machine totals do not need the three-account traffic threshold.",
+            "remain unknown. Machine resource totals are independent of transfer samples.",
             "Fleet CPU 占用按服务自身的 CPU 配额计算，不是整台 VPS 的百分比。Fleet 内存为容器"
             "计入配额的占用，包含缓存和内核内存，与主机内存估算口径不同。约每 15 秒采样一次，"
-            "页面每分钟刷新。缺失或过期的数值仍显示为未知。主机汇总指标不受三个账号的流量门槛限制。",
+            "页面每分钟刷新。缺失或过期的数值仍显示为未知。主机资源汇总与传输样本数相互独立。",
             inline=True) + '</p></details>'
     )
     return (
@@ -699,7 +720,6 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float,
             inline=True,
         )
         + "</span></div>"
-        + machine_details_panel(details, viewer, now)
         + performance_panel(performance.summary(store, cfg, now), now)
         + (machine_panel(machine_report, now) if machine_report is not None else '')
         + '<div class="card st-list">'
@@ -715,6 +735,7 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float,
             group=True,
         )
         + "</div>"
+        + machine_details_panel(details, viewer, now)
         + KEY
     )
     return _shell("status", body, REFRESH, STATUS_CSS, viewer=viewer, here="/status")

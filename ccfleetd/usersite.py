@@ -874,7 +874,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-12"
+PRIVACY_UPDATED = "2026-10-13"
 
 
 def _span(seconds: int) -> str:
@@ -1389,26 +1389,31 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "The public Status page combines existing numeric relay measurements "
                 "from current, fresh slot reports. It shows transfer completion and "
                 "average slot-side timing over seven UTC calendar days, including today. "
-                "It does not publish individual user or slot statistics, names, emails, "
+                "It does not split measurements by user or slot or publish names, emails, "
                 "prompts, credentials or response contents.",
                 "公开的服务状态页只汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
-                "七个 UTC 日的传输完成率和槽位端平均响应时长。不公开单个用户或槽位的统计，"
+                "七个 UTC 日的传输完成率和槽位端平均响应时长。不按用户或槽位分别展示统计，"
                 "也不公开名称、邮箱、提示词、凭据或回复内容。",
             ),
             (
-                "Machine availability is shown separately under stable neutral labels "
-                "such as Machine 1, with health, machine-level reasons and the last report. "
+                "Machine availability is shown separately in a compact table under stable "
+                "neutral labels such as Machine 1, with status and the last report. "
                 "Your own slot card links to its machine's public label. Operators can "
-                "also see actual machine names after signing in; those names remain "
-                "hidden from other public viewers.",
-                "主机可用状态单独展示，使用“主机 1”等固定中性标签，显示健康状态、"
-                "主机层面的异常原因和最近报告时间。你的槽位卡片会链接到对应的公开标签。"
-                "管理员登录后还可以看到实际主机名称；其他公开访问者看不到这些名称。",
+                "also see actual machine names beside those labels after signing in; "
+                "those names remain hidden from other public viewers. Status describes "
+                "machine health only; the table has no detailed reasons or per-machine "
+                "uptime cards.",
+                "主机可用状态在紧凑表格中单独展示，使用“主机 1”等固定中性标签，显示状态和"
+                "最近报告时间。你的槽位卡片会链接到对应的公开标签。管理员登录后还可以在"
+                "标签旁看到实际主机名称；其他公开访问者看不到这些名称。状态只表示主机健康，"
+                "表格不展示详细异常原因或逐台主机的可用率卡片。",
             ),
             (
-                "Traffic figures appear only when at least three contributing Fleet "
-                "users and twenty observed attempts are included. Each timing separately "
-                "needs twenty samples from three users. Until then, the panel "
+                "Traffic figures appear after at least twenty observed attempts. "
+                "Published aggregates can include only one contributing Fleet user, "
+                "so a total or average can reflect that user's traffic. Each timing "
+                "separately needs twenty samples, which can all come from one user. "
+                "Until enough fresh measurements are available, the panel "
                 "shows that more aggregate data is needed. A completed transfer requires "
                 "a successful HTTP reply (2xx) delivered in full; error replies, "
                 "cancellations and interrupted transfers are not successes. "
@@ -1416,8 +1421,9 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "can include a backup attempt for one request; they do not cover gateway "
                 "failures before a slot is reached or measure answer quality. Viewing "
                 "Status makes no extra model request.",
-                "只有至少三个 Fleet 用户提供了统计，且合计有二十次观测到的转发尝试时，"
-                "才公开流量数值；每项计时也需要三个用户提供二十个样本。此前页面会提示"
+                "观测到至少二十次转发尝试后，才公开流量数值。公开汇总可能只包含一个 Fleet "
+                "用户的观测，因此总量或平均值可能反映这个用户的流量。每项计时分别需要二十个"
+                "样本，所有样本可以来自同一个用户。没有足够的新观测时，页面会提示"
                 "需要更多汇总数据。成功传输要求 HTTP 回复状态为 2xx，且内容完整传完；错误"
                 "回复、取消或中断的传输不算成功。一条请求可能因使用备用"
                 "账号而产生多次转发尝试。这些统计不包含请求到达槽位前的网关失败，也不评价"
@@ -1443,11 +1449,12 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "The service samples these numeric kernel counters every fifteen "
                 "seconds and keeps the latest observation in memory. Values older "
                 "than one minute are hidden; restarting resets the observations. "
-                "These infrastructure figures do not need the traffic panel's "
-                "three-account threshold. Viewing them makes no model request.",
+                "These infrastructure figures are separate from user traffic and do "
+                "not require relay attempts or timing samples. Viewing them makes "
+                "no model request.",
                 "服务每十五秒采样一次系统的数值计数器，只在内存中保留最新观测。超过一分钟"
-                "的数值不再显示，重启会重置观测。基础设施数值不受转发统计的三个账号门槛"
-                "限制，查看它们不会调用模型。",
+                "的数值不再显示，重启会重置观测。基础设施数值与用户流量分开，不需要转发尝试或"
+                "计时样本，查看它们不会调用模型。",
             ),
         ],
     )

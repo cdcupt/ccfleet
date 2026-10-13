@@ -110,7 +110,7 @@ def test_ready_reports_exact_counts_weighted_rate_and_each_timing_denominator():
     assert result["latencies"]["total_ms"] == {"count": 104, "mean": 11600 / 104}
 
 
-def test_ready_request_cohort_does_not_reveal_a_single_holders_timing():
+def test_ready_request_totals_allow_a_single_holders_measured_timing():
     fleet = Fleet([
         report(100, 99, timings={"first_byte_ms": (100, 50), "connect_ms": (100, 10)}),
         report(10, 9, timings={"connect_ms": (10, 20)}),
@@ -118,7 +118,7 @@ def test_ready_request_cohort_does_not_reveal_a_single_holders_timing():
     ])
     result = measure(fleet)
     assert result["state"] == "ready" and result["requests"] == 120
-    assert result["latencies"]["first_byte_ms"] == {"count": None, "mean": None}
+    assert result["latencies"]["first_byte_ms"] == {"count": 100, "mean": 50}
     assert result["latencies"]["connect_ms"] == {"count": 120, "mean": 12.5}
     assert result["latencies"]["total_ms"] == {"count": 0, "mean": None}
 
@@ -132,12 +132,12 @@ def test_positive_timing_with_too_few_samples_is_gated_independently():
     assert measure(Fleet(readings))["latencies"]["first_byte_ms"] == {"count": 20, "mean": 100}
 
 
-def test_timing_cohort_counts_holders_not_number_of_slots():
+def test_timing_samples_can_come_from_fewer_holders_than_request_totals():
     readings = [report(10, 10, timings={"first_byte_ms": (10, 100)}) for _ in range(3)]
     readings.append(report(10, 10))
     result = measure(Fleet(readings, holders=["a", "a", "b", "c"]))
     assert result["state"] == "ready" and result["reporting_users"] == 3
-    assert result["latencies"]["first_byte_ms"] == {"count": None, "mean": None}
+    assert result["latencies"]["first_byte_ms"] == {"count": 30, "mean": 100}
 
 
 def test_valid_reports_without_timings_preserve_no_samples():
@@ -146,27 +146,71 @@ def test_valid_reports_without_timings_preserve_no_samples():
     assert result["latencies"] == {stage: {"count": 0, "mean": None}
                                   for stage in relay_metrics.TIMINGS}
 
-
 @pytest.mark.parametrize("counts,holders,state", [
-    ([100], ["a"], "limited_data"),
-    ([100, 100, 100], ["a", "a", "a"], "limited_data"),
-    ([100, 100, 100], ["a", "b", "a"], "limited_data"),
+    ([100], ["a"], "ready"),
+    ([100, 100, 100], ["a", "a", "a"], "ready"),
+    ([100, 100, 100], ["a", "b", "a"], "ready"),
     ([1, 1, 1], ["a", "b", "c"], "limited_data"),
     ([18, 1, 0], ["a", "b", "c"], "limited_data"),
-    ([19, 1, 0], ["a", "b", "c"], "limited_data"),
+    ([19, 1, 0], ["a", "b", "c"], "ready"),
     ([18, 1, 1], ["a", "b", "c"], "ready"),
 ])
-def test_minimum_cohort_counts_only_distinct_holders_with_measured_traffic(counts, holders, state):
+def test_minimum_attempts_are_independent_of_distinct_holder_count(counts, holders, state):
     result = measure(Fleet([report(count, count) for count in counts], holders))
     assert result["state"] == state
     if state != "ready":
         assert_hidden(result)
 
 
-def test_zero_traffic_slot_counts_for_coverage_but_not_privacy_cohort():
+def test_zero_traffic_slot_counts_for_coverage_but_not_contributors():
     result = measure(Fleet([report(10, 9), report(10, 9), report(0, 0)]))
     assert result["eligible_slots"] == result["reporting_slots"] == 3
-    assert result["reporting_users"] == 2 and result["state"] == "limited_data"
+    assert result["reporting_users"] == 2 and result["state"] == "ready"
+    assert result["requests"] == 20 and result["completed"] == 18
+
+
+@pytest.mark.parametrize("attempts,state", [(0, "no_data"), (19, "limited_data"), (20, "ready")])
+def test_single_holder_attempt_boundary_and_numeric_privacy(attempts, state):
+    fleet = Fleet([report(attempts, attempts, timings={"total_ms": (attempts, 1500 if attempts else 0)})],
+                  holders=[SECRET])
+    before = copy.deepcopy(fleet.beats)
+    result = measure(fleet)
+    assert result["state"] == state
+    if state == "ready":
+        assert result["requests"] == result["completed"] == 20
+        assert result["completion_rate"] == 1
+        assert result["latencies"]["total_ms"] == {"count": 20, "mean": 1500}
+    else:
+        assert_hidden(result)
+    raw = json.dumps(result, allow_nan=False)
+    for private in (SECRET, BOUND, "node-", "slot-id-", "last_success_at", "models", "headers", "path", "token_usage"):
+        assert private not in raw
+    assert fleet.beats == before
+
+@pytest.mark.parametrize("samples,expected", [
+    (0, {"count": 0, "mean": None}),
+    (19, {"count": None, "mean": None}),
+    (20, {"count": 20, "mean": 500}),
+])
+def test_single_holder_timing_keeps_its_independent_sample_boundary(samples, expected):
+    result = measure(Fleet([report(30, 25, timings={"first_byte_ms": (samples, 500 if samples else 0)})]))
+    assert result["state"] == "ready"
+    assert result["latencies"]["first_byte_ms"] == expected
+
+
+@pytest.mark.parametrize("change", [
+    lambda fleet: fleet.beats["node-0"].update(ts=NOW - 301),
+    lambda fleet: fleet.entry()["credentials"].update(logged_in=False),
+    lambda fleet: fleet.entry()["credentials"].update(account_fp=OTHER),
+    lambda fleet: fleet.entry().update(provisioned_for=NOW - 86401),
+    lambda fleet: fleet.slots[0].update(account_switched_at=NOW + 1),
+])
+def test_single_holder_ready_report_still_requires_fresh_current_binding(change):
+    fleet = Fleet([report(20, 18, timings={"first_byte_ms": (20, 500)})])
+    assert measure(fleet)["state"] == "ready"
+    change(fleet)
+    result = measure(fleet)
+    assert result["state"] == "no_data" and result["reporting_slots"] == 0
     assert_hidden(result)
 
 
@@ -175,7 +219,6 @@ def test_oldest_report_exposes_coverage_age_not_individual_event_time():
     result = measure(fleet)
     assert result["oldest_observed_at"] == NOW - 200
     assert "last_success_at" not in result
-
 
 @pytest.mark.parametrize("field,value", [
     ("state", slots.FREE), ("state", slots.CLAIMING), ("state", slots.CLAIMED),
@@ -190,14 +233,12 @@ def test_not_currently_held_hosted_active_slot_is_not_eligible(field, value):
     assert result["eligible_slots"] == result["reporting_slots"] == 0
     assert result["state"] == "no_data"
 
-
 @pytest.mark.parametrize("enabled", [0, False, None, "yes", 2, 1.0])
 def test_disabled_and_invalid_nodes_do_not_contribute(enabled):
     fleet = Fleet([report()])
     fleet.nodes[0]["enabled"] = enabled
     result = measure(fleet)
     assert result["eligible_slots"] == 0 and result["state"] == "no_data"
-
 
 @pytest.mark.parametrize("field,value", [
     ("logged_in", False), ("logged_in", 1), ("logged_in", None),
@@ -217,7 +258,6 @@ def test_trailing_newline_does_not_make_a_valid_account_binding():
     fleet.entry()["credentials"].update(bound_fp=BOUND + "\n", account_fp=BOUND + "\n")
     assert measure(fleet)["reporting_slots"] == 0
 
-
 @pytest.mark.parametrize("change", [
     lambda fleet: fleet.beats.clear(),
     lambda fleet: fleet.beats.update({"node-0": None}),
@@ -236,7 +276,6 @@ def test_missing_or_ambiguous_slot_snapshot_fails_closed(change):
     result = measure(fleet)
     assert result["reporting_slots"] == 0 and result["state"] == "no_data"
 
-
 @pytest.mark.parametrize("value", [None, True, "now", -1, float("inf"), float("nan"), 10**400,
                                     NOW - 301, NOW + 61])
 def test_heartbeat_receive_clock_must_be_finite_fresh_and_bounded(value):
@@ -245,19 +284,16 @@ def test_heartbeat_receive_clock_must_be_finite_fresh_and_bounded(value):
     result = measure(fleet)
     assert result["reporting_slots"] == 0
 
-
 @pytest.mark.parametrize("offset,accepted", [(-301, False), (-300, True), (60, True), (61, False)])
 def test_heartbeat_receive_clock_freshness_edges(offset, accepted):
     fleet = Fleet([report()])
     fleet.beats["node-0"]["ts"] = NOW + offset
     assert bool(measure(fleet)["reporting_slots"]) is accepted
 
-
 @pytest.mark.parametrize("offset,accepted", [(-301, False), (-300, True), (60, True), (61, False)])
 def test_report_observation_clock_freshness_edges(offset, accepted):
     fleet = Fleet([report(observed=NOW + offset)])
     assert bool(measure(fleet)["reporting_slots"]) is accepted
-
 
 @pytest.mark.parametrize("field", ["claimed_at", "account_switched_at"])
 def test_report_predating_current_assignment_is_not_counted(field):
@@ -268,7 +304,6 @@ def test_report_predating_current_assignment_is_not_counted(field):
     assert measure(fleet)["reporting_slots"] == 0
     fleet.entry()["relay"] = report(observed=NOW)
     assert measure(fleet)["reporting_slots"] == 1
-
 
 @pytest.mark.parametrize("provisioned", [None, True, "now", float("nan"), float("inf"),
                                         10**400, NOW - 86401, NOW - 86399])
@@ -292,7 +327,6 @@ def test_old_claim_clock_ahead_of_new_claim_does_not_leak_cached_traffic():
     # skew, but the root-owned provisioning marker still names the old claim.
     assert measure(fleet)["reporting_slots"] == 0
 
-
 @pytest.mark.parametrize("field,value", [
     ("claimed_at", None), ("claimed_at", True), ("claimed_at", "now"),
     ("account_switched_at", float("nan")), ("account_switched_at", True),
@@ -314,13 +348,11 @@ def test_utc_midnight_omits_previous_day_window_even_if_clock_fresh():
     fleet.entry()["relay"] = report(observed=midnight)
     assert measure(fleet, now=midnight + 1)["reporting_slots"] == 1
 
-
 @pytest.mark.parametrize("value", [None, True, {}, "SECRET"])
 def test_non_report_telemetry_fails_closed(value):
     fleet = Fleet([report()])
     fleet.entry()["relay"] = value
     assert measure(fleet)["reporting_slots"] == 0
-
 
 @pytest.mark.parametrize("field,value", [
     ("requests", True), ("requests", -1), ("requests", "SECRET"),
@@ -332,7 +364,6 @@ def test_invalid_or_identity_tainted_report_is_revalidated(field, value):
     fleet = Fleet([report()])
     fleet.entry()["relay"][field] = value
     assert measure(fleet)["reporting_slots"] == 0
-
 
 @pytest.mark.parametrize("field,value", [
     ("count", 11), ("count", True), ("mean", -1), ("mean", float("nan")),
@@ -392,8 +423,8 @@ def test_latest_snapshot_only_does_not_sum_history_or_native_transcript_usage(st
     # A later beat without usable telemetry wins, even though history has it.
     store.insert_heartbeat("machine-0", NOW + 1, {"node_id": "machine-0", "mode": "machine"})
     result = measure(store, now=NOW + 1)
-    assert result["reporting_slots"] == 2 and result["state"] == "limited_data"
-    assert_hidden(result)
+    assert result["reporting_slots"] == 2 and result["state"] == "ready"
+    assert result["requests"] == 20 and result["completed"] == 16
 
 
 def test_configured_freshness_is_used_without_restart_grace():
@@ -402,7 +433,6 @@ def test_configured_freshness_is_used_without_restart_grace():
     fleet.beats["node-0"]["ts"] = NOW - 301
     assert measure(fleet)["reporting_slots"] == 0
     assert measure(fleet, cfg=replace(Config(), heartbeat_max_age_s=600))["reporting_slots"] == 1
-
 
 @pytest.mark.parametrize("now", [None, True, "now", float("inf"), float("nan"), -1, 10**400])
 def test_invalid_server_clock_is_rejected(now):
