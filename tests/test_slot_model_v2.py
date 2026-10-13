@@ -110,9 +110,10 @@ def test_the_number_skips_every_name_id_and_machine_already_in_use(store):
     """The name becomes a hostname: it may not collide with another slot's name,
     another slot's id, or a machine that already answers to it."""
     store.add_node("alice-1", "op", now=NOW)          # a machine called alice-1
-    machine(store, "alice-2")                        # a slot whose id is alice-2
     machine(store, "pool-1")
     machine(store, "pool-2")
+    # Reserve canonical pool IDs before the personal machine's empty report.
+    machine(store, "alice-2")                        # a slot whose id is alice-2
     account(store, "b1", "alice@elsewhere.example")
     store.set_account_handle("b1", "alice")
     store.claim_slot("b1", now=NOW, node_id="pool-1")   # alice-3: 1 is a machine, 2 a slot

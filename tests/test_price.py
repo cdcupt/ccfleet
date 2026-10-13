@@ -136,9 +136,11 @@ def test_setting_a_price_records_who_and_when(store):
 
 
 def test_the_price_lives_under_one_key_as_json(store):
+    before = dict(store._conn.execute("SELECT key, value FROM settings").fetchall())
     store.set_price("20", "USD", by="x", now=1.0)
-    rows = store._conn.execute("SELECT key, value FROM settings").fetchall()
-    assert [tuple(r) for r in rows] == [("price", '{"amount": "20", "currency": "USD"}')]
+    after = dict(store._conn.execute("SELECT key, value FROM settings").fetchall())
+    assert after.pop("price") == '{"amount": "20", "currency": "USD"}'
+    assert after == before, "setting the price must not change other metadata"
 
 
 @pytest.mark.parametrize("amount,currency", [("0", "USD"), ("20", "XYZ"), ("3000.5", "JPY"),

@@ -100,6 +100,14 @@ def fleet(store, now):
         store.add_node(node, "erik", region="us-west-residential", now=now - 5 * 86400)
         store.set_machine_capacity(node, 1)
         store.add_slot(node, node, "slot01", now=now - 5 * 86400)
+
+    # Declare the whole intended fleet before empty reports allocate aliases.
+    # erik-2 must not reserve pool-1/2/3 before their machines are registered.
+    store.add_node("pool-2", "erik", region="us-west-residential", now=now - 3600)
+    store.add_node("pool-3", "erik", region="us-west-residential", now=now - 600)
+    store.set_machine_capacity("pool-3", 1)
+    store.add_slot("pool-3", "pool-3", "slot01", now=now - 600)
+    for node in ("erik-2", "pool-1"):
         store.apply_slot_report(node, [{"unix_user": "slot01", "present": False}],
                                 now=now - 4 * 86400)
     held = store.claim_slot(erik["id"], now=now - 20 * 3600, node_id="erik-2")
@@ -129,12 +137,8 @@ def fleet(store, now):
          "credentials": {"present": False, "logged_in": False},
          "remote_control": {"state": "inactive"}, "usage": {}, "quota": {}}])
 
-    store.add_node("pool-2", "erik", region="us-west-residential", now=now - 3600)
     machine_beat(store, "pool-2", now - 40, [])
-    # Declared, and never heard from: a machine by the server's own record alone.
-    store.add_node("pool-3", "erik", region="us-west-residential", now=now - 600)
-    store.set_machine_capacity("pool-3", 1)
-    store.add_slot("pool-3", "pool-3", "slot01", now=now - 600)
+    # pool-3 remains declared but unheard from: only the server has a record.
     return erik, ysf
 
 
@@ -243,7 +247,8 @@ def test_a_free_pool_slot_explains_its_missing_installation(console):
     store.begin_release("erik-2")
     store.apply_slot_report("erik-2", [{"unix_user": "slot01", "present": False}], now=now)
     machine_beat(store, "erik-2", now, [{"unix_user": "slot01", "present": False}])
-    row = row_of(call("GET", "/admin").body, "erik-2")
+    assert store.get_slot("erik-2")["pool_name"] == "pool-4"
+    row = row_of(call("GET", "/admin").body, "pool-4")
     assert "Installed on claim" in row and "free · in pool" in row
     assert "unknown" not in row and "token " not in row and "latest" not in row
     assert ">disabled (hosted)<" in row
@@ -257,7 +262,8 @@ def test_a_free_slot_does_not_show_the_previous_holders_login(console):
                             now=time.time())
     # Until the next heartbeat, the last stored report still belongs to the
     # previous holder. The lifecycle record already confirms the wipe.
-    row = row_of(call("GET", "/admin").body, "erik-2")
+    assert store.get_slot("erik-2")["pool_name"] == "pool-4"
+    row = row_of(call("GET", "/admin").body, "pool-4")
     assert "free · in pool" in row and "Installed on claim" in row
     assert "2.1.281" not in row and "Max" not in row and "token " not in row
     assert ">disabled (hosted)<" in row and ">active<" not in row
