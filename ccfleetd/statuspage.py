@@ -2,8 +2,8 @@
 
 Anybody may read it, signed in or not. Each machine has a persistent neutral
 public number; node ids, rented slot names and holder information stay private.
-Only an authenticated operator sees the actual machine name. Machine-only
-reasons and recorded uptime complement the aggregate and transfer panels.
+Only an authenticated operator sees the actual machine name. A compact machine
+availability sheet complements the aggregate history and transfer panels.
 """
 
 from __future__ import annotations
@@ -26,24 +26,6 @@ BANNERS_ZH = {status.GREEN: "监测中的机器运行正常", status.YELLOW: "�
               status.RED: "全部监测机器离线"}
 COMPONENT_ZH = {SITE_NAME: "网站与账号页面", MACHINES_NAME: "槽位主机"}
 WORDS_ZH = {status.GREEN: "正常", status.YELLOW: "性能或容量异常", status.RED: "离线"}
-MACHINE_REASONS = {
-    "reported": ("Reporting normally.", "上报正常。"),
-    "restart_waiting": ("Waiting for a fresh report after the server restarted.",
-                        "服务重启后，正在等待新的上报。"),
-    "heartbeat_missing": ("No heartbeat received.", "尚未收到心跳上报。"),
-    "heartbeat_late": ("Heartbeat is late.", "心跳上报延迟。"),
-    "heartbeat_down": ("No heartbeat within the expected reporting interval.",
-                       "超过预期上报间隔，仍未收到心跳。"),
-    "disk_high": ("Disk capacity is low.", "磁盘剩余空间不足。"),
-    "disk_critical": ("Disk capacity is critically low.", "磁盘剩余空间严重不足。"),
-    "claude_missing": ("Claude Code is unavailable on this machine.",
-                       "这台主机上的 Claude Code 不可用。"),
-    "slot_missing": ("A slot environment is unavailable.", "槽位运行环境不可用。"),
-    "slot_wipe_failed": ("Slot cleanup needs operator attention.", "槽位清理需要管理员处理。"),
-    "slot_occupied": ("Slot cleanup is incomplete.", "槽位清理尚未完成。"),
-    "slot_provision_failed": ("Slot setup needs operator attention.",
-                              "槽位初始化需要管理员处理。"),
-}
 #: The front page's pill, in the colours of the site's other pills (render.CSS).
 PILL_CLASS = {status.GREEN: "ok", status.YELLOW: "warn", status.RED: "critical"}
 #: A day's colour, as the class its square in the bar takes.
@@ -107,14 +89,21 @@ font-variant-numeric:tabular-nums;letter-spacing:-.015em;overflow-wrap:anywhere}
 .st-machine-subhead{font-size:14px;font-weight:620;margin:20px 0 10px}
 .st-machines{padding:20px 22px;margin:0 0 18px;scroll-margin-top:100px}
 .st-machines>h2{margin:0;font-size:19px}
-.st-machine-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.st-machine-card{min-width:0;padding:16px;border:1px solid var(--rule-soft);
-border-radius:10px;background:var(--inset);scroll-margin-top:100px}
-.st-machine-card h3{margin:0;font-size:16px}
-.st-machine-card .st-head{margin-bottom:8px}
-.st-machine-card ul{margin:8px 0 12px;padding-left:20px;font-size:14px}
-.st-machine-meta{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--muted)}
-.st-machine-card p{font-size:13px;overflow-wrap:anywhere}
+.st-machine-sheet{overflow:auto}
+.st-machine-table{width:100%;min-width:0;border-collapse:collapse;table-layout:fixed;font-size:14px}
+.st-machine-table th,.st-machine-table td{text-align:left;vertical-align:middle;
+padding:10px 12px;border-bottom:1px solid var(--rule-soft);white-space:normal;
+overflow-wrap:anywhere}
+.st-machine-table thead th{font-size:12px;font-weight:620;color:var(--muted)}
+.st-machine-table th:first-child{width:34%}.st-machine-table th:nth-child(2){width:28%}
+.st-machine-table tbody th{font-weight:620;text-transform:none;letter-spacing:normal}
+.st-machine-table tbody tr:last-child th,.st-machine-table tbody tr:last-child td{border-bottom:0}
+.st-machine-row{scroll-margin-top:100px}
+.st-machine-state{display:inline-flex;align-items:center;gap:7px;max-width:100%}
+.st-machine-state .st-word{margin:0;font-size:13px}
+.st-machine-name{display:block;color:var(--muted);font-size:12px;font-weight:400;margin-top:2px}
+.st-machine-table time{font-size:13px;color:var(--muted)}
+.st-machine-empty{color:var(--muted)}
 @media (max-width:560px){.st-bar{gap:1px;height:30px}
 .st-bar .d:nth-child(-n+60){display:none}.st-scale .d90{display:none}
 .st-scale .d30{display:inline}.st-overall{margin-left:0;flex-basis:100%}
@@ -124,7 +113,7 @@ border-radius:10px;background:var(--inset);scroll-margin-top:100px}
 .st-perf-grid{grid-template-columns:minmax(0,1fr);gap:8px}
 .st-perf-metric{padding:12px 14px}
 .st-perf-metric dd{font-size:25px;margin:5px 0}
-.st-machines{padding:18px 16px}.st-machine-grid{grid-template-columns:minmax(0,1fr)}}
+.st-machines{padding:18px 16px}.st-machine-table th,.st-machine-table td{padding:9px 6px}}
 """
 
 
@@ -303,48 +292,35 @@ def _report_time(observed: float, now: float) -> str:
             + label(age_en, age_zh, inline=True) + '</time>')
 
 
-def machine_details_panel(details: Sequence[status.MachineDetail], history: status.History,
+def machine_details_panel(details: Sequence[status.MachineDetail],
                           viewer: Optional[Viewer], now: float) -> str:
-    """Expose only fixed machine facts under persistent, neutral public labels."""
-    cards = []
-    for detail in sorted(details, key=lambda item: item.public_number or 0):
+    """One compact row per machine, with private display names only for operators."""
+    rows = []
+    labeled = [detail for detail in details
+               if type(detail.public_number) is int and detail.public_number > 0]
+    for detail in sorted(labeled, key=lambda item: item.public_number):
         number = detail.public_number
-        if type(number) is not int or number <= 0:
-            continue
         identity = f"machine-{number}"
         level = detail.state.level
-        reasons = ''.join('<li>' + label(*MACHINE_REASONS[code], inline=True) + '</li>'
-                          for code in detail.reasons if code in MACHINE_REASONS)
         reported = (_report_time(detail.last_report, now) if detail.last_report is not None
                     and math.isfinite(detail.last_report) else label(
                         "Not yet received", "尚未收到", inline=True))
-        up, counted = history.per_machine_minutes.get(detail.node_id, (0, 0))
-        uptime = (label(status.percent(up, counted), status.percent(up, counted), inline=True)
-                  if counted else label("No data yet", "尚无数据", inline=True))
         operator_name = ''
         if viewer is not None and viewer.operator:
             display_name = detail.operator_name or detail.node_id
-            operator_name = '<p class="muted">' + label(
-                "Operator machine name: ", "管理员主机名称：", inline=True)
-            operator_name += escape(display_name) + '</p>'
-            if display_name != detail.node_id:
-                operator_name += '<p class="muted">' + label(
-                    "Internal machine ID: ", "内部主机 ID：", inline=True)
-                operator_name += escape(detail.node_id) + '</p>'
-        cards.append(
-            f'<article class="st-machine-card" id="{identity}" '
-            f'aria-labelledby="{identity}-title"><div class="st-head">'
+            operator_name = '<small class="st-machine-name">' + escape(display_name) + '</small>'
+        rows.append(
+            f'<tr class="st-machine-row" id="{identity}">'
+            f'<th scope="row" id="{identity}-title">'
+            + label(f"Machine {number}", f"主机 {number}", inline=True)
+            + operator_name + '</th><td><span class="st-machine-state">'
             f'<span class="st-dot {level}" aria-hidden="true"></span>'
-            f'<h3 id="{identity}-title">'
-            + label(f"Machine {number}", f"主机 {number}", inline=True) + '</h3>'
             + f'<span class="st-word {level}">'
-            + label(status.WORDS[level], WORDS_ZH[level], inline=True) + '</span></div>'
-            + operator_name + '<ul>' + reasons + '</ul><div class="st-machine-meta"><span>'
-            + label("Last report: ", "最近上报：", inline=True) + reported + '</span><span>'
-            + label("90-day recorded uptime: ", "90 天已记录在线率：", inline=True)
-            + uptime + '</span></div></article>')
-    empty = ('<p class="muted">' + label("No labeled slot machines to show yet.",
-                                        "暂无可展示的已编号槽位主机。", inline=True) + '</p>')
+            + label(status.WORDS[level], WORDS_ZH[level], inline=True)
+            + '</span></span></td><td>' + reported + '</td></tr>')
+    empty = ('<tr><td class="st-machine-empty" colspan="3">'
+             + label("No labeled slot machines to show yet.", "暂无可展示的已编号槽位主机。",
+                     inline=True) + '</td></tr>')
     return ('<section class="card st-machines" id="slot-machines" '
             'aria-labelledby="slot-machines-title"><h2 id="slot-machines-title">'
             + label("Each slot machine", "逐台槽位主机", inline=True) + '</h2><p class="sub">'
@@ -352,8 +328,14 @@ def machine_details_panel(details: Sequence[status.MachineDetail], history: stat
                     "machine, not Claude sign-in, quota or acceptance of a model request.",
                     "请对照“我的槽位”中的公共主机编号。这里检查主机状态，不包括 Claude "
                     "登录、用量额度，也不保证模型请求会被接受。", inline=True)
-            + '</p><div class="st-machine-grid">' + (''.join(cards) if cards else empty)
-            + '</div></section>')
+            + '</p><div class="st-machine-sheet" role="region" '
+            'aria-labelledby="slot-machines-title" tabindex="0">'
+            '<table class="st-machine-table" aria-labelledby="slot-machines-title">'
+            '<thead><tr><th scope="col">' + label("Machine", "主机", inline=True)
+            + '</th><th scope="col">' + label("Status", "状态", inline=True)
+            + '</th><th scope="col">' + label("Last report", "最近上报", inline=True)
+            + '</th></tr></thead><tbody>' + (''.join(rows) if rows else empty)
+            + '</tbody></table></div></section>')
 
 
 def performance_panel(report: Mapping[str, Any], now: float) -> str:
@@ -717,7 +699,7 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float,
             inline=True,
         )
         + "</span></div>"
-        + machine_details_panel(details, history, viewer, now)
+        + machine_details_panel(details, viewer, now)
         + performance_panel(performance.summary(store, cfg, now), now)
         + (machine_panel(machine_report, now) if machine_report is not None else '')
         + '<div class="card st-list">'
