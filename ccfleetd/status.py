@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape
 from typing import Any, Optional
 
-from . import resets
+from . import names, resets
 from . import slots as slotstates
 from .render import _age
 from .rules import LEVEL_CRITICAL
@@ -103,6 +103,28 @@ class State:
     since: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class MachineDetail:
+    """Machine-only status facts; raw alert bodies and holder data stay out.
+
+    The node id remains private to operator rendering and history lookups. Public
+    labels use the separately assigned number, never a node or slot name.
+    """
+
+    node_id: str
+    public_number: Optional[int]
+    state: State
+    reasons: tuple[str, ...]
+    last_report: Optional[float]
+    operator_name: Optional[str] = None
+
+
+def public_machine_number(node: Mapping[str, Any]) -> Optional[int]:
+    """A persistent authored public label, with no fallback to private names."""
+    value = node.get("public_status_number")
+    return value if type(value) is int and value > 0 else None
+
+
 def rule_state(rule: str, level: str) -> Optional[str]:
     """What one open alert says about its machine; None when nothing."""
     base = rule.split(":", 1)[0]
@@ -130,31 +152,37 @@ def _worst(reasons: Sequence[State]) -> State:
     return State(level, min(times) if times else None)
 
 
-def machine_state(latest: Optional[Mapping[str, Any]], alerts: Sequence[Mapping[str, Any]],
-                  shared: bool, now: float, listening_since: Optional[float] = None) -> State:
-    """One machine now: from its last report, and its alerts about itself.
-
-    A report sent while the server was down reached nobody, so given when the
-    server began listening again (listening_for), the machine's silence counts
-    from then."""
+def _machine_reasons(latest: Optional[Mapping[str, Any]], alerts: Sequence[Mapping[str, Any]],
+                     shared: bool, now: float,
+                     listening_since: Optional[float]) -> list[tuple[State, str]]:
+    """The same allowlisted reasons drive both the colour and public explanation."""
     heard = (latest or {}).get("ts")
     if heard is None:
-        return State(RED)
+        return [(State(RED), "heartbeat_missing")]
     heard = float(heard)
     if listening_since is not None:
         heard = max(heard, listening_since)
     late, down = thresholds(shared)
     age = now - heard
-    reasons: list[State] = []
+    reasons: list[tuple[State, str]] = []
     if age >= down:
-        reasons.append(State(RED, heard + down))
+        reasons.append((State(RED, heard + down), "heartbeat_down"))
     elif age >= late:
-        reasons.append(State(YELLOW, heard + late))
+        reasons.append((State(YELLOW, heard + late), "heartbeat_late"))
     for alert in alerts:
-        level = rule_state(str(alert.get("rule", "")), str(alert.get("level", "")))
+        rule = str(alert.get("rule", "")).split(":", 1)[0]
+        level = rule_state(rule, str(alert.get("level", "")))
         if level is not None:
-            reasons.append(State(level, alert.get("opened_at")))
-    return _worst(reasons)
+            code = "disk_critical" if rule == "disk_high" and level == RED else rule
+            reasons.append((State(level, alert.get("opened_at")), code))
+    return reasons
+
+
+def machine_state(latest: Optional[Mapping[str, Any]], alerts: Sequence[Mapping[str, Any]],
+                  shared: bool, now: float, listening_since: Optional[float] = None) -> State:
+    """One machine now, retaining server-restart grace and account exclusions."""
+    return _worst([reason for reason, _code in
+                   _machine_reasons(latest, alerts, shared, now, listening_since)])
 
 
 def components(nodes: Sequence[Mapping[str, Any]], slot_rows: Sequence[Mapping[str, Any]],
@@ -194,16 +222,41 @@ def listening_for(store: Any) -> Callable[[str], Optional[float]]:
     return lambda node_id: None if node_id in already else since
 
 
-def snapshot(store: Any, now: float) -> dict[str, State]:
-    """Every machine that counts, by node id, as it is now."""
+def machine_details(store: Any, now: float) -> list[MachineDetail]:
+    """One batched snapshot for the same components that drive aggregate status."""
     latest = store.latest_heartbeats()
     listening = listening_for(store)
     by_node: dict[str, list[Mapping[str, Any]]] = {}
     for alert in store.open_alerts():
         by_node.setdefault(alert["node_id"], []).append(alert)
-    return {node["id"]: machine_state(latest.get(node["id"]), by_node.get(node["id"], ()),
-                                      shared, now, listening(node["id"]))
-            for node, shared in components(store.list_nodes(), store.list_slots(), latest)}
+    slot_rows = store.list_slots()
+    slots_by_node: dict[str, list[Mapping[str, Any]]] = {}
+    for slot in slot_rows:
+        slots_by_node.setdefault(slot["node_id"], []).append(slot)
+    details = []
+    for node, shared in components(store.list_nodes(), slot_rows, latest):
+        node_id = node["id"]
+        report = latest.get(node_id)
+        heard = (report or {}).get("ts")
+        last_report = float(heard) if heard is not None else None
+        since = listening(node_id)
+        reasons = _machine_reasons(report, by_node.get(node_id, ()), shared, now, since)
+        codes = tuple(dict.fromkeys(code for _state, code in sorted(
+            reasons, key=lambda reason: -_RANK[reason[0].level])))
+        if not codes:
+            codes = ("restart_waiting" if since is not None and last_report is not None
+                     and last_report < since else "reported",)
+        machine_slots = slots_by_node[node_id]
+        operator_name = names.display(machine_slots[0]) if len(machine_slots) == 1 else node_id
+        details.append(MachineDetail(node_id, public_machine_number(node),
+                                     _worst([state for state, _code in reasons]),
+                                     codes, last_report, operator_name))
+    return details
+
+
+def snapshot(store: Any, now: float) -> dict[str, State]:
+    """Every machine that counts, by node id, as it is now."""
+    return {detail.node_id: detail.state for detail in machine_details(store, now)}
 
 
 # -- minutes and days ---------------------------------------------------------------------
@@ -278,6 +331,7 @@ class History:
     machines: list[Day]
     site_minutes: tuple[int, int]
     machines_minutes: tuple[int, int]
+    per_machine_minutes: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     @property
     def overall_minutes(self) -> tuple[int, int]:
@@ -305,7 +359,11 @@ def history(store: Any, now: float, days: int = HISTORY_DAYS) -> History:
             for d in found.values()]
     return History(site, machines,
                    (sum(d.up for d in site), sum(d.up + d.down for d in site)),
-                   (sum(d.up for d in each), sum(d.up + d.down for d in each)))
+                   (sum(d.up for d in each), sum(d.up + d.down for d in each)),
+                   {name[len(MACHINE_PREFIX):]: (
+                       sum(d.up for d in found.values()),
+                       sum(d.up + d.down for d in found.values()))
+                    for name, found in by_component.items() if name.startswith(MACHINE_PREFIX)})
 
 
 def percent(up: int, counted: int) -> str:

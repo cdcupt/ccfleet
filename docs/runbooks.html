@@ -135,7 +135,15 @@ one). A handle set with <code>ccfleetd account handle &lt;email&gt; &lt;handle&g
 person's request, names their slots <code>&lt;handle&gt;-&lt;n&gt;</code> instead (<code>alice-1</code>, then
 <code>alice-2</code>). The machine takes the name as its hostname on its next run; the
 console marks the machine &quot;hostname pending&quot; until it has. When the wipe that frees the slot completes, the name
-goes and the slot is called by its id again.</p>
+goes and the slot receives an unused <code>pool-N</code> name. The pool name remains
+reserved for that slot across later claims and releases; an existing <code>pool-N</code>
+identity is retained when available. The authenticated node and slot IDs do not change,
+so installed agents, SSH pins and history keep their existing identities. A failed or
+unfinished wipe never makes the slot free or publishes it as a new pool slot.</p>
+<p>The public status page lists each monitored slot machine under a stable
+<code>Machine N</code> label, with its health, machine-level reasons and last report.
+The holder's slot card links to that label. Signed-in operators additionally see actual
+machine names; public visitors do not see holder names, account state or raw alerts.</p>
 <p>Set the hostname when the machine is added, the way step 4 of
 <a href="#rename-a-machine">Rename a machine</a> does, so a provider's serial-number
 hostname never reaches the picker. A fleet already running under other names
@@ -481,7 +489,7 @@ node, the same line in <code>~/.config/ccfleet/agent.env</code>. The next heartb
 accepted.
 On a shared machine, stop here: steps 4 and 5 happen by themselves. The
 machine agent answers to its slot's name (its holder's while held, its own
-id while free): on its next run it rewrites <code>/etc/hosts</code>, runs <code>hostnamectl</code>,
+pool name while free): on its next run it rewrites <code>/etc/hosts</code>, runs <code>hostnamectl</code>,
 writes the cloud-init drop-in, and restarts any legacy Remote Control service
 if it is running. The console says &quot;hostname pending&quot; until it has. An owner's
 node is never renamed for you; go on with step 4 there.</li>

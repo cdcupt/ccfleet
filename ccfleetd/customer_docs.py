@@ -1355,6 +1355,17 @@ def how_it_works(
             "这些数值本身不能证明一次慢请求把时间花在了哪里。</p>",
         )
         + bi(
+            '<p>The <a href="/status#slot-machines">slot-machine details</a> list each '
+            "monitored machine as Operational, Degraded or Down, with the machine-level "
+            "reason and last report. Stable labels such as Machine 1 protect holder names; "
+            "your slot card links to the matching label. A completed slot release clears "
+            "your chosen name and returns the machine under its reserved pool-N name.</p>",
+            '<p><a href="/status#slot-machines">槽位主机详情</a>逐台展示已监测主机的正常、异常'
+            "或离线状态，以及主机层面的原因和最近报告时间。“主机 1”等固定标签保护持有者"
+            "的名称；你的槽位卡片链接到对应标签。槽位归还且删除确认完成后，会清除你选择的"
+            "名称，并恢复该槽位保留的 pool-N 名称。</p>",
+        )
+        + bi(
             "<p>Model requests need the configured gateway and an eligible slot. A gateway "
             "outage reports an error. Giving a slot back stops its processes and deletes "
             "the Linux account and all slot files. It is offered again only after the "

@@ -224,7 +224,7 @@ def machine_hostname(node_id: str, slots: list[Mapping[str, Any]]) -> str:
     """What a shared machine should call itself: its one slot's name.
 
     One machine is one slot, so the machine answers to whatever that slot is
-    called — its holder-chosen name while held, and its id while free.
+    called — its holder-chosen name while held, and its neutral pool name while free.
     With no slot, or a slot id that is no hostname, the machine keeps its own
     id, which always is one.
     """
