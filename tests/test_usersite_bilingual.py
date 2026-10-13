@@ -99,6 +99,36 @@ def test_privacy_translation_uses_real_retention_values_and_escapes_contact():
                if link.get('href', '').startswith('mailto:'))
 
 
+def test_privacy_discloses_single_contributor_aggregates_without_individual_breakdowns():
+    page = Page(usersite.privacy_page(Config()))
+    english, chinese = page.copy('en'), page.copy('zh')
+    for phrase in (
+        'at least twenty observed attempts',
+        'only one contributing Fleet user',
+        "a total or average can reflect that user's traffic",
+        'twenty samples, which can all come from one user',
+        'does not split measurements by user or slot',
+        'prompts, credentials or response contents',
+        'Status describes machine health only',
+        'no detailed reasons or per-machine uptime cards',
+    ):
+        assert phrase in english
+    for phrase in (
+        '至少二十次转发尝试',
+        '公开汇总可能只包含一个 Fleet 用户的观测',
+        '总量或平均值可能反映这个用户的流量',
+        '所有样本可以来自同一个用户',
+        '不按用户或槽位分别展示统计',
+        '也不公开名称、邮箱、提示词、凭据或回复内容',
+        '状态只表示主机健康',
+        '表格不展示详细异常原因或逐台主机的可用率卡片',
+    ):
+        assert phrase in chinese
+    assert 'three contributing Fleet users' not in english
+    assert 'three-account threshold' not in english
+    assert '三个 Fleet 用户' not in chinese and '三个账号门槛' not in chinese
+
+
 @pytest.mark.parametrize('update', [{}, {'state': 'failed', 'detail': 'controlled error'}])
 def test_stable_slot_with_new_release_renders_update_controls_without_label_shadow(update):
     slot = {**SLOT, 'claude_channel': 'stable'}

@@ -28,7 +28,7 @@ class Text(HTMLParser):
 def ready_report():
     return {
         "state": "ready", "window_days": 7, "window_start_day": "2033-05-12",
-        "eligible_slots": 8, "reporting_slots": 5, "reporting_users": 3,
+        "eligible_slots": 8, "reporting_slots": 5, "reporting_users": 1,
         "oldest_observed_at": NOW - 120, "requests": 25, "completed": 24,
         "completion_rate": 0.96,
         "latencies": {
@@ -57,13 +57,50 @@ def test_ready_panel_explains_the_actual_measured_numbers_and_window():
     assert "Oldest included report: 2m ago" in text
 
 
+
+def test_all_five_metrics_and_their_sample_counts_are_visible_before_help():
+    raw = projected(ready_report())
+    visible = Text(raw).shown().split("How we measure this", 1)[0]
+    assert raw.count('class="st-perf-metric"') == 5
+    for metric in ("Transfer completion 96.00%", "Observed relay attempts 25",
+                   "Average first response byte 1.25 s", "Average upstream connection 240 ms",
+                   "Average full transfer 30.12 s"):
+        assert metric in visible
+    for count in (23, 24, 25):
+        assert f"{count} timing samples" in visible
+    assert "24 of 25 transfers completed" in visible
+
+@pytest.mark.parametrize("stage,title", [
+    ("connect_ms", "Average upstream connection"),
+    ("first_byte_ms", "Average first response byte"),
+    ("total_ms", "Average full transfer"),
+])
+@pytest.mark.parametrize("sample", [{"count": 0, "mean": None}, {"count": None, "mean": None}])
+def test_each_public_timing_card_independently_preserves_unknown(stage, title, sample):
+    report = ready_report()
+    report["latencies"][stage] = sample
+    before_help = Text(projected(report)).shown().split("How we measure this", 1)[0]
+    assert title + " —" in before_help
+    assert "Transfer completion 96.00%" in before_help
+    assert "Observed relay attempts 25" in before_help
+    expected = "No timing samples" if sample["count"] == 0 else "More aggregate samples needed"
+    assert expected in before_help
+
+
+def test_measured_zero_completion_is_a_number_not_unknown():
+    report = ready_report()
+    report.update(requests=25, completed=0, completion_rate=0)
+    text = Text(projected(report)).shown().split("How we measure this", 1)[0]
+    assert "Transfer completion 0.00%" in text
+    assert "0 of 25 transfers completed" in text
+
+
 def test_transfer_completion_never_rounds_a_failed_attempt_up_to_one_hundred_percent():
     report = ready_report()
     report.update(requests=100001, completed=100000, completion_rate=100000 / 100001)
     text = Text(projected(report)).shown()
     assert "Transfer completion 99.99%" in text
     assert "100%" not in text
-
 
 @pytest.mark.parametrize("state", ["no_data", "limited_data"])
 def test_suppressed_states_never_publish_raw_traffic_coverage_or_freshness(state):
@@ -77,7 +114,7 @@ def test_suppressed_states_never_publish_raw_traffic_coverage_or_freshness(state
     }
     raw = projected(report)
     text = Text(raw).shown()
-    assert text.count("—") == 3
+    assert text.count("—") == 5
     assert "A dash means unknown, not zero" in text
     expected = ("No fresh transfer data yet" if state == "no_data"
                 else "Waiting for enough aggregated data")
@@ -100,7 +137,7 @@ def test_missing_first_byte_sample_is_unknown_not_a_zero_latency():
     assert "0 ms" not in text.replace("240 ms", "")
 
 
-def test_a_timing_with_too_few_contributors_stays_hidden_when_overall_traffic_is_ready():
+def test_a_timing_with_too_few_samples_stays_hidden_when_overall_traffic_is_ready():
     report = ready_report()
     report["latencies"]["first_byte_ms"] = {"count": None, "mean": None}
     text = Text(projected(report)).shown()
@@ -108,7 +145,7 @@ def test_a_timing_with_too_few_contributors_stays_hidden_when_overall_traffic_is
     assert "Average first response body byte: — · More aggregate samples needed" in text
     assert "Transfer completion 96.00%" in text
     assert "Observed relay attempts 25" in text
-    assert "Each timing separately requires at least 20 samples from 3 different accounts" in text
+    assert "Each timing separately requires at least 20 samples" in text
     assert "None" not in text
 
 
@@ -123,6 +160,7 @@ def test_timer_and_attempt_definitions_do_not_claim_end_to_end_task_success():
     assert "not a generated word" in text
     assert "excludes the trip from your computer to the gateway and SSH setup" in text
     assert "no account names, slots, messages, or individual request records" in text
+    assert "even if only one account contributes" in text
 
 
 def test_arbitrary_account_slot_content_and_raw_reports_are_never_rendered():

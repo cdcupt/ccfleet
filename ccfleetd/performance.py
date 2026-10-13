@@ -1,4 +1,4 @@
-"""Public, cohort-gated performance from existing numeric relay observations.
+"""Public, sample-gated performance from existing numeric relay observations.
 
 Read each slot's latest seven-UTC-day snapshot once, never add successive
 heartbeats or infer unmeasured gateway requests. No request path, credential,
@@ -18,7 +18,7 @@ from ccfleet_agent.relay_metrics import DAY_SECONDS, MAX_EPOCH, TIMINGS, WINDOW_
 from . import slots
 from .heartbeat import account_fp, relay_report
 
-MIN_REPORTING_USERS = 3
+MIN_REPORTING_USERS = 1
 MIN_REQUESTS = 20
 MIN_TIMING_SAMPLES = 20
 FUTURE_SKEW_S = 60
@@ -80,15 +80,17 @@ def _current_report(slot: Mapping[str, Any], heartbeat: Any, node_id: str,
 
 
 def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
-    """Allowlisted aggregate; traffic values stay hidden until the cohort is large.
+    """Allowlisted aggregate; traffic values need enough measured attempts.
 
     completion_rate is a ratio from 0 to 1 of completed relay transfers to
     observed relay attempts. Timing means are weighted by each stage's sample
     count, including failures when that stage was measured. Each positive timing
-    stage separately needs three contributing holders and twenty samples. Zero
+    stage separately needs twenty samples, even from a single holder. Zero
     timing samples have count=0 and mean=None when ready; gated stages have both
-    values None, including positive stages whose cohort is not yet large enough.
-    Eligible slots are enabled, currently held active hosted slots, regardless
+    values None, including positive stages with too few measurements.
+    A single holder can contribute the entire public aggregate; identities and
+    per-holder or per-slot breakdowns are never returned. Eligible slots are
+    enabled, currently held active hosted slots, regardless
     of whether they support metrics. Reporting counts are internal until ready.
     """
     observed_now = _instant(now)

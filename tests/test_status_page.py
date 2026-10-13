@@ -334,6 +334,52 @@ def test_machine_sheet_has_three_accessible_columns_and_one_row_per_machine(stor
         assert removed not in section
 
 
+@pytest.mark.parametrize('language,reading', [('en', 'Reading this page'), ('zh', '如何理解状态')])
+@pytest.mark.parametrize('resources', [None, {'state': 'disabled'}])
+def test_compact_machine_sheet_is_immediately_above_reading_help_near_page_bottom(
+        store, cfg, language, reading, resources):
+    fleet(store)
+    raw = project_html(statuspage.page(store, cfg, None, NOW, machine_report=resources),
+                       language, '/zh/status' if language == 'zh' else '/status')
+    performance_at = raw.index('id="performance"')
+    history_at = raw.index('class="card st-list"')
+    sheet_at = raw.index('id="slot-machines"')
+    help_at = raw.index('class="card st-key"')
+    assert performance_at < history_at < sheet_at < help_at
+    if resources is not None:
+        assert performance_at < raw.index('id="gateway-machine"') < history_at
+    sheet_end = raw.index('</section>', sheet_at) + len('</section>')
+    assert raw[sheet_end:].startswith('<div class="card st-key">')
+    assert reading in shown(raw[help_at:])
+    assert len(MachineSheet(raw[sheet_at:sheet_end]).rows) == 3
+    for number in (1, 2, 3):
+        assert f'id="machine-{number}"' in raw
+    for name in NAMES:
+        assert name not in raw
+
+
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_performance_copy_retains_sample_minima_without_a_multi_account_prerequisite(language):
+    report = {'state': 'limited_data', 'reporting_users': 765432,
+              'reporting_slots': 654321, 'eligible_slots': 543210,
+              'account_name': 'PRIVATE_ACCOUNT', 'email': 'private@example.com'}
+    raw = project_html(statuspage.performance_panel(report, NOW), language,
+                       '/zh/status' if language == 'zh' else '/status')
+    text = shown(raw)
+    if language == 'en':
+        assert 'At least 20 recorded attempts are needed' in text
+        assert 'Each timing separately requires at least 20 samples' in text
+        assert 'even if only one account contributes' in text
+        assert 'from 3' not in text and '3 different' not in text
+    else:
+        assert '至少有 20 次已记录的尝试' in text
+        assert '至少 20 个样本' in text
+        assert '即使只有一个账号贡献数据' in text
+        assert '3 个账号' not in text and '3 个不同' not in text
+    for private in ('765432', '654321', '543210', 'PRIVATE_ACCOUNT', 'private@example.com'):
+        assert private not in raw
+
+
 def test_machine_sheet_scales_to_many_sorted_rows_with_stable_public_anchors():
     details = [status.MachineDetail(f'private-node-{number}', number,
                                    status.State(status.RED if number % 2 else status.GREEN),
