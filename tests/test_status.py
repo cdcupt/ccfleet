@@ -145,6 +145,52 @@ def test_the_holders_alerts_leave_a_fresh_machine_green():
     assert status.machine_state(beat(20), alerts, True, NOW) == status.State(status.GREEN)
 
 
+@pytest.mark.parametrize("value, expected", [(1, 1), (900, 900), (None, None),
+                                             (True, None), ("1", None), (0, None), (-1, None)])
+def test_public_machine_number_never_coerces_private_or_invalid_data(value, expected):
+    assert status.public_machine_number({"id": "private-person", "public_status_number": value}) == expected
+
+
+def test_machine_details_use_only_fixed_machine_reasons_and_strip_alert_suffixes(store):
+    fleet(store)
+    store.open_alert("pool-1", "slot_wipe_failed:person@example.com", LEVEL_CRITICAL,
+                     "private user on 192.0.2.3", NOW - 90)
+    store.open_alert("pool-1", "disk_high", LEVEL_CRITICAL, "raw disk/path detail", NOW - 80)
+    for rule in status.EXCLUDED_RULES:
+        store.open_alert("pool-1", rule, LEVEL_CRITICAL, "private account fact", NOW - 60)
+    detail = next(item for item in status.machine_details(store, NOW) if item.node_id == "pool-1")
+    assert detail.state == status.State(status.RED, NOW - 80)
+    assert detail.reasons == ("disk_critical", "slot_wipe_failed")
+    assert "person@example.com" not in repr(detail) and "192.0.2.3" not in repr(detail)
+
+
+def test_machine_details_retain_restart_grace_but_actual_report_time(store):
+    fleet(store)
+    store.set_listening_since(NOW - 5)
+    detail = next(item for item in status.machine_details(store, NOW) if item.node_id == "erik-1")
+    assert detail.state == status.State(status.GREEN)
+    assert detail.reasons == ("restart_waiting",)
+    assert detail.last_report == NOW - 700
+    store.begin_outage("erik-1", NOW - 500)
+    detail = next(item for item in status.machine_details(store, NOW) if item.node_id == "erik-1")
+    assert detail.state.level == status.YELLOW and detail.reasons == ("heartbeat_late",)
+
+
+def test_machine_details_batch_each_inventory_read_once(store, monkeypatch):
+    fleet(store)
+    calls = []
+    for method in ("latest_heartbeats", "open_alerts", "list_nodes", "list_slots",
+                   "listening_since", "open_outages"):
+        original = getattr(store, method)
+        def counted(*args, _name=method, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(store, method, counted)
+    details = status.machine_details(store, NOW)
+    assert {detail.node_id for detail in details} == {"erik-1", "pool-1"}
+    assert len(calls) == 6 and len(set(calls)) == 6
+
+
 # -- which machines count ------------------------------------------------------------------
 
 def node(node_id, enabled=True):

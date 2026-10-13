@@ -42,6 +42,7 @@ OWNER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 USERNAME_RE = OWNER_RE
 ROLES = ("admin", "owner")
 TOKEN_BYTES = 32
+PUBLIC_STATUS_SEQUENCE_KEY = "public_status_number_high_water"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -53,6 +54,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     rc_expected INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at REAL NOT NULL,
+    -- Stable anonymous status label, independent of internal auth identity.
+    public_status_number INTEGER CHECK (public_status_number > 0),
     -- When a device token was last handed over for this node. The time only;
     -- the credential itself lives in `logins` for the life of the request and
     -- nowhere else.
@@ -176,6 +179,8 @@ CREATE TABLE IF NOT EXISTS slots (
     -- renamed it to), NULL while free: the name people see, and its machine's
     -- hostname. The id never changes.
     name TEXT,
+    -- Neutral empty-slot hostname; kept across later claims and releases.
+    pool_name TEXT,
     -- 'machine': a Linux user the machine agent makes and wipes. 'owner': a
     -- person's own node counted as their slot, a record and nothing more.
     kind TEXT NOT NULL DEFAULT 'machine',
@@ -249,7 +254,8 @@ CREATE INDEX IF NOT EXISTS ix_payments_account ON payments(account_id);
 -- console and the public pages show (see ccfleetd/pricing.py), a line people
 -- read and never something charged or enforced; the release channels' last read
 -- (ccfleetd/claude_versions.py); and since when the serving loop has been
--- listening for reports (LISTENING_KEY).
+-- listening for reports (LISTENING_KEY). The public-status label high-water
+-- number persists even when its former node is removed.
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -452,6 +458,7 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
         "rc_expected": bool(row["rc_expected"]),
         "enabled": bool(row["enabled"]),
         "created_at": row["created_at"],
+        "public_status_number": row["public_status_number"],
         # A time, never a credential: when a device token was last handed over.
         # Keys are whitelisted here, so a column that is not named is a column
         # that does not exist as far as the rest of the server is concerned —
@@ -592,6 +599,25 @@ class Store:
                                "ON slots(name) WHERE name IS NOT NULL")
             self._conn.commit()
 
+        # Allocate names under the database write lock, including when two
+        # server/CLI Stores open an older database at the same time.
+        with self._write_txn() as conn:
+            self._add_missing_columns("slots", {"pool_name": "TEXT"})
+            self._add_missing_columns("nodes", {
+                "public_status_number": "INTEGER CHECK (public_status_number > 0)",
+            })
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_slots_pool_name "
+                         "ON slots(pool_name) WHERE pool_name IS NOT NULL")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_nodes_public_status_number "
+                         "ON nodes(public_status_number) WHERE public_status_number IS NOT NULL")
+            number = self._public_status_high_water(conn)
+            for row in conn.execute("SELECT id FROM nodes WHERE public_status_number IS NULL "
+                                    "ORDER BY created_at, id").fetchall():
+                number += 1
+                conn.execute("UPDATE nodes SET public_status_number = ? WHERE id = ?",
+                             (number, row["id"]))
+            self._save_public_status_high_water(conn, number, now=0.0)
+
     def _add_missing_columns(self, table: str, columns: dict[str, str]) -> None:
         """Idempotent ALTER TABLE ADD COLUMN. Called with literals only."""
         have = {row["name"] for row in
@@ -629,6 +655,30 @@ class Store:
 
     # -- nodes -------------------------------------------------------------
 
+    @staticmethod
+    def _public_status_high_water(conn: sqlite3.Connection) -> int:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?",
+                           (PUBLIC_STATUS_SEQUENCE_KEY,)).fetchone()
+        raw = row["value"] if row else "0"
+        if not raw.isascii() or not raw.isdigit():
+            raise StoreError("invalid public status number sequence")
+        stored = int(raw)
+        highest = conn.execute("SELECT COALESCE(MAX(public_status_number), 0) FROM nodes "
+                               "WHERE typeof(public_status_number) = 'integer'").fetchone()[0]
+        number = max(stored, highest)
+        if number >= 2 ** 63 - 1:
+            raise StoreError("public status number sequence exhausted")
+        return number
+
+    @staticmethod
+    def _save_public_status_high_water(conn: sqlite3.Connection, number: int, *,
+                                       now: float) -> None:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (PUBLIC_STATUS_SEQUENCE_KEY, str(number), now, "system"))
+
     def add_node(self, node_id: str, owner: str, region: str = "",
                  pinned_version: str = "", rc_expected: bool = False,
                  now: float = 0.0) -> str:
@@ -643,18 +693,24 @@ class Store:
         with self._write_txn() as conn:
             # A machine answers to its id while its slot is free: no slot may
             # already be called that, by id or by its holder's name.
-            if conn.execute("SELECT 1 FROM slots WHERE id = ? OR name = ?",
-                            (node_id, node_id)).fetchone() is not None:
+            if conn.execute("SELECT 1 FROM slots WHERE id = ? OR name = ? OR pool_name = ?",
+                            (node_id, node_id, node_id)).fetchone() is not None:
                 raise StoreError(f"a slot already answers to {node_id!r}")
+            number = self._public_status_high_water(conn) + 1
             try:
                 conn.execute(
                     "INSERT INTO nodes (id, owner, region, token_hash, pinned_version, "
-                    "rc_expected, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "rc_expected, enabled, created_at, public_status_number) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
                     (node_id, owner.strip(), region.strip(), hash_token(token),
-                     pinned_version.strip(), int(rc_expected), now),
+                     pinned_version.strip(), int(rc_expected), now, number),
                 )
             except sqlite3.IntegrityError as exc:
                 raise StoreError(f"node {node_id!r} already exists") from exc
+            # Re-registering an internal id creates new hardware lineage and
+            # a new public number; never adopt the removed node's uptime.
+            conn.execute("DELETE FROM status_minutes WHERE component = ?", (f"node:{node_id}",))
+            self._save_public_status_high_water(conn, number, now=now)
         return token
 
     def rotate_token(self, node_id: str) -> str:
@@ -1155,8 +1211,8 @@ class Store:
                 raise StoreError(f"a node called {new!r} already exists")
             # A machine answers to its id when its slot is free: no slot on
             # another machine may already be called that, by id or by name.
-            if conn.execute("SELECT 1 FROM slots WHERE (id = ? OR name = ?) AND node_id != ?",
-                            (new, new, old)).fetchone() is not None:
+            if conn.execute("SELECT 1 FROM slots WHERE (id = ? OR name = ? OR pool_name = ?) "
+                            "AND node_id != ?", (new, new, new, old)).fetchone() is not None:
                 raise StoreError(f"a slot on another machine already answers to {new!r}")
             stray = [r["id"] for r in conn.execute(
                 "SELECT id FROM slots WHERE node_id = ? ORDER BY id", (new,))]
@@ -1173,6 +1229,11 @@ class Store:
             for table in ("logins", "heartbeats", "alerts"):
                 conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
             conn.execute("DELETE FROM outages WHERE component = ?", (new,))
+            # Public Machine N keeps its measured history. A destination's
+            # orphaned history belonged to other hardware and is never adopted.
+            conn.execute("DELETE FROM status_minutes WHERE component = ?", (f"node:{new}",))
+            conn.execute("UPDATE status_minutes SET component = ? WHERE component = ?",
+                         (f"node:{new}", f"node:{old}"))
             for table, column in self.NODE_ID_COLUMNS:
                 conn.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
                              (new, old))
@@ -1925,7 +1986,8 @@ class Store:
             # The slot's id is its machine's name while it is free: it may be
             # its own machine's id — the rule, pool-1 on pool-1 — and nothing
             # else that already answers to a name.
-            if conn.execute("SELECT 1 FROM slots WHERE name = ?", (slot_id,)).fetchone() or \
+            if conn.execute("SELECT 1 FROM slots WHERE name = ? OR pool_name = ?",
+                            (slot_id, slot_id)).fetchone() or \
                     conn.execute("SELECT 1 FROM nodes WHERE id = ? AND id != ?",
                                  (slot_id, node_id)).fetchone():
                 raise StoreError(f"something already answers to {slot_id!r}")
@@ -2015,8 +2077,8 @@ class Store:
             # A slot's id is its machine's name while it is free, so nothing
             # else may already answer to it: another slot's holder, or another
             # machine. Its own machine's id, and its own holder's name, may.
-            if conn.execute("SELECT 1 FROM slots WHERE name = ? AND id != ?",
-                            (new, old)).fetchone() is not None:
+            if conn.execute("SELECT 1 FROM slots WHERE (name = ? OR pool_name = ?) AND id != ?",
+                            (new, new, old)).fetchone() is not None:
                 raise StoreError(f"a slot already answers to {new!r}")
             if conn.execute("SELECT 1 FROM nodes WHERE id = ? AND id != "
                             "(SELECT node_id FROM slots WHERE id = ?)",
@@ -2580,18 +2642,17 @@ class Store:
         that came back free still carrying the previous holder's id would read
         as theirs on every page that joins on it.
         """
-        with self._lock:
-            row = self._conn.execute(
+        with self._write_txn() as conn:
+            row = conn.execute(
                 "SELECT state FROM slots WHERE id = ?", (slot_id,)).fetchone()
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
             slotstates.check_move(row["state"], slotstates.FREE)
-            freed = self._free_released(self._conn, slot_id, now)
-            self._conn.commit()
+            freed = self._free_released(conn, slot_id, now)
         return freed
 
-    @staticmethod
-    def _free_released(conn: sqlite3.Connection, slot_id: str, now: float) -> bool:
+    @classmethod
+    def _free_released(cls, conn: sqlite3.Connection, slot_id: str, now: float) -> bool:
         """The one statement that turns a finished wipe into a free slot.
 
         Shared by every path that frees a slot, so what "free" clears cannot
@@ -2599,17 +2660,22 @@ class Store:
         last handed a device token — all of it in the same statement, pinned
         to `releasing` so a slot in any other state is left untouched.
         """
-        # The name goes too: it was the last holder's, and a free slot is
-        # called by its id until the next claim names it after somebody else.
+        row = conn.execute("SELECT * FROM slots WHERE id = ? AND state = ?",
+                           (slot_id, slotstates.RELEASING)).fetchone()
+        if row is None:
+            return False
+        pool_name = cls._pool_name_for(conn, row)
+        # The holder's name goes; the neutral pool alias survives future claims.
         # So does their last change of account: the next holder's week is
         # their own.
         cur = conn.execute(
             "UPDATE slots SET state = ?, held_by = NULL, claimed_at = NULL, "
-            "released_at = ?, device_token_at = 0, name = NULL, claude_channel = NULL, "
+            "released_at = ?, device_token_at = 0, name = NULL, pool_name = ?, "
+            "claude_channel = NULL, "
             "account_switched_at = NULL, quota_wanted_at = NULL, ssh_public_key = '', "
             "gateway_claim_id = '', gateway_generation = gateway_generation + 1 "
             "WHERE id = ? AND state = ?",
-            (slotstates.FREE, now, slot_id, slotstates.RELEASING))
+            (slotstates.FREE, now, pool_name, slot_id, slotstates.RELEASING))
         if cur.rowcount > 0:
             # Nor their update: the next holder starts on the machine's pin.
             conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (slot_id,))
@@ -2657,6 +2723,8 @@ class Store:
                     (int(present) if isinstance(present, bool) else None, now, row["id"]))
                 to = slotstates.next_state(row["state"], row["claimed_at"], report)
                 if to is None:
+                    if row["state"] == slotstates.FREE and present is False:
+                        self._normalize_free_pool_names(conn, slot_id=row["id"])
                     continue
                 # No state pin on these writes: the state was read inside this
                 # write transaction, so nothing can have changed it since.
@@ -2692,17 +2760,53 @@ class Store:
         return [row["id"] for row in rows]
 
     @staticmethod
-    def _taken_names(conn: sqlite3.Connection, but: str = "") -> set[str]:
+    def _taken_names(conn: sqlite3.Connection, but: str = "", node_but: str = "") -> set[str]:
         """Every name a machine answers to or may: each node's id and each
-        slot's id and name, but the slot `but`'s own. The name becomes a
+        slot's id, holder name and reserved pool alias, but the slot `but`'s own.
+        The pool allocator may also exclude that slot's own node id. A name becomes a
         hostname, and one another machine already answers to would be two
         machines under one name."""
-        taken = {r["id"] for r in conn.execute("SELECT id FROM nodes")}
-        for row in conn.execute("SELECT id, name FROM slots WHERE id != ?", (but,)):
+        taken = {r["id"] for r in conn.execute("SELECT id FROM nodes WHERE id != ?",
+                                              (node_but,))}
+        for row in conn.execute("SELECT id, name, pool_name FROM slots WHERE id != ?", (but,)):
             taken.add(row["id"])
             if row["name"]:
                 taken.add(row["name"])
+            if row["pool_name"]:
+                taken.add(row["pool_name"])
         return taken
+
+    @classmethod
+    def _pool_name_for(cls, conn: sqlite3.Connection, row: sqlite3.Row) -> str:
+        if names.valid_pool_name(row["pool_name"]):
+            return row["pool_name"]
+        taken = cls._taken_names(conn, but=row["id"], node_but=row["node_id"])
+        for candidate in (row["id"], row["node_id"]):
+            if names.valid_pool_name(candidate) and candidate not in taken:
+                return candidate
+        return names.next_name("pool", taken)
+
+    @classmethod
+    def _normalize_free_pool_names(cls, conn: sqlite3.Connection, *,
+                                   slot_id: Optional[str] = None) -> list[dict[str, str]]:
+        rows = conn.execute(
+            "SELECT * FROM slots WHERE state = ? AND kind = ? AND present = 0 "
+            "AND held_by IS NULL AND claimed_at IS NULL AND pool_name IS NULL "
+            + ("AND id = ? " if slot_id is not None else "") + "ORDER BY node_id, id",
+            (slotstates.FREE, slotstates.MACHINE_SLOT,
+             *([slot_id] if slot_id is not None else []))).fetchall()
+        changed = []
+        for row in rows:
+            pool_name = cls._pool_name_for(conn, row)
+            conn.execute("UPDATE slots SET pool_name = ?, name = NULL WHERE id = ?",
+                         (pool_name, row["id"]))
+            changed.append({"slot_id": row["id"], "pool_name": pool_name})
+        return changed
+
+    def normalize_free_pool_names(self) -> list[dict[str, str]]:
+        """Backfill only empty, holderless hosted slots; never declare a wipe."""
+        with self._write_txn() as conn:
+            return self._normalize_free_pool_names(conn)
 
     @classmethod
     def _name_for(cls, conn: sqlite3.Connection, account: sqlite3.Row) -> str:

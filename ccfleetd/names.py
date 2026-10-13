@@ -9,7 +9,8 @@ lowercase letters, digits and inner hyphens, at most 63 characters.
 
 A slot's id never changes: sign-ins, requests and pages are keyed on it. The
 name is separate, set when somebody claims the slot and cleared when the wipe
-that frees it completes, and the id stands in for it whenever there is none.
+that frees it completes. A persistent neutral pool name identifies an empty
+hosted slot without changing its internal id.
 """
 
 from __future__ import annotations
@@ -38,6 +39,13 @@ _NICKNAME_RE = re.compile(rf"[a-z0-9][a-z0-9-]{{0,{MAX_NICKNAME - 2}}}[a-z0-9]")
 # nickname never takes their shape, so no name reads as a pool machine's or
 # waits to become a neutral one that another slot is later given.
 _RESERVED_RE = re.compile(r"(?:pool|slot)-[0-9]+")
+_POOL_RE = re.compile(r"pool-[1-9][0-9]*")
+
+
+def valid_pool_name(name: Any) -> bool:
+    """An authored, numbered pool hostname, never a holder's nickname."""
+    return (isinstance(name, str) and valid_hostname(name)
+            and _POOL_RE.fullmatch(name) is not None)
 
 
 def valid_handle(handle: Any) -> bool:
@@ -80,5 +88,9 @@ def next_name(handle: str, taken: Collection[str]) -> str:
 
 
 def display(slot: Mapping[str, Any]) -> str:
-    """What a slot is called on every page: its name while held, else its id."""
+    """Its holder's name while held; its neutral pool name when empty."""
+    pool = slot.get("pool_name")
+    pool = pool if valid_pool_name(pool) else None
+    if slot.get("state") == "free":
+        return pool or slot["id"]
     return slot.get("name") or slot["id"]

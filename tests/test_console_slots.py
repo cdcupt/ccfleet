@@ -955,7 +955,7 @@ def test_alerts_are_pills_on_the_row_they_are_about(console):
     # The machine's own, about no slot: the Alerts card says it, not a row.
     store.open_alert("m1", "account_elsewhere", "critical", "about the machine itself", now)
     card = slots_card(call("GET", "/admin").body)
-    first, second = on_the_row(by_name(card)["m1-01"]), on_the_row(by_name(card)["m1-02"])
+    first, second = on_the_row(by_name(card)["pool-1"]), on_the_row(by_name(card)["pool-2"])
     assert '<span class="pill critical">account elsewhere</span>' in first
     assert '<span class="pill warn">slot provision failed</span>' in first
     assert '<span class="pill critical">slot wipe failed</span>' in second

@@ -1,8 +1,7 @@
 """The public status page, and each holder's line about their slot's machine.
 
-Public, so it says only what anybody may know: whether this site and the
-machines are up, and how they have been. Never a machine's id or a slot's name,
-since a held slot is named after its holder (Erik, 2026-09-24, #108).
+Public machine details use persistent neutral numbers, fixed machine reasons
+and recorded uptime. Private node/slot/holder identities are not public labels.
 """
 from __future__ import annotations
 
@@ -12,13 +11,13 @@ import time
 
 import pytest
 
-from ccfleetd import render, status, statuspage, usersite
+from ccfleetd import names, render, status, statuspage, usersite
 from ccfleetd.bilingual import SCRIPT_TAG as LANGUAGE_TAG
 from ccfleetd.bilingual import label, project_html
 from ccfleetd.config import Config
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
-from ccfleetd.rules import LEVEL_WARN
+from ccfleetd.rules import LEVEL_CRITICAL, LEVEL_WARN
 from tests.conftest import refresh_of
 from tests.test_admin_host import ADMIN, PRODUCT, split  # noqa: F401  (the fixture)
 from tests.test_usersite import report, site  # noqa: F401  (the fixture, by name)
@@ -109,6 +108,176 @@ def test_the_page_names_no_machine_and_nobody(store, cfg):
     raw = page_of(store, cfg, NOW + 180)
     for name in NAMES:
         assert name not in raw, name
+
+
+def machine_card(raw, number):
+    return raw.split(f'<article class="st-machine-card" id="machine-{number}"', 1)[1].split(
+        '</article>', 1)[0]
+
+
+def test_each_machine_has_its_own_neutral_label_colour_safe_reason_and_report(store, cfg):
+    fleet(store, ages=(20, 30, 400))
+    store.open_alert("pool-7", "disk_high", LEVEL_WARN,
+                     "ana@example.com disk/path on 192.0.2.3", NOW - 60)
+    nodes = {node['id']: node for node in store.list_nodes()}
+    raw = page_of(store, cfg)
+    assert 'id="slot-machines"' in raw
+    assert raw.count('class="st-machine-card"') == 3
+    owner = shown(machine_card(raw, nodes['erik-9']['public_status_number']))
+    assert 'Operational' in owner and 'Reporting normally.' in owner
+    disk = shown(machine_card(raw, nodes['pool-7']['public_status_number']))
+    assert 'Degraded' in disk and 'Disk capacity is low.' in disk
+    down = machine_card(raw, nodes['pool-8']['public_status_number'])
+    assert 'Down' in shown(down)
+    assert 'No heartbeat within the expected reporting interval.' in shown(down)
+    assert f'datetime="{status.utc_iso(NOW - 400)}" data-local' in down
+    for private in (*NAMES, '192.0.2.3', 'disk/path'):
+        assert private not in raw
+
+
+@pytest.mark.parametrize("rule,level,expected", [
+    ('slot_missing:private-user@example.com', LEVEL_CRITICAL, 'A slot environment is unavailable.'),
+    ('slot_wipe_failed:private-user', LEVEL_CRITICAL, 'Slot cleanup needs operator attention.'),
+    ('slot_occupied:private-user', LEVEL_CRITICAL, 'Slot cleanup is incomplete.'),
+    ('slot_provision_failed:private-user', LEVEL_WARN, 'Slot setup needs operator attention.'),
+    ('claude_missing', LEVEL_CRITICAL, 'Claude Code is unavailable on this machine.'),
+    ('disk_high', LEVEL_CRITICAL, 'Disk capacity is critically low.'),
+])
+def test_machine_reason_copy_is_fixed_and_never_reflects_alert_messages(
+        store, cfg, rule, level, expected):
+    fleet(store)
+    store.open_alert('pool-8', rule, level, 'PRIVATE_RAW_ERROR /root/private 192.0.2.8', NOW - 60)
+    raw = page_of(store, cfg)
+    assert expected in shown(raw)
+    for private in ('private-user', 'PRIVATE_RAW_ERROR', '/root/private', '192.0.2.8'):
+        assert private not in raw
+
+
+@pytest.mark.parametrize("rule", status.EXCLUDED_RULES)
+def test_credential_quota_and_informational_alerts_do_not_become_public_machine_reasons(
+        store, cfg, rule):
+    fleet(store)
+    store.open_alert('pool-8', rule, LEVEL_CRITICAL, 'PRIVATE_ACCOUNT_REASON', NOW - 60)
+    raw = page_of(store, cfg)
+    assert '3 of 3 operational' in shown(raw)
+    assert raw.count('Reporting normally.') == 3
+    assert 'PRIVATE_ACCOUNT_REASON' not in raw and rule not in raw
+
+
+def test_machine_status_shows_original_timestamp_during_restart_grace(store, cfg):
+    fleet(store, ages=(600, 600, 600))
+    store.set_listening_since(NOW - 5)
+    raw = page_of(store, cfg)
+    assert '3 of 3 operational' in shown(raw)
+    assert raw.count('Waiting for a fresh report after the server restarted.') == 3
+    assert raw.count(f'datetime="{status.utc_iso(NOW - 600)}" data-local') == 3
+
+
+def test_machine_uptime_uses_existing_recorded_minutes_without_an_extra_history_read(
+        store, cfg, monkeypatch):
+    fleet(store)
+    store.count_status('node:pool-7', status.GREEN, NOW, grace=0)
+    store.count_status('node:pool-7', status.RED, NOW + 60, grace=0)
+    number = next(node['public_status_number'] for node in store.list_nodes() if node['id'] == 'pool-7')
+    calls = []
+    original = store.status_minutes
+    def recorded(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(store, 'status_minutes', recorded)
+    raw = project_html(page_of(store, cfg, NOW + 120), 'en', '/status')
+    assert '90-day recorded uptime: 50.00%' in shown(machine_card(raw, number))
+    assert len(calls) == 1
+    empty_number = next(node['public_status_number'] for node in store.list_nodes() if node['id'] == 'pool-8')
+    assert '90-day recorded uptime: No data yet' in shown(machine_card(raw, empty_number))
+
+
+def test_machine_name_is_visible_only_to_an_authenticated_operator_and_is_escaped(store, cfg):
+    fleet(store)
+    admin = usersite.Viewer({'role': 'admin', 'email': 'operator@example.com'}, 'csrf')
+    member = usersite.Viewer({'role': 'user', 'email': 'viewer@example.com'}, 'csrf')
+    assert 'Operator machine name:' not in statuspage.page(store, cfg, member, NOW)
+    raw = statuspage.page(store, cfg, admin, NOW)
+    for node in ('pool-7', 'pool-8', 'erik-9'):
+        assert node in raw
+    detail = status.MachineDetail('<script>alert(1)</script>', 7, status.State(status.GREEN),
+                                  ('reported',), NOW)
+    html = statuspage.machine_details_panel([detail], status.History([], [], (0, 0), (0, 0)), admin, NOW)
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html and '<script>' not in html
+    anonymous = statuspage.machine_details_panel([detail], status.History([], [], (0, 0), (0, 0)), None, NOW)
+    assert 'alert(1)' not in anonymous
+
+
+def test_operator_machine_name_uses_current_slot_display_and_keeps_internal_id_separate(store, cfg):
+    fleet(store)
+    store.add_node('operator-private', 'op', now=NOW)
+    store.add_slot('operator-private', 'operator-private', 'slot01', now=NOW)
+    store.apply_slot_report('operator-private', [{'unix_user': 'slot01', 'present': False}], now=NOW)
+    store.insert_heartbeat('operator-private', NOW, {'node_id': 'operator-private', 'mode': 'machine'})
+    admin = usersite.Viewer({'role': 'admin', 'email': 'operator@example.com'}, 'csrf')
+    member = usersite.Viewer({'role': 'user', 'email': 'viewer@example.com'}, 'csrf')
+    slots = {slot['node_id']: slot for slot in store.list_slots()}
+    nodes = {node['id']: node for node in store.list_nodes()}
+    free_name = names.display(slots['operator-private'])
+    held_name = names.display(slots['pool-7'])
+    english = project_html(statuspage.page(store, cfg, admin, NOW), 'en', '/status')
+    free = shown(machine_card(english, nodes['operator-private']['public_status_number']))
+    held = shown(machine_card(english, nodes['pool-7']['public_status_number']))
+    assert 'Operator machine name: ' + free_name in free
+    assert 'Internal machine ID: operator-private' in free
+    assert 'Operator machine name: ' + held_name in held
+    assert 'Internal machine ID: pool-7' in held
+    for viewer in (None, member):
+        public = statuspage.page(store, cfg, viewer, NOW)
+        for private in (free_name, held_name, 'pool-7', 'operator-private'):
+            assert private not in public
+    detail = status.MachineDetail('private-node', 10, status.State(status.GREEN), ('reported',),
+                                  NOW, '<img src=x onerror=alert(1)>')
+    html = statuspage.machine_details_panel([detail], status.History([], [], (0, 0), (0, 0)), admin, NOW)
+    assert '&lt;img src=x onerror=alert(1)&gt;' in html and '<img' not in html
+
+
+@pytest.mark.parametrize('number', [None, True, 'erik-9', 0, -1])
+def test_missing_or_invalid_public_number_never_falls_back_to_a_personal_name(number):
+    detail = status.MachineDetail('private-person', number, status.State(status.GREEN),
+                                  ('reported',), NOW)
+    html = statuspage.machine_details_panel([detail], status.History([], [], (0, 0), (0, 0)), None, NOW)
+    assert 'private-person' not in html and 'class="st-machine-card"' not in html
+
+
+def test_detail_snapshot_is_batched_once_and_keeps_the_original_aggregate_components(
+        store, cfg, monkeypatch):
+    fleet(store)
+    store.add_node('disabled-private', 'op', now=NOW)
+    store.add_slot('disabled-private', 'disabled-private', 'slot01', now=NOW)
+    store.set_enabled('disabled-private', False)
+    store.insert_heartbeat('disabled-private', NOW, {'node_id': 'disabled-private', 'mode': 'machine'})
+    calls = []
+    original = status.machine_details
+    def details(*args):
+        calls.append(args)
+        return original(*args)
+    monkeypatch.setattr(status, 'machine_details', details)
+    raw = page_of(store, cfg)
+    assert calls == [(store, NOW)]
+    assert raw.count('class="st-machine-card"') == 3
+    assert '3 of 3 operational' in shown(raw)
+    assert 'disabled-private' not in raw
+
+
+def test_machine_detail_projection_has_only_the_selected_language(store, cfg):
+    fleet(store, ages=(20, 30, 400))
+    store.open_alert('pool-7', 'disk_high', LEVEL_WARN, 'RAW_SECRET', NOW - 60)
+    raw = page_of(store, cfg)
+    english = project_html(raw, 'en', '/status')
+    chinese = project_html(raw, 'zh', '/zh/status')
+    assert 'Machine 1' in shown(english) and '主机 1' not in shown(english)
+    assert 'Disk capacity is low.' in shown(english)
+    assert '主机 1' in shown(chinese) and 'Machine 1' not in shown(chinese)
+    assert '磁盘剩余空间不足。' in shown(chinese)
+    assert '超过预期上报间隔，仍未收到心跳。' in shown(chinese)
+    assert 'RAW_SECRET' not in english + chinese
+    assert english.count('<script') == chinese.count('<script') == 2
 
 
 def test_the_page_carries_only_the_two_authored_scripts(store, cfg):

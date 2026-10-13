@@ -118,14 +118,16 @@ verify and restore that current state, then start only the restored deployment
 and switch routing. Never reactivate the source's stale database or overwrite
 legitimate new activity to force an old baseline comparison.</p>
 <h2 id="naming-machines-and-slots">Naming machines and slots</h2>
-<p>One machine is one slot, and one name per machine, used everywhere: its node
-id, its slot's id and its hostname. Named by role:</p>
+<p>One machine is one slot. Its authenticated node ID and slot ID remain stable;
+its display name and desired hostname follow the slot's lifecycle. Choose initial
+IDs by role:</p>
 <ul>
 <li><code>&lt;operator&gt;-N</code> for the operator's own machines, owner nodes and shared
 machines kept for their own account alike: <code>erik-1</code>, <code>erik-2</code>;</li>
 <li><code>pool-N</code> for shared machines offered to customers: <code>pool-1</code>, <code>pool-2</code>.</li>
 </ul>
-<p>A shared machine's one slot takes the machine's name (<code>pool-1</code> on <code>pool-1</code>),
+<p>A shared machine's one slot normally starts with the same ID as its node
+(<code>pool-1</code> on <code>pool-1</code>),
 and its Linux user is <code>slot01</code>. When somebody claims it, the slot gets a
 neutral name, <code>slot-4821</code> (random digits nobody answers to yet), never anything
 from their address: Claude Code can report the hostname to Anthropic
@@ -135,7 +137,18 @@ one). A handle set with <code>ccfleetd account handle &lt;email&gt; &lt;handle&g
 person's request, names their slots <code>&lt;handle&gt;-&lt;n&gt;</code> instead (<code>alice-1</code>, then
 <code>alice-2</code>). The machine takes the name as its hostname on its next run; the
 console marks the machine &quot;hostname pending&quot; until it has. When the wipe that frees the slot completes, the name
-goes and the slot is called by its id again.</p>
+goes and the slot receives an unused <code>pool-N</code> name. The pool name remains
+reserved for that slot across later claims and releases; an existing <code>pool-N</code>
+identity is retained when available. The authenticated node and slot IDs do not change,
+so installed agents, SSH pins and history keep their existing identities. A failed or
+unfinished wipe never makes the slot free or publishes it as a new pool slot.</p>
+<p>New node and slot IDs must not reuse an existing slot's reserved pool name,
+including while that slot is held. Check the current names in the console before
+registering another machine; choose an unused ID if a pool name is already reserved.</p>
+<p>The public status page lists each monitored slot machine under a stable
+<code>Machine N</code> label, with its health, machine-level reasons and last report.
+The holder's slot card links to that label. Signed-in operators additionally see actual
+machine names; public visitors do not see holder names, account state or raw alerts.</p>
 <p>Set the hostname when the machine is added, the way step 4 of
 <a href="#rename-a-machine">Rename a machine</a> does, so a provider's serial-number
 hostname never reaches the picker. A fleet already running under other names
@@ -481,7 +494,7 @@ node, the same line in <code>~/.config/ccfleet/agent.env</code>. The next heartb
 accepted.
 On a shared machine, stop here: steps 4 and 5 happen by themselves. The
 machine agent answers to its slot's name (its holder's while held, its own
-id while free): on its next run it rewrites <code>/etc/hosts</code>, runs <code>hostnamectl</code>,
+pool name while free): on its next run it rewrites <code>/etc/hosts</code>, runs <code>hostnamectl</code>,
 writes the cloud-init drop-in, and restarts any legacy Remote Control service
 if it is running. The console says &quot;hostname pending&quot; until it has. An owner's
 node is never renamed for you; go on with step 4 there.</li>

@@ -1396,6 +1396,16 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "也不公开名称、邮箱、提示词、凭据或回复内容。",
             ),
             (
+                "Machine availability is shown separately under stable neutral labels "
+                "such as Machine 1, with health, machine-level reasons and the last report. "
+                "Your own slot card links to its machine's public label. Operators can "
+                "also see actual machine names after signing in; those names remain "
+                "hidden from other public viewers.",
+                "主机可用状态单独展示，使用“主机 1”等固定中性标签，显示健康状态、"
+                "主机层面的异常原因和最近报告时间。你的槽位卡片会链接到对应的公开标签。"
+                "管理员登录后还可以看到实际主机名称；其他公开访问者看不到这些名称。",
+            ),
+            (
                 "Traffic figures appear only when at least three contributing Fleet "
                 "users and twenty observed attempts are included. Each timing separately "
                 "needs twenty samples from three users. Until then, the panel "
@@ -1712,6 +1722,18 @@ def _slot_card(
     # Its machine's state, as the status page says it (status.slot_line).
     if machine_line:
         parts.append(machine_line)
+    public_number = status.public_machine_number(node)
+    if public_number is not None:
+        public_label = label(f"Public status: Machine {public_number}",
+                             f"公共状态：主机 {public_number}", inline=True)
+        monitored = heartbeat is not None and node.get("enabled") is not False
+        parts.append(
+            '<p class="muted small">'
+            + (f'<a href="/status#machine-{public_number}">{public_label}</a>'
+               if monitored else public_label + ' · ' + label(
+                   "Not publicly monitored yet", "暂未纳入公开监测", inline=True))
+            + '</p>'
+        )
     if detail:
         detail_zh = (
             "在下方登录你自己的 Claude 账号。"
