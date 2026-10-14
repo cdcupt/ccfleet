@@ -238,6 +238,8 @@ def test_timer_and_attempt_definitions_do_not_claim_end_to_end_task_success():
     assert "first to the last successfully forwarded response-body chunk" in text
     assert "native/bridge slot-relay measurements" in text
     assert "without counting a gateway reply twice" in text
+    assert "At the observing relay" in text
+    assert "At the gateway" not in text
     assert "at least two chunks and 100 ms" in text
     assert "Single-chunk or too-short replies are excluded" in text
     assert "buffering can affect the observed rate" in text

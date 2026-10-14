@@ -408,8 +408,8 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
          "Recorded transfer duration; answer length affects it.",
          "记录中的传输时长，也受回复长度影响。", _timing_samples_text(total)),
         ("Streamed output rate", "流式输出速率", output_rate,
-         "At the gateway; higher is faster for comparable models and workloads.",
-         "在网关观测；模型和工作负载相近时，数值越高表示交付越快。", output_samples),
+         "At the observing relay; higher is faster for comparable models and workloads.",
+         "在转发点观测；模型和工作负载相近时，数值越高表示交付越快。", output_samples),
     )
     grid = '<dl class="st-perf-grid">' + ''.join(
         '<div class="st-perf-metric"><dt>' + label(en, zh, inline=True)
@@ -554,8 +554,8 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
         '<section class="card st-performance" id="performance" aria-labelledby="performance-title">'
         '<h2 id="performance-title">' + label("Fleet performance", "Fleet 性能", inline=True)
         + '</h2><p class="sub">' + label(
-            "Recent slot-relay measurements and gateway streamed-output delivery.",
-            "近期槽位端转发统计与网关流式输出交付表现。", inline=True)
+            "Recent slot-relay transfer and streamed-output delivery measurements.",
+            "近期槽位转发与流式输出交付观测。", inline=True)
         + '<span class="st-perf-window">' + label(
             "Last 7 UTC calendar days, including today", "最近 7 个 UTC 日期，包含今天",
             inline=True)
