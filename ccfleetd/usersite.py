@@ -542,28 +542,53 @@ border-radius:12px;background:var(--panel)}
 border:1px solid var(--rule-soft);border-radius:12px}
 .site .relay-usage>summary{font-weight:650;cursor:pointer}
 .site .relay-usage p{line-height:1.65}
-.site .usage-ranking{margin-top:44px;padding:22px 24px}
-.usage-ranking h2{margin:0 0 8px;font-size:24px}
-.usage-ranking p{font-size:14px;line-height:1.65;color:var(--muted)}
+.site .usage-ranking{margin-top:44px;padding:24px}
+.usage-ranking h2{margin:0;font-size:23px;letter-spacing:-.02em}
+.usage-ranking p{font-size:13px;line-height:1.65;color:var(--muted);margin:10px 0}
+.usage-ranking .usage-ranking-lead{margin:6px 0 0}
 .usage-ranking-sheet{max-width:100%;overflow-x:auto;border:1px solid var(--rule-soft);
-border-radius:12px;margin:18px 0}
-.usage-ranking table{width:100%;min-width:480px;border-collapse:collapse;font-size:14px}
-.usage-ranking th,.usage-ranking td{padding:12px 14px;text-align:left;vertical-align:top;
+border-radius:14px;margin:18px 0 12px}
+.usage-ranking table{width:100%;min-width:440px;border-collapse:collapse;font-size:14px}
+.usage-ranking th,.usage-ranking td{padding:15px 16px;text-align:left;vertical-align:top;
 border-bottom:1px solid var(--rule-soft);font-variant-numeric:tabular-nums}
-.usage-ranking thead th{background:var(--inset);font-size:12px;color:var(--muted)}
+.usage-ranking thead th{background:var(--inset);font-size:11px;color:var(--muted);
+letter-spacing:.04em;white-space:nowrap}
 .usage-ranking tbody th{background:none;text-transform:none}
-.usage-ranking tbody tr:last-child td,.usage-ranking tbody tr:last-child th{border-bottom:0}
-.usage-ranking small{display:block;margin-top:4px;font-size:12px;color:var(--muted)}
-.usage-ranking details{margin-top:7px;font-weight:400;max-width:320px}
-.usage-ranking tbody th details,.usage-ranking .usage-models{text-transform:none;font-weight:400}
-.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12px}
-.usage-ranking .usage-models{margin:10px 0 0;min-width:210px}
-.usage-models>div{padding:8px 0;border-top:1px solid var(--rule-soft)}
-.usage-models dt{font-size:12px;font-weight:400;overflow-wrap:anywhere}
-.usage-models dd{margin:3px 0 0;font-size:12px;color:var(--muted);line-height:1.65}
+.usage-ranking .usage-ranking-row th,.usage-ranking .usage-ranking-row td{border-bottom:0}
+.usage-ranking .usage-rank{width:28px;color:var(--muted);font-size:12px}
+.usage-ranking .usage-user{min-width:72px;padding-top:18px}
+.usage-ranking .usage-observed{min-width:115px}
+.usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:19px;font-weight:700;
+line-height:1.3;color:var(--ink);white-space:nowrap}
+.usage-ranking small{display:block;margin-top:5px;font-size:11.5px;line-height:1.5;
+color:var(--muted)}
+.usage-ranking .usage-estimate{min-width:180px}
+.usage-estimate-value{display:flex;align-items:center;gap:8px}
+.usage-ranking .usage-badge{display:inline-flex;font-size:10px;font-weight:650;line-height:1.4;
+padding:2px 6px;border-radius:999px;color:var(--acc);background:var(--acc-soft)}
+.usage-ranking .usage-ranking-detail>td{padding:0 16px 12px}
+.usage-ranking details{text-transform:none;font-weight:400}
+.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12px;line-height:1.6}
+.usage-ranking .usage-models{display:grid;gap:10px;margin:12px 0 0}
+.usage-model{padding:14px 16px;border:1px solid var(--rule-soft);border-radius:10px;
+background:var(--inset)}
+.usage-model-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px}
+.usage-model-name{font-size:13px;font-weight:650;overflow-wrap:anywhere}
+.usage-model-value{font-size:14px;font-weight:650;white-space:nowrap}
+.usage-token-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0}
+.usage-token-grid dt{font-size:10.5px;color:var(--muted);text-transform:none;letter-spacing:0}
+.usage-token-grid dd{margin:3px 0 0;font-size:14px;color:var(--ink);font-weight:600}
+.usage-ranking .usage-method{border-top:1px solid var(--rule-soft);padding-top:10px;margin-top:12px}
+.usage-ranking .usage-units{font-size:11px;margin:0}
+.usage-ranking .usage-scope{color:var(--ink);font-size:12px}
+.usage-ranking .usage-token{font-variant-numeric:tabular-nums}
 .usage-ranking .usage-ranking-empty{padding:20px;color:var(--muted)}
-@media(max-width:640px){.site .usage-ranking{padding:18px 16px}
-.usage-ranking th,.usage-ranking td{padding:10px}.usage-ranking h2{font-size:22px}}
+@media(max-width:640px){.site .usage-ranking{padding:18px 14px}
+.usage-ranking th,.usage-ranking td{padding:13px 10px}
+.usage-ranking .usage-ranking-detail>td{padding:0 10px 10px}
+.usage-ranking h2{font-size:21px}.usage-model{padding:12px}
+.usage-token-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:17px}}
 .site .row-line.release{border-top:1px solid var(--rule-soft);margin-top:8px;padding-block:20px}
 .site .row-line.release .check{line-height:1.65}
 .site .row-line.release button{white-space:normal}
@@ -681,19 +706,47 @@ def _public_usage_number(value: Any) -> str:
     return f"{count:,}" if count is not None else "—"
 
 
+def _public_usage_token(value: Any) -> str:
+    """Compact decimal units with exact, accessible counts and integer rounding."""
+    count = _public_usage_count(value)
+    if count is None:
+        return label("—", "—", inline=True)
+    shown = str(count)
+    if count >= 1000:
+        units = ((1000, "K"), (1_000_000, "M"), (1_000_000_000, "B"))
+        index = max(index for index, (scale, _) in enumerate(units) if count >= scale)
+        scale, suffix = units[index]
+        rounded = (count * 100 + scale // 2) // scale
+        if rounded >= 100_000 and index < len(units) - 1:
+            scale, suffix = units[index + 1]
+            rounded = (count * 100 + scale // 2) // scale
+        whole, fraction = divmod(rounded, 100)
+        shown = str(whole) + ("." + f"{fraction:02}".rstrip("0") if fraction else "") + suffix
+    english, chinese = f"{count:,} tokens", f"{count:,} Token"
+    return (f'<span class="usage-token" title="{english}" aria-label="{english}" '
+            f'data-title-en="{english}" data-title-zh="{chinese}" '
+            f'data-aria-label-en="{english}" data-aria-label-zh="{chinese}">{shown}</span>')
+
+
+def _public_usage_price_known(reading: Mapping[str, Any]) -> bool:
+    value = reading.get("estimated_usd")
+    try:
+        return (reading.get("cost_state") in ("complete", "partial")
+                and type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 10**15)
+    except (OverflowError, ValueError):
+        return False
+
+
 def _public_usage_value(reading: Mapping[str, Any]) -> str:
     value = reading.get("estimated_usd")
-    state = reading.get("cost_state")
-    try:
-        known = (state in ("complete", "partial") and type(value) in (int, float)
-                 and math.isfinite(value) and 0 <= value <= 10**15)
-    except (OverflowError, ValueError):
-        known = False
-    if not known:
+    if not _public_usage_price_known(reading):
         return label("—", "—", inline=True)
-    amount = "&lt;$0.01" if 0 < value < 0.01 else f"${value:,.2f}"
-    return amount + ('<small>' + label("Partial estimate", "部分估值", inline=True) + '</small>'
-                     if state == "partial" else '')
+    return "&lt;$0.01" if 0 < value < 0.01 else f"${value:,.2f}"
+
+
+def _public_usage_badge(reading: Mapping[str, Any]) -> str:
+    return ('<span class="usage-badge">' + label("Partial", "部分覆盖", inline=True) + '</span>'
+            if reading.get("cost_state") == "partial" else '')
 
 
 def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
@@ -706,7 +759,7 @@ def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
                  inline=True)
 
 
-def _public_usage_models(models: Any) -> str:
+def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
     rows = []
     for model in models[:16] if isinstance(models, list) else []:
         if not isinstance(model, Mapping):
@@ -719,35 +772,94 @@ def _public_usage_models(models: Any) -> str:
         sample_text = _public_usage_number(model.get("samples"))
         read_text = _public_usage_number(model.get("cache_read_samples"))
         write_text = _public_usage_number(model.get("cache_creation_samples"))
-        totals = [
-            label(en + " " + _public_usage_number(tokens.get(key)),
-                  zh + " " + _public_usage_number(tokens.get(key)), inline=True)
-            for key, en, zh in (("input_tokens", "Input", "输入"),
-                               ("output_tokens", "Output", "输出"),
-                               ("cache_read_input_tokens", "Cache read", "缓存读取"),
-                               ("cache_creation_input_tokens", "Cache write", "缓存写入"))
-        ]
-        rows.append('<div><dt>' + title + '</dt><dd>' + ' · '.join(totals) + '<br>'
-                    + label("Estimated API value: ", "估算 API 等价值：", inline=True)
-                    + _public_usage_value(model) + '<br>'
-                    + label("Measured replies: " + sample_text, "已观测回复：" + sample_text,
-                            inline=True)
-                    + '<br>' + label(
-                        f"Cache field coverage: read {read_text}/{sample_text} · "
-                        f"write {write_text}/{sample_text}",
-                        f"缓存字段覆盖：读取 {read_text}／{sample_text} · "
-                        f"写入 {write_text}／{sample_text}", inline=True)
-                    + '</dd></div>')
-    detail = ('<dl class="usage-models">' + ''.join(rows) + '</dl>' if rows else '<p>' + label(
-        "No model-aware observations yet; existing aggregate tokens are not assigned "
-        "a model price.",
-        "暂无带模型信息的观测；已有汇总 Token 不会被补填模型价格。", inline=True) + '</p>')
-    return ('<details><summary>' + label("Model details", "模型明细", inline=True) + '</summary>'
-            + detail + '</details>')
+        grid = ''.join('<div><dt>' + label(en, zh, inline=True) + '</dt><dd>'
+                       + _public_usage_token(tokens.get(field)) + '</dd></div>'
+                       for field, en, zh in (
+                           ("input_tokens", "Input", "输入"),
+                           ("output_tokens", "Output", "输出"),
+                           ("cache_read_input_tokens", "Cache read", "缓存读取"),
+                           ("cache_creation_input_tokens", "Cache write", "缓存写入")))
+        known = (_public_usage_price_known(model)
+                 and _public_usage_count(tokens.get("total_tokens")) is not None)
+        value = _public_usage_value(model) if known else label("—", "—", inline=True)
+        paired = ('<small>' + label("API estimate for ", "API 估值对应 ", inline=True)
+                  + _public_usage_token(tokens.get("total_tokens"))
+                  + label(" tokens", " Token", inline=True) + '</small>' if known else '')
+        rows.append('<div class="usage-model"><div class="usage-model-head">'
+                    '<span class="usage-model-name">' + title + '</span>'
+                    '<span class="usage-model-value">' + value + '</span></div>' + paired
+                    + '<dl class="usage-token-grid">' + grid + '</dl><small>'
+                    + label(f"{sample_text} replies · Cache field coverage: read "
+                            f"{read_text}/{sample_text} · write {write_text}/{sample_text}",
+                            f"{sample_text} 个回复 · 缓存字段覆盖："
+                            f"读取 {read_text}／{sample_text} · "
+                            f"写入 {write_text}／{sample_text}", inline=True)
+                    + '</small></div>')
+    detail = ('<div class="usage-models">' + ''.join(rows) + '</div>' if rows else '<p>' + label(
+        "No model-aware observations yet; older aggregate tokens have no matched model price.",
+        "暂无带模型信息的观测；旧汇总 Token 没有匹配的模型价格。", inline=True) + '</p>')
+    totals = reading.get("tokens")
+    totals = totals if isinstance(totals, Mapping) else {}
+    reported = ''.join('<div><dt>' + label(en, zh, inline=True) + '</dt><dd>'
+                       + _public_usage_token(totals.get(field)) + '</dd></div>'
+                       for field, en, zh in (
+                           ("input_tokens", "Input", "输入"), ("output_tokens", "Output", "输出"),
+                           ("cache_read_input_tokens", "Cache read", "缓存读取"),
+                           ("cache_creation_input_tokens", "Cache write", "缓存写入")))
+    aggregate = '<div class="usage-model"><span class="usage-model-name">' + label(
+        "Reported processed-token breakdown", "已报告的处理 Token 明细", inline=True)
+    aggregate += '</span><dl class="usage-token-grid">' + reported + '</dl></div>'
+    return ('<details class="usage-model-detail"><summary>'
+            + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
+            + aggregate + detail + '<p>' + _public_usage_coverage(reading) + '</p></details>')
+
+
+def _public_usage_method(report: Mapping[str, Any]) -> str:
+    source = '<details class="usage-method"><summary>' + label(
+        "Method, coverage & prices", "统计范围与价格", inline=True) + '</summary>'
+    source += '<p>' + _public_usage_coverage(report) + '</p><p>' + label(
+        "Tokens are reported input, output and cache-read/write subtotals. Missing coverage is "
+        "unknown, not zero. Model details and estimates use new model-aware observations; "
+        "older aggregate tokens can remain unpriced. Unknown values are not ranked. "
+        "Nicknames are partly masked, which is not anonymity.",
+        "Token 是已报告的输入、输出和缓存读取／写入小计。缺失的覆盖表示未知，不是零。模型明细"
+        "与估值使用新的带模型信息观测；旧汇总 Token 可能仍未计价。未知估值不参与排名。昵称"
+        "部分遮盖，这不等于匿名。", inline=True) + '</p><p>' + label(
+        "API value is an estimate, not a Claude Pro/Max bill, amount paid or quota balance. "
+        "Pricing assumes standard global API rates and 5-minute cache writes; actual cache "
+        "TTL, context and service tiers can change API pricing. Haiku 5.5 remains unpriced "
+        "because its per-request prompt tier is absent. Estimates follow reported model "
+        "labels; these statistics retain no raw replies, so older model/fallback attribution "
+        "cannot be verified or reliably repriced from these aggregates alone. "
+        "No older model detail is backfilled. "
+        "Reading this page makes no model call. ",
+        "API 等价值是估算，不是 Claude Pro/Max 账单、实际付款或剩余额度。估值假设采用标准全球 "
+        "API 价格及 5 分钟缓存写入价格；实际缓存有效期、上下文和服务档位可能影响 API 价格。"
+        "汇总里没有 Haiku 5.5 每次请求对应的提示长度计价档位，因此不对它估值。不补填旧模型"
+        "明细。估值依据上报的模型标签；统计不保留原始回复，因此不能仅凭旧汇总核验当时的"
+        "模型或回退路线，也不能可靠地重新计价。阅读本页不会调用模型。", inline=True)
+    source += '<a href="/privacy">' + label("Public ranking privacy", "公开排行隐私说明",
+                                          inline=True) + '</a>.</p>'
+    pricing_ = report.get("pricing")
+    if isinstance(pricing_, Mapping):
+        reference_day = pricing_.get("date")
+        if (isinstance(reference_day, str)
+                and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", reference_day)):
+            source += '<p>' + label("Price reference: " + reference_day,
+                                   "价格参考日期：" + reference_day, inline=True) + '</p>'
+        links = []
+        for key, expected, en, zh in (("url", PRICING_URL, "Official API prices", "官方 API 价格"),
+                                      ("models_url", MODELS_URL, "Model catalogue", "模型目录")):
+            if pricing_.get(key) == expected:
+                links.append('<a href="' + escape(expected, quote=True) + '">'
+                             + label(en, zh, inline=True) + '</a>')
+        if links:
+            source += '<p>' + ' · '.join(links) + '</p>'
+    return source + '</details>'
 
 
 def public_usage_panel(ranking: Any) -> str:
-    """Render only the bounded public DTO; never look up a private account."""
+    """Pair estimates only with their matching tokens; never price the legacy total."""
     report = ranking if isinstance(ranking, Mapping) else {}
     entries = report.get("entries") if report.get("state") in ("partial", "ready") else []
     rows = []
@@ -760,79 +872,63 @@ def public_usage_panel(ranking: Any) -> str:
                   else label("User", "用户", inline=True))
         rank = _public_usage_count(entry.get("rank"))
         rank_text = str(rank) if rank is not None and 1 <= rank <= 50 else "—"
-        tokens = entry.get("tokens")
+        tokens, priced, unpriced = (entry.get(field) for field in
+                                    ("tokens", "priced_tokens", "unpriced_tokens"))
         tokens = tokens if isinstance(tokens, Mapping) else {}
-        token_text = _public_usage_number(tokens.get("total_tokens"))
-        partial_tokens = ('<small>' + label("Observed subtotal", "已观测小计", inline=True)
-                          + '</small>' if entry.get("token_state") == "partial" else '')
-        rows.append('<tr><td>' + rank_text + '</td><th scope="row">' + masked
-                    + _public_usage_models(entry.get("models")) + '</th><td>' + token_text
-                    + partial_tokens + '</td><td>' + _public_usage_value(entry)
-                    + '<small>' + _public_usage_coverage(entry) + '</small></td></tr>')
+        priced = priced if isinstance(priced, Mapping) else {}
+        unpriced = unpriced if isinstance(unpriced, Mapping) else {}
+        known = (_public_usage_price_known(entry)
+                 and _public_usage_count(priced.get("total_tokens")) is not None)
+        value = _public_usage_value(entry) if known else label("—", "—", inline=True)
+        scope = (label("for ", "对应 ", inline=True)
+                 + _public_usage_token(priced.get("total_tokens"))
+                 + label(" priced tokens", " 已计价 Token", inline=True) if known else label(
+                     "Estimate unavailable", "暂无可用估值", inline=True))
+        badge = _public_usage_badge(entry) if known else ''
+        rows.append('<tr class="usage-ranking-row"><td class="usage-rank">' + rank_text
+                    + '</td><th class="usage-user" scope="row">' + masked
+                    + '</th><td class="usage-observed"><strong>'
+                    + _public_usage_token(tokens.get("total_tokens")) + '</strong><small>'
+                    + label("Output ", "输出 ", inline=True)
+                    + _public_usage_token(tokens.get("output_tokens")) + '</small><small>'
+                    + label("Unpriced ", "未计价 ", inline=True)
+                    + _public_usage_token(unpriced.get("total_tokens")) + '</small></td>'
+                    '<td class="usage-estimate"><div class="usage-estimate-value">'
+                    + value + badge + '</div><small class="usage-estimate-scope">' + scope
+                    + '</small></td></tr><tr class="usage-ranking-detail"><td colspan="4">'
+                    + _public_usage_models(entry.get("models"), entry) + '</td></tr>')
     empty = ('<tr><td colspan="4" class="usage-ranking-empty">' + label(
         "No publishable usage observations yet. New valid reports are needed; unknown is not zero.",
         "暂无可公开的用量观测。需要新的有效报告；未知不是零。", inline=True) + '</td></tr>')
     source = ('<section class="card usage-ranking" id="usage-ranking" '
               'aria-labelledby="usage-ranking-title"><h2 id="usage-ranking-title">')
-    source += label("Measured usage ranking", "观测用量排行", inline=True) + '</h2><p>' + label(
-        "Last 7 UTC calendar days, including today. Ranked by known standard API-equivalent "
-        "value; unknown values are not ranked. Nicknames are partly masked, "
-        "which is not anonymity.",
-        "最近 7 个 UTC 日期，包含今天。按已知的标准 API 等价值排序；未知估值不参与排名。"
-        "昵称部分遮盖，这不等于匿名。", inline=True) + '</p>'
+    source += label("Measured usage ranking", "观测用量排行", inline=True) + '</h2>'
+    source += '<p class="usage-ranking-lead">' + label(
+        "Last 7 UTC days · ranked by estimated API value",
+        "最近 7 个 UTC 日期 · 按估算 API 等价值排名",
+        inline=True) + '</p><p class="usage-scope">' + label(
+        "Each estimate covers only the matching priced tokens shown beneath it.",
+        "每个估值只对应其下方显示的已计价 Token。", inline=True) + '</p>'
+    source += '<p>' + label(
+        "Reported processed tokens include cached context counted again on each request; "
+        "this is not generated or unique text.",
+        "已报告的处理 Token 包含每次请求重复计数的缓存上下文，不等于生成或独有的文本。",
+        inline=True) + '</p>'
     source += ('<div class="usage-ranking-sheet" role="region" '
                'aria-labelledby="usage-ranking-title" tabindex="0"><table><thead><tr>'
                + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>' for en, zh in (
-                   ("Rank", "排名"), ("Masked user", "遮盖后的昵称"),
-                   ("Measured tokens", "已观测 Token"),
-                   ("Estimated API value · USD", "估算 API 等价值 · 美元")))
+                   ("Rank", "排名"), ("User", "用户"), ("Processed tokens", "处理 Token"),
+                   ("API estimate · USD", "API 估值 · 美元")))
                + '</tr></thead><tbody>' + (''.join(rows) if rows else empty)
-               + '</tbody></table></div>')
-    if rows:
-        source += '<p>' + _public_usage_coverage(report) + '</p>'
-        omitted = _public_usage_count(report.get("omitted_entries"))
-        if omitted:
-            source += '<p>' + label(
-                f"Showing the first 50 entries; {omitted:,} further entries omitted.",
-                f"展示前 50 项；另有 {omitted:,} 项未列出。", inline=True) + '</p>'
-    source += '<p>' + label(
-        "Tokens are observed input, output and reported cache-read/write subtotals. Missing "
-        "coverage is not zero. Model details and prices use new model-aware observations; "
-        "validated older aggregate tokens can remain unpriced. API value is an estimate, "
-        "not a Claude Pro/Max bill, amount paid or quota balance.",
-        "Token 为观测到的输入、输出及已报告缓存读取／写入小计；缺失的覆盖不按零计算。模型明细"
-        "和估值使用新的带模型信息观测；已有经验证的汇总 Token 可能仍无法计价。API 等价值是"
-        "估算，不是 Claude Pro/Max 账单、实际付款或剩余额度。", inline=True) + '</p>'
-    source += '<p>' + label(
-        "Pricing assumes standard global API rates and 5-minute cache writes. Cache TTL, "
-        "context and service tiers can change actual API pricing; unpriced variants remain "
-        "unknown. Haiku 5.5 remains unpriced because its per-request prompt tier is absent "
-        "from these aggregates. No historical model detail is backfilled. Reading this page "
-        "makes no model call. ",
-        "估值假设采用标准全球 API 价格及 5 分钟缓存写入价格。缓存有效期、上下文和服务档位可能"
-        "影响实际 API 价格；无法计价的版本仍表示未知。汇总里没有 Haiku 5.5 每次请求对应的"
-        "提示长度计价档位，因此不对它估值。不补填历史模型明细。阅读本页不会调用模型。",
-        inline=True) + '<a href="/privacy">' + label("Public ranking privacy", "公开排行隐私说明",
-                                                  inline=True) + '</a>.</p>'
-    pricing_ = report.get("pricing")
-    if isinstance(pricing_, Mapping):
-        reference_day = pricing_.get("date")
-        if (isinstance(reference_day, str)
-                and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", reference_day)):
-            source += '<p>' + label("Price reference: " + reference_day,
-                                   "价格参考日期：" + reference_day, inline=True) + '</p>'
-        links = []
-        for key, expected, en, zh in (("url", PRICING_URL, "Official API prices", "官方 API 价格"),
-                                      ("models_url", MODELS_URL, "Model catalogue", "模型目录")):
-            url = pricing_.get(key)
-            if url != expected:
-                continue
-            links.append('<a href="' + escape(expected, quote=True) + '">'
-                         + label(en, zh, inline=True) + '</a>')
-        if links:
-            source += '<p>' + ' · '.join(links) + '</p>'
-    return source + '</section>'
-
+               + '</tbody></table></div><p class="usage-units">' + label(
+                   "K = thousand · M = million · B = billion. Exact counts on hover.",
+                   "K＝千 · M＝百万 · B＝十亿。悬停可查看精确数量。", inline=True) + '</p>')
+    omitted = _public_usage_count(report.get("omitted_entries"))
+    if rows and omitted:
+        source += '<p>' + label(
+            f"Showing the first 50 entries; {omitted:,} further entries omitted.",
+            f"展示前 50 项；另有 {omitted:,} 项未列出。", inline=True) + '</p>'
+    return source + _public_usage_method(report) + '</section>'
 
 FORM_ZH = {
     "Claim a slot": "领取槽位", "Sign in again": "重新登录", "Sign in to Claude": "登录 Claude",
@@ -1615,10 +1711,18 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "prices and cache-pricing assumptions. It is not a Claude Pro/Max "
                 "subscription bill, an amount paid, a quota balance or a promise of "
                 "savings. Partial pricing covers only observations with enough known "
-                "model and cache information; it does not assign $0 to the rest.",
+                "model and cache information; it does not assign $0 to the rest. Each "
+                "estimate is paired only with its matching priced tokens; the overall "
+                "reported processed total and unpriced subtotal are shown separately. "
+                "Processed totals include cached context counted again per request; "
+                "they are not generated or unique text. Estimates follow reported model "
+                "labels, and these aggregates alone cannot reliably reprice older usage.",
                 "API 等价值按页面列出的标准模型价格与缓存计价假设估算，不是 Claude Pro/Max "
                 "订阅账单、实际付款、剩余额度，也不保证节省了这些费用。部分估值只覆盖模型与缓存"
-                "信息足够明确的观测，其余部分不按 $0 计算。",
+                "信息足够明确的观测，其余部分不按 $0 计算。每个估值只对应匹配的已计价 Token；"
+                "已报告的处理 Token 总量与未计价小计分别展示。处理总量包含每次请求重复计数的"
+                "缓存上下文，不等于生成或独有的文本。估值依据上报的模型标签，不能仅凭旧汇总"
+                "可靠地重新计价。",
             ),
         ],
     )

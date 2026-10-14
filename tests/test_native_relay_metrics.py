@@ -90,7 +90,8 @@ def test_invalid_completed_usage_never_exposes_a_model(case):
 
 def test_json_response_model_is_normalized_without_any_request_label():
     raw = json.dumps({"type": "message", "stop_reason": "end_turn", "usage": USAGE,
-                      "model": PROVIDER_MODEL, "id": SECRET, "content": [{"text": SECRET}]}).encode()
+                      "model": PROVIDER_MODEL, "id": SECRET,
+                      "content": [{"type": "text", "text": SECRET}]}).encode()
     observer, usage = complete([raw[:5], raw[5:]], "application/json")
     assert usage == USAGE and observer.public_model == metrics._public_model(PROVIDER_MODEL)
 

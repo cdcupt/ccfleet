@@ -1,10 +1,11 @@
 """Public ranking is a masked numeric DTO, never a private account page."""
+import re
 from copy import deepcopy
 
 import pytest
 
 from ccfleet_agent.model_usage import LABELS, MODELS_URL, PRICING_URL
-from ccfleetd import bilingual, customer_docs, usage
+from ccfleetd import bilingual, customer_docs, usage, usersite
 from ccfleetd.config import Config
 from tests.test_customer_docs import ADMIN, _serve
 from tests.test_html_document_preservation import Document
@@ -20,11 +21,15 @@ def ranking():
                "estimated_usd": 0.5, "cost_state": "partial"}
               for key in ("claude-fable-5-1", "claude-mythos-5-1")]
     entry = {"rank": 1, "masked_handle": "a***e", "tokens": tokens,
+             "priced_tokens": tokens, "priced_token_state": "partial",
+             "unpriced_tokens": dict.fromkeys(tokens, 0), "unpriced_token_state": "partial",
              "token_state": "partial", "estimated_usd": 1.0, "cost_state": "partial",
              "usage_samples": 4, "usage_eligible_messages": 5, "priced_samples": 4,
              "models": models}
     unknown = {**entry, "rank": None, "masked_handle": None, "estimated_usd": None,
-               "cost_state": "unknown", "priced_samples": 0, "models": []}
+               "cost_state": "unknown", "priced_samples": 0, "models": [],
+               "priced_tokens": None, "priced_token_state": "unknown",
+               "unpriced_tokens": tokens, "unpriced_token_state": "partial"}
     return {"state": "partial", "entries": [entry, unknown], "usage_samples": 8,
             "usage_eligible_messages": 10, "priced_samples": 4, "omitted_entries": 0,
             "pricing": {"date": "2026-10-14", "url": PRICING_URL,
@@ -41,13 +46,15 @@ def test_known_estimate_mask_model_subtotals_and_coverage_are_visible_on_homepag
     text = Document(page).text
     assert "Measured usage ranking" in text
     assert "a***e" in text and "User" in text
-    assert "1,234" in text and "$1.00" in text and "Partial estimate" in text
+    assert "1.23K" in text and "$1.00" in text and "Partial" in text
+    assert 'title="1,234 tokens"' in page
+    assert "for 1.23K priced tokens" in text
     assert "Claude Fable 5.1" in text and "Claude Mythos 5.1" in text
-    assert "Input 1,000" in text and "Output 200" in text
+    assert "Input 1K" in text and "Output 200" in text
     assert "Cache read 30" in text and "Cache write 4" in text
     assert "Model price known: 4 of 4" in text
     assert "Cache field coverage: read 1/2 · write 2/2" in text
-    assert "unknown values are not ranked" in text
+    assert "Unknown values are not ranked" in text
     assert "not a Claude Pro/Max bill" in text
     assert "Haiku 5.5 remains unpriced" in text
     assert "5-minute cache writes" in text
@@ -56,14 +63,17 @@ def test_known_estimate_mask_model_subtotals_and_coverage_are_visible_on_homepag
     assert page.index('id="usage-ranking"') < page.index("Read next")
     assert page.count('<script') == 2 and '<script src=' not in page
     assert '<div class="usage-ranking-sheet" role="region"' in page
+    assert '<details class="usage-method">' in page
+    assert "cached context counted again on each request" in text
 
 
 def test_unknown_api_value_is_not_zero_but_measured_zero_is_a_number():
     report = ranking()
     report["entries"] = [report["entries"][1]]
     assert "$0.00" not in shown(report)
-    assert "1,234" in Document(shown(report)).text
-    report["entries"][0].update(cost_state="complete", estimated_usd=0)
+    assert "1.23K" in Document(shown(report)).text
+    report["entries"][0].update(cost_state="partial", estimated_usd=0,
+                                priced_tokens=dict.fromkeys(report["entries"][0]["tokens"], 0))
     assert "$0.00" in shown(report)
     report["entries"][0].update(estimated_usd=0.0001)
     assert "&lt;$0.01" in shown(report)
@@ -93,7 +103,7 @@ def test_bad_estimates_stay_unknown_without_hiding_known_tokens(value):
     report["entries"][0].update(cost_state="complete", estimated_usd=value)
     page = shown(report)
     assert "$0.00" not in page and "$1.00" not in page
-    assert "1,234" in Document(page).text
+    assert "1.23K" in Document(page).text
 
 
 @pytest.mark.parametrize("report", [None, {}, {"state": "no_data"},
@@ -111,8 +121,8 @@ def test_renderer_bounds_rows_and_expanded_model_rows():
     report["entries"] = [report["entries"][0]] * 100
     report["omitted_entries"] = 50
     page = shown(report)
-    assert page.count('<th scope="row">') == 50
-    assert page.count('<div><dt>Claude ') == 50 * 16
+    assert page.count('scope="row"') == 50
+    assert page.count('<span class="usage-model-name">Claude ') == 50 * 16
     assert "50 further entries omitted" in Document(page).text
 
 
@@ -121,11 +131,69 @@ def test_chinese_is_complete_and_the_homepage_has_separate_language_views():
     assert 'class="copy-zh"' not in english and "观测用量排行" not in english
     assert 'class="copy-en"' not in chinese and "Measured usage ranking" not in chinese
     text = Document(chinese).text
-    for phrase in ("观测用量排行", "模型明细", "已观测 Token", "估算 API 等价值", "部分估值",
+    for phrase in ("观测用量排行", "模型明细", "处理 Token", "API 估值", "部分覆盖",
                    "模型价格已知", "缓存字段覆盖：读取 1／2 · 写入 2／2", "这不等于匿名",
                    "不是 Claude Pro/Max 账单", "提示长度计价档位"):
         assert phrase in text
     assert 'data-language-link="both"' not in english + chinese
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0, "0"), (999, "999"), (1000, "1K"), (1005, "1.01K"),
+    (999994, "999.99K"), (999995, "1M"), (1_200_803, "1.2M"),
+    (999_994_999, "999.99M"), (999_995_000, "1B"), (2_147_054_518, "2.15B"),
+])
+def test_compact_token_units_round_up_at_boundaries_and_keep_exact_accessible_counts(value, expected):
+    source = usersite._public_usage_token(value)
+    assert Document(source).text == expected
+    assert f'title="{value:,} tokens"' in source
+    assert f'aria-label="{value:,} tokens"' in source
+    chinese = bilingual.project_html(source, "zh", "/")
+    assert f'title="{value:,} Token"' in chinese
+    assert f'aria-label="{value:,} Token"' in chinese
+
+
+@pytest.mark.parametrize("value", [None, True, "1000", -1, float("nan"), float("inf")])
+def test_invalid_token_counts_stay_unknown_and_never_enter_tooltips(value):
+    source = usersite._public_usage_token(value)
+    assert Document(bilingual.project_html(source, "en", "/")).text == "—"
+    assert 'title=' not in source and 'aria-label=' not in source
+
+
+def test_legacy_total_is_never_the_denominator_of_a_small_new_api_estimate():
+    observed = {"input_tokens": 3_912_469, "output_tokens": 8_721_456,
+                "cache_read_input_tokens": 2_062_021_318,
+                "cache_creation_input_tokens": 72_399_275, "total_tokens": 2_147_054_518}
+    priced = {"input_tokens": 1207, "output_tokens": 5025,
+              "cache_read_input_tokens": 1_054_178, "cache_creation_input_tokens": 140_393,
+              "total_tokens": 1_200_803}
+    entry = {"rank": 1, "masked_handle": "e***k", "tokens": observed,
+             "token_state": "complete", "priced_tokens": priced, "priced_token_state": "complete",
+             "unpriced_tokens": {key: observed[key] - priced[key] for key in observed},
+             "unpriced_token_state": "complete", "estimated_usd": 1.0181286,
+             "cost_state": "partial", "usage_samples": 6118, "usage_eligible_messages": 6118,
+             "priced_samples": 11, "models": []}
+    source = shown({**ranking(), "entries": [entry]})
+    cell = re.search(r'<td class="usage-estimate">(.*?)</td>', source, flags=re.S)[1]
+    assert "$1.02" in cell and "Partial" in Document(cell).text
+    assert "for 1.2M priced tokens" in Document(cell).text
+    assert 'title="1,200,803 tokens"' in cell
+    assert "2.15B" not in cell and "2,147,054,518" not in cell
+    visible = Document(source).text
+    assert "2.15B" in visible and "Unpriced 2.15B" in visible and "Output 8.72M" in visible
+    assert "Model price known: 11 of 6,118" in visible
+    assert 'title="2,145,853,715 tokens"' in source
+    assert "not generated or unique text" in visible
+
+
+def test_matching_priced_scope_is_required_to_publish_any_main_estimate():
+    report = ranking()
+    report["entries"] = [report["entries"][0]]
+    for scope in (None, {}, {"total_tokens": True}, {"total_tokens": -1}, {"total_tokens": "1234"}):
+        report["entries"][0]["priced_tokens"] = scope
+        cell = re.search(r'<td class="usage-estimate">(.*?)</td>', shown(report), flags=re.S)[1]
+        assert "$1.00" not in cell and "Estimate unavailable" in Document(cell).text
+        assert "priced tokens" not in Document(cell).text
 
 
 def test_http_home_aliases_alone_receive_ranking_and_non_home_pages_do_not(monkeypatch):
