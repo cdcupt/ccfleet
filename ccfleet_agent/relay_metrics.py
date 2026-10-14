@@ -263,6 +263,8 @@ class UsageCollector:
         self.started = self.delta = self.stopped = False
         self.numbers: dict[str, int] = {}
         self._model = "other"
+        self._unpriced = False
+        self._fallback = self._replace_usage = False
         self._completed_model: Optional[str] = None
 
     @property
@@ -276,6 +278,8 @@ class UsageCollector:
         self.data.clear()
         self.numbers.clear()
         self._model = "other"
+        self._unpriced = False
+        self._fallback = self._replace_usage = False
         self._completed_model = None
 
     @staticmethod
@@ -295,10 +299,53 @@ class UsageCollector:
             raise ValueError("partial initial usage")
         if not initial and "output_tokens" not in values:
             raise ValueError("partial final usage")
+        if initial or self._replace_usage:
+            if not {"input_tokens", "output_tokens"} <= values.keys():
+                raise ValueError("partial returned-attempt usage")
+            self.numbers = values
+            self._replace_usage = False
+            return
         for key, value in values.items():
             if value < self.numbers.get(key, 0):
                 raise ValueError("nonmonotonic cumulative usage")
             self.numbers[key] = value
+
+    def _iterations(self, usage: dict[str, Any]) -> None:
+        """Ambiguous serving-model metadata disables pricing, not numeric usage.
+
+        Fallback usage describes the returned attempt, while its iterations can
+        describe other models. Never apply the starting model's price to those
+        counts or sum the nested counts into the numeric API.
+        """
+        if "iterations" not in usage:
+            return
+        rows = usage["iterations"]
+        if (isinstance(rows, list) and any(isinstance(row, dict)
+                                         and row.get("type") == "fallback_message"
+                                         for row in rows) and not self._fallback):
+            self._mark_fallback()
+        if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or rows[0].get("type") != "message"
+                or _public_model(rows[0].get("model")) == "other"
+                or _public_model(rows[0].get("model")) != self._model):
+            self._unpriced = True
+            return
+        for key in USAGE_FIELDS:
+            if key in rows[0] and (type(rows[0][key]) is not int
+                                  or not 0 <= rows[0][key] <= MAX_USAGE_TOKENS
+                                  or (key in usage or key in self.numbers)
+                                  and rows[0][key] != usage.get(key, self.numbers.get(key))):
+                self._unpriced = True
+
+    def _mark_fallback(self) -> None:
+        self._unpriced = self._fallback = self._replace_usage = True
+
+    def _content_metadata(self, value: Any) -> None:
+        """Inspect only the fixed content-block type; retain no content or model ID."""
+        if not isinstance(value, dict) or not isinstance(value.get("type"), str):
+            self._unpriced = True
+        elif value["type"] == "fallback":
+            self._mark_fallback()
 
     def _dispatch(self) -> None:
         if not self.event and not self.data:
@@ -307,6 +354,15 @@ class UsageCollector:
         if kind not in {"message_start", "message_delta", "message_stop", "error"}:
             if self.stopped and kind != "ping":
                 raise ValueError("event after completion")
+            if kind == "content_block_start":
+                try:
+                    value = self._object(bytes(self.data))
+                    if not isinstance(value, dict) or value.get("type") != kind:
+                        self._unpriced = True
+                    else:
+                        self._content_metadata(value.get("content_block"))
+                except (ValueError, UnicodeError, TypeError, RecursionError, OverflowError):
+                    self._unpriced = True
             return
         value = self._object(bytes(self.data))
         if not isinstance(value, dict) or value.get("type") != kind or self.stopped:
@@ -317,13 +373,21 @@ class UsageCollector:
             message = value.get("message")
             if not isinstance(message, dict):
                 raise ValueError("missing message")
-            self._merge(message.get("usage"), initial=True)
             self._model = _public_model(message.get("model"))
+            if isinstance(message.get("usage"), dict):
+                self._iterations(message["usage"])
+            self._merge(message.get("usage"), initial=True)
             self.started = True
         elif kind == "message_delta":
             if not self.started:
                 raise ValueError("delta before start")
+            if isinstance(value.get("usage"), dict):
+                self._iterations(value["usage"])
             self._merge(value.get("usage"))
+            delta = value.get("delta")
+            if (isinstance(delta, dict) and "model" in delta
+                    and _public_model(delta["model"]) != self._model):
+                self._unpriced = True
             self.delta = True
         elif kind == "message_stop":
             if not self.started or not self.delta:
@@ -381,12 +445,21 @@ class UsageCollector:
                         or not isinstance(value.get("stop_reason"), str)
                         or not value["stop_reason"]):
                     return None
-                self._merge(value.get("usage"), initial=True)
                 self._model = _public_model(value.get("model"))
-            elif self.buffer or self.data or not self.stopped:
+                if isinstance(value.get("usage"), dict):
+                    self._iterations(value["usage"])
+                if "content" in value:
+                    if not isinstance(value["content"], list):
+                        self._unpriced = True
+                    else:
+                        for block in value["content"]:
+                            self._content_metadata(block)
+                self._merge(value.get("usage"), initial=True)
+            elif self.buffer or self.data or not self.stopped or self._replace_usage:
                 return None
             usage = _usage_sample(self.numbers)
-            self._completed_model = self._model if usage is not None else None
+            self._completed_model = ("other" if self._unpriced else self._model) \
+                if usage is not None else None
             return usage
         except (ValueError, UnicodeError, TypeError, RecursionError, OverflowError):
             return None
@@ -396,6 +469,8 @@ class UsageCollector:
             self.numbers.clear()
             self.event = ""
             self._model = "other"
+            self._unpriced = False
+            self._fallback = self._replace_usage = False
 
 
 def _empty_bucket() -> dict[str, Any]:

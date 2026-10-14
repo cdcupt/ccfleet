@@ -241,6 +241,8 @@ def test_public_dto_has_no_raw_identity_or_private_payload_and_does_not_mutate()
     assert (fleet.slots, fleet.beats) == before
     entry = result["entries"][0]
     assert set(entry) == {"rank", "masked_handle", *usage.COUNTERS, "unpriced_samples", "tokens",
+                          "priced_tokens", "priced_token_state", "unpriced_tokens",
+                          "unpriced_token_state",
                           "token_state", "estimated_usd", "cost_state", "models"}
 
 

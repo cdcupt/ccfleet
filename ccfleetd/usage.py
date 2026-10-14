@@ -30,6 +30,8 @@ def _empty(start):
     return {"state": "no_data", "window_days": WINDOW_DAYS, "window_start_day": start,
             "eligible_slots": 0, "reporting_slots": 0, **dict.fromkeys(COUNTERS, 0),
             "unpriced_samples": 0, "tokens": None, "token_state": "unknown",
+            "priced_tokens": None, "priced_token_state": "unknown",
+            "unpriced_tokens": None, "unpriced_token_state": "unknown",
             "estimated_usd": None, "cost_state": "unknown", "entries": [],
             "omitted_entries": 0, "pricing": dict(PRICING)}
 
@@ -106,6 +108,31 @@ def _model_row(key, data):
             "cost_state": (token_state if estimate is not None else "unknown")}
 
 
+def _token_partition(data, priced, token_state):
+    """Partition observed categories using exactly the rows in the USD estimate.
+
+    Cache reads/writes are separate provider categories, not part of uncached
+    input_tokens. Missing categories contribute no invented tokens or cost.
+    The remainder is an observed subtotal, not inferred usage of unpriced models.
+    """
+    known = [data["models"][row["model"]] for row in priced]
+    covered = {key: _sum(row[key] for row in known)
+               for key in (*TOKEN_FIELDS, "cache_read_samples", "cache_creation_samples")}
+    samples = _sum(row["samples"] for row in known)
+    priced_tokens, priced_state = _tokens(covered, samples)
+    if not data["usage_samples"]:
+        return priced_tokens, priced_state, None, "unknown"
+    remainder = {key: _sum((data[key], -covered[key])) for key in TOKEN_FIELDS}
+    unpriced_tokens = {"input_tokens": remainder["input_tokens"],
+                       "output_tokens": remainder["output_tokens"],
+                       "cache_read_input_tokens": (remainder["cache_read_input_tokens"]
+                                                   if data["cache_read_samples"] else None),
+                       "cache_creation_input_tokens": (remainder["cache_creation_input_tokens"]
+                                                       if data["cache_creation_samples"] else None),
+                       "total_tokens": _sum(remainder.values())}
+    return priced_tokens, priced_state, unpriced_tokens, token_state
+
+
 def _entry(data, handle=None):
     models = [_model_row(key, row) for key, row in sorted(data["models"].items())]
     priced = [row for row in models if row["estimated_usd"] is not None]
@@ -116,6 +143,8 @@ def _entry(data, handle=None):
     tokens, token_state = _tokens(data, data["usage_samples"])
     if data["usage_samples"] < data["usage_eligible_messages"] and token_state == "complete":
         token_state = "partial"
+    priced_tokens, priced_state, unpriced_tokens, unpriced_state = _token_partition(
+        data, priced, token_state)
     estimate = math.fsum(row["estimated_usd"] for row in priced) if priced else None
     complete = (priced_samples == data["usage_samples"] == data["model_samples"]
                 and data["usage_samples"] == data["usage_eligible_messages"]
@@ -123,6 +152,8 @@ def _entry(data, handle=None):
                 and all(row["cost_state"] == "complete" for row in priced))
     return {"rank": None, "masked_handle": _masked_handle(handle), **values,
             "tokens": tokens, "token_state": token_state,
+            "priced_tokens": priced_tokens, "priced_token_state": priced_state,
+            "unpriced_tokens": unpriced_tokens, "unpriced_token_state": unpriced_state,
             "estimated_usd": estimate,
             "cost_state": ("complete" if complete else "partial") if estimate is not None
                           else "unknown", "models": models}
@@ -161,6 +192,8 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
             _add(all_data, report)
         totals = _entry(all_data)
         for key in (*COUNTERS, "unpriced_samples", "tokens", "token_state",
+                    "priced_tokens", "priced_token_state", "unpriced_tokens",
+                    "unpriced_token_state",
                     "estimated_usd", "cost_state"):
             result[key] = totals[key]
         entries = [_entry(value, accounts.get(holder)) for holder, value in groups.items()

@@ -187,6 +187,12 @@ consistent database; do not replace it with an older snapshot merely to clear te
 measured token totals, model details and estimated standard API-equivalent USD values
 under partly masked user-chosen nicknames. Short nicknames are fully masked; missing
 nicknames use a generic label. Emails and account IDs are never public-name fallbacks.
+Each estimate is paired with its matching priced-token subtotal; the overall observed
+total and unpriced observed tokens appear separately. K/M/B mean thousand/million/billion;
+exact counts remain in tooltips, while reply sample counts stay precise.
+Processed totals include cached context counted again on each request; they are not generated
+or unique text. Estimates use reported model labels; these numeric aggregates retain no raw
+replies and cannot reliably reprice older model/fallback attribution.
 Masking is not anonymity. Estimates are not Claude Pro/Max bills or amounts paid;
 measurement, model-price and cache coverage are shown, and missing or unpriced usage is
 unknown rather than zero. Existing validated aggregate tokens can remain visible without
