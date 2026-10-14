@@ -11,15 +11,25 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 import secrets
 import sqlite3
 import threading
 import time
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+from ccfleet_agent.relay_metrics import (
+    DAY_SECONDS,
+    MAX_COUNTER,
+    MAX_EPOCH,
+    MAX_LATENCY_MS,
+    MAX_USAGE_TOKENS,
+    WINDOW_DAYS,
+)
 
 from . import claude_versions, cli_access, gateway_access, names, payments, pricing
 from . import sessions as sessionlib
@@ -311,6 +321,14 @@ CREATE TABLE IF NOT EXISTS status_minutes (
     PRIMARY KEY (component, day)
 );
 CREATE INDEX IF NOT EXISTS ix_status_minutes_day ON status_minutes(day);
+-- Anonymous matched SSE output-rate samples, retained for seven UTC dates.
+-- No user, slot, model, response, content or individual event timestamp.
+CREATE TABLE IF NOT EXISTS gateway_throughput_days (
+    day TEXT PRIMARY KEY NOT NULL,
+    samples INTEGER NOT NULL DEFAULT 0,
+    output_tokens_sum INTEGER NOT NULL DEFAULT 0,
+    stream_ms_sum REAL NOT NULL DEFAULT 0
+);
 -- One machine's time down, or the site's (see ccfleetd/outage.py): when it
 -- began, when the emails that it was down were owed, and when it ended. Kept
 -- so each outage is told once.
@@ -1485,6 +1503,146 @@ class Store:
             cur = self._conn.execute("DELETE FROM status_minutes WHERE day < ?", (before_day,))
             self._conn.commit()
         return cur.rowcount
+
+    # -- anonymous gateway output-rate samples -----------------------------
+
+    @staticmethod
+    def _throughput_window(now: float) -> tuple[str, str]:
+        if (type(now) not in (int, float) or not 0 <= now <= MAX_EPOCH
+                or not math.isfinite(now)):
+            raise StoreError("invalid gateway throughput clock")
+        today = int(now // DAY_SECONDS)
+        first = max(0, today - WINDOW_DAYS + 1)
+        return tuple(datetime.fromtimestamp(day * DAY_SECONDS, timezone.utc).date().isoformat()
+                     for day in (first, today))
+
+    @staticmethod
+    def _throughput_totals(row: Mapping[str, Any]) -> tuple[int, int, float]:
+        day = row["day"]
+        try:
+            valid_day = (type(day) is str and len(day) == 10
+                         and date.fromisoformat(day).isoformat() == day)
+        except ValueError:
+            valid_day = False
+        samples, tokens, elapsed = row["samples"], row["output_tokens_sum"], row["stream_ms_sum"]
+        if (not valid_day or type(samples) is not int or not 0 <= samples <= MAX_COUNTER
+                or type(tokens) is not int or not 0 <= tokens <= MAX_COUNTER
+                or type(elapsed) not in (int, float) or not 0 <= elapsed <= MAX_COUNTER
+                or not math.isfinite(elapsed) or tokens > samples * MAX_USAGE_TOKENS
+                or not samples * 100 <= elapsed <= samples * MAX_LATENCY_MS):
+            raise StoreError("invalid gateway throughput aggregate")
+        return samples, tokens, float(elapsed)
+
+    @classmethod
+    def _throughput_aggregate(cls, rows: list[Mapping[str, Any]]) -> tuple[
+            int, int, float, Optional[str]]:
+        totals = [cls._throughput_totals(row) for row in rows]
+        samples = sum(value[0] for value in totals)
+        tokens = sum(value[1] for value in totals)
+        elapsed = math.fsum(value[2] for value in totals)
+        if max(samples, tokens, elapsed) > MAX_COUNTER:
+            raise StoreError("gateway throughput aggregate exceeds its limit")
+        first = min((row["day"] for row, value in zip(rows, totals) if value[0]), default=None)
+        return samples, tokens, elapsed, first
+
+    def record_gateway_throughput(self, output_tokens: int, stream_ms: float, *,
+                                  now: float) -> None:
+        """Add one matched sample atomically; never retain its individual identity.
+
+        Zero output is a measured zero, not an absent sample. Old rows are pruned
+        on writes; the monitor also prunes independently while traffic is idle.
+        """
+        first, today = self._throughput_window(now)
+        if (type(output_tokens) is not int or not 0 <= output_tokens <= MAX_USAGE_TOKENS
+                or type(stream_ms) not in (int, float) or not 100 <= stream_ms <= MAX_LATENCY_MS
+                or not math.isfinite(stream_ms)):
+            raise StoreError("invalid gateway throughput sample")
+        with self._write_txn() as conn:
+            existing = conn.execute(
+                "SELECT day, samples, output_tokens_sum, stream_ms_sum "
+                "FROM gateway_throughput_days WHERE day = ?", (today,)).fetchone()
+            samples, tokens, elapsed = (self._throughput_totals(existing) if existing
+                                        else (0, 0, 0.0))
+            updated = {"day": today, "samples": samples + 1,
+                       "output_tokens_sum": tokens + output_tokens,
+                       "stream_ms_sum": elapsed + stream_ms}
+            rows = conn.execute(
+                "SELECT day, samples, output_tokens_sum, stream_ms_sum "
+                "FROM gateway_throughput_days WHERE day >= ? AND day <= ? AND day != ?",
+                (first, today, today)).fetchall()
+            # Cap both a day's counters and the whole currently visible window.
+            self._throughput_aggregate([*rows, updated])
+            conn.execute(
+                "INSERT INTO gateway_throughput_days (day, samples, "
+                "output_tokens_sum, stream_ms_sum) "
+                "VALUES (?,?,?,?) ON CONFLICT(day) DO UPDATE SET samples = excluded.samples, "
+                "output_tokens_sum = excluded.output_tokens_sum, "
+                "stream_ms_sum = excluded.stream_ms_sum",
+                (today, updated["samples"], updated["output_tokens_sum"], updated["stream_ms_sum"]))
+            conn.execute("DELETE FROM gateway_throughput_days WHERE day < ?", (first,))
+
+    def try_record_gateway_throughput(self, output_tokens: int, stream_ms: float, *,
+                                      now: float) -> bool:
+        """Never wait for the shared lock or a SQLite writer just for metrics.
+
+        False means no sample committed: lock contention, a caller's existing
+        transaction, or a known SQLite busy/locked error. Other failures escape
+        so the observer must not retry a possibly completed operation.
+        """
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            if self._conn.in_transaction:
+                return False
+            previous_timeout = self._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            try:
+                self._conn.execute("PRAGMA busy_timeout = 0")
+                try:
+                    self.record_gateway_throughput(output_tokens, stream_ms, now=now)
+                except sqlite3.OperationalError as error:
+                    code = getattr(error, "sqlite_errorcode", None)
+                    # Result-code attributes were added in Python 3.11. Keep
+                    # Python 3.9/3.10 support without treating arbitrary errors
+                    # containing the word "locked" as safely retryable.
+                    busy = ((type(code) is int and code & 0xff in (5, 6))
+                            if code is not None else str(error) in (
+                                "database is locked", "database table is locked",
+                                "database schema is locked")
+                            or str(error).startswith(("database table is locked: ",
+                                                      "database schema is locked: ")))
+                    if not busy:
+                        raise
+                    if self._conn.in_transaction:
+                        self._conn.rollback()
+                    return False
+                return True
+            finally:
+                self._conn.execute(f"PRAGMA busy_timeout = {previous_timeout}")
+        finally:
+            self._lock.release()
+
+    def gateway_throughput_summary(self, now: float) -> dict[str, Any]:
+        """Read seven UTC dates without writes or historical reconstruction.
+
+        collection_start_day means the earliest retained positive-sample date in
+        this window, not the original deployment or collection launch date.
+        """
+        first, today = self._throughput_window(now)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT day, samples, output_tokens_sum, stream_ms_sum "
+                "FROM gateway_throughput_days WHERE day >= ? AND day <= ? ORDER BY day",
+                (first, today)).fetchall()
+        samples, tokens, elapsed, available_since = self._throughput_aggregate(rows)
+        return {"samples": samples, "output_tokens": tokens, "stream_ms": elapsed,
+                "window_start_day": first, "collection_start_day": available_since}
+
+    def prune_gateway_throughput(self, now: float) -> int:
+        """Expire old daily rows even if no new request arrives."""
+        first, _today = self._throughput_window(now)
+        with self._write_txn() as conn:
+            return conn.execute("DELETE FROM gateway_throughput_days WHERE day < ?",
+                                (first,)).rowcount
 
     # -- alerts ------------------------------------------------------------
 

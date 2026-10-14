@@ -153,3 +153,41 @@ def test_public_performance_discloses_single_contributor_aggregates_and_sample_l
     assert "three contributing Fleet users" not in english
     assert "three contributing accounts" not in english
     assert "三个 Fleet 用户" not in chinese and "三个账号参与" not in chinese
+
+
+def test_streamed_output_rate_is_observed_delivery_with_independent_samples_and_no_backfill():
+    source = GUIDE.read_text()
+    english = Document(bilingual.project_html(source, "en", TARGET)).text
+    chinese = Document(bilingual.project_html(source, "zh", TARGET)).text
+    for phrase in (
+        "Streamed output rate is measured independently at the HTTPS gateway",
+        "summed tokens and summed time",
+        "at least two chunks and at least 100 ms",
+        "Single-chunk or too-short replies are excluded",
+        "buffering can affect the observed rate",
+        "excludes the initial wait",
+        "thinking or tool output where counted",
+        "comparable models and workloads",
+        "twenty eligible replies are required independently of the other five metrics",
+        "anonymous daily sample counts, output-token totals and delivery-time totals",
+        "Input/cache totals, user/slot/model breakdowns and individual request timestamps",
+        "older traffic is not backfilled",
+        "earliest available retained sample day",
+    ):
+        assert phrase in english
+    for phrase in (
+        "流式输出速率在 HTTPS 网关单独观测",
+        "从首个到最后一个响应正文分块的时间总和",
+        "至少两个分块",
+        "至少持续 100 毫秒",
+        "单个分块或过短的回复不计入",
+        "缓冲可能影响观测到的速率",
+        "速率不包含初始等待",
+        "思考或工具输出",
+        "不依赖另外五项指标",
+        "每日样本数、输出 Token 总量和交付时间总和",
+        "不保存单条请求时间戳",
+        "不补填历史流量",
+        "现有留存样本的最早日期",
+    ):
+        assert phrase in chinese

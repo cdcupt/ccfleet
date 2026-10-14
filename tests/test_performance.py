@@ -20,7 +20,7 @@ OTHER = "fedcba9876543210"
 SECRET = "private-model-session-email-slot-host-request-error-content"
 KEYS = {"state", "window_days", "window_start_day", "eligible_slots", "reporting_slots",
         "reporting_users", "oldest_observed_at", "requests", "completed", "completion_rate",
-        "latencies"}
+        "latencies", "throughput"}
 
 
 def report(requests=10, completed=8, observed=NOW, timings=None):
@@ -389,6 +389,113 @@ def test_window_is_calendar_dates_in_utc_and_output_is_fixed_numeric_allowlist()
                     "token_usage", "models", "headers", "max"):
         assert private not in raw
     assert fleet.beats == before
+
+
+def gateway_reading(samples=20, tokens=4000, elapsed=100000.0):
+    day = datetime.fromtimestamp(NOW, timezone.utc).date().isoformat()
+    start = datetime.fromtimestamp((int(NOW // 86400) - 6) * 86400, timezone.utc).date()
+    return {"samples": samples, "output_tokens": tokens, "stream_ms": elapsed,
+            "window_start_day": start.isoformat(), "collection_start_day": day}
+
+
+def test_gateway_rate_is_independent_of_missing_relay_reports_and_uses_ratio_of_sums():
+    fleet = Fleet()
+    calls = []
+    reading = {**gateway_reading(), "model": SECRET, "individual_timestamp": NOW - 1}
+    fleet.gateway_throughput_summary = lambda now: calls.append(now) or reading
+    result = measure(fleet)
+    assert result["state"] == "no_data"
+    assert result["throughput"] == {
+        "state": "ready", "samples": 20, "tokens_per_second": 40.0,
+        "window_start_day": reading["window_start_day"],
+        "collection_start_day": reading["collection_start_day"],
+    }
+    assert calls == [NOW]
+    assert SECRET not in json.dumps(result, allow_nan=False)
+    assert "output_tokens" not in result["throughput"]
+    assert "stream_ms" not in result["throughput"]
+
+
+def test_persisted_gateway_days_feed_weighted_output_rate_without_slot_or_holder_identity(store):
+    for _ in range(10):
+        store.record_gateway_throughput(1000, 1000.0, now=NOW - 86400)
+        store.record_gateway_throughput(1000, 10000.0, now=NOW)
+    result = measure(store)
+    assert result["state"] == "no_data" and result["eligible_slots"] == 0
+    throughput = result["throughput"]
+    assert throughput["state"] == "ready" and throughput["samples"] == 20
+    assert throughput["tokens_per_second"] == pytest.approx(20000 / 110)
+    assert throughput["tokens_per_second"] != 550  # Not an average of per-request rates.
+    assert throughput["collection_start_day"] == datetime.fromtimestamp(
+        NOW - 86400, timezone.utc).date().isoformat()
+    assert "output_tokens" not in throughput and "stream_ms" not in throughput
+
+
+@pytest.mark.parametrize("samples,state", [(0, "no_data"), (19, "limited_data"), (20, "ready")])
+def test_gateway_samples_have_their_own_publication_boundary(samples, state):
+    fleet = Fleet([report(20, 20)])
+    reading = gateway_reading(samples, samples * 100, samples * 1000.0)
+    if samples == 0:
+        reading["collection_start_day"] = None
+    fleet.gateway_throughput_summary = lambda _: reading
+    result = measure(fleet)
+    assert result["state"] == "ready"
+    throughput = result["throughput"]
+    assert throughput["state"] == state
+    assert throughput["samples"] == (20 if state == "ready" else None)
+    assert throughput["tokens_per_second"] == (100.0 if state == "ready" else None)
+
+
+def test_measured_zero_output_is_zero_rate_while_missing_store_support_is_unknown():
+    fleet = Fleet()
+    assert measure(fleet)["throughput"]["tokens_per_second"] is None
+    fleet.gateway_throughput_summary = lambda _: gateway_reading(tokens=0)
+    assert measure(fleet)["throughput"]["tokens_per_second"] == 0
+
+
+@pytest.mark.parametrize("field,value", [
+    ("samples", True), ("samples", "20"), ("samples", -1),
+    ("samples", performance.MAX_THROUGHPUT_TOTAL + 1),
+    ("output_tokens", True), ("output_tokens", "4000"), ("output_tokens", -1),
+    ("output_tokens", 20_000_000_001),
+    ("stream_ms", True), ("stream_ms", "100000"), ("stream_ms", -1),
+    ("stream_ms", float("nan")), ("stream_ms", float("inf")),
+    ("stream_ms", 1999), ("stream_ms", 72_000_001),
+    ("window_start_day", "1970-01-01"), ("collection_start_day", None),
+    ("collection_start_day", "2099-01-01"), ("collection_start_day", "1970-01-01"),
+    ("collection_start_day", "not-a-day"),
+])
+def test_corrupt_gateway_summary_stays_unknown_without_affecting_relay_metrics(field, value):
+    fleet = Fleet([report(20, 20)])
+    reading = {**gateway_reading(), field: value}
+    fleet.gateway_throughput_summary = lambda _: reading
+    result = measure(fleet)
+    assert result["state"] == "ready"
+    assert result["throughput"]["state"] == "no_data"
+    assert result["throughput"]["samples"] is None
+    assert result["throughput"]["tokens_per_second"] is None
+    assert result["throughput"]["collection_start_day"] is None
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("reading", [None, {}, gateway_reading(0, 1, 0)])
+def test_missing_or_inconsistent_gateway_totals_are_not_coerced_to_zero(reading):
+    fleet = Fleet()
+    fleet.gateway_throughput_summary = lambda _: reading
+    assert measure(fleet)["throughput"]["tokens_per_second"] is None
+
+
+def test_gateway_store_exception_does_not_break_status_or_disclose_its_message():
+    fleet = Fleet([report(20, 20)])
+
+    def broken(_):
+        raise ValueError(SECRET)
+
+    fleet.gateway_throughput_summary = broken
+    result = measure(fleet)
+    assert result["state"] == "ready"
+    assert result["throughput"]["state"] == "no_data"
+    assert SECRET not in json.dumps(result)
 
 
 def test_prevalidated_heartbeat_is_compatible_with_summary():

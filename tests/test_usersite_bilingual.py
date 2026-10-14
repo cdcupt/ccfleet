@@ -129,6 +129,42 @@ def test_privacy_discloses_single_contributor_aggregates_without_individual_brea
     assert '三个 Fleet 用户' not in chinese and '三个账号门槛' not in chinese
 
 
+def test_privacy_explains_independent_output_rate_and_daily_numeric_retention():
+    page = Page(usersite.privacy_page(Config()))
+    english, chinese = page.copy('en'), page.copy('zh')
+    for phrase in (
+        'A separate streamed output rate',
+        'first-to-last gateway response-body chunk time',
+        'at least two chunks and at least 100 ms',
+        'Single-chunk or too-short replies are excluded',
+        'buffering can affect the observed rate',
+        'excludes the initial wait',
+        'thinking or tool output',
+        'twenty eligible replies are needed independently',
+        'anonymous daily counts, output-token totals and delivery-time totals',
+        'seven UTC calendar days',
+        'No input/cache token totals, user/slot/model breakdowns or individual request timestamps',
+        'Older traffic is not backfilled',
+    ):
+        assert phrase in english
+    for phrase in (
+        '流式输出速率使用 HTTPS 网关新收集的数值观测',
+        '从首个到最后一个响应正文分块',
+        '至少两个分块',
+        '至少持续 100 毫秒',
+        '单个分块或过短的回复不计入',
+        '缓冲可能影响观测到的速率',
+        '不含初始等待',
+        '思考或工具输出',
+        '单独要求至少二十个符合条件的回复',
+        '每日样本数、输出 Token 总量和交付时间总和',
+        '七个 UTC 日期',
+        '不保存单条请求时间戳',
+        '不补填历史流量',
+    ):
+        assert phrase in chinese
+
+
 @pytest.mark.parametrize('update', [{}, {'state': 'failed', 'detail': 'controlled error'}])
 def test_stable_slot_with_new_release_renders_update_controls_without_label_shadow(update):
     slot = {**SLOT, 'claude_channel': 'stable'}

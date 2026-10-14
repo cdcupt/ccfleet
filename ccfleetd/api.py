@@ -1530,7 +1530,7 @@ def serve(ctx: Context) -> None:
         server.serve_forever()
     finally:
         stop.set()
-        ctx.gateway.stopping.set()
+        ctx.gateway.close()
         server.server_close()
         if metrics_worker is not None:
             metrics_worker.join(timeout=2)

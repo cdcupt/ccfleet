@@ -143,6 +143,7 @@ def scenario(cfg, tmp_path, request):
     server.shutdown()
     server.server_close()
     thread.join(timeout=2)
+    runtime.close()
     store.close()
 
 

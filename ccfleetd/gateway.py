@@ -19,6 +19,7 @@ from typing import Any
 from ccfleet_agent import inference_client as wire
 from ccfleet_agent import local_relay
 
+from . import throughput
 from .gateway_transport import GatewayTransportError, SSHAttempt
 
 PATHS = wire.PATHS
@@ -127,6 +128,12 @@ class GatewayRuntime:
         self.health = OrderedDict()
         self.salt = os.urandom(32)
         self.stopping = threading.Event()
+        self.throughput = (throughput.Recorder(store)
+                           if not getattr(cfg, "broker_only", False) else None)
+
+    def close(self) -> bool:
+        self.stopping.set()
+        return self.throughput.close() if self.throughput is not None else True
 
     @property
     def enabled(self) -> bool:
@@ -266,7 +273,7 @@ class GatewayRuntime:
         except (OSError, ValueError):
             return True
 
-    def _watch(self, handler, key, target, attempt, done, deadline) -> None:
+    def _watch(self, handler, key, target, attempt, done, deadline, cancelled=None) -> None:
         while not done.wait(0.2):
             try:
                 allowed = (self.clock() < deadline and self._authorized(key, target)
@@ -274,6 +281,8 @@ class GatewayRuntime:
             except Exception:
                 allowed = False
             if not allowed:
+                if cancelled is not None:
+                    cancelled.set()
                 attempt.close()
                 return
 
@@ -374,10 +383,12 @@ class GatewayRuntime:
                 continue
             attempt = self.transport_factory(target, self.cfg)
             done = threading.Event()
+            cancelled = threading.Event()
             watcher = threading.Thread(target=self._watch,
-                args=(handler, key, target, attempt, done, deadline), daemon=True)
+                args=(handler, key, target, attempt, done, deadline, cancelled), daemon=True)
             watcher.start()
             committed = False
+            observer = None
             try:
                 attempt.start(headers, body, path=handler.path,
                               before_model_send=lambda target=target: (self._authorized(key, target)
@@ -418,6 +429,11 @@ class GatewayRuntime:
                     error_body = wire.chunk(safe)
                 if status < 400:
                     self._success(session, target)
+                if (self.throughput is not None and handler.path.split("?", 1)[0] == "/v1/messages"
+                        and 200 <= status < 300
+                        and reply["headers"].get("content-type") == "text/event-stream"):
+                    with contextlib.suppress(Exception):
+                        observer = throughput.StreamObserver("text/event-stream", clock=self.clock)
                 handler.protocol_version = "HTTP/1.1"
                 handler.send_response(status)
                 for name, value in reply["headers"].items():
@@ -434,10 +450,23 @@ class GatewayRuntime:
                         raise GatewayTransportError()
                     handler.wfile.write(f"{len(part):x}\r\n".encode() + part + b"\r\n")
                     handler.wfile.flush()
+                    if observer is not None:
+                        try:
+                            observer.feed(part)
+                        except Exception:
+                            with contextlib.suppress(Exception):
+                                observer.discard()
+                            observer = None
                 if error_body is None:
                     attempt.finish(status)
                 handler.wfile.write(b"0\r\n\r\n")
                 handler.wfile.flush()
+                if (observer is not None and not cancelled.is_set()
+                        and not self.stopping.is_set()):
+                    with contextlib.suppress(Exception):
+                        sample = observer.finish()
+                        if sample is not None and self.clock() < deadline:
+                            self.throughput.submit(sample, now=time.time())
                 return
             except GatewayTransportError as exc:
                 if committed:
@@ -455,6 +484,9 @@ class GatewayRuntime:
                 return
             finally:
                 done.set()
+                if observer is not None:
+                    with contextlib.suppress(Exception):
+                        observer.discard()
                 attempt.close()
                 watcher.join(timeout=1)
         model_error(handler, 503, "No selected slot is currently ready.")
