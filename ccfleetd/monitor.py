@@ -211,6 +211,11 @@ class Monitor:
             return
         self._last_prune = now
         removed = self._store.prune_heartbeats(now - self._cfg.retention_days * 86400)
+        # Optional numeric telemetry must not interrupt machine checks or alerting.
+        try:
+            self._store.prune_gateway_throughput(now)
+        except Exception:
+            log.debug("gateway output-rate retention is temporarily unavailable")
         if removed:
             log.info("pruned %d old heartbeats", removed)
 

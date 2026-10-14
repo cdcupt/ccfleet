@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timezone
 from html import escape
 from typing import Any, Optional
 
@@ -291,6 +292,29 @@ def _timing_samples_text(sample: Mapping[str, Any]) -> str:
     return label(f"{count:,} timing samples", f"{count:,} 个计时样本", inline=True)
 
 
+def _throughput_reading(sample: Any) -> tuple[bool, str, str]:
+    """Output rate is independently publishable, including a measured zero."""
+    if isinstance(sample, Mapping) and sample.get("state") == "ready":
+        count, rate = sample.get("samples"), sample.get("tokens_per_second")
+        try:
+            if (type(count) is int
+                    and performance.MIN_THROUGHPUT_SAMPLES <= count
+                    <= performance.MAX_THROUGHPUT_TOTAL
+                    and type(rate) in (int, float) and math.isfinite(rate)
+                    and 0 <= rate <= 10_000_000_000):
+                number = f"{rate:,.2f}"
+                return (True, label(number + " tokens/s", number + " Token/秒", inline=True),
+                        label(f"{count:,} streamed reply samples", f"{count:,} 个流式回复样本",
+                              inline=True))
+        except (OverflowError, ValueError):
+            pass
+    waiting = isinstance(sample, Mapping) and sample.get("state") == "limited_data"
+    return (False, label("—", "—", inline=True), label(
+        "Waiting for 20 eligible streamed replies" if waiting
+        else "Needs 20 eligible streamed replies",
+        "等待 20 个符合条件的流式回复" if waiting else "需有 20 个符合条件的流式回复", inline=True))
+
+
 def _report_time(observed: float, now: float) -> str:
     """Localize the oldest included observation with a useful no-script age."""
     minutes = max(0, int((now - observed) // 60))
@@ -352,7 +376,7 @@ def machine_details_panel(details: Sequence[status.MachineDetail],
 
 
 def performance_panel(report: Mapping[str, Any], now: float) -> str:
-    """Only the publishable aggregate; suppressed states never disclose numbers."""
+    """Relay and streamed-output aggregates have independent publication gates."""
     ready = report.get("state") == "ready"
     latencies = report.get("latencies", {}) if ready else {}
     connect = latencies.get("connect_ms", {})
@@ -365,6 +389,8 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
     completion_samples = (label(f"{completed:,} of {requests:,} transfers completed",
                                 f"{requests:,} 次传输中有 {completed:,} 次完成", inline=True)
                           if completed is not None and requests is not None else '')
+    throughput = report.get("throughput")
+    throughput_ready, output_rate, output_samples = _throughput_reading(throughput)
     cards = (
         ("Transfer completion", "传输完成率", label(rate, rate, inline=True),
          "How often a successful HTTP reply was fully delivered.",
@@ -381,6 +407,9 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
         ("Average full transfer", "平均完整传输时间", _latency_text(total),
          "Recorded transfer duration; answer length affects it.",
          "记录中的传输时长，也受回复长度影响。", _timing_samples_text(total)),
+        ("Streamed output rate", "流式输出速率", output_rate,
+         "At the gateway; higher is faster for comparable models and workloads.",
+         "在网关观测；模型和工作负载相近时，数值越高表示交付越快。", output_samples),
     )
     grid = '<dl class="st-perf-grid">' + ''.join(
         '<div class="st-perf-metric"><dt>' + label(en, zh, inline=True)
@@ -397,15 +426,17 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
             if report.get("oldest_observed_at") is not None else ''
         )
         note = '<p class="st-perf-note">' + label(
-            "Only slots with recent, usable reports are included. This is part of Fleet traffic, "
-            "not a measurement of every request. A dash means no publishable timing sample yet.",
-            "仅统计近期上报且数据有效的槽位。这只覆盖部分 Fleet 流量，不代表每一次请求。"
+            "The five slot-relay figures include only recent, usable reports. This is part "
+            "of Fleet traffic, not a measurement of every request. "
+            "A dash means no publishable timing sample yet.",
+            "五项槽位端统计仅包含近期上报且数据有效的报告。这只覆盖部分 Fleet 流量，"
+            "不代表每一次请求。"
             "横线表示暂时没有可公开的计时数据。",
             inline=True) + '</p>' + freshness
     else:
-        message = ("No fresh transfer data yet", "暂时没有新的传输数据") if report.get(
-            "state") == "no_data" else (
-                "Waiting for enough aggregated data", "等待足够的汇总数据")
+        message = ("No fresh slot-relay transfer data yet", "暂时没有新的槽位端传输数据") if (
+            report.get("state") == "no_data") else (
+                "Waiting for enough aggregated relay data", "等待足够的转发汇总数据")
         note = '<p class="st-perf-note"><strong>' + label(*message, inline=True) + '</strong> '
         note += label(
             "At least 20 recorded attempts are needed before traffic figures appear. "
@@ -414,6 +445,17 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
             "至少有 20 次已记录的尝试，才展示流量数字。"
             "每项计时也要单独达到 20 个样本。横线表示未知，不是零。",
             inline=True) + '</p>'
+    if throughput_ready:
+        collected = throughput.get("collection_start_day")
+        try:
+            if (isinstance(collected, str) and date.fromisoformat(collected).isoformat()
+                    == collected and collected <= datetime.fromtimestamp(now, timezone.utc)
+                    .date().isoformat()):
+                note += '<p class="st-perf-note">' + label(
+                    "Earliest available output-rate samples: " + collected + " (UTC).",
+                    "现有输出速率样本最早日期：" + collected + "（UTC）。", inline=True) + '</p>'
+        except (ValueError, OverflowError, OSError):
+            pass
     timing_notes = ''
     if ready:
         for key, en, zh in (
@@ -430,7 +472,7 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
         '<details class="st-perf-help"><summary>'
         + label("How we measure this", "这些数字是怎么来的", inline=True) + '</summary>'
         + '<p>' + label(
-            "These are slot-side relay attempts over the last seven UTC calendar days, including "
+            "The five slot-relay figures cover the last seven UTC calendar days, including "
             "today. They can include both Messages and token-count calls. One user request "
             "can produce more than one attempt when a safe fallback is tried. Requests rejected "
             "before reaching a slot relay are not counted.",
@@ -465,6 +507,36 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
             "至少 20 个样本。因此，即使流量总数可以公开，某项计时仍可能未知。",
             inline=True) + '</p>'
         + '<p>' + label(
+            "Streamed output rate is measured separately at the HTTPS gateway for successful, "
+            "fully delivered /v1/messages streaming replies. It divides the sum of "
+            "provider-reported output tokens by the sum of time from the first to the last "
+            "gateway response-body chunk. A reply needs valid output usage, at least two "
+            "chunks and 100 ms of delivery time. Single-chunk or too-short replies are "
+            "excluded; buffering can affect the observed rate. It excludes the initial wait, "
+            "but includes stream pauses and network delivery, and includes all output "
+            "tokens reported by the provider, including thinking or tool output where counted. "
+            "Higher is faster for comparable models and workloads; this is an observed "
+            "delivery rate, not a pure model-speed benchmark.",
+            "流式输出速率在 HTTPS 网关单独观测，只统计成功且完整传回的 /v1/messages 流式回复。"
+            "计算方式为服务商报告的输出 Token 总量除以网关从首个到最后一个响应正文分块的"
+            "时间总和。回复需有有效的输出用量、至少两个分块，且传输过程至少持续 100 毫秒。"
+            "单个分块或过短的回复不计入；缓冲可能影响观测到的速率。不包含最初等待回复的"
+            "时间，但包含流中的暂停和网络传输；服务商计入的全部输出 Token 都在内，包括被计入"
+            "的思考或工具输出。模型和工作负载相近时，数值越高表示交付越快；这是观测到的交付"
+            "速率，不是模型本身速度的基准测试。", inline=True) + '</p>'
+        + '<p>' + label(
+            "Output rate needs at least 20 eligible streamed replies over the same seven UTC "
+            "calendar days. It can be shown while slot-relay figures remain unknown, or "
+            "remain unknown when they are ready. Collection starts with new observations; "
+            "older traffic is not backfilled. Only anonymous daily numeric totals are retained, "
+            "with no user, slot or model breakdown, input/cache token totals or individual "
+            "request timestamps.",
+            "输出速率在相同的七个 UTC 日期窗口内单独要求至少 20 个符合条件的流式回复。"
+            "槽位端统计未知时，输出速率仍可能公开；槽位端统计已就绪时，输出速率也可能仍未知。"
+            "只从新的观测开始收集，不补填历史流量。仅保留不含身份信息的每日数值汇总，不按用户、"
+            "槽位或模型分别展示，也不包含输入或缓存 Token 总量、单条请求的时间戳。",
+            inline=True) + '</p>'
+        + '<p>' + label(
             "Only combined numbers are public, even if only one account contributes. "
             "This panel shows no account names, slots, "
             "messages, or individual request records.",
@@ -476,8 +548,8 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
         '<section class="card st-performance" id="performance" aria-labelledby="performance-title">'
         '<h2 id="performance-title">' + label("Fleet performance", "Fleet 性能", inline=True)
         + '</h2><p class="sub">' + label(
-            "Recent transfer measurements, combined from usable relay reports.",
-            "汇总有效转发上报中的近期传输表现。", inline=True)
+            "Recent slot-relay measurements and gateway streamed-output delivery.",
+            "近期槽位端转发统计与网关流式输出交付表现。", inline=True)
         + '<span class="st-perf-window">' + label(
             "Last 7 UTC calendar days, including today", "最近 7 个 UTC 日期，包含今天",
             inline=True)

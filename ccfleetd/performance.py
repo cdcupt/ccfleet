@@ -1,16 +1,17 @@
-"""Public, sample-gated performance from existing numeric relay observations.
+"""Public, sample-gated numeric relay and gateway-stream observations.
 
 Read each slot's latest seven-UTC-day snapshot once, never add successive
 heartbeats or infer unmeasured gateway requests. No request path, credential,
 native transcript usage or individual identity is returned. The caller must
 keep reporting_users internal and hide coverage counts when state is not ready.
+Gateway output throughput has its own sample gate and never uses relay timing.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from ccfleet_agent.relay_metrics import DAY_SECONDS, MAX_EPOCH, TIMINGS, WINDOW_DAYS
@@ -21,6 +22,8 @@ from .heartbeat import account_fp, relay_report
 MIN_REPORTING_USERS = 1
 MIN_REQUESTS = 20
 MIN_TIMING_SAMPLES = 20
+MIN_THROUGHPUT_SAMPLES = 20
+MAX_THROUGHPUT_TOTAL = 2**53 - 1
 FUTURE_SKEW_S = 60
 
 
@@ -29,6 +32,54 @@ def _instant(value: Any) -> Optional[float]:
             and math.isfinite(value)):
         return float(value)
     return None
+
+
+def _throughput_summary(store: Any, now: float, start: str) -> dict[str, Any]:
+    """Only a validated delivery rate and publishable sample count leave Store."""
+    result = {"state": "no_data", "samples": None, "tokens_per_second": None,
+              "window_start_day": start, "collection_start_day": None}
+    unknown = dict(result)
+    try:
+        measure = getattr(store, "gateway_throughput_summary", None)
+        if not callable(measure):
+            return result
+        raw = measure(now)
+        if not isinstance(raw, Mapping) or raw.get("window_start_day") != start:
+            return result
+        samples, tokens, elapsed = (raw.get(key) for key in
+                                    ("samples", "output_tokens", "stream_ms"))
+        if (type(samples) is not int or type(tokens) is not int
+                or not 0 <= samples <= MAX_THROUGHPUT_TOTAL
+                or not 0 <= tokens <= MAX_THROUGHPUT_TOTAL
+                or type(elapsed) not in (int, float) or not math.isfinite(elapsed)
+                or not 0 <= elapsed <= MAX_THROUGHPUT_TOTAL):
+            return result
+        collected = raw.get("collection_start_day")
+        if collected is not None:
+            if (not isinstance(collected, str) or date.fromisoformat(collected).isoformat()
+                    != collected or collected < start
+                    or collected > datetime.fromtimestamp(now, timezone.utc)
+                    .date().isoformat()):
+                return result
+        if samples == 0:
+            if tokens != 0 or elapsed != 0:
+                return result
+            result["collection_start_day"] = collected
+            return result
+        if (collected is None or not samples * 100 <= elapsed <= samples * 3_600_000
+                or tokens > samples * 1_000_000_000):
+            return result
+        result.update(state="limited_data", collection_start_day=collected)
+        if samples < MIN_THROUGHPUT_SAMPLES:
+            return result
+        rate = tokens / (elapsed / 1000)
+        if not math.isfinite(rate):
+            return unknown
+        result.update(state="ready", samples=samples, tokens_per_second=rate)
+    except Exception:
+        # Telemetry must never make Status fail or turn corrupt observations into zero.
+        return unknown
+    return result
 
 
 def _current_report(slot: Mapping[str, Any], heartbeat: Any, node_id: str,
@@ -105,6 +156,7 @@ def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         "oldest_observed_at": None, "requests": None, "completed": None,
         "completion_rate": None,
         "latencies": {stage: {"count": None, "mean": None} for stage in TIMINGS},
+        "throughput": _throughput_summary(store, observed_now, start),
     }
     nodes = {node["id"] for node in store.list_nodes()
              if isinstance(node, Mapping) and isinstance(node.get("id"), str)

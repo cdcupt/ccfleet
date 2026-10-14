@@ -1389,10 +1389,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "The public Status page combines existing numeric relay measurements "
                 "from current, fresh slot reports. It shows transfer completion and "
                 "average slot-side timing over seven UTC calendar days, including today. "
+                "A separate streamed output rate uses new numeric observations at the HTTPS "
+                "gateway over the same window. "
                 "It does not split measurements by user or slot or publish names, emails, "
                 "prompts, credentials or response contents.",
-                "公开的服务状态页只汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
-                "七个 UTC 日的传输完成率和槽位端平均响应时长。不按用户或槽位分别展示统计，"
+                "公开的服务状态页汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
+                "七个 UTC 日的传输完成率和槽位端平均响应时长。流式输出速率使用 HTTPS 网关新收集"
+                "的数值观测，在相同窗口内单独计算。不按用户或槽位分别展示统计，"
                 "也不公开名称、邮箱、提示词、凭据或回复内容。",
             ),
             (
@@ -1428,6 +1431,32 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "回复、取消或中断的传输不算成功。一条请求可能因使用备用"
                 "账号而产生多次转发尝试。这些统计不包含请求到达槽位前的网关失败，也不评价"
                 "答案质量。查看状态页不会额外调用模型。",
+            ),
+            (
+                "Streamed output rate is provider-reported output tokens divided by "
+                "first-to-last gateway response-body chunk time, summed across successful, "
+                "fully delivered /v1/messages streaming replies. A sample needs valid usage, "
+                "at least two chunks and at least 100 ms of delivery time. Single-chunk "
+                "or too-short replies are excluded; buffering can affect the observed rate. "
+                "This observed delivery rate "
+                "excludes the initial wait and includes stream pauses, network delivery "
+                "and any thinking or tool output included in the provider's output count. "
+                "Compare only similar models and workloads; it is not a pure model benchmark. "
+                "At least twenty eligible replies are needed independently of slot-relay "
+                "measurements. We retain only anonymous daily counts, output-token totals "
+                "and delivery-time totals for seven UTC calendar days. No input/cache token "
+                "totals, user/slot/model breakdowns or individual request timestamps are "
+                "stored for this measure. Older traffic is not backfilled.",
+                "流式输出速率用服务商报告的输出 Token 总量，除以网关从首个到最后一个响应正文分块"
+                "的时间总和，只统计成功且完整传回的 /v1/messages 流式回复。样本需有有效用量、"
+                "至少两个分块，且传输过程至少持续 100 毫秒。单个分块或过短的回复不计入；"
+                "缓冲可能影响观测到的速率。这是观测到的交付速率，不含初始等待，"
+                "但包含流中的暂停、网络传输，"
+                "以及服务商输出计数中包含的思考或工具输出。只宜比较相近的模型和工作负载，"
+                "不是模型本身的基准测试。它单独要求至少二十个符合条件的回复，不依赖槽位端"
+                "统计是否就绪。仅在七个 UTC 日期内保留不含身份信息的每日样本数、输出 Token "
+                "总量和交付时间总和；这项观测不保存输入或缓存 Token 总量、不按用户、槽位或模型"
+                "分别统计，也不保存单条请求时间戳。不补填历史流量。",
             ),
         ],
     )

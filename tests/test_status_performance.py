@@ -36,6 +36,9 @@ def ready_report():
             "first_byte_ms": {"count": 24, "mean": 1250.0},
             "total_ms": {"count": 25, "mean": 30123.0},
         },
+        "throughput": {"state": "ready", "samples": 20, "tokens_per_second": 40.0,
+                       "window_start_day": "2033-05-12",
+                       "collection_start_day": "2033-05-18"},
     }
 
 
@@ -58,17 +61,18 @@ def test_ready_panel_explains_the_actual_measured_numbers_and_window():
 
 
 
-def test_all_five_metrics_and_their_sample_counts_are_visible_before_help():
+def test_all_six_metrics_and_their_sample_counts_are_visible_before_help():
     raw = projected(ready_report())
     visible = Text(raw).shown().split("How we measure this", 1)[0]
-    assert raw.count('class="st-perf-metric"') == 5
+    assert raw.count('class="st-perf-metric"') == 6
     for metric in ("Transfer completion 96.00%", "Observed relay attempts 25",
                    "Average first response byte 1.25 s", "Average upstream connection 240 ms",
-                   "Average full transfer 30.12 s"):
+                   "Average full transfer 30.12 s", "Streamed output rate 40.00 tokens/s"):
         assert metric in visible
     for count in (23, 24, 25):
         assert f"{count} timing samples" in visible
     assert "24 of 25 transfers completed" in visible
+    assert "20 streamed reply samples" in visible
 
 @pytest.mark.parametrize("stage,title", [
     ("connect_ms", "Average upstream connection"),
@@ -112,18 +116,86 @@ def test_suppressed_states_never_publish_raw_traffic_coverage_or_freshness(state
         key: {"count": 432109, "mean": 321098.0}
         for key in ("connect_ms", "first_byte_ms", "total_ms")
     }
+    report["throughput"] = {"state": state, "samples": 999888,
+                            "tokens_per_second": 888777.0,
+                            "collection_start_day": "2033-05-18"}
     raw = projected(report)
     text = Text(raw).shown()
-    assert text.count("—") == 5
+    assert text.count("—") == 6
     assert "A dash means unknown, not zero" in text
-    expected = ("No fresh transfer data yet" if state == "no_data"
-                else "Waiting for enough aggregated data")
+    expected = ("No fresh slot-relay transfer data yet" if state == "no_data"
+                else "Waiting for enough aggregated relay data")
     assert expected in text
-    for secret in ("987654", "876543", "765432", "654321", "543210", "432109", "321098"):
+    for secret in ("987654", "876543", "765432", "654321", "543210", "432109", "321098",
+                   "999888", "888777"):
         assert secret not in raw
     assert "Oldest included report" not in text
     assert "timing samples" not in text
     assert "datetime=" not in raw
+    assert "Earliest available output-rate samples" not in text
+
+
+@pytest.mark.parametrize("relay_state", ["no_data", "limited_data"])
+def test_ready_output_rate_is_visible_independently_of_suppressed_relay_figures(relay_state):
+    report = ready_report()
+    report["state"] = relay_state
+    text = Text(projected(report)).shown()
+    before_help = text.split("How we measure this", 1)[0]
+    assert "Transfer completion —" in before_help
+    assert "Observed relay attempts —" in before_help
+    assert "Streamed output rate 40.00 tokens/s" in before_help
+    assert "20 streamed reply samples" in before_help
+    assert "Earliest available output-rate samples: 2033-05-18 (UTC)." in before_help
+    assert "slot-relay" in before_help or "relay data" in before_help
+
+
+@pytest.mark.parametrize("throughput", [
+    None, {}, {"state": "no_data"},
+    {"state": "limited_data", "samples": 19, "tokens_per_second": 99},
+    {"state": "ready", "samples": 19, "tokens_per_second": 99},
+    {"state": "ready", "samples": True, "tokens_per_second": 99},
+    {"state": "ready", "samples": 20, "tokens_per_second": True},
+    {"state": "ready", "samples": 20, "tokens_per_second": "99"},
+    {"state": "ready", "samples": 20, "tokens_per_second": float("nan")},
+    {"state": "ready", "samples": 20, "tokens_per_second": float("inf")},
+    {"state": "ready", "samples": 20, "tokens_per_second": -1},
+])
+def test_unknown_or_invalid_output_rate_is_never_zero_or_a_raw_partial_count(throughput):
+    report = ready_report()
+    report["throughput"] = throughput
+    text = Text(projected(report)).shown().split("How we measure this", 1)[0]
+    assert "Streamed output rate —" in text
+    assert "Transfer completion 96.00%" in text
+    assert "tokens/s" not in text
+    assert "streamed reply samples" not in text
+    assert "Earliest available output-rate samples" not in text
+    assert ("Waiting for 20 eligible streamed replies" if throughput and throughput.get(
+        "state") == "limited_data" else "Needs 20 eligible streamed replies") in text
+
+
+def test_zero_output_rate_is_a_measurement_and_untrusted_fields_are_never_rendered():
+    report = ready_report()
+    report["throughput"].update(tokens_per_second=0.0, model="secret-model",
+                                email="secret-email", output_tokens=999888, stream_ms=888777,
+                                collection_start_day="secret-date", timestamp=NOW - 1)
+    before = deepcopy(report)
+    raw = projected(report)
+    assert "Streamed output rate 0.00 tokens/s" in Text(raw).shown()
+    for private in ("secret-", "999888", "888777", str(NOW - 1)):
+        assert private not in raw
+    assert "Earliest available output-rate samples" not in raw
+    assert report == before
+
+
+def test_empty_output_rate_hint_states_the_publication_requirement_in_both_languages():
+    report = ready_report()
+    report["throughput"] = {"state": "no_data"}
+    english = Text(projected(report)).shown().split("How we measure this", 1)[0]
+    chinese = Text(projected(report, "zh")).shown().split("这些数字是怎么来的", 1)[0]
+    assert "Streamed output rate — Needs 20 eligible streamed replies" in english
+    assert "流式输出速率 — 需有 20 个符合条件的流式回复" in chinese
+    assert "No eligible stream samples yet" not in english
+    assert "暂无符合条件的流式样本" not in chinese
 
 
 def test_missing_first_byte_sample_is_unknown_not_a_zero_latency():
@@ -134,7 +206,8 @@ def test_missing_first_byte_sample_is_unknown_not_a_zero_latency():
     assert "Average first response body byte: — · No timing samples" in text
     assert "Transfer completion 96.00%" in text
     assert "Observed relay attempts 25" in text
-    assert "0 ms" not in text.replace("240 ms", "")
+    assert "Average first response byte 0 ms" not in text
+    assert "Average first response body byte: 0 ms" not in text
 
 
 def test_a_timing_with_too_few_samples_stays_hidden_when_overall_traffic_is_ready():
@@ -161,6 +234,18 @@ def test_timer_and_attempt_definitions_do_not_claim_end_to_end_task_success():
     assert "excludes the trip from your computer to the gateway and SSH setup" in text
     assert "no account names, slots, messages, or individual request records" in text
     assert "even if only one account contributes" in text
+    assert "sum of provider-reported output tokens" in text
+    assert "first to the last gateway response-body chunk" in text
+    assert "at least two chunks and 100 ms" in text
+    assert "Single-chunk or too-short replies are excluded" in text
+    assert "buffering can affect the observed rate" in text
+    assert "excludes the initial wait" in text
+    assert "includes stream pauses and network delivery" in text
+    assert "including thinking or tool output where counted" in text
+    assert "not a pure model-speed benchmark" in text
+    assert "at least 20 eligible streamed replies" in text
+    assert "older traffic is not backfilled" in text
+    assert "input/cache token totals or individual request timestamps" in text
 
 
 def test_arbitrary_account_slot_content_and_raw_reports_are_never_rendered():
@@ -187,10 +272,17 @@ def test_english_and_chinese_are_actual_separate_prose_including_help_and_age():
     assert "传输完成率 96.00%" in text
     assert "平均首字节等待时间 1.25 秒" in text
     assert "已记录的转发尝试 25" in text
+    assert "流式输出速率 40.00 Token/秒" in text
+    assert "20 个流式回复样本" in text
     assert "最近 7 个 UTC 日期，包含今天" in text
     assert "最早的一份有效上报： 2 分钟前" in text
     assert "这些数字是怎么来的" in text
     assert "不是中位数或百分位数" in text
+    assert "不包含最初等待回复的时间" in text
+    assert "至少 20 个符合条件的流式回复" in text
+    assert "不补填历史流量" in text
+    assert "单个分块或过短的回复不计入" in text
+    assert "缓冲可能影响观测到的速率" in text
     assert "not a measurement" not in text
 
 

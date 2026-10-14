@@ -104,6 +104,14 @@ def test_serving_loop_owns_sampler_start_stop_and_join(monkeypatch, enabled):
     server = Server()
     ctx = api.Context(object(), Config(public_machine_metrics_enabled=enabled), Monitor())
     ctx.machine_health = Sampler() if enabled else None
+    gateway_closed = []
+    close_gateway = ctx.gateway.close
+
+    def close_output_recorder():
+        gateway_closed.append(True)
+        close_gateway()
+
+    monkeypatch.setattr(ctx.gateway, 'close', close_output_recorder)
     monkeypatch.setattr(api, 'build_server', lambda context: server)
     monkeypatch.setattr(api.threading, 'Thread', Thread)
     monkeypatch.setattr(api.signal, 'signal', lambda number, handler: handlers.update({number: handler}))
@@ -114,3 +122,4 @@ def test_serving_loop_owns_sampler_start_stop_and_join(monkeypatch, enabled):
         assert metrics[0].started and metrics[0].args[0].is_set()
         assert metrics[0].joined == 2
     assert server.closed and ctx.gateway.stopping.is_set()
+    assert gateway_closed == [True]
