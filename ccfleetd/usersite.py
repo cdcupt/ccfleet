@@ -760,7 +760,7 @@ def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
 
 
 def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
-    rows = []
+    priced_rows, unpriced_rows = [], []
     for model in models[:16] if isinstance(models, list) else []:
         if not isinstance(model, Mapping):
             continue
@@ -785,7 +785,8 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
         paired = ('<small>' + label("API estimate for ", "API 估值对应 ", inline=True)
                   + _public_usage_token(tokens.get("total_tokens"))
                   + label(" tokens", " Token", inline=True) + '</small>' if known else '')
-        rows.append('<div class="usage-model"><div class="usage-model-head">'
+        (priced_rows if known else unpriced_rows).append(
+                    '<div class="usage-model"><div class="usage-model-head">'
                     '<span class="usage-model-name">' + title + '</span>'
                     '<span class="usage-model-value">' + value + '</span></div>' + paired
                     + '<dl class="usage-token-grid">' + grid + '</dl><small>'
@@ -795,11 +796,20 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                             f"读取 {read_text}／{sample_text} · "
                             f"写入 {write_text}／{sample_text}", inline=True)
                     + '</small></div>')
-    detail = ('<div class="usage-models">' + ''.join(rows) + '</div>' if rows else '<p>' + label(
-        "No model-aware observations yet; older aggregate tokens have no matched model price.",
-        "暂无带模型信息的观测；旧汇总 Token 没有匹配的模型价格。", inline=True) + '</p>')
+    detail = ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
+              + '</p><div class="usage-models">' + ''.join(priced_rows) + '</div>'
+              if priced_rows else '<p>' + label(
+                  "No priced model observations yet; older aggregate tokens have no matched "
+                  "model price.",
+                  "暂无可计价的模型观测；旧汇总 Token 没有匹配的模型价格。", inline=True) + '</p>')
+    outside = ('<p>' + label("Unpriced model observations (outside ranking)",
+                            "未计价模型观测（不参与排行）", inline=True)
+               + '</p><div class="usage-models">' + ''.join(unpriced_rows) + '</div>'
+               if unpriced_rows else '')
     totals = reading.get("tokens")
     totals = totals if isinstance(totals, Mapping) else {}
+    unpriced = reading.get("unpriced_tokens")
+    unpriced = unpriced if isinstance(unpriced, Mapping) else {}
     reported = ''.join('<div><dt>' + label(en, zh, inline=True) + '</dt><dd>'
                        + _public_usage_token(totals.get(field)) + '</dd></div>'
                        for field, en, zh in (
@@ -807,11 +817,20 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                            ("cache_read_input_tokens", "Cache read", "缓存读取"),
                            ("cache_creation_input_tokens", "Cache write", "缓存写入")))
     aggregate = '<div class="usage-model"><span class="usage-model-name">' + label(
-        "Reported processed-token breakdown", "已报告的处理 Token 明细", inline=True)
-    aggregate += '</span><dl class="usage-token-grid">' + reported + '</dl></div>'
+        "Broader reported usage (includes older/unpriced)",
+        "更广的上报范围（含旧数据／未计价用量）",
+        inline=True)
+    aggregate += '</span><p>' + label("Reported total ", "上报总量 ", inline=True)
+    aggregate += _public_usage_token(totals.get("total_tokens")) + ' · ' + label(
+        "Unpriced ", "未计价 ", inline=True) + _public_usage_token(unpriced.get("total_tokens"))
+    aggregate += '</p><small>' + label(
+        "Separate scope from the ranking tokens and API estimate.",
+        "此范围与排行 Token 及 API 估值不同。", inline=True) + '</small>'
+    aggregate += '<dl class="usage-token-grid">' + reported + '</dl></div>'
     return ('<details class="usage-model-detail"><summary>'
             + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
-            + aggregate + detail + '<p>' + _public_usage_coverage(reading) + '</p></details>')
+            + detail + aggregate + outside + '<p>' + _public_usage_coverage(reading)
+            + '</p></details>')
 
 
 def _public_usage_method(report: Mapping[str, Any]) -> str:
@@ -872,11 +891,8 @@ def public_usage_panel(ranking: Any) -> str:
                   else label("User", "用户", inline=True))
         rank = _public_usage_count(entry.get("rank"))
         rank_text = str(rank) if rank is not None and 1 <= rank <= 50 else "—"
-        tokens, priced, unpriced = (entry.get(field) for field in
-                                    ("tokens", "priced_tokens", "unpriced_tokens"))
-        tokens = tokens if isinstance(tokens, Mapping) else {}
+        priced = entry.get("priced_tokens")
         priced = priced if isinstance(priced, Mapping) else {}
-        unpriced = unpriced if isinstance(unpriced, Mapping) else {}
         known = (_public_usage_price_known(entry)
                  and _public_usage_count(priced.get("total_tokens")) is not None)
         value = _public_usage_value(entry) if known else label("—", "—", inline=True)
@@ -888,11 +904,16 @@ def public_usage_panel(ranking: Any) -> str:
         rows.append('<tr class="usage-ranking-row"><td class="usage-rank">' + rank_text
                     + '</td><th class="usage-user" scope="row">' + masked
                     + '</th><td class="usage-observed"><strong>'
-                    + _public_usage_token(tokens.get("total_tokens")) + '</strong><small>'
+                    + _public_usage_token(priced.get("total_tokens") if known else None)
+                    + '</strong><small>'
                     + label("Output ", "输出 ", inline=True)
-                    + _public_usage_token(tokens.get("output_tokens")) + '</small><small>'
-                    + label("Unpriced ", "未计价 ", inline=True)
-                    + _public_usage_token(unpriced.get("total_tokens")) + '</small></td>'
+                    + _public_usage_token(priced.get("output_tokens") if known else None)
+                    + '</small><small>' + label(
+                        _public_usage_number(entry.get("priced_samples") if known else None)
+                        + " replies in priced scope",
+                        "计价范围内 "
+                        + _public_usage_number(entry.get("priced_samples") if known else None)
+                        + " 个回复", inline=True) + '</small></td>'
                     '<td class="usage-estimate"><div class="usage-estimate-value">'
                     + value + badge + '</div><small class="usage-estimate-scope">' + scope
                     + '</small></td></tr><tr class="usage-ranking-detail"><td colspan="4">'
@@ -907,8 +928,10 @@ def public_usage_panel(ranking: Any) -> str:
         "Last 7 UTC days · ranked by estimated API value",
         "最近 7 个 UTC 日期 · 按估算 API 等价值排名",
         inline=True) + '</p><p class="usage-scope">' + label(
-        "Each estimate covers only the matching priced tokens shown beneath it.",
-        "每个估值只对应其下方显示的已计价 Token。", inline=True) + '</p>'
+        "Ranking token totals and costs use the same priceable scope; older/unpriced "
+        "reported usage is in details.",
+        "排行 Token 总量与估值使用同一计价范围；旧数据／未计价上报用量在明细中。",
+        inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
         "this is not generated or unique text.",
@@ -917,7 +940,7 @@ def public_usage_panel(ranking: Any) -> str:
     source += ('<div class="usage-ranking-sheet" role="region" '
                'aria-labelledby="usage-ranking-title" tabindex="0"><table><thead><tr>'
                + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>' for en, zh in (
-                   ("Rank", "排名"), ("User", "用户"), ("Processed tokens", "处理 Token"),
+                   ("Rank", "排名"), ("User", "用户"), ("Priced tokens", "已计价 Token"),
                    ("API estimate · USD", "API 估值 · 美元")))
                + '</tr></thead><tbody>' + (''.join(rows) if rows else empty)
                + '</tbody></table></div><p class="usage-units">' + label(
@@ -1711,16 +1734,18 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "prices and cache-pricing assumptions. It is not a Claude Pro/Max "
                 "subscription bill, an amount paid, a quota balance or a promise of "
                 "savings. Partial pricing covers only observations with enough known "
-                "model and cache information; it does not assign $0 to the rest. Each "
-                "estimate is paired only with its matching priced tokens; the overall "
-                "reported processed total and unpriced subtotal are shown separately. "
+                "model and cache information; it does not assign $0 to the rest. The "
+                "primary ranking token total, output, reply count and estimate use the "
+                "same priceable cohort; broader reported totals and older/unpriced usage "
+                "appear only in expanded details under a separate scope. "
                 "Processed totals include cached context counted again per request; "
                 "they are not generated or unique text. Estimates follow reported model "
                 "labels, and these aggregates alone cannot reliably reprice older usage.",
                 "API 等价值按页面列出的标准模型价格与缓存计价假设估算，不是 Claude Pro/Max "
                 "订阅账单、实际付款、剩余额度，也不保证节省了这些费用。部分估值只覆盖模型与缓存"
-                "信息足够明确的观测，其余部分不按 $0 计算。每个估值只对应匹配的已计价 Token；"
-                "已报告的处理 Token 总量与未计价小计分别展示。处理总量包含每次请求重复计数的"
+                "信息足够明确的观测，其余部分不按 $0 计算。排行主表的 Token 总量、输出、回复数量"
+                "与估值使用同一可计价批次；更广的上报总量及旧数据／未计价用量只在展开明细中以"
+                "不同范围展示。处理总量包含每次请求重复计数的"
                 "缓存上下文，不等于生成或独有的文本。估值依据上报的模型标签，不能仅凭旧汇总"
                 "可靠地重新计价。",
             ),
