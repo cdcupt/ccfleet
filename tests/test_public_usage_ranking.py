@@ -131,7 +131,7 @@ def test_chinese_is_complete_and_the_homepage_has_separate_language_views():
     assert 'class="copy-zh"' not in english and "观测用量排行" not in english
     assert 'class="copy-en"' not in chinese and "Measured usage ranking" not in chinese
     text = Document(chinese).text
-    for phrase in ("观测用量排行", "模型明细", "处理 Token", "API 估值", "部分覆盖",
+    for phrase in ("观测用量排行", "模型明细", "已计价 Token", "API 估值", "部分覆盖",
                    "模型价格已知", "缓存字段覆盖：读取 1／2 · 写入 2／2", "这不等于匿名",
                    "不是 Claude Pro/Max 账单", "提示长度计价档位"):
         assert phrase in text
@@ -181,9 +181,56 @@ def test_legacy_total_is_never_the_denominator_of_a_small_new_api_estimate():
     assert "2.15B" not in cell and "2,147,054,518" not in cell
     visible = Document(source).text
     assert "2.15B" in visible and "Unpriced 2.15B" in visible and "Output 8.72M" in visible
+    main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', source, flags=re.S)[1]
+    assert "1.2M" in main and "Output 5.03K" in Document(main).text
+    assert "11 replies in priced scope" in Document(main).text
+    assert "2.15B" not in main and "8.72M" not in main and "Unpriced" not in main
     assert "Model price known: 11 of 6,118" in visible
     assert 'title="2,145,853,715 tokens"' in source
     assert "not generated or unique text" in visible
+
+
+def test_exact_user_model_counters_and_cost_share_the_primary_29_reply_cohort():
+    priced = {"input_tokens": 1243, "output_tokens": 24874,
+              "cache_read_input_tokens": 4341125, "cache_creation_input_tokens": 225684}
+    priced["total_tokens"] = sum(priced.values())
+    assert priced["total_tokens"] == 4_592_926
+    unpriced = {"input_tokens": 3_911_262, "output_tokens": 8_716_431,
+                "cache_read_input_tokens": 2_060_967_140,
+                "cache_creation_input_tokens": 72_258_882, "total_tokens": 2_145_853_715}
+    observed = {key: priced[key] + unpriced[key] for key in priced}
+    assert observed["total_tokens"] == 2_150_446_641
+    model = {"model": "claude-opus-5-5", "tokens": priced, "samples": 29,
+             "cache_read_samples": 29, "cache_creation_samples": 29,
+             "estimated_usd": 2.499097, "cost_state": "complete"}
+    entry = {"rank": 1, "masked_handle": "e***k", "tokens": observed,
+             "token_state": "complete", "priced_tokens": priced, "priced_token_state": "complete",
+             "unpriced_tokens": unpriced, "unpriced_token_state": "complete",
+             "estimated_usd": 2.499097, "cost_state": "partial", "models": [model],
+             "priced_samples": 29, "usage_samples": 6136, "usage_eligible_messages": 6136}
+    for language in ("en", "zh"):
+        source = shown({**ranking(), "entries": [entry]}, language)
+        main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', source, flags=re.S)[1]
+        details = re.search(r'<tr class="usage-ranking-detail">(.*?)</tr>', source, flags=re.S)[1]
+        text = Document(main).text
+        assert "4.59M" in text and "$2.50" in text and "24.87K" in text
+        replies = "29 replies in priced scope" if language == "en" else "29 个回复"
+        assert replies in text
+        assert "2.15B" not in main and "2,150,446,641" not in main and "2,145,853,715" not in main
+        assert "2.15B" in Document(details).text
+        for field in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                      "cache_creation_input_tokens"):
+            assert f'title="{priced[field]:,}' in details
+        assert 'title="4,592,926' in main
+        assert 'title="2,150,446,641' in details and 'title="2,145,853,715' in details
+
+
+def test_no_priced_data_keeps_primary_tokens_output_and_cost_unknown_not_zero():
+    report = ranking()
+    report["entries"] = [report["entries"][1]]
+    main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', shown(report), flags=re.S)[1]
+    assert "1.23K" not in main and "$0.00" not in main
+    assert "Output —" in Document(main).text and "Estimate unavailable" in Document(main).text
 
 
 def test_matching_priced_scope_is_required_to_publish_any_main_estimate():
