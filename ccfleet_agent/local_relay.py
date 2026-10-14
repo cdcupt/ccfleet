@@ -503,13 +503,17 @@ def _metrics_module():
 
 
 def _record_metrics(home: Path, account: str, outcome: str, timings: dict[str, float], *,
-                    usage: Optional[dict[str, int]] = None, usage_eligible: bool = False) -> None:
+                    usage: Optional[dict[str, int]] = None, usage_eligible: bool = False,
+                    public_model: Optional[str] = None,
+                    stream_output: Optional[dict[str, Any]] = None) -> None:
     try:
         if bound_account(home) != account:
             return
         _metrics_module().record(home, account, outcome, timings, time.time(),
                                  still_bound=lambda: bound_account(home) == account,
-                                 usage=usage, usage_eligible=usage_eligible)
+                                 usage=usage, usage_eligible=usage_eligible,
+                                 model_eligible=usage_eligible, public_model=public_model,
+                                 stream_output=stream_output)
     except Exception:
         # Metrics are best effort. Do not reflect exceptions, retry inference or
         # change an already completed response for a missing/failed collector.
@@ -536,7 +540,10 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
     timings: dict[str, float] = {}
     outcome = "connection_errors"
     usage_collector = None
+    stream_collector = None
     usage = None
+    public_model = None
+    stream_output = None
     usage_eligible = False
     finished, cancelled = threading.Event(), threading.Event()
     try:
@@ -630,6 +637,13 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
                 usage_collector = _metrics_module().UsageCollector(headers.get("content-type", ""))
             except Exception:
                 pass
+            # The HTTPS gateway already observes its own replies. This block
+            # covers the direct slot/bridge relay only, preventing double count.
+            if not gateway and headers.get("content-type") == "text/event-stream":
+                try:
+                    stream_collector = _metrics_module().StreamOutputCollector()
+                except Exception:
+                    pass
         write_metadata(output, response.status, headers)
         began = True
         while True:
@@ -645,6 +659,11 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             if "first_byte_ms" not in timings and request_started is not None:
                 timings["first_byte_ms"] = (time.monotonic() - request_started) * 1000
             write_chunk(output, data)
+            if stream_collector is not None:
+                try:
+                    stream_collector.forwarded()
+                except Exception:
+                    stream_collector = None
             if usage_collector is not None:
                 try:
                     usage_collector.feed(data)
@@ -655,6 +674,18 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
         if usage_collector is not None:
             try:
                 usage = usage_collector.finish()
+            except Exception:
+                pass
+            if usage is not None:
+                public_model = "other"
+                try:
+                    public_model = _metrics_module()._public_model(
+                        getattr(usage_collector, "public_model", None))
+                except Exception:
+                    pass
+        if usage is not None and stream_collector is not None:
+            try:
+                stream_output = stream_collector.finish(usage["output_tokens"])
             except Exception:
                 pass
         return 0
@@ -677,7 +708,14 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             final_outcome = "cancelled" if cancelled.is_set() else outcome
             _record_metrics(home, account, final_outcome, timings,
                             usage=usage if final_outcome == "success" else None,
-                            usage_eligible=usage_eligible and final_outcome == "success")
+                            usage_eligible=usage_eligible and final_outcome == "success",
+                            public_model=public_model if final_outcome == "success" else None,
+                            stream_output=stream_output if final_outcome == "success" else None)
+        if usage_collector is not None:
+            try:
+                usage_collector.finish()  # Clear transient buffers on failures too.
+            except Exception:
+                pass
         if connection is not None:
             connection.close()
 

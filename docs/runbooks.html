@@ -159,17 +159,22 @@ moves onto these with <a href="#rename-a-machine">Rename a machine</a>, held slo
 <h2 id="public-output-speed">Read public output speed</h2>
 <p>The <a href="/status#performance">Status performance panel</a> shows streamed output
 rate after twenty eligible replies have been measured. It divides the final provider-reported
-output-token counts by their matched first-to-last body-chunk delivery time at the HTTPS
-gateway. This excludes the initial wait and includes stream pauses, network transfer and
+output-token counts by their matched first-to-last body-chunk delivery time observed at
+the node for native/bridge traffic or at the HTTPS gateway. Gateway traffic is not counted
+twice. This excludes the initial wait and includes stream pauses, network transfer and
 reported thinking or tool-output tokens. Compare equivalent models and workloads; it is an
 observed delivery rate, not isolated model generation speed or peak fleet capacity.</p>
 <p>Only fully completed successful streaming Messages replies with valid final usage,
 multiple nonempty chunks and at least 100 milliseconds of measured delivery contribute.
 Single-chunk, too-short, malformed, interrupted, rejected, non-streaming and token-count
-replies supply no speed sample. Buffering can affect the observed rate. Direct native relay traffic is outside this gateway measurement.
+replies supply no speed sample. Buffering can affect the observed rate. Native/bridge
+samples require fresh, valid reports for the current holder and bound Claude account;
+old or unsupported agents leave those samples unknown.
 Older slot token totals and timing averages cannot be used to reconstruct historical TPS.</p>
 <p>A dash means no publishable speed measurement yet. Normal eligible traffic fills the
-counter; opening Status does not issue a model request. The server keeps only anonymous
+counter; opening Status does not issue a model request. Node observations remain in the
+private account-bound seven-day relay file and numeric heartbeat fields. The server's
+gateway recorder keeps only anonymous
 UTC-day sample counts, output-token sums and duration sums in
 <code>gateway_throughput_days</code>, over the seven-date reporting window. Old days are
 filtered immediately and pruned on new samples and by the hourly monitor. No account,
@@ -178,6 +183,16 @@ slot, model, prompt, response, credential or individual event timestamp is store
 telemetry failures do not replay inference. Published sample counts describe measured coverage.
 The added table is compatible with the previous server image. Recovery must keep the latest
 consistent database; do not replace it with an older snapshot merely to clear telemetry.</p>
+<p>The <a href="/#usage-ranking">public homepage usage ranking</a> separately publishes
+measured token totals, model details and estimated standard API-equivalent USD values
+under partly masked user-chosen nicknames. Short nicknames are fully masked; missing
+nicknames use a generic label. Emails and account IDs are never public-name fallbacks.
+Masking is not anonymity. Estimates are not Claude Pro/Max bills or amounts paid;
+measurement, model-price and cache coverage are shown, and missing or unpriced usage is
+unknown rather than zero. Existing validated aggregate tokens can remain visible without
+a model price; model details and cost estimates require new model-aware observations.
+Older model detail is not backfilled. See <a href="/privacy">Privacy</a> for this distinct
+public disclosure.</p>
 <h2 id="add-an-owner">Add an owner</h2>
 <ol>
 <li><em>server</em>: <code>ccfleetd node add &lt;node-id&gt; --owner &lt;name&gt; --region &lt;region&gt; [--rc-expected]</code>

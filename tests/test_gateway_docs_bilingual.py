@@ -127,7 +127,9 @@ def test_public_performance_discloses_single_contributor_aggregates_and_sample_l
         "at least twenty observed attempts",
         "even if only one Fleet user contributes",
         "total or average can therefore reflect that one user’s traffic",
-        "per-user or per-slot breakdowns are never listed",
+        "This performance panel does not list names",
+        "or per-user or per-slot breakdowns",
+        "homepage has a separate public usage ranking",
         "twenty samples; those samples can all come from a single Fleet user",
         "Missing, old or insufficient data stays unavailable",
         "Opening Status does not call a model",
@@ -143,7 +145,8 @@ def test_public_performance_discloses_single_contributor_aggregates_and_sample_l
         "至少二十次尝试",
         "即使只有一个 Fleet 用户提供了统计",
         "总量或平均值因此可能反映这一个用户的流量",
-        "不会按用户或槽位分别展示统计",
+        "不按用户或槽位分别展示统计",
+        "首页另有公开的用量排行",
         "每项计时分别需要二十个样本",
         "这些样本可以全部来自一个 Fleet 用户",
         "数据缺失、过期或不足时，暂不显示数值",
@@ -160,7 +163,8 @@ def test_streamed_output_rate_is_observed_delivery_with_independent_samples_and_
     english = Document(bilingual.project_html(source, "en", TARGET)).text
     chinese = Document(bilingual.project_html(source, "zh", TARGET)).text
     for phrase in (
-        "Streamed output rate is measured independently at the HTTPS gateway",
+        "Streamed output rate combines matched native/bridge observations",
+        "without counting gateway traffic twice",
         "summed tokens and summed time",
         "at least two chunks and at least 100 ms",
         "Single-chunk or too-short replies are excluded",
@@ -170,13 +174,14 @@ def test_streamed_output_rate_is_observed_delivery_with_independent_samples_and_
         "comparable models and workloads",
         "twenty eligible replies are required independently of the other five metrics",
         "anonymous daily sample counts, output-token totals and delivery-time totals",
-        "Input/cache totals, user/slot/model breakdowns and individual request timestamps",
+        "public output-rate panel shows no input/cache totals",
+        "private account-bound seven-day relay file",
         "older traffic is not backfilled",
         "earliest available retained sample day",
     ):
         assert phrase in english
     for phrase in (
-        "流式输出速率在 HTTPS 网关单独观测",
+        "流式输出速率合并节点上符合条件的原生／桥接观测与 HTTPS 网关观测",
         "从首个到最后一个响应正文分块的时间总和",
         "至少两个分块",
         "至少持续 100 毫秒",
@@ -186,8 +191,26 @@ def test_streamed_output_rate_is_observed_delivery_with_independent_samples_and_
         "思考或工具输出",
         "不依赖另外五项指标",
         "每日样本数、输出 Token 总量和交付时间总和",
-        "不保存单条请求时间戳",
+        "公开输出速率面板不展示输入或缓存总量",
         "不补填历史流量",
         "现有留存样本的最早日期",
     ):
+        assert phrase in chinese
+
+
+def test_public_usage_ranking_explains_masking_coverage_and_api_equivalent_estimates():
+    source = GUIDE.read_text()
+    english = Document(bilingual.project_html(source, "en", TARGET)).text
+    chinese = Document(bilingual.project_html(source, "zh", TARGET)).text
+    for phrase in ("Public measured usage ranking", "Unknown estimates are unranked",
+                   "unpriced usage is not $0", "valid existing aggregate tokens",
+                   "new model-aware observations", "never an email or account ID",
+                   "Masking is not anonymity", "five-minute cache-write price",
+                   "not a Claude Pro/Max bill", "native, bridge and gateway model calls",
+                   "no HTTPS migration or model call is needed"):
+        assert phrase.lower() in english.lower()
+    for phrase in ("公开的观测用量排行", "未知估值不参与排名", "无法计价的用量不按 $0",
+                   "已有经验证的汇总 Token", "新的带模型信息观测", "绝不以邮箱或账号 ID",
+                   "遮盖不等于匿名", "五分钟缓存写入价格", "不是 Claude Pro/Max 账单",
+                   "原生、桥接与网关模型调用", "不需要迁移到 HTTPS"):
         assert phrase in chinese

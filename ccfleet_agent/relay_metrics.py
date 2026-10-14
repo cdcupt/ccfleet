@@ -1,9 +1,9 @@
 """Content-free, account-scoped inference aggregates over seven UTC calendar days.
 
-Only slot-user-owned numeric aggregates are persisted. The caller provides the
-already verified account binding; this helper never opens a Claude credential,
-request, response or history file. ``validate_report`` is pure and can also be
-used at the fleet server's heartbeat boundary.
+Only slot-user-owned numeric aggregates and fixed public model labels are
+persisted. The caller provides the already verified account binding; this helper
+never opens a Claude credential, request, response or history file.
+``validate_report`` is pure and also serves the fleet heartbeat boundary.
 
 Callers must treat MetricsError as non-fatal and must not retry inference or
 change its result merely because recording a metric failed.
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import importlib.util
 import json
 import math
 import os
@@ -51,6 +52,41 @@ USAGE_KEYS = {"eligible", "samples", *USAGE_FIELDS, "cache_read_samples", "cache
 USAGE_EVENT_BYTES = 64 * 1024
 USAGE_JSON_BYTES = 256 * 1024
 MAX_USAGE_TOKENS = 10**9
+OPTIONAL_BLOCKS = {"token_usage", "model_usage", "stream_output"}
+MAX_MODELS = 16
+MIN_STREAM_MS = 100
+STREAM_KEYS = {"samples", "output_tokens", "stream_ms"}
+MODEL_ROW_KEYS = {"model", "samples", *USAGE_FIELDS,
+                  "cache_read_samples", "cache_creation_samples"}
+_catalogue = None
+
+
+def _model_catalogue():
+    global _catalogue
+    if _catalogue is not None:
+        return _catalogue
+    try:
+        from . import model_usage
+        _catalogue = model_usage
+    except ImportError:
+        # The installed relay uses Python -I. Only its root-owned sibling is
+        # eligible; never import a module from a holder's working directory.
+        spec = importlib.util.spec_from_file_location(
+            "ccfleet_public_model_usage", Path(__file__).with_name("model_usage.py"))
+        if spec is None or spec.loader is None:
+            raise ImportError("public model catalogue unavailable") from None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _catalogue = module
+    return _catalogue
+
+
+def _public_model(value: Any) -> str:
+    try:
+        return _model_catalogue().normalize(value)
+    except Exception:
+        # A missing optional catalogue must not discard numeric token usage.
+        return "other"
 
 
 class MetricsError(ValueError):
@@ -113,6 +149,103 @@ def _usage_sample(raw: Any) -> Optional[dict[str, int]]:
     return dict(raw)
 
 
+def _stream_output(raw: Any, usage: dict[str, int]) -> dict[str, Any]:
+    if (not isinstance(raw, dict) or set(raw) != STREAM_KEYS
+            or not _counter(raw["samples"]) or not _counter(raw["output_tokens"])
+            or not _number(raw["stream_ms"], MAX_COUNTER)
+            or raw["samples"] > usage["samples"]
+            or raw["output_tokens"] > usage["output_tokens"]
+            or (not raw["samples"] and (raw["output_tokens"] or raw["stream_ms"]))
+            or not raw["samples"] * MIN_STREAM_MS <= raw["stream_ms"] <=
+            raw["samples"] * MAX_LATENCY_MS):
+        raise MetricsError("invalid aggregate stream output")
+    return {"samples": raw["samples"], "output_tokens": raw["output_tokens"],
+            "stream_ms": float(raw["stream_ms"])}
+
+
+def _model_usage(raw: Any, usage: dict[str, int]) -> dict[str, Any]:
+    if (not isinstance(raw, dict) or set(raw) != {"eligible", "samples", "models"}
+            or not _counter(raw["eligible"]) or not _counter(raw["samples"])
+            or not raw["samples"] <= raw["eligible"] <= usage["eligible"]
+            or raw["samples"] > usage["samples"]
+            or not isinstance(raw["models"], list) or len(raw["models"]) > MAX_MODELS):
+        raise MetricsError("invalid aggregate model usage")
+    rows, seen = [], set()
+    totals = dict.fromkeys(USAGE_KEYS - {"eligible"}, 0)
+    for row in raw["models"]:
+        if (not isinstance(row, dict) or set(row) != MODEL_ROW_KEYS
+                or not isinstance(row["model"], str) or row["model"] in seen
+                or _public_model(row["model"]) != row["model"]
+                or not _counter(row["samples"]) or not row["samples"]):
+            raise MetricsError("invalid aggregate public model")
+        seen.add(row["model"])
+        numbers = _usage({key: row[key] for key in USAGE_KEYS - {"eligible"}} |
+                         {"eligible": row["samples"]}, usage["samples"])
+        for key in totals:
+            totals[key] += numbers[key]
+        rows.append({"model": row["model"], **{key: numbers[key] for key in totals}})
+    if totals["samples"] != raw["samples"] or any(totals[key] > usage[key] for key in totals):
+        raise MetricsError("inconsistent aggregate model coverage")
+    return {"eligible": raw["eligible"], "samples": raw["samples"],
+            "models": sorted(rows, key=lambda row: row["model"])}
+
+
+def _blocks(raw: dict[str, Any], successes: int) -> dict[str, Any]:
+    if not raw.keys() & OPTIONAL_BLOCKS:
+        return {}
+    if "token_usage" not in raw:
+        raise MetricsError("new metrics require matched token usage")
+    usage = _usage(raw["token_usage"], successes)
+    result: dict[str, Any] = {"token_usage": usage}
+    if "model_usage" in raw:
+        result["model_usage"] = _model_usage(raw["model_usage"], usage)
+    if "stream_output" in raw:
+        result["stream_output"] = _stream_output(raw["stream_output"], usage)
+    return result
+
+
+class StreamOutputCollector:
+    """First-to-last flushed nonempty body chunks; no response bytes are retained."""
+
+    def __init__(self, *, clock=None) -> None:
+        self.clock = time.monotonic if clock is None else clock
+        self.first: Optional[float] = None
+        self.last: Optional[float] = None
+        self.chunks = 0
+        self.bad = False
+
+    def forwarded(self) -> None:
+        if self.bad:
+            return
+        try:
+            now = self.clock()
+            if not _number(now) or (self.last is not None and now < self.last):
+                self.bad = True
+                return
+            self.first = now if self.first is None else self.first
+            self.last = now
+            self.chunks = min(2, self.chunks + 1)
+        except Exception:
+            self.bad = True
+
+    def finish(self, output_tokens: Any) -> Optional[dict[str, Any]]:
+        try:
+            if (self.bad or self.chunks < 2 or self.first is None or self.last is None
+                    or type(output_tokens) is not int
+                    or not 0 <= output_tokens <= MAX_USAGE_TOKENS):
+                return None
+            duration = (self.last - self.first) * 1000
+            if not _number(duration, MAX_LATENCY_MS) or duration < MIN_STREAM_MS:
+                return None
+            return {"samples": 1, "output_tokens": output_tokens, "stream_ms": duration}
+        except Exception:
+            return None
+        finally:
+            self.first = self.last = None
+            self.chunks = 0
+            self.bad = True
+
+
 class UsageCollector:
     """Bounded, transient response observer; only numeric usage can escape finish().
 
@@ -129,12 +262,21 @@ class UsageCollector:
         self.data = bytearray()
         self.started = self.delta = self.stopped = False
         self.numbers: dict[str, int] = {}
+        self._model = "other"
+        self._completed_model: Optional[str] = None
+
+    @property
+    def public_model(self) -> Optional[str]:
+        """Allowlisted provider label only after a valid completed usage sample."""
+        return self._completed_model
 
     def _reject(self) -> None:
         self.bad = True
         self.buffer.clear()
         self.data.clear()
         self.numbers.clear()
+        self._model = "other"
+        self._completed_model = None
 
     @staticmethod
     def _object(raw: bytes) -> Any:
@@ -176,6 +318,7 @@ class UsageCollector:
             if not isinstance(message, dict):
                 raise ValueError("missing message")
             self._merge(message.get("usage"), initial=True)
+            self._model = _public_model(message.get("model"))
             self.started = True
         elif kind == "message_delta":
             if not self.started:
@@ -228,6 +371,7 @@ class UsageCollector:
             self._reject()
 
     def finish(self) -> Optional[dict[str, int]]:
+        self._completed_model = None
         try:
             if self.bad:
                 return None
@@ -238,15 +382,20 @@ class UsageCollector:
                         or not value["stop_reason"]):
                     return None
                 self._merge(value.get("usage"), initial=True)
+                self._model = _public_model(value.get("model"))
             elif self.buffer or self.data or not self.stopped:
                 return None
-            return _usage_sample(self.numbers)
+            usage = _usage_sample(self.numbers)
+            self._completed_model = self._model if usage is not None else None
+            return usage
         except (ValueError, UnicodeError, TypeError, RecursionError, OverflowError):
             return None
         finally:
             self.buffer.clear()
             self.data.clear()
             self.numbers.clear()
+            self.event = ""
+            self._model = "other"
 
 
 def _empty_bucket() -> dict[str, Any]:
@@ -259,7 +408,7 @@ def _empty_bucket() -> dict[str, Any]:
 
 
 def _bucket(raw: Any, day: int) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) - {"token_usage"} != {
+    if not isinstance(raw, dict) or set(raw) - OPTIONAL_BLOCKS != {
         "counts",
         "last_success_at",
         "updated_at",
@@ -313,8 +462,7 @@ def _bucket(raw: Any, day: int) -> dict[str, Any]:
         "updated_at": float(updated),
         "last_success_at": float(success) if success is not None else None,
         "timings": timings,
-        **({"token_usage": _usage(raw["token_usage"], counts["success"])}
-           if "token_usage" in raw else {}),
+        **_blocks(raw, counts["success"]),
     }
 
 
@@ -494,7 +642,9 @@ def _save(directory: int, state: dict[str, Any]) -> None:
 
 def record(home: Path, bound_fp: str, outcome: str, timings: dict[str, Any], now: float, *,
            still_bound: Optional[Callable[[], bool]] = None,
-           usage: Optional[dict[str, int]] = None, usage_eligible: bool = False) -> None:
+           usage: Optional[dict[str, int]] = None, usage_eligible: bool = False,
+           model_eligible: bool = False, public_model: Optional[str] = None,
+           stream_output: Optional[dict[str, Any]] = None) -> None:
     """Record one completed attempt, using milliseconds for available stages only.
 
     Each call increments requests and exactly one OUTCOMES counter. A failed or
@@ -508,6 +658,23 @@ def record(home: Path, bound_fp: str, outcome: str, timings: dict[str, Any], now
     if type(usage_eligible) is not bool or (usage is not None and (
             not usage_eligible or outcome != "success" or _usage_sample(usage) is None)):
         raise MetricsError("invalid completed usage sample")
+    if (type(model_eligible) is not bool
+            or model_eligible and (not usage_eligible or outcome != "success")
+            or public_model is not None and (
+                not model_eligible or usage is None or not isinstance(public_model, str)
+                or _public_model(public_model) != public_model)
+            or model_eligible and usage is not None and public_model is None):
+        raise MetricsError("invalid completed model sample")
+    if stream_output is not None:
+        if usage is None or outcome != "success":
+            raise MetricsError("invalid matched stream sample")
+        one_usage = {**dict.fromkeys(USAGE_KEYS, 0), **usage, "eligible": 1, "samples": 1,
+                     "cache_read_samples": int("cache_read_input_tokens" in usage),
+                     "cache_creation_samples": int("cache_creation_input_tokens" in usage)}
+        stream_output = _stream_output(stream_output, one_usage)
+        if (stream_output["samples"] != 1
+                or stream_output["output_tokens"] != usage["output_tokens"]):
+            raise MetricsError("invalid matched stream sample")
     if (
         not isinstance(timings, dict)
         or set(timings) - set(TIMINGS)
@@ -548,6 +715,32 @@ def record(home: Path, bound_fp: str, outcome: str, timings: dict[str, Any], now
                     if "cache_creation_input_tokens" in usage:
                         totals["cache_creation_samples"] += 1
                 bucket["token_usage"] = _usage(totals, bucket["counts"]["success"])
+                if model_eligible:
+                    models = bucket.get("model_usage", {"eligible": 0, "samples": 0, "models": []})
+                    models["eligible"] += 1
+                    if usage is not None:
+                        models["samples"] += 1
+                        selected = public_model
+                        if (selected != "other" and len(models["models"]) >= MAX_MODELS - 1
+                                and not any(row["model"] == selected for row in models["models"])):
+                            selected = "other"
+                        row = next((row for row in models["models"]
+                                    if row["model"] == selected), None)
+                        if row is None:
+                            row = {"model": selected,
+                                   **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)}
+                            models["models"].append(row)
+                        row["samples"] += 1
+                        for field, value in usage.items():
+                            row[field] += value
+                        row["cache_read_samples"] += int("cache_read_input_tokens" in usage)
+                        row["cache_creation_samples"] += int("cache_creation_input_tokens" in usage)
+                    bucket["model_usage"] = _model_usage(models, totals)
+                if stream_output is not None:
+                    output = bucket.get("stream_output", dict.fromkeys(STREAM_KEYS, 0))
+                    for field, value in stream_output.items():
+                        output[field] += value
+                    bucket["stream_output"] = _stream_output(output, totals)
         for name, value in timings.items():
             sample = bucket["timings"][name]
             measured = round(float(value), 3)
@@ -578,6 +771,11 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
     timings = {key: {"count": 0, "sum": 0.0, "max": 0.0} for key in TIMINGS}
     usage = dict.fromkeys(USAGE_KEYS, 0)
     has_usage = False
+    models: dict[str, dict[str, Any]] = {}
+    model_eligible = model_samples = 0
+    has_models = False
+    stream_output = dict.fromkeys(STREAM_KEYS, 0)
+    has_stream = False
     for bucket in state["buckets"].values():
         for key in COUNTERS:
             result[key] += bucket["counts"][key]
@@ -585,6 +783,19 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
             has_usage = True
             for key, value in bucket["token_usage"].items():
                 usage[key] += value
+        if "model_usage" in bucket:
+            has_models = True
+            model_eligible += bucket["model_usage"]["eligible"]
+            model_samples += bucket["model_usage"]["samples"]
+            for row in bucket["model_usage"]["models"]:
+                target = models.setdefault(row["model"], {"model": row["model"],
+                                           **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)})
+                for key in MODEL_ROW_KEYS - {"model"}:
+                    target[key] += row[key]
+        if "stream_output" in bucket:
+            has_stream = True
+            for key, value in bucket["stream_output"].items():
+                stream_output[key] += value
         success = bucket["last_success_at"]
         if success is not None and (
             result["last_success_at"] is None or success > result["last_success_at"]
@@ -605,6 +816,20 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
     }
     if has_usage:
         result["token_usage"] = usage
+    if has_models:
+        if len(models) > MAX_MODELS:
+            keep = set(sorted(key for key in models if key != "other")[:MAX_MODELS - 1])
+            other = {"model": "other", **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)}
+            for key in list(models):
+                if key not in keep:
+                    folded = models.pop(key)
+                    for field in MODEL_ROW_KEYS - {"model"}:
+                        other[field] += folded[field]
+            models["other"] = other
+        result["model_usage"] = {"eligible": model_eligible, "samples": model_samples,
+                                 "models": list(models.values())}
+    if has_stream:
+        result["stream_output"] = stream_output
     return validate_report(result)
 
 
@@ -631,10 +856,10 @@ def report(home: Path, bound_fp: str, now: float) -> dict[str, Any]:
 
 
 def validate_report(raw: Any) -> dict[str, Any]:
-    """Reject unexpected/nonfinite fields and return a detached numeric-only report."""
+    """Reject unexpected/private fields and detach numeric totals/public model labels."""
     if (
         not isinstance(raw, dict)
-        or set(raw) - {"token_usage"} != SUMMARY_KEYS
+        or set(raw) - OPTIONAL_BLOCKS != SUMMARY_KEYS
         or type(raw["version"]) is not int
         or raw["version"] != 1
         or type(raw["window_days"]) is not int
@@ -677,6 +902,5 @@ def validate_report(raw: Any) -> dict[str, Any]:
         **counts,
         "last_success_at": float(success) if success is not None else None,
         "latencies": latencies,
-        **({"token_usage": _usage(raw["token_usage"], counts["success"])}
-           if "token_usage" in raw else {}),
+        **_blocks(raw, counts["success"]),
     }

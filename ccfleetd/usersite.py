@@ -1,10 +1,13 @@
 """The user site: one person, the slots they hold, and what they can do with them.
 
-Everything here is scoped to the signed-in account, and the scoping is the
-point. A slot that is not theirs answers exactly as a slot that does not exist
+Private slot management is scoped to the signed-in account, and the scoping is
+the point. A slot that is not theirs answers exactly as a slot that does not exist
 would — they never see other people, other slots or anybody's alerts — and
 every action checks the slot's holder again rather than trusting the page it
 came from.
+
+The public homepage ranking renders a separate allowlisted numeric summary with
+partly masked chosen nicknames. It never reads another account's private page.
 
 Signing in to *us* is Google's (see oauth.py and sessions.py). Signing in to
 *Claude* happens on the slot, through Claude Code's own login: this page
@@ -16,11 +19,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
+
+from ccfleet_agent.model_usage import LABELS, MODELS_URL, PRICING_URL
 
 from . import (
     claude_versions,
@@ -536,6 +542,28 @@ border-radius:12px;background:var(--panel)}
 border:1px solid var(--rule-soft);border-radius:12px}
 .site .relay-usage>summary{font-weight:650;cursor:pointer}
 .site .relay-usage p{line-height:1.65}
+.site .usage-ranking{margin-top:44px;padding:22px 24px}
+.usage-ranking h2{margin:0 0 8px;font-size:24px}
+.usage-ranking p{font-size:14px;line-height:1.65;color:var(--muted)}
+.usage-ranking-sheet{max-width:100%;overflow-x:auto;border:1px solid var(--rule-soft);
+border-radius:12px;margin:18px 0}
+.usage-ranking table{width:100%;min-width:480px;border-collapse:collapse;font-size:14px}
+.usage-ranking th,.usage-ranking td{padding:12px 14px;text-align:left;vertical-align:top;
+border-bottom:1px solid var(--rule-soft);font-variant-numeric:tabular-nums}
+.usage-ranking thead th{background:var(--inset);font-size:12px;color:var(--muted)}
+.usage-ranking tbody th{background:none;text-transform:none}
+.usage-ranking tbody tr:last-child td,.usage-ranking tbody tr:last-child th{border-bottom:0}
+.usage-ranking small{display:block;margin-top:4px;font-size:12px;color:var(--muted)}
+.usage-ranking details{margin-top:7px;font-weight:400;max-width:320px}
+.usage-ranking tbody th details,.usage-ranking .usage-models{text-transform:none;font-weight:400}
+.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12px}
+.usage-ranking .usage-models{margin:10px 0 0;min-width:210px}
+.usage-models>div{padding:8px 0;border-top:1px solid var(--rule-soft)}
+.usage-models dt{font-size:12px;font-weight:400;overflow-wrap:anywhere}
+.usage-models dd{margin:3px 0 0;font-size:12px;color:var(--muted);line-height:1.65}
+.usage-ranking .usage-ranking-empty{padding:20px;color:var(--muted)}
+@media(max-width:640px){.site .usage-ranking{padding:18px 16px}
+.usage-ranking th,.usage-ranking td{padding:10px}.usage-ranking h2{font-size:22px}}
 .site .row-line.release{border-top:1px solid var(--rule-soft);margin-top:8px;padding-block:20px}
 .site .row-line.release .check{line-height:1.65}
 .site .row-line.release button{white-space:normal}
@@ -642,6 +670,168 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
 
 
 _HERE = ' class="here"'
+
+
+def _public_usage_count(value: Any) -> Optional[int]:
+    return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+
+
+def _public_usage_number(value: Any) -> str:
+    count = _public_usage_count(value)
+    return f"{count:,}" if count is not None else "—"
+
+
+def _public_usage_value(reading: Mapping[str, Any]) -> str:
+    value = reading.get("estimated_usd")
+    state = reading.get("cost_state")
+    try:
+        known = (state in ("complete", "partial") and type(value) in (int, float)
+                 and math.isfinite(value) and 0 <= value <= 10**15)
+    except (OverflowError, ValueError):
+        known = False
+    if not known:
+        return label("—", "—", inline=True)
+    amount = "&lt;$0.01" if 0 < value < 0.01 else f"${value:,.2f}"
+    return amount + ('<small>' + label("Partial estimate", "部分估值", inline=True) + '</small>'
+                     if state == "partial" else '')
+
+
+def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
+    measured = _public_usage_number(reading.get("usage_samples"))
+    eligible = _public_usage_number(reading.get("usage_eligible_messages"))
+    priced = _public_usage_number(reading.get("priced_samples"))
+    return label(f"Measured: {measured} of {eligible} replies · "
+                 f"Model price known: {priced} of {measured}",
+                 f"已观测回复：{measured}／{eligible} · 模型价格已知：{priced}／{measured}",
+                 inline=True)
+
+
+def _public_usage_models(models: Any) -> str:
+    rows = []
+    for model in models[:16] if isinstance(models, list) else []:
+        if not isinstance(model, Mapping):
+            continue
+        key = model.get("model")
+        title = (escape(LABELS[key]) if isinstance(key, str) and key in LABELS
+                 and key != "other" else label("Other / unknown", "其他／未知", inline=True))
+        tokens = model.get("tokens")
+        tokens = tokens if isinstance(tokens, Mapping) else {}
+        sample_text = _public_usage_number(model.get("samples"))
+        read_text = _public_usage_number(model.get("cache_read_samples"))
+        write_text = _public_usage_number(model.get("cache_creation_samples"))
+        totals = [
+            label(en + " " + _public_usage_number(tokens.get(key)),
+                  zh + " " + _public_usage_number(tokens.get(key)), inline=True)
+            for key, en, zh in (("input_tokens", "Input", "输入"),
+                               ("output_tokens", "Output", "输出"),
+                               ("cache_read_input_tokens", "Cache read", "缓存读取"),
+                               ("cache_creation_input_tokens", "Cache write", "缓存写入"))
+        ]
+        rows.append('<div><dt>' + title + '</dt><dd>' + ' · '.join(totals) + '<br>'
+                    + label("Estimated API value: ", "估算 API 等价值：", inline=True)
+                    + _public_usage_value(model) + '<br>'
+                    + label("Measured replies: " + sample_text, "已观测回复：" + sample_text,
+                            inline=True)
+                    + '<br>' + label(
+                        f"Cache field coverage: read {read_text}/{sample_text} · "
+                        f"write {write_text}/{sample_text}",
+                        f"缓存字段覆盖：读取 {read_text}／{sample_text} · "
+                        f"写入 {write_text}／{sample_text}", inline=True)
+                    + '</dd></div>')
+    detail = ('<dl class="usage-models">' + ''.join(rows) + '</dl>' if rows else '<p>' + label(
+        "No model-aware observations yet; existing aggregate tokens are not assigned "
+        "a model price.",
+        "暂无带模型信息的观测；已有汇总 Token 不会被补填模型价格。", inline=True) + '</p>')
+    return ('<details><summary>' + label("Model details", "模型明细", inline=True) + '</summary>'
+            + detail + '</details>')
+
+
+def public_usage_panel(ranking: Any) -> str:
+    """Render only the bounded public DTO; never look up a private account."""
+    report = ranking if isinstance(ranking, Mapping) else {}
+    entries = report.get("entries") if report.get("state") in ("partial", "ready") else []
+    rows = []
+    for entry in entries[:50] if isinstance(entries, list) else []:
+        if not isinstance(entry, Mapping):
+            continue
+        handle = entry.get("masked_handle")
+        masked = (escape(handle) if isinstance(handle, str) and len(handle) <= 40
+                  and re.fullmatch(r"[a-z0-9-]{0,2}\*{1,32}[a-z0-9-]{0,2}", handle)
+                  else label("User", "用户", inline=True))
+        rank = _public_usage_count(entry.get("rank"))
+        rank_text = str(rank) if rank is not None and 1 <= rank <= 50 else "—"
+        tokens = entry.get("tokens")
+        tokens = tokens if isinstance(tokens, Mapping) else {}
+        token_text = _public_usage_number(tokens.get("total_tokens"))
+        partial_tokens = ('<small>' + label("Observed subtotal", "已观测小计", inline=True)
+                          + '</small>' if entry.get("token_state") == "partial" else '')
+        rows.append('<tr><td>' + rank_text + '</td><th scope="row">' + masked
+                    + _public_usage_models(entry.get("models")) + '</th><td>' + token_text
+                    + partial_tokens + '</td><td>' + _public_usage_value(entry)
+                    + '<small>' + _public_usage_coverage(entry) + '</small></td></tr>')
+    empty = ('<tr><td colspan="4" class="usage-ranking-empty">' + label(
+        "No publishable usage observations yet. New valid reports are needed; unknown is not zero.",
+        "暂无可公开的用量观测。需要新的有效报告；未知不是零。", inline=True) + '</td></tr>')
+    source = ('<section class="card usage-ranking" id="usage-ranking" '
+              'aria-labelledby="usage-ranking-title"><h2 id="usage-ranking-title">')
+    source += label("Measured usage ranking", "观测用量排行", inline=True) + '</h2><p>' + label(
+        "Last 7 UTC calendar days, including today. Ranked by known standard API-equivalent "
+        "value; unknown values are not ranked. Nicknames are partly masked, "
+        "which is not anonymity.",
+        "最近 7 个 UTC 日期，包含今天。按已知的标准 API 等价值排序；未知估值不参与排名。"
+        "昵称部分遮盖，这不等于匿名。", inline=True) + '</p>'
+    source += ('<div class="usage-ranking-sheet" role="region" '
+               'aria-labelledby="usage-ranking-title" tabindex="0"><table><thead><tr>'
+               + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>' for en, zh in (
+                   ("Rank", "排名"), ("Masked user", "遮盖后的昵称"),
+                   ("Measured tokens", "已观测 Token"),
+                   ("Estimated API value · USD", "估算 API 等价值 · 美元")))
+               + '</tr></thead><tbody>' + (''.join(rows) if rows else empty)
+               + '</tbody></table></div>')
+    if rows:
+        source += '<p>' + _public_usage_coverage(report) + '</p>'
+        omitted = _public_usage_count(report.get("omitted_entries"))
+        if omitted:
+            source += '<p>' + label(
+                f"Showing the first 50 entries; {omitted:,} further entries omitted.",
+                f"展示前 50 项；另有 {omitted:,} 项未列出。", inline=True) + '</p>'
+    source += '<p>' + label(
+        "Tokens are observed input, output and reported cache-read/write subtotals. Missing "
+        "coverage is not zero. Model details and prices use new model-aware observations; "
+        "validated older aggregate tokens can remain unpriced. API value is an estimate, "
+        "not a Claude Pro/Max bill, amount paid or quota balance.",
+        "Token 为观测到的输入、输出及已报告缓存读取／写入小计；缺失的覆盖不按零计算。模型明细"
+        "和估值使用新的带模型信息观测；已有经验证的汇总 Token 可能仍无法计价。API 等价值是"
+        "估算，不是 Claude Pro/Max 账单、实际付款或剩余额度。", inline=True) + '</p>'
+    source += '<p>' + label(
+        "Pricing assumes standard global API rates and 5-minute cache writes. Cache TTL, "
+        "context and service tiers can change actual API pricing; unpriced variants remain "
+        "unknown. Haiku 5.5 remains unpriced because its per-request prompt tier is absent "
+        "from these aggregates. No historical model detail is backfilled. Reading this page "
+        "makes no model call. ",
+        "估值假设采用标准全球 API 价格及 5 分钟缓存写入价格。缓存有效期、上下文和服务档位可能"
+        "影响实际 API 价格；无法计价的版本仍表示未知。汇总里没有 Haiku 5.5 每次请求对应的"
+        "提示长度计价档位，因此不对它估值。不补填历史模型明细。阅读本页不会调用模型。",
+        inline=True) + '<a href="/privacy">' + label("Public ranking privacy", "公开排行隐私说明",
+                                                  inline=True) + '</a>.</p>'
+    pricing_ = report.get("pricing")
+    if isinstance(pricing_, Mapping):
+        reference_day = pricing_.get("date")
+        if (isinstance(reference_day, str)
+                and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", reference_day)):
+            source += '<p>' + label("Price reference: " + reference_day,
+                                   "价格参考日期：" + reference_day, inline=True) + '</p>'
+        links = []
+        for key, expected, en, zh in (("url", PRICING_URL, "Official API prices", "官方 API 价格"),
+                                      ("models_url", MODELS_URL, "Model catalogue", "模型目录")):
+            url = pricing_.get(key)
+            if url != expected:
+                continue
+            links.append('<a href="' + escape(expected, quote=True) + '">'
+                         + label(en, zh, inline=True) + '</a>')
+        if links:
+            source += '<p>' + ' · '.join(links) + '</p>'
+    return source + '</section>'
 
 
 FORM_ZH = {
@@ -874,7 +1064,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-13"
+PRIVACY_UPDATED = "2026-10-14"
 
 
 def _span(seconds: int) -> str:
@@ -1382,20 +1572,73 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         ],
     )
     body += card(
+        "Public usage ranking",
+        "公开的用量排行",
+        [
+            (
+                'The <a href="/#usage-ranking">homepage ranking</a> is visible to everyone. '
+                "It publishes each contributing user's measured token totals, a compact "
+                "model breakdown and an estimated standard API-equivalent USD value over "
+                "seven UTC calendar days. Only a partly masked nickname chosen by the user "
+                "is shown; short nicknames are fully masked. Users without a chosen nickname "
+                "receive a generic label. An email address or account ID is never used as "
+                "the public name. "
+                "Masking is not anonymity: a nickname or activity pattern may still identify "
+                "someone. The ranking can include one contributing user.",
+                '<a href="/#usage-ranking">首页用量排行</a>对所有人公开，展示每位参与用户在七个 '
+                "UTC "
+                "日期内观测到的 Token 总量、简要模型明细，以及按标准 API 价格估算的美元价值。"
+                "名称只使用用户自己选择的昵称，并遮盖其中一部分；较短的昵称全部遮盖，未设置昵称"
+                "时显示通用标签。公开名称绝不使用邮箱或账号 ID。遮盖不等于匿名：昵称或活动模式"
+                "仍可能让人识别出某位用户。排行可以包含仅一位参与用户。",
+            ),
+            (
+                "The ranking uses validated usage totals from current, fresh, account-bound "
+                "slot reports. Existing aggregate tokens can be shown without model prices; "
+                "model details and cost estimates use only new model-aware observations. "
+                "Eligible native, bridge and gateway "
+                "model calls are counted at the node once. It is not a complete record of "
+                "all Claude activity. Missing, partial, oversized or older observations "
+                "are not reconstructed or treated as zero. Measurement and pricing "
+                "coverage are shown, and unknown or unpriced usage stays unknown. No "
+                "prompts, response content, raw errors, hostnames, IP addresses, login "
+                "accounts or individual request timestamps appear in the ranking.",
+                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。已有汇总 Token 可以"
+                "在没有模型价格时展示；模型明细和估值只使用新的带模型信息观测。符合条件的"
+                "原生、桥接和网关模型调用在节点上只计一次，不代表全部 Claude 活动的完整记录。"
+                "缺失、不完整、过大或较旧的观测不重建，也不当作零。页面注明观测与计价覆盖范围；"
+                "未知或无法计价的用量仍表示未知。排行不展示提示词、回复内容、原始错误、主机名、"
+                "IP 地址、登录账号或单条请求时间戳。",
+            ),
+            (
+                "API-equivalent value is an estimate using the listed standard model "
+                "prices and cache-pricing assumptions. It is not a Claude Pro/Max "
+                "subscription bill, an amount paid, a quota balance or a promise of "
+                "savings. Partial pricing covers only observations with enough known "
+                "model and cache information; it does not assign $0 to the rest.",
+                "API 等价值按页面列出的标准模型价格与缓存计价假设估算，不是 Claude Pro/Max "
+                "订阅账单、实际付款、剩余额度，也不保证节省了这些费用。部分估值只覆盖模型与缓存"
+                "信息足够明确的观测，其余部分不按 $0 计算。",
+            ),
+        ],
+    )
+    body += card(
         "Public performance measurements",
         "公开的性能统计",
         [
             (
-                "The public Status page combines existing numeric relay measurements "
+                "The public Status performance panel combines existing numeric relay measurements "
                 "from current, fresh slot reports. It shows transfer completion and "
                 "average slot-side timing over seven UTC calendar days, including today. "
-                "A separate streamed output rate uses new numeric observations at the HTTPS "
-                "gateway over the same window. "
-                "It does not split measurements by user or slot or publish names, emails, "
+                "A separate streamed output rate combines matched native/bridge node streams "
+                "and HTTPS gateway observations over the same window, without counting "
+                "gateway traffic twice. This performance panel "
+                "does not split measurements by user or slot or publish names, emails, "
                 "prompts, credentials or response contents.",
-                "公开的服务状态页汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
-                "七个 UTC 日的传输完成率和槽位端平均响应时长。流式输出速率使用 HTTPS 网关新收集"
-                "的数值观测，在相同窗口内单独计算。不按用户或槽位分别展示统计，"
+                "公开的服务状态性能面板汇总当前槽位最新报告中已有的数值统计，展示包括今天在内的 "
+                "七个 UTC 日的传输完成率和槽位端平均响应时长。流式输出速率在相同窗口内，合并"
+                "符合条件的节点原生／桥接流和 HTTPS 网关观测，不重复计算网关流量。这个性能面板"
+                "不按用户或槽位分别展示统计，"
                 "也不公开名称、邮箱、提示词、凭据或回复内容。",
             ),
             (
@@ -1434,8 +1677,9 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
             (
                 "Streamed output rate is provider-reported output tokens divided by "
-                "first-to-last gateway response-body chunk time, summed across successful, "
-                "fully delivered /v1/messages streaming replies. A sample needs valid usage, "
+                "first-to-last response-body chunk time, summed across successful, fully "
+                "delivered /v1/messages streaming replies observed at a node for native/bridge "
+                "traffic or at the HTTPS gateway. A sample needs valid usage, "
                 "at least two chunks and at least 100 ms of delivery time. Single-chunk "
                 "or too-short replies are excluded; buffering can affect the observed rate. "
                 "This observed delivery rate "
@@ -1443,20 +1687,24 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "and any thinking or tool output included in the provider's output count. "
                 "Compare only similar models and workloads; it is not a pure model benchmark. "
                 "At least twenty eligible replies are needed independently of slot-relay "
-                "measurements. We retain only anonymous daily counts, output-token totals "
-                "and delivery-time totals for seven UTC calendar days. No input/cache token "
-                "totals, user/slot/model breakdowns or individual request timestamps are "
-                "stored for this measure. Older traffic is not backfilled.",
-                "流式输出速率用服务商报告的输出 Token 总量，除以网关从首个到最后一个响应正文分块"
-                "的时间总和，只统计成功且完整传回的 /v1/messages 流式回复。样本需有有效用量、"
+                "measurements. Node observations stay in a private account-bound seven-day "
+                "relay file and allowlisted numeric heartbeats. Gateway storage contains only "
+                "anonymous daily sample counts, output-token totals and delivery-time totals "
+                "for seven UTC calendar days. The public output-rate measure shows no model "
+                "breakdown, input/cache token totals or individual request timestamps. "
+                "Older traffic is not backfilled.",
+                "流式输出速率用服务商报告的输出 Token 总量，除以从首个到最后一个响应正文分块"
+                "的时间总和，只统计成功且完整传回的 /v1/messages 流式回复；原生／桥接流量在节点"
+                "观测，HTTPS 流量在网关观测。样本需有有效用量、"
                 "至少两个分块，且传输过程至少持续 100 毫秒。单个分块或过短的回复不计入；"
                 "缓冲可能影响观测到的速率。这是观测到的交付速率，不含初始等待，"
                 "但包含流中的暂停、网络传输，"
                 "以及服务商输出计数中包含的思考或工具输出。只宜比较相近的模型和工作负载，"
                 "不是模型本身的基准测试。它单独要求至少二十个符合条件的回复，不依赖槽位端"
-                "统计是否就绪。仅在七个 UTC 日期内保留不含身份信息的每日样本数、输出 Token "
-                "总量和交付时间总和；这项观测不保存输入或缓存 Token 总量、不按用户、槽位或模型"
-                "分别统计，也不保存单条请求时间戳。不补填历史流量。",
+                "统计是否就绪。节点观测保存在私有、与账号绑定的七日转发统计文件及允许的数值心跳"
+                "字段中。网关只在七个 UTC 日期内保留不含身份信息的每日样本数、输出 Token 总量"
+                "和交付时间总和。公开输出速率不展示模型明细、输入或缓存 Token 总量，也不展示"
+                "单条请求时间戳。不补填历史流量。",
             ),
         ],
     )

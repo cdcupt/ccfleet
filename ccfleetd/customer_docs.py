@@ -1,8 +1,9 @@
 """The pages a customer is sent: what ccfleet is, how to start, how it works, the terms.
 
 Public, on the product site, beside /privacy. Written for somebody deciding
-whether to buy a slot and then using one, not for an operator: nothing here
-names a machine's address or a person, and every button it quotes is the label
+whether to buy a slot and then using one, not for an operator. The front page
+also shows a masked public usage summary; no machine address or private account
+identity is disclosed. Every button it quotes is the label
 the user site really shows.
 
 The one fact that must never soften is the plan requirement: ccfleet sells a
@@ -12,14 +13,15 @@ it themselves; no page may suggest otherwise.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from html import escape
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from . import pricing, statuspage
 from .bilingual import bi, label
 from .config import Config
 from .render import _meter
-from .usersite import NAV, Viewer, _shell
+from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
 DOCS_UPDATED = "2026-10-11"
@@ -276,6 +278,7 @@ def overview(
     *,
     price: Optional[pricing.Price] = None,
     health: Optional[str] = None,
+    ranking: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """The site's front page: the bare address and /docs serve it alike, and
     it names the bare address as the one to keep. At its top, whether the
@@ -453,7 +456,9 @@ def overview(
             inline=True,
         )
         + "</li>"
-        + '</ol></div></section><section class="band">'
+        + '</ol></div></section>'
+        + public_usage_panel(ranking)
+        + '<section class="band">'
         + bi("<h2>Read next</h2>", "<h2>继续了解</h2>")
         + '<div class="next">'
         '<a href="/docs/guide"><b>'

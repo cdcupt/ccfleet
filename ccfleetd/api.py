@@ -31,6 +31,7 @@ from . import (
     reference_docs,
     sessions,
     statuspage,
+    usage,
     usersite,
 )
 from . import slots as slotstates
@@ -556,11 +557,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _docs_page(self, page: Callable[..., str]) -> None:
             """A public page of the product, for whoever is looking, with the
-            price the operator set, if any. The front page also says at its
-            top whether the service is up, as /status does; only it reads
-            the machines for that."""
+            price the operator set, if any. Only the front page also reads
+            service health and the bounded public usage ranking."""
             current = ctx.store.get_price()
-            extra = ({"health": statuspage.health(ctx.store, time.time())}
+            now = time.time()
+            extra = ({"health": statuspage.health(ctx.store, now),
+                      "ranking": usage.public_summary(ctx.store, ctx.cfg, now)}
                      if page is customer_docs.overview else {})
             self._send(200, page(ctx.cfg, viewer=self._viewer(),
                                  price=current["price"] if current else None,

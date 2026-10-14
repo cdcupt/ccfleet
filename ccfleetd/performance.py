@@ -1,10 +1,10 @@
-"""Public, sample-gated numeric relay and gateway-stream observations.
+"""Public, sample-gated numeric relay and matched stream observations.
 
 Read each slot's latest seven-UTC-day snapshot once, never add successive
 heartbeats or infer unmeasured gateway requests. No request path, credential,
 native transcript usage or individual identity is returned. The caller must
 keep reporting_users internal and hide coverage counts when state is not ready.
-Gateway output throughput has its own sample gate and never uses relay timing.
+Output throughput has its own sample gate and never uses relay request timing.
 """
 
 from __future__ import annotations
@@ -34,51 +34,91 @@ def _instant(value: Any) -> Optional[float]:
     return None
 
 
-def _throughput_summary(store: Any, now: float, start: str) -> dict[str, Any]:
-    """Only a validated delivery rate and publishable sample count leave Store."""
-    result = {"state": "no_data", "samples": None, "tokens_per_second": None,
-              "window_start_day": start, "collection_start_day": None}
-    unknown = dict(result)
+def _stream_totals(raw: Any) -> Optional[tuple[int, int, float]]:
+    """Validate one independently measured source, without retaining raw fields."""
+    if not isinstance(raw, Mapping):
+        return None
+    samples, tokens, elapsed = (raw.get(key) for key in
+                                ("samples", "output_tokens", "stream_ms"))
+    if (type(samples) is not int or type(tokens) is not int
+            or not 0 <= samples <= MAX_THROUGHPUT_TOTAL
+            or not 0 <= tokens <= MAX_THROUGHPUT_TOTAL
+            or type(elapsed) not in (int, float) or not math.isfinite(elapsed)
+            or not 0 <= elapsed <= MAX_THROUGHPUT_TOTAL):
+        return None
+    if samples == 0:
+        return (0, 0, 0.0) if tokens == elapsed == 0 else None
+    if (not samples * 100 <= elapsed <= samples * 3_600_000
+            or tokens > samples * 1_000_000_000):
+        return None
+    return samples, tokens, float(elapsed)
+
+
+def _gateway_totals(store: Any, now: float, start: str):
+    """A corrupt/unsupported gateway source does not suppress valid native data."""
     try:
         measure = getattr(store, "gateway_throughput_summary", None)
         if not callable(measure):
-            return result
+            return None
         raw = measure(now)
         if not isinstance(raw, Mapping) or raw.get("window_start_day") != start:
-            return result
-        samples, tokens, elapsed = (raw.get(key) for key in
-                                    ("samples", "output_tokens", "stream_ms"))
-        if (type(samples) is not int or type(tokens) is not int
-                or not 0 <= samples <= MAX_THROUGHPUT_TOTAL
-                or not 0 <= tokens <= MAX_THROUGHPUT_TOTAL
-                or type(elapsed) not in (int, float) or not math.isfinite(elapsed)
-                or not 0 <= elapsed <= MAX_THROUGHPUT_TOTAL):
-            return result
+            return None
+        totals = _stream_totals(raw)
+        if totals is None:
+            return None
         collected = raw.get("collection_start_day")
         if collected is not None:
             if (not isinstance(collected, str) or date.fromisoformat(collected).isoformat()
                     != collected or collected < start
                     or collected > datetime.fromtimestamp(now, timezone.utc)
                     .date().isoformat()):
-                return result
-        if samples == 0:
-            if tokens != 0 or elapsed != 0:
-                return result
-            result["collection_start_day"] = collected
+                return None
+        if totals[0] and collected is None:
+            return None
+        return totals, collected
+    except Exception:
+        return None
+
+
+def _throughput_summary(store: Any, now: float, start: str,
+                        reports=()) -> dict[str, Any]:
+    """Same-definition native and gateway sums; node gateway samples are excluded.
+
+    Native reports do not carry the first sample's date, so any positive native
+    contribution makes the combined collection_start_day unknown.
+    """
+    result = {"state": "no_data", "samples": None, "tokens_per_second": None,
+              "window_start_day": start, "collection_start_day": None}
+    try:
+        gateway = _gateway_totals(store, now, start)
+        sources = [gateway[0]] if gateway is not None else []
+        collected = gateway[1] if gateway is not None else None
+        for report in reports:
+            native = _stream_totals(report.get("stream_output"))
+            if native is not None:
+                sources.append(native)
+                if native[0]:
+                    collected = None
+        samples = sum(source[0] for source in sources)
+        tokens = sum(source[1] for source in sources)
+        elapsed = math.fsum(source[2] for source in sources)
+        if _stream_totals({"samples": samples, "output_tokens": tokens,
+                           "stream_ms": elapsed}) is None:
             return result
-        if (collected is None or not samples * 100 <= elapsed <= samples * 3_600_000
-                or tokens > samples * 1_000_000_000):
+        result["collection_start_day"] = collected
+        if not samples:
             return result
-        result.update(state="limited_data", collection_start_day=collected)
+        result["state"] = "limited_data"
         if samples < MIN_THROUGHPUT_SAMPLES:
             return result
         rate = tokens / (elapsed / 1000)
         if not math.isfinite(rate):
-            return unknown
+            return {**result, "state": "no_data", "collection_start_day": None}
         result.update(state="ready", samples=samples, tokens_per_second=rate)
     except Exception:
         # Telemetry must never make Status fail or turn corrupt observations into zero.
-        return unknown
+        return {**result, "state": "no_data", "samples": None, "tokens_per_second": None,
+                "collection_start_day": None}
     return result
 
 
@@ -130,6 +170,22 @@ def _current_report(slot: Mapping[str, Any], heartbeat: Any, node_id: str,
     return report
 
 
+def _active_slots(rows, nodes):
+    """Do not attribute an ambiguous duplicate machine snapshot to either holder."""
+    unique, ambiguous = {}, set()
+    for slot in rows:
+        if (not isinstance(slot, Mapping) or slot.get("kind") != slots.MACHINE_SLOT
+                or slot.get("state") != slots.ACTIVE or slot.get("node_id") not in nodes
+                or not isinstance(slot.get("held_by"), str) or not slot["held_by"]
+                or not isinstance(slot.get("unix_user"), str) or not slot["unix_user"]):
+            continue
+        key = slot["node_id"], slot["unix_user"]
+        if key in unique:
+            ambiguous.add(key)
+        unique[key] = slot
+    return [row for key, row in unique.items() if key not in ambiguous]
+
+
 def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
     """Allowlisted aggregate; traffic values need enough measured attempts.
 
@@ -156,7 +212,7 @@ def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         "oldest_observed_at": None, "requests": None, "completed": None,
         "completion_rate": None,
         "latencies": {stage: {"count": None, "mean": None} for stage in TIMINGS},
-        "throughput": _throughput_summary(store, observed_now, start),
+        "throughput": None,
     }
     nodes = {node["id"] for node in store.list_nodes()
              if isinstance(node, Mapping) and isinstance(node.get("id"), str)
@@ -165,12 +221,7 @@ def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
     reports: list[dict[str, Any]] = []
     contributors: set[str] = set()
     stage_contributors: dict[str, set[str]] = {stage: set() for stage in TIMINGS}
-    for slot in store.list_slots():
-        if (not isinstance(slot, Mapping) or slot.get("kind") != slots.MACHINE_SLOT
-                or slot.get("state") != slots.ACTIVE or slot.get("node_id") not in nodes
-                or not isinstance(slot.get("held_by"), str) or not slot["held_by"]
-                or not isinstance(slot.get("unix_user"), str) or not slot["unix_user"]):
-            continue
+    for slot in _active_slots(store.list_slots(), nodes):
         result["eligible_slots"] += 1
         report = _current_report(slot, latest.get(slot["node_id"]), slot["node_id"],
                                  observed_now, max_age)
@@ -184,6 +235,7 @@ def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
                 stage_contributors[stage].add(slot["held_by"])
     result["reporting_slots"] = len(reports)
     result["reporting_users"] = len(contributors)
+    result["throughput"] = _throughput_summary(store, observed_now, start, reports)
     requests = sum(report["requests"] for report in reports)
     if not requests:
         return result

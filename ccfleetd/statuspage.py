@@ -507,18 +507,21 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
             "至少 20 个样本。因此，即使流量总数可以公开，某项计时仍可能未知。",
             inline=True) + '</p>'
         + '<p>' + label(
-            "Streamed output rate is measured separately at the HTTPS gateway for successful, "
+            "Streamed output rate combines native/bridge slot-relay measurements and HTTPS "
+            "gateway measurements without counting a gateway reply twice. It covers successful, "
             "fully delivered /v1/messages streaming replies. It divides the sum of "
             "provider-reported output tokens by the sum of time from the first to the last "
-            "gateway response-body chunk. A reply needs valid output usage, at least two "
+            "successfully forwarded response-body chunk at the observing relay. "
+            "A reply needs valid output usage, at least two "
             "chunks and 100 ms of delivery time. Single-chunk or too-short replies are "
             "excluded; buffering can affect the observed rate. It excludes the initial wait, "
             "but includes stream pauses and network delivery, and includes all output "
             "tokens reported by the provider, including thinking or tool output where counted. "
             "Higher is faster for comparable models and workloads; this is an observed "
             "delivery rate, not a pure model-speed benchmark.",
-            "流式输出速率在 HTTPS 网关单独观测，只统计成功且完整传回的 /v1/messages 流式回复。"
-            "计算方式为服务商报告的输出 Token 总量除以网关从首个到最后一个响应正文分块的"
+            "流式输出速率合并原生/桥接槽位转发和 HTTPS 网关的观测，不重复计算网关回复。"
+            "只统计成功且完整传回的 /v1/messages 流式回复。计算方式为服务商报告的输出 "
+            "Token 总量除以观测点从首个到最后一个成功转发的响应正文分块的"
             "时间总和。回复需有有效的输出用量、至少两个分块，且传输过程至少持续 100 毫秒。"
             "单个分块或过短的回复不计入；缓冲可能影响观测到的速率。不包含最初等待回复的"
             "时间，但包含流中的暂停和网络传输；服务商计入的全部输出 Token 都在内，包括被计入"
@@ -528,13 +531,16 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
             "Output rate needs at least 20 eligible streamed replies over the same seven UTC "
             "calendar days. It can be shown while slot-relay figures remain unknown, or "
             "remain unknown when they are ready. Collection starts with new observations; "
-            "older traffic is not backfilled. Only anonymous daily numeric totals are retained, "
-            "with no user, slot or model breakdown, input/cache token totals or individual "
-            "request timestamps.",
+            "older traffic is not backfilled. The gateway retains anonymous daily numeric totals; "
+            "native relays keep account-bound daily numeric totals in the slot report. "
+            "This output-rate panel publishes no user, slot or model breakdown or individual "
+            "request timestamps. The homepage separately shows masked user usage "
+            "and model details.",
             "输出速率在相同的七个 UTC 日期窗口内单独要求至少 20 个符合条件的流式回复。"
             "槽位端统计未知时，输出速率仍可能公开；槽位端统计已就绪时，输出速率也可能仍未知。"
-            "只从新的观测开始收集，不补填历史流量。仅保留不含身份信息的每日数值汇总，不按用户、"
-            "槽位或模型分别展示，也不包含输入或缓存 Token 总量、单条请求的时间戳。",
+            "只从新的观测开始收集，不补填历史流量。网关保留匿名每日数值汇总，原生转发在槽位报告"
+            "中保留绑定账号的每日数值汇总。本速率面板不公开用户、槽位、模型细分或单次请求时间；"
+            "首页另行展示部分隐藏昵称的用户用量和模型详情。",
             inline=True) + '</p>'
         + '<p>' + label(
             "Only combined numbers are public, even if only one account contributes. "

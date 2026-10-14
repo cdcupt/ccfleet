@@ -99,7 +99,7 @@ def test_privacy_translation_uses_real_retention_values_and_escapes_contact():
                if link.get('href', '').startswith('mailto:'))
 
 
-def test_privacy_discloses_single_contributor_aggregates_without_individual_breakdowns():
+def test_privacy_scopes_performance_aggregates_separately_from_the_public_usage_ranking():
     page = Page(usersite.privacy_page(Config()))
     english, chinese = page.copy('en'), page.copy('zh')
     for phrase in (
@@ -108,6 +108,12 @@ def test_privacy_discloses_single_contributor_aggregates_without_individual_brea
         "a total or average can reflect that user's traffic",
         'twenty samples, which can all come from one user',
         'does not split measurements by user or slot',
+        'public Status performance panel',
+        'homepage ranking',
+        'visible to everyone',
+        'Masking is not anonymity',
+        'estimated standard API-equivalent USD value',
+        'not a Claude Pro/Max subscription bill',
         'prompts, credentials or response contents',
         'Status describes machine health only',
         'no detailed reasons or per-machine uptime cards',
@@ -119,6 +125,12 @@ def test_privacy_discloses_single_contributor_aggregates_without_individual_brea
         '总量或平均值可能反映这个用户的流量',
         '所有样本可以来自同一个用户',
         '不按用户或槽位分别展示统计',
+        '公开的服务状态性能面板',
+        '首页用量排行',
+        '对所有人公开',
+        '遮盖不等于匿名',
+        '按标准 API 价格估算的美元价值',
+        '不是 Claude Pro/Max 订阅账单',
         '也不公开名称、邮箱、提示词、凭据或回复内容',
         '状态只表示主机健康',
         '表格不展示详细异常原因或逐台主机的可用率卡片',
@@ -134,21 +146,23 @@ def test_privacy_explains_independent_output_rate_and_daily_numeric_retention():
     english, chinese = page.copy('en'), page.copy('zh')
     for phrase in (
         'A separate streamed output rate',
-        'first-to-last gateway response-body chunk time',
+        'first-to-last response-body chunk time',
+        'native/bridge traffic or at the HTTPS gateway',
         'at least two chunks and at least 100 ms',
         'Single-chunk or too-short replies are excluded',
         'buffering can affect the observed rate',
         'excludes the initial wait',
         'thinking or tool output',
         'twenty eligible replies are needed independently',
-        'anonymous daily counts, output-token totals and delivery-time totals',
+        'anonymous daily sample counts, output-token totals and delivery-time totals',
         'seven UTC calendar days',
-        'No input/cache token totals, user/slot/model breakdowns or individual request timestamps',
+        'public output-rate measure shows no model breakdown, input/cache token totals',
+        'private account-bound seven-day relay file',
         'Older traffic is not backfilled',
     ):
         assert phrase in english
     for phrase in (
-        '流式输出速率使用 HTTPS 网关新收集的数值观测',
+        '合并符合条件的节点原生／桥接流和 HTTPS 网关观测',
         '从首个到最后一个响应正文分块',
         '至少两个分块',
         '至少持续 100 毫秒',
@@ -159,7 +173,8 @@ def test_privacy_explains_independent_output_rate_and_daily_numeric_retention():
         '单独要求至少二十个符合条件的回复',
         '每日样本数、输出 Token 总量和交付时间总和',
         '七个 UTC 日期',
-        '不保存单条请求时间戳',
+        '公开输出速率不展示模型明细',
+        '私有、与账号绑定的七日转发统计文件',
         '不补填历史流量',
     ):
         assert phrase in chinese
