@@ -194,6 +194,7 @@ step "2/6  the agent and the slot scripts"
 mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 fetch ccfleet_agent/__init__.py "$LIB_DIR/ccfleet_agent/__init__.py" 644
 fetch ccfleet_agent/inference_policy.py "$LIB_DIR/ccfleet_agent/inference_policy.py" 644
+fetch ccfleet_agent/model_usage.py "$LIB_DIR/ccfleet_agent/model_usage.py" 644
 fetch ccfleet_agent/relay_metrics.py "$LIB_DIR/ccfleet_agent/relay_metrics.py" 644
 fetch ccfleet_agent/inference_client.py "$LIB_DIR/ccfleet_agent/inference_client.py" 644
 fetch ccfleet_agent/compatibility.py "$LIB_DIR/ccfleet_agent/compatibility.py" 644

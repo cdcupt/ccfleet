@@ -235,7 +235,9 @@ def test_timer_and_attempt_definitions_do_not_claim_end_to_end_task_success():
     assert "no account names, slots, messages, or individual request records" in text
     assert "even if only one account contributes" in text
     assert "sum of provider-reported output tokens" in text
-    assert "first to the last gateway response-body chunk" in text
+    assert "first to the last successfully forwarded response-body chunk" in text
+    assert "native/bridge slot-relay measurements" in text
+    assert "without counting a gateway reply twice" in text
     assert "at least two chunks and 100 ms" in text
     assert "Single-chunk or too-short replies are excluded" in text
     assert "buffering can affect the observed rate" in text
@@ -245,7 +247,8 @@ def test_timer_and_attempt_definitions_do_not_claim_end_to_end_task_success():
     assert "not a pure model-speed benchmark" in text
     assert "at least 20 eligible streamed replies" in text
     assert "older traffic is not backfilled" in text
-    assert "input/cache token totals or individual request timestamps" in text
+    assert "no user, slot or model breakdown or individual request timestamps" in text
+    assert "homepage separately shows masked user usage and model details" in text
 
 
 def test_arbitrary_account_slot_content_and_raw_reports_are_never_rendered():
