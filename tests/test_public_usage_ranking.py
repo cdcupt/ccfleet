@@ -182,8 +182,8 @@ def test_legacy_total_is_never_the_denominator_of_a_small_new_api_estimate():
     visible = Document(source).text
     assert "2.15B" in visible and "Unpriced 2.15B" in visible and "Output 8.72M" in visible
     main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', source, flags=re.S)[1]
-    assert "1.2M" in main and "Output 5.03K" in Document(main).text
-    assert "11 replies in priced scope" in Document(main).text
+    assert "1.2M" in main and "Output" not in Document(main).text
+    assert "replies in priced scope" not in Document(main).text
     assert "2.15B" not in main and "8.72M" not in main and "Unpriced" not in main
     assert "Model price known: 11 of 6,118" in visible
     assert 'title="2,145,853,715 tokens"' in source
@@ -213,9 +213,13 @@ def test_exact_user_model_counters_and_cost_share_the_primary_29_reply_cohort():
         main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', source, flags=re.S)[1]
         details = re.search(r'<tr class="usage-ranking-detail">(.*?)</tr>', source, flags=re.S)[1]
         text = Document(main).text
-        assert "4.59M" in text and "$2.50" in text and "24.87K" in text
-        replies = "29 replies in priced scope" if language == "en" else "29 个回复"
-        assert replies in text
+        assert "4.59M" in text and "$2.50" in text
+        assert "24.87K" not in text
+        assert "Output" not in text and "replies in priced scope" not in text
+        assert "输出" not in text and "个回复" not in text
+        assert "24.87K" in Document(details).text
+        replies = "29 replies" if language == "en" else "29 个回复"
+        assert replies in Document(details).text
         assert "2.15B" not in main and "2,150,446,641" not in main and "2,145,853,715" not in main
         assert "2.15B" in Document(details).text
         for field in ("input_tokens", "output_tokens", "cache_read_input_tokens",
@@ -225,12 +229,13 @@ def test_exact_user_model_counters_and_cost_share_the_primary_29_reply_cohort():
         assert 'title="2,150,446,641' in details and 'title="2,145,853,715' in details
 
 
-def test_no_priced_data_keeps_primary_tokens_output_and_cost_unknown_not_zero():
+def test_no_priced_data_keeps_primary_tokens_and_cost_unknown_not_zero():
     report = ranking()
     report["entries"] = [report["entries"][1]]
     main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', shown(report), flags=re.S)[1]
     assert "1.23K" not in main and "$0.00" not in main
-    assert "Output —" in Document(main).text and "Estimate unavailable" in Document(main).text
+    assert "Output" not in Document(main).text
+    assert "Estimate unavailable" in Document(main).text
 
 
 def test_matching_priced_scope_is_required_to_publish_any_main_estimate():

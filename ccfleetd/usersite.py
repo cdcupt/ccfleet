@@ -905,15 +905,7 @@ def public_usage_panel(ranking: Any) -> str:
                     + '</td><th class="usage-user" scope="row">' + masked
                     + '</th><td class="usage-observed"><strong>'
                     + _public_usage_token(priced.get("total_tokens") if known else None)
-                    + '</strong><small>'
-                    + label("Output ", "输出 ", inline=True)
-                    + _public_usage_token(priced.get("output_tokens") if known else None)
-                    + '</small><small>' + label(
-                        _public_usage_number(entry.get("priced_samples") if known else None)
-                        + " replies in priced scope",
-                        "计价范围内 "
-                        + _public_usage_number(entry.get("priced_samples") if known else None)
-                        + " 个回复", inline=True) + '</small></td>'
+                    + '</strong></td>'
                     '<td class="usage-estimate"><div class="usage-estimate-value">'
                     + value + badge + '</div><small class="usage-estimate-scope">' + scope
                     + '</small></td></tr><tr class="usage-ranking-detail"><td colspan="4">'
@@ -1735,17 +1727,18 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "subscription bill, an amount paid, a quota balance or a promise of "
                 "savings. Partial pricing covers only observations with enough known "
                 "model and cache information; it does not assign $0 to the rest. The "
-                "primary ranking token total, output, reply count and estimate use the "
+                "primary ranking token total and estimate use the "
                 "same priceable cohort; broader reported totals and older/unpriced usage "
-                "appear only in expanded details under a separate scope. "
+                "appear only in expanded details under a separate scope. Output and reply "
+                "counts remain in the detailed breakdowns. "
                 "Processed totals include cached context counted again per request; "
                 "they are not generated or unique text. Estimates follow reported model "
                 "labels, and these aggregates alone cannot reliably reprice older usage.",
                 "API 等价值按页面列出的标准模型价格与缓存计价假设估算，不是 Claude Pro/Max "
                 "订阅账单、实际付款、剩余额度，也不保证节省了这些费用。部分估值只覆盖模型与缓存"
-                "信息足够明确的观测，其余部分不按 $0 计算。排行主表的 Token 总量、输出、回复数量"
-                "与估值使用同一可计价批次；更广的上报总量及旧数据／未计价用量只在展开明细中以"
-                "不同范围展示。处理总量包含每次请求重复计数的"
+                "信息足够明确的观测，其余部分不按 $0 计算。排行主表的 Token 总量与估值使用同一"
+                "可计价批次；更广的上报总量及旧数据／未计价用量只在展开明细中以不同范围展示。"
+                "输出与回复数量保留在明细中。处理总量包含每次请求重复计数的"
                 "缓存上下文，不等于生成或独有的文本。估值依据上报的模型标签，不能仅凭旧汇总"
                 "可靠地重新计价。",
             ),
