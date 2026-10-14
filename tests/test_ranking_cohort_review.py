@@ -89,17 +89,20 @@ def test_latest_matched_fields_sum_and_estimate_are_exact_without_repricing_lega
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
-def test_main_row_contains_only_matching_priceable_total_output_and_reply_count(language):
+def test_main_row_contains_matching_total_and_cost_without_output_or_reply_sublines(language):
     data = snapshot()
     before = copy.deepcopy(data)
     shown = show(data, language)
-    assert "4.59M" in shown.main() and "24.87K" in shown.main() and "$2.50" in shown.main()
-    assert "29" in shown.main()
+    assert "4.59M" in shown.main() and "$2.50" in shown.main()
+    assert "24.87K" not in shown.main() and "29" not in shown.main()
+    assert "Output" not in shown.main() and "输出" not in shown.main()
+    assert "replies in priced scope" not in shown.main() and "个回复" not in shown.main()
     for broader in ("2.15B", "8.02M", "6,136", "6,107", "8,024,874"):
         assert broader not in shown.main()
     exact = "4,592,926"
     assert any(exact in attrs.get("aria-label", "") for attrs in shown.main_attrs)
     assert "2.15B" in shown.details() and "8.02M" in shown.details()
+    assert "24.87K" in shown.details() and "29" in shown.details()
     assert data == before
 
 
@@ -128,7 +131,8 @@ def test_positive_samples_with_measured_zero_keep_zero_tokens_and_zero_estimate(
                                     read_tokens=0, write_tokens=0)]))
     shown = show(data)
     assert "$0.00" in shown.main() and "0" in shown.main()
-    assert "20" in shown.main() and "—" not in shown.main()
+    assert "20" not in shown.main() and "—" not in shown.main()
+    assert "20 replies" in shown.details()
 
 
 @pytest.mark.parametrize("field,value", [
@@ -160,18 +164,20 @@ def test_partial_model_cache_coverage_is_not_filled_from_broader_known_cache_tot
 
 
 @pytest.mark.parametrize("value", [None, True, "24874"])
-def test_unknown_priced_output_never_falls_back_to_overall_output_or_zero(value):
+def test_priced_output_is_absent_from_main_even_when_missing_in_matching_scope(value):
     data = snapshot()
     data["entries"][0]["priced_tokens"]["output_tokens"] = value
     main = show(data).main()
-    assert "Output —" in main
+    assert "Output" not in main
     assert "8.02M" not in main and "24.87K" not in main and "Output 0" not in main
 
 
 @pytest.mark.parametrize("value", [None, True, "29"])
-def test_unknown_priceable_reply_count_never_uses_the_broader_reply_count(value):
+def test_priceable_reply_count_is_absent_from_main_and_kept_in_details(value):
     data = snapshot()
     data["entries"][0]["priced_samples"] = value
-    main = show(data).main()
-    assert "— replies in priced scope" in main
+    shown = show(data)
+    main = shown.main()
+    assert "replies in priced scope" not in main
     assert "6,136" not in main and "6,107" not in main and "0 replies" not in main
+    assert "6,136" in shown.details() and "Model price known: —" in shown.details()
