@@ -86,9 +86,10 @@ font-variant-numeric:tabular-nums;letter-spacing:-.015em;overflow-wrap:anywhere}
 .st-perf-reference h3{margin:0 0 6px;font-size:15px}
 .st-perf-reference p{font-size:12.5px;line-height:1.65;margin:7px 0;color:var(--muted)}
 .st-perf-reference strong{color:var(--ink)}
-.st-perf-reference table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+.st-perf-reference table{width:100%;min-width:0;table-layout:fixed;
+border-collapse:collapse;font-size:13px;margin:10px 0}
 .st-perf-reference th,.st-perf-reference td{padding:6px 8px;text-align:left;
-border-bottom:1px solid var(--rule-soft);overflow-wrap:anywhere}
+border-bottom:1px solid var(--rule-soft);white-space:normal;overflow-wrap:anywhere}
 .st-perf-reference th{font-weight:600;color:var(--muted)}
 .st-perf-reference td:last-child{font-variant-numeric:tabular-nums;white-space:nowrap}
 .st-perf-help{border-top:1px solid var(--rule-soft);margin-top:14px;padding-top:12px}
