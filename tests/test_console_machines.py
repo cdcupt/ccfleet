@@ -191,8 +191,9 @@ def test_an_own_node_still_reads_its_own_facts(console):
 
 def byline(row):
     """The small line under a row's name in the fleet table."""
-    return re.search(r'node-id">[^<]*</span>.*?<br><span class="muted">(.*?)</span>',
-                     row, re.S).group(1)
+    cell = re.search(r'<td><span class="node-id">.*?</td>', row, re.S).group(0)
+    found = re.search(r'<br><span class="muted">(.*?)</span>', cell, re.S)
+    return found.group(1) if found else ""
 
 
 def test_a_held_slot_is_said_by_its_holders_name_alone(console):
@@ -208,8 +209,7 @@ def test_a_held_slot_is_said_by_its_holders_name_alone(console):
 
 
 def test_what_nobody_holds_by_name_keeps_its_owner(console):
-    """A free machine, a slot from before names and an owner's own node go by
-    their own ids, with their owner beside them."""
+    """An undeclared machine, legacy held slot and owner's own node retain context."""
     store, call = console
     fleet(store, time.time())
     page = call("GET", "/admin").body
@@ -227,7 +227,8 @@ def test_a_slot_given_back_answers_to_its_pool_name_again(console):
                             now=time.time())
     assert store.get_slot("pool-1")["state"] == slots.FREE
     page = call("GET", "/admin").body
-    assert byline(row_of(page, "pool-1")) == "erik \u00b7 us-west-residential"
+    assert byline(row_of(page, "pool-1")) == ""
+    assert 'row-name">pool-1</div>' in manage_line(page, "pool-1")
     assert "ysflowerdog-1" not in page
 
 
@@ -248,7 +249,14 @@ def test_a_free_pool_slot_explains_its_missing_installation(console):
     store.apply_slot_report("erik-2", [{"unix_user": "slot01", "present": False}], now=now)
     machine_beat(store, "erik-2", now, [{"unix_user": "slot01", "present": False}])
     assert store.get_slot("erik-2")["pool_name"] == "pool-4"
-    row = row_of(call("GET", "/admin").body, "pool-4")
+    page = call("GET", "/admin").body
+    row = row_of(page, "pool-4")
+    assert byline(row) == ""
+    assert "erik" not in row and "us-west-residential" not in row
+    manage = manage_line(page, "pool-4")
+    assert 'row-name">pool-4</div>' in manage
+    assert 'action="/actions/node/erik-2/disable"' in manage
+    assert 'name="confirm" value="erik-2"' in manage
     assert "Installed on claim" in row and "free · in pool" in row
     assert "unknown" not in row and "token " not in row and "latest" not in row
     assert ">disabled (hosted)<" in row
@@ -274,12 +282,13 @@ def test_a_free_slot_does_not_show_the_previous_holders_login(console):
 def test_a_free_slot_is_not_called_available_without_a_confirmed_wipe(cfg, present, words):
     nodes = [{"id": "m1", "owner": "erik", "region": "us", "pinned_version": "latest",
               "rc_expected": False, "enabled": True, "created_at": 0}]
-    one = [{"id": "m1", "node_id": "m1", "unix_user": "slot01",
+    one = [{"id": "m1", "node_id": "m1", "unix_user": "slot01", "pool_name": "pool-7",
             "kind": slots.MACHINE_SLOT, "state": slots.FREE, "present": present}]
     row = build_rows(nodes, {}, [], 3_000_000, slots=one)[0]
     page = render_dashboard([row], [], 3_000_000, cfg)
-    assert f"free · {words}" in row_of(page, "m1")
-    assert "free · in pool" not in row_of(page, "m1")
+    shown = row_of(page, "pool-7")
+    assert f"free · {words}" in shown and byline(shown) == "on m1 · erik · us"
+    assert "free · in pool" not in shown
 
 
 @pytest.mark.parametrize("enabled,reserved,words", [(True, True, "reserved in pool"),
@@ -289,12 +298,13 @@ def test_a_free_slot_is_only_available_when_its_machine_allows_claims(cfg, enabl
     nodes = [{"id": "m1", "owner": "erik", "region": "us", "pinned_version": "latest",
               "rc_expected": False, "enabled": enabled, "created_at": 0,
               "reserved_for": "holder" if reserved else None}]
-    one = [{"id": "m1", "node_id": "m1", "unix_user": "slot01",
+    one = [{"id": "m1", "node_id": "m1", "unix_user": "slot01", "pool_name": "pool-7",
             "kind": slots.MACHINE_SLOT, "state": slots.FREE, "present": False}]
     row = build_rows(nodes, {}, [], 3_000_000, slots=one)[0]
     page = render_dashboard([row], [], 3_000_000, cfg)
-    assert f"free · {words}" in row_of(page, "m1")
-    assert "free · in pool" not in row_of(page, "m1")
+    shown = row_of(page, "pool-7")
+    assert f"free · {words}" in shown and byline(shown) == ""
+    assert "free · in pool" not in shown
 
 
 @pytest.mark.parametrize("state", ["active", "failed"])
@@ -451,6 +461,21 @@ def slot_row(slot_id, user, name=None):
 def test_a_free_slot_not_called_as_its_machine_says_which_machine(cfg):
     page = one_machine(cfg, [slot_row("m1-01", "slot01")])
     assert byline(row_of(page, "m1-01")) == "on m1 \u00b7 erik \u00b7 us"
+
+
+@pytest.mark.parametrize("changed", [
+    {"state": slots.ACTIVE}, {"state": slots.RELEASING}, {"held_by": "account"},
+    {"held_by": ""}, {"held_by": False},
+    {"present": True}, {"present": None}, {"pool_name": "pool-0"},
+    {"pool_name": "pool-01"}, {"pool_name": "pool-7-extra"},
+    {"kind": slots.OWNER_SLOT}, {"id": "pool-7", "pool_name": None},
+])
+def test_pool_shaped_names_do_not_hide_nonfree_or_nonpool_context(cfg, changed):
+    record = {**slot_row("m1-01", "slot01"), "state": slots.FREE, "present": False,
+              "held_by": None, "pool_name": "pool-7", **changed}
+    page = one_machine(cfg, [record])
+    row = re.findall(r"<tr class=.*?</tr>", table(page), re.S)[0]
+    assert "erik" in byline(row) and "us" in byline(row)
 
 
 def test_a_machine_of_two_slots_goes_by_its_own_id(cfg):

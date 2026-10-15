@@ -142,6 +142,11 @@ reserved for that slot across later claims and releases; an existing <code>pool-
 identity is retained when available. The authenticated node and slot IDs do not change,
 so installed agents, SSH pins and history keep their existing identities. A failed or
 unfinished wipe never makes the slot free or publishes it as a new pool slot.</p>
+<p>In the operator console, a confirmed free, holderless machine slot uses only its
+<code>pool-N</code> name in the Fleet row, Slots row and Manage heading. Internal
+node/slot IDs, owner and region remain under the Slots row's Manage controls.
+Reservations remain visible as a warning and retain their account details under Manage;
+cleanup, health and disabled-machine warnings are unchanged.</p>
 <p>New node and slot IDs must not reuse an existing slot's reserved pool name,
 including while that slot is held. Check the current names in the console before
 registering another machine; choose an unused ID if a pool name is already reserved.</p>

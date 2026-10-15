@@ -22,7 +22,7 @@ from typing import Any, Optional
 from . import claude_versions, names, payments, plans, pricing
 from . import slots as slotstates
 from .desired import is_channel, machine_hostname
-from .render import _age
+from .render import _age, _free_pool_slot
 from .store import Store, StoreError
 from .usersite import STATE_WORDS
 
@@ -227,14 +227,22 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
     said = _update_said(slot, node, report, update, look.channels)
     pills, notes = _problems(slot, report, look.alerts, said, look.now, look.listening)
     shown = names.display(slot)
+    free_pool = _free_pool_slot(slot)
     sub = _on_machine(slot, node)
     keeper = _kept_for(node, look.accounts)
-    cells = _cells(_name(shown, sub + ([keeper] if keeper else [])),
+    if free_pool and keeper:
+        pills.append(_pill("warn", "reserved"))
+    cells = _cells(_name(shown, sub + ([keeper] if keeper and not free_pool else [])),
                    _holder(slot, look.accounts, report), _state_pill(slot),
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     crowded = len(machine.rows) > slotstates.MAX_SLOTS_PER_MACHINE
-    manage = (_slot_actions(slot, look.csrf) + _keep_part(node, look.csrf)
+    identity = (_part("Machine identity", "", f"Node <code>{escape(node['id'])}</code>; "
+                      f"slot <code>{escape(slot['id'])}</code>; "
+                      f"owner {escape(node['owner'])}; region {escape(node['region'] or '-')}.")
+                if free_pool else "")
+    manage = (identity + _slot_actions(slot, look.csrf)
+              + _keep_part(node, look.csrf, keeper=keeper if free_pool else "")
               + (_advanced_part(machine, look.csrf) if crowded else ""))
     return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage)
 
@@ -300,7 +308,7 @@ def _on_machine(slot: Mapping[str, Any], node: Mapping[str, Any]) -> list[str]:
     A held slot's name is said alone, from the claim until the wipe that
     frees it: not the machine it is on (Erik, 2026-09-24; see
     render._called). Escaped."""
-    if slot.get("name") or names.display(slot) == node["id"]:
+    if _free_pool_slot(slot) or slot.get("name") or names.display(slot) == node["id"]:
         return []
     return [f"on {escape(node['id'])}"]
 
@@ -539,12 +547,13 @@ def _slot_actions(slot: Mapping[str, Any], csrf: str) -> str:
                                   "confirms.")
 
 
-def _keep_part(node: Mapping[str, Any], csrf: str) -> str:
+def _keep_part(node: Mapping[str, Any], csrf: str, *, keeper: str = "") -> str:
     """Keep the machine for one account, or open it to anybody again."""
     base = f"/actions/machine/{escape(node['id'])}"
     if node.get("reserved_for"):
         return _part("Reservation", _form(f"{base}/unreserve", csrf, "Clear reservation"),
-                     "Once cleared, anybody with an allowance may claim it.")
+                     (f"{keeper}. " if keeper else "")
+                     + "Once cleared, anybody with an allowance may claim it.")
     return _part("Keep for somebody",
                  _form(f"{base}/reserve", csrf, "Reserve",
                        '<input type="email" name="email" placeholder="their email" size="20" '
