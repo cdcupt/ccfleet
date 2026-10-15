@@ -84,6 +84,10 @@ SLOT_GROUP="ccfleet-slots"
 # Prefer the units sitting next to this script; fall back to fetching them.
 LOCAL_UNITS="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/systemd"
 as_slot() { sudo -u "$SLOT" HOME="$HOME_DIR" bash -c "$1"; }
+as_native_slot() {
+  sudo -u "$SLOT" HOME="$HOME_DIR" /usr/bin/python3 -I "$EGRESS_HELPER" \
+    exec -- /bin/bash -c "$1"
+}
 user_systemctl() {
   local uid; uid="$(id -u "$SLOT")"
   sudo -u "$SLOT" XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -117,6 +121,22 @@ MACHINE_AUDIT="$(dirname "$0")/ccfleet_agent/machine.py"
 [ -f "$MACHINE_AUDIT" ] || MACHINE_AUDIT="$(dirname "$0")/../ccfleet_agent/machine.py"
 python3 -I "$MACHINE_AUDIT" --audit-login-shell \
   || die "an installed root-controlled /bin/dash is required for slot SSH"
+CANONICAL_EGRESS_ETC_DIR="/etc/ccfleet"
+EGRESS_ETC_DIR="${CCFLEET_ETC_DIR:-/etc/ccfleet}"
+if [ -e "$EGRESS_ETC_DIR/egress.json" ] || [ -L "$EGRESS_ETC_DIR/egress.json" ] \
+  || [ -e "$CANONICAL_EGRESS_ETC_DIR/egress.json" ] || [ -L "$CANONICAL_EGRESS_ETC_DIR/egress.json" ]; then
+  [ "$EGRESS_ETC_DIR" = "$CANONICAL_EGRESS_ETC_DIR" ] \
+    || die "execution node egress requires the canonical /etc/ccfleet configuration path"
+  # An explicit root invocation must obey the same one-slot rule as the agent.
+  # Re-running setup for the sole existing slot is safe; another holder is not.
+  SLOT_MEMBERS="$(getent group "$SLOT_GROUP" 2>/dev/null | cut -d: -f4 | tr ',' ' ' || true)"
+  for member in $SLOT_MEMBERS; do
+    [ "$member" = "$SLOT" ] || die "execution node egress requires one slot per machine"
+  done
+fi
+EGRESS_HELPER="$(dirname "$MACHINE_AUDIT")/egress.py"
+python3 -I "$EGRESS_HELPER" exec -- /usr/bin/true \
+  || die "slot egress policy is unavailable; the slot was not changed"
 getent group "$SLOT_GROUP" >/dev/null 2>&1 || addgroup --system "$SLOT_GROUP" >/dev/null
 if [ "$EXISTING_SLOT" = no ]; then
   adduser --disabled-password --shell /bin/dash --gecos "" "$SLOT" >/dev/null
@@ -209,7 +229,7 @@ note "memory capped at $MEMORY_MAX for this slot alone"
 
 step "3/5  Claude Code"
 as_slot 'mkdir -p ~/.local/bin ~/.config/ccfleet ~/.config/systemd/user ~/workspace'
-as_slot '[ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1'
+as_native_slot '[ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1'
 as_slot 'grep -q DISABLE_AUTOUPDATER ~/.profile 2>/dev/null || printf "\n# ccfleet: upgrades are staged by the operator\nexport DISABLE_AUTOUPDATER=1\nexport PATH=\"\$HOME/.local/bin:\$PATH\"\n" >> ~/.profile'
 # Ask whether the binary is there, rather than inferring it from a version
 # string. `claude --version | head -1` exits with head's status, so a missing
@@ -218,7 +238,7 @@ as_slot 'grep -q DISABLE_AUTOUPDATER ~/.profile 2>/dev/null || printf "\n# ccfle
 # it could never be. A slot with no Claude Code was reported as ready.
 as_slot '[ -x "$HOME/.local/bin/claude" ]' \
   || die "Claude Code did not install for $SLOT"
-CC_VERSION="$(as_slot '"$HOME"/.local/bin/claude --version 2>/dev/null | head -1')"
+CC_VERSION="$(as_native_slot '"$HOME"/.local/bin/claude --version 2>/dev/null | head -1')"
 [ -n "$CC_VERSION" ] || die "Claude Code is installed for $SLOT but will not report a version"
 note "installed: $CC_VERSION"
 

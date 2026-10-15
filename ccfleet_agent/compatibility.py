@@ -6,6 +6,7 @@ provider acceptance, or an attestation against the owner of the slot.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
 import json
 import math
@@ -21,6 +22,21 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+try:
+    from . import egress
+except ImportError:
+    # Owner installs predate the optional machine egress helper. Only load a
+    # sibling of this installed guard; never search a holder's cwd/PYTHONPATH.
+    _egress_path = Path(__file__).with_name("egress.py")
+    if _egress_path.is_file():
+        _egress_spec = importlib.util.spec_from_file_location("ccfleet_egress", _egress_path)
+        assert _egress_spec is not None and _egress_spec.loader is not None
+        egress = importlib.util.module_from_spec(_egress_spec)
+        sys.modules[_egress_spec.name] = egress
+        _egress_spec.loader.exec_module(egress)
+    else:
+        egress = None
 
 STATES = frozenset({"pending", "passed", "failed", "blocked"})
 CHECKS = frozenset({"native_version", "auth_interface", "usage_parser",
@@ -248,6 +264,14 @@ def probe_environment(home: Path, expected_config_dir: Optional[Path] = None) ->
     if expected_config_dir is not None and (expected_config_dir != home / ".claude"
                                            or os.environ.get("CLAUDE_CONFIG_DIR")):
         environment["CLAUDE_CONFIG_DIR"] = str(expected_config_dir)
+    if egress is not None:
+        environment.update(egress.native_environment())
+    else:
+        try:
+            Path("/etc/ccfleet/egress.json").lstat()
+        except FileNotFoundError:
+            return environment
+        raise OSError("slot egress policy is unavailable")
     return environment
 
 

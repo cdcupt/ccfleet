@@ -190,6 +190,67 @@ def test_a_slots_process_gets_its_own_environment_and_none_of_roots(monkeypatch)
     assert env["PATH"].split(":")[-1] == "/home/slot01/.local/bin"
 
 
+def test_slot_environment_adds_only_public_egress_route(monkeypatch):
+    route = {name: "http://127.0.0.1:912" for name in
+             ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+    route.update({name: "" for name in ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")})
+    monkeypatch.setenv("HTTPS_PROXY", "http://PRIVATE:SECRET@untrusted.invalid")
+    monkeypatch.setattr(machine.egress, "native_environment", lambda: dict(route))
+    env = machine.slot_env(account())
+    assert all(env[key] == value for key, value in route.items())
+    assert "PRIVATE" not in json.dumps(env) and "SECRET" not in json.dumps(env)
+
+
+def test_enabled_egress_refuses_existing_legacy_multi_slot_before_any_actions(cfg, monkeypatch):
+    monkeypatch.setattr(machine.egress, "native_environment", lambda: {"HTTPS_PROXY": "public"})
+    fake = Fake(users=["slot01", "slot02"])
+    state = {"slots": ["slot01", "slot02"], "private_state": "preserve"}
+    status, desired, result = machine.run_cycle(cfg, state, fake.system())
+    assert status == 503 and desired == {} and result == state
+    assert fake.posted == [] and fake.spawned == [] and fake.scripts == []
+    assert not cfg.state_path.exists()
+
+
+def test_enabled_egress_refuses_multi_slot_desired_before_mutations(cfg, monkeypatch):
+    monkeypatch.setattr(machine.egress, "native_environment", lambda: {"HTTPS_PROXY": "public"})
+    fake = Fake(desired={"slots": [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
+        {"unix_user": "slot02", "state": "releasing"}]})
+    monkeypatch.setattr(machine, "_take_name", lambda *a: pytest.fail("changed hostname"))
+    monkeypatch.setattr(machine, "converge_inference_access", lambda *a: pytest.fail("changed gates"))
+    monkeypatch.setattr(machine, "converge_ssh_access", lambda *a: pytest.fail("changed keys"))
+    state = {"slots": []}
+    status, desired, result = machine.run_cycle(cfg, state, fake.system())
+    assert status == 503 and desired == fake.desired and result == state
+    assert fake.scripts == [] and not cfg.state_path.exists()
+
+
+def test_invalid_egress_refuses_cycle_without_logging_private_exception(cfg, monkeypatch, caplog):
+    def invalid():
+        raise OSError("SYNTHETIC_PRIVATE_PROXY_SECRET")
+
+    monkeypatch.setattr(machine.egress, "native_environment", invalid)
+    fake = Fake(users=["slot01"])
+    state = {"slots": ["slot01"]}
+    status, _, result = machine.run_cycle(cfg, state, fake.system())
+    assert status == 503 and result == state
+    assert fake.posted == [] and fake.spawned == [] and fake.scripts == []
+    assert "SYNTHETIC_PRIVATE_PROXY_SECRET" not in caplog.text
+    assert "slot egress policy is unavailable" in caplog.text
+
+
+def test_egress_enabled_during_heartbeat_still_refuses_multi_slot_mutations(cfg, monkeypatch):
+    routes = iter([{}, {"HTTPS_PROXY": "public"}])
+    monkeypatch.setattr(machine.egress, "native_environment", lambda: next(routes))
+    fake = Fake(desired={"slots": [
+        {"unix_user": "slot01", "state": "claiming", "claimed_at": CLAIM},
+        {"unix_user": "slot02", "state": "claiming", "claimed_at": CLAIM}]})
+    monkeypatch.setattr(machine, "_take_name", lambda *a: pytest.fail("changed hostname"))
+    status, _, state = machine.run_cycle(cfg, {"slots": []}, fake.system())
+    assert status == 503 and state == {"slots": []}
+    assert fake.scripts == [] and not cfg.state_path.exists()
+
+
 def test_a_slot_is_asked_as_itself_with_no_groups(cfg):
     fake = Fake(users=["slot01"])
     machine.ask_slot(fake.lookup("slot01"), cfg, fake.system(), {"refresh_quota": True})
@@ -651,7 +712,7 @@ def test_the_installed_layout_imports_without_the_package(tmp_path):
     lib = tmp_path / "ccfleet_agent"
     lib.mkdir()
     src = Path(machine.__file__).resolve().parent
-    for name in ("agent.py", "machine.py", "inference_policy.py"):
+    for name in ("agent.py", "machine.py", "inference_policy.py", "egress.py"):
         (lib / name).write_text((src / name).read_text())
     proc = subprocess.run([PY, "-I", str(lib / "machine.py"), "--help"], capture_output=True,
                           text=True, timeout=30, cwd=tmp_path)

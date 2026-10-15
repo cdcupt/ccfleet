@@ -457,8 +457,26 @@ def sanitize_body(raw: bytes) -> bytes:
 
 
 def connect_upstream() -> http.client.HTTPSConnection:
-    return http.client.HTTPSConnection(UPSTREAM_HOST, 443, timeout=CONNECT_TIMEOUT,
-                                       context=ssl.create_default_context())
+    try:
+        from . import egress
+    except ImportError:
+        sibling = Path(__file__).with_name("egress.py")
+        if not sibling.is_file():
+            # Older owner installs lack this node-only module. They stay direct
+            # only when no machine egress policy has been installed.
+            try:
+                Path("/etc/ccfleet/egress.json").lstat()
+            except FileNotFoundError:
+                return http.client.HTTPSConnection(UPSTREAM_HOST, 443, timeout=CONNECT_TIMEOUT,
+                                                   context=ssl.create_default_context())
+            raise OSError("execution node egress is unavailable") from None
+        spec = importlib.util.spec_from_file_location("ccfleet_egress", sibling)
+        if spec is None or spec.loader is None:
+            raise OSError("execution node egress is unavailable") from None
+        egress = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(egress)
+    return egress.provider_connection(UPSTREAM_HOST, 443, timeout=CONNECT_TIMEOUT,
+                                      context=ssl.create_default_context())
 
 
 def response_headers(response: Any) -> dict[str, str]:

@@ -37,6 +37,7 @@ def sandbox(tmp_path, monkeypatch):
     sshd_config = root / "sshd_config"
     sshd_config.write_text(f"Include {root / 'sshd'}/*.conf\n")
     monkeypatch.setenv("CCFLEET_SSHD_CONFIG", str(sshd_config))
+    monkeypatch.setenv("CCFLEET_MANAGED_SETTINGS_FILE", str(root / "managed/90-egress.json"))
     monkeypatch.setenv("CCFLEET_SOURCE_DIR", str(REPO))
     # If anything tried to fetch, it would fail loudly rather than reach GitHub.
     monkeypatch.setenv("CCFLEET_REPO_RAW", "http://127.0.0.1:9/never")
@@ -44,7 +45,7 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
-            keys_audit_ok=True, shell_audit_ok=True):
+            keys_audit_ok=True, shell_audit_ok=True, egress_ok=True):
     """Root's view of the world: `id -u` is 0, and the rest just logs."""
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
@@ -71,6 +72,9 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
         "usermod": 'echo "usermod $*" >> "__LOG__"',
         "python3": textwrap.dedent("""\
             echo "python3 $*" >> "__LOG__"
+            case "$2" in
+              */egress.py) exit __EGRESS__ ;;
+            esac
             case "$3" in
               --audit-authorized-keys) exit __KEYS_AUDIT__ ;;
               --audit-login-shell) exit __SHELL_AUDIT__ ;;
@@ -106,16 +110,26 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
                         .replace("__START__", "0" if first_run_ok else "1")
                         .replace("__KEYS_AUDIT__", "0" if keys_audit_ok else "2")
                         .replace("__SHELL_AUDIT__", "0" if shell_audit_ok else "2")
+                        .replace("__EGRESS__", "0" if egress_ok else "2")
                         .replace("__SSHD__", "0" if sshd_ok else "1") + "\n")
         path.chmod(0o755)
     return bindir, calls
 
 
-def run(args, bindir=None):
+def run(args, bindir=None, *, canonical_egress_dir=None):
     env = dict(os.environ)
     if bindir is not None:
         env["PATH"] = f"{bindir}:{env['PATH']}"
-    return subprocess.run(["bash", str(SETUP), *args], capture_output=True, text=True,
+    script = SETUP
+    if canonical_egress_dir is not None:
+        # A test-only script copy maps its fixed system path into the sandbox.
+        # Production has no configurable runtime path or bypass for this guard.
+        script = canonical_egress_dir.parent / "sandbox-machine-setup.sh"
+        original = 'CANONICAL_EGRESS_ETC_DIR="/etc/ccfleet"'
+        assert SETUP.read_text().count(original) == 1
+        script.write_text(SETUP.read_text().replace(
+            original, f'CANONICAL_EGRESS_ETC_DIR="{canonical_egress_dir}"'))
+    return subprocess.run(["bash", str(script), *args], capture_output=True, text=True,
                           timeout=60, env=env)
 
 
@@ -192,6 +206,7 @@ def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
                 "ccfleet_agent/machine.py", "ccfleet_agent/local_relay.py",
                 "ccfleet_agent/model_usage.py", "ccfleet_agent/relay_metrics.py",
                 "ccfleet_agent/inference_policy.py",
+                "ccfleet_agent/egress.py",
                 "ccfleet_agent/compatibility.py", "ccfleet_agent/inference_client.py",
                 "slot-add.sh", "slot-remove.sh",
                 "slot-entry.sh",
@@ -199,7 +214,12 @@ def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
         installed = lib / rel
         source = REPO / ("node/" + rel if rel.endswith(".sh") or rel.startswith("systemd")
                          else rel)
-        assert installed.read_bytes() == source.read_bytes(), rel
+        expected = source.read_bytes()
+        if rel == "systemd/ccfleet-shell.service":
+            expected = expected.replace(b"%h/.local/bin/claude --dangerously-skip-permissions",
+                                        f"/usr/bin/python3 -I {lib}/ccfleet_agent/egress.py exec -- "
+                                        "%h/.local/bin/claude --dangerously-skip-permissions".encode())
+        assert installed.read_bytes() == expected, rel
     assert mode(lib / "slot-add.sh") == 0o755 and mode(lib / "slot-remove.sh") == 0o755
     assert mode(lib / "slot-entry.sh") == 0o755
     assert mode(lib / "ccfleet_agent" / "agent.py") == 0o644
@@ -239,7 +259,8 @@ def test_the_service_runs_what_was_just_installed(tmp_path, sandbox):
     assert f"--env-file {sandbox / 'etc'}/agent.env" in unit
     assert "/usr/local/lib/ccfleet" not in unit and "/etc/ccfleet" not in unit
     assert sorted(p.name for p in (sandbox / "units").iterdir()) == [
-        "ccfleet-machine.service", "ccfleet-machine.timer"], "left a sed backup behind"
+        "ccfleet-egress.service", "ccfleet-machine.service", "ccfleet-machine.timer"], \
+        "left a sed backup behind"
 
 
 def test_it_turns_the_timer_on_and_runs_once(tmp_path):
@@ -256,6 +277,62 @@ def test_it_turns_the_timer_on_and_runs_once(tmp_path):
     for package in ("python3", "tmux", "sudo", "adduser", "libpam-systemd",
                     "git", "gh", "rsync"):
         assert package in install.split(), f"{package} not installed"
+
+
+def test_opted_in_proxy_and_native_settings_precede_timer_and_any_new_claim(tmp_path, sandbox):
+    bindir, calls = fakebin(tmp_path)
+    etc = sandbox / "etc"
+    etc.mkdir()
+    (etc / "egress.json").write_text('{"version":1,"enabled":true}')
+    assert run(GOOD, bindir, canonical_egress_dir=etc).returncode == 0
+    log = calls.read_text().splitlines()
+    marker_check = next(i for i, line in enumerate(log) if "egress.py" in line
+                        and line.endswith(" check"))
+    private_check = next(i for i, line in enumerate(log) if line.endswith(" check-upstream"))
+    settings = next(i for i, line in enumerate(log) if " install-native-settings " in line)
+    start = log.index("systemctl enable --now ccfleet-egress.service")
+    active = log.index("systemctl is-active --quiet ccfleet-egress.service")
+    timer = log.index("systemctl enable --now ccfleet-machine.timer")
+    first = log.index("systemctl start ccfleet-machine.service")
+    assert marker_check < private_check < settings < start < active < timer < first
+    unit = (sandbox / "units/ccfleet-egress.service").read_text()
+    assert f"{sandbox / 'lib'}/ccfleet_agent/egress.py" in unit
+    assert f"--policy-file {etc}/egress.json" in unit
+    assert f"--upstream-file {etc}/egress-upstream.json" in unit
+    assert "--password" not in unit and "--username" not in unit
+
+
+def test_invalid_opt_in_prevents_starting_machine_or_proxy(tmp_path, sandbox):
+    bindir, calls = fakebin(tmp_path, egress_ok=False)
+    (sandbox / "etc").mkdir()
+    (sandbox / "etc/egress.json").write_text("not-valid-json")
+    result = run(GOOD, bindir, canonical_egress_dir=sandbox / "etc")
+    assert result.returncode != 0 and "egress policy is invalid" in result.stderr
+    assert "enable --now ccfleet-machine.timer" not in calls.read_text()
+    assert "enable --now ccfleet-egress.service" not in calls.read_text()
+
+
+def test_existing_multi_holder_machine_refuses_proxy_before_any_install(tmp_path, sandbox,
+                                                                     monkeypatch):
+    bindir, calls = fakebin(tmp_path)
+    (sandbox / "etc").mkdir()
+    (sandbox / "etc/egress.json").write_text('{"version":1,"enabled":true}')
+    monkeypatch.setenv("FAKE_SLOT_MEMBERS", "slot01,slot02")
+    result = run(GOOD, bindir, canonical_egress_dir=sandbox / "etc")
+    assert result.returncode != 0 and "requires one slot per machine" in result.stderr
+    assert not (sandbox / "lib").exists()
+    assert "apt-get" not in calls.read_text() and "systemctl" not in calls.read_text()
+
+
+def test_custom_config_path_with_egress_refuses_before_any_install(tmp_path, sandbox):
+    etc = sandbox / "etc"
+    etc.mkdir()
+    (etc / "egress.json").write_text('{"version":1,"enabled":true}')
+    bindir, calls = fakebin(tmp_path)
+    result = run(GOOD, bindir)
+    assert result.returncode != 0 and "canonical /etc/ccfleet" in result.stderr
+    assert not (sandbox / "lib").exists()
+    assert calls.read_text() == ""
 
 
 def test_it_restricts_slot_ssh_and_validates_before_reload(tmp_path, sandbox):

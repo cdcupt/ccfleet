@@ -24,7 +24,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-11"
+DOCS_UPDATED = "2026-10-15"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -279,6 +279,8 @@ def overview(
     price: Optional[pricing.Price] = None,
     health: Optional[str] = None,
     ranking: Optional[Mapping[str, Any]] = None,
+    catalogue: str = "",
+    per_slot_pricing: bool = False,
 ) -> str:
     """The site's front page: the bare address and /docs serve it alike, and
     it names the bare address as the one to keep. At its top, whether the
@@ -343,6 +345,12 @@ def overview(
         if price is not None
         else "价格与付款方式直接和运营者约定。"
     )
+    if per_slot_pricing:
+        paying = ('The <a href="#slot-pricing">slot list</a> shows each provider, IP type '
+                  'and monthly price, calculated from supplier cost plus 10%. Pay the '
+                  'operator directly; this site does not charge automatically.')
+        paying_zh = ('<a href="#slot-pricing">槽位列表</a>展示各服务商、IP 类型及月费，'
+                     '按供应成本加 10% 计算。直接支付给运营者，本站不会自动扣款。')
     body = (
         '<section class="hero"><div class="hero-copy"><div class="hero-top">'
         + bi(
@@ -457,6 +465,7 @@ def overview(
         )
         + "</li>"
         + '</ol></div></section>'
+        + catalogue
         + public_usage_panel(ranking)
         + '<section class="band">'
         + bi("<h2>Read next</h2>", "<h2>继续了解</h2>")
@@ -891,7 +900,8 @@ def _client_tools() -> str:
 
 
 def guide(
-    cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None
+    cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
+    per_slot_pricing: bool = False,
 ) -> str:
     price_en = (
         f"A slot costs {_cost(price)}, paid directly to the operator; this site "
@@ -904,6 +914,14 @@ def guide(
         if price is not None
         else "价格与付款方式直接和运营者约定。"
     )
+    if per_slot_pricing:
+        price_en = ('Each slot has its own provider, IP type and monthly price in the '
+                    '<a href="/#slot-pricing">slot list</a>, based on supplier costs plus '
+                    '10%. Choose the slot shown on your account page and pay the operator '
+                    'directly; this site does not charge automatically.')
+        price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/#slot-pricing">槽位列表</a>，'
+                    '按供应成本加 10% 计算。在账号页选择所展示的槽位，并直接向运营者付款；'
+                    '本站不会自动扣款。')
     body = (
         '<div class="dochead">'
         + bi("<h1>Getting started</h1>", "<h1>开始使用</h1>")
@@ -1381,6 +1399,17 @@ def how_it_works(
         )
         + "</div></div></div>"
     )
+    body += bi(
+        '<div class="card"><h2>Slot providers and IP types</h2><p>The '
+        '<a href="/#slot-pricing">public slot list</a> names each hosting and IP provider, '
+        'with Residential or ISP labels and the monthly price. An ISP slot can use a '
+        'separate approved exit proxy; provider HTTPS remains encrypted through that '
+        'tunnel. Your account page shows the same labels before you choose a slot.</p></div>',
+        '<div class="card"><h2>槽位服务商与 IP 类型</h2><p>'
+        '<a href="/#slot-pricing">公开槽位列表</a>'
+        '分别展示主机及 IP 服务商、住宅或 ISP 标签和月费。ISP 槽位可以使用独立获准的出口代理，'
+        '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p></div>',
+    )
     return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
@@ -1388,7 +1417,8 @@ def how_it_works(
 
 
 def terms(
-    cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None
+    cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
+    per_slot_pricing: bool = False,
 ) -> str:
     paying = (
         f"A slot costs {_cost(price)}, paid directly to the operator, who "
@@ -1405,11 +1435,20 @@ def terms(
         if price is not None
         else "价格与付款方式直接和运营者约定，付款后开通。"
     )
+    if per_slot_pricing:
+        paying = ('Monthly rates are listed separately for each slot in the '
+                  '<a href="/#slot-pricing">slot list</a>: monthly hosting plus IP cost, '
+                  'with a 10% markup, in the stated currency. Your Claude subscription '
+                  'is separate. Agree the price and paid period directly with the operator; '
+                  'claiming a slot does not charge you automatically.')
+        paying_zh = ('各槽位月费分别列于<a href="/#slot-pricing">槽位列表</a>：'
+                     '按主机与 IP 月成本加 10%，并保留所标币种。Claude 订阅另计。'
+                     '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款。')
     body = (
         '<div class="dochead">'
         + bi("<h1>Terms</h1>", "<h1>服务条款</h1>")
         + bi(
-            '<p class="sub">Last updated 2026-10-11</p>', '<p class="sub">最后更新：2026-10-11</p>'
+            '<p class="sub">Last updated 2026-10-15</p>', '<p class="sub">最后更新：2026-10-15</p>'
         )
         + '</div><div class="card">'
         + bi("<h2>The service</h2>", "<h2>服务内容</h2>")

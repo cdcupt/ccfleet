@@ -71,7 +71,7 @@ def _never_the_real_system(tmp_path_factory, monkeypatch):
 
 
 def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
-                slot_home=None):
+                slot_home=None, slot_members=""):
     """A PATH where `id` and friends describe whatever account we want to test.
 
     The scripts ask three things before touching anything: am I root, does this
@@ -124,8 +124,11 @@ def fake_system(tmp_path, *, uid="1001", groups=SLOT_GROUP, exists=True,
     (bindir / "getent").write_text(textwrap.dedent("""\
         #!/bin/sh
         if [ "$1" = "passwd" ]; then echo "$2:x:1001:1001::__HOME__:/bin/sh"; exit 0; fi
+        if [ "$1" = "group" ] && [ "$2" = "ccfleet-slots" ]; then
+          echo "ccfleet-slots:x:999:__MEMBERS__"; exit 0
+        fi
         exit 0
-        """).replace("__HOME__", home))
+        """).replace("__HOME__", home).replace("__MEMBERS__", slot_members))
     (bindir / "pgrep").write_text("#!/bin/sh\nexit 1\n")   # nothing running
     (bindir / "passwd").write_text(textwrap.dedent("""\
         #!/bin/sh
@@ -226,6 +229,68 @@ def test_slot_add_refuses_an_unverified_login_shell_before_account_changes(tmp_p
     monkeypatch.setenv("FAKE_SHELL_AUDIT_FAIL", "1")
     result = as_root(ADD, tmp_path, "--slot", "slot01")
     assert result.returncode != 0 and "root-controlled /bin/dash" in result.stderr
+    assert not (tmp_path / "fakebin" / "calls.log").exists()
+
+
+def test_slot_add_refuses_invalid_egress_before_account_changes(tmp_path):
+    bindir = fake_system(tmp_path, exists=False)
+    python = bindir / "python3"
+    python.write_text(textwrap.dedent("""\
+        #!/bin/sh
+        if [ "$1" = -I ] && [ "$3" = --audit-login-shell ]; then exit 0; fi
+        if [ "$1" = -I ] && [ "$3" = exec ]; then exit 2; fi
+        exit 1
+        """))
+    python.chmod(0o755)
+    result = subprocess.run([str(ADD), "--slot", "slot01"], capture_output=True,
+                            text=True, timeout=30,
+                            env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"})
+    assert result.returncode != 0
+    assert "slot egress policy is unavailable" in result.stderr
+    assert not (bindir / "calls.log").exists()
+
+
+def sandboxed_egress_add(tmp_path):
+    """Map the script's fixed production path into an isolated test copy."""
+    etc = Path(os.environ["CCFLEET_ETC_DIR"])
+    etc.mkdir()
+    (etc / "egress.json").write_text('{"version":1,"enabled":true}')
+    folder = tmp_path / "node"
+    folder.mkdir()
+    (folder / "ccfleet_agent").symlink_to(NODE.parent / "ccfleet_agent")
+    (folder / "systemd").symlink_to(NODE / "systemd")
+    script = folder / "slot-add.sh"
+    original = 'CANONICAL_EGRESS_ETC_DIR="/etc/ccfleet"'
+    assert ADD.read_text().count(original) == 1
+    script.write_text(ADD.read_text().replace(
+        original, f'CANONICAL_EGRESS_ETC_DIR="{etc}"'))
+    script.chmod(0o755)
+    return script
+
+
+@pytest.mark.parametrize("members", ["slot01", "slot01,slot02"])
+def test_slot_add_proxy_refuses_another_managed_slot_before_account_changes(tmp_path, members):
+    script = sandboxed_egress_add(tmp_path)
+    result = as_root(script, tmp_path, "--slot", "slot02", exists=False,
+                     slot_members=members)
+    assert result.returncode != 0 and "requires one slot per machine" in result.stderr
+    assert not (tmp_path / "fakebin" / "calls.log").exists()
+
+
+def test_slot_add_proxy_allows_idempotent_sole_managed_slot(tmp_path):
+    script = sandboxed_egress_add(tmp_path)
+    result = as_root(script, tmp_path, "--slot", "slot01", slot_home=tmp_path / "slot01",
+                     slot_members="slot01")
+    assert result.returncode == 0, result.stderr
+    assert "usermod -s /bin/dash slot01" in (tmp_path / "fakebin" / "calls.log").read_text()
+
+
+def test_slot_add_proxy_refuses_custom_path_before_account_changes(tmp_path):
+    etc = Path(os.environ["CCFLEET_ETC_DIR"])
+    etc.mkdir()
+    (etc / "egress.json").write_text('{"version":1,"enabled":true}')
+    result = as_root(ADD, tmp_path, "--slot", "slot01", exists=False)
+    assert result.returncode != 0 and "canonical /etc/ccfleet" in result.stderr
     assert not (tmp_path / "fakebin" / "calls.log").exists()
 
 
@@ -806,6 +871,14 @@ def test_no_system_path_is_written_without_a_way_to_redirect_it(script):
             continue
         # Fine: the line that *defines* the overridable default.
         if re.search(r'\$\{CCFLEET_\w+:-/etc/', bare):
+            continue
+        # Egress reads this fixed root policy path and refuses custom installs;
+        # it never writes there. The refusal tests exercise the real script
+        # before any mutation; enabled-path tests use an isolated script copy.
+        if bare.strip() in {
+            'CANONICAL_EGRESS_ETC_DIR="/etc/ccfleet"',
+            '|| die "execution node egress requires the canonical /etc/ccfleet configuration path"',
+        }:
             continue
         offenders.append(f"{script.name}:{n}: {line.strip()}")
     assert not offenders, "unredirectable system paths:\n" + "\n".join(offenders)

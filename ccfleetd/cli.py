@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from typing import Optional
 
-from . import __version__, claude_versions, payments, pricing
+from . import __version__, claude_versions, offers, payments, pricing
 from . import slots as slotstates
 from .api import Context, serve
 from .config import Config, ConfigError
@@ -45,6 +45,25 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--rc-expected", action="store_true",
                      help="alert when the remote-control service is not active")
     node.add_parser("list", help="list nodes")
+    offer = node.add_parser("offer", help="set public brands, IP type and actual supplier costs; "
+                            "shown, never charged").add_subparsers(
+                                dest="offer_command", required=True)
+    for action in ("show", "clear"):
+        offer.add_parser(action).add_argument("node_id")
+    offer_set = offer.add_parser("set", help="replace this node's whole offer; omitted costs "
+                                "stay unknown, never inferred")
+    offer_set.add_argument("node_id")
+    offer_set.add_argument("--host-brand", default="")
+    offer_set.add_argument("--ip-brand", default="")
+    offer_set.add_argument("--ip-type", choices=offers.IP_TYPES, default="unknown")
+    for component in ("hosting", "ip"):
+        offer_set.add_argument(f"--{component}-cost", default=None,
+                               help="actual exact amount; zero means explicitly bundled/free")
+        offer_set.add_argument(f"--{component}-currency", default=None,
+                               help="required with cost; no implicit currency conversion")
+        offer_set.add_argument(f"--{component}-period", choices=offers.PERIODS, default=None,
+                               help="required with cost; year / 12, 30_days * 365 / 360 "
+                               "normalizes to an average calendar month")
     for name in ("remove", "rotate-token", "enable", "disable"):
         node.add_parser(name).add_argument("node_id")
     node_rename = node.add_parser(
@@ -403,6 +422,32 @@ def _user_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
 
 
 def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
+    if args.node_command == "offer":
+        if args.offer_command == "clear":
+            store.clear_node_offer(args.node_id)
+            print(f"{args.node_id}: offer cleared; legacy global-price fallback restored")
+            return EXIT_OK
+        if args.offer_command == "set":
+            costs = {}
+            for component in ("hosting", "ip"):
+                values = [getattr(args, component + '_' + key)
+                          for key in ("cost", "currency", "period")]
+                if any(value is not None for value in values):
+                    if any(value is None for value in values):
+                        raise StoreError(f"--{component}-cost, --{component}-currency and "
+                                         f"--{component}-period are required together")
+                    costs[component] = offers.Cost(*values)
+            store.set_node_offer(args.node_id, host_brand=args.host_brand,
+                                 ip_brand=args.ip_brand, ip_type=args.ip_type, **costs)
+        current = store.get_node_offer(args.node_id)
+        if current is None:
+            print(f"{args.node_id}: no offer metadata; legacy global-price fallback applies")
+        else:
+            print(offers.to_json(current))
+            price = offers.monthly_price(current)
+            print(pricing.per_slot(price) + " (actual normalized costs + 10%)" if price else
+                  "price pending: both actual costs in the same currency are required")
+        return EXIT_OK
     if args.node_command == "add":
         token = store.add_node(args.node_id, args.owner, args.region, args.pinned_version,
                                args.rc_expected, now=time.time())
@@ -553,7 +598,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return EXIT_OK
         finally:
             store.close()
-    except (ConfigError, StoreError) as exc:
+    except (ConfigError, StoreError, offers.OfferError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
 

@@ -31,7 +31,7 @@ from ccfleet_agent.relay_metrics import (
     WINDOW_DAYS,
 )
 
-from . import claude_versions, cli_access, gateway_access, names, payments, pricing
+from . import claude_versions, cli_access, gateway_access, names, offers, payments, pricing
 from . import sessions as sessionlib
 from . import slots as slotstates
 from .desired import is_login_url
@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     rc_expected INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at REAL NOT NULL,
+    offer_json TEXT NOT NULL DEFAULT '',
     -- Stable anonymous status label, independent of internal auth identity.
     public_status_number INTEGER CHECK (public_status_number > 0),
     -- When a device token was last handed over for this node. The time only;
@@ -477,6 +478,9 @@ def _row_to_node(row: sqlite3.Row) -> dict[str, Any]:
         "enabled": bool(row["enabled"]),
         "created_at": row["created_at"],
         "public_status_number": row["public_status_number"],
+        # A corrupt configured offer stays unpriced, never adopts a global price.
+        "offer": (None if row["offer_json"] == "" else
+                  offers.from_json(row["offer_json"]) or offers.Offer()),
         # A time, never a credential: when a device token was last handed over.
         # Keys are whitelisted here, so a column that is not named is a column
         # that does not exist as far as the rest of the server is concerned —
@@ -548,6 +552,7 @@ class Store:
             # The account a shared machine is kept for, or NULL for anybody —
             # which every machine written before this column is.
             self._add_missing_columns("nodes", {"reserved_for": "TEXT"})
+            self._add_missing_columns("nodes", {"offer_json": "TEXT NOT NULL DEFAULT ''"})
             self._add_missing_columns("logins", {
                 "kind": "TEXT NOT NULL DEFAULT 'login'",
                 "secret": "TEXT NOT NULL DEFAULT ''",
@@ -1150,7 +1155,7 @@ class Store:
                          "WHERE node_id = ?", (node_id,))
 
     def _update_node(self, node_id: str, column: str, value: Any) -> None:
-        if column not in {"token_hash", "pinned_version", "enabled", "rc_expected"}:
+        if column not in {"token_hash", "pinned_version", "enabled", "rc_expected", "offer_json"}:
             raise StoreError(f"cannot update column {column!r}")
         with self._lock:
             cur = self._conn.execute(f"UPDATE nodes SET {column} = ? WHERE id = ?",  # noqa: S608
@@ -1942,6 +1947,26 @@ class Store:
     #
     # Shown on the public pages, never charged. Like the ledger above, nothing
     # that claims or releases a slot reads it.
+
+    def get_node_offer(self, node_id: str) -> Optional[offers.Offer]:
+        node = self.get_node(node_id)
+        if node is None:
+            raise StoreError(f"unknown node {node_id!r}")
+        return node["offer"]
+
+    def set_node_offer(self, node_id: str, *, host_brand: str = "", ip_brand: str = "",
+                       ip_type: str = "unknown", hosting: Optional[offers.Cost] = None,
+                       ip: Optional[offers.Cost] = None) -> offers.Offer:
+        """Replace explicit display metadata; release/rename never changes it."""
+        try:
+            offer = offers.Offer(host_brand, ip_brand, ip_type, hosting, ip)
+        except offers.OfferError as exc:
+            raise StoreError(str(exc)) from exc
+        self._update_node(node_id, "offer_json", offers.to_json(offer))
+        return offer
+
+    def clear_node_offer(self, node_id: str) -> None:
+        self._update_node(node_id, "offer_json", "")
 
     def get_price(self) -> Optional[dict[str, Any]]:
         """The price the operator set, with who set it and when; None when there
