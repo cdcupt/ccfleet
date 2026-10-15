@@ -351,6 +351,12 @@ cannot use it as an arbitrary TCP proxy.</li>
 <li>The slot administrator still has root. End-to-end transport encryption does
 not hide plaintext model requests/responses from the slot relay endpoint.</li>
 </ul>
+<p>Rental slots can publish separate hosting and IP-provider brands, a Residential or ISP
+category and a per-slot monthly price. Configured prices use actual normalized hosting plus
+IP costs with a 10% markup, in the stated currency. Customers choose their displayed machine
+before claiming; payment remains an operator record, never an automatic charge. Approved proxy
+nodes use a protected local CONNECT service and verified provider TLS; proxy credentials stay
+in root-only configuration. See the <a href="docs/runbooks.html#slot-providers-pricing-and-egress">provider, pricing and egress runbook</a>.</p>
 <h2 id="operations">Operations</h2>
 <p>Agents report heartbeat facts and the server raises alerts for missing nodes,
 missing or stale Claude login, version drift, disk pressure and changed egress.

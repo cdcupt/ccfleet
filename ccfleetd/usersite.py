@@ -36,6 +36,7 @@ from . import (
     gateway_ui,
     names,
     oauth,
+    offer_ui,
     payments,
     plans,
     resets,
@@ -303,7 +304,7 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
     if len(parts) == 3 and parts[:2] == ["account", "gateway"]:
         return gateway_ui.act(store, cfg, account, path, form, now, session_id)
     if parts == ["account", "claim"]:
-        return _claim(store, cfg, account, now)
+        return _claim(store, cfg, account, now, form)
     if parts == ["account", "outage-emails"] and cfg.emails_ready:
         on = form.get("on") == "1"
         store.set_outage_emails(account["id"], on)
@@ -322,11 +323,23 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
     return not_found(viewer)
 
 
-def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float) -> Outcome:
+def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float,
+           form: Optional[Mapping[str, str]] = None) -> Outcome:
+    node_id = None
+    number = (form or {}).get("machine_number", "")
+    configured = any(node.get("offer") is not None for node in store.list_nodes())
+    if number or configured:
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", number):
+            return _back("no-slot")
+        candidates = offer_ui.available(store, account, now, cfg.heartbeat_max_age_s)
+        node_id = next((node["id"] for node in candidates
+                        if status.public_machine_number(node) == int(number)), None)
+        if node_id is None:
+            return _back("no-slot")
     try:
         # Only a machine heard from recently: handing out a slot on one that
         # has gone quiet leaves somebody watching "setting up" for half an hour.
-        slot = store.claim_slot(account["id"], now=now,
+        slot = store.claim_slot(account["id"], now=now, node_id=node_id,
                                 heard_since=now - cfg.heartbeat_max_age_s)
     except QuotaExceeded:
         return _back("no-allowance")
@@ -660,7 +673,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             f'<link rel="icon" href="{FAVICON}">'
             + (f'<link rel="canonical" href="{escape(canonical)}">' if canonical else "")
             + (
-                f"<style>{USER_CSS}{BILINGUAL_CSS}{extra_css}</style></head"
+                f"<style>{USER_CSS}{BILINGUAL_CSS}{offer_ui.CSS}{extra_css}</style></head"
                 f">"
                 '<body class="site" data-language="en"><header '
                 'class="topbar"><div class="topbar-in">'
@@ -1028,7 +1041,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                      f"{'slot' if quota == 1 else 'slots'}, and hold "
                      f"<strong>{counted}</strong>.</p>")
         if counted < quota:
-            claim = _form("/account/claim", csrf, "Claim a slot", cls="primary")
+            if any(node.get("offer") is not None for node in nodes.values()):
+                claim = offer_ui.choices(store, account, csrf, now, cfg.heartbeat_max_age_s)
+            else:
+                claim = _form("/account/claim", csrf, "Claim a slot", cls="primary")
     allowance = _blocks(allowance, [
         "你还没有槽位。",
         '槽位由运营方分配。获得额度后可在这里领取。<a href="/docs">了解如何购买</a>。',
@@ -1175,7 +1191,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-14"
+PRIVACY_UPDATED = "2026-10-15"
 
 
 def _span(seconds: int) -> str:
@@ -1520,6 +1536,23 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 ),
             ),
         ],
+    )
+    body += card(
+        "Slot providers and network exits",
+        "槽位服务商与网络出口",
+        [("The public slot list names the host provider and IP/exit provider separately, "
+          "with the operator-declared Residential or ISP category and monthly rate. "
+          "It uses neutral machine numbers and does not publish holder identities, "
+          "slot nicknames, machine addresses or proxy credentials.",
+          "公开槽位列表分别展示主机及 IP／出口服务商、运营者标注的住宅或 ISP 类别和月费。"
+          "列表使用中立主机编号，不公开持有人身份、槽位昵称、主机地址或代理凭据。"),
+         ("A proxy-routed slot keeps provider TLS verification enabled. The exit provider "
+          "can observe connection destinations, timing and encrypted traffic volume; "
+          "the proxy tunnel does not terminate the HTTPS connection to Anthropic. "
+          "The slot host's administrators retain access to the slot and its credentials.",
+          "代理出口槽位保留对上游的 TLS 校验。出口服务商可观察连接目标、时间和加密流量"
+          "大小；代理隧道不会终止与 Anthropic 的 HTTPS 连接。槽位主机管理员仍能访问槽位"
+          "及其中的凭据。")],
     )
     body += card(
         "Your local work and model context",
@@ -2125,6 +2158,8 @@ def _slot_card(
         + "</p>"
         '</div><div class="slot-body">',
     ]
+    if node.get("offer") is not None:
+        parts.append(offer_ui.details(node))
     # Its machine's state, as the status page says it (status.slot_line).
     if machine_line:
         parts.append(machine_line)

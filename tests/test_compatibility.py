@@ -308,6 +308,47 @@ def test_usage_launch_has_explicit_clean_env_not_stale_tmux_auth(slot):
     assert agent.QUOTA_TMUX_SOCKET == "ccfleet-quota-safe-v1"
 
 
+def test_native_probe_includes_public_egress_route_and_clears_bypass(slot, monkeypatch):
+    route = {name: "http://127.0.0.1:912" for name in
+             ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+    route.update({name: "" for name in ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")})
+    monkeypatch.setenv("HTTPS_PROXY", "http://PRIVATE:SECRET@untrusted.invalid")
+    monkeypatch.setenv("NO_PROXY", "api.anthropic.com")
+    monkeypatch.setattr(compatibility.egress, "native_environment", lambda: dict(route))
+    environment = compatibility.probe_environment(slot.home)
+    assert all(environment[key] == value for key, value in route.items())
+    _, report, attempted = check(slot)
+    assert attempted and report["state"] == "passed"
+    launch = next(call for call in slot.calls if "new-session" in call)
+    assert all(key + "=" + value in launch for key, value in route.items())
+    assert not any("PRIVATE" in value or "SECRET" in value for value in launch)
+
+
+def test_native_probe_invalid_egress_policy_cannot_launch(slot, monkeypatch):
+    def invalid():
+        raise OSError("slot egress policy is unavailable")
+
+    monkeypatch.setattr(compatibility.egress, "native_environment", invalid)
+    with pytest.raises(OSError, match="slot egress policy is unavailable"):
+        compatibility.probe_environment(slot.home)
+    assert slot.calls == []
+
+
+def test_owner_without_egress_helper_keeps_existing_environment_only_without_policy(slot, monkeypatch):
+    monkeypatch.setattr(compatibility, "egress", None)
+
+    def absent(path):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(compatibility.Path, "lstat", absent)
+    environment = compatibility.probe_environment(slot.home)
+    assert environment["HOME"] == str(slot.home) and "HTTPS_PROXY" not in environment
+    monkeypatch.setattr(compatibility.Path, "lstat", lambda path: SimpleNamespace())
+    with pytest.raises(OSError, match="slot egress policy is unavailable"):
+        compatibility.probe_environment(slot.home)
+    assert slot.calls == []
+
+
 def test_all_quota_consumers_block_unsafe_context_and_use_clean_direct_exec(slot):
     (slot.home / ".claude/settings.json").write_text(json.dumps({"hooks": {"SessionStart": []}}))
     observed = {}

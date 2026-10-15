@@ -21,9 +21,13 @@ REPO_RAW="${CCFLEET_REPO_RAW:-https://raw.githubusercontent.com/cdcupt/ccfleet/m
 # a sandbox rather than at the machine running them.
 LIB_DIR="${CCFLEET_LIB_DIR:-/usr/local/lib/ccfleet}"
 ETC_DIR="${CCFLEET_ETC_DIR:-/etc/ccfleet}"
+# Native child processes read this root-controlled path, never an environment
+# override. Custom installer paths remain available only without egress.
+CANONICAL_EGRESS_ETC_DIR="/etc/ccfleet"
 STATE_DIR="${CCFLEET_STATE_DIR:-/var/lib/ccfleet}"
 UNIT_DIR="${CCFLEET_UNIT_DIR:-/etc/systemd/system}"
 HOME_ROOT="${CCFLEET_HOME_ROOT:-/home}"
+MANAGED_SETTINGS_FILE="${CCFLEET_MANAGED_SETTINGS_FILE:-/etc/claude-code/managed-settings.d/90-ccfleet-egress.json}"
 SSHD_DROPIN_DIR="${CCFLEET_SSHD_DROPIN_DIR:-/etc/ssh/sshd_config.d}"
 SSHD_CONFIG="${CCFLEET_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 # A checkout to copy from instead of fetching: offline installs, and tests.
@@ -66,6 +70,18 @@ case "$SERVER" in *[[:space:]]*) die "--server must not contain spaces" ;; esac
 printf '%s' "$NODE_ID" | grep -qE '^[a-z0-9][a-z0-9-]{1,39}$' || die "--node must be lowercase letters, digits and hyphens"
 printf '%s' "$TOKEN"   | grep -qE '^[0-9a-f]{64}$'            || die "--token must be the 64-character value from the console"
 [ "$(id -u)" -eq 0 ] || die "run this as root (prefix it with sudo)"
+
+# This proxy is one approved egress identity per machine. Never silently route
+# several existing holders through it on a legacy shared machine.
+if [ -e "$ETC_DIR/egress.json" ] || [ -L "$ETC_DIR/egress.json" ] \
+  || [ -e "$CANONICAL_EGRESS_ETC_DIR/egress.json" ] || [ -L "$CANONICAL_EGRESS_ETC_DIR/egress.json" ]; then
+  [ "$ETC_DIR" = "$CANONICAL_EGRESS_ETC_DIR" ] \
+    || die "execution node egress requires the canonical /etc/ccfleet configuration path"
+  SLOT_MEMBERS="$(getent group ccfleet-slots 2>/dev/null | cut -d: -f4 | tr ',' ' ' || true)"
+  SLOT_COUNT=0
+  for member in $SLOT_MEMBERS; do SLOT_COUNT=$((SLOT_COUNT + 1)); done
+  [ "$SLOT_COUNT" -le 1 ] || die "execution node egress requires one slot per machine"
+fi
 
 # Before anything is changed. An owner agent already reporting as this node
 # would take turns with the machine agent on every heartbeat — one saying
@@ -194,6 +210,7 @@ step "2/6  the agent and the slot scripts"
 mkdir -p "$LIB_DIR/ccfleet_agent" "$LIB_DIR/systemd"
 fetch ccfleet_agent/__init__.py "$LIB_DIR/ccfleet_agent/__init__.py" 644
 fetch ccfleet_agent/inference_policy.py "$LIB_DIR/ccfleet_agent/inference_policy.py" 644
+fetch ccfleet_agent/egress.py "$LIB_DIR/ccfleet_agent/egress.py" 644
 fetch ccfleet_agent/model_usage.py "$LIB_DIR/ccfleet_agent/model_usage.py" 644
 fetch ccfleet_agent/relay_metrics.py "$LIB_DIR/ccfleet_agent/relay_metrics.py" 644
 fetch ccfleet_agent/inference_client.py "$LIB_DIR/ccfleet_agent/inference_client.py" 644
@@ -209,6 +226,11 @@ fetch node/slot-remove.sh       "$LIB_DIR/slot-remove.sh" 755
 fetch node/slot-entry.sh        "$LIB_DIR/slot-entry.sh" 755
 # slot-add.sh installs these into each new slot from the directory beside it.
 fetch node/systemd/ccfleet-shell.service         "$LIB_DIR/systemd/ccfleet-shell.service" 644
+# This template is also used by legacy owner installs. Only shared-machine
+# copies use the protected node launcher; owner installs need no new module.
+sed -i.orig -e "s#%h/.local/bin/claude --dangerously-skip-permissions#/usr/bin/python3 -I $LIB_DIR/ccfleet_agent/egress.py exec -- %h/.local/bin/claude --dangerously-skip-permissions#g" \
+  "$LIB_DIR/systemd/ccfleet-shell.service"
+rm -f "$LIB_DIR/systemd/ccfleet-shell.service.orig"
 # Root runs these, and every slot's user runs agent.py: owned by root and
 # writable by nobody else, or one slot could change what root runs next.
 chown -R root:root "$LIB_DIR"
@@ -244,7 +266,7 @@ restrict_slot_sshd
 note "slot keys are root-managed; project access stays off without a separate operator policy"
 
 step "5/6  the timer"
-for unit in ccfleet-machine.service ccfleet-machine.timer; do
+for unit in ccfleet-machine.service ccfleet-machine.timer ccfleet-egress.service; do
   fetch "node/systemd/$unit" "$UNIT_DIR/$unit" 644
 done
 # The unit names the default paths; point it at the ones used here, so the
@@ -252,7 +274,26 @@ done
 sed -i.orig -e "s#/usr/local/lib/ccfleet#$LIB_DIR#g" -e "s#/etc/ccfleet#$ETC_DIR#g" \
   "$UNIT_DIR/ccfleet-machine.service"
 rm -f "$UNIT_DIR/ccfleet-machine.service.orig"
+sed -i.orig -e "s#/usr/local/lib/ccfleet#$LIB_DIR#g" -e "s#/etc/ccfleet#$ETC_DIR#g" \
+  "$UNIT_DIR/ccfleet-egress.service"
+rm -f "$UNIT_DIR/ccfleet-egress.service.orig"
 systemctl daemon-reload
+if [ -e "$ETC_DIR/egress.json" ] || [ -L "$ETC_DIR/egress.json" ]; then
+  # Validate the public marker before provisioning, then install credential-free
+  # managed native settings for all future claims/background supervisors.
+  python3 -I "$LIB_DIR/ccfleet_agent/egress.py" --policy-file "$ETC_DIR/egress.json" \
+    check || die "execution node egress policy is invalid"
+  python3 -I "$LIB_DIR/ccfleet_agent/egress.py" --policy-file "$ETC_DIR/egress.json" \
+    --upstream-file "$ETC_DIR/egress-upstream.json" check-upstream \
+    || die "execution node upstream proxy configuration is invalid"
+  python3 -I "$LIB_DIR/ccfleet_agent/egress.py" --policy-file "$ETC_DIR/egress.json" \
+    install-native-settings "$MANAGED_SETTINGS_FILE" \
+    || die "could not install protected native egress settings"
+  systemctl enable --now ccfleet-egress.service >/dev/null 2>&1 \
+    || die "could not start protected execution-node egress"
+  systemctl is-active --quiet ccfleet-egress.service \
+    || die "protected execution-node egress is unavailable"
+fi
 systemctl enable --now ccfleet-machine.timer >/dev/null 2>&1 || die "could not enable ccfleet-machine.timer"
 
 step "6/6  first report"

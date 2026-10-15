@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, payments, plans, pricing
+from . import claude_versions, names, offers, payments, plans, pricing
 from . import slots as slotstates
 from .desired import is_channel, machine_hostname
 from .render import _age, _free_pool_slot
@@ -144,6 +144,54 @@ def _price_card(store: Store, csrf: str, now: float) -> str:
             "lets somebody claim a slot, and the payments above are a record.</p></div>")
 
 
+def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
+    """Public labels and exact private cost inputs, scoped to this machine."""
+    offer = node.get("offer") or offers.Offer()
+    base = f"/actions/machine/{node['id']}"
+    fields = ('<label>Host provider <input name="host_brand" maxlength="48" '
+              f'value="{escape(offer.host_brand)}" placeholder="Hosting brand"></label>'
+              '<label>IP provider <input name="ip_brand" maxlength="48" '
+              f'value="{escape(offer.ip_brand)}" placeholder="IP or proxy brand"></label>'
+              '<label>IP type <select name="ip_type">'
+              + ''.join(f'<option value="{kind}"'
+                        f'{" selected" if offer.ip_type == kind else ""}>{kind}</option>'
+                        for kind in offers.IP_TYPES) + '</select></label>')
+    for key, title, cost in (("hosting", "Hosting cost", offer.hosting),
+                             ("ip", "IP cost", offer.ip)):
+        amount = cost.amount if cost is not None else ""
+        currency = cost.currency if cost is not None else "USD"
+        period = cost.period if cost is not None else "month"
+        fields += (f'<label>{title} <input name="{key}_cost" inputmode="decimal" '
+                   f'value="{escape(amount)}" size="9" placeholder="Not set"></label>'
+                   f'<select name="{key}_currency" aria-label="{title} currency">'
+                   + ''.join(f'<option value="{code}"'
+                             f'{" selected" if code == currency else ""}>{code}</option>'
+                             for code in pricing.CURRENCIES) + '</select>'
+                   f'<select name="{key}_period" aria-label="{title} period">'
+                   + ''.join(f'<option value="{value}"'
+                             f'{" selected" if value == period else ""}>{words}</option>'
+                             for value, words in (("month", "Calendar month"),
+                                                  ("30_days", "30 days"), ("year", "Year")))
+                   + '</select>')
+    price = offers.monthly_price(offer)
+    preview = (pricing.per_slot(price) if price is not None else "Price pending")
+    body = ('<p><strong>' + escape(preview) + '</strong> · hosting + IP cost, plus 10%.</p>'
+            + _form(base + "/offer", csrf, "Save slot offer", fields, "primary")
+            + (_form(base + "/offer-clear", csrf, "Clear slot offer")
+               if node.get("offer") is not None else ""))
+    return _part("Providers, IP type & price", body,
+                 "Brands, IP type and calculated monthly price are public. Supplier costs "
+                 "stay in this console. Enter 0 for an IP included in hosting; a blank "
+                 "component or mixed currencies keeps the price pending. Monthly costs "
+                 "are summed, marked up 10%, then rounded once; no automatic charges.")
+
+
+def _offer_cost(form: Mapping[str, str], key: str) -> Optional[offers.Cost]:
+    amount = form.get(key + "_cost", "")
+    return (offers.Cost(amount, form.get(key + "_currency", ""),
+                        form.get(key + "_period", "month")) if amount else None)
+
+
 # -- the slots card -------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -241,7 +289,7 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
                       f"slot <code>{escape(slot['id'])}</code>; "
                       f"owner {escape(node['owner'])}; region {escape(node['region'] or '-')}.")
                 if free_pool else "")
-    manage = (identity + _slot_actions(slot, look.csrf)
+    manage = (identity + _slot_actions(slot, look.csrf) + _offer_part(node, look.csrf)
               + _keep_part(node, look.csrf, keeper=keeper if free_pool else "")
               + (_advanced_part(machine, look.csrf) if crowded else ""))
     return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage)
@@ -275,7 +323,7 @@ def _empty_row(machine: _Machine, look: _Look) -> str:
     cells = (f'<div class="c-name">{_name(node["id"], [keeper] if keeper else [])}</div>'
              f'<div class="c-empty">{EMPTY_SAYS}</div>'
              f'<div class="c-flags">{" ".join(machine.pills)}</div>')
-    manage = (_advanced_part(machine, look.csrf)
+    manage = (_advanced_part(machine, look.csrf) + _offer_part(node, look.csrf)
               + (_keep_part(node, look.csrf) if node.get("reserved_for") else ""))
     return _row(node["id"], "", node["id"], cells, list(machine.notes), manage, opened=True)
 
@@ -705,6 +753,19 @@ def act(store: Store, kind: str, target: str, action: str, form: Mapping[str, st
     `by` is who is acting, as the console knows them; the ledger writes it
     beside every payment.
     """
+    if kind == "machine" and action == "offer":
+        try:
+            store.set_node_offer(target, host_brand=form.get("host_brand", ""),
+                                 ip_brand=form.get("ip_brand", ""),
+                                 ip_type=form.get("ip_type", "unknown"),
+                                 hosting=_offer_cost(form, "hosting"),
+                                 ip=_offer_cost(form, "ip"))
+        except offers.OfferError as exc:
+            raise StoreError(str(exc)) from exc
+        return "slots"
+    if kind == "machine" and action == "offer-clear":
+        store.clear_node_offer(target)
+        return "slots"
     if kind == "machine" and action == "capacity":
         count = _count(form)
         if count > slotstates.MAX_SLOTS_PER_MACHINE:

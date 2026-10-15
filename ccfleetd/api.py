@@ -561,11 +561,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             service health and the bounded public usage ranking."""
             current = ctx.store.get_price()
             now = time.time()
+            nodes = ctx.store.list_nodes()
+            per_slot = any(node.get("offer") is not None for node in nodes)
             extra = ({"health": statuspage.health(ctx.store, now),
                       "ranking": usage.public_summary(ctx.store, ctx.cfg, now)}
                      if page is customer_docs.overview else {})
+            if page is customer_docs.overview:
+                from . import offer_ui
+                extra.update({"catalogue": offer_ui.catalogue(
+                    ctx.store, now, ctx.cfg.heartbeat_max_age_s), "per_slot_pricing": per_slot})
+            elif page in (customer_docs.guide, customer_docs.terms):
+                extra["per_slot_pricing"] = per_slot
             self._send(200, page(ctx.cfg, viewer=self._viewer(),
-                                 price=current["price"] if current else None,
+                                 price=current["price"] if current and not per_slot else None,
                                  **extra).encode("utf-8"),
                        HTML_HEADERS)
 

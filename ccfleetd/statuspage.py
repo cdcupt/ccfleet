@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone
 from html import escape
 from typing import Any, Optional
 
-from . import performance, status
+from . import offer_ui, performance, status
 from .bilingual import bi, label
 from .config import Config
 from .usersite import Viewer, _shell
@@ -330,7 +330,8 @@ def _report_time(observed: float, now: float) -> str:
 
 
 def machine_details_panel(details: Sequence[status.MachineDetail],
-                          viewer: Optional[Viewer], now: float) -> str:
+                          viewer: Optional[Viewer], now: float,
+                          nodes: Optional[Mapping[str, Mapping[str, Any]]] = None) -> str:
     """One compact row per machine, with private display names only for operators."""
     rows = []
     labeled = [detail for detail in details
@@ -350,7 +351,8 @@ def machine_details_panel(details: Sequence[status.MachineDetail],
             f'<tr class="st-machine-row" id="{identity}">'
             f'<th scope="row" id="{identity}-title">'
             + label(f"Machine {number}", f"主机 {number}", inline=True)
-            + operator_name + '</th><td><span class="st-machine-state">'
+            + operator_name + offer_ui.compact((nodes or {}).get(detail.node_id) or {})
+            + '</th><td><span class="st-machine-state">'
             f'<span class="st-dot {level}" aria-hidden="true"></span>'
             + f'<span class="st-word {level}">'
             + label(status.WORDS[level], WORDS_ZH[level], inline=True)
@@ -814,7 +816,8 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float,
             group=True,
         )
         + "</div>"
-        + machine_details_panel(details, viewer, now)
+        + machine_details_panel(details, viewer, now,
+                                {node["id"]: node for node in store.list_nodes()})
         + KEY
     )
     return _shell("status", body, REFRESH, STATUS_CSS, viewer=viewer, here="/status")

@@ -311,6 +311,32 @@ def test_native_claude_is_execed_with_only_slot_environment_and_cwd(home, monkey
     assert captured["env"]["HOME"] == str(home) and captured["env"]["TZ"] == "UTC"
 
 
+def test_project_native_environment_routes_through_public_proxy_only(home, monkeypatch):
+    route = {name: "http://127.0.0.1:912" for name in
+             ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")}
+    route.update({name: "" for name in ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")})
+    monkeypatch.setenv("HTTPS_PROXY", "http://PRIVATE:SECRET@untrusted.invalid")
+    monkeypatch.setattr(access.egress, "native_environment", lambda: dict(route))
+    environment = access.slot_environment(home)
+    assert all(environment[key] == value for key, value in route.items())
+    assert "PRIVATE" not in json.dumps(environment) and "SECRET" not in json.dumps(environment)
+
+
+def test_project_native_invalid_egress_fails_before_exec(home, monkeypatch):
+    access.project_root(home, PROJECT, create=True)
+    monkeypatch.setattr(access, "require_enabled", lambda: None)
+    monkeypatch.setattr(access.os, "chdir", lambda path: None)
+    monkeypatch.setattr(access.os, "umask", lambda mode: None)
+    monkeypatch.setattr(access.os, "execve", lambda *a: pytest.fail("launched native Claude"))
+
+    def invalid():
+        raise OSError("slot egress policy is unavailable")
+
+    monkeypatch.setattr(access.egress, "native_environment", invalid)
+    with pytest.raises(OSError, match="slot egress policy is unavailable"):
+        access.run_claude(home, PROJECT, "manual", "opus", "high")
+
+
 def test_new_session_uses_fixed_runner_then_exact_tmux_attach(home, monkeypatch):
     root = access.project_root(home, PROJECT, create=True)
     monkeypatch.setattr(access, "require_enabled", lambda: None)

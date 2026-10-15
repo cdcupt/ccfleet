@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 try:
-    from . import project_files
+    from . import egress, project_files
 except ImportError:
     # Python -I intentionally excludes cwd and PYTHONPATH. Load only the sibling
     # installed in the same root-owned agent directory, never a project module.
@@ -36,6 +36,12 @@ except ImportError:
     assert _spec is not None and _spec.loader is not None
     project_files = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(project_files)
+    _spec = importlib.util.spec_from_file_location(
+        "ccfleet_egress", Path(__file__).with_name("egress.py"))
+    assert _spec is not None and _spec.loader is not None
+    egress = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = egress
+    _spec.loader.exec_module(egress)
 
 POLICY_DIR = Path("/etc/ccfleet/project-access")
 MAX_FRAME = 32 * 1024 * 1024
@@ -100,9 +106,11 @@ def bound_account(home: Path) -> str:
 
 def slot_environment(home: Path) -> dict[str, str]:
     name = pwd.getpwuid(os.getuid()).pw_name
-    return {"HOME": str(home), "USER": name, "LOGNAME": name,
-            "PATH": f"{home}/.local/bin:/usr/local/bin:/usr/bin:/bin",
-            "LANG": "C.UTF-8", "TZ": "UTC", "TERM": "xterm-256color"}
+    environment = {"HOME": str(home), "USER": name, "LOGNAME": name,
+                   "PATH": f"{home}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+                   "LANG": "C.UTF-8", "TZ": "UTC", "TERM": "xterm-256color"}
+    environment.update(egress.native_environment())
+    return environment
 
 
 def safe_directory(path: Path, *, create: bool = False) -> Path:

@@ -133,6 +133,10 @@ case "$EFFORT" in
   *) printf 'invalid Claude effort level\n' >&2; exit 2 ;;
 esac
 
+EGRESS_HELPER="${BASH_SOURCE[0]%/*}/ccfleet_agent/egress.py"
+[ -f "$EGRESS_HELPER" ] || EGRESS_HELPER="${BASH_SOURCE[0]%/*}/../ccfleet_agent/egress.py"
+/usr/bin/python3 -I "$EGRESS_HELPER" exec -- /usr/bin/true \
+  || { printf 'slot egress policy is unavailable\n' >&2; exit 2; }
 mkdir -p "$HOME/workspace"
 # Keep the default session under the lingering user manager. Named sessions
 # share that tmux server and therefore survive the SSH transport too.
@@ -140,7 +144,7 @@ if ! tmux has-session -t ccfleet 2>/dev/null; then
   systemctl --user restart ccfleet-shell.service >/dev/null 2>&1 || true
 fi
 
-CLAUDE=("$HOME/.local/bin/claude")
+CLAUDE=(/usr/bin/python3 -I "$EGRESS_HELPER" exec -- "$HOME/.local/bin/claude")
 if [ "$MODE" = bypassPermissions ]; then
   CLAUDE+=(--dangerously-skip-permissions)
 else

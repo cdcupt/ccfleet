@@ -59,12 +59,13 @@ from typing import Any, Callable, Optional, Union
 
 try:
     from ccfleet_agent import agent as core
-    from ccfleet_agent import inference_policy
+    from ccfleet_agent import egress, inference_policy
 except ImportError:  # installed as plain files side by side, not as a package
     # Run with -I, which keeps even this script's own directory off the path.
     # Put it back explicitly: it is root's, and nothing else on it is trusted.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import agent as core  # type: ignore[no-redef]
+    import egress  # type: ignore[no-redef]
     import inference_policy  # type: ignore[no-redef]
 
 log = logging.getLogger("ccfleet-machine")
@@ -769,7 +770,7 @@ def slot_env(account: pwd.struct_passwd) -> dict[str, str]:
     `systemctl` dropped there cannot stand in for the system's.
     """
     runtime = f"/run/user/{account.pw_uid}"
-    return {"HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name,
+    environment = {"HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name,
             "PATH": f"/usr/local/bin:/usr/bin:/bin:{account.pw_dir}/.local/bin",
             "LANG": "C.UTF-8",
             # The probe runs `claude --version`, which can start an update and
@@ -778,6 +779,8 @@ def slot_env(account: pwd.struct_passwd) -> dict[str, str]:
             # So `systemctl --user` reaches the slot's own manager.
             "XDG_RUNTIME_DIR": runtime,
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus"}
+    environment.update(egress.native_environment())
+    return environment
 
 
 def ask_slot(account: pwd.struct_passwd, cfg: MachineConfig, system: System,
@@ -1179,6 +1182,14 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
               ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """One post, then whatever the reply calls for. Returns (status, desired, state)."""
     users = [u for u in state.get("slots") or [] if isinstance(u, str)]
+    try:
+        egress_enabled = bool(egress.native_environment())
+    except OSError:
+        log.error("slot egress policy is unavailable; no slots were changed")
+        return 503, {}, dict(state)
+    if egress_enabled and len(set(users)) > 1:
+        log.error("slot egress requires one slot per machine; no slots were changed")
+        return 503, {}, dict(state)
     turn = int(state.get("quota_turn") or 0)
     # One slot's quota per full run, and none on the fast polls. Each read
     # starts a Claude Code session; six at once on one machine is a spike.
@@ -1206,6 +1217,19 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
         log.error("heartbeat rejected: status=%s category=%s", logged_status, category)
         return status, {}, dict(state)
     desired = core.parse_desired(text)
+    # A heartbeat can overlap an operator changing the opt-in. Recheck before
+    # any provisioning, key, policy or hostname change rather than carrying a
+    # stale decision across that network operation.
+    try:
+        egress_enabled = bool(egress.native_environment())
+    except OSError:
+        log.error("slot egress policy is unavailable; no slots were changed")
+        return 503, desired, dict(state)
+    declared = desired.get("slots")
+    if egress_enabled and (len(set(users)) > 1
+                           or isinstance(declared, list) and len(declared) > 1):
+        log.error("slot egress requires one slot per machine; no slots were changed")
+        return 503, desired, dict(state)
     state = {**state, "heard": {u: f for u, f in heard.items() if u in users}}
     # Before provisioning, so a claim's Remote Control first registers under
     # its holder's name.
