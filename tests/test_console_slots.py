@@ -335,18 +335,40 @@ def test_taking_back_a_slot_that_is_not_there_is_refused_not_crashed(console):
     assert reply.status == 400
 
 
-def test_a_free_slot_says_its_machine_only_when_its_name_does_not(console):
-    """Nobody holds it, so its name is nobody's: a slot whose id is not its
-    machine's says which machine it is on, and one called as its machine does
-    not say so twice."""
+def test_a_confirmed_free_pool_slot_says_its_neutral_name_alone(console):
+    """Primary labels stay neutral; management retains the authenticated identities."""
     store, call = console
     shared(store, node="m2", users=("slot01",))                  # its slot is m2-01
     store.add_node("pool-4", "op", now=time.time())
     store.set_machine_capacity("pool-4", 1)
     store.add_slot("pool-4", "pool-4", "slot01", now=time.time())
     card = slots_card(call("GET", "/admin").body)
-    assert "on m2" in text(on_the_row(row_of(card, "m2")))
+    row = row_of(card, "m2")
+    primary = on_the_row(row)
+    assert 'row-name">pool-1</span>' in primary and 'class="sub"' not in primary
+    assert "on m2" not in text(primary)
+    assert '<code>m2</code>' in under_manage(row)
+    assert '<code>m2-01</code>' in under_manage(row)
+    assert 'action="/actions/slot/m2-01/remove"' in under_manage(row)
     assert "on pool-4" not in text(on_the_row(row_of(card, "pool-4")))
+
+
+def test_a_reserved_free_pool_label_keeps_its_warning_and_management_details(console):
+    store, call = console
+    shared(store, node="erik-2", users=("slot01",))
+    account = holder(store)
+    store.reserve_machine("erik-2", account["id"])
+    row = row_of(slots_card(call("GET", "/admin").body), "erik-2")
+    primary, manage = on_the_row(row), under_manage(row)
+    assert 'row-name">pool-1</span>' in primary and 'class="sub"' not in primary
+    assert '<span class="pill warn">reserved</span>' in primary
+    visible = text("<div " + primary)
+    assert "erik-2" not in visible and account["email"] not in visible
+    assert "kept for ana@example.com" in manage
+    assert '<code>erik-2</code>' in manage and '<code>erik-2-01</code>' in manage
+    assert 'action="/actions/machine/erik-2/unreserve"' in manage
+    assert store.get_node("erik-2")["reserved_for"] == account["id"]
+    assert store.get_slot("erik-2-01")["held_by"] is None
 
 
 def test_the_typed_name_is_checked_in_the_release_itself(console):

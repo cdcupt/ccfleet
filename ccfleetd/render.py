@@ -488,6 +488,14 @@ def _slot_facts(node: Mapping[str, Any], payload: Mapping[str, Any],
     return report, slotnames.display(mine[0])
 
 
+def _free_pool_slot(slot: Mapping[str, Any]) -> bool:
+    """A neutral pool label only after the holder is gone and the wipe is confirmed."""
+    return (slot.get("kind") == slotstates.MACHINE_SLOT
+            and slot.get("state") == slotstates.FREE and slot.get("held_by") is None
+            and slot.get("present") == 0
+            and slotnames.valid_pool_name(slot.get("pool_name")))
+
+
 def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str, Any]],
                alerts: list[Mapping[str, Any]], now: float,
                slots: Sequence[Mapping[str, Any]] = (), *, max_age: float = 15 * 60,
@@ -523,6 +531,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # Named while somebody holds it: from the claim until the wipe that
             # frees it (see _called).
             "held_name": len(mine) == 1 and bool(mine[0].get("name")),
+            "free_pool": len(mine) == 1 and _free_pool_slot(mine[0]),
             # Its one slot, for the usage card's Refresh (see _quota_refresh).
             "slot_id": mine[0]["id"] if len(mine) == 1 else None,
             "slot_state": mine[0].get("state") if len(mine) == 1 else None,
@@ -606,12 +615,13 @@ def _called(row: Mapping[str, Any]) -> tuple[str, str]:
     claude.ai shows. While somebody holds the slot the name is theirs
     (alice-1), and it is said alone: not the machine's id, which is the
     operator's handle for it on the server, nor the operator who owns it
-    (Erik, 2026-09-24). Once the slot is freed its name goes, and the machine
-    answers to its pool name and its owner again. `ccfleetd slot list` still
-    says which machine a name is on. Returned unescaped; "" for nothing.
+    (Erik, 2026-09-24). A confirmed empty pool slot is also said by its
+    neutral pool name alone; its internal identity stays in management
+    controls. `ccfleetd slot list` still says which machine a name is on.
+    Returned unescaped; "" for nothing.
     """
     shown = row.get("name") or row["id"]
-    if row.get("held_name"):
+    if row.get("held_name") or row.get("free_pool"):
         return shown, ""
     return shown, (f"on {row['id']} \u00b7 " if shown != row["id"] else "") + row["owner"]
 
@@ -686,7 +696,8 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     if row["rc_expected"] and row["enabled"] and not row.get("machine"):
         rc += " (expected)"
     shown, beside = _called(row)
-    byline = " \u00b7 ".join(part for part in (beside, row["region"] or "-") if part)
+    byline = ("" if row.get("free_pool") else
+              " \u00b7 ".join(part for part in (beside, row["region"] or "-") if part))
     login = escape(cred_text)
     if not free:
         login += ('<br><span class="muted">token '
@@ -696,7 +707,7 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
         f"<td>{_pill(row['status'])}</td>"
         f'<td><span class="node-id">{escape(shown)}</span>'
         + (' <span class="pill warn">reboot needed</span>' if row.get("reboot_required") else "")
-        + f"<br><span class=\"muted\">{escape(byline)}</span></td>"
+        + (f'<br><span class="muted">{escape(byline)}</span>' if byline else "") + "</td>"
         f"<td class=\"num\">{escape(_age(now, row['last_seen_ts']))}</td>"
         f'<td class="v">{version}</td>'
         f"<td><code>{_fmt(row['egress_ip'])}</code></td>"
