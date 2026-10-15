@@ -136,9 +136,15 @@ def _price_card(store: Store, csrf: str, now: float) -> str:
                  f'<select name="currency" aria-label="Currency">{options}</select>',
                  "primary")
     clear = _form(f"{base}/clear", csrf, "Clear") if current is not None else ""
+    tier_note = ('<p class="note">Per-machine offers are enabled. Public rates and '
+                 'claim choices use Providers, IP type &amp; price under each slot’s '
+                 'Manage panel. This global value is only the legacy default; it does '
+                 'not price an unconfigured machine.</p>'
+                 if any(node.get("offer") is not None for node in store.list_nodes()) else "")
     return ('<h2 id="price">Price</h2><div class="card">'
             f'<div class="row-line"><div class="row-name">{said}</div>'
             f'<div class="actions">{form}{clear}</div></div>'
+            + tier_note +
             '<p class="note">The price of a slot for a month, shown on the public pages. '
             "It is shown, never charged: people pay you directly, an allowance is still what "
             "lets somebody claim a slot, and the payments above are a record.</p></div>")

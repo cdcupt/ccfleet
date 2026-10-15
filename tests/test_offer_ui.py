@@ -93,6 +93,17 @@ def test_public_free_requires_machine_confirmation_of_absence(site, present):
     assert 'Preparing' in table and '>Free<' not in table
 
 
+def test_unmonitored_catalogue_machine_does_not_link_to_a_missing_status_row(site):
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    configure(store)
+    store.set_enabled('m1', False)
+    page = sign_in().call('GET', '/en/').body
+    table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
+    assert 'Machine 1' in table and 'Unavailable' in table
+    assert '/status#machine-1' not in table
+
+
 @pytest.mark.parametrize("number", ["", "0", "-1", "1.0", "1e0", "1\n", "99999999999", "9"])
 def test_claim_requires_an_explicit_existing_public_machine_choice(site, number):
     store, sign_in, _ = site

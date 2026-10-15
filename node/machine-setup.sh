@@ -78,9 +78,8 @@ if [ -e "$ETC_DIR/egress.json" ] || [ -L "$ETC_DIR/egress.json" ] \
   [ "$ETC_DIR" = "$CANONICAL_EGRESS_ETC_DIR" ] \
     || die "execution node egress requires the canonical /etc/ccfleet configuration path"
   SLOT_MEMBERS="$(getent group ccfleet-slots 2>/dev/null | cut -d: -f4 | tr ',' ' ' || true)"
-  SLOT_COUNT=0
-  for member in $SLOT_MEMBERS; do SLOT_COUNT=$((SLOT_COUNT + 1)); done
-  [ "$SLOT_COUNT" -le 1 ] || die "execution node egress requires one slot per machine"
+  read -r -a SLOT_MEMBER_LIST <<< "$SLOT_MEMBERS"
+  [ "${#SLOT_MEMBER_LIST[@]}" -le 1 ] || die "execution node egress requires one slot per machine"
 fi
 
 # Before anything is changed. An owner agent already reporting as this node

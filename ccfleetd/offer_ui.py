@@ -139,8 +139,10 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
             state = label("In use", "已领取", inline=True)
         else:
             state = label("Preparing", "准备中", inline=True)
-        rows.append('<tr><th scope="row"><a href="/status#machine-' + str(number) + '">'
-                    + label(f"Machine {number}", f"主机 {number}", inline=True) + '</a></th>'
+        machine = label(f"Machine {number}", f"主机 {number}", inline=True)
+        if beat is not None and node.get("enabled") is not False:
+            machine = f'<a href="/status#machine-{number}">' + machine + '</a>'
+        rows.append('<tr><th scope="row">' + machine + '</th>'
                     '<td>' + _brand(offer["host_brand"]) + '</td><td>'
                     + _brand(offer["ip_brand"]) + '</td><td>' + ip_label(offer["ip_type"])
                     + '</td><td>' + state + '</td><td>' + rate(node) + '</td></tr>')
