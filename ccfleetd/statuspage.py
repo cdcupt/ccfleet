@@ -82,6 +82,15 @@ border-radius:10px;background:var(--inset)}
 font-variant-numeric:tabular-nums;letter-spacing:-.015em;overflow-wrap:anywhere}
 .st-perf-metric p{font-size:12.5px;line-height:1.55;margin:0;color:var(--muted)}
 .st-perf-note{margin:8px 0;font-size:13px;color:var(--muted)}
+.st-perf-reference{border-top:1px solid var(--rule-soft);margin:16px 0;padding-top:14px}
+.st-perf-reference h3{margin:0 0 6px;font-size:15px}
+.st-perf-reference p{font-size:12.5px;line-height:1.65;margin:7px 0;color:var(--muted)}
+.st-perf-reference strong{color:var(--ink)}
+.st-perf-reference table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+.st-perf-reference th,.st-perf-reference td{padding:6px 8px;text-align:left;
+border-bottom:1px solid var(--rule-soft);overflow-wrap:anywhere}
+.st-perf-reference th{font-weight:600;color:var(--muted)}
+.st-perf-reference td:last-child{font-variant-numeric:tabular-nums;white-space:nowrap}
 .st-perf-help{border-top:1px solid var(--rule-soft);margin-top:14px;padding-top:12px}
 .st-perf-help summary{cursor:pointer;color:var(--acc);font-weight:600;font-size:14px}
 .st-perf-help p,.st-perf-help li{font-size:13px;line-height:1.65}
@@ -375,6 +384,49 @@ def machine_details_panel(details: Sequence[status.MachineDetail],
             + '</tbody></table></div></section>')
 
 
+def _external_performance_reference() -> str:
+    """A dated public snapshot, independent of Fleet reports and unknown states."""
+    rows = ''.join(
+        '<tr><th scope="row">' + escape(provider) + '</th><td>' + speed + '</td></tr>'
+        for provider, speed in (
+            ("Google", "98.3"), ("Microsoft Azure", "96.7"),
+            ("Anthropic", "95.7"), ("Amazon Bedrock", "93.5")))
+    return (
+        '<section class="st-perf-reference" aria-labelledby="performance-reference-title">'
+        '<h3 id="performance-reference-title">'
+        + label("External provider reference", "外部服务商参考", inline=True) + '</h3><p><strong>'
+        + label("Context only · Not directly comparable", "仅供参考 · 不可直接比较", inline=True)
+        + '</strong></p><p>' + label(
+            "Snapshot checked: 2026-10-15 · Claude Opus 5.5 (Max, Default Fallback) · "
+            "10k input tokens · 72-hour median (P50). "
+            "Fixed snapshot; not automatically refreshed.",
+            "快照核对日期：2026-10-15 · Claude Opus 5.5（Max，默认回退）· "
+            "10k 输入 Token · 72 小时中位数（P50）。固定快照，不自动刷新。", inline=True)
+        + '</p><table aria-labelledby="performance-reference-title"><thead><tr><th scope="col">'
+        + label("Provider", "服务商", inline=True) + '</th><th scope="col">'
+        + label("Output speed (AA tokens/s)", "输出速率（AA Token/秒）", inline=True)
+        + '</th></tr></thead><tbody>' + rows + '</tbody></table><p>' + label(
+            "AA uses o200k_base tokens and medians. Fleet mixes models and provider-native "
+            "output counts, including counted thinking, over relay delivery spans. "
+            "Different definitions and workloads; no better/worse verdict.",
+            "AA 使用 o200k_base 标准化 Token 和中位数。Fleet 合并不同模型，按服务商原生"
+            "输出用量（包括被计入的思考 Token）和转发交付时长计算。口径和工作负载不同，"
+            "不判定更好或更差。", inline=True)
+        + '</p><p>' + label(
+            "No comparable external baseline for completion, connection, first byte or full "
+            "transfer. Fleet's first byte may be metadata, not TTFT.",
+            "传输完成率、上游连接、回复首字节和完整传输时间均没有可直接比较的外部基线。"
+            "Fleet 的首字节可能只是元数据，不等同于首个 Token 时间（TTFT）。", inline=True)
+        + '</p><p>' + label("Sources: ", "来源：", inline=True)
+        + '<a href="https://artificialanalysis.ai/models/claude-opus-5-5/providers" '
+        'rel="noopener noreferrer">Artificial Analysis · '
+        + label("provider benchmark", "服务商基准测试", inline=True) + '</a> · '
+        '<a href="https://artificialanalysis.ai/methodology/performance-benchmarking" '
+        'rel="noopener noreferrer">' + label("methodology", "测试方法", inline=True)
+        + '</a></p></section>'
+    )
+
+
 def performance_panel(report: Mapping[str, Any], now: float) -> str:
     """Relay and streamed-output aggregates have independent publication gates."""
     ready = report.get("state") == "ready"
@@ -393,20 +445,21 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
     throughput_ready, output_rate, output_samples = _throughput_reading(throughput)
     cards = (
         ("Transfer completion", "传输完成率", label(rate, rate, inline=True),
-         "How often a successful HTTP reply was fully delivered.",
-         "记录中的尝试，有多少完整收到成功的 HTTP 回复。", completion_samples),
+         "Higher is better for transport completion, not task success.",
+         "传输完成率越高越好；不代表任务成功率。", completion_samples),
         ("Average first response byte", "平均首字节等待时间", _latency_text(first),
-         "How long a slot waited for the reply to start arriving.",
-         "槽位等多久，才收到回复正文的开头。", _timing_samples_text(first)),
+         "Lower means an earlier reply body; not time to first token (TTFT).",
+         "越低表示越早收到回复正文；不等同于首个 Token 时间（TTFT）。",
+         _timing_samples_text(first)),
         ("Observed relay attempts", "已记录的转发尝试", label(count, count, inline=True),
-         "Each attempt is counted; a retry may add another.",
-         "每次尝试各计一次；切换后重试可能多计一次。", ''),
+         "Traffic volume, not a performance score; retries may add attempts.",
+         "这是流量规模，不是性能评分；重试可能增加尝试次数。", ''),
         ("Average upstream connection", "平均上游连接时间", _latency_text(connect),
-         "How long a slot took to connect to the upstream.",
-         "槽位与上游建立连接所需的时间。", _timing_samples_text(connect)),
+         "Lower is better for connection setup; no equivalent external reference.",
+         "建连时间越低越好；没有同口径的外部参考。", _timing_samples_text(connect)),
         ("Average full transfer", "平均完整传输时间", _latency_text(total),
-         "Recorded transfer duration; answer length affects it.",
-         "记录中的传输时长，也受回复长度影响。", _timing_samples_text(total)),
+         "Answer-length dependent; no automatic better/worse verdict.",
+         "受回复长度影响；不自动判定更好或更差。", _timing_samples_text(total)),
         ("Streamed output rate", "流式输出速率", output_rate,
          "At the observing relay; higher is faster for comparable models and workloads.",
          "在转发点观测；模型和工作负载相近时，数值越高表示交付越快。", output_samples),
@@ -559,7 +612,7 @@ def performance_panel(report: Mapping[str, Any], now: float) -> str:
         + '<span class="st-perf-window">' + label(
             "Last 7 UTC calendar days, including today", "最近 7 个 UTC 日期，包含今天",
             inline=True)
-        + '</span></p>' + grid + note + help_ + '</section>'
+        + '</span></p>' + grid + _external_performance_reference() + note + help_ + '</section>'
     )
 
 
