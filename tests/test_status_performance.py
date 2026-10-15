@@ -47,12 +47,7 @@ def projected(report, language="en"):
 
 
 def fleet_cards(report, language="en"):
-    return projected(report, language).split('<section class="st-perf-reference"', 1)[0]
-
-
-def external_reference(report, language="en"):
-    return projected(report, language).split('<section class="st-perf-reference"', 1)[1].split(
-        '</section>', 1)[0]
+    return projected(report, language).split('</dl>', 1)[0]
 
 
 def test_ready_panel_explains_the_actual_measured_numbers_and_window():
@@ -189,7 +184,7 @@ def test_each_metric_has_a_visible_direction_or_neutral_interpretation():
             "Higher is better for transport completion, not task success",
             "Lower means an earlier reply body; not time to first token (TTFT)",
             "Traffic volume, not a performance score",
-            "Lower is better for connection setup; no equivalent external reference",
+            "Lower is better for connection setup",
             "Answer-length dependent; no automatic better/worse verdict",
             "higher is faster for comparable models and workloads"):
         assert hint in english
@@ -197,72 +192,34 @@ def test_each_metric_has_a_visible_direction_or_neutral_interpretation():
             "传输完成率越高越好；不代表任务成功率",
             "越低表示越早收到回复正文；不等同于首个 Token 时间（TTFT）",
             "这是流量规模，不是性能评分",
-            "建连时间越低越好；没有同口径的外部参考",
+            "建连时间越低越好",
             "受回复长度影响；不自动判定更好或更差",
             "模型和工作负载相近时，数值越高表示交付越快"):
         assert hint in chinese
 
 
-def test_external_reference_is_dated_cited_accessible_and_separate_from_fleet_cards():
-    raw = projected(ready_report())
-    reference = external_reference(ready_report())
-    text = Text(reference).shown()
-    assert raw.index('class="st-perf-grid"') < raw.index('class="st-perf-reference"')
-    assert raw.index('class="st-perf-reference"') < raw.index('class="st-perf-help"')
-    for phrase in (
-            "External provider reference", "Context only · Not directly comparable",
-            "Snapshot checked: 2026-10-15", "Claude Opus 5.5 (Max, Default Fallback)",
-            "10k input tokens", "72-hour median (P50)", "Output speed (AA tokens/s)",
-            "Fixed snapshot; not automatically refreshed",
-            "Google 98.3", "Microsoft Azure 96.7", "Anthropic 95.7", "Amazon Bedrock 93.5",
-            "AA uses o200k_base tokens and medians", "Fleet mixes models",
-            "provider-native output counts, including counted thinking",
-            "Different definitions and workloads; no better/worse verdict",
-            "No comparable external baseline for completion, connection, first byte or full transfer",
-            "Fleet's first byte may be metadata, not TTFT"):
-        assert phrase in text
-    assert '<h3 id="performance-reference-title">' in reference
-    assert '<table aria-labelledby="performance-reference-title">' in reference
-    assert reference.count('<th scope="row">') == 4
-    assert reference.count('<th scope="col">') == 2
-    for url in (
-            "https://artificialanalysis.ai/models/claude-opus-5-5/providers",
-            "https://artificialanalysis.ai/methodology/performance-benchmarking"):
-        assert 'href="' + url + '" rel="noopener noreferrer"' in reference
-    for misleading in ("faster than", "slower than", "better than", "worse than", "679.24",
-                       'class="ok"', 'class="warn"', 'class="critical"', '<script', 'fetch('):
-        assert misleading not in reference
-
-
-@pytest.mark.parametrize("state", ["no_data", "limited_data"])
-def test_external_reference_remains_visible_without_filling_unknown_fleet_readings(state):
+@pytest.mark.parametrize("language", ["en", "zh"])
+@pytest.mark.parametrize("state", ["ready", "no_data", "limited_data"])
+def test_performance_has_only_fleet_measurements_without_unmatched_provider_references(language, state):
     report = ready_report()
-    report.update(state=state, model="private-model", requests=987654)
-    report["throughput"] = {"state": state, "samples": 19, "tokens_per_second": 999888}
+    report["state"] = state
+    if state != "ready":
+        report["throughput"] = {"state": state, "samples": 19, "tokens_per_second": 999888}
     before = deepcopy(report)
-    cards = Text(fleet_cards(report)).shown()
-    assert cards.count("—") == 6
-    assert "tokens/s" not in cards
-    assert external_reference(report) == external_reference(ready_report())
-    for private in ("private-model", "987654", "999888"):
-        assert private not in projected(report)
+    raw = projected(report, language)
+    assert raw.count('class="st-perf-metric"') == 6
+    for removed in ("st-perf-reference", "performance-reference-title", "artificialanalysis.ai",
+                    "Artificial Analysis", "External provider reference", "外部服务商参考",
+                    "o200k_base", "Snapshot checked", "快照核对日期", "<table"):
+        assert removed not in raw
+    text = Text(raw).shown()
+    if state == "ready":
+        assert ("40.00 tokens/s" if language == "en" else "40.00 Token/秒") in text
+        assert "96.00%" in text
+    else:
+        assert text.count("—") == 6
+        assert "999888" not in raw
     assert report == before
-
-
-def test_external_reference_has_separate_complete_chinese_copy():
-    english = Text(external_reference(ready_report())).shown()
-    chinese = Text(external_reference(ready_report(), "zh")).shown()
-    for phrase in (
-            "外部服务商参考", "仅供参考 · 不可直接比较", "快照核对日期：2026-10-15",
-            "Claude Opus 5.5（Max，默认回退）", "10k 输入 Token", "72 小时中位数（P50）",
-            "固定快照，不自动刷新",
-            "输出速率（AA Token/秒）", "o200k_base 标准化 Token 和中位数",
-            "不判定更好或更差", "均没有可直接比较的外部基线",
-            "不等同于首个 Token 时间（TTFT）", "服务商基准测试", "测试方法"):
-        assert phrase in chinese
-    assert "External provider reference" not in chinese
-    assert "Not directly comparable" not in chinese
-    assert "外部服务商参考" not in english
 
 
 def test_zero_output_rate_is_a_measurement_and_untrusted_fields_are_never_rendered():
