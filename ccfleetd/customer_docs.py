@@ -24,7 +24,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-15"
+DOCS_UPDATED = "2026-10-16"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -160,6 +160,38 @@ def _cost(price: pricing.Price) -> str:
 
 def _cost_zh(price: pricing.Price) -> str:
     return f"<strong>{escape(pricing.display(price))}</strong>／月"
+
+
+def _rental_pricing_details() -> str:
+    """Current catalogue policy, shared by the guide, explanation and terms."""
+    return bi(
+        '<p>Each machine has its own monthly USD rate in the '
+        '<a href="/#slot-pricing">public slot list</a>. The rate is the actual hosting '
+        'and IP costs, normalized to a calendar month, plus a fixed 10% markup. '
+        'A 30-day cost is multiplied by 365/360; an annual cost is divided by 12. '
+        'The total is rounded once, half up, to cents. Agree the price and paid period '
+        'with the operator; the website does not charge automatically or rewrite past '
+        'payments. Your own Claude subscription is separate.</p>',
+        '<p>每台主机的美元月费分别列于<a href="/#slot-pricing">公开槽位列表</a>。'
+        '按实际主机和 IP 成本统一折算为日历月，再加固定 10%：30 天成本乘以 '
+        '365/360，年付成本除以 12，最后只对总价四舍五入一次，保留到美分。'
+        '价格及服务有效期直接与运营者约定；网站不会自动扣款，也不会改写过去的付款记录。'
+        '你自己的 Claude 订阅另计。</p>',
+    ) + bi(
+        '<p>The host and IP-provider brands are shown separately. ISP is the standard '
+        'network category; Residential is premium. These labels do not guarantee an IP '
+        'quality score, speed or acceptance by Anthropic.</p>',
+        '<p>主机与 IP 服务商品牌分别展示。ISP 为标准网络类别，住宅为高级类别；'
+        '这些标签不保证 IP 质量评分、速度或 Anthropic 一定接受请求。</p>',
+    ) + bi(
+        '<p>Retired machines are removed from the rental catalogue. A temporarily '
+        'offline machine that remains in service still appears on '
+        '<a href="/status#slot-machines">Status</a>. Retirement does not release an '
+        'existing holder or delete their account and payment history.</p>',
+        '<p>已退役主机会从出租目录移除。仍在运营、只是暂时离线的主机继续显示在'
+        '<a href="/status#slot-machines">服务状态</a>中。退役不会自动归还已有持有者的'
+        '槽位，也不会删除其账号或付款历史。</p>',
+    )
 
 
 def _contact_zh(cfg: Config) -> str:
@@ -347,10 +379,12 @@ def overview(
     )
     if per_slot_pricing:
         paying = ('The <a href="#slot-pricing">slot list</a> shows each provider, IP type '
-                  'and monthly price, calculated from supplier cost plus 10%. Pay the '
+                  'and monthly USD rate: calendar-month hosting plus IP cost, with a '
+                  'fixed 10% markup. Choose a machine at its displayed rate and pay the '
                   'operator directly; this site does not charge automatically.')
         paying_zh = ('<a href="#slot-pricing">槽位列表</a>展示各服务商、IP 类型及月费，'
-                     '按供应成本加 10% 计算。直接支付给运营者，本站不会自动扣款。')
+                     '按主机与 IP 的日历月成本加固定 10%，以美元计价。按所示价格选择主机，'
+                     '直接支付给运营者；本站不会自动扣款。')
     body = (
         '<section class="hero"><div class="hero-copy"><div class="hero-top">'
         + bi(
@@ -916,11 +950,13 @@ def guide(
     )
     if per_slot_pricing:
         price_en = ('Each slot has its own provider, IP type and monthly price in the '
-                    '<a href="/#slot-pricing">slot list</a>, based on supplier costs plus '
-                    '10%. Choose the slot shown on your account page and pay the operator '
+                    '<a href="/#slot-pricing">slot list</a>, in USD with a fixed 10% '
+                    'markup on calendar-month hosting and IP costs. Choose the machine '
+                    'at its displayed rate on your account page and pay the operator '
                     'directly; this site does not charge automatically.')
         price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/#slot-pricing">槽位列表</a>，'
-                    '按供应成本加 10% 计算。在账号页选择所展示的槽位，并直接向运营者付款；'
+                    '按主机与 IP 的日历月成本加固定 10%，以美元计价。'
+                    '在账号页按所示价格选择主机，并直接向运营者付款；'
                     '本站不会自动扣款。')
     body = (
         '<div class="dochead">'
@@ -1149,6 +1185,10 @@ def guide(
         )
         + "</div>"
     )
+    if per_slot_pricing:
+        body += ('<div class="card" id="rental-pricing">'
+                 + bi('<h2>Choosing a slot and its rate</h2>', '<h2>选择槽位与价格</h2>')
+                 + _rental_pricing_details() + '</div>')
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
@@ -1399,17 +1439,16 @@ def how_it_works(
         )
         + "</div></div></div>"
     )
-    body += bi(
-        '<div class="card"><h2>Slot providers and IP types</h2><p>The '
-        '<a href="/#slot-pricing">public slot list</a> names each hosting and IP provider, '
-        'with Residential or ISP labels and the monthly price. An ISP slot can use a '
+    body += '<div class="card" id="rental-pricing">' + bi(
+        '<h2>Slot providers, IP types and rates</h2>',
+        '<h2>槽位服务商、IP 类型与价格</h2>',
+    ) + _rental_pricing_details() + bi(
+        '<p>An ISP slot can use a '
         'separate approved exit proxy; provider HTTPS remains encrypted through that '
-        'tunnel. Your account page shows the same labels before you choose a slot.</p></div>',
-        '<div class="card"><h2>槽位服务商与 IP 类型</h2><p>'
-        '<a href="/#slot-pricing">公开槽位列表</a>'
-        '分别展示主机及 IP 服务商、住宅或 ISP 标签和月费。ISP 槽位可以使用独立获准的出口代理，'
-        '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p></div>',
-    )
+        'tunnel. Your account page shows the same labels before you choose a slot.</p>',
+        '<p>ISP 槽位可以使用独立获准的出口代理，'
+        '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p>',
+    ) + '</div>'
     return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
@@ -1437,18 +1476,19 @@ def terms(
     )
     if per_slot_pricing:
         paying = ('Monthly rates are listed separately for each slot in the '
-                  '<a href="/#slot-pricing">slot list</a>: monthly hosting plus IP cost, '
-                  'with a 10% markup, in the stated currency. Your Claude subscription '
+                  '<a href="/#slot-pricing">slot list</a>: calendar-month hosting plus IP '
+                  'cost, with a fixed 10% markup, in USD. Your Claude subscription '
                   'is separate. Agree the price and paid period directly with the operator; '
                   'claiming a slot does not charge you automatically.')
         paying_zh = ('各槽位月费分别列于<a href="/#slot-pricing">槽位列表</a>：'
-                     '按主机与 IP 月成本加 10%，并保留所标币种。Claude 订阅另计。'
+                     '按主机与 IP 的日历月成本加固定 10%，以美元计价。Claude 订阅另计。'
                      '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款。')
     body = (
         '<div class="dochead">'
         + bi("<h1>Terms</h1>", "<h1>服务条款</h1>")
         + bi(
-            '<p class="sub">Last updated 2026-10-15</p>', '<p class="sub">最后更新：2026-10-15</p>'
+            f'<p class="sub">Last updated {DOCS_UPDATED}</p>',
+            f'<p class="sub">最后更新：{DOCS_UPDATED}</p>'
         )
         + '</div><div class="card">'
         + bi("<h2>The service</h2>", "<h2>服务内容</h2>")
@@ -1520,6 +1560,10 @@ def terms(
         )
         + "</div>"
     )
+    if per_slot_pricing:
+        body += ('<div class="card" id="rental-pricing">'
+                 + bi('<h2>Per-machine rental rates</h2>', '<h2>逐台主机的出租价格</h2>')
+                 + _rental_pricing_details() + '</div>')
     return _page("/docs/terms", "terms", body, viewer=viewer)
 
 

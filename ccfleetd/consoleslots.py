@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from html import escape
 from typing import Any, Optional
 
@@ -76,9 +77,10 @@ def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") ->
 def section(store: Store, csrf: str, now: float) -> str:
     """The slots card, the accounts card and the price, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
-    return (_slots_card(store, accounts, csrf, now)
-            + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store))
-            + _price_card(store, csrf, now))
+    body = (_slots_card(store, accounts, csrf, now)
+            + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store)))
+    price = _price_card(store, csrf, now)
+    return price + body if _has_offers(store) else body + price
 
 
 def _report_of(slot: Mapping[str, Any], payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -115,6 +117,8 @@ def _plans_by_holder(store: Store) -> dict[Optional[str], list[str]]:
 
 def _price_card(store: Store, csrf: str, now: float) -> str:
     """What the public pages say a slot costs, and the form that changes it."""
+    if _has_offers(store):
+        return _offer_prices_card(store)
     current = store.get_price()
     if current is not None:
         price = current["price"]
@@ -136,52 +140,142 @@ def _price_card(store: Store, csrf: str, now: float) -> str:
                  f'<select name="currency" aria-label="Currency">{options}</select>',
                  "primary")
     clear = _form(f"{base}/clear", csrf, "Clear") if current is not None else ""
-    tier_note = ('<p class="note">Per-machine offers are enabled. Public rates and '
-                 'claim choices use Providers, IP type &amp; price under each slot’s '
-                 'Manage panel. This global value is only the legacy default; it does '
-                 'not price an unconfigured machine.</p>'
-                 if any(node.get("offer") is not None for node in store.list_nodes()) else "")
     return ('<h2 id="price">Price</h2><div class="card">'
             f'<div class="row-line"><div class="row-name">{said}</div>'
             f'<div class="actions">{form}{clear}</div></div>'
-            + tier_note +
             '<p class="note">The price of a slot for a month, shown on the public pages. '
             "It is shown, never charged: people pay you directly, an allowance is still what "
             "lets somebody claim a slot, and the payments above are a record.</p></div>")
+
+
+def _has_offers(store: Store) -> bool:
+    return any(node.get("offer") is not None for node in store.list_nodes())
+
+
+def _offer_money(amount: Decimal, currency: str) -> str:
+    """Readable invoice precision; rounded previews never feed the price calculation."""
+    shown = amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+    approximate = "≈ " if shown != amount else ""
+    number = format(shown, "f").rstrip("0").rstrip(".")
+    if currency not in pricing.WHOLE_ONLY:
+        whole, _, fraction = number.partition(".")
+        number = whole + "." + fraction.ljust(2, "0")
+    label = pricing.display(pricing.Price(number, currency))
+    return approximate + label + ("" if currency in pricing.SHARED_SYMBOL else f" {currency}")
+
+
+def _offer_invoice(cost: Optional[offers.Cost]) -> str:
+    if cost is None:
+        return '<span class="muted">Not set</span>'
+    period = {"month": "calendar month", "30_days": "30 days", "year": "year"}[cost.period]
+    return (escape(_offer_money(Decimal(cost.amount), cost.currency))
+            + f'<span class="sub">per {period}</span>')
+
+
+def _offer_total(offer: offers.Offer) -> Optional[Decimal]:
+    if offer.hosting is None or offer.ip is None or offer.hosting.currency != offer.ip.currency:
+        return None
+    with localcontext() as context:
+        context.prec = 40
+        return offer.hosting.monthly() + offer.ip.monthly()
+
+
+def _offer_rate(offer: offers.Offer) -> str:
+    price = offers.monthly_price(offer)
+    return (_offer_money(Decimal(price.amount), price.currency) + " / month"
+            if price is not None else "Price pending")
+
+
+def _offer_prices_card(store: Store) -> str:
+    """The effective per-machine strategy, independent of an obsolete global setting."""
+    def order(node):
+        offer = node["offer"]
+        cost = offer.hosting or offer.ip
+        currency = cost.currency if cost else "USD"
+        return currency != "USD", currency, node.get("public_status_number", 0), node["id"]
+
+    rows = []
+    for node in sorted((n for n in store.list_nodes()
+                        if n.get("enabled") is not False and n.get("offer") is not None),
+                       key=order):
+        offer = node["offer"]
+        slots = store.list_slots(node_id=node["id"])
+        shown = names.display(slots[0]) if len(slots) == 1 else node["id"]
+        number = node.get("public_status_number")
+        identity = f'<span class="sub">Machine {number}</span>' if number else ""
+        brands = escape(offer.host_brand or "Host provider not set")
+        brands += '<span class="sub">' + escape(offer.ip_brand or "IP provider not set") + '</span>'
+        kind = {"residential": "Residential", "isp": "ISP"}.get(offer.ip_type, "Not verified")
+        total = _offer_total(offer)
+        supplier = (escape(_offer_money(total, offer.hosting.currency))
+                    if total is not None else '<span class="muted">Needs matching costs</span>')
+        rows.append('<tr><th scope="row">' + escape(shown) + identity + '</th><td>'
+                    + brands + '<span class="sub">' + kind + '</span></td><td>'
+                    + _offer_invoice(offer.hosting) + '</td><td>' + _offer_invoice(offer.ip)
+                    + '</td><td>' + supplier + '</td><td><strong>'
+                    + escape(_offer_rate(offer)) + '</strong></td></tr>')
+    table = ('<div class="offer-costs" role="region" '
+             'aria-label="Machine supplier costs and prices" tabindex="0"><table><thead><tr>'
+             + ''.join(f'<th scope="col">{label}</th>' for label in (
+                 "Machine", "Providers / IP type", "Hosting invoice", "IP invoice",
+                 "Supplier / month", "Customer / month"))
+             + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>' if rows else
+             '<p class="quiet">No enabled machine offers yet. Configure an enabled machine’s '
+             'Providers, IP type &amp; price under Manage.</p>')
+    return ('<h2 id="price">Slot pricing</h2><div class="card offer-pricing">'
+            '<p class="offer-rule"><strong>(Monthly hosting + monthly IP cost) × 1.10</strong>'
+            ' · 10% markup per machine.</p>' + table
+            + '<p class="note">Calendar-month costs stay unchanged; 30-day costs × 365 / 360; '
+            'annual costs ÷ 12. Add the normalized costs, apply 10%, then round once. '
+            'USD is listed first; currencies are never converted automatically. '
+            'A missing component or mixed currencies leaves the price pending.</p>'
+            '<p class="note">Edit each machine under its slot’s Manage → Providers, IP type '
+            '&amp; price. Supplier costs are private; brands, IP type and customer price are '
+            'public. Prices are displayed only; allowances and payment records are unchanged.'
+            '</p></div>')
 
 
 def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
     """Public labels and exact private cost inputs, scoped to this machine."""
     offer = node.get("offer") or offers.Offer()
     base = f"/actions/machine/{node['id']}"
-    fields = ('<label>Host provider <input name="host_brand" maxlength="48" '
+    fields = ('<div class="offer-fields"><fieldset><legend>Providers and IP type</legend>'
+              '<label>Host provider <input name="host_brand" maxlength="48" '
               f'value="{escape(offer.host_brand)}" placeholder="Hosting brand"></label>'
               '<label>IP provider <input name="ip_brand" maxlength="48" '
               f'value="{escape(offer.ip_brand)}" placeholder="IP or proxy brand"></label>'
               '<label>IP type <select name="ip_type">'
               + ''.join(f'<option value="{kind}"'
                         f'{" selected" if offer.ip_type == kind else ""}>{kind}</option>'
-                        for kind in offers.IP_TYPES) + '</select></label>')
+                        for kind in offers.IP_TYPES) + '</select></label></fieldset>')
     for key, title, cost in (("hosting", "Hosting cost", offer.hosting),
                              ("ip", "IP cost", offer.ip)):
         amount = cost.amount if cost is not None else ""
         currency = cost.currency if cost is not None else "USD"
         period = cost.period if cost is not None else "month"
-        fields += (f'<label>{title} <input name="{key}_cost" inputmode="decimal" '
+        fields += (f'<fieldset><legend>{title}</legend><label>Invoice amount '
+                   f'<input name="{key}_cost" inputmode="decimal" '
                    f'value="{escape(amount)}" size="9" placeholder="Not set"></label>'
-                   f'<select name="{key}_currency" aria-label="{title} currency">'
+                   f'<label>Currency <select name="{key}_currency" '
+                   f'aria-label="{title} currency">'
                    + ''.join(f'<option value="{code}"'
                              f'{" selected" if code == currency else ""}>{code}</option>'
-                             for code in pricing.CURRENCIES) + '</select>'
-                   f'<select name="{key}_period" aria-label="{title} period">'
+                             for code in pricing.CURRENCIES) + '</select></label>'
+                   f'<label>Billing period <select class="offer-period" name="{key}_period" '
+                   f'aria-label="{title} period">'
                    + ''.join(f'<option value="{value}"'
                              f'{" selected" if value == period else ""}>{words}</option>'
                              for value, words in (("month", "Calendar month"),
                                                   ("30_days", "30 days"), ("year", "Year")))
-                   + '</select>')
-    price = offers.monthly_price(offer)
-    preview = (pricing.per_slot(price) if price is not None else "Price pending")
-    body = ('<p><strong>' + escape(preview) + '</strong> · hosting + IP cost, plus 10%.</p>'
+                   + '</select></label></fieldset>')
+    fields += '</div>'
+    preview = _offer_rate(offer)
+    total = _offer_total(offer)
+    supplier = (_offer_money(total, offer.hosting.currency) if total is not None
+                else "Both invoice costs in one currency are required")
+    body = ('<p class="offer-preview"><span class="sub">Saved customer price</span><strong>'
+            + escape(preview) + '</strong><span class="sub">Monthly supplier cost: '
+            + escape(supplier) + '</span></p>'
             + _form(base + "/offer", csrf, "Save slot offer", fields, "primary")
             + (_form(base + "/offer-clear", csrf, "Clear slot offer")
                if node.get("offer") is not None else ""))
@@ -189,7 +283,8 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
                  "Brands, IP type and calculated monthly price are public. Supplier costs "
                  "stay in this console. Enter 0 for an IP included in hosting; a blank "
                  "component or mixed currencies keeps the price pending. Monthly costs "
-                 "are summed, marked up 10%, then rounded once; no automatic charges.")
+                 "are summed, marked up 10%, then rounded once; no automatic charges. "
+                 "Save to update the displayed preview.")
 
 
 def _offer_cost(form: Mapping[str, str], key: str) -> Optional[offers.Cost]:
@@ -249,6 +344,10 @@ def _machine_rows(store: Store, node: Mapping[str, Any], said: Mapping[str, Any]
     """One machine's row: its slot's, one saying it has none yet, or nothing
     at all for an ordinary owner node."""
     all_rows = store.list_slots(node_id=node["id"])
+    if (node.get("enabled") is False
+            and (not all_rows or (len(all_rows) == 1 and all_rows[0]["state"] == slotstates.FREE
+                                  and not all_rows[0].get("held_by")))):
+        return ""  # Retired empty candidates stay in the database, outside the working list.
     rows = tuple(r for r in all_rows if r["kind"] == slotstates.MACHINE_SLOT)
     owned = [r for r in all_rows if r["kind"] == slotstates.OWNER_SLOT]
     if owned and not rows:
@@ -539,6 +638,8 @@ def _machine_problems(node: Mapping[str, Any], rows: tuple[Mapping[str, Any], ..
     """What is wrong with the machine itself, said on its every row. An
     owner's own node names itself, so only a reboot is worth saying there."""
     pills, notes = [], []
+    if node.get("enabled") is False:
+        pills.append(_pill("disabled", "machine disabled"))
     if said.get("reboot_required") is True:
         pills.append(_pill("warn", "reboot needed"))
     if not shared:

@@ -234,6 +234,32 @@ tbody tr.r-disabled td{opacity:.62}
 td.wrap{white-space:normal;min-width:130px}
 .node-id{font-family:var(--mono);font-weight:650;font-size:14px}
 
+
+/* Supplier inputs are operator-only; the calculated customer price is the result. */
+.offer-pricing{padding-top:18px}
+.offer-rule{margin:0 0 16px;padding:12px 14px;border:1px solid var(--acc-line);
+border-radius:10px;background:var(--acc-soft);font-size:14px}
+.offer-costs{overflow:auto;border:1px solid var(--rule-soft);border-radius:10px}
+.offer-costs table{min-width:760px;font-size:13px}
+.offer-costs th,.offer-costs td{padding:12px;white-space:normal;overflow-wrap:anywhere}
+.offer-costs tbody th{text-transform:none;letter-spacing:normal;font-size:13px;
+color:var(--ink);background:var(--panel)}
+.offer-costs .sub{display:block;font-size:11px;line-height:1.5;margin-top:4px;color:var(--muted)}
+.manage-panel>.mpart:has(.offer-fields){flex-basis:100%;border-top:1px solid var(--rule);padding-top:12px}
+.offer-costs td:last-child{font-family:var(--mono);font-weight:700;white-space:nowrap;
+color:var(--acc);background:var(--acc-soft);font-size:15px}
+.offer-costs td:nth-last-child(2){white-space:nowrap;font-variant-numeric:tabular-nums}
+.offer-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;
+width:100%;margin:12px 0}
+.offer-fields fieldset{min-width:0;margin:0;padding:12px;border:1px solid var(--rule);
+border-radius:10px;display:grid;gap:8px;align-content:start}
+.offer-fields legend{font-size:12px;font-weight:650;color:var(--muted);padding:0 5px}
+.offer-fields label{display:grid;gap:5px;font-size:12px;min-width:0}
+.offer-fields input,.offer-fields select{min-width:0;max-width:100%;width:100%!important}
+.offer-preview{margin:8px 0 12px;line-height:1.6}
+.offer-preview strong{font-size:17px;color:var(--acc)}
+@media(max-width:900px){.offer-fields{grid-template-columns:1fr}.offer-costs table{min-width:680px}}
+
 /* A state, said the same way everywhere: a coloured dot and a word. */
 /* A pill may wrap: a few carry a whole sentence ("hostname pending: …"), and
    those must fit a phone. A short one never has a reason to. */
@@ -1423,6 +1449,16 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     # who is None for callers that predate per-user accounts, which are all
     # operator-side, so the default is the full-privilege view.
     is_admin = who is None or getattr(who, "is_admin", True)
+    # Disabled, empty shared machines are retained operational records, not
+    # current inventory. Keep owned or unfinished slots visible for recovery.
+    retired = {row["id"] for row in rows
+               if row.get("machine") and row.get("enabled") is False
+               and (row.get("slot_count") == 0
+                    or (row.get("slot_count") == 1
+                        and row.get("slot_state") == slotstates.FREE))}
+    rows = [row for row in rows if row["id"] not in retired]
+    alerts = [alert for alert in alerts if alert.get("node_id") not in retired]
+    logins = {node: login for node, login in (logins or {}).items() if node not in retired}
     empty = ("No nodes yet. Use the form below." if is_admin else
              "No nodes are assigned to you yet. Your operator adds them.")
     body_rows = "".join(_row_html(r, now) for r in rows) or (
@@ -1482,7 +1518,8 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         '<p class="sub">One owner, one account, one node · heartbeat max age '
         f"{cfg.heartbeat_max_age_s // 60} min · {cadence}{whoami}</p></div>"
         + _strip_html(counts) +
-        "</header>"
+        "</header>" + extra
+        + '<h2 id="machine-diagnostics">Machine diagnostics</h2>'
         '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
         "<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Login</th>"
         "<th>Remote Control</th></tr></thead>"
@@ -1496,6 +1533,5 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
-        + extra
         + "</div>" + LOCAL_TIMES_TAG + "</body></html>"
     )

@@ -302,6 +302,10 @@ def test_a_free_slot_is_only_available_when_its_machine_allows_claims(cfg, enabl
             "kind": slots.MACHINE_SLOT, "state": slots.FREE, "present": False}]
     row = build_rows(nodes, {}, [], 3_000_000, slots=one)[0]
     page = render_dashboard([row], [], 3_000_000, cfg)
+    if not enabled:
+        # Disabled empty machines are retained records, absent from live inventory.
+        assert "pool-7" not in page
+        return
     shown = row_of(page, "pool-7")
     assert f"free · {words}" in shown and byline(shown) == ""
     assert "free · in pool" not in shown

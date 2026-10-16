@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from ccfleetd import names, render, status, statuspage, usersite
+from ccfleetd import names, offers, render, status, statuspage, usersite
 from ccfleetd.bilingual import SCRIPT_TAG as LANGUAGE_TAG
 from ccfleetd.bilingual import label, project_html
 from ccfleetd.config import Config
@@ -269,6 +269,32 @@ def test_detail_snapshot_is_batched_once_and_keeps_the_original_aggregate_compon
     assert raw.count('class="st-machine-row"') == 3
     assert '3 of 3 operational' in shown(raw)
     assert 'disabled-private' not in raw
+
+
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_public_inventory_omits_disabled_offers_but_keeps_an_enabled_outage(store, cfg, language):
+    fleet(store, ages=(20, 30, 400))
+    store.set_node_offer('pool-8', host_brand='VisibleHost', ip_brand='VisibleIP', ip_type='isp',
+                         hosting=offers.Cost('4.70', 'USD'), ip=offers.Cost('5', 'USD'))
+    store.add_node('retired-private', 'private-owner', now=NOW)
+    store.add_slot('retired-slot', 'retired-private', 'private-user', now=NOW)
+    store.set_node_offer('retired-private', host_brand='RetiredHost', ip_brand='RetiredIP',
+                         ip_type='residential', hosting=offers.Cost('7.13', 'USD'),
+                         ip=offers.Cost('5.40', 'USD'))
+    store.insert_heartbeat('retired-private', NOW,
+                           {'node_id': 'retired-private', 'mode': 'machine'})
+    store.set_enabled('retired-private', False)
+    nodes = {node['id']: node for node in store.list_nodes()}
+    raw = project_html(page_of(store, cfg), language)
+    assert raw.count('class="st-machine-row"') == 3
+    assert f'id="machine-{nodes["retired-private"]["public_status_number"]}"' not in raw
+    outage = machine_row(raw, nodes['pool-8']['public_status_number'])
+    assert 'VisibleHost / VisibleIP' in outage and '$10.67' in outage
+    assert ('Down' if language == 'en' else '离线') in shown(outage)
+    assert all(secret not in raw for secret in ('RetiredHost', 'RetiredIP', 'retired-private',
+                                                'private-owner', 'private-user', 'retired-slot',
+                                                '4.70', '7.13', '5.40', 'hosting_cost'))
+    assert store.get_node('retired-private') is not None
 
 
 def test_machine_detail_projection_has_only_the_selected_language(store, cfg):

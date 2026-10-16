@@ -146,7 +146,8 @@ unfinished wipe never makes the slot free or publishes it as a new pool slot.</p
 <code>pool-N</code> name in the Fleet row, Slots row and Manage heading. Internal
 node/slot IDs, owner and region remain under the Slots row's Manage controls.
 Reservations remain visible as a warning and retain their account details under Manage;
-cleanup, health and disabled-machine warnings are unchanged.</p>
+cleanup and health warnings remain. Retired or disabled machines are omitted from the
+normal catalogue; their underlying records remain available for operator recovery.</p>
 <p>New node and slot IDs must not reuse an existing slot's reserved pool name,
 including while that slot is held. Check the current names in the console before
 registering another machine; choose an unused ID if a pool name is already reserved.</p>
@@ -324,22 +325,33 @@ Residential is the premium network category and ISP the standard category; these
 describe the supplied service, not a guaranteed quality score or upstream acceptance.
 Only stable public machine numbers appear in the public catalogue and Status; never publish
 machine addresses, proxy credentials, holder identities or internal node names there.</p>
-<p>Set each machine's display metadata and actual supplier costs from the console's
-<strong>Providers, IP type &amp; price</strong> section. A bundled IP has an explicit zero IP cost;
-a blank cost means unknown. Both costs must use the same currency. There is no implicit FX
-conversion. Annual costs divide by 12 and 30-day costs multiply by 365/360; add the normalized
-costs, apply a fixed 10% markup, then round once, half up, to the currency's minor unit.
-This is a displayed monthly price, not an automatic charge or a Claude subscription fee.</p>
+<p>The current rental policy is a per-machine monthly USD rate. Set each machine's display
+metadata and actual supplier costs from its <strong>Providers, IP type &amp; price</strong>
+controls. Enter both costs in USD; convert a non-USD supplier invoice first and retain the
+original amount, FX source, rate and date in private operator records. The application never
+fetches or guesses an exchange rate, and rejects mixed-currency costs. A bundled IP has an
+explicit zero IP cost; a blank cost means unknown, not free. Annual costs divide by 12 and
+30-day costs multiply by 365/360; add the normalized costs, apply a fixed 10% markup, then
+round the final total once, half up, to cents. The console's pricing section lists each
+machine's costs and resulting rate instead of one global price. Raw supplier costs remain
+operator-only. This is a displayed monthly rental rate, not an automatic charge or a Claude
+subscription fee.</p>
 <pre><code>ccfleetd node offer set &lt;node&gt; --host-brand &lt;hosting-brand&gt; --ip-brand &lt;exit-brand&gt; --ip-type isp \
   --hosting-cost &lt;actual-amount&gt; --hosting-currency USD --hosting-period month \
   --ip-cost &lt;actual-amount&gt; --ip-currency USD --ip-period month
 ccfleetd node offer show &lt;node&gt;
 ccfleetd node offer clear &lt;node&gt;</code></pre>
 <p>Once any machine has a configured offer, customers choose a specific public machine and
-its displayed price before claiming. Unconfigured or unpriced machines cannot be auto-claimed;
+its displayed price before claiming. Retired or disabled machines are removed from the
+public rental inventory and normal console catalogue; do not delete their database rows to
+achieve this. Existing holders, account bindings, payments and history remain intact.
+An enabled machine with an outage still appears on Status with its health information.
+Unconfigured or unpriced machines cannot be auto-claimed;
 configure every intended rental. Existing allowance, reservation, recent-heartbeat and confirmed
-empty-slot checks still apply. Legacy installations with no offers keep the global display price
-and original claim flow. Existing payments and paid-through dates are not changed.</p>
+empty-slot checks still apply. The global display price and original claim flow remain only as
+compatibility behavior for installations with no configured offers; they are not the current
+catalogue pricing policy. Changing a rate does not alter existing payments, paid-through dates,
+allowances or account bindings. Agree any new paid period directly with the customer.</p>
 <p>For an approved ISP-proxy node, install the reviewed opt-in node egress module and service.
 Opted-in proxy nodes require the canonical <code>/etc/ccfleet</code> configuration directory;
 custom <code>CCFLEET_ETC_DIR</code> deployments are refused before setup changes.
