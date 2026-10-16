@@ -349,8 +349,19 @@ password and an explicit HTTPS destination allowlist in the separate root-owned,
 <code>/etc/ccfleet/egress-upstream.json</code>. Do not put credentials in commands, Git,
 logs or holder-readable environment variables. The local credential-free CONNECT endpoint is
 <code>http://127.0.0.1:912</code>; it preserves provider TLS validation and does not terminate
-provider TLS. HTTP upstream transport does not encrypt proxy authentication; use verified
+provider TLS. Upstream <code>scheme</code> accepts <code>http</code>, <code>https</code>,
+or authenticated <code>socks5</code>. Use only the protocol and port documented for the
+purchased allocation. SOCKS5 requires username/password authentication and sends the allowed
+destination hostname to the proxy for resolution; a refused handshake never falls back to a
+direct route. SOCKS5 usernames and passwords must each fit in 255 UTF-8 bytes.
+HTTP and SOCKS5 upstream transports do not encrypt proxy authentication; use verified
 HTTPS upstream transport only when the purchased endpoint supports it.</p>
+<p>If an upstream HTTP CONNECT endpoint returns intermittent errors, compare its numeric
+CONNECT response with a separately documented protocol on the same purchased exit. Test
+from one authorized source host, retain provider TLS validation, and confirm the assigned
+exit with a harmless HTTPS reflector. A successful alternate-protocol sample is a candidate
+workaround, not proof of provider-wide reliability. Keep the machine unclaimable until the
+full installation, fail-closed and persistence checks pass through the selected route.</p>
 <p>Start and verify <code>ccfleet-egress.service</code> before provisioning the slot. Native
 launchers, background settings and relay traffic must use the same endpoint. Enabling a malformed,
 missing-private-config or unavailable proxy must fail closed. Proxy environment settings alone

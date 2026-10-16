@@ -108,7 +108,7 @@ def test_private_config_rejects_extra_fields(protected):
 
 
 @pytest.mark.parametrize("field,value", [
-    ("version", True), ("version", 2), ("scheme", "socks5"), ("host", "bad host"),
+    ("version", True), ("version", 2), ("scheme", "socks4"), ("host", "bad host"),
     ("host", "proxy.example.test/path"), ("port", True), ("port", 0), ("port", 65536),
     ("username", ""), ("username", "user:name"), ("username", "user\r\nHeader: injected"),
     ("password", ""), ("password", "private\x00value"), ("password", "x" * 2049),

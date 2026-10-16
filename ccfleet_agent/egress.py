@@ -168,7 +168,7 @@ def upstream_config() -> dict[str, Any]:
     if (set(value) != {"version", "scheme", "host", "port", "username", "password",
                       "allowed_hosts"}
             or type(value["version"]) is not int or value["version"] != 1
-            or value["scheme"] not in ("http", "https")
+            or value["scheme"] not in ("http", "https", "socks5")
             or not _hostname(value["host"], literal=True)
             or type(value["port"]) is not int or not 1 <= value["port"] <= 65535
             or not isinstance(value["allowed_hosts"], list)
@@ -181,9 +181,83 @@ def upstream_config() -> dict[str, Any]:
         if (not isinstance(field, str) or not 1 <= len(field) <= 2048
                 or any(ord(char) < 32 or ord(char) == 127 for char in field)):
             raise EgressError()
-    if ":" in value["username"]:
+    if value["scheme"] == "socks5":
+        _socks_credentials(value)
+    elif ":" in value["username"]:
         raise EgressError()
     return value
+
+
+def _socks_credentials(value: dict[str, Any]) -> tuple[bytes, bytes]:
+    fields = []
+    for key in ("username", "password"):
+        field = value[key]
+        if (not isinstance(field, str)
+                or any(ord(char) < 32 or ord(char) == 127 for char in field)):
+            raise EgressError()
+        try:
+            encoded = field.encode("utf-8")
+        except UnicodeError:
+            raise EgressError() from None
+        if not 1 <= len(encoded) <= 255:
+            raise EgressError()
+        fields.append(encoded)
+    return fields[0], fields[1]
+
+
+def _socks_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise EgressError()
+    return remaining
+
+
+def _socks_send(stream: socket.socket, data: bytes, deadline: float) -> None:
+    stream.settimeout(_socks_remaining(deadline))
+    stream.sendall(data)
+
+
+def _socks_read_exact(stream: socket.socket, size: int, deadline: float) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        stream.settimeout(_socks_remaining(deadline))
+        part = stream.recv(size - len(data))
+        if not part:
+            raise EgressError()
+        data.extend(part)
+    return bytes(data)
+
+
+def _socks_connect(stream: socket.socket, target: bytes, credentials: tuple[bytes, bytes],
+                   deadline: float) -> None:
+    # Offer only RFC 1929 authentication; never retry anonymously or directly.
+    _socks_send(stream, b"\x05\x01\x02", deadline)
+    if _socks_read_exact(stream, 2, deadline) != b"\x05\x02":
+        raise EgressError()
+    username, password = credentials
+    _socks_send(stream, b"\x01" + bytes([len(username)]) + username
+                + bytes([len(password)]) + password, deadline)
+    if _socks_read_exact(stream, 2, deadline) != b"\x01\x00":
+        raise EgressError()
+    # A domain CONNECT keeps destination resolution at the approved upstream.
+    _socks_send(stream, b"\x05\x01\x00\x03" + bytes([len(target)]) + target
+                + b"\x01\xbb", deadline)
+    reply = _socks_read_exact(stream, 4, deadline)
+    if reply[:3] != b"\x05\x00\x00":
+        raise EgressError()
+    if reply[3] == 1:
+        size = 4
+    elif reply[3] == 3:
+        size = _socks_read_exact(stream, 1, deadline)[0]
+        if size == 0:
+            raise EgressError()
+    elif reply[3] == 4:
+        size = 16
+    else:
+        raise EgressError()
+    _socks_read_exact(stream, size, deadline)
+    _socks_read_exact(stream, 2, deadline)  # BND.PORT; never an alternate destination.
+    _socks_remaining(deadline)
 
 
 def _headers(stream: socket.socket) -> list[bytes]:
@@ -228,6 +302,16 @@ def _destination(lines: list[bytes], allowed: list[str]) -> str:
 def _upstream(value: dict[str, Any], target: str) -> socket.socket:
     stream = None
     try:
+        if value["scheme"] == "socks5":
+            credentials = _socks_credentials(value)
+            if not _hostname(target):
+                raise EgressError()
+            encoded_target = target.encode("ascii")
+            deadline = time.monotonic() + CONNECT_TIMEOUT
+            stream = socket.create_connection((value["host"], value["port"]),
+                                              _socks_remaining(deadline))
+            _socks_connect(stream, encoded_target, credentials, deadline)
+            return stream
         stream = socket.create_connection((value["host"], value["port"]), CONNECT_TIMEOUT)
         if value["scheme"] == "https":
             stream = ssl.create_default_context().wrap_socket(stream, server_hostname=value["host"])
@@ -242,7 +326,8 @@ def _upstream(value: dict[str, Any], target: str) -> socket.socket:
         return stream
     except Exception:
         if stream is not None:
-            stream.close()
+            with contextlib.suppress(Exception):
+                stream.close()
         raise EgressError() from None
 
 
