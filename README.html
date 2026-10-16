@@ -351,12 +351,21 @@ cannot use it as an arbitrary TCP proxy.</li>
 <li>The slot administrator still has root. End-to-end transport encryption does
 not hide plaintext model requests/responses from the slot relay endpoint.</li>
 </ul>
-<p>Rental slots can publish separate hosting and IP-provider brands, a Residential or ISP
-category and a per-slot monthly price. Configured prices use actual normalized hosting plus
-IP costs with a 10% markup, in the stated currency. Customers choose their displayed machine
+<p>Rental slots publish separate hosting and IP-provider brands and a per-machine monthly
+USD rate. ISP is the standard network category and Residential is premium; neither label
+guarantees IP quality, speed or upstream acceptance. The rate is actual hosting plus IP cost,
+normalized to a calendar month, with a fixed 10% markup. Annual costs divide by 12;
+30-day costs multiply by 365/360. Round the final total once, half up, to cents. Convert any
+non-USD supplier invoice before entry and retain the FX rate and date in private operator records.
+Customers choose their displayed machine
 before claiming; payment remains an operator record, never an automatic charge. Approved proxy
 nodes use a protected local CONNECT service and verified provider TLS; proxy credentials stay
 in root-only configuration. See the <a href="docs/runbooks.html#slot-providers-pricing-and-egress">provider, pricing and egress runbook</a>.</p>
+<p>Retired or disabled machines are omitted from the public rental inventory and normal
+operator catalogue. This does not release an existing holder or delete accounts, payments
+or history. Enabled machines with a temporary outage still appear on Status, so an outage
+is visible instead of being treated as retirement. Configuring a price never rewrites past
+payments or includes a Claude subscription.</p>
 <h2 id="operations">Operations</h2>
 <p>Agents report heartbeat facts and the server raises alerts for missing nodes,
 missing or stale Claude login, version drift, disk pressure and changed egress.

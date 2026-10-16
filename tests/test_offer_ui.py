@@ -93,15 +93,61 @@ def test_public_free_requires_machine_confirmation_of_absence(site, present):
     assert 'Preparing' in table and '>Free<' not in table
 
 
-def test_unmonitored_catalogue_machine_does_not_link_to_a_missing_status_row(site):
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_disabled_machine_is_not_offered_but_its_records_are_retained(site, language):
     store, sign_in, _ = site
     machine(store, users=("slot01",))
-    configure(store)
+    configure(store, host='RetiredHost', ip='RetiredIP')
+    machine(store, 'm2', users=("slot01",))
+    configure(store, 'm2', host='CurrentHost', ip='CurrentIP')
+    store.set_enabled('m1', False)
+    page = sign_in().call('GET', f'/{language}/').body
+    table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
+    assert 'Machine 1' not in table and '主机 1' not in table
+    assert 'RetiredHost' not in table and 'RetiredIP' not in table
+    assert 'CurrentHost' in table and 'CurrentIP' in table
+    assert '/status#machine-1' not in table
+    assert store.get_node('m1')['enabled'] is False
+    assert store.get_node_offer('m1').host_brand == 'RetiredHost'
+    assert len(store.list_slots(node_id='m1')) == 1
+
+
+def test_no_catalogue_when_only_disabled_machines_have_offers(site):
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    configure(store, host='RetiredHost')
     store.set_enabled('m1', False)
     page = sign_in().call('GET', '/en/').body
+    assert 'id="slot-pricing"' not in page and 'RetiredHost' not in page
+
+
+@pytest.mark.parametrize('has_report', [False, True])
+def test_enabled_unavailable_machine_stays_in_public_catalogue(site, has_report):
+    store, sign_in, _ = site
+    machine(store, users=("slot01",), heard=1)
+    configure(store)
+    if not has_report:
+        store._conn.execute("DELETE FROM heartbeats WHERE node_id = 'm1'")
+        store._conn.commit()
+    page = sign_in().call('GET', '/en/').body
     table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
-    assert 'Machine 1' in table and 'Unavailable' in table
-    assert '/status#machine-1' not in table
+    assert 'Machine 1' in table and 'ExampleHost' in table and 'Unavailable' in table
+    assert ('/status#machine-1' in table) is has_report
+    assert '>Free<' not in table
+
+
+def test_catalogue_explains_fixed_markup_without_exposing_supplier_costs(site):
+    store, sign_in, _ = site
+    machine(store, users=("slot01",))
+    store.set_node_offer('m1', host_brand='ExampleHost', ip_brand='ExampleIP', ip_type='isp',
+                         hosting=offers.Cost('64.20', 'USD', 'year'),
+                         ip=offers.Cost('5.40', 'USD', '30_days'))
+    page = sign_in().call('GET', '/en/').body
+    section = page.split('id="slot-pricing"', 1)[1].split('</section>', 1)[0]
+    assert '$11.91 / month' in section
+    assert 'fixed 10% markup' in section and 'average calendar month' in section
+    assert 'USD offers' in section and 'not a guaranteed quality score' in section
+    assert all(secret not in section for secret in ('64.20', '5.40', 'hosting_cost', '30_days'))
 
 
 @pytest.mark.parametrize("number", ["", "0", "-1", "1.0", "1e0", "1\n", "99999999999", "9"])

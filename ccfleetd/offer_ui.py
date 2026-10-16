@@ -118,7 +118,10 @@ def choices(store: Any, account: Mapping[str, Any], csrf: str, now: float,
 
 def catalogue(store: Any, now: float, max_age: float) -> str:
     """Anonymous machine numbers only; no holders, nicknames, IPs or endpoints."""
-    nodes = store.list_nodes()
+    # Disabled machines are retained for operators and historical records, but
+    # are no longer offered. Keep enabled machines with stale reports visible
+    # so a temporary outage cannot silently disappear from the catalogue.
+    nodes = [node for node in store.list_nodes() if node.get("enabled")]
     if not any(node.get("offer") is not None for node in nodes):
         return ""
     latest = store.latest_heartbeats()
@@ -131,7 +134,7 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
             continue
         offer = offers.public(node.get("offer"))
         beat = latest.get(node["id"])
-        if node.get("enabled") is False or not beat or beat["ts"] < now - max_age:
+        if not beat or beat["ts"] < now - max_age:
             state = label("Unavailable", "暂不可用", inline=True)
         elif slot["state"] == slots.FREE and slot.get("present") == 0:
             state = label("Free", "空闲", inline=True)
@@ -140,7 +143,7 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
         else:
             state = label("Preparing", "准备中", inline=True)
         machine = label(f"Machine {number}", f"主机 {number}", inline=True)
-        if beat is not None and node.get("enabled") is not False:
+        if beat is not None:
             machine = f'<a href="/status#machine-{number}">' + machine + '</a>'
         rows.append('<tr><th scope="row">' + machine + '</th>'
                     '<td>' + _brand(offer["host_brand"]) + '</td><td>'
@@ -154,11 +157,13 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
             '<p class="offer-note">' + label(
                 "Residential is our premium network category; ISP is our standard category. "
                 "The label describes the supplied IP service, not a guaranteed quality score. "
-                "Rates are monthly hosting plus IP cost, with a 10% markup. Prices stay in "
-                "their stated currencies; your Claude subscription is separate.",
+                "Each machine's rate uses its recorded hosting and IP costs, normalized "
+                "to an average calendar month, with a fixed 10% markup. USD offers use "
+                "costs converted by the operator; your Claude subscription is separate.",
                 "住宅 IP 为高级网络类别，ISP 为标准类别。标签描述供应的 IP 服务类型，"
-                "并非保证性的质量评分。月费按主机和 IP 成本加 10% 计算，并保留所标币种；"
-                "Claude 订阅另计。", inline=True) + '</p>'
+                "并非保证性的质量评分。每台主机按已登记的主机和 IP 成本折算为平均自然月，"
+                "再固定加价 10%。美元报价使用运营者换算后的成本；Claude 订阅另计。",
+                inline=True) + '</p>'
             '<div class="offer-sheet" role="region" aria-label="Slot providers and prices" '
             'data-aria-label-en="Slot providers and prices" '
             'data-aria-label-zh="槽位服务商与价格" '
