@@ -45,13 +45,17 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
-            keys_audit_ok=True, shell_audit_ok=True, egress_ok=True):
+            keys_audit_ok=True, shell_audit_ok=True, egress_ok=True,
+            slot_group_exists=True, addgroup_ok=True):
     """Root's view of the world: `id -u` is 0, and the rest just logs."""
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
     calls = tmp_path / "calls.log"
     calls.write_text("")
     password_set = tmp_path / "password-set.marker"
+    slot_group = tmp_path / "slot-group.marker"
+    if slot_group_exists:
+        slot_group.touch()
     stubs = {
         "id": textwrap.dedent("""\
             if [ "$1" = -u ] && [ $# = 1 ]; then echo 0; exit 0; fi
@@ -66,9 +70,19 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
               echo "$2:x:1001:1001::/home/$2:${FAKE_SLOT_SHELL:-/bin/bash}"
               exit 0
             fi
-            if [ "$1" = group ] && [ "$2" = ccfleet-slots ] && [ -n "${FAKE_SLOT_MEMBERS:-}" ]; then
-              echo "ccfleet-slots:x:999:$FAKE_SLOT_MEMBERS"
-            fi"""),
+            if [ "$1" = group ] && [ "$2" = ccfleet-slots ]; then
+              [ "${FAKE_GROUP_LOOKUP_ERROR:-0}" -eq 0 ] || exit "$FAKE_GROUP_LOOKUP_ERROR"
+              [ -f "__SLOT_GROUP__" ] || exit 2
+              echo "ccfleet-slots:x:999:${FAKE_SLOT_MEMBERS:-}"
+              exit 0
+            fi
+            exit 2"""),
+        "addgroup": textwrap.dedent("""\
+            echo "addgroup $*" >> "__LOG__"
+            [ "$*" = "--system ccfleet-slots" ] || exit 1
+            [ __ADDGROUP__ -eq 0 ] || exit 1
+            touch "__SLOT_GROUP__"
+            """),
         "usermod": 'echo "usermod $*" >> "__LOG__"',
         "python3": textwrap.dedent("""\
             echo "python3 $*" >> "__LOG__"
@@ -106,6 +120,8 @@ def fakebin(tmp_path, *, timer_state="active", first_run_ok=True, sshd_ok=True,
         path = bindir / name
         path.write_text("#!/bin/sh\n" + body.replace("__LOG__", str(calls))
                         .replace("__PASSWORD_SET__", str(password_set))
+                        .replace("__SLOT_GROUP__", str(slot_group))
+                        .replace("__ADDGROUP__", "0" if addgroup_ok else "1")
                         .replace("__TIMER__", timer_state)
                         .replace("__START__", "0" if first_run_ok else "1")
                         .replace("__KEYS_AUDIT__", "0" if keys_audit_ok else "2")
@@ -196,6 +212,46 @@ def test_an_owner_agent_for_another_node_is_no_obstacle(tmp_path, sandbox):
 
 
 # -- what it installs ------------------------------------------------------------
+
+@pytest.mark.parametrize("group_exists", [False, True])
+def test_slot_group_exists_before_existing_slot_audits_and_reruns_do_not_recreate_it(
+        tmp_path, sandbox, group_exists):
+    """Real getent exit 2 on an empty fresh host must not abort under pipefail."""
+    bindir, calls = fakebin(tmp_path, slot_group_exists=group_exists)
+    result = run(GOOD, bindir)
+    assert result.returncode == 0, result.stderr
+    lines = calls.read_text().splitlines()
+    creation = "addgroup --system ccfleet-slots"
+    audit = f"python3 -I {sandbox / 'lib/ccfleet_agent/machine.py'} --audit-login-shell"
+    assert lines.count(creation) == (0 if group_exists else 1)
+    if not group_exists:
+        assert lines.index(creation) < lines.index(audit)
+    assert "systemctl start ccfleet-machine.service" in lines
+    calls.write_text("")
+    result = run(GOOD, bindir)
+    assert result.returncode == 0, result.stderr
+    assert creation not in calls.read_text()
+    assert audit in calls.read_text()
+
+
+def test_slot_group_creation_failure_stops_before_audits_ssh_and_timer(tmp_path, sandbox):
+    bindir, calls = fakebin(tmp_path, slot_group_exists=False, addgroup_ok=False)
+    result = run(GOOD, bindir)
+    assert result.returncode != 0 and "could not create the managed slot group" in result.stderr
+    assert not (sandbox / "sshd/02-ccfleet-slots.conf").exists()
+    assert not any("--audit-" in line or line.startswith(("sshd ", "systemctl "))
+                   for line in calls.read_text().splitlines())
+
+
+def test_slot_group_lookup_error_does_not_attempt_creation(tmp_path, sandbox, monkeypatch):
+    bindir, calls = fakebin(tmp_path, slot_group_exists=False)
+    monkeypatch.setenv("FAKE_GROUP_LOOKUP_ERROR", "1")
+    result = run(GOOD, bindir)
+    assert result.returncode != 0 and "could not look up the managed slot group" in result.stderr
+    assert "addgroup " not in calls.read_text()
+    assert "--audit-" not in calls.read_text()
+    assert not (sandbox / "sshd/02-ccfleet-slots.conf").exists()
+
 
 def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
     bindir, calls = fakebin(tmp_path)
