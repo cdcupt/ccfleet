@@ -35,8 +35,10 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import contextlib
 import grp
 import hashlib
+import io
 import json
 import logging
 import os
@@ -45,12 +47,14 @@ import re
 import selectors
 import signal
 import socket
+import ssl
 import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -876,6 +880,70 @@ def slot_report(user: str, state: Mapping[str, Any], cfg: MachineConfig,
     return entry
 
 
+@contextlib.contextmanager
+def _proxy_egress_open(request: urllib.request.Request, timeout: float):
+    """One HTTPS reflector through protected loopback; no redirects or ambient proxies."""
+    connection = None
+    response = None
+    try:
+        target = request.full_url
+        if any(ord(char) <= 32 or ord(char) == 127 for char in target):
+            raise ValueError("invalid reflector")
+        parts = urllib.parse.urlsplit(target)
+        host = parts.hostname
+        if (parts.scheme != "https" or not host or parts.username is not None
+                or parts.password is not None or parts.port not in (None, 443)
+                or parts.netloc.lower() not in (host, host + ":443") or parts.fragment):
+            raise ValueError("invalid reflector")
+        context = ssl.create_default_context()
+        connection = egress._ProxiedHTTPSConnection(host, 443, timeout=min(timeout, 5.0),
+                                                   context=context)
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        connection.request("GET", path, headers={
+            "User-Agent": f"ccfleet-agent/{core.AGENT_VERSION}", "Connection": "close"})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise OSError("reflector unavailable")
+        body = response.read(core.MAX_EGRESS_BYTES + 1)
+        if len(body) > core.MAX_EGRESS_BYTES:
+            raise OSError("reflector response too large")
+        with io.BytesIO(body) as sample:
+            yield sample
+    except Exception:
+        raise OSError("execution egress observation unavailable") from None
+    finally:
+        for resource in (response, connection):
+            if resource is not None:
+                with contextlib.suppress(Exception):
+                    resource.close()
+
+
+def execution_egress_ip(cfg: MachineConfig, system: System) -> dict[str, Any]:
+    """Measure the configured execution route while management keeps its own opener."""
+    unknown = {"ip": None, "source": None}
+    try:
+        enabled = egress.enabled()
+        if enabled is False:
+            # A leftover private config means broken opt-in, not a direct node.
+            # Inspect existence only; the agent never reads proxy credentials.
+            try:
+                egress.UPSTREAM_FILE.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                return unknown
+            return core.egress_ip(cfg.egress_targets, system.opener, min(cfg.timeout_s, 5.0))
+        if enabled is not True:
+            return unknown
+        result = core.egress_ip(cfg.egress_targets[:3], _proxy_egress_open,
+                              min(cfg.timeout_s, 5.0))
+        return result if egress.enabled() is True else unknown
+    except Exception:
+        return unknown
+
+
 def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System,
                     refresh_for: Optional[str] = None, fast: bool = False,
                     abandoned: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
@@ -887,8 +955,7 @@ def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System
     # one it should: its slot's.
     payload["hostname"] = system.hostname()[:100]
     payload["disk"] = core.disk_info(Path(SLOT_HOMES))
-    payload["egress"] = core.egress_ip(cfg.egress_targets, system.opener,
-                                       min(cfg.timeout_s, 5.0))
+    payload["egress"] = execution_egress_ip(cfg, system)
     signing_in = set(state.get("slot_logins") or {}) | set(abandoned or {})
     payload["slots"] = [slot_report(user, state, cfg, system, user == refresh_for,
                                     ask=not fast or user in signing_in, abandoned=abandoned)
