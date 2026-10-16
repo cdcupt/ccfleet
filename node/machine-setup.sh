@@ -259,6 +259,18 @@ note "$ETC_DIR/agent.env, readable by root only"
 # create it implicitly: existing owner/legacy machines must not gain access.
 
 step "4/6  slot SSH restrictions"
+# Fresh machines have no slot users yet, but the audits below query this group
+# under pipefail. Create only the system group now; users still wait for a claim.
+if getent group ccfleet-slots >/dev/null; then
+  :
+else
+  slot_group_status=$?
+  [ "$slot_group_status" -eq 2 ] || die "could not look up the managed slot group"
+  addgroup --system ccfleet-slots >/dev/null \
+    || die "could not create the managed slot group"
+  getent group ccfleet-slots >/dev/null \
+    || die "the managed slot group is unavailable after creation"
+fi
 make_existing_slots_shell_safe
 make_existing_slots_key_eligible
 restrict_slot_sshd
