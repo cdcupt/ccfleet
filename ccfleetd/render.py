@@ -245,7 +245,8 @@ border-radius:10px;background:var(--acc-soft);font-size:14px}
 .offer-costs tbody th{text-transform:none;letter-spacing:normal;font-size:13px;
 color:var(--ink);background:var(--panel)}
 .offer-costs .sub{display:block;font-size:11px;line-height:1.5;margin-top:4px;color:var(--muted)}
-.manage-panel>.mpart:has(.offer-fields){flex-basis:100%;border-top:1px solid var(--rule);padding-top:12px}
+.manage-panel>.mpart:has(.offer-fields){flex-basis:100%;border-top:1px solid var(--rule);
+padding-top:12px}
 .offer-costs td:last-child{font-family:var(--mono);font-weight:700;white-space:nowrap;
 color:var(--acc);background:var(--acc-soft);font-size:15px}
 .offer-costs td:nth-last-child(2){white-space:nowrap;font-variant-numeric:tabular-nums}
