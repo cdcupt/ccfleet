@@ -48,7 +48,11 @@ padding:12px 14px;background:var(--inset);border:1px solid var(--rule-soft);bord
 .offer-choice p{margin:0;font-size:13px}.offer-choice .offer-compact{margin-top:2px}
 .slot-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin:16px 0}
 .slot-filters>label{display:grid;gap:6px;flex:1 1 150px;min-width:0;margin:0}
-.slot-filters input,.slot-filters select{width:100%;min-width:0}
+.slot-filters input,.slot-filters select{width:100%;min-width:0;min-height:42px;
+padding:9px 12px;border:1px solid var(--rule);border-radius:9px;
+background:var(--panel);color:var(--ink);font:inherit}
+.slot-filters input:focus-visible,.slot-filters select:focus-visible{
+outline:2px solid var(--acc);outline-offset:2px}
 .slot-filters .filter-search{flex:2 1 240px}.slot-filter-actions{display:flex;gap:12px;
 align-items:center;padding-bottom:1px}.slot-browser-pages{display:flex;flex-wrap:wrap;
 align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
