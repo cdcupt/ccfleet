@@ -24,7 +24,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-16"
+DOCS_UPDATED = "2026-10-17"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -166,7 +166,7 @@ def _rental_pricing_details() -> str:
     """Current catalogue policy, shared by the guide, explanation and terms."""
     return bi(
         '<p><strong>Alpha pricing.</strong> Each machine has its own monthly USD rate in the '
-        '<a href="/#slot-pricing">public slot list</a>. Alpha pricing passes through recorded '
+        '<a href="/slots">public slot catalogue</a>. Alpha pricing passes through recorded '
         'VPS and exit-IP costs, plus a monthly service fee of 10% of resource cost, with a '
         '$2 minimum per slot. Your Claude subscription or Anthropic API usage is billed '
         'separately.</p><p>Recorded costs are normalized to a calendar month. '
@@ -177,7 +177,7 @@ def _rental_pricing_details() -> str:
         '$22.28 and $27.44 therefore give totals of $10.68, $12.83, $24.51 and $30.18 '
         'per month. The fee remains $2 through $20 of resource cost.</p>',
         '<p><strong>Alpha 定价。</strong>每台主机的美元月费分别列于'
-        '<a href="/#slot-pricing">公开槽位列表</a>。按已记录的 VPS 与出口 IP 成本计价，'
+        '<a href="/slots">公开槽位目录</a>。按已记录的 VPS 与出口 IP 成本计价，'
         '另收资源成本 10% 的月度服务费，每槽位最低 $2。你自己的 Claude 订阅或 '
         'Anthropic API 用量另行付费。</p><p>已记录成本统一折算为日历月：30 天成本乘以 '
         '365/360，年付成本除以 12。报价先将折算后的美元资源成本四舍五入到美分，再取其 '
@@ -250,6 +250,27 @@ def _available_slot_browsing() -> str:
         '网络类型（ISP 或住宅）筛选；每页最多展示 20 台主机。先核对主机价格与成本明细，'
         '再领取该主机，随后返回“我的槽位”管理。原有槽位额度及领取条件仍然适用，'
         '领取不会自动扣款。</p>',
+    )
+
+
+def _public_slot_catalogue() -> str:
+    """Explain public discovery while keeping claims in the signed-in account flow."""
+    return bi(
+        '<p>The homepage’s Slots &amp; pricing section shows up to three real configuration '
+        'examples. Open the <a href="/slots">full public slot catalogue</a> for machine '
+        'providers, network types, current availability and Alpha price breakdowns. Search '
+        'host/IP-provider brands or a public label such as Machine 7, filter by provider '
+        'and IP type, and browse pages of up to 20 machines. The purple Residential and '
+        'blue ISP badges name network types; their text and color do not rank quality or '
+        'guarantee Claude compatibility. Browsing does not reserve a slot. Sign in and '
+        'use <a href="/account/available">Browse available slots</a> to choose and claim '
+        'a machine within your allowance.</p>',
+        '<p>首页“槽位与价格”展示最多三个实际配置示例。打开<a href="/slots">完整公开槽位目录</a>'
+        '可查看主机服务商、网络类型、当前可用状态与 Alpha 报价明细。可按主机／IP 服务商'
+        '或“主机 7”等公开标签搜索，按服务商与 IP 类型筛选，每页最多展示 20 台主机。'
+        '紫色住宅与蓝色 ISP 标签描述网络类型；文字与颜色不代表质量排名，也不保证 Claude '
+        '兼容性。浏览不会预留槽位。领取时请先登录，再通过'
+        '<a href="/account/available">浏览可用槽位</a>，在自己的额度内选择主机。</p>',
     )
 
 
@@ -427,13 +448,17 @@ def overview(
               "Agree the quote and payment directly with the operator.")
     paying_zh = ("已记录的资源成本支持报价前，价格暂不可用。报价与付款方式直接和运营者约定。")
     if per_slot_pricing:
-        paying = ('The <a href="#slot-pricing">slot list</a> shows each provider, IP type '
-                  'and monthly USD rate. Alpha pricing adds a service fee of 10% of '
+        paying = ('The <a href="#slot-pricing">Slots &amp; pricing</a> section shows up to '
+                  'three real configuration examples. The <a href="/slots">full public '
+                  'slot catalogue</a> lists providers, IP types, availability and monthly '
+                  'USD quotes. Alpha pricing adds a service fee of 10% of '
                   'recorded monthly resource cost, with a $2 minimum per slot. Your Claude '
                   'subscription or Anthropic API usage is billed separately. Choose a '
                   'machine at its displayed rate and pay the operator directly; this site '
                   'does not charge automatically or renew automatically.')
-        paying_zh = ('<a href="#slot-pricing">槽位列表</a>展示各服务商、IP 类型及月费，'
+        paying_zh = ('<a href="#slot-pricing">槽位与价格</a>展示最多三个实际配置示例。'
+                     '<a href="/slots">完整公开槽位目录</a>列出服务商、IP 类型、可用状态'
+                     '与美元月费。'
                      'Alpha 定价在已记录的美元月度资源成本上，收取 10% 服务费，'
                      '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
                      '按所示价格选择主机，直接支付给运营者；本站不会自动扣款或自动续费。')
@@ -1001,14 +1026,14 @@ def guide(
     price_zh = "已记录的资源成本支持报价前，价格暂不可用。报价与付款方式直接和运营者约定。"
     if per_slot_pricing:
         price_en = ('Each slot has its own provider, IP type and monthly price in the '
-                    '<a href="/#slot-pricing">slot list</a>. Alpha pricing passes through '
+                    '<a href="/slots">public slot catalogue</a>. Alpha pricing passes through '
                     'recorded monthly VPS and exit-IP costs, plus a 10% service fee with '
                     'a $2 minimum per slot, in USD. Your Claude subscription or Anthropic '
                     'API usage is billed separately. Choose the machine at its displayed '
                     'rate in <a href="/account/available">Browse available slots</a> '
                     'and pay the operator directly; this site '
                     'does not charge automatically or renew automatically.')
-        price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/#slot-pricing">槽位列表</a>，'
+        price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/slots">公开槽位目录</a>，'
                     'Alpha 定价按已记录的 VPS 与出口 IP 美元月成本，加 10% 服务费，'
                     '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
                     '在<a href="/account/available">浏览可用槽位</a>按所示价格选择主机，'
@@ -1251,7 +1276,8 @@ def guide(
     if per_slot_pricing:
         body += ('<div class="card" id="rental-pricing">'
                  + bi('<h2>Choosing a slot and its rate</h2>', '<h2>选择槽位与价格</h2>')
-                 + _available_slot_browsing() + _rental_pricing_details() + '</div>')
+                 + _public_slot_catalogue() + _available_slot_browsing()
+                 + _rental_pricing_details() + '</div>')
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
@@ -1505,7 +1531,7 @@ def how_it_works(
     body += '<div class="card" id="rental-pricing">' + bi(
         '<h2>Slot providers, IP types and rates</h2>',
         '<h2>槽位服务商、IP 类型与价格</h2>',
-    ) + _rental_pricing_details() + bi(
+    ) + _public_slot_catalogue() + _rental_pricing_details() + bi(
         '<p>An ISP slot can use a '
         'separate approved exit proxy; provider HTTPS remains encrypted through that '
         'tunnel. Your account page shows the same labels before you choose a slot.</p>',
@@ -1529,13 +1555,13 @@ def terms(
                  "付款后开通；本站不会自动扣款或自动续费。")
     if per_slot_pricing:
         paying = ('Monthly rates are listed separately for each slot in the '
-                  '<a href="/#slot-pricing">slot list</a>. Alpha pricing adds a service '
+                  '<a href="/slots">public slot catalogue</a>. Alpha pricing adds a service '
                   'fee of 10% of recorded monthly VPS and exit-IP resource cost, with a '
                   '$2 minimum per slot, in USD. Your Claude subscription or Anthropic API '
                   'usage is billed separately. Agree the price and paid period directly '
                   'with the operator; claiming a slot does not charge you automatically '
                   'or renew automatically.')
-        paying_zh = ('各槽位月费分别列于<a href="/#slot-pricing">槽位列表</a>：'
+        paying_zh = ('各槽位月费分别列于<a href="/slots">公开槽位目录</a>：'
                      'Alpha 定价在已记录的 VPS 与出口 IP 美元月度资源成本上，加 10% 服务费，'
                      '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
                      '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款或自动续费。')

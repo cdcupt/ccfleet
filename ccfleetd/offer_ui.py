@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from decimal import Decimal
 from html import escape
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -26,7 +27,8 @@ vertical-align:middle;overflow-wrap:anywhere}
 .offer-table tbody th{text-transform:none;letter-spacing:normal;font-weight:600}
 .ip-category{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
 font-weight:600;white-space:nowrap;background:var(--inset);border:1px solid var(--rule-soft)}
-.ip-category.residential,.ip-category.isp{color:var(--ink);background:var(--inset)}
+.ip-category.residential{color:#60269c;background:#f4edff;border-color:#cdb5e8}
+.ip-category.isp{color:#1253a0;background:#edf5ff;border-color:#a9c9ec}
 .offer-table tbody tr:last-child>*{border-bottom:0}.offer-table td:last-child{white-space:nowrap}
 .offer-note{font-size:13px;color:var(--muted);margin:12px 0}
 .alpha-badge{display:inline-flex;align-items:center;border:1px solid var(--acc-line);
@@ -57,6 +59,14 @@ outline:2px solid var(--acc);outline-offset:2px}
 align-items:center;padding-bottom:1px}.slot-browser-pages{display:flex;flex-wrap:wrap;
 align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
 .slot-browser-pages p{margin:0}.slot-browser-pages nav{display:flex;gap:12px}
+.offer-examples{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));
+gap:14px;margin:16px 0}.offer-example{padding:18px;border:1px solid var(--rule-soft);
+border-radius:12px;background:var(--panel);min-width:0}.offer-example h3{font-size:16px;
+margin:12px 0 6px}.offer-example p{margin:8px 0}.offer-example .offer-rate{font-size:22px}
+.offer-example-brands{margin:12px 0;font-size:12px;line-height:1.6}
+.offer-example-brands dt{color:var(--muted)}.offer-example-brands dd{margin:0 0 6px;
+overflow-wrap:anywhere}.offer-policy{margin:18px 0;font-size:13px}
+.offer-policy>summary{cursor:pointer;color:var(--acc);font-weight:600}
 .slot-browser .offer-table form{margin:0}.slot-browser .offer-table td{padding-block:10px}
 @media(max-width:560px){.slot-filters>label,.slot-filters .filter-search{flex-basis:100%}
 .slot-offer{gap:10px 16px}.slot-offer>div{flex:1 1 40%}}
@@ -216,8 +226,17 @@ def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
     Search and pagination use approved public metadata only. These are choices,
     not reservations: the existing claim action rechecks eligibility atomically.
     """
-    nodes = sorted(available(store, account, now, max_age),
-                   key=lambda node: status.public_machine_number(node) or 0)
+    return _browser(available(store, account, now, max_age), query,
+                    path="/account/available", csrf=csrf, can_claim=can_claim)
+
+
+def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: str,
+             csrf: str = "", can_claim: bool = False,
+             availability: Optional[Mapping[str, tuple[str, str]]] = None,
+             reported: Optional[set[str]] = None) -> str:
+    """Shared bounded filters and rows; only the authenticated wrapper can claim."""
+    public_inventory = availability is not None
+    nodes = sorted(nodes, key=lambda node: status.public_machine_number(node) or 0)
     brands = {value for node in nodes for key, value in offers.public(node.get("offer")).items()
               if key in ("host_brand", "ip_brand") and value}
     selected = _browse_params(query, brands)
@@ -240,7 +259,7 @@ def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
     page = max(1, min(int(selected["page"]), pages))
     first = (page - 1) * PAGE_SIZE
     shown = matching[first:first + PAGE_SIZE]
-    filters = ('<form class="slot-filters" method="get" action="/account/available">'
+    filters = ('<form class="slot-filters" method="get" action="' + path + '">'
                '<label class="filter-search">' + label("Search", "搜索", inline=True)
                + '<input type="search" name="q" maxlength="80" value="'
                + escape(selected["q"]) + '" placeholder="Provider or Machine number" '
@@ -258,7 +277,7 @@ def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
                                                ("isp", "ISP", "ISP IP")))
                + '</select></label><div class="slot-filter-actions"><button type="submit">'
                + label("Search", "搜索", inline=True) + '</button>'
-               '<a href="/account/available">' + label("Reset", "重置", inline=True)
+               '<a href="' + path + '">' + label("Reset", "重置", inline=True)
                + '</a></div></form>')
     rows = []
     for node in shown:
@@ -271,36 +290,47 @@ def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
                   '<button class="primary" type="submit">'
                   + label("Claim this slot", "领取此槽位", inline=True)
                   + '</button></form></td>') if can_claim else ''
-        rows.append('<tr><th scope="row"><a href="/status#machine-' + str(number) + '">'
-                    + machine + '</a></th><td>' + _brand(public["host_brand"]) + '</td><td>'
+        if reported is None or node["id"] in reported:
+            machine = '<a href="/status#machine-' + str(number) + '">' + machine + '</a>'
+        state = ('<td>' + label(*availability[node["id"]], inline=True) + '</td>'
+                 if public_inventory else '')
+        rows.append('<tr><th scope="row">' + machine + '</th><td>'
+                    + _brand(public["host_brand"]) + '</td><td>'
                     + _brand(public["ip_brand"]) + '</td><td>' + ip_label(public["ip_type"])
-                    + '</td><td>' + quoted_rate(node) + '</td>' + action + '</tr>')
+                    + '</td>' + state + '<td>' + quoted_rate(node) + '</td>' + action + '</tr>')
     heads = [("Slot machine", "槽位主机"), ("Host provider", "主机服务商"),
              ("IP provider", "IP 服务商"), ("IP type", "IP 类型"),
              ("Current Alpha quote", "当前 Alpha 报价")]
+    if public_inventory:
+        heads.insert(4, ("Availability", "可用情况"))
     if can_claim:
         heads.append(("Action", "操作"))
-    table = ('<div class="offer-sheet" role="region" aria-label="Available slot machines" '
-             'data-aria-label-en="Available slot machines" '
-             'data-aria-label-zh="可领取槽位主机" tabindex="0"><table class="offer-table">'
+    region_en, region_zh = (("Slot catalogue", "槽位目录") if public_inventory else
+                            ("Available slot machines", "可领取槽位主机"))
+    table = ('<div class="offer-sheet" role="region" aria-label="' + region_en + '" '
+             'data-aria-label-en="' + region_en + '" data-aria-label-zh="' + region_zh
+             + '" tabindex="0"><table class="offer-table">'
              '<thead><tr>' + ''.join('<th scope="col">' + label(en, zh, inline=True)
                                      + '</th>' for en, zh in heads)
              + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>') if rows else (
                  '<p class="offer-note">' + label(
+                     "No machines match these filters." if public_inventory else
                      "No available machines match these filters.",
+                     "没有符合筛选条件的主机。" if public_inventory else
                      "没有符合筛选条件的可领取主机。", inline=True) + '</p>')
 
     def page_link(target: int, en: str, zh: str) -> str:
         parameters = {key: value for key, value in selected.items() if key != "page" and value}
         parameters["page"] = str(target)
-        return '<a class="btn" href="' + escape('/account/available?' + urlencode(parameters)) \
+        return '<a class="btn" href="' + escape(path + '?' + urlencode(parameters)) \
             + '">' + label(en, zh, inline=True) + '</a>'
 
     navigation = (page_link(page - 1, "Previous", "上一页") if page > 1 else '')
     navigation += (page_link(page + 1, "Next", "下一页") if page < pages else '')
     count = label(f"Showing {first + 1 if total else 0}–{first + len(shown)} of {total} "
-                  "matching available machines.",
-                  f"共 {total} 台可领取主机符合条件，当前显示第 "
+                  + ("matching machines." if public_inventory else "matching available machines."),
+                  f"共 {total} 台" + ("主机" if public_inventory else "可领取主机")
+                  + "符合条件，当前显示第 "
                   f"{first + 1 if total else 0}–{first + len(shown)} 台。", inline=True)
     pagination = ('<div class="slot-browser-pages"><p class="offer-note">'
                   + label(f"Page {page} of {pages}", f"第 {page}／{pages} 页", inline=True)
@@ -311,79 +341,129 @@ def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
             + count + '</p>' + table + pagination + '</section>')
 
 
-def catalogue(store: Any, now: float, max_age: float) -> str:
-    """Anonymous machine numbers only; no holders, nicknames, IPs or endpoints."""
-    # Disabled machines are retained for operators and historical records, but
-    # are no longer offered. Keep enabled machines with stale reports visible
-    # so a temporary outage cannot silently disappear from the catalogue.
-    nodes = [node for node in store.list_nodes() if node.get("enabled")]
-    if not any(node.get("offer") is not None for node in nodes):
-        return ""
+def _public_nodes(store: Any) -> list[Mapping[str, Any]]:
+    declared = {slot["node_id"] for slot in store.list_slots()}
+    return [node for node in store.list_nodes()
+            if node.get("enabled") and node["id"] in declared
+            and status.public_machine_number(node) is not None]
+
+
+def _pricing_policy() -> str:
+    """The same complete pricing and Alpha disclosures on examples and inventory."""
+    paragraphs = (
+        ("Alpha pricing passes through recorded VPS and exit-IP costs, plus a monthly "
+         "service fee of 10% of resource cost, with a $2 minimum per slot. "
+         "Costs are normalized to an average calendar month and converted to USD "
+         "by the operator. Resource cost and service fee are each rounded to cents, "
+         "then added. Your Claude subscription or Anthropic API usage is billed separately.",
+         "Alpha 定价按已记录的 VPS 与出口 IP 成本，加收资源成本 10% 的月服务费，"
+         "每个槽位的服务费最低为 2 美元。成本折算为平均自然月并由运营者换算为美元；"
+         "资源成本和服务费分别舍入到美分后相加。Claude 订阅或 Anthropic API 用量另行计费。"),
+        ("Annual costs divide by 12; 30-day costs multiply by 365/360. Missing or "
+         "unconverted costs leave pricing unavailable. A normalization rounding line "
+         "reconciles any difference between rounded components and resource cost.",
+         "年付成本除以 12，30 天成本乘以 365/360。成本缺失或尚未换算时，价格暂不可用。"
+         "如单项舍入与资源成本合计存在差异，折算舍入行会说明差额。"),
+        ("ISP and residential describe network types, not a quality ranking or a "
+         "guarantee of Claude compatibility. Each customer receives a dedicated VPS "
+         "and dedicated exit IP. Bundled supplier costs are shown without an invented split.",
+         "ISP 与住宅表示网络类型，并非质量排名，也不保证 Claude 兼容性。每位客户使用独立 "
+         "VPS 和独立出口 IP。供应商打包成本按记录展示，不虚构拆分。"),
+        ("Available means unallocated, not a promise of eligibility. Sign in to choose an "
+         "available priced slot within your allowance. Payment is agreed directly "
+         "with the operator; this site does not charge or renew automatically.",
+         "可领取表示槽位尚未分配，不保证你有领取权限。登录后可在额度内选择可领取的已定价"
+         "槽位。付款直接与运营者约定，本站不会自动扣款或续费。"),
+        ("Alpha is still being tested. The operator has had encouraging results with one "
+         "residential slot; reliability across providers, configurations and multiple users "
+         "is still being evaluated. Alpha pricing is introductory and may change for future "
+         "billing periods. If pricing changes, you will receive an updated quote before "
+         "renewal; an already agreed billing period retains its agreed price.",
+         "Alpha 仍在测试中。运营者自用一个住宅槽位的结果令人鼓舞，但不同服务商、配置及多用户"
+         "情况下的可靠性仍在评估。Alpha 价格为入门阶段定价，未来账期可能调整；如有变更，"
+         "续费前会提供新报价，已经约定的账期继续按原价执行。"),
+    )
+    return ('<details class="offer-policy"><summary>'
+            + label("Alpha pricing & service limits", "Alpha 定价与服务说明", inline=True)
+            + '</summary>' + ''.join('<p class="offer-note">' + label(en, zh, inline=True)
+                                    + '</p>' for en, zh in paragraphs) + '</details>')
+
+
+def public_browse(store: Any, now: float, max_age: float, query: Mapping[str, str]) -> str:
+    """Public inventory is metadata only; it never reads holders or accepts claims."""
+    nodes = _public_nodes(store)
     latest = store.latest_heartbeats()
     declared = {slot["node_id"]: slot for slot in store.list_slots()}
-    rows = []
-    for node in sorted(nodes, key=lambda n: status.public_machine_number(n) or 0):
-        number = status.public_machine_number(node)
-        slot = declared.get(node["id"])
-        if number is None or slot is None:
-            continue
-        offer = offers.public(node.get("offer"))
-        beat = latest.get(node["id"])
+    states = {}
+    for node in nodes:
+        slot, beat = declared[node["id"]], latest.get(node["id"])
         if not beat or beat["ts"] < now - max_age:
-            state = label("Unavailable", "暂不可用", inline=True)
+            state = ("Unavailable", "暂不可用")
         elif slot["state"] == slots.FREE and slot.get("present") == 0:
-            state = label("Available", "可领取", inline=True)
+            state = ("Available", "可领取")
         elif slot["state"] in slots.HELD:
-            state = label("In use", "已领取", inline=True)
+            state = ("In use", "已领取")
         else:
-            state = label("Preparing", "准备中", inline=True)
-        machine = label(f"Machine {number}", f"主机 {number}", inline=True)
-        if beat is not None:
-            machine = f'<a href="/status#machine-{number}">' + machine + '</a>'
-        rows.append('<tr><th scope="row">' + machine + '</th>'
-                    '<td>' + _brand(offer["host_brand"]) + '</td><td>'
-                    + _brand(offer["ip_brand"]) + '</td><td>' + ip_label(offer["ip_type"])
-                    + '</td><td>' + state + '</td><td>' + quoted_rate(node) + '</td></tr>')
-    heads = (("Slot machine", "槽位主机"), ("Host provider", "主机服务商"),
-             ("IP provider", "IP 服务商"), ("IP type", "IP 类型"),
-             ("Availability", "可用情况"), ("Monthly price", "月费"))
+            state = ("Preparing", "准备中")
+        states[node["id"]] = state
+    return (_browser(nodes, query, path="/slots", availability=states, reported=set(latest))
+            + '<p class="offer-note"><a class="btn primary" href="/account/available">'
+            + label("Sign in to choose a slot", "登录并选择槽位", inline=True) + '</a></p>'
+            + _pricing_policy())
+
+
+def catalogue(store: Any, now: float, max_age: float) -> str:
+    """At most three recorded example configurations; never a homepage inventory."""
+    nodes = sorted(_public_nodes(store), key=lambda node: status.public_machine_number(node) or 0)
+    if not nodes:
+        return ""
+    distinct = []
+    seen = set()
+    for node in nodes:
+        offer = node.get("offer")
+        value = offers.quote(offer)
+        if value is None:
+            continue
+        key = (offer.host_brand, offer.ip_brand, offer.ip_type, value.hosting.amount,
+               value.ip.amount, value.resource.amount, value.total.amount, value.bundled)
+        if key not in seen:
+            seen.add(key)
+            distinct.append(node)
+    def by_price(node):
+        return Decimal(offers.quote(node["offer"]).total.amount), status.public_machine_number(node)
+
+    distinct.sort(key=by_price)
+    selected = []
+    for kind in ("residential", "isp"):
+        representative = next((node for node in distinct if node["offer"].ip_type == kind), None)
+        if representative is not None:
+            selected.append(representative)
+    selected.extend(node for node in distinct if node not in selected)
+    cards = []
+    for node in sorted(selected[:3], key=by_price):
+        offer = offers.public(node.get("offer"))
+        number = status.public_machine_number(node)
+        cards.append('<article class="offer-example">' + ip_label(offer["ip_type"])
+                     + '<h3>' + label("Example configuration", "配置示例", inline=True) + '</h3>'
+                     '<p class="offer-note">'
+                     + label(f"Recorded on Machine {number}", f"记录来自主机 {number}", inline=True)
+                     + '</p><dl class="offer-example-brands"><dt>'
+                     + label("Host provider", "主机服务商", inline=True) + '</dt><dd>'
+                     + _brand(offer["host_brand"]) + '</dd><dt>'
+                     + label("IP provider", "IP 服务商", inline=True) + '</dt><dd>'
+                     + _brand(offer["ip_brand"]) + '</dd></dl>' + quoted_rate(node) + '</article>')
+    examples = ('<div class="offer-examples">' + ''.join(cards) + '</div>') if cards else (
+        '<p class="offer-note">' + label(
+            "Pricing unavailable until recorded costs support example quotes.",
+            "已记录成本支持示例报价前，价格暂不可用。", inline=True) + '</p>')
     return ('<section class="band" id="slot-pricing"><h2>'
             + label("Slots & pricing", "槽位与价格", inline=True) + ' ' + alpha_label() + '</h2>'
             '<p class="offer-note">' + label(
-                "Alpha pricing passes through recorded VPS and exit-IP costs, plus a monthly "
-                "service fee of 10% of resource cost, with a $2 minimum per slot. "
-                "Costs are normalized to an average calendar month and converted to USD "
-                "by the operator. Resource cost and service fee are each rounded to cents, "
-                "then added. Your Claude subscription or Anthropic API usage is billed separately.",
-                "Alpha 定价按已记录的 VPS 与出口 IP 成本，加收资源成本 10% 的月服务费，"
-                "每个槽位的服务费最低为 2 美元。成本折算为平均自然月并由运营者换算为美元；"
-                "资源成本和服务费分别舍入到美分后相加。Claude 订阅或 Anthropic API 用量另行计费。",
-                inline=True) + '</p><p class="offer-note">' + label(
-                "ISP and residential describe network types, not a quality ranking or a "
-                "guarantee of Claude compatibility. Each customer receives a dedicated VPS "
-                "and dedicated exit IP. Bundled supplier costs are shown without an "
-                "invented split.",
-                "ISP 与住宅表示网络类型，并非质量排名，也不保证 Claude 兼容性。每位客户使用独立 "
-                "VPS 和独立出口 IP。供应商打包成本按记录展示，不虚构拆分。", inline=True) + '</p>'
-            '<div class="offer-sheet" role="region" aria-label="Slot providers and prices" '
-            'data-aria-label-en="Slot providers and prices" '
-            'data-aria-label-zh="槽位服务商与价格" '
-            'tabindex="0"><table class="offer-table"><thead><tr>'
-            + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>'
-                      for en, zh in heads) + '</tr></thead><tbody>' + ''.join(rows)
-            + '</tbody></table></div><p class="offer-note">' + label(
-                "Available means unallocated, not a promise of eligibility. Sign in to choose an "
-                "available priced slot within your allowance. Payment is agreed directly "
-                "with the operator; this site does not charge or renew automatically.",
-                "可领取表示槽位尚未分配，不保证你有领取权限。登录后可在额度内选择可领取的已定价"
-                "槽位。付款直接与运营者约定，本站不会自动扣款或续费。", inline=True)
-            + '</p><p class="offer-note">' + label(
-                "Alpha is still being tested. The operator has had encouraging results with one "
-                "residential slot; reliability across providers, configurations and multiple users "
-                "is still being evaluated. Alpha pricing is introductory and may change for future "
-                "billing periods. If pricing changes, you will receive an updated quote before "
-                "renewal; an already agreed billing period retains its agreed price.",
-                "Alpha 仍在测试中。运营者自用一个住宅槽位的结果令人鼓舞，但不同服务商、配置及多用户"
-                "情况下的可靠性仍在评估。Alpha 价格为入门阶段定价，未来账期可能调整；如有变更，"
-                "续费前会提供新报价，已经约定的账期继续按原价执行。", inline=True)
-            + '</p></section>')
+                "A few examples from recorded configurations. These are current Alpha quotes, "
+                "not a promise that a matching slot is available. Browse the catalogue for "
+                "all providers, prices and availability.",
+                "以下为已记录配置的部分示例，展示当前 Alpha 报价，不保证同类槽位可领取。"
+                "完整服务商、价格与可用情况请查看槽位目录。", inline=True) + '</p>'
+            + examples + '<p><a class="btn primary" href="/slots">'
+            + label("View all slots", "查看全部槽位", inline=True) + '</a></p>'
+            + _pricing_policy() + '</section>')

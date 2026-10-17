@@ -647,7 +647,7 @@ border-color:var(--acc-line)}
 """
 
 #: The pages anybody can read, in the order the bar on top shows them.
-NAV = (("/", "Overview"), ("/docs/guide", "Guide"),
+NAV = (("/", "Overview"), ("/slots", "Slots & pricing"), ("/docs/guide", "Guide"),
        ("/docs/how-it-works", "How it works"), ("/status", "Status"),
        ("/privacy", "Privacy"),
        ("/docs/terms", "Terms"))
@@ -662,7 +662,8 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
     and nothing on a page that is itself the way in (``door``). A page served
     at more than one address names the one to keep in ``canonical``.
     """
-    nav_zh = {"Overview": "概览", "Guide": "使用指南", "How it works": "工作原理",
+    nav_zh = {"Overview": "概览", "Slots & pricing": "槽位与价格",
+              "Guide": "使用指南", "How it works": "工作原理",
               "Status": "服务状态", "Privacy": "隐私", "Terms": "条款"}
     links = "".join(f'<a href="{path}"{_HERE if path == here else ""}>'
                     f'{label(name, nav_zh[name], inline=True)}</a>' for path, name in NAV)
@@ -704,6 +705,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
                           )
             + ''.join(f'<a href="{path}">{label(en, zh, inline=True)}</a>'
                       for path, en, zh in (("/account", "Your slots", "我的槽位"),
+                                           ("/slots", "Slots & pricing", "槽位与价格"),
                                            ("/docs/guide", "Guide", "使用指南"),
                                            ("/docs/how-it-works", "How it works", "工作原理"),
                                            ("/privacy", "Privacy", "隐私"),
@@ -1127,6 +1129,18 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                 .get("checked_at"), now) for s in held)
     return _shell("your slots", body, _refresh(held, logins, updating or reading),
                   viewer=viewer_for(account, session_id, cfg, store))
+
+
+def slots_page(store: Store, cfg: Config, now: float, query: Mapping[str, str], *,
+               viewer: Optional[Viewer] = None) -> str:
+    """Public inventory without customer identities or claim authority."""
+    body = ('<div class="pagehead"><h1>'
+            + label("Slots & pricing", "槽位与价格", inline=True) + ' '
+            + offer_ui.alpha_label() + '</h1><p class="sub">'
+            + label("Compare providers, network types and current Alpha quotes.",
+                    "比较服务商、网络类型与当前 Alpha 报价。", inline=True) + '</p></div>'
+            + offer_ui.public_browse(store, now, cfg.heartbeat_max_age_s, query))
+    return _shell("Slots & pricing", body, here="/slots", viewer=viewer, width="wide")
 
 
 def _account_nav(current: str) -> str:

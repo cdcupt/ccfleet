@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
-    '/', '/account', '/account/available', '/privacy', '/status', '/docs', '/docs/guide',
+    '/', '/slots', '/account', '/account/available', '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
     '/docs/library/docs/platform-comparison.html',
@@ -21,7 +21,7 @@ POST_PAGES = frozenset({'/account/claim', '/account/outage-emails', '/auth/signo
                        '/account/gateway/revoke'})
 VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
                   'meta', 'param', 'source', 'track', 'wbr'})
-TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/account': '我的槽位',
+TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
              '/account/available': '可用槽位',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
              '/docs/how-it-works': '工作原理', '/docs/terms': '服务条款',
@@ -221,7 +221,7 @@ class _Projection(HTMLParser):
                                  else self.target)
                 switch_parts = urlsplit(switch_target)
                 search = ''
-                if switch_parts.path == '/account/available':
+                if switch_parts.path in {'/slots', '/account/available'}:
                     search = _slot_search_query(switch_parts.query)
                 switch_target = urlunsplit(('', '', switch_parts.path, search,
                                              switch_parts.fragment))
