@@ -639,7 +639,12 @@ text-align:center}
 .ways{grid-template-columns:minmax(0,1fr)}
 .door{padding:22px 20px 20px}
 .sitefoot-in{padding-left:16px;padding-right:16px}}
-""" + status.LINE_CSS
+""" + status.LINE_CSS + """
+.account-nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 20px}
+.account-nav [aria-current=page]{background:var(--acc-soft);color:var(--acc);
+border-color:var(--acc-line)}
+.slot-browse-link{min-width:0}.slot-browse-link p{margin:0 0 8px}
+"""
 
 #: The pages anybody can read, in the order the bar on top shows them.
 NAV = (("/", "Overview"), ("/docs/guide", "Guide"),
@@ -1042,11 +1047,16 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         allowance = (f"<p>You may hold <strong>{quota}</strong> "
                      f"{'slot' if quota == 1 else 'slots'}, and hold "
                      f"<strong>{counted}</strong>.</p>")
-        if counted < quota:
-            if any(node.get("offer") is not None for node in nodes.values()):
-                claim = offer_ui.choices(store, account, csrf, now, cfg.heartbeat_max_age_s)
-            else:
-                claim = _form("/account/claim", csrf, "Claim a slot", cls="primary")
+    if any(node.get("offer") is not None for node in nodes.values()):
+        available_count = len(offer_ui.available(
+            store, account, now, cfg.heartbeat_max_age_s))
+        claim = ('<div class="slot-browse-link"><p class="muted">'
+                 + label(f"{available_count} available slots", f"{available_count} 个可用槽位",
+                         inline=True)
+                 + '</p><a class="btn primary" href="/account/available">'
+                 + label("Browse available slots", "浏览可用槽位", inline=True) + '</a></div>')
+    elif quota > counted:
+        claim = _form("/account/claim", csrf, "Claim a slot", cls="primary")
     allowance = _blocks(allowance, [
         "你还没有槽位。",
         '槽位由运营方分配。获得额度后可在这里领取。<a href="/docs">了解如何购买</a>。',
@@ -1078,7 +1088,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         '<p class="sub">' + label('Signed in as', '当前账号', inline=True)
         + f' <strong>{escape(str(account.get("email", "")))}'
         "</strong></p></div>"
-        + banner
+        + _account_nav("/account") + banner
         + (
             '<div class="card allowance"><div><h2>'
         ) + label('Your allowance', '槽位额度', inline=True)
@@ -1117,6 +1127,41 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                 .get("checked_at"), now) for s in held)
     return _shell("your slots", body, _refresh(held, logins, updating or reading),
                   viewer=viewer_for(account, session_id, cfg, store))
+
+
+def _account_nav(current: str) -> str:
+    return ('<nav class="account-nav" aria-label="Slot pages" '
+            'data-aria-label-en="Slot pages" data-aria-label-zh="槽位页面">'
+            + ''.join('<a class="btn" href="' + path + '"'
+                      + (' aria-current="page"' if path == current else '') + '>'
+                      + label(en, zh, inline=True) + '</a>'
+                      for path, en, zh in (("/account", "Your slots", "我的槽位"),
+                                           ("/account/available", "Available slots", "可用槽位")))
+            + '</nav>')
+
+
+def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
+                   session_id: str, now: float, query: Mapping[str, str]) -> str:
+    """Only this customer's eligible pool; browsing never claims or starts a model."""
+    if account is None:
+        return _signed_out(cfg)
+    held = store.list_slots(held_by=account["id"])
+    quota = int(account.get("slot_quota") or 0)
+    counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
+    can_claim = counted < quota
+    note = ('' if can_claim else '<p class="offer-note">' + label(
+        "You have no unused slot allowance. You can browse prices; contact the operator "
+        "before claiming another slot.",
+        "当前没有剩余槽位额度。你仍可浏览价格；领取其他槽位前请联系运营者。", inline=True) + '</p>')
+    body = ('<div class="pagehead"><h1>'
+            + label("Available slots", "可用槽位", inline=True) + '</h1><p class="sub">'
+            + label("Search providers and network types, then choose a machine.",
+                    "搜索服务商与网络类型，再选择主机。", inline=True) + '</p></div>'
+            + _account_nav("/account/available") + note
+            + offer_ui.browse(store, account, csrf_for(session_id, cfg.cookie_secret), now,
+                              cfg.heartbeat_max_age_s, query, can_claim=can_claim))
+    return _shell("Available slots", body, viewer=viewer_for(account, session_id, cfg, store),
+                  width="wide")
 
 
 def _paid(through: Optional[str], now: float) -> str:

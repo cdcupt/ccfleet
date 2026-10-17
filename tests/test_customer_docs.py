@@ -168,6 +168,7 @@ def test_the_operators_address_appears_only_once_they_chose_one():
 
 
 def test_the_guide_quotes_labels_the_user_site_really_shows():
+    from ccfleetd import offer_ui
     from tests.test_html_document_preservation import visible_html
 
     guide = visible_html(render("/docs/guide"))
@@ -175,8 +176,8 @@ def test_the_guide_quotes_labels_the_user_site_really_shows():
     for label in ("Setting up", "Ready to sign in", "In use"):
         assert label in states and label in guide
     source = inspect.getsource(usersite)
+    assert "Claim this slot" in inspect.getsource(offer_ui) and "Claim this slot" in guide
     for label in (
-        "Claim a slot",
         "Sign in to Claude",
         "Send code",
         "Connect this computer",

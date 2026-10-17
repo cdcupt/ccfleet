@@ -61,7 +61,9 @@ def test_unknown_component_never_uses_legacy_rate_or_becomes_claimable(site):
     store.set_price("20", "USD", by="operator", now=1)
     user = sign_in(quota=1)
     assert 'Pricing unavailable' in user.call("GET", "/en/").body
-    assert 'Claim this slot' not in user.page()
+    browser = user.call('GET', '/account/available')
+    assert browser.status == 200 and 'Claim this slot' not in browser.body
+    assert 'name="machine_number"' not in browser.body
     response = user.press("/account/claim", machine_number="1")
     assert response.status == 303 and 'no-slot' in response.getheader('Location')
     assert store.list_slots()[0]['state'] == slots.FREE
@@ -77,6 +79,11 @@ def test_partial_rollout_keeps_unconfigured_nodes_unpriced_and_unclaimable(site)
     catalogue = user.call('GET', '/en/').body.split('id="slot-pricing"', 1)[1]
     assert 'Pricing unavailable' in catalogue
     assert '$20 / month' not in catalogue
+    browser = user.call('GET', '/account/available')
+    assert browser.status == 200 and 'Claim this slot' in browser.body
+    assert 'name="machine_number" value="1"' in browser.body
+    assert 'name="machine_number" value="2"' not in browser.body
+    assert '$20 / month' not in browser.body
     assert user.press('/account/claim', machine_number='2').getheader('Location').startswith(
         '/account?note=no-slot')
     assert store.list_slots(held_by=user.account['id']) == []
@@ -172,8 +179,13 @@ def test_claim_uses_the_selected_price_tier_not_first_free_machine(site):
     configure(store, "m1", host="ExampleResidential", kind="residential", cost="20", ip_cost="0")
     configure(store, "m2")
     user = sign_in(quota=1)
-    before = user.page()
-    assert 'Claim this slot' in before and '$11.70 / month' in before
+    account_page = user.page()
+    assert 'Browse available slots' in account_page
+    assert 'Claim this slot' not in account_page and 'class="offer-choices"' not in account_page
+    browser = user.call('GET', '/account/available')
+    assert browser.status == 200
+    assert 'Claim this slot' in browser.body and '$11.70 / month' in browser.body
+    assert 'name="machine_number" value="2"' in browser.body
     assert user.press('/account/claim', machine_number="2").status == 303
     [held] = store.list_slots(held_by=user.account['id'])
     assert held['node_id'] == 'm2'
@@ -187,6 +199,9 @@ def test_choice_does_not_bypass_existing_claim_restrictions(site, restricted):
     machine(store, users=("slot01",))
     configure(store)
     user = sign_in(quota=1)
+    before = user.call('GET', '/account/available')
+    assert before.status == 200 and 'Claim this slot' in before.body
+    assert 'name="machine_number" value="1"' in before.body
     if restricted == 'disabled':
         store.set_enabled('m1', False)
     elif restricted == 'offline':
@@ -198,7 +213,9 @@ def test_choice_does_not_bypass_existing_claim_restrictions(site, restricted):
             store.reserve_machine('m1', other.account['id'])
         else:
             store.claim_slot(other.account['id'], node_id='m1', now=time.time())
-    assert 'Claim this slot' not in user.page()
+    browser = user.call('GET', '/account/available')
+    assert browser.status == 200 and 'Claim this slot' not in browser.body
+    assert 'name="machine_number" value="1"' not in browser.body
     response = user.press('/account/claim', machine_number='1')
     assert response.status == 303 and 'no-slot' in response.getheader('Location')
     assert store.list_slots(held_by=user.account['id']) == []
