@@ -84,7 +84,7 @@ def access_log_route(target: Any) -> str:
         path = urllib.parse.urlsplit(routed[0]).path
     except ValueError:
         return "unknown_route"
-    if path in {"/", "/healthz", "/account", "/account/available", "/privacy", "/status",
+    if path in {"/", "/healthz", "/slots", "/account", "/account/available", "/privacy", "/status",
                 "/auth/basic",
                 "/auth/google/start", "/auth/google/callback", "/auth/signout",
                 "/api/nodes", "/api/alerts", "/api/heartbeat", "/api/cli/status",
@@ -364,7 +364,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _html_page_route(self) -> bool:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
-            current = {"/", "/account", "/account/available", "/privacy", "/status",
+            current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
                        "/docs/library",
                        "/docs/library/", "/docs/library/docs/index.html",
                        "/docs/library/docs/public-gateway.html",
@@ -556,6 +556,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             """Who is looking at a public page, as its corner shows them."""
             account, session_id = self._peek_signed_in()
             return usersite.viewer_for(account, session_id, ctx.cfg, ctx.store)
+
+        def _slot_query(self) -> dict[str, str]:
+            """Only bounded catalogue controls; never log or echo arbitrary parameters."""
+            try:
+                parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query,
+                                              max_num_fields=16)
+            except ValueError:
+                parsed = {}
+            return {key: parsed.get(key, [""])[0] for key in ("q", "brand", "type", "page")}
 
         def _docs_page(self, page: Callable[..., str]) -> None:
             """A public page of the product, for whoever is looking, with the
@@ -1041,7 +1050,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    (path in ("/account", "/account/available", "/privacy", "/status")
+                    (path in ("/slots", "/account", "/account/available", "/privacy", "/status")
                      or customer_docs.page_for(path))
                     and not self._product_site()):
                 # Each site answers only for its own audience: the product
@@ -1055,6 +1064,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._json(401, {"error": "unauthorized"},
                                {"WWW-Authenticate": 'Basic realm="ccfleet", charset="UTF-8"'})
+            elif path == "/slots":
+                self._send(200, usersite.slots_page(
+                    ctx.store, ctx.cfg, time.time(), self._slot_query(),
+                    viewer=self._viewer()).encode("utf-8"), HTML_HEADERS)
             elif path == "/account":
                 account, session_id = self._signed_in()
                 note = urllib.parse.parse_qs(
@@ -1064,15 +1077,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                            HTML_HEADERS)
             elif path == "/account/available":
                 account, session_id = self._signed_in()
-                try:
-                    parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query,
-                                                  max_num_fields=16)
-                except ValueError:
-                    parsed = {}
-                query = {key: parsed.get(key, [""])[0]
-                         for key in ("q", "brand", "type", "page")}
                 self._send(200, usersite.available_page(
-                    ctx.store, ctx.cfg, account, session_id, time.time(), query).encode("utf-8"),
+                    ctx.store, ctx.cfg, account, session_id, time.time(),
+                    self._slot_query()).encode("utf-8"),
                     HTML_HEADERS)
             elif path == "/privacy":
                 # Public: Google links here from its sign-in screen.

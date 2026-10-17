@@ -48,7 +48,7 @@ def test_public_offer_currencies_are_not_silently_converted(site):
               cost="89", ip_cost="10", currency="CNY")
     configure(store, "m2", host="ExampleBundled", ip="ExampleBundled", kind="residential",
               cost="14.99", ip_cost="1")
-    page = sign_in().call("GET", "/en/").body
+    page = sign_in().call("GET", "/en/slots").body
     assert '¥108.90 CNY / month' not in page and '$17.99 / month' in page
     assert 'Pricing unavailable' in page
     assert 'Residential' in page
@@ -60,7 +60,7 @@ def test_unknown_component_never_uses_legacy_rate_or_becomes_claimable(site):
     store.set_node_offer("m1", host_brand="ExampleHost", ip_brand="ExampleIP", ip_type="isp")
     store.set_price("20", "USD", by="operator", now=1)
     user = sign_in(quota=1)
-    assert 'Pricing unavailable' in user.call("GET", "/en/").body
+    assert 'Pricing unavailable' in user.call("GET", "/en/slots").body
     browser = user.call('GET', '/account/available')
     assert browser.status == 200 and 'Claim this slot' not in browser.body
     assert 'name="machine_number"' not in browser.body
@@ -76,7 +76,7 @@ def test_partial_rollout_keeps_unconfigured_nodes_unpriced_and_unclaimable(site)
     configure(store, 'm1')
     store.set_price('20', 'USD', by='operator', now=1)
     user = sign_in(quota=1)
-    catalogue = user.call('GET', '/en/').body.split('id="slot-pricing"', 1)[1]
+    catalogue = user.call('GET', '/en/slots').body
     assert 'Pricing unavailable' in catalogue
     assert '$20 / month' not in catalogue
     browser = user.call('GET', '/account/available')
@@ -96,7 +96,7 @@ def test_public_available_requires_machine_confirmation_of_absence(site, present
     configure(store)
     store._conn.execute('UPDATE slots SET present = ?', (present,))
     store._conn.commit()
-    page = sign_in().call('GET', '/en/').body
+    page = sign_in().call('GET', '/en/slots').body
     table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
     assert 'Preparing' in table and '>Available<' not in table
 
@@ -109,7 +109,7 @@ def test_disabled_machine_is_not_offered_but_its_records_are_retained(site, lang
     machine(store, 'm2', users=("slot01",))
     configure(store, 'm2', host='CurrentHost', ip='CurrentIP')
     store.set_enabled('m1', False)
-    page = sign_in().call('GET', f'/{language}/').body
+    page = sign_in().call('GET', f'/{language}/slots').body
     table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
     assert 'Machine 1' not in table and '主机 1' not in table
     assert 'RetiredHost' not in table and 'RetiredIP' not in table
@@ -137,7 +137,7 @@ def test_enabled_unavailable_machine_stays_in_public_catalogue(site, has_report)
     if not has_report:
         store._conn.execute("DELETE FROM heartbeats WHERE node_id = 'm1'")
         store._conn.commit()
-    page = sign_in().call('GET', '/en/').body
+    page = sign_in().call('GET', '/en/slots').body
     table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
     assert 'Machine 1' in table and 'ExampleHost' in table and 'Unavailable' in table
     assert ('/status#machine-1' in table) is has_report
@@ -241,7 +241,7 @@ def test_customer_pages_stop_promising_one_global_price(site, path):
     configure(store)
     store.set_price('20', 'USD', by='operator', now=1)
     page = sign_in().call('GET', path)
-    assert page.status == 200 and '10%' in page.body and '#slot-pricing' in page.body
+    assert page.status == 200 and '10%' in page.body and 'href="/slots"' in page.body
     assert 'A slot costs <strong>$20' not in page.body
 
 
@@ -275,7 +275,7 @@ def test_catalogue_reads_no_private_identity_from_corrupt_configured_offer():
         machine(store, 'private-name', users=("slot01",))
         store._conn.execute("UPDATE nodes SET offer_json = ?", ('{"host_brand":"192.0.2.3"}',))
         store._conn.commit()
-        html = project_html(offer_ui.catalogue(store, time.time(), 300), 'en')
+        html = project_html(offer_ui.public_browse(store, time.time(), 300, {}), 'en')
         assert 'Pricing unavailable' in html and 'Not provided' in html
         assert '192.0.2.3' not in html and 'private-name' not in html
         assert re.search(r'Machine [0-9]+', html)
