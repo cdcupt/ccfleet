@@ -84,7 +84,7 @@ def test_authenticated_console_filters_display_but_inventory_api_retains_records
         assert status == 200
         page = raw.decode()
         assert 'retired-empty' not in page and 'retired-vm' not in page
-        assert 'offline-live' in page and 'Slot pricing' in page
+        assert 'offline-live' in page and 'Alpha slot pricing' in page
         status, raw, _ = call(server, 'GET', '/api/nodes', headers=basic(cfg.admin_token))
         assert status == 200
         assert {'retired-empty', 'retired-vm', 'offline-live'} <= {

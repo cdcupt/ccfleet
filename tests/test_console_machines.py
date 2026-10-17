@@ -257,7 +257,7 @@ def test_a_free_pool_slot_explains_its_missing_installation(console):
     assert 'row-name">pool-4</div>' in manage
     assert 'action="/actions/node/erik-2/disable"' in manage
     assert 'name="confirm" value="erik-2"' in manage
-    assert "Installed on claim" in row and "free · in pool" in row
+    assert "Installed on claim" in row and "available · in pool" in row
     assert "unknown" not in row and "token " not in row and "latest" not in row
     assert ">disabled (hosted)<" in row
 
@@ -272,7 +272,7 @@ def test_a_free_slot_does_not_show_the_previous_holders_login(console):
     # previous holder. The lifecycle record already confirms the wipe.
     assert store.get_slot("erik-2")["pool_name"] == "pool-4"
     row = row_of(call("GET", "/admin").body, "pool-4")
-    assert "free · in pool" in row and "Installed on claim" in row
+    assert "available · in pool" in row and "Installed on claim" in row
     assert "2.1.281" not in row and "Max" not in row and "token " not in row
     assert ">disabled (hosted)<" in row and ">active<" not in row
 
@@ -287,8 +287,8 @@ def test_a_free_slot_is_not_called_available_without_a_confirmed_wipe(cfg, prese
     row = build_rows(nodes, {}, [], 3_000_000, slots=one)[0]
     page = render_dashboard([row], [], 3_000_000, cfg)
     shown = row_of(page, "pool-7")
-    assert f"free · {words}" in shown and byline(shown) == "on m1 · erik · us"
-    assert "free · in pool" not in shown
+    assert f"unallocated · {words}" in shown and byline(shown) == "on m1 · erik · us"
+    assert "available · in pool" not in shown
 
 
 @pytest.mark.parametrize("enabled,reserved,words", [(True, True, "reserved in pool"),
@@ -307,8 +307,8 @@ def test_a_free_slot_is_only_available_when_its_machine_allows_claims(cfg, enabl
         assert "pool-7" not in page
         return
     shown = row_of(page, "pool-7")
-    assert f"free · {words}" in shown and byline(shown) == ""
-    assert "free · in pool" not in shown
+    assert f"available · {words}" in shown and byline(shown) == ""
+    assert "available · in pool" not in shown
 
 
 @pytest.mark.parametrize("state", ["active", "failed"])
