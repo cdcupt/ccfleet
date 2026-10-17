@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
-    '/', '/account', '/privacy', '/status', '/docs', '/docs/guide',
+    '/', '/account', '/account/available', '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
     '/docs/library/docs/platform-comparison.html',
@@ -22,6 +22,7 @@ POST_PAGES = frozenset({'/account/claim', '/account/outage-emails', '/auth/signo
 VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
                   'meta', 'param', 'source', 'track', 'wbr'})
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/account': '我的槽位',
+             '/account/available': '可用槽位',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
              '/docs/how-it-works': '工作原理', '/docs/terms': '服务条款',
              '/docs/library': '文档', '/docs/library/': '文档',
@@ -146,6 +147,32 @@ SCRIPT_TAG = f'<script>{SCRIPT}</script>'
 SCRIPT_CSP = "'sha256-" + base64.b64encode(hashlib.sha256(SCRIPT.encode()).digest()).decode() + "'"
 
 
+def _slot_search_query(query: str) -> str:
+    """Retain only bounded browse controls, never arbitrary/auth request values."""
+    try:
+        pairs = parse_qsl(query, keep_blank_values=False, max_num_fields=16)
+    except ValueError:
+        return ''
+    result = {}
+    for key, raw in pairs:
+        if key not in {'q', 'brand', 'type', 'page'} or key in result:
+            continue
+        value = raw.strip()
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            continue
+        if key == 'q':
+            value = value[:80]
+        elif key == 'brand' and len(value) > 48:
+            continue
+        elif key == 'type' and value not in {'isp', 'residential'}:
+            continue
+        elif key == 'page' and (not value.isascii() or not value.isdigit()
+                               or not 0 < len(value) <= 6 or int(value) < 1):
+            continue
+        result[key] = value
+    return urlencode(result)
+
+
 class _Projection(HTMLParser):
     def __init__(self, language: str, target: str, public_origin: str):
         super().__init__(convert_charrefs=False)
@@ -193,7 +220,10 @@ class _Projection(HTMLParser):
                 switch_target = ('/account#gateway' if _form(urlsplit(self.target).path)
                                  else self.target)
                 switch_parts = urlsplit(switch_target)
-                switch_target = urlunsplit(('', '', switch_parts.path, '',
+                search = ''
+                if switch_parts.path == '/account/available':
+                    search = _slot_search_query(switch_parts.query)
+                switch_target = urlunsplit(('', '', switch_parts.path, search,
                                              switch_parts.fragment))
                 attrs['href'] = localized_url(switch_target, choice, self.target,
                                               self.public_origin)

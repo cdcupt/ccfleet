@@ -233,6 +233,26 @@ def _alpha_stage_details() -> str:
     )
 
 
+def _available_slot_browsing() -> str:
+    """Keep choosing an unallocated machine separate from managing held slots."""
+    return bi(
+        '<p><a href="/account">Your slots</a> keeps your held slots, controls and usage '
+        'together. To add a slot, choose <a href="/account/available">Browse available '
+        'slots</a>. This signed-in page lets you search by host provider, IP provider or '
+        'public machine label such as Machine 7, and filter by provider and network type '
+        '(ISP or Residential). Results appear in pages of up to 20 machines. Review a '
+        'machine’s price and cost breakdown, then claim that machine; you return to Your '
+        'slots to manage it. Your allowance and the existing eligibility checks still '
+        'apply, and claiming does not charge you automatically.</p>',
+        '<p><a href="/account">我的槽位</a>集中展示你持有的槽位、操作和用量。'
+        '需要增加槽位时，选择<a href="/account/available">浏览可用槽位</a>。此页面需要'
+        '登录，可以按主机服务商、IP 服务商或“主机 7”等公开主机标签搜索，并按服务商及'
+        '网络类型（ISP 或住宅）筛选；每页最多展示 20 台主机。先核对主机价格与成本明细，'
+        '再领取该主机，随后返回“我的槽位”管理。原有槽位额度及领取条件仍然适用，'
+        '领取不会自动扣款。</p>',
+    )
+
+
 def _contact_zh(cfg: Config) -> str:
     return contact(cfg) if cfg.contact_email else "向你提供此页面的运营者"
 
@@ -985,12 +1005,14 @@ def guide(
                     'recorded monthly VPS and exit-IP costs, plus a 10% service fee with '
                     'a $2 minimum per slot, in USD. Your Claude subscription or Anthropic '
                     'API usage is billed separately. Choose the machine at its displayed '
-                    'rate on your account page and pay the operator directly; this site '
+                    'rate in <a href="/account/available">Browse available slots</a> '
+                    'and pay the operator directly; this site '
                     'does not charge automatically or renew automatically.')
         price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/#slot-pricing">槽位列表</a>，'
                     'Alpha 定价按已记录的 VPS 与出口 IP 美元月成本，加 10% 服务费，'
                     '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
-                    '在账号页按所示价格选择主机，并直接向运营者付款；'
+                    '在<a href="/account/available">浏览可用槽位</a>按所示价格选择主机，'
+                    '并直接向运营者付款；'
                     '本站不会自动扣款或自动续费。')
     body = (
         '<div class="dochead">'
@@ -1023,11 +1045,18 @@ def guide(
         + "</li>"
         + "<li>"
         + bi(
-            '<h3>Claim it</h3><p>Choose <span class="btnlabel">Claim a slot</span>. The '
+            '<h3>Choose and claim a machine</h3><p>From <a href="/account">Your slots</a>, '
+            'choose <a href="/account/available">Browse available slots</a>. Search or '
+            'filter the list, review a machine’s price, then choose '
+            '<span class="btnlabel">Claim this slot</span> for that machine. You return to '
+            'Your slots. The '
             'card shows <span class="pill busy">Setting up</span> while the machine '
             "creates your separate Linux account and installs Claude Code. This takes a "
             "few minutes; the page updates itself.</p>",
-            '<h3>领取槽位</h3><p>点击 <span class="btnlabel">领取槽位</span>。机器会建立独'
+            '<h3>选择并领取主机</h3><p>在<a href="/account">我的槽位</a>选择'
+            '<a href="/account/available">浏览可用槽位</a>，搜索或筛选列表、核对主机价格，'
+            '再点击该主机的 <span class="btnlabel">领取此槽位</span>。随后返回“我的槽位”。'
+            '机器会建立独'
             '立的 Linux 用户环境并安装 Claude Code，此时显示 <span class="pill '
             'busy">正在准备</span>。通常需要几分钟，页面会自动更新。</p>',
         )
@@ -1222,7 +1251,7 @@ def guide(
     if per_slot_pricing:
         body += ('<div class="card" id="rental-pricing">'
                  + bi('<h2>Choosing a slot and its rate</h2>', '<h2>选择槽位与价格</h2>')
-                 + _rental_pricing_details() + '</div>')
+                 + _available_slot_browsing() + _rental_pricing_details() + '</div>')
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 

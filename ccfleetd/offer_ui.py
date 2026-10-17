@@ -1,12 +1,16 @@
 """Public slot offers: explicit labels and prices, never machine access details."""
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 from . import offers, pricing, slots, status
 from .bilingual import label
+
+PAGE_SIZE = 20
 
 CSS = """
 .slot-offer{display:flex;flex-wrap:wrap;gap:8px 20px;margin:12px 0 16px;
@@ -42,7 +46,16 @@ line-height:1.6;overflow-wrap:anywhere}.offer-choices{margin:14px 0;display:grid
 justify-content:space-between;
 padding:12px 14px;background:var(--inset);border:1px solid var(--rule-soft);border-radius:10px}
 .offer-choice p{margin:0;font-size:13px}.offer-choice .offer-compact{margin-top:2px}
-@media(max-width:560px){.slot-offer{gap:10px 16px}.slot-offer>div{flex:1 1 40%}}
+.slot-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin:16px 0}
+.slot-filters>label{display:grid;gap:6px;flex:1 1 150px;min-width:0;margin:0}
+.slot-filters input,.slot-filters select{width:100%;min-width:0}
+.slot-filters .filter-search{flex:2 1 240px}.slot-filter-actions{display:flex;gap:12px;
+align-items:center;padding-bottom:1px}.slot-browser-pages{display:flex;flex-wrap:wrap;
+align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
+.slot-browser-pages p{margin:0}.slot-browser-pages nav{display:flex;gap:12px}
+.slot-browser .offer-table form{margin:0}.slot-browser .offer-table td{padding-block:10px}
+@media(max-width:560px){.slot-filters>label,.slot-filters .filter-search{flex-basis:100%}
+.slot-offer{gap:10px 16px}.slot-offer>div{flex:1 1 40%}}
 """
 
 
@@ -169,6 +182,129 @@ def choices(store: Any, account: Mapping[str, Any], csrf: str, now: float,
             "No priced slot is ready for your account yet. Check back or contact the operator.",
             "暂时没有已定价且可供你领取的槽位，请稍后查看或联系运营者。", inline=True) + '</p>'
     return '<div class="offer-choices">' + ''.join(rows) + '</div>'
+
+
+def _browse_option(value: str, en: str, zh: str, selected: bool) -> str:
+    # Options need native text, not the bilingual spans used in ordinary labels.
+    return ('<option value="' + escape(value) + '" data-copy-en="' + escape(en)
+            + '" data-copy-zh="' + escape(zh) + '"' + (' selected' if selected else '')
+            + '>' + escape(en) + '</option>')
+
+
+def _browse_params(query: Mapping[str, str], brands: set[str]) -> dict[str, str]:
+    def text(key: str, limit: int) -> str:
+        value = query.get(key, "")
+        if not isinstance(value, str) or any(ord(char) < 32 for char in value):
+            return ""
+        value = value.strip()
+        return value[:limit] if key == "q" else value if len(value) <= limit else ""
+
+    search, brand, kind, page = text("q", 80), text("brand", 48), text("type", 16), text("page", 7)
+    return {"q": search, "brand": brand if brand in brands else "",
+            "type": kind if kind in ("residential", "isp") else "",
+            "page": page if re.fullmatch(r"[0-9]{1,6}", page) else "1"}
+
+
+def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
+           max_age: float, query: Mapping[str, str], can_claim: bool = True) -> str:
+    """An eligible inventory page, separate from the holder's own slot controls.
+
+    Search and pagination use approved public metadata only. These are choices,
+    not reservations: the existing claim action rechecks eligibility atomically.
+    """
+    nodes = sorted(available(store, account, now, max_age),
+                   key=lambda node: status.public_machine_number(node) or 0)
+    brands = {value for node in nodes for key, value in offers.public(node.get("offer")).items()
+              if key in ("host_brand", "ip_brand") and value}
+    selected = _browse_params(query, brands)
+    search = selected["q"].casefold()
+    matching = []
+    for node in nodes:
+        public = offers.public(node.get("offer"))
+        number = status.public_machine_number(node)
+        searchable = " ".join((public["host_brand"], public["ip_brand"], public["ip_type"],
+                               f"Machine {number}", f"主机 {number}",
+                               "住宅" if public["ip_type"] == "residential" else "")).casefold()
+        if (search and search not in searchable
+                or selected["brand"] and selected["brand"] not in (
+                    public["host_brand"], public["ip_brand"])
+                or selected["type"] and selected["type"] != public["ip_type"]):
+            continue
+        matching.append(node)
+    total = len(matching)
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(int(selected["page"]), pages))
+    first = (page - 1) * PAGE_SIZE
+    shown = matching[first:first + PAGE_SIZE]
+    filters = ('<form class="slot-filters" method="get" action="/account/available">'
+               '<label class="filter-search">' + label("Search", "搜索", inline=True)
+               + '<input type="search" name="q" maxlength="80" value="'
+               + escape(selected["q"]) + '" placeholder="Provider or Machine number" '
+               'data-placeholder-en="Provider or Machine number" '
+               'data-placeholder-zh="服务商或主机编号"></label><label>'
+               + label("Provider", "服务商", inline=True) + '<select name="brand">'
+               + _browse_option("", "All providers", "全部服务商", not selected["brand"])
+               + ''.join(_browse_option(brand, brand, brand, selected["brand"] == brand)
+                         for brand in sorted(brands, key=lambda brand: (brand.casefold(), brand)))
+               + '</select></label><label>' + label("IP type", "IP 类型", inline=True)
+               + '<select name="type">'
+               + ''.join(_browse_option(value, en, zh, selected["type"] == value)
+                         for value, en, zh in (("", "All network types", "全部网络类型"),
+                                               ("residential", "Residential", "住宅 IP"),
+                                               ("isp", "ISP", "ISP IP")))
+               + '</select></label><div class="slot-filter-actions"><button type="submit">'
+               + label("Search", "搜索", inline=True) + '</button>'
+               '<a href="/account/available">' + label("Reset", "重置", inline=True)
+               + '</a></div></form>')
+    rows = []
+    for node in shown:
+        public = offers.public(node.get("offer"))
+        number = status.public_machine_number(node)
+        machine = label(f"Machine {number}", f"主机 {number}", inline=True)
+        action = ('<td><form method="post" action="/account/claim">'
+                  '<input type="hidden" name="csrf" value="' + escape(csrf) + '">'
+                  f'<input type="hidden" name="machine_number" value="{number}">'
+                  '<button class="primary" type="submit">'
+                  + label("Claim this slot", "领取此槽位", inline=True)
+                  + '</button></form></td>') if can_claim else ''
+        rows.append('<tr><th scope="row"><a href="/status#machine-' + str(number) + '">'
+                    + machine + '</a></th><td>' + _brand(public["host_brand"]) + '</td><td>'
+                    + _brand(public["ip_brand"]) + '</td><td>' + ip_label(public["ip_type"])
+                    + '</td><td>' + quoted_rate(node) + '</td>' + action + '</tr>')
+    heads = [("Slot machine", "槽位主机"), ("Host provider", "主机服务商"),
+             ("IP provider", "IP 服务商"), ("IP type", "IP 类型"),
+             ("Current Alpha quote", "当前 Alpha 报价")]
+    if can_claim:
+        heads.append(("Action", "操作"))
+    table = ('<div class="offer-sheet" role="region" aria-label="Available slot machines" '
+             'data-aria-label-en="Available slot machines" '
+             'data-aria-label-zh="可领取槽位主机" tabindex="0"><table class="offer-table">'
+             '<thead><tr>' + ''.join('<th scope="col">' + label(en, zh, inline=True)
+                                     + '</th>' for en, zh in heads)
+             + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>') if rows else (
+                 '<p class="offer-note">' + label(
+                     "No available machines match these filters.",
+                     "没有符合筛选条件的可领取主机。", inline=True) + '</p>')
+
+    def page_link(target: int, en: str, zh: str) -> str:
+        parameters = {key: value for key, value in selected.items() if key != "page" and value}
+        parameters["page"] = str(target)
+        return '<a class="btn" href="' + escape('/account/available?' + urlencode(parameters)) \
+            + '">' + label(en, zh, inline=True) + '</a>'
+
+    navigation = (page_link(page - 1, "Previous", "上一页") if page > 1 else '')
+    navigation += (page_link(page + 1, "Next", "下一页") if page < pages else '')
+    count = label(f"Showing {first + 1 if total else 0}–{first + len(shown)} of {total} "
+                  "matching available machines.",
+                  f"共 {total} 台可领取主机符合条件，当前显示第 "
+                  f"{first + 1 if total else 0}–{first + len(shown)} 台。", inline=True)
+    pagination = ('<div class="slot-browser-pages"><p class="offer-note">'
+                  + label(f"Page {page} of {pages}", f"第 {page}／{pages} 页", inline=True)
+                  + '</p><nav aria-label="Inventory pages" '
+                  'data-aria-label-en="Inventory pages" data-aria-label-zh="主机列表分页">'
+                  + navigation + '</nav></div>')
+    return ('<section class="slot-browser">' + filters + '<p class="offer-note">'
+            + count + '</p>' + table + pagination + '</section>')
 
 
 def catalogue(store: Any, now: float, max_age: float) -> str:
