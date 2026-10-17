@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal, localcontext
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any, Optional
 
@@ -43,7 +43,7 @@ PRICE_TARGET = "slot"
 # A slot's state in the words and colours its holder's own page uses. Free is
 # the one state no holder sees there, and an owner's own node, which never
 # goes through the lifecycle, is signed in or not.
-FREE_WORDS = ("disabled", "Free")
+FREE_WORDS = ("disabled", "Available")
 NOT_SIGNED_IN = ("warn", "Not signed in")
 #: The states in which a slot's Claude Code is somebody's, so where it is
 #: going is worth a word.
@@ -64,7 +64,7 @@ SLOT_HEAD = ('<div class="slothead" aria-hidden="true"><span>Slot</span><span>Ho
 EMPTY_SAYS = "No slot declared yet: nobody can claim it until it has one."
 OWN_NOTE = ("Counted as their slot, and never wiped or handed out from here. To stop "
             "counting it, on the server: <code>ccfleetd node hold {node} --none</code>")
-WIPE_NOTE = ("Take back is a wipe: everything on the slot goes, and it is free again once the "
+WIPE_NOTE = ("Take back is a wipe: everything on the slot goes, and it is available again once the "
              "machine confirms.")
 
 
@@ -117,35 +117,7 @@ def _plans_by_holder(store: Store) -> dict[Optional[str], list[str]]:
 
 def _price_card(store: Store, csrf: str, now: float) -> str:
     """What the public pages say a slot costs, and the form that changes it."""
-    if _has_offers(store):
-        return _offer_prices_card(store)
-    current = store.get_price()
-    if current is not None:
-        price = current["price"]
-        said = (f"{escape(pricing.per_slot(price))}"
-                f'<span class="muted"> · set by {escape(str(current["updated_by"]))}, '
-                f"{escape(_age(now, current['updated_at']))} ago</span>")
-        amount, chosen = price.amount, price.currency
-    else:
-        said = ('No price set<span class="muted"> · the public pages say price and payment '
-                "are agreed with you</span>")
-        amount, chosen = "", pricing.CURRENCIES[0]
-    options = "".join(f'<option value="{code}"{" selected" if code == chosen else ""}>{code}'
-                      "</option>" for code in pricing.CURRENCIES)
-    base = f"/actions/price/{PRICE_TARGET}"
-    form = _form(f"{base}/set", csrf, "Save",
-                 '<input type="text" name="amount" class="price" inputmode="decimal" '
-                 f'value="{escape(amount)}" placeholder="20" size="8" '
-                 'aria-label="Price per slot per month" required>'
-                 f'<select name="currency" aria-label="Currency">{options}</select>',
-                 "primary")
-    clear = _form(f"{base}/clear", csrf, "Clear") if current is not None else ""
-    return ('<h2 id="price">Price</h2><div class="card">'
-            f'<div class="row-line"><div class="row-name">{said}</div>'
-            f'<div class="actions">{form}{clear}</div></div>'
-            '<p class="note">The price of a slot for a month, shown on the public pages. '
-            "It is shown, never charged: people pay you directly, an allowance is still what "
-            "lets somebody claim a slot, and the payments above are a record.</p></div>")
+    return _offer_prices_card(store)
 
 
 def _has_offers(store: Store) -> bool:
@@ -172,18 +144,10 @@ def _offer_invoice(cost: Optional[offers.Cost]) -> str:
             + f'<span class="sub">per {period}</span>')
 
 
-def _offer_total(offer: offers.Offer) -> Optional[Decimal]:
-    if offer.hosting is None or offer.ip is None or offer.hosting.currency != offer.ip.currency:
-        return None
-    with localcontext() as context:
-        context.prec = 40
-        return offer.hosting.monthly() + offer.ip.monthly()
-
-
 def _offer_rate(offer: offers.Offer) -> str:
     price = offers.monthly_price(offer)
     return (_offer_money(Decimal(price.amount), price.currency) + " / month"
-            if price is not None else "Price pending")
+            if price is not None else "Pricing unavailable")
 
 
 def _offer_prices_card(store: Store) -> str:
@@ -206,32 +170,45 @@ def _offer_prices_card(store: Store) -> str:
         brands = escape(offer.host_brand or "Host provider not set")
         brands += '<span class="sub">' + escape(offer.ip_brand or "IP provider not set") + '</span>'
         kind = {"residential": "Residential", "isp": "ISP"}.get(offer.ip_type, "Not verified")
-        total = _offer_total(offer)
-        supplier = (escape(_offer_money(total, offer.hosting.currency))
-                    if total is not None else '<span class="muted">Needs matching costs</span>')
+        value = offers.quote(offer)
+        supplier = (escape(_offer_money(Decimal(value.resource.amount), "USD"))
+                    if value is not None else '<span class="muted">Needs recorded USD costs</span>')
+        bundled = value is not None and value.bundled
+        hosting_invoice = _offer_invoice(offer.hosting)
+        if bundled:
+            hosting_invoice += '<span class="sub">VPS + exit IP bundled invoice</span>'
+        ip_invoice = ('<span class="muted">Included in bundled invoice</span>' if bundled
+                      else _offer_invoice(offer.ip))
+        service_fee = (escape(pricing.display(value.service_fee)) if value is not None
+                       else '<span class="muted">Unavailable</span>')
         rows.append('<tr><th scope="row">' + escape(shown) + identity + '</th><td>'
                     + brands + '<span class="sub">' + kind + '</span></td><td>'
-                    + _offer_invoice(offer.hosting) + '</td><td>' + _offer_invoice(offer.ip)
-                    + '</td><td>' + supplier + '</td><td><strong>'
+                    + hosting_invoice + '</td><td>' + ip_invoice
+                    + '</td><td>' + supplier + '</td><td>' + service_fee + '</td><td><strong>'
                     + escape(_offer_rate(offer)) + '</strong></td></tr>')
     table = ('<div class="offer-costs" role="region" '
              'aria-label="Machine supplier costs and prices" tabindex="0"><table><thead><tr>'
              + ''.join(f'<th scope="col">{label}</th>' for label in (
                  "Machine", "Providers / IP type", "Hosting invoice", "IP invoice",
-                 "Supplier / month", "Customer / month"))
+                 "Resource / month", "Service fee / month", "Customer / month"))
              + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>' if rows else
              '<p class="quiet">No enabled machine offers yet. Configure an enabled machine’s '
              'Providers, IP type &amp; price under Manage.</p>')
-    return ('<h2 id="price">Slot pricing</h2><div class="card offer-pricing">'
-            '<p class="offer-rule"><strong>(Monthly hosting + monthly IP cost) × 1.10</strong>'
-            ' · 10% markup per machine.</p>' + table
+    return ('<h2 id="price">Alpha slot pricing</h2><div class="card offer-pricing">'
+            '<p class="offer-rule"><strong>Recorded monthly resource cost + '
+            'max($2.00, 10% of resource cost)</strong> · same formula for ISP and residential.</p>'
+            + table
             + '<p class="note">Calendar-month costs stay unchanged; 30-day costs × 365 / 360; '
-            'annual costs ÷ 12. Add the normalized costs, apply 10%, then round once. '
-            'USD is listed first; currencies are never converted automatically. '
-            'A missing component or mixed currencies leaves the price pending.</p>'
+            'annual costs ÷ 12. Round the combined USD resource cost to cents, round the '
+            'service fee to cents, then add them. USD is listed first; currencies are never '
+            'converted automatically. Record operator-converted USD costs before quoting '
+            'foreign invoices. Missing or unconverted costs leave pricing unavailable.</p>'
             '<p class="note">Edit each machine under its slot’s Manage → Providers, IP type '
-            '&amp; price. Supplier costs are private; brands, IP type and customer price are '
-            'public. Prices are displayed only; allowances and payment records are unchanged.'
+            '&amp; price. Brands, network type and the normalized monthly cost breakdown are '
+            'public; raw invoices remain here. Introductory Alpha pricing may change for future '
+            'periods: provide an updated quote before renewal and honor the agreed price for '
+            'an already agreed period. Payments remain manually agreed; no automatic charges '
+            'or renewals. Claude subscriptions and Anthropic API usage are separate.'
             '</p></div>')
 
 
@@ -270,20 +247,23 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
                    + '</select></label></fieldset>')
     fields += '</div>'
     preview = _offer_rate(offer)
-    total = _offer_total(offer)
-    supplier = (_offer_money(total, offer.hosting.currency) if total is not None
-                else "Both invoice costs in one currency are required")
+    value = offers.quote(offer)
+    supplier = (pricing.display(value.resource) if value is not None
+                else "Both recorded USD costs are required")
+    fee = pricing.display(value.service_fee) if value is not None else "Unavailable"
     body = ('<p class="offer-preview"><span class="sub">Saved customer price</span><strong>'
             + escape(preview) + '</strong><span class="sub">Monthly supplier cost: '
-            + escape(supplier) + '</span></p>'
+            + escape(supplier) + '</span><span class="sub">Monthly service fee: '
+            + escape(fee) + '</span></p>'
             + _form(base + "/offer", csrf, "Save slot offer", fields, "primary")
             + (_form(base + "/offer-clear", csrf, "Clear slot offer")
                if node.get("offer") is not None else ""))
     return _part("Providers, IP type & price", body,
-                 "Brands, IP type and calculated monthly price are public. Supplier costs "
-                 "stay in this console. Enter 0 for an IP included in hosting; a blank "
-                 "component or mixed currencies keeps the price pending. Monthly costs "
-                 "are summed, marked up 10%, then rounded once; no automatic charges. "
+                 "Brands, network type and normalized monthly quote breakdown are public. "
+                 "Enter 0 only for an exit IP included in the recorded bundled hosting cost; "
+                 "a blank component or unconverted foreign costs leave pricing unavailable. "
+                 "Alpha pricing rounds resource cost, adds a rounded service fee of 10% with "
+                 "a $2 minimum; no automatic charges or renewals. "
                  "Save to update the displayed preview.")
 
 
@@ -481,7 +461,7 @@ def _holder(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
         plan = _plan_of(report)
         under = f'<span class="sub">{escape(plan)}</span>' if plan else ""
         return escape(str(holder["email"])) + under
-    return '<span class="muted">free</span>' if slot["state"] == slotstates.FREE else "&mdash;"
+    return '<span class="muted">available</span>' if slot["state"] == slotstates.FREE else "&mdash;"
 
 
 def _state_pill(slot: Mapping[str, Any], report: Optional[Mapping[str, Any]] = None) -> str:
@@ -696,9 +676,9 @@ def _slot_actions(slot: Mapping[str, Any], csrf: str) -> str:
                      f"<b>{typed}</b> to confirm.")
     if slot["state"] == slotstates.FREE:
         return _part("Remove the slot", _form(f"{base}/remove", csrf, "Remove"),
-                     f"Takes {typed} off the machine. It is free, so there is nothing on it "
+                     f"Takes {typed} off the machine. It is available, so there is nothing on it "
                      "to lose.")
-    return _part("Take back", "", "Being wiped already: it is free again once the machine "
+    return _part("Take back", "", "Being wiped already: it is available again once the machine "
                                   "confirms.")
 
 
@@ -713,7 +693,7 @@ def _keep_part(node: Mapping[str, Any], csrf: str, *, keeper: str = "") -> str:
                  _form(f"{base}/reserve", csrf, "Reserve",
                        '<input type="email" name="email" placeholder="their email" size="20" '
                        'aria-label="Email of the account to keep it for" required>'),
-                 "While it is free, only they can claim it.")
+                 "While it is available, only they can claim it.")
 
 
 def _advanced_part(machine: _Machine, csrf: str) -> str:

@@ -1,8 +1,9 @@
 """Operator-declared slot offers; labels and exact costs, never access details.
 
 Costs normalize to an average calendar month: annual / 12; 30-day * 365 / 360.
-Sum before applying the fixed 10% markup and rounding once, half up, to the
-currency's minor unit. Missing or mixed-currency costs stay unpriced. These
+Alpha quotes round the combined USD resource cost to cents, round the service
+fee (10%, with a $2 minimum), then add the two. Currency conversion remains the
+operator's recorded input; missing or unconverted costs stay unpriced. These
 display-only offers never grant a slot, collect payment or alter its lifecycle.
 """
 from __future__ import annotations
@@ -107,21 +108,49 @@ class Offer:
             raise OfferError("supplier costs must be validated Cost values")
 
 
-def monthly_price(offer: Offer) -> Optional[pricing.Price]:
-    if offer.hosting is None or offer.ip is None or offer.hosting.currency != offer.ip.currency:
+@dataclass(frozen=True)
+class AlphaQuote:
+    hosting: pricing.Price
+    ip: pricing.Price
+    resource: pricing.Price
+    service_fee: pricing.Price
+    total: pricing.Price
+    bundled: bool
+    rounding_adjustment: Decimal
+
+
+def _usd(amount: Decimal) -> pricing.Price:
+    return pricing.Price(format(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f"),
+                         "USD")
+
+
+def quote(offer: Optional[Offer]) -> Optional[AlphaQuote]:
+    """A customer quote from recorded costs, never from a prior selling price.
+
+    An explicit zero exit-IP cost is the existing operator convention for an IP
+    included in the hosting invoice. A blank IP cost remains missing. Rounded
+    component cents can differ from the rounded combined resource cost; expose
+    that adjustment rather than inventing or silently changing a component.
+    """
+    if (not isinstance(offer, Offer) or offer.hosting is None or offer.ip is None
+            or offer.hosting.currency != "USD" or offer.ip.currency != "USD"):
         return None
-    currency = offer.hosting.currency
-    unit = Decimal("1") if currency in pricing.WHOLE_ONLY else Decimal("0.01")
     with localcontext() as context:
         context.prec = 40
-        amount = ((offer.hosting.monthly() + offer.ip.monthly()) * Decimal("1.10")).quantize(
-            unit, rounding=ROUND_HALF_UP)
-    # Computed free offers deliberately preserve measured zero; the separate
-    # legacy global-price form still refuses zero exactly as it always has.
-    shown = format(amount, "f")
-    if shown.endswith(".00"):
-        shown = shown[:-3]
-    return pricing.Price(shown, currency)
+        hosting = _usd(offer.hosting.monthly())
+        ip = _usd(offer.ip.monthly())
+        resource = _usd(offer.hosting.monthly() + offer.ip.monthly())
+        amount = Decimal(resource.amount)
+        service_fee = _usd(max(Decimal("2.00"), amount * Decimal("0.10")))
+        total = _usd(amount + Decimal(service_fee.amount))
+        adjustment = amount - Decimal(hosting.amount) - Decimal(ip.amount)
+    return AlphaQuote(hosting, ip, resource, service_fee, total,
+                      Decimal(offer.ip.amount) == 0, adjustment)
+
+
+def monthly_price(offer: Offer) -> Optional[pricing.Price]:
+    value = quote(offer)
+    return value.total if value is not None else None
 
 
 def public(offer: Optional[Offer]) -> dict[str, Any]:

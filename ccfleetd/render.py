@@ -698,14 +698,14 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     if free:
         present = row.get("slot_present")
         if present is True:
-            cred_text = "free · cleanup required"
+            cred_text = "unallocated · cleanup required"
         elif present is None:
-            cred_text = "free · waiting for machine"
+            cred_text = "unallocated · waiting for machine"
         elif not row["enabled"]:
-            cred_text = "free · machine disabled"
+            cred_text = "unallocated · machine disabled"
         else:
-            cred_text = ("free · reserved in pool" if row.get("pool_reserved") else
-                         "free · in pool")
+            cred_text = ("available · reserved in pool" if row.get("pool_reserved") else
+                         "available · in pool")
     elif plan and not signed_out:
         # The plan is a label on the login, not a qualifier on the time. Trailing
         # it read as "refreshed 10m ago (max)", where (max) looks like it modifies

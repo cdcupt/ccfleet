@@ -97,8 +97,8 @@ def test_machine_cost_strategy_replaces_global_price_in_front_of_console(console
     page = call("GET", "/admin").body
     card = price_card(page)
     assert page.index('id="price"') < page.index('id="slots"') < page.index('id="accounts"')
-    assert "Slot pricing" in card and "10% markup per machine" in card
-    for said in ("$5.35 USD", "$5.40 USD", "per 30 days", "$10.825 USD", "$11.91 USD / month"):
+    assert "Alpha slot pricing" in card and "max($2.00, 10% of resource cost)" in card
+    for said in ("$5.35 USD", "$5.40 USD", "per 30 days", "$10.83 USD", "$12.83 USD / month"):
         assert said in text(card)
     assert "× 365 / 360" in text(card) and "annual costs ÷ 12" in text(card)
     assert "/actions/price/slot/" not in page and "$777" not in card
@@ -119,7 +119,8 @@ def test_pricing_lists_enabled_offers_usd_first_and_keeps_original_currency(cons
     store.set_enabled("retired", False)
     card = price_card(call("GET", "/admin").body)
     assert card.index("USD Host") < card.index("CNY Host")
-    assert "¥163.90 CNY / month" in text(card)
+    assert "¥149.00 CNY" in text(card) and "Pricing unavailable" in text(card)
+    assert "¥163.90 CNY / month" not in text(card)
     assert "Retired Host" not in card
     assert "currencies are never converted automatically" in text(card)
 
@@ -142,7 +143,7 @@ def test_annual_and_monthly_invoice_costs_keep_the_correct_calculated_rate(conso
     offer(store, hosting="120", hosting_period="year", ip="7.20")
     card = price_card(call("GET", "/admin").body)
     assert "$120.00 USD" in text(card) and "per year" in text(card)
-    assert "$17.30 USD" in text(card) and "$19.03 USD / month" in text(card)
+    assert "$17.30 USD" in text(card) and "$19.30 USD / month" in text(card)
 
 
 @pytest.mark.parametrize("missing", [True, False])
@@ -154,7 +155,7 @@ def test_missing_or_mixed_supplier_costs_never_fall_back_to_global_price(console
                          ip=None if missing else offers.Cost("5", "CNY"))
     store.set_price("777", "USD", by="old-default", now=1)
     card = price_card(call("GET", "/admin").body)
-    assert "Price pending" in card and "Needs matching costs" in card
+    assert "Pricing unavailable" in card and "Needs recorded USD costs" in card
     assert "$777" not in card and "/actions/price/slot/" not in card
 
 
@@ -174,7 +175,8 @@ def test_offer_editor_groups_invoice_fields_without_changing_action_scope(consol
     for name in ("host_brand", "ip_brand", "ip_type", "hosting_cost", "hosting_currency",
                  "hosting_period", "ip_cost", "ip_currency", "ip_period"):
         assert f'name="{name}"' in panel
-    assert "Saved customer price" in panel and "$11.91 USD / month" in text(panel)
+    assert "Saved customer price" in panel and "$12.83 USD / month" in text(panel)
+    assert "Monthly service fee: $2.00" in text(panel)
     assert "Save to update the displayed preview" in text(panel)
 
 

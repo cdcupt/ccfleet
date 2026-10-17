@@ -11,7 +11,7 @@ from .bilingual import label
 CSS = """
 .slot-offer{display:flex;flex-wrap:wrap;gap:8px 20px;margin:12px 0 16px;
 padding:12px 14px;border:1px solid var(--rule-soft);border-radius:10px;background:var(--inset)}
-.slot-offer>span{min-width:0;overflow-wrap:anywhere;font-size:13px}
+.slot-offer>div{min-width:0;overflow-wrap:anywhere;font-size:13px}
 .slot-offer b{display:block;font-size:11px;color:var(--muted);font-weight:550;margin-bottom:3px}
 .offer-sheet{overflow:auto;border:1px solid var(--rule-soft);border-radius:12px}
 .offer-table{width:100%;min-width:660px;border-collapse:collapse;font-size:13px}
@@ -22,17 +22,27 @@ vertical-align:middle;overflow-wrap:anywhere}
 .offer-table tbody th{text-transform:none;letter-spacing:normal;font-weight:600}
 .ip-category{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
 font-weight:600;white-space:nowrap;background:var(--inset);border:1px solid var(--rule-soft)}
-.ip-category.residential{color:var(--ok);background:var(--ok-bg)}
-.ip-category.isp{color:var(--acc);background:var(--acc-soft)}
+.ip-category.residential,.ip-category.isp{color:var(--ink);background:var(--inset)}
 .offer-table tbody tr:last-child>*{border-bottom:0}.offer-table td:last-child{white-space:nowrap}
 .offer-note{font-size:13px;color:var(--muted);margin:12px 0}
+.alpha-badge{display:inline-flex;align-items:center;border:1px solid var(--acc-line);
+border-radius:999px;padding:3px 8px;background:var(--acc-soft);color:var(--acc);
+font-size:11px;font-weight:650;line-height:1.4;white-space:nowrap}
+.offer-rate{font-size:16px;font-weight:650;color:var(--ink)}
+.offer-breakdown{font-size:12px;min-width:180px;margin-top:6px;white-space:normal}
+.offer-breakdown summary{cursor:pointer;color:var(--acc);font-weight:500}
+.offer-breakdown dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px 14px;
+margin:10px 0 4px;min-width:210px;max-width:360px;line-height:1.5}
+.offer-breakdown dt,.offer-breakdown dd{margin:0}.offer-breakdown dd{text-align:right}
+.offer-breakdown .offer-total{border-top:1px solid var(--rule-soft);padding-top:7px;font-weight:650}
+.offer-choice .offer-breakdown{margin-top:8px}
 .offer-compact{display:block;font-size:11px;font-weight:400;color:var(--muted);margin-top:4px;
 line-height:1.6;overflow-wrap:anywhere}.offer-choices{margin:14px 0;display:grid;gap:10px}
 .offer-choice{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
 justify-content:space-between;
 padding:12px 14px;background:var(--inset);border:1px solid var(--rule-soft);border-radius:10px}
 .offer-choice p{margin:0;font-size:13px}.offer-choice .offer-compact{margin-top:2px}
-@media(max-width:560px){.slot-offer{gap:10px 16px}.slot-offer>span{flex:1 1 40%}}
+@media(max-width:560px){.slot-offer{gap:10px 16px}.slot-offer>div{flex:1 1 40%}}
 """
 
 
@@ -43,13 +53,53 @@ def ip_label(kind: str) -> str:
     return f'<span class="ip-category {style}">' + label(en, zh, inline=True) + '</span>'
 
 
+def alpha_label() -> str:
+    return '<span class="alpha-badge">' + label("Alpha", "Alpha 内测", inline=True) + '</span>'
+
+
 def rate(node: Mapping[str, Any], fallback: Optional[pricing.Price] = None) -> str:
-    configured = node.get("offer") is not None
-    price = offers.public(node.get("offer"))["price"] if configured else fallback
+    # A legacy selling price is never evidence of a machine's resource costs.
+    price = offers.public(node.get("offer"))["price"]
     if price is None:
-        return label("Price pending", "价格待确认", inline=True)
+        return label("Pricing unavailable", "价格暂不可用", inline=True)
     shown = escape(pricing.display(price))
     return label(shown + " / month", shown + "／月", inline=True)
+
+
+def breakdown(node: Mapping[str, Any]) -> str:
+    """Publish only validated monthly USD quote items, never supplier/access records."""
+    offer = node.get("offer")
+    quote = offers.quote(offer) if isinstance(offer, offers.Offer) else None
+    if quote is None:
+        return ""
+    rows = []
+
+    def item(en: str, zh: str, value: pricing.Price, *, total: bool = False) -> None:
+        style = ' class="offer-total"' if total else ''
+        rows.append('<dt' + style + '>' + label(en, zh, inline=True) + '</dt><dd'
+                    + style + '>' + escape(pricing.display(value)) + '</dd>')
+
+    if quote.bundled:
+        item("VPS + exit IP (bundled)", "VPS 与出口 IP（打包）", quote.hosting)
+    else:
+        item("VPS cost", "VPS 成本", quote.hosting)
+        item("Exit-IP cost", "出口 IP 成本", quote.ip)
+    if quote.rounding_adjustment:
+        adjustment = quote.rounding_adjustment
+        shown = pricing.Price(format(abs(adjustment), ".2f"), "USD")
+        rows.append('<dt>' + label("Monthly rounding adjustment", "月成本舍入调整", inline=True)
+                    + '</dt><dd>' + ('−' if adjustment < 0 else '+')
+                    + escape(pricing.display(shown)) + '</dd>')
+    item("Monthly resource cost", "每月资源成本", quote.resource)
+    item("Service fee", "服务费", quote.service_fee)
+    item("Total monthly price", "每月总价", quote.total, total=True)
+    return ('<details class="offer-breakdown"><summary>'
+            + label("Monthly price breakdown", "月费明细", inline=True)
+            + '</summary><dl>' + ''.join(rows) + '</dl></details>')
+
+
+def quoted_rate(node: Mapping[str, Any]) -> str:
+    return '<strong class="offer-rate">' + rate(node) + '</strong>' + breakdown(node)
 
 
 def _brand(value: str) -> str:
@@ -62,9 +112,13 @@ def details(node: Mapping[str, Any]) -> str:
     cells = ((label("Host provider", "主机服务商", inline=True), _brand(offer["host_brand"])),
              (label("IP provider", "IP 服务商", inline=True), _brand(offer["ip_brand"])),
              (label("IP type", "IP 类型", inline=True), ip_label(offer["ip_type"])),
-             (label("Monthly price", "月费", inline=True), rate(node)))
+             (label("Current Alpha quote", "当前 Alpha 报价", inline=True), quoted_rate(node)))
     return '<div class="slot-offer">' + ''.join(
-        '<span><b>' + title + '</b>' + value + '</span>' for title, value in cells) + '</div>'
+        '<div><b>' + title + '</b>' + value + '</div>' for title, value in cells) + '</div>' \
+        + '<p class="offer-note">' + label(
+            "An already agreed billing period keeps its agreed price. If the price changes, "
+            "you will receive an updated quote before renewal.",
+            "已经约定的账期继续按原价执行。如价格变更，续费前会提供新报价。", inline=True) + '</p>'
 
 
 def compact(node: Mapping[str, Any]) -> str:
@@ -73,6 +127,7 @@ def compact(node: Mapping[str, Any]) -> str:
     offer = offers.public(node.get("offer"))
     return ('<small class="offer-compact">' + _brand(offer["host_brand"]) + ' / '
             + _brand(offer["ip_brand"]) + ' · ' + ip_label(offer["ip_type"]) + ' · '
+            + label('Current Alpha quote: ', '当前 Alpha 报价：', inline=True)
             + rate(node) + '</small>')
 
 
@@ -102,7 +157,7 @@ def choices(store: Any, account: Mapping[str, Any], csrf: str, now: float,
         number = status.public_machine_number(node)
         rows.append('<div class="offer-choice"><div><p><strong>'
                     + label(f"Machine {number}", f"主机 {number}", inline=True)
-                    + '</strong></p>' + compact(node) + '</div>'
+                    + '</strong></p>' + compact(node) + breakdown(node) + '</div>'
                     '<form method="post" action="/account/claim">'
                     f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
                     f'<input type="hidden" name="machine_number" value="{number}">'
@@ -137,7 +192,7 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
         if not beat or beat["ts"] < now - max_age:
             state = label("Unavailable", "暂不可用", inline=True)
         elif slot["state"] == slots.FREE and slot.get("present") == 0:
-            state = label("Free", "空闲", inline=True)
+            state = label("Available", "可领取", inline=True)
         elif slot["state"] in slots.HELD:
             state = label("In use", "已领取", inline=True)
         else:
@@ -148,22 +203,28 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
         rows.append('<tr><th scope="row">' + machine + '</th>'
                     '<td>' + _brand(offer["host_brand"]) + '</td><td>'
                     + _brand(offer["ip_brand"]) + '</td><td>' + ip_label(offer["ip_type"])
-                    + '</td><td>' + state + '</td><td>' + rate(node) + '</td></tr>')
+                    + '</td><td>' + state + '</td><td>' + quoted_rate(node) + '</td></tr>')
     heads = (("Slot machine", "槽位主机"), ("Host provider", "主机服务商"),
              ("IP provider", "IP 服务商"), ("IP type", "IP 类型"),
              ("Availability", "可用情况"), ("Monthly price", "月费"))
     return ('<section class="band" id="slot-pricing"><h2>'
-            + label("Slots & pricing", "槽位与价格", inline=True) + '</h2>'
+            + label("Slots & pricing", "槽位与价格", inline=True) + ' ' + alpha_label() + '</h2>'
             '<p class="offer-note">' + label(
-                "Residential is our premium network category; ISP is our standard category. "
-                "The label describes the supplied IP service, not a guaranteed quality score. "
-                "Each machine's rate uses its recorded hosting and IP costs, normalized "
-                "to an average calendar month, with a fixed 10% markup. USD offers use "
-                "costs converted by the operator; your Claude subscription is separate.",
-                "住宅 IP 为高级网络类别，ISP 为标准类别。标签描述供应的 IP 服务类型，"
-                "并非保证性的质量评分。每台主机按已登记的主机和 IP 成本折算为平均自然月，"
-                "再固定加价 10%。美元报价使用运营者换算后的成本；Claude 订阅另计。",
-                inline=True) + '</p>'
+                "Alpha pricing passes through recorded VPS and exit-IP costs, plus a monthly "
+                "service fee of 10% of resource cost, with a $2 minimum per slot. "
+                "Costs are normalized to an average calendar month and converted to USD "
+                "by the operator. Resource cost and service fee are each rounded to cents, "
+                "then added. Your Claude subscription or Anthropic API usage is billed separately.",
+                "Alpha 定价按已记录的 VPS 与出口 IP 成本，加收资源成本 10% 的月服务费，"
+                "每个槽位的服务费最低为 2 美元。成本折算为平均自然月并由运营者换算为美元；"
+                "资源成本和服务费分别舍入到美分后相加。Claude 订阅或 Anthropic API 用量另行计费。",
+                inline=True) + '</p><p class="offer-note">' + label(
+                "ISP and residential describe network types, not a quality ranking or a "
+                "guarantee of Claude compatibility. Each customer receives a dedicated VPS "
+                "and dedicated exit IP. Bundled supplier costs are shown without an "
+                "invented split.",
+                "ISP 与住宅表示网络类型，并非质量排名，也不保证 Claude 兼容性。每位客户使用独立 "
+                "VPS 和独立出口 IP。供应商打包成本按记录展示，不虚构拆分。", inline=True) + '</p>'
             '<div class="offer-sheet" role="region" aria-label="Slot providers and prices" '
             'data-aria-label-en="Slot providers and prices" '
             'data-aria-label-zh="槽位服务商与价格" '
@@ -171,9 +232,18 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
             + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>'
                       for en, zh in heads) + '</tr></thead><tbody>' + ''.join(rows)
             + '</tbody></table></div><p class="offer-note">' + label(
-                "Free means empty, not a promise of eligibility. Sign in to choose an "
+                "Available means unallocated, not a promise of eligibility. Sign in to choose an "
                 "available priced slot within your allowance. Payment is agreed directly "
-                "with the operator; this site does not charge automatically.",
-                "空闲表示槽位为空，不保证你有领取权限。登录后可在额度内选择可领取的已定价"
-                "槽位。付款直接与运营者约定，本站不会自动扣款。", inline=True)
+                "with the operator; this site does not charge or renew automatically.",
+                "可领取表示槽位尚未分配，不保证你有领取权限。登录后可在额度内选择可领取的已定价"
+                "槽位。付款直接与运营者约定，本站不会自动扣款或续费。", inline=True)
+            + '</p><p class="offer-note">' + label(
+                "Alpha is still being tested. The operator has had encouraging results with one "
+                "residential slot; reliability across providers, configurations and multiple users "
+                "is still being evaluated. Alpha pricing is introductory and may change for future "
+                "billing periods. If pricing changes, you will receive an updated quote before "
+                "renewal; an already agreed billing period retains its agreed price.",
+                "Alpha 仍在测试中。运营者自用一个住宅槽位的结果令人鼓舞，但不同服务商、配置及多用户"
+                "情况下的可靠性仍在评估。Alpha 价格为入门阶段定价，未来账期可能调整；如有变更，"
+                "续费前会提供新报价，已经约定的账期继续按原价执行。", inline=True)
             + '</p></section>')

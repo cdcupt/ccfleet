@@ -321,21 +321,37 @@ private script that takes an address and a name, reads the root password once
 from a prompt, and re-runs safely, so the next machine is one command.</p>
 <h2 id="slot-providers-pricing-and-egress">Slot providers, pricing and ISP egress</h2>
 <p>Public slot listings identify the host provider and the IP/exit provider separately.
-Residential is the premium network category and ISP the standard category; these labels
-describe the supplied service, not a guaranteed quality score or upstream acceptance.
+ISP and Residential are network types, with the same Alpha formula and no separate residential
+premium. Neither type guarantees quality, speed or Claude compatibility. Each customer receives
+a dedicated VPS and dedicated exit IP.
 Only stable public machine numbers appear in the public catalogue and Status; never publish
 machine addresses, proxy credentials, holder identities or internal node names there.</p>
-<p>The current rental policy is a per-machine monthly USD rate. Set each machine's display
+<p><strong>Alpha pricing.</strong> The current policy is a per-machine monthly USD rate. Set each machine's display
 metadata and actual supplier costs from its <strong>Providers, IP type &amp; price</strong>
 controls. Enter both costs in USD; convert a non-USD supplier invoice first and retain the
 original amount, FX source, rate and date in private operator records. The application never
 fetches or guesses an exchange rate, and rejects mixed-currency costs. A bundled IP has an
-explicit zero IP cost; a blank cost means unknown, not free. Annual costs divide by 12 and
-30-day costs multiply by 365/360; add the normalized costs, apply a fixed 10% markup, then
-round the final total once, half up, to cents. The console's pricing section lists each
-machine's costs and resulting rate instead of one global price. Raw supplier costs remain
-operator-only. This is a displayed monthly rental rate, not an automatic charge or a Claude
-subscription fee.</p>
+explicit zero IP cost; a blank cost means unknown, not zero. Missing costs or costs not converted
+to USD make the customer price unavailable. Annual costs divide by 12 and 30-day costs multiply
+by 365/360. Add the normalized costs and round the USD resource cost half up to cents.
+The monthly service fee is the greater of $2 or 10% of that rounded resource cost, rounded
+half up to cents. The monthly customer price is their sum, so the displayed breakdown agrees
+with the total. The minimum fee applies through a $20 resource cost. Examples:
+$8.68 + $2 = $10.68; $10.83 + $2 = $12.83; $22.28 + $2.23 = $24.51;
+$27.44 + $2.74 = $30.18.</p>
+<p>The public breakdown shows VPS cost, separately recorded exit-IP cost, service fee and total.
+When the provider bundles hosting and exit IP, show the recorded bundled cost without inventing
+a split. A normalization rounding line explains any difference between rounded components and
+the rounded combined resource cost. Raw invoice documents and FX evidence remain private.
+The console lists each machine's procurement costs and resulting quote instead of one global
+price. A legacy global selling price alone must not be published as an Alpha quote. Your Claude
+subscription or Anthropic API usage is billed separately. Payment remains manually agreed;
+there are no automatic charges or renewals.</p>
+<p><strong>Alpha — Early Access.</strong> The service is still being tested and has not launched
+commercially. The operator's personal trial of one residential slot is encouraging, but reliability
+across providers, configurations and multiple users remains unverified. Alpha pricing is introductory
+and may change for future billing periods. Give the customer an updated quote before renewal
+if pricing changes; retain the agreed price for an already agreed billing period.</p>
 <pre><code>ccfleetd node offer set &lt;node&gt; --host-brand &lt;hosting-brand&gt; --ip-brand &lt;exit-brand&gt; --ip-type isp \
   --hosting-cost &lt;actual-amount&gt; --hosting-currency USD --hosting-period month \
   --ip-cost &lt;actual-amount&gt; --ip-currency USD --ip-period month
@@ -348,10 +364,10 @@ achieve this. Existing holders, account bindings, payments and history remain in
 An enabled machine with an outage still appears on Status with its health information.
 Unconfigured or unpriced machines cannot be auto-claimed;
 configure every intended rental. Existing allowance, reservation, recent-heartbeat and confirmed
-empty-slot checks still apply. The global display price and original claim flow remain only as
-compatibility behavior for installations with no configured offers; they are not the current
-catalogue pricing policy. Changing a rate does not alter existing payments, paid-through dates,
-allowances or account bindings. Agree any new paid period directly with the customer.</p>
+empty-slot checks still apply. The original claim flow remains only as compatibility behavior for
+installations with no configured offers; it does not establish a recorded-cost Alpha quote.
+Changing a rate does not alter existing payments, paid-through dates, allowances or account
+bindings. Agree any new paid period and quote directly with the customer before renewal.</p>
 <p>For an approved ISP-proxy node, install the reviewed opt-in node egress module and service.
 Opted-in proxy nodes require the canonical <code>/etc/ccfleet</code> configuration directory;
 custom <code>CCFLEET_ETC_DIR</code> deployments are refused before setup changes.

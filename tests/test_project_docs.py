@@ -177,7 +177,8 @@ def test_overview_and_how_it_works_describe_local_execution_without_slot_only_ov
     assert "files, tools and history on your computer" in summary
     details = visible(how_it_works(Config()))
     assert "runs original Claude Code on your computer" in details
-    assert "Slots may share a physical machine and its internet address" in details
+    assert "dedicated VPS and dedicated exit IP" in details
+    assert "Slots may share a physical machine and its internet address" not in details
     assert "only Claude Code on the slot talks to Anthropic" not in details
     assert "remote-terminal" not in details
 

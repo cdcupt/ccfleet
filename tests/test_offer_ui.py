@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from ccfleetd import offer_ui, offers, slots
+from ccfleetd import offer_ui, offers, pricing, slots
 from ccfleetd.bilingual import project_html
 from ccfleetd.store import Store
 from tests.test_price import console  # noqa: F401 -- shared authenticated HTTP fixture
@@ -26,7 +26,7 @@ def configure(store, node="m1", *, host="ExampleHost", ip="ExampleIP", kind="isp
                          hosting=offers.Cost(cost, currency), ip=offers.Cost(ip_cost, currency))
 
 
-def test_public_offer_is_neutral_and_contains_only_brand_type_rate(site):
+def test_public_offer_has_transparent_quote_without_private_machine_identity(site):
     store, sign_in, _ = site
     machine(store, node="secret-machine", users=("slot01",))
     configure(store, "secret-machine")
@@ -34,9 +34,9 @@ def test_public_offer_is_neutral_and_contains_only_brand_type_rate(site):
     public = sign_in().call("GET", "/en/").body
     table = public.split('id="slot-pricing"', 1)[1].split('</section>', 1)[0]
     assert 'Machine 1' in table and 'ExampleHost' in table and 'ExampleIP' in table
-    assert 'ISP' in table and '$10.67 / month' in table and '10%' in table
+    assert 'ISP' in table and '$11.70 / month' in table and '10%' in table
     assert all(secret not in table for secret in ("secret-machine", "slot01", "erik@example.com",
-                                                 "4.70", "5.00", "token_hash", "access_host"))
+                                                 "token_hash", "access_host"))
     assert "A slot costs <strong>$20" not in public
 
 
@@ -49,7 +49,8 @@ def test_public_offer_currencies_are_not_silently_converted(site):
     configure(store, "m2", host="ExampleBundled", ip="ExampleBundled", kind="residential",
               cost="14.99", ip_cost="1")
     page = sign_in().call("GET", "/en/").body
-    assert '¥108.90 CNY / month' in page and '$17.59 / month' in page
+    assert '¥108.90 CNY / month' not in page and '$17.99 / month' in page
+    assert 'Pricing unavailable' in page
     assert 'Residential' in page
 
 
@@ -59,7 +60,7 @@ def test_unknown_component_never_uses_legacy_rate_or_becomes_claimable(site):
     store.set_node_offer("m1", host_brand="ExampleHost", ip_brand="ExampleIP", ip_type="isp")
     store.set_price("20", "USD", by="operator", now=1)
     user = sign_in(quota=1)
-    assert 'Price pending' in user.call("GET", "/en/").body
+    assert 'Pricing unavailable' in user.call("GET", "/en/").body
     assert 'Claim this slot' not in user.page()
     response = user.press("/account/claim", machine_number="1")
     assert response.status == 303 and 'no-slot' in response.getheader('Location')
@@ -74,7 +75,7 @@ def test_partial_rollout_keeps_unconfigured_nodes_unpriced_and_unclaimable(site)
     store.set_price('20', 'USD', by='operator', now=1)
     user = sign_in(quota=1)
     catalogue = user.call('GET', '/en/').body.split('id="slot-pricing"', 1)[1]
-    assert 'Price pending' in catalogue
+    assert 'Pricing unavailable' in catalogue
     assert '$20 / month' not in catalogue
     assert user.press('/account/claim', machine_number='2').getheader('Location').startswith(
         '/account?note=no-slot')
@@ -82,7 +83,7 @@ def test_partial_rollout_keeps_unconfigured_nodes_unpriced_and_unclaimable(site)
 
 
 @pytest.mark.parametrize('present', [None, 1])
-def test_public_free_requires_machine_confirmation_of_absence(site, present):
+def test_public_available_requires_machine_confirmation_of_absence(site, present):
     store, sign_in, _ = site
     machine(store, users=("slot01",))
     configure(store)
@@ -90,7 +91,7 @@ def test_public_free_requires_machine_confirmation_of_absence(site, present):
     store._conn.commit()
     page = sign_in().call('GET', '/en/').body
     table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
-    assert 'Preparing' in table and '>Free<' not in table
+    assert 'Preparing' in table and '>Available<' not in table
 
 
 @pytest.mark.parametrize('language', ['en', 'zh'])
@@ -133,10 +134,10 @@ def test_enabled_unavailable_machine_stays_in_public_catalogue(site, has_report)
     table = page.split('class="offer-table"', 1)[1].split('</table>', 1)[0]
     assert 'Machine 1' in table and 'ExampleHost' in table and 'Unavailable' in table
     assert ('/status#machine-1' in table) is has_report
-    assert '>Free<' not in table
+    assert '>Available<' not in table
 
 
-def test_catalogue_explains_fixed_markup_without_exposing_supplier_costs(site):
+def test_catalogue_explains_alpha_fee_and_displays_normalized_costs(site):
     store, sign_in, _ = site
     machine(store, users=("slot01",))
     store.set_node_offer('m1', host_brand='ExampleHost', ip_brand='ExampleIP', ip_type='isp',
@@ -144,10 +145,13 @@ def test_catalogue_explains_fixed_markup_without_exposing_supplier_costs(site):
                          ip=offers.Cost('5.40', 'USD', '30_days'))
     page = sign_in().call('GET', '/en/').body
     section = page.split('id="slot-pricing"', 1)[1].split('</section>', 1)[0]
-    assert '$11.91 / month' in section
-    assert 'fixed 10% markup' in section and 'average calendar month' in section
-    assert 'USD offers' in section and 'not a guaranteed quality score' in section
-    assert all(secret not in section for secret in ('64.20', '5.40', 'hosting_cost', '30_days'))
+    assert '$12.83 / month' in section
+    assert '10% of resource cost, with a $2 minimum' in section
+    assert 'average calendar month' in section and 'USD' in section
+    assert 'network types, not a quality ranking' in section
+    assert all(value in section for value in ('$5.35', '$5.48', '$10.83', '$2.00', '$12.83'))
+    assert all(private not in section for private in ('64.20', '5.40', 'hosting_cost', '30_days'))
+    assert 'fixed 10% markup' not in section and 'premium network category' not in section
 
 
 @pytest.mark.parametrize("number", ["", "0", "-1", "1.0", "1e0", "1\n", "99999999999", "9"])
@@ -169,7 +173,7 @@ def test_claim_uses_the_selected_price_tier_not_first_free_machine(site):
     configure(store, "m2")
     user = sign_in(quota=1)
     before = user.page()
-    assert 'Claim this slot' in before and '$10.67 / month' in before
+    assert 'Claim this slot' in before and '$11.70 / month' in before
     assert user.press('/account/claim', machine_number="2").status == 303
     [held] = store.list_slots(held_by=user.account['id'])
     assert held['node_id'] == 'm2'
@@ -207,8 +211,8 @@ def test_new_metadata_is_public_in_both_languages_and_status_stays_neutral(site)
     browser = sign_in()
     for lang, words in [('en', 'Slots &amp; pricing'), ('zh', '槽位与价格')]:
         page = browser.call('GET', f'/{lang}/').body
-        assert words in page and 'ExampleHost' in page and '$10.67' in page
-        assert ('价格待确认' not in page if lang == 'en' else 'Price pending' not in page)
+        assert words in page and 'ExampleHost' in page and '$11.70' in page
+        assert ('价格暂不可用' not in page if lang == 'en' else 'Pricing unavailable' not in page)
     status = browser.call('GET', '/en/status').body
     assert 'ExampleHost / ExampleIP' in status and 'secret-machine' not in status
 
@@ -234,7 +238,7 @@ def test_operator_can_set_offer_but_an_owner_and_missing_csrf_cannot(request):
         assert call('POST', '/actions/machine/m1/offer', fields, **kwargs).status == 403
         assert store.get_node_offer('m1') is None
     assert call('POST', '/actions/machine/m1/offer', fields).status == 303
-    assert offers.monthly_price(store.get_node_offer('m1')).amount == '10.67'
+    assert offers.monthly_price(store.get_node_offer('m1')).amount == '11.70'
     before = store.get_node_offer('m1')
     assert call('POST', '/actions/machine/m1/offer', {**fields, 'hosting_cost': 'NaN'}).status == 400
     assert store.get_node_offer('m1') == before
@@ -255,7 +259,7 @@ def test_catalogue_reads_no_private_identity_from_corrupt_configured_offer():
         store._conn.execute("UPDATE nodes SET offer_json = ?", ('{"host_brand":"192.0.2.3"}',))
         store._conn.commit()
         html = project_html(offer_ui.catalogue(store, time.time(), 300), 'en')
-        assert 'Price pending' in html and 'Not provided' in html
+        assert 'Pricing unavailable' in html and 'Not provided' in html
         assert '192.0.2.3' not in html and 'private-name' not in html
         assert re.search(r'Machine [0-9]+', html)
     finally:
@@ -294,3 +298,70 @@ def test_populated_offer_does_not_leak_or_break_heartbeat_desired_state(site):
     assert reply.status == 200
     assert json.loads(body)['desired']
     assert all(field not in body for field in ('offer_json', 'hosting', '4.70', '5.00'))
+
+
+@pytest.mark.parametrize('hosting,ip,resource,fee,total', [
+    ('5.35', '3.33', '8.68', '2.00', '10.68'),
+    ('5.35', '5.48', '10.83', '2.00', '12.83'),
+    ('22.28', '0', '22.28', '2.23', '24.51'),
+    ('27.44', '0', '27.44', '2.74', '30.18'),
+])
+def test_accessible_quote_breakdown_matches_prominent_total(hosting, ip, resource, fee, total):
+    node = {'offer': offers.Offer('Host', 'Exit', 'isp', offers.Cost(hosting, 'USD'),
+                                 offers.Cost(ip, 'USD'))}
+    html = re.sub(r'</?span[^>]*>', '', project_html(offer_ui.quoted_rate(node), 'en'))
+    assert '<strong class="offer-rate">' in html and f'${total} / month' in html
+    assert '<details class="offer-breakdown"><summary>' in html
+    assert '<dl>' in html and 'Monthly price breakdown' in html
+    assert f'Monthly resource cost</dt><dd>${resource}</dd>' in html
+    assert f'Service fee</dt><dd>${fee}</dd>' in html
+    assert f'Total monthly price</dt><dd class="offer-total">${total}</dd>' in html
+    if ip == '0':
+        assert 'VPS + exit IP (bundled)' in html and 'Exit-IP cost' not in html
+        assert '$0.00' not in html
+    else:
+        assert f'VPS cost</dt><dd>${hosting}</dd>' in html
+        assert f'Exit-IP cost</dt><dd>${ip}</dd>' in html
+
+
+def test_quote_rounding_adjustment_reconciles_displayed_components():
+    node = {'offer': offers.Offer(hosting=offers.Cost('0.004', 'USD'),
+                                 ip=offers.Cost('0.004', 'USD'))}
+    html = re.sub(r'</?span[^>]*>', '', project_html(offer_ui.breakdown(node), 'en'))
+    assert html.count('$0.00') == 2
+    assert 'Monthly rounding adjustment</dt><dd>+$0.01</dd>' in html
+    assert 'Monthly resource cost</dt><dd>$0.01</dd>' in html
+    assert 'Total monthly price</dt><dd class="offer-total">$2.01</dd>' in html
+
+
+@pytest.mark.parametrize('offer', [None, offers.Offer(),
+    offers.Offer(hosting=offers.Cost('10', 'USD')),
+    offers.Offer(hosting=offers.Cost('10', 'CNY'), ip=offers.Cost('0', 'CNY'))])
+def test_unavailable_quote_never_publishes_a_legacy_selling_price(offer):
+    node = {'offer': offer}
+    html = re.sub(r'</?span[^>]*>', '',
+                  project_html(offer_ui.rate(node, pricing.Price('99', 'USD')), 'en'))
+    assert html == 'Pricing unavailable'
+    assert offer_ui.breakdown(node) == ''
+
+
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_alpha_stage_and_renewal_terms_are_visible_with_neutral_network_types(site, language):
+    store, sign_in, _ = site
+    machine(store, users=('slot01',))
+    configure(store)
+    page = sign_in().call('GET', f'/{language}/').body
+    header = page.split('<header', 1)[1].split('</header>', 1)[0]
+    section = page.split('id="slot-pricing"', 1)[1].split('</section>', 1)[0]
+    assert 'alpha-badge' in header and 'Alpha' in header
+    if language == 'en':
+        for words in ('Alpha is still being tested', 'one residential slot',
+                      'multiple users', 'updated quote before renewal',
+                      'retains its agreed price', 'does not charge or renew automatically',
+                      'Anthropic API usage is billed separately', 'Available'):
+            assert words in section
+        assert '>Free<' not in section and 'our premium' not in section
+    else:
+        for words in ('Alpha 仍在测试中', '多用户', '续费前会提供新报价', '原价执行', '可领取'):
+            assert words in section
+        assert 'Alpha is still being tested' not in section
