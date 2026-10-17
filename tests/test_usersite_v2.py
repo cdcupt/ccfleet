@@ -201,6 +201,6 @@ def test_the_docs_say_a_slot_is_an_isolated_linux_account_under_a_name_you_choos
     assert "pick anything but your email address" in customer_docs.page_for(
         "/docs/guide")(Config())
     details = customer_docs.page_for("/docs/how-it-works")(Config())
-    assert "A slot is a separate Linux account" in details
-    assert "private home directory" in details
-    assert "Slots may share a physical machine and its internet address" in details
+    assert "Each customer receives a dedicated VPS and dedicated exit IP" in details
+    assert "private Linux home directory" in details
+    assert "Slots may share a physical machine and its internet address" not in details

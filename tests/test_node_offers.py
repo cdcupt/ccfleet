@@ -14,17 +14,17 @@ def cost(amount="5.35", currency="USD", period="month"):
 
 
 @pytest.mark.parametrize("hosting,ip,expected", [
-    (cost(), cost("0"), pricing.Price("5.89", "USD")),
-    (cost("59.99", period="year"), cost("2.50"), pricing.Price("8.25", "USD")),
-    (cost("5"), cost("3", period="30_days"), pricing.Price("8.85", "USD")),
-    (cost("0"), cost("0"), pricing.Price("0", "USD")),
-    (cost("10.005"), cost("0"), pricing.Price("11.01", "USD")),
-    (cost("5", "JPY"), cost("0", "JPY"), pricing.Price("6", "JPY")),
-    (cost("0.004"), cost("0.004"), pricing.Price("0.01", "USD")),
+    (cost(), cost("0"), pricing.Price("7.35", "USD")),
+    (cost("59.99", period="year"), cost("2.50"), pricing.Price("9.50", "USD")),
+    (cost("5"), cost("3", period="30_days"), pricing.Price("10.04", "USD")),
+    (cost("0"), cost("0"), pricing.Price("2.00", "USD")),
+    (cost("10.005"), cost("0"), pricing.Price("12.01", "USD")),
+    (cost("5", "JPY"), cost("0", "JPY"), None),
+    (cost("0.004"), cost("0.004"), pricing.Price("2.01", "USD")),
     (cost(), None, None), (None, cost("0"), None),
     (cost(), cost("0", "EUR"), None),
 ])
-def test_costs_normalize_then_add_ten_percent_and_round_once(hosting, ip, expected):
+def test_costs_normalize_then_apply_alpha_service_fee(hosting, ip, expected):
     offer = offers.Offer(hosting=hosting, ip=ip)
     assert offers.monthly_price(offer) == expected
     with localcontext() as context:
@@ -67,7 +67,7 @@ def test_public_helper_has_only_approved_fields_and_no_supplier_costs():
     offer = offers.Offer(" OVHcloud ", "AT&T", "residential", cost(), cost("0"))
     public = offers.public(offer)
     assert public == {"host_brand": "OVHcloud", "ip_brand": "AT&T", "ip_type": "residential",
-                      "price": pricing.Price("5.89", "USD")}
+                      "price": pricing.Price("7.35", "USD")}
     assert set(public) == {"host_brand", "ip_brand", "ip_type", "price"}
     assert offers.public({"access_host": "secret", "token": "secret"}) == offers.public(None)
     assert offers.from_json(offers.to_json(offer)) == offer
@@ -170,13 +170,13 @@ def test_server_cli_offer_show_set_clear_are_explicit_and_scoped(tmp_path, capsy
             "--hosting-period", "month", "--ip-cost", "0", "--ip-currency", "USD",
             "--ip-period", "month"]
     assert cli.main(args) == 0
-    assert "$5.89 per slot per month" in capsys.readouterr().out
+    assert "$7.35 per slot per month" in capsys.readouterr().out
     assert cli.main([*prefix, "set", "node-a", "--ip-cost", "1"]) == 2
     assert "required together" in capsys.readouterr().err
     assert cli.main([*prefix, "show", "node-b"]) == 0
     assert "no offer metadata" in capsys.readouterr().out
     assert cli.main([*prefix, "set", "node-a", "--ip-type", "isp"]) == 0
-    assert "price pending" in capsys.readouterr().out
+    assert "pricing unavailable" in capsys.readouterr().out.lower()
     assert cli.main([*prefix, "clear", "node-a"]) == 0
-    assert "fallback restored" in capsys.readouterr().out
+    assert "pricing unavailable" in capsys.readouterr().out.lower()
     assert cli.main([*prefix, "show", "unknown"]) == 2

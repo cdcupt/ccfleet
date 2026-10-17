@@ -165,24 +165,46 @@ def _cost_zh(price: pricing.Price) -> str:
 def _rental_pricing_details() -> str:
     """Current catalogue policy, shared by the guide, explanation and terms."""
     return bi(
-        '<p>Each machine has its own monthly USD rate in the '
-        '<a href="/#slot-pricing">public slot list</a>. The rate is the actual hosting '
-        'and IP costs, normalized to a calendar month, plus a fixed 10% markup. '
+        '<p><strong>Alpha pricing.</strong> Each machine has its own monthly USD rate in the '
+        '<a href="/#slot-pricing">public slot list</a>. Alpha pricing passes through recorded '
+        'VPS and exit-IP costs, plus a monthly service fee of 10% of resource cost, with a '
+        '$2 minimum per slot. Your Claude subscription or Anthropic API usage is billed '
+        'separately.</p><p>Recorded costs are normalized to a calendar month. '
         'A 30-day cost is multiplied by 365/360; an annual cost is divided by 12. '
-        'The total is rounded once, half up, to cents. Agree the price and paid period '
-        'with the operator; the website does not charge automatically or rewrite past '
-        'payments. Your own Claude subscription is separate.</p>',
-        '<p>每台主机的美元月费分别列于<a href="/#slot-pricing">公开槽位列表</a>。'
-        '按实际主机和 IP 成本统一折算为日历月，再加固定 10%：30 天成本乘以 '
-        '365/360，年付成本除以 12，最后只对总价四舍五入一次，保留到美分。'
-        '价格及服务有效期直接与运营者约定；网站不会自动扣款，也不会改写过去的付款记录。'
-        '你自己的 Claude 订阅另计。</p>',
+        'For a customer quote, round the normalized USD resource cost to cents, half up; '
+        'calculate 10% of that amount, round the service fee half up to cents with a $2 '
+        'minimum, then add the two displayed amounts. Resource costs of $8.68, $10.83, '
+        '$22.28 and $27.44 therefore give totals of $10.68, $12.83, $24.51 and $30.18 '
+        'per month. The fee remains $2 through $20 of resource cost.</p>',
+        '<p><strong>Alpha 定价。</strong>每台主机的美元月费分别列于'
+        '<a href="/#slot-pricing">公开槽位列表</a>。按已记录的 VPS 与出口 IP 成本计价，'
+        '另收资源成本 10% 的月度服务费，每槽位最低 $2。你自己的 Claude 订阅或 '
+        'Anthropic API 用量另行付费。</p><p>已记录成本统一折算为日历月：30 天成本乘以 '
+        '365/360，年付成本除以 12。报价先将折算后的美元资源成本四舍五入到美分，再取其 '
+        '10% 并将服务费四舍五入到美分，服务费最低 $2，最后将两项显示金额相加。'
+        '资源成本 $8.68、$10.83、$22.28 和 $27.44，分别对应月费 $10.68、$12.83、'
+        '$24.51 和 $30.18。资源成本不超过 $20 时，服务费为 $2。</p>',
     ) + bi(
-        '<p>The host and IP-provider brands are shown separately. ISP is the standard '
-        'network category; Residential is premium. These labels do not guarantee an IP '
-        'quality score, speed or acceptance by Anthropic.</p>',
-        '<p>主机与 IP 服务商品牌分别展示。ISP 为标准网络类别，住宅为高级类别；'
-        '这些标签不保证 IP 质量评分、速度或 Anthropic 一定接受请求。</p>',
+        '<p>The public breakdown shows VPS cost, separately recorded exit-IP cost, service '
+        'fee and total. When hosting includes the exit IP, it shows the recorded bundled '
+        'resource cost without inventing a split. A normalization rounding line explains '
+        'any cent-level difference between individually rounded components and the '
+        'rounded combined resource cost. Missing costs or costs not converted '
+        'to USD make pricing unavailable. The host and IP-provider brands remain visible. '
+        'ISP and Residential describe network types, with the same pricing formula and '
+        'no separate residential premium; neither guarantees quality, speed or Claude '
+        'compatibility.</p>',
+        '<p>公开明细展示 VPS 成本、单独记录的出口 IP 成本、服务费与总价。'
+        '主机包含出口 IP 时，展示已记录的打包资源成本，不虚构拆分金额。若各项单独舍入后'
+        '与合计资源成本存在美分差异，会以折算舍入行解释。成本缺失或尚未'
+        '转换为美元时，价格暂不可用。主机与 IP 服务商品牌保持可见。ISP 与住宅只描述'
+        '网络类型，两者采用同一公式，不另加住宅溢价；这些类型不保证质量、速度或 '
+        'Claude 兼容性。</p>',
+    ) + _alpha_stage_details() + bi(
+        '<p>Agree the price and paid period with the operator; the website does not charge '
+        'automatically, renew automatically or rewrite past payments.</p>',
+        '<p>价格及服务有效期直接与运营者约定；网站不会自动扣款、自动续费，'
+        '也不会改写过去的付款记录。</p>',
     ) + bi(
         '<p>Retired machines are removed from the rental catalogue. A temporarily '
         'offline machine that remains in service still appears on '
@@ -191,6 +213,23 @@ def _rental_pricing_details() -> str:
         '<p>已退役主机会从出租目录移除。仍在运营、只是暂时离线的主机继续显示在'
         '<a href="/status#slot-machines">服务状态</a>中。退役不会自动归还已有持有者的'
         '槽位，也不会删除其账号或付款历史。</p>',
+    )
+
+
+def _alpha_stage_details() -> str:
+    """Describe the current stage without turning a personal trial into a guarantee."""
+    return bi(
+        '<p><strong>Alpha — Early Access.</strong> The service is still being tested and '
+        'has not launched commercially. The operator has personally used one residential '
+        'slot with encouraging results; reliability across providers, configurations and '
+        'multiple users is still being evaluated. Alpha pricing is introductory and may '
+        'change for future billing periods. You will receive an updated quote before '
+        'renewal if pricing changes; an already agreed billing period retains its agreed '
+        'price.</p>',
+        '<p><strong>Alpha — 早期体验。</strong>服务仍在测试，尚未正式商业发布。运营者'
+        '亲自使用过一个住宅槽位，结果令人鼓舞，但不同服务商、配置及多用户场景的可靠性'
+        '仍待评估。Alpha 价格为初期价格，未来计费周期可能调整。如有变更，续期前会提供'
+        '更新报价；已约定计费周期仍执行原约定价格。</p>',
     )
 
 
@@ -363,34 +402,29 @@ def overview(
             "查看我的槽位</a>。</p>"
         )
     way_in = bi(way_in, way_in_zh)
-    # With a price the operator set, say it; without one, say it is agreed with them.
-    paying = (
-        f"A slot costs {_cost(price)}, paid directly to the operator; this "
-        f"site takes "
-        f"no "
-        "card and no payment."
-        if price is not None
-        else "Slots are sold directly by the operator; price and payment are agreed with them."
-    )
-    paying_zh = (
-        f"槽位费用为{_cost_zh(price)}，直接支付给运营者，本站不收集银行卡，也不代收款项。"
-        if price is not None
-        else "价格与付款方式直接和运营者约定。"
-    )
+    # A legacy global selling price is not evidence of current resource costs.
+    paying = ("Pricing is unavailable until the recorded resource costs support a quote. "
+              "Agree the quote and payment directly with the operator.")
+    paying_zh = ("已记录的资源成本支持报价前，价格暂不可用。报价与付款方式直接和运营者约定。")
     if per_slot_pricing:
         paying = ('The <a href="#slot-pricing">slot list</a> shows each provider, IP type '
-                  'and monthly USD rate: calendar-month hosting plus IP cost, with a '
-                  'fixed 10% markup. Choose a machine at its displayed rate and pay the '
-                  'operator directly; this site does not charge automatically.')
+                  'and monthly USD rate. Alpha pricing adds a service fee of 10% of '
+                  'recorded monthly resource cost, with a $2 minimum per slot. Your Claude '
+                  'subscription or Anthropic API usage is billed separately. Choose a '
+                  'machine at its displayed rate and pay the operator directly; this site '
+                  'does not charge automatically or renew automatically.')
         paying_zh = ('<a href="#slot-pricing">槽位列表</a>展示各服务商、IP 类型及月费，'
-                     '按主机与 IP 的日历月成本加固定 10%，以美元计价。按所示价格选择主机，'
-                     '直接支付给运营者；本站不会自动扣款。')
+                     'Alpha 定价在已记录的美元月度资源成本上，收取 10% 服务费，'
+                     '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
+                     '按所示价格选择主机，直接支付给运营者；本站不会自动扣款或自动续费。')
     body = (
         '<section class="hero"><div class="hero-copy"><div class="hero-top">'
         + bi(
             '<p class="eyebrow">Bring your own Claude plan</p>',
             '<p class="eyebrow">使用你自己的 Claude 订阅</p>',
         )
+        + bi('<p class="eyebrow">Alpha — Early Access</p>',
+             '<p class="eyebrow">Alpha — 早期体验</p>')
         + statuspage.pill(health)
         + "</div>"
         + bi(
@@ -398,13 +432,14 @@ def overview(
             "<h1>Claude Code 在本地运行，账号留在你的槽位</h1>",
         )
         + bi(
-            '<p class="lead">ccfleet gives you a <strong>slot</strong>: a separate Linux '
-            "account on a machine we run, signed in to <em>your own</em> Claude account. "
+            '<p class="lead">ccfleet gives you a <strong>slot</strong>: a dedicated VPS '
+            "and dedicated exit IP, with a private Linux account signed in to "
+            "<em>your own</em> Claude account. "
             "Run <code>ccfleet local</code> for original Claude Code, files, tools and "
             "history on your computer. Supported model requests go over HTTPS to our "
             "gateway, then through a slot you selected.</p>",
-            '<p class="lead">CC Fleet 提供一个<strong>槽位</strong>：托管机器上的独立 '
-            "Linux 用户环境，登录<em>你自己的</em> Claude 账号。运行 <code>ccfleet "
+            '<p class="lead">CC Fleet 提供一个<strong>槽位</strong>：专属 VPS 与专属出口 '
+            "IP，以及登录<em>你自己的</em> Claude 账号的独立 Linux 用户环境。运行 <code>ccfleet "
             "local</code>，原版 Claude Code、文件、工具和历史在你的电脑上；支持的模型请求通"
             "过 HTTPS 到网关，再经过你选中的槽位。</p>",
         )
@@ -499,6 +534,10 @@ def overview(
         )
         + "</li>"
         + '</ol></div></section>'
+        + '<section class="band">'
+        + bi('<h2>Alpha — Early Access</h2>', '<h2>Alpha — 早期体验</h2>')
+        + _alpha_stage_details()
+        + '</section>'
         + catalogue
         + public_usage_panel(ranking)
         + '<section class="band">'
@@ -937,27 +976,22 @@ def guide(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
     per_slot_pricing: bool = False,
 ) -> str:
-    price_en = (
-        f"A slot costs {_cost(price)}, paid directly to the operator; this site "
-        "takes no card and no payment."
-        if price is not None
-        else "Price and payment are agreed directly with the operator."
-    )
-    price_zh = (
-        f"槽位费用为{_cost_zh(price)}，直接支付给运营者；本站不收集银行卡，也不代收款项。"
-        if price is not None
-        else "价格与付款方式直接和运营者约定。"
-    )
+    price_en = ("Pricing is unavailable until the recorded resource costs support a quote. "
+                "Agree the quote and payment directly with the operator.")
+    price_zh = "已记录的资源成本支持报价前，价格暂不可用。报价与付款方式直接和运营者约定。"
     if per_slot_pricing:
         price_en = ('Each slot has its own provider, IP type and monthly price in the '
-                    '<a href="/#slot-pricing">slot list</a>, in USD with a fixed 10% '
-                    'markup on calendar-month hosting and IP costs. Choose the machine '
-                    'at its displayed rate on your account page and pay the operator '
-                    'directly; this site does not charge automatically.')
+                    '<a href="/#slot-pricing">slot list</a>. Alpha pricing passes through '
+                    'recorded monthly VPS and exit-IP costs, plus a 10% service fee with '
+                    'a $2 minimum per slot, in USD. Your Claude subscription or Anthropic '
+                    'API usage is billed separately. Choose the machine at its displayed '
+                    'rate on your account page and pay the operator directly; this site '
+                    'does not charge automatically or renew automatically.')
         price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/#slot-pricing">槽位列表</a>，'
-                    '按主机与 IP 的日历月成本加固定 10%，以美元计价。'
+                    'Alpha 定价按已记录的 VPS 与出口 IP 美元月成本，加 10% 服务费，'
+                    '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
                     '在账号页按所示价格选择主机，并直接向运营者付款；'
-                    '本站不会自动扣款。')
+                    '本站不会自动扣款或自动续费。')
     body = (
         '<div class="dochead">'
         + bi("<h1>Getting started</h1>", "<h1>开始使用</h1>")
@@ -1325,13 +1359,13 @@ def how_it_works(
         + '</div><div class="card">'
         + bi("<h2>Your seat and your account</h2>", "<h2>你的槽位与你的账号</h2>")
         + bi(
-            "<p>A slot is a separate Linux account on a machine we operate. It has a "
-            "private home directory and one bound Claude account. Slots may share a "
-            "physical machine and its internet address. You sign in yourself through "
+            "<p>Each customer receives a dedicated VPS and dedicated exit IP. The slot "
+            "has a private Linux home directory and one bound Claude account. You sign "
+            "in yourself through "
             "Anthropic; native Claude owns authentication and renewal. Renewal can fail or "
             "be revoked, so the page may ask you to <strong>Sign in again</strong>.</p>",
-            "<p>槽位是我们托管机器上的独立 Linux 用户环境，有自己的主目录，并绑定一个 "
-            "Claude 账号。多个槽位可能共用一台物理机器和公网地址。你通过 Anthropic "
+            "<p>每位客户获得专属 VPS 与专属出口 IP。槽位有独立的 Linux 主目录，并绑定一个 "
+            "Claude 账号。你通过 Anthropic "
             "亲自登录，认证与续期由原版 Claude 管理。续期可能失败，登录也可能被撤销，因此页"
             "面仍可能要求<strong>重新登录</strong>。</p>",
         )
@@ -1459,30 +1493,23 @@ def terms(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
     per_slot_pricing: bool = False,
 ) -> str:
-    paying = (
-        f"A slot costs {_cost(price)}, paid directly to the operator, who "
-        f"switches "
-        f"your "
-        "slot on when you pay; this site takes no card and no payment."
-        if price is not None
-        else "Price and payment are agreed directly with the operator, who switches your "
-        "slot on when you pay."
-    )
-    paying_zh = (
-        f"槽位费用为{_cost_zh(price)}，直接支付给运营者，付款后开通；"
-        f"本站不收集银行卡，也不代收款项。"
-        if price is not None
-        else "价格与付款方式直接和运营者约定，付款后开通。"
-    )
+    paying = ("Pricing is unavailable until the recorded resource costs support a quote. "
+              "Agree the quote and paid period directly with the operator, who enables "
+              "access after payment; this site does not charge or renew automatically.")
+    paying_zh = ("已记录的资源成本支持报价前，价格暂不可用。报价及服务有效期直接和运营者约定，"
+                 "付款后开通；本站不会自动扣款或自动续费。")
     if per_slot_pricing:
         paying = ('Monthly rates are listed separately for each slot in the '
-                  '<a href="/#slot-pricing">slot list</a>: calendar-month hosting plus IP '
-                  'cost, with a fixed 10% markup, in USD. Your Claude subscription '
-                  'is separate. Agree the price and paid period directly with the operator; '
-                  'claiming a slot does not charge you automatically.')
+                  '<a href="/#slot-pricing">slot list</a>. Alpha pricing adds a service '
+                  'fee of 10% of recorded monthly VPS and exit-IP resource cost, with a '
+                  '$2 minimum per slot, in USD. Your Claude subscription or Anthropic API '
+                  'usage is billed separately. Agree the price and paid period directly '
+                  'with the operator; claiming a slot does not charge you automatically '
+                  'or renew automatically.')
         paying_zh = ('各槽位月费分别列于<a href="/#slot-pricing">槽位列表</a>：'
-                     '按主机与 IP 的日历月成本加固定 10%，以美元计价。Claude 订阅另计。'
-                     '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款。')
+                     'Alpha 定价在已记录的 VPS 与出口 IP 美元月度资源成本上，加 10% 服务费，'
+                     '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
+                     '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款或自动续费。')
     body = (
         '<div class="dochead">'
         + bi("<h1>Terms</h1>", "<h1>服务条款</h1>")
@@ -1493,11 +1520,12 @@ def terms(
         + '</div><div class="card">'
         + bi("<h2>The service</h2>", "<h2>服务内容</h2>")
         + bi(
-            "<p>A slot is a Linux account on a machine the operator runs, for one person, "
-            "with Claude Code installed. You bring your own Claude plan and sign in to it "
+            "<p>A slot provides one person with a dedicated VPS and dedicated exit IP, "
+            "with a private Linux account and Claude Code installed. You bring your own "
+            "Claude plan and sign in to it "
             "yourself; ccfleet does not provide access to Claude. CC Fleet is independent "
             "and is not affiliated with or endorsed by Anthropic.</p>",
-            "<p>槽位是运营者托管机器上的一个 Linux 用户环境，供一人使用，安装了 Claude "
+            "<p>槽位为一人提供专属 VPS 与专属出口 IP，包含独立 Linux 用户环境，并安装了 Claude "
             "Code。你自行准备 Claude 订阅并亲自登录；CC Fleet 不提供 Claude 订阅或账号。CC "
             "Fleet 独立运营，与 Anthropic 没有隶属关系，也未获其背书。</p>",
         )

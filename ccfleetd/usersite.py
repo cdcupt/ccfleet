@@ -95,7 +95,7 @@ from .store import (
 NOTES = {
     "claimed": ("ok", "Your slot is being set up: an account on the machine, then Claude "
                       "Code. It takes a few minutes, and this page keeps up."),
-    "no-slot": ("warn", "No slot is free right now. Try again later, or ask your operator."),
+    "no-slot": ("warn", "No slot is available right now. Try again later, or ask your operator."),
     "no-allowance": ("warn", "You already hold every slot your allowance covers."),
     "released": ("ok", "Given back. Everything on it is being deleted."),
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
@@ -127,7 +127,7 @@ NOTES_ZH = {
         '槽位正在准备：先创建独立账号，再安装 Claude Code。'
         '通常需要几分钟，页面会自动更新。'
     ),
-    "no-slot": "目前没有空闲槽位。请稍后再试，或联系运营方。",
+    "no-slot": "目前没有可领取槽位。请稍后再试，或联系运营方。",
     "no-allowance": "你已领取额度内的全部槽位。",
     "released": "槽位已归还，正在删除其中的所有内容。",
     "confirm": "请先勾选确认框：归还槽位会删除其中的所有内容。",
@@ -678,12 +678,14 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
                 '<body class="site" data-language="en"><header '
                 'class="topbar"><div class="topbar-in">'
                 f'<a class="brand" href="/">{MARK}<span>ccfleet</span></a>'
+                + offer_ui.alpha_label() +
                 f'<nav class="doc-nav">{links}</nav>'
                 f'<div class="topbar-end">{CONTROLS}{corner}</div></div></h'
                 f'eader>'
                 f'<main class="page {escape(width)}">{body}</main>'
                 '<footer class="sitefoot"><div class="sitefoot-in"><div>'
                 f'<a class="brand" href="/">{MARK}<span>ccfleet</span></a>'
+                + offer_ui.alpha_label() +
                 "<p>"
             ) + label("Local Claude Code. Your accounts, your selected slots.",
                           (

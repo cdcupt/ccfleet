@@ -316,17 +316,19 @@ def _price_command(args: argparse.Namespace, store: Store) -> int:
     if args.price_command == "set":
         price = store.set_price(args.amount, args.currency, by="server command line",
                                 now=time.time())
-        print(f"the public pages now say: {pricing.per_slot(price)}")
+        print(f"legacy recorded rate: {pricing.per_slot(price)}; "
+              "Alpha quotes use recorded per-machine resource costs instead")
         return EXIT_OK
     if args.price_command == "clear":
         store.clear_price()
-        print("no price shown: the pages say price and payment are agreed with you")
+        print("legacy rate cleared; Alpha quotes use recorded per-machine resource costs")
         return EXIT_OK
     current = store.get_price()
     if current is None:
-        print("no price set: the pages say price and payment are agreed with you")
+        print("no legacy rate set; Alpha quotes require recorded per-machine resource costs")
         return EXIT_OK
-    print(f"{pricing.per_slot(current['price'])}, set by {current['updated_by']} on "
+    print(f"legacy recorded rate (not an Alpha quote): {pricing.per_slot(current['price'])}, "
+          f"set by {current['updated_by']} on "
           f"{payments.today(current['updated_at']).isoformat()}")
     return EXIT_OK
 
@@ -425,7 +427,8 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
     if args.node_command == "offer":
         if args.offer_command == "clear":
             store.clear_node_offer(args.node_id)
-            print(f"{args.node_id}: offer cleared; legacy global-price fallback restored")
+            print(f"{args.node_id}: offer cleared; "
+                  "Alpha pricing unavailable until costs are recorded")
             return EXIT_OK
         if args.offer_command == "set":
             costs = {}
@@ -441,12 +444,17 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
                                  ip_brand=args.ip_brand, ip_type=args.ip_type, **costs)
         current = store.get_node_offer(args.node_id)
         if current is None:
-            print(f"{args.node_id}: no offer metadata; legacy global-price fallback applies")
+            print(f"{args.node_id}: no offer metadata; Alpha pricing unavailable")
         else:
             print(offers.to_json(current))
-            price = offers.monthly_price(current)
-            print(pricing.per_slot(price) + " (actual normalized costs + 10%)" if price else
-                  "price pending: both actual costs in the same currency are required")
+            value = offers.quote(current)
+            if value is None:
+                print("Alpha pricing unavailable: record both costs in USD; "
+                      "convert foreign invoices explicitly before quoting")
+            else:
+                print(pricing.per_slot(value.total) + " (Alpha)")
+                print("Resource " + pricing.display(value.resource) + " + service fee "
+                      + pricing.display(value.service_fee) + " = " + pricing.display(value.total))
         return EXIT_OK
     if args.node_command == "add":
         token = store.add_node(args.node_id, args.owner, args.region, args.pinned_version,

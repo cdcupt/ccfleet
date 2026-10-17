@@ -32,17 +32,30 @@ refer to the former platform host. Those instructions remain a historical record
 current connection and privacy guidance is in the native-local section below and
 the <a href="public-gateway.html">HTTPS gateway guide</a>.</p></div>
 <p class="eyebrow">CC Fleet · guidebook · 2026-09-28</p>
-<div class="card note" id="rental-policy-current"><p><strong>Current rental policy — October 16, 2026.</strong>
+<div class="card note" id="rental-policy-current"><p><strong>Alpha pricing — October 16, 2026.</strong>
 Choose an available machine and its monthly USD rate from the
 <a href="https://ccfleet.daichenlab.com/en/#slot-pricing">current rental catalogue</a>.
-Hosting and IP-provider brands are separate; ISP is standard and Residential premium,
-without a guaranteed quality score or upstream acceptance. Rates use actual hosting plus IP
-costs normalized to a calendar month, add a fixed 10%, and round the total once, half up,
-to cents. A 30-day cost multiplies by 365/360; an annual cost divides by 12. Claude is not
-included and the website does not charge automatically. Retired machines leave the rental
+Each customer receives a dedicated VPS and dedicated exit IP. Hosting and IP-provider brands
+are separate; ISP and Residential are network types with the same formula, no residential
+premium and no guaranteed quality or Claude compatibility. Resource cost uses recorded VPS
+and exit-IP costs normalized to a calendar month: a 30-day cost multiplies by 365/360 and
+an annual cost divides by 12. Round the USD resource cost half up to cents, calculate a
+10% monthly service fee with a $2 minimum and round it half up to cents, then add them.
+For example, $8.68 + $2 = $10.68 and $10.83 + $2 = $12.83; the $2 fee applies through
+$20 of resource cost. The public breakdown shows VPS cost, separately recorded IP cost,
+service fee and total. A recorded hosting-and-IP bundle stays bundled, with no invented
+split; a normalization rounding line explains any cent-level component difference. Missing costs
+or costs not converted to USD make pricing unavailable. Your Claude subscription or Anthropic
+API usage is billed separately; payment remains manually agreed, with no automatic charges
+or renewals. Retired machines leave the rental
 catalogue; existing holders and payment history are preserved. Temporarily offline enabled
 machines still appear on <a href="https://ccfleet.daichenlab.com/status">Status</a>.
-This notice updates rental guidance, not the dated workflow evidence below.</p></div>
+This notice updates rental guidance, not the dated workflow evidence below.</p>
+<p><strong>Alpha — Early Access.</strong> The service is still being tested and has not launched
+commercially. One residential slot worked encouragingly in the operator's personal use;
+reliability across providers, configurations and multiple users remains unverified. Alpha pricing
+is introductory and may change for future billing periods. Customers receive an updated quote
+before renewal if prices change; an already agreed period retains its agreed price.</p></div>
 <h1>Claude Code anywhere, one account per slot</h1>
 <p class="lead">CC Fleet hosts the original Claude Code CLI in a private Linux slot. A
 small local command connects your terminal to it; the Claude credential and model traffic

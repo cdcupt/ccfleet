@@ -1,4 +1,4 @@
-"""The price of a slot: set by the operator in the console, shown on the public pages.
+"""Legacy price records stay valid but cannot become recorded-cost Alpha quotes.
 
 Shown, never charged. The tests that matter most are about what a price may be
 (a typo must be refused rather than published), what a customer reads with and
@@ -26,10 +26,9 @@ from ccfleetd.store import Store, StoreError
 from tests.test_admin_host import Browser
 
 ADMIN_TOKEN = "admin-token-long-enough-to-pass"
-NO_PRICE_OVERVIEW = "Slots are sold directly by the operator; price and payment are agreed with them."
-NO_PRICE_GUIDE = "Price and payment are agreed directly with the operator."
-NO_PRICE_TERMS = ("Price and payment are agreed directly with the operator, who switches your slot "
-                  "on when you pay.")
+NO_PRICE_OVERVIEW = "Pricing is unavailable until the recorded resource costs support a quote."
+NO_PRICE_GUIDE = NO_PRICE_OVERVIEW
+NO_PRICE_TERMS = NO_PRICE_OVERVIEW
 
 
 # -- what a price may be --------------------------------------------------------------
@@ -240,30 +239,28 @@ def price_card(page):
 def test_the_console_shows_there_is_no_price_yet(console):
     _, call = console
     card = price_card(call("GET", "/admin").body)
-    assert "No price set" in card
-    assert 'action="/actions/price/slot/set"' in card
+    assert "Alpha slot pricing" in card and "No enabled machine offers yet" in card
+    assert 'action="/actions/price/slot/set"' not in card
     assert 'action="/actions/price/slot/clear"' not in card, "nothing to clear yet"
-    for code in pricing.CURRENCIES:
-        assert f'<option value="{code}"' in card
 
 
-def test_the_operator_sets_the_price_from_the_console(console):
+def test_the_compatibility_action_records_a_legacy_rate_without_publishing_a_quote(console):
     store, call = console
     reply = call("POST", "/actions/price/slot/set", {"amount": "20", "currency": "USD"})
     assert reply.status == 303 and reply.getheader("Location") == "/admin#price"
     assert store.get_price()["price"] == pricing.Price("20", "USD")
     assert store.get_price()["updated_by"] == "admin token"
     card = price_card(call("GET", "/admin").body)
-    assert "$20 per slot per month" in card and "set by admin token" in card
-    assert 'value="20"' in card and '<option value="USD" selected>' in card
-    assert 'action="/actions/price/slot/clear"' in card
+    assert "Alpha slot pricing" in card and "No enabled machine offers yet" in card
+    assert "$20 per slot per month" not in card and "set by admin token" not in card
+    assert 'value="20"' not in card and 'action="/actions/price/slot/clear"' not in card
 
 
 def test_a_named_operator_is_who_set_it(console):
     store, call = console
     call("POST", "/actions/price/slot/set", {"amount": "150", "currency": "CNY"}, who="op")
     assert store.get_price()["updated_by"] == "op"
-    assert "¥150 CNY per slot per month" in price_card(call("GET", "/admin").body)
+    assert "¥150 CNY per slot per month" not in price_card(call("GET", "/admin").body)
 
 
 @pytest.mark.parametrize("form,said", [
@@ -286,7 +283,7 @@ def test_clearing_from_the_console(console):
     store.set_price("20", "USD", by="op", now=1.0)
     reply = call("POST", "/actions/price/slot/clear", {})
     assert reply.status == 303 and store.get_price() is None
-    assert "No price set" in price_card(call("GET", "/admin").body)
+    assert "No enabled machine offers yet" in price_card(call("GET", "/admin").body)
 
 
 def test_an_owner_login_cannot_set_or_clear_the_price(console):
@@ -322,11 +319,12 @@ def test_an_unknown_price_action_is_not_found(console):
     assert store.get_price() is None
 
 
-def test_who_set_it_is_shown_as_text(console):
+def test_legacy_author_and_amount_are_absent_from_the_alpha_card(console):
     store, call = console
     store.set_price("20", "USD", by="o'neil&<b>x</b>@example.com", now=time.time())
     card = price_card(call("GET", "/admin").body)
-    assert "<b>x</b>" not in card and "o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;" in card
+    assert "<b>x</b>" not in card and "o&#x27;neil&amp;&lt;b&gt;x&lt;/b&gt;" not in card
+    assert "$20 per slot per month" not in card
 
 
 def test_a_customer_session_is_no_console_identity(monkeypatch):
@@ -366,50 +364,54 @@ def render(path, price=None):
     return customer_docs.page_for(path)(Config(), price=price)
 
 
-def test_without_a_price_the_pages_say_it_is_agreed_with_the_operator():
+def test_without_recorded_costs_the_pages_say_pricing_is_unavailable():
     assert NO_PRICE_OVERVIEW in render("/docs")
     assert NO_PRICE_GUIDE in render("/docs/guide")
     assert NO_PRICE_TERMS in render("/docs/terms")
 
 
 @pytest.mark.parametrize("path", ["/docs", "/docs/guide", "/docs/terms"])
-def test_with_a_price_each_page_says_what_a_slot_costs(path):
-    page = render(path, pricing.Price("20", "USD"))
-    assert "$20" in page and "a month" in page
-    assert "paid directly to" in page and "no card" in page
-    for fallback in (NO_PRICE_OVERVIEW, NO_PRICE_GUIDE, NO_PRICE_TERMS):
-        assert fallback not in page
+def test_a_legacy_price_cannot_stand_in_for_a_resource_cost_quote(path):
+    page = render(path, pricing.Price("987.65", "USD"))
+    assert "$987.65" not in page
+    assert NO_PRICE_OVERVIEW in page
+    assert "directly with the operator" in page
 
 
 def test_the_overview_keeps_its_honest_points_with_a_price():
     page = render("/docs", pricing.Price("20", "USD"))
-    assert "A slot costs <strong>$20</strong> a month, paid directly to the operator" in page
+    assert NO_PRICE_OVERVIEW in page
+    assert "Alpha — Early Access" in page
     assert "ccfleet sells the machine, not Claude" in page
 
 
-def test_yen_on_the_pages_says_which_yen():
-    assert "¥150 CNY" in render("/docs", pricing.Price("150", "CNY"))
+def test_an_unconverted_foreign_legacy_rate_is_not_an_alpha_quote():
+    page = render("/docs", pricing.Price("150", "CNY"))
+    assert "¥150 CNY" not in page and NO_PRICE_OVERVIEW in page
 
 
-def test_the_price_on_a_page_is_escaped():
-    """Validation keeps markup out of a price, and the page escapes it anyway."""
+@pytest.mark.parametrize("path", ["/docs", "/docs/guide", "/docs/terms"])
+def test_unsafe_legacy_price_is_never_rendered_raw_or_escaped(path):
+    """A legacy selling-price argument is not a recorded resource quote."""
     odd = pricing.Price("<b>20</b>", "USD")
-    page = render("/docs/terms", odd)
-    assert "<b>20</b>" not in page and "&lt;b&gt;20&lt;/b&gt;" in page
+    page = render(path, odd)
+    assert "<b>20</b>" not in page and "&lt;b&gt;20&lt;/b&gt;" not in page
+    assert NO_PRICE_TERMS in page
 
 
 def test_the_how_it_works_page_takes_the_same_arguments():
     assert "How it works" in render("/docs/how-it-works", pricing.Price("20", "USD"))
 
 
-def test_the_pages_over_http_show_the_operators_price(console):
+def test_public_pages_over_http_ignore_the_legacy_rate_and_its_author(console):
     store, call = console
     assert NO_PRICE_OVERVIEW in call("GET", "/docs").body
     store.set_price("20", "USD", by="erik@example.com", now=time.time())
     page = call("GET", "/docs").body
-    assert "A slot costs <strong>$20</strong> a month" in page
+    assert NO_PRICE_OVERVIEW in page and "A slot costs <strong>$20</strong>" not in page
     assert "erik@example.com" not in page, "a customer never sees who set it"
-    assert "$20" in call("GET", "/docs/terms").body
+    assert "A slot costs <strong>$20</strong>" not in call("GET", "/docs/terms").body
+    assert NO_PRICE_TERMS in call("GET", "/docs/terms").body
 
 
 # -- the command line -----------------------------------------------------------------
@@ -423,16 +425,18 @@ def db(tmp_path, monkeypatch):
 
 def test_the_price_from_the_command_line(db, capsys):
     assert cli.main(["--db", db, "price", "show"]) == 0
-    assert "no price set" in capsys.readouterr().out
+    assert "no legacy rate set" in capsys.readouterr().out
     assert cli.main(["--db", db, "price", "set", "20", "USD"]) == 0
-    assert "$20 per slot per month" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "$20 per slot per month" in out and "legacy recorded rate" in out
     assert cli.main(["--db", db, "price", "show"]) == 0
     out = capsys.readouterr().out
     assert "$20 per slot per month" in out and "server command line" in out
+    assert "legacy recorded rate (not an Alpha quote)" in out
     assert cli.main(["--db", db, "price", "clear"]) == 0
     capsys.readouterr()
     assert cli.main(["--db", db, "price", "show"]) == 0
-    assert "no price set" in capsys.readouterr().out
+    assert "no legacy rate set" in capsys.readouterr().out
 
 
 def test_a_bad_price_on_the_command_line_is_refused(db, capsys):

@@ -132,7 +132,7 @@ def test_the_operator_sees_every_slot_and_who_holds_it(console):
     card = slots_card(call("GET", "/admin").body)
     assert "m1-01" in card and "m1-02" in card
     assert "ana@example.com" in card
-    assert ">Setting up<" in card and ">Free<" in card
+    assert ">Setting up<" in card and ">Available<" in card
 
 
 def test_what_people_and_machines_wrote_is_shown_not_run(console):

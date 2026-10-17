@@ -145,7 +145,8 @@ def test_gateway_address_and_published_contact_are_escaped_in_both_copies():
 
 def test_terms_and_prices_do_not_imply_included_claude_or_reveal_raw_markup():
     source = customer_docs.terms(Config(), price=pricing.Price("<unsafe>", "USD"))
-    assert "<unsafe>" not in source and "&lt;unsafe&gt;" in source
+    assert "<unsafe>" not in source and "&lt;unsafe&gt;" not in source
+    assert "Pricing is unavailable" in source
     copy = LanguageCopy(source)
     assert "does not provide access to Claude" in copy.text("en")
     assert "不提供 Claude 订阅或账号" in copy.text("zh-Hans")
