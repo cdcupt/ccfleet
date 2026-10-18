@@ -12,6 +12,7 @@ CURRENT_PAGES = frozenset({
     '/', '/slots', '/account', '/account/available', '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
+    '/docs/library/docs/devin.html',
     '/docs/library/docs/platform-comparison.html',
 })
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
@@ -28,6 +29,7 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/docs/library': '文档', '/docs/library/': '文档',
              '/docs/library/docs/index.html': '文档',
              '/docs/library/docs/public-gateway.html': 'HTTPS 接入指南',
+             '/docs/library/docs/devin.html': '为什么评估 Devin',
              '/docs/library/docs/platform-comparison.html': 'CC Fleet 与 CC Host 对比',
              '/account/gateway/create': '连接密钥'}
 
