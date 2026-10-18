@@ -161,7 +161,8 @@ def _slot_block(slot: Mapping[str, Any],
                 channels: Optional[Mapping[str, Any]] = None,
                 update: Optional[Mapping[str, Any]] = None,
                 cli_keys: Optional[list[str]] = None,
-                gateway_keys: Optional[list[str]] = None) -> dict[str, Any]:
+                gateway_keys: Optional[list[str]] = None,
+                devin_gateway: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """What a shared machine should do about one of its slots.
 
     The state is the whole instruction: `claiming` means provision it,
@@ -184,6 +185,12 @@ def _slot_block(slot: Mapping[str, Any],
     pending = _login_block(login) if slot.get("state") in SLOT_SIGN_IN_STATES else None
     if pending:
         block["login"] = pending
+    if (devin_gateway is not None and slot.get("kind") == "machine"
+            and slot.get("state") in SLOT_SIGN_IN_STATES
+            and isinstance(slot.get("held_by"), str) and slot["held_by"]
+            and not pending):
+        # Private root-machine control; it does not assert native identity.
+        block["devin_gateway"] = dict(devin_gateway)
     # Clear the old unrestricted customer-SSH field while installing only keys
     # whose authorized-key options force the CC Fleet CLI entrypoint.
     if slot.get("state") in (*SLOT_SIGN_IN_STATES, "releasing"):
@@ -196,7 +203,9 @@ def _slot_block(slot: Mapping[str, Any],
         # Service authentication is a distinct privilege and never turns into
         # a CLI device key. Send a revocation even on an ineligible lifecycle.
         safe_keys = []
-        eligible = (slot.get("kind") == "machine" and slot.get("state") == "active"
+        eligible = (slot.get("kind") == "machine"
+                    and (slot.get("state") == "active"
+                         or block.get("devin_gateway", {}).get("keys"))
                     and block.get("inference_allowed") is True
                     and not (pending and pending.get("kind") in ("login", "switch")))
         if eligible and isinstance(gateway_keys, list) and len(gateway_keys) <= 1:
@@ -246,7 +255,9 @@ def desired_state(node: Mapping[str, Any],
                   slot_updates: Optional[Mapping[str, Mapping[str, Any]]] = None,
                   own_update: Optional[Mapping[str, Any]] = None,
                   slot_cli_keys: Optional[Mapping[str, list[str]]] = None,
-                  slot_gateway_keys: Optional[Mapping[str, list[str]]] = None) -> dict[str, Any]:
+                  slot_gateway_keys: Optional[Mapping[str, list[str]]] = None,
+                  slot_devin_gateways: Optional[Mapping[str, Mapping[str, Any]]] = None
+                  ) -> dict[str, Any]:
     """What this node should look like, derived from its stored row.
 
     `slot_logins` maps a slot's id to its sign-in row, for a shared machine.
@@ -273,7 +284,8 @@ def desired_state(node: Mapping[str, Any],
                                         updates.get(s.get("id")),
                                         cli_keys.get(s.get("id")),
                                         ((slot_gateway_keys.get(s.get("id")) or [])
-                                         if slot_gateway_keys is not None else None))
+                                         if slot_gateway_keys is not None else None),
+                                        ((slot_devin_gateways or {}).get(s.get("id"))))
                             for s in slots]
     elif hostname is None:
         # An owner's own node: its pin is its owner's, so it is never a hold.

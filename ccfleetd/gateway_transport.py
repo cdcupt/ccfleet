@@ -7,6 +7,8 @@ is ambiguous and must never cause an automatic retry.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -21,7 +23,9 @@ from typing import Any
 
 from ccfleet_agent import inference_client as wire
 
-from . import cli_access
+from . import cli_access, gateway_providers
+
+NATIVE_MESSAGE_PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true"})
 
 
 class GatewayTransportError(Exception):
@@ -73,6 +77,23 @@ class SSHAttempt:
         self.closed = threading.Event()
         self.ready = False
 
+    def _remote_command(self) -> str:
+        return "ccfleet-gateway-v1"
+
+    def _status_fields(self) -> dict[str, Any]:
+        return {"operation": "status"}
+
+    def _request_fields(self, headers, body, path) -> dict[str, Any]:
+        return {"operation": "request", "method": "POST", "path": path,
+                "headers": headers, "body_size": len(body)}
+
+    def _ready_body(self) -> dict[str, Any]:
+        return {"ready": True, "protocol": 2}
+
+    def _validate_ready(self, value) -> bool:
+        return (isinstance(value, dict) and value.get("ready") is True
+                and type(value.get("protocol")) is int and value == self._ready_body())
+
     def _command(self) -> list[str]:
         key = Path(self.cfg.gateway_ssh_key_path)
         info = key.lstat()
@@ -107,7 +128,7 @@ class SSHAttempt:
                 "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
                 "-o", "PermitLocalCommand=no", "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
-                f"{user}@{host}", "ccfleet-gateway-v1"]
+                f"{user}@{host}", self._remote_command()]
 
     def start(self, headers: dict[str, str], body: bytes, *, path: str = "/v1/messages",
               before_model_send=lambda: True) -> None:
@@ -125,7 +146,7 @@ class SSHAttempt:
             if self.closed.is_set():
                 self.close()
                 raise GatewayTransportError(retryable=True)
-            self.process.stdin.write(wire.preamble({"operation": "status"}))
+            self.process.stdin.write(wire.preamble(self._status_fields()))
             self.process.stdin.flush()
             ready = response_metadata(self.process.stdout)
             if ready["status"] != 200:
@@ -136,7 +157,7 @@ class SSHAttempt:
                 raw.extend(part)
                 if len(raw) > 1024:
                     raise ValueError("oversized readiness")
-            if wire._json(bytes(raw)) != {"ready": True, "protocol": 2}:
+            if not self._validate_ready(wire._json(bytes(raw))):
                 raise ValueError("invalid readiness")
             self.ready = True
             if not before_model_send():
@@ -147,9 +168,8 @@ class SSHAttempt:
 
             def write_request() -> None:
                 try:
-                    self.process.stdin.write(wire.preamble({
-                        "operation": "request", "method": "POST", "path": path,
-                        "headers": headers, "body_size": len(body)}))
+                    self.process.stdin.write(wire.preamble(
+                        self._request_fields(headers, body, path)))
                     self.process.stdin.write(body)
                     self.process.stdin.flush()
                 except (OSError, ValueError) as exc:
@@ -213,3 +233,90 @@ class SSHAttempt:
         if self.directory is not None:
             with contextlib.suppress(OSError):
                 self.directory.cleanup()
+
+
+class NativeSSHAttempt(SSHAttempt):
+    """A native-agent request bound to one authoritative owner/claim/runtime.
+
+    This is a separate fixed command, never an Anthropic credential relay. The
+    context is detached and validated before spawning; status contains no model
+    body, and the inherited authorization callback gates the request-frame write.
+    """
+
+    def __init__(self, target: dict[str, Any], cfg: Any) -> None:
+        super().__init__(target, cfg)
+        try:
+            value = target["_native_context"]
+            if (not isinstance(value, dict) or set(value) != {"binding", "runtime", "request_id"}
+                    or not isinstance(value["binding"], dict)
+                    or set(value["binding"]) != {"owner_id", "key_id", "key_generation",
+                        "slot_id", "claim_id", "claim_generation", "provider_generation",
+                        "provider"}
+                    or not isinstance(value["request_id"], str)
+                    or not re.fullmatch(r"[0-9a-f]{32}", value["request_id"])):
+                raise ValueError("context")
+            binding = dict(value["binding"])
+            if (binding["provider"] != gateway_providers.DEVIN
+                    or any(not isinstance(binding[name], str)
+                        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", binding[name])
+                        for name in ("owner_id", "key_id", "slot_id"))
+                    or not isinstance(binding["claim_id"], str)
+                    or not re.fullmatch(r"[0-9a-f]{32}", binding["claim_id"])
+                    or any(type(binding[name]) is not int or not 1 <= binding[name] <= 2**31-1
+                        for name in ("key_generation", "claim_generation", "provider_generation"))):
+                raise ValueError("binding")
+            runtime = value["runtime"]
+            if (not isinstance(runtime, dict) or set(runtime) != {
+                    "bridge_contract", "native_version", "adapter_revision", "model_map_digest",
+                    "provider_account_fp"}):
+                raise ValueError("runtime")
+            profile = gateway_providers.clean_runtime(
+                {name: item for name, item in runtime.items() if name != "provider_account_fp"})
+            account_fp = runtime["provider_account_fp"]
+            if (profile["bridge_contract"] != gateway_providers.NATIVE_AGENT_CONTRACT
+                    or not isinstance(account_fp, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", account_fp)
+                    or target.get("provider") != gateway_providers.DEVIN
+                    or any(binding[name] != target[field] for name, field in (
+                        ("slot_id", "slot_id"), ("claim_id", "claim_id"),
+                        ("claim_generation", "claim_generation"),
+                        ("provider_generation", "provider_binding_generation")))
+                    or any(runtime[name] != target[name] for name in runtime)):
+                raise ValueError("target")
+            self.native = {"binding": binding, "runtime": {**profile,
+                "provider_account_fp": account_fp}, "request_id": value["request_id"]}
+            canonical = json.dumps(binding, ensure_ascii=False, allow_nan=False,
+                                   sort_keys=True, separators=(",", ":")).encode()
+            self.binding_digest = hashlib.sha256(canonical).hexdigest()
+        except (ValueError, KeyError, TypeError, RecursionError, UnicodeError) as exc:
+            raise GatewayTransportError("native slot context is unavailable", status=503) from exc
+
+    def _remote_command(self) -> str:
+        return "ccfleet-devin-gateway-v1"
+
+    def _status_fields(self) -> dict[str, Any]:
+        return {**super()._status_fields(), "native": self.native}
+
+    def _request_fields(self, headers, body, path) -> dict[str, Any]:
+        return {**super()._request_fields(headers, body, path), "native": self.native}
+
+    def _ready_body(self) -> dict[str, Any]:
+        return {"ready": True, "protocol": 2, "provider": gateway_providers.DEVIN,
+                "bridge_contract": gateway_providers.NATIVE_AGENT_CONTRACT,
+                "binding_digest": self.binding_digest}
+
+    def start(self, headers: dict[str, str], body: bytes, *, path: str = "/v1/messages",
+              before_model_send=lambda: True) -> None:
+        if path not in NATIVE_MESSAGE_PATHS:
+            raise GatewayTransportError("native token counting is unavailable", status=501)
+        super().start(headers, body, path=path, before_model_send=before_model_send)
+
+
+def transport_attempt(target, cfg):
+    """Dispatch only from a server-owned provider snapshot; legacy defaults stay put."""
+    provider = target.get("provider", gateway_providers.ANTHROPIC)
+    if provider == gateway_providers.DEVIN:
+        return NativeSSHAttempt(target, cfg)
+    if provider != gateway_providers.ANTHROPIC:
+        raise GatewayTransportError("slot provider is unavailable", status=503)
+    return SSHAttempt(target, cfg)

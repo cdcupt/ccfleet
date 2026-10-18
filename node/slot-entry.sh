@@ -8,11 +8,17 @@ set -euo pipefail
 # Fleet's Messages gateway has a separate service key. Its forced command
 # cannot open a terminal, access projects, or use a legacy device protocol.
 if [ "${1:-}" = --gateway-only ]; then
-  [ "$#" = 1 ] && [ "${SSH_ORIGINAL_COMMAND:-}" = ccfleet-gateway-v1 ] \
-    && [ ! -t 0 ] && [ ! -t 1 ] \
+  [ "$#" = 1 ] && [ ! -t 0 ] && [ ! -t 1 ] \
     || { printf 'unsupported CC Fleet gateway request\n' >&2; exit 2; }
-  exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/local_relay.py" \
-    --gateway-protocol-v1
+  case "${SSH_ORIGINAL_COMMAND:-}" in
+    ccfleet-gateway-v1)
+      exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/local_relay.py" \
+        --gateway-protocol-v1 ;;
+    ccfleet-devin-gateway-v1)
+      exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/devin_relay.py" \
+        --gateway-protocol-v1 ;;
+    *) printf 'unsupported CC Fleet gateway request\n' >&2; exit 2 ;;
+  esac
 fi
 [ "$#" = 0 ] \
   || { printf 'unsupported CC Fleet entry arguments\n' >&2; exit 2; }

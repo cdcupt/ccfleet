@@ -17,6 +17,7 @@ from ccfleet_agent.relay_metrics import DAY_SECONDS, WINDOW_DAYS, MetricsError, 
 from .compatibility import clean as compatibility_report
 from .config import CONTACT_EMAIL_RE
 from .credential_health import instant, renewal_report
+from .gateway_providers import clean_report
 from .slots import MACHINE_MODE
 from .store import UNIX_USER_RE
 
@@ -303,6 +304,20 @@ def _slots(value: Any, now: float) -> list[dict[str, Any]]:
         compatibility = compatibility_report(entry.get("compatibility"), now)
         if compatibility:
             out[-1]["compatibility"] = compatibility
+        provider = entry.get("gateway_provider")
+        if (isinstance(provider, dict) and set(provider) == {
+                "claim_id", "claim_generation", "report"}
+                and isinstance(provider["claim_id"], str)
+                and re.fullmatch(r"[0-9a-f]{32}", provider["claim_id"])
+                and type(provider["claim_generation"]) is int
+                and 1 <= provider["claim_generation"] <= 2**31-1):
+            try:
+                report = clean_report(provider["report"])
+                if 0 <= now-report["observed_at"] <= 300:
+                    out[-1]["gateway_provider"] = {"claim_id": provider["claim_id"],
+                        "claim_generation": provider["claim_generation"], "report": report}
+            except (ValueError, TypeError, OverflowError):
+                pass
         progress = _login_progress(_section(entry, "login"))
         if progress:
             out[-1]["login"] = progress

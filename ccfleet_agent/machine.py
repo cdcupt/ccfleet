@@ -18,13 +18,16 @@ What it does as root, and nothing else:
   install paired terminal device keys          root-controlled sshd key files
 
 The third is the one to be careful with. Everything under a slot's home belongs
-to whoever holds it — every file and every symlink — so root never opens
-anything there. It starts the ordinary agent as that user, with a clean
+to whoever holds it — every file and every symlink. Ordinary facts are collected
+by starting the agent as that user, with a clean
 environment and no supplementary groups, and reads back a JSON report whose
 size it bounds and whose content it treats as untrusted: the slot's holder can
 shape it, and the server validates it again. What a report can never carry is
 whether the user exists, or whether it was provisioned or wiped. Root answers
 those from its own records, because they are what moves a slot between people.
+An explicitly registered native Devin profile additionally snapshots only its
+fixed credential file without following links, into a separate verifier UID;
+the holder's process output cannot attest to provider account readiness.
 
 It reports first and acts second, like the owner agent: each run posts what the
 last run did and what the machine looks like now, then acts on the reply.
@@ -79,6 +82,7 @@ DEFAULT_STATE_PATH = "/var/lib/ccfleet/machine.json"
 DEFAULT_LIB_DIR = "/usr/local/lib/ccfleet"
 DEFAULT_AUTHORIZED_KEYS_DIR = "/etc/ccfleet/authorized_keys"
 DEFAULT_INFERENCE_POLICY_DIR = "/etc/ccfleet/local-relay"
+DEFAULT_DEVIN_POLICY_DIR = "/etc/ccfleet/devin"
 # Where slot homes live, for the disk reading. Slots fill /home, not /.
 SLOT_HOMES = "/home"
 
@@ -170,6 +174,7 @@ class MachineConfig:
     egress_targets: tuple[str, ...] = core.DEFAULT_EGRESS_TARGETS
     timeout_s: float = 10.0
     inference_policy_dir: Path = Path(DEFAULT_INFERENCE_POLICY_DIR)
+    devin_policy_dir: Path = Path(DEFAULT_DEVIN_POLICY_DIR)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> MachineConfig:
@@ -185,6 +190,8 @@ class MachineConfig:
                                             or DEFAULT_AUTHORIZED_KEYS_DIR),
                    inference_policy_dir=Path(env.get("CCFLEET_INFERENCE_POLICY_DIR")
                                              or DEFAULT_INFERENCE_POLICY_DIR),
+                   devin_policy_dir=Path(env.get("CCFLEET_DEVIN_POLICY_DIR")
+                                         or DEFAULT_DEVIN_POLICY_DIR),
                    egress_targets=base.egress_targets, timeout_s=base.timeout_s)
 
 
@@ -647,6 +654,16 @@ class System:
 # -- what the server asks for ----------------------------------------------------
 
 
+def _native_provision():
+    # Native files are optional in legacy installed layouts. No new dependency
+    # is imported merely to run --help or the unchanged Anthropic agent path.
+    if __package__:
+        from . import devin_provision
+    else:
+        import devin_provision
+    return devin_provision
+
+
 def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The slots the server says this machine carries, checked before use.
 
@@ -677,6 +694,11 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
         login = _login_request(entry.get("login")) if state in SIGN_IN_STATES else None
         if login is not None:
             item["login"] = login
+        if state in SIGN_IN_STATES and login is None and "devin_gateway" in entry:
+            try:
+                item["devin_gateway"] = _native_provision().clean_control(entry["devin_gateway"])
+            except (ImportError, ValueError, TypeError, KeyError):
+                pass
         if state in UPGRADE_STATES:
             item.update(_version_request(entry))
         if state in (*SIGN_IN_STATES, "releasing") and "ssh_public_keys" in entry:
@@ -696,7 +718,8 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
             # Malformed service intent revokes the service privilege while
             # preserving independently validated ordinary device keys.
             gateway_keys = normalize_gateway_public_keys(entry.get("ssh_gateway_public_keys"))
-            safe = (state == "active" and item.get("inference_allowed") is True
+            safe = ((state == "active" or item.get("devin_gateway", {}).get("keys"))
+                    and item.get("inference_allowed") is True
                     and not (login and login.get("kind") in ("login", "switch")))
             device_keys = item.get("ssh_public_keys", [])
             if "ssh_public_key" in item:
@@ -946,7 +969,8 @@ def execution_egress_ip(cfg: MachineConfig, system: System) -> dict[str, Any]:
 
 def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System,
                     refresh_for: Optional[str] = None, fast: bool = False,
-                    abandoned: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                    abandoned: Optional[Mapping[str, Any]] = None,
+                    provider_reports: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """The machine itself, then each slot. No owner login: the machine has none."""
     payload: dict[str, Any] = {"node_id": cfg.node_id, "ts": system.clock(),
                                "agent_version": core.AGENT_VERSION, "mode": "machine"}
@@ -960,7 +984,92 @@ def machine_payload(cfg: MachineConfig, state: Mapping[str, Any], system: System
     payload["slots"] = [slot_report(user, state, cfg, system, user == refresh_for,
                                     ask=not fast or user in signing_in, abandoned=abandoned)
                         for user in state.get("slots") or []]
+    for entry in payload["slots"]:
+        # Never inherit a readiness claim from slot facts or an old facts cache.
+        entry.pop("gateway_provider", None)
+        value = (provider_reports or {}).get(entry["unix_user"])
+        if value is not None:
+            entry["gateway_provider"] = value
     return payload
+
+
+def _native_account(account, system):
+    privileged = {"sudo", "admin", "wheel", "root", "docker", "lxd", "libvirt",
+                  "kvm", "adm", "disk", "shadow", "staff"}
+    return (account is not None and account.pw_gid != 0
+            and is_slot_account(account, system.groups_of(account))
+            and not system.groups_of(account).intersection(privileged))
+
+
+def native_provider_observations(cfg, state, system, *, fast):
+    """Root-produced evidence, separate from every holder-writable fact channel."""
+    reports, observations = {}, {}
+    users = state.get("slots") or []
+    if len(users) != 1:
+        return reports, observations
+    user = users[0]
+    control = (state.get("devin_controls") or {}).get(user)
+    account = system.lookup(user)
+    if not _native_account(account, system) or control is None:
+        return reports, observations
+    try:
+        devin_provision = _native_provision()
+        control = devin_provision.clean_control(control)
+        if (state.get("slot_states") or {}).get(user) not in SIGN_IN_STATES:
+            return reports, observations
+        if fast:
+            value = devin_provision.clean_observation(
+                (state.get("devin_observations") or {}).get(user), control, now=system.clock())
+            # Revalidate the operator registration before repeating cached facts.
+            _, profile, _, _, _ = devin_provision._profile(cfg.devin_policy_dir, user, control)
+            if (value["config_sha256"] != profile["template_sha256"]
+                    or value["source_profile_sha256"] != profile["source_profile_sha256"]
+                    or hashlib.sha256(devin_provision._credential(account)).hexdigest()
+                       != value["credential_sha256"]):
+                raise ValueError("profile changed")
+        else:
+            value = devin_provision.collect(cfg.devin_policy_dir, account, control,
+                spawn=system.spawn, lookup=system.lookup, groups_of=system.groups_of,
+                now=system.clock)
+        observations[user] = value
+        reports[user] = devin_provision.public_report(value)
+    except ImportError:
+        return reports, observations
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        try:
+            control = devin_provision.clean_control(control)
+            reports[user] = {"claim_id": control["claim"]["claim_id"],
+                "claim_generation": control["claim"]["claim_generation"],
+                "report": {**control["runtime"], "account_fp": None, "identity_verified": False,
+                    "capabilities": {}, "observed_at": system.clock()}}
+        except (ValueError, TypeError, KeyError):
+            pass
+    return reports, observations
+
+
+def converge_devin_access(desired, slots, cfg, system, observations, previous_users=()):
+    """Reconcile before key installation and lifecycle changes; failures deny grants."""
+    declared = desired.get("slots")
+    single = isinstance(declared, list) and len(declared) == 1 and len(slots) == 1
+    current = {s["unix_user"]: s for s in slots}
+    try:
+        devin_provision = _native_provision()
+    except ImportError:
+        return
+    for user in set(current) | set(previous_users):
+        account = system.lookup(user)
+        if account is None:
+            continue
+        slot = current.get(user, {})
+        eligible = (single and _native_account(account, system)
+                    and slot.get("state") in SIGN_IN_STATES
+                    and slot.get("inference_allowed") is True and not slot.get("login"))
+        try:
+            devin_provision.reconcile(cfg.devin_policy_dir, account,
+                slot.get("devin_gateway") if eligible else None,
+                observations.get(user) if eligible else None, now=system.clock())
+        except (OSError, ValueError, TypeError, KeyError):
+            log.error("native gateway policy could not be reconciled")
 
 
 def wanted_hostname(desired: Mapping[str, Any]) -> Optional[str]:
@@ -1269,7 +1378,21 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     priority = min(due)[1] if due and not state.get("renewal_priority_last") else None
     refresh_for = ((priority or (asked[0] if asked else users[turn % len(users)]))
                    if users and not fast else None)
-    payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned)
+    provider_reports, provider_observations = native_provider_observations(
+        cfg, state, system, fast=fast)
+    # Root opt-out/credential changes revoke local native grants even if the
+    # next heartbeat fails; server authorization remains independently required.
+    for user in (state.get("devin_controls") or {}):
+        account = system.lookup(user)
+        if account is not None:
+            try:
+                _native_provision().reconcile(cfg.devin_policy_dir, account,
+                    (state.get("devin_controls") or {}).get(user),
+                    provider_observations.get(user), now=system.clock())
+            except (ImportError, OSError, ValueError, TypeError, KeyError):
+                log.error("native gateway policy could not be reconciled")
+    payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned,
+                              provider_reports=provider_reports)
     # What each slot said, kept for the fast polls to repeat. Never the sign-in
     # progress: that is news once, and a device token must not sit on disk.
     heard = dict(state.get("heard") or {})
@@ -1303,8 +1426,14 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     state = _take_name(desired, cfg, state, system)
     wanted = wanted_slots(desired)
     converge_inference_access(desired, wanted, cfg, system)
+    converge_devin_access(desired, wanted, cfg, system, provider_observations,
+                          previous_users=state.get("devin_controls") or {})
     converge_ssh_access(wanted, system)
     new_state = act_on_slots(wanted, state, cfg, system)
+    new_state["devin_controls"] = {s["unix_user"]: s["devin_gateway"] for s in wanted
+                                  if "devin_gateway" in s}
+    new_state["devin_observations"] = {u: v for u, v in provider_observations.items()
+                                      if u in new_state["devin_controls"]}
     # A claiming account did not exist for the first pass. Clear any managed
     # key file left by an interrupted old release as soon as it is created.
     converge_ssh_access(wanted, system)
