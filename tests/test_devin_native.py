@@ -453,7 +453,7 @@ def policy(tmp_path, monkeypatch):
     (home / ".config/devin").mkdir(parents=True)
     native_config = home / ".config/devin/config.json"
     native_mcp = home / ".config/devin/mcp_config.json"
-    settings = {"auto_update": False, "subagents_enabled": False,
+    settings = {"version": 1, "auto_update": False, "subagents_enabled": False,
                 "agent": {"model": "native-max"}, "disabled_tools": sorted(native._DISABLED),
                 "read_config_from": dict.fromkeys(native._IMPORTS, False),
                 "permissions": {"allow": ["mcp__ccfleet__Read"], "deny": sorted(native._DENIED)},
@@ -521,11 +521,18 @@ def test_malformed_policy_has_no_authority(policy, change):
 
 
 @pytest.mark.parametrize("field,change", [
+    ("version", None), ("version", True), ("version", 0), ("version", 2),
     ("auto_update", True), ("subagents_enabled", True), ("disabled_tools", []),
     ("read_config_from", {}), ("hooks", {}), ("permissions", {"allow": ["*"], "deny": []}),
     ("agent", {"model": "other"})])
 def test_native_builtin_import_or_hook_containment_cannot_be_omitted(policy, field, change):
     policy.settings[field] = change
+    with pytest.raises(native.NativeError, match="native_containment_guard"):
+        policy.load()
+
+
+def test_unversioned_native_settings_reject_before_startup_can_rewrite_pinned_bytes(policy):
+    policy.settings.pop("version")
     with pytest.raises(native.NativeError, match="native_containment_guard"):
         policy.load()
 

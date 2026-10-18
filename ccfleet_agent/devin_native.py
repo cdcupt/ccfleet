@@ -425,7 +425,8 @@ class NativeConfig:
         command = shlex.join([files["python"]["path"], "-I", files["mcp"]["path"], "--hook"])
         hooks = {"PreToolUse": [{"matcher": "", "hooks": [{"type": "command",
                                                            "command": command, "timeout": 5}]}]}
-        if (not isinstance(settings, dict) or settings.get("auto_update") is not False
+        if (not isinstance(settings, dict) or type(settings.get("version")) is not int
+                or settings["version"] != 1 or settings.get("auto_update") is not False
                 or settings.get("subagents_enabled") is not False
                 or not isinstance(disabled, list) or any(not isinstance(n, str) for n in disabled)
                 or not _DISABLED <= set(disabled)

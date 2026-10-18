@@ -366,8 +366,18 @@ and rental claim, approved native executable SHA, adapter SHA and canonical mode
 map. Derive the model digest from <code>model_uid</code>, sorted
 <code>request_models</code> and sorted <code>verified_models</code>.
 The <code>NativeConfig</code> manifest pins the adapter, ACP controller, MCP helper,
-tool codec, relay, inference policy, package source, Python/native executables
-and native configuration. Preserve its native-tool denials and exact MCP hook.</li>
+tool codec, relay, inference policy, egress module, package source, Python/native
+executables and native configuration. Preserve its native-tool denials and exact
+MCP hook. Native settings must include the integer <code>version: 1</code> before
+pinning: an unversioned file can be migrated and rewritten by native startup,
+invalidating its digest. Verify a model-free startup leaves the pins unchanged
+before authorizing a prompt; never accept changed slot bytes automatically.</li>
+<li><strong>Preserve the chosen network exit.</strong> Native inference and metadata
+receive only the protected node proxy environment. Incomplete proxy configuration
+rejects before launch. On a proxy-routed node, include the dedicated verifier's
+actual UID in persistent IPv4 and IPv6 egress enforcement; ordinary-slot UID
+ranges do not cover system verifier UIDs. Verify the exit and direct-network
+denial before registering readiness. Upstream credentials remain root-only.</li>
 <li><strong>Verify identity outside the holder's UID.</strong> A dedicated
 <code>ccfleet-devin-v*</code> verifier must have a different unprivileged UID,
 non-root GID, a nologin/false shell and no privileged or slot groups. It must run
