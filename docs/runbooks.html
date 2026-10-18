@@ -320,10 +320,13 @@ account if the token is no longer used anywhere.</p>
 private script that takes an address and a name, reads the root password once
 from a prompt, and re-runs safely, so the next machine is one command.</p>
 <h2 id="native-devin-operator-pilot">Native Devin operator pilot</h2>
-<p><strong>Reviewed October 18, 2026; activation pending.</strong> The private four-step
+<p><strong>Reviewed October 18, 2026; operator-enabled pilot.</strong> The account page
+offers Devin only after the holder's own slot is verified; Anthropic remains the
+default. The private four-step
 Read/Edit/Bash fixture passed three tests and returned its answer. Seven finalized
 provider requests were verified as Opus 5.5 Max. This is private pilot evidence;
-the public Fleet endpoint and production activation still require their own verification.
+the public Fleet endpoint has not yet been verified in this record. Verify that
+path separately before expanding the pilot.
 See the <a href="devin.html">short Devin explanation and route diagram</a>.</p>
 <p>The route is local official Claude Code → the same Fleet Messages API → native
 Devin CLI on the holder's assigned slot. The website provider setting preserves
@@ -336,7 +339,9 @@ session with the complete supported visible history, including prior tool result
 system instructions and history as labeled context. Native harness authority
 still applies. Unsupported images, documents, historical thinking/signatures,
 server tools and unsupported request controls reject before launch.
-<code>/v1/messages/count_tokens</code> returns <code>501</code>. Replies are buffered
+<code>/v1/messages/count_tokens</code> returns <code>501</code>.
+<code>max_tokens</code> is passed as context, not an enforced output or spending cap.
+Replies are buffered
 before Messages/SSE delivery. Missing usage stays unknown; observed token counts,
 finalized provider records and quota changes are not a billing total or guarantee.</p>
 <ol>

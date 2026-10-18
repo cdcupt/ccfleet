@@ -57,6 +57,14 @@ _VERSION = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}\Z")
 CAPABILITIES = frozenset({"labeled_visible_context", "text", "client_tools", "streaming",
                           "cancellation", "unknown_usage", "revocation"})
 _IMPORTS = ("agents_standard", "cursor", "windsurf", "claude", "copilot", "opencode", "zed")
+# Exact pinned CLI credential profile, independently inspected without exposing
+# the opaque token. Alternate/enterprise endpoints need a separately reviewed
+# profile; a holder-controlled URL is never trusted for native identity proof.
+_CREDENTIAL_ENDPOINTS = {"api_server_url": "https://server.codeium.com",
+                         "devin_webapp_host": "app.devin.ai",
+                         "devin_api_url": "https://api.devin.ai"}
+_CREDENTIAL_KEYS = frozenset({"windsurf_api_key", *_CREDENTIAL_ENDPOINTS})
+_CREDENTIAL_LINE = re.compile(r'([a-z_]+)[ \t]*=[ \t]*"([^"\\]*)"\Z')
 
 
 class AccountError(ValueError):
@@ -267,6 +275,41 @@ def _credential(path):
         raise AccountError("native_credential_unavailable") from None
 
 
+def validate_native_credentials(raw, *, expected_api_origin):
+    """Validate the pinned four-string native TOML subset without exposing it.
+
+    The native CLI parses this file itself. Accept only its inspected canonical
+    scalar-string profile so the same bytes cannot introduce an alternate
+    metadata origin, TOML table, escaped value, override or unknown option.
+    No token or parsed credential mapping is returned, logged or printed.
+    """
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= 64 * 1024:
+        raise AccountError("native_credential_size")
+    try:
+        text = raw.decode("ascii").replace("\r\n", "\n")
+    except UnicodeError:
+        raise AccountError("native_credential_format") from None
+    if (any((ord(char) < 32 and char not in "\n\t") or ord(char) == 127 for char in text)
+            or len(text.splitlines()) > 16):
+        raise AccountError("native_credential_format")
+    values = {}
+    for line in text.splitlines():
+        line = line.strip(" \t")
+        if not line:
+            continue
+        match = _CREDENTIAL_LINE.fullmatch(line)
+        if (match is None or match[1] not in _CREDENTIAL_KEYS or match[1] in values
+                or any(ord(char) < 32 for char in match[2])):
+            raise AccountError("native_credential_format")
+        values[match[1]] = match[2]
+    if set(values) != _CREDENTIAL_KEYS or not 1 <= len(values["windsurf_api_key"]) <= 16384:
+        raise AccountError("native_credential_format")
+    if any(values[key] != expected for key, expected in _CREDENTIAL_ENDPOINTS.items()):
+        raise AccountError("native_credential_endpoints")
+    if canonical_origin(expected_api_origin) != _CREDENTIAL_ENDPOINTS["api_server_url"]:
+        raise AccountError("native_credential_api_origin")
+
+
 def _mkdir(path):
     path.mkdir(mode=0o700)
 
@@ -433,6 +476,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                 raise AccountError("invalid_metadata_factory")
             original_path = original_home / ".local/share/devin/credentials.toml"
             credential = _credential(original_path)
+            validate_native_credentials(credential, expected_api_origin=source["api_origin"])
             credential_sha = hashlib.sha256(credential).hexdigest()
             home = _fresh_home(state, credential)
             environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",

@@ -22,8 +22,78 @@ from ccfleet_agent import devin_native as native
 ORIGIN = "https://server.codeium.com"
 SUBJECT = "synthetic_user_subject_01234567890123456"
 SECRET = b"synthetic-token-never-public"
+CREDENTIAL = (b'windsurf_api_key = "' + SECRET + b'"\n'
+              b'api_server_url = "https://server.codeium.com"\n'
+              b'devin_webapp_host = "app.devin.ai"\n'
+              b'devin_api_url = "https://api.devin.ai"\n')
 REPORT_FIELDS = {"account_fp", "identity_verified", "bridge_contract", "capabilities",
                  "native_version", "adapter_revision", "model_map_digest", "observed_at"}
+
+
+def test_pinned_credential_subset_is_validated_without_returning_secret_material():
+    assert account.validate_native_credentials(CREDENTIAL, expected_api_origin=ORIGIN) is None
+    assert account.validate_native_credentials(CREDENTIAL.replace(b"\n", b"\r\n"),
+                                               expected_api_origin=ORIGIN) is None
+    reordered = b"\n".join(reversed(CREDENTIAL.rstrip(b"\n").split(b"\n"))) + b"\n"
+    assert account.validate_native_credentials(reordered, expected_api_origin=ORIGIN) is None
+
+
+@pytest.mark.parametrize("raw", [
+    b"", b"x" * (65536 + 1), b"\xef\xbb\xbf" + CREDENTIAL,
+    CREDENTIAL.replace(SECRET, b""), CREDENTIAL.replace(SECRET, b"x" * 16385),
+    CREDENTIAL + b'windsurf_api_key = "another-token"\n',
+    CREDENTIAL + b'api_server_url = "https://server.codeium.com"\n',
+    CREDENTIAL + b'unknown_option = "value"\n',
+    CREDENTIAL + b'[extra]\n', CREDENTIAL + b'[[extra]]\n',
+    CREDENTIAL + b'# comment\n', CREDENTIAL.replace(b'"\n', b'" # comment\n', 1),
+    CREDENTIAL.replace(b'windsurf_api_key', b'"windsurf_api_key"', 1),
+    CREDENTIAL.replace(b'windsurf_api_key', b'account.windsurf_api_key', 1),
+    CREDENTIAL.replace(SECRET, b'has\\escape'),
+    CREDENTIAL.replace(SECRET, b'has\\u0061escape'),
+    CREDENTIAL.replace(SECRET, b'has\\U00000061escape'),
+    CREDENTIAL.replace(SECRET, b'has\\"quote'),
+    CREDENTIAL.replace(SECRET, b'has\tcontrol'),
+    CREDENTIAL.replace(SECRET, b'has\x00control'),
+    CREDENTIAL.replace(SECRET, b'nonascii-\xff'),
+    CREDENTIAL.replace(b'"' + SECRET + b'"', b'42'),
+    CREDENTIAL.replace(b'"' + SECRET + b'"', b"'literal-token'"),
+    CREDENTIAL.replace(b'"' + SECRET + b'"', b'"""multiline"""'),
+    CREDENTIAL.replace(b'devin_api_url = "https://api.devin.ai"\n', b''),
+    b"\n" * 17 + CREDENTIAL,
+])
+def test_ambiguous_unrecognized_or_escaped_native_toml_is_rejected(raw):
+    with pytest.raises(account.AccountError) as captured:
+        account.validate_native_credentials(raw, expected_api_origin=ORIGIN)
+    assert SECRET.decode() not in str(captured.value)
+
+
+@pytest.mark.parametrize("endpoint", [
+    b'https://server.codeium.com/', b'http://server.codeium.com', b'https://localhost',
+    b'https://127.0.0.1', b'https://169.254.169.254', b'https://server.codeium.com.evil.test',
+    b'https://server.codeium.com@evil.test', b'https://evil.test/server.codeium.com',
+    b'https://server.codeium.com:444', b'https://SERVER.codeium.com',
+])
+def test_api_server_requires_exact_official_url_not_just_a_host_like_substring(endpoint):
+    raw = CREDENTIAL.replace(b'https://server.codeium.com', endpoint)
+    with pytest.raises(account.AccountError, match="native_credential_endpoints"):
+        account.validate_native_credentials(raw, expected_api_origin=ORIGIN)
+
+
+@pytest.mark.parametrize("before,after", [
+    (b'app.devin.ai', b'evil.test'),
+    (b'app.devin.ai', b'https://app.devin.ai'),
+    (b'https://api.devin.ai', b'https://evil.test'),
+    (b'https://api.devin.ai', b'https://api.devin.ai/'),
+])
+def test_devin_identity_endpoints_are_pinned_as_well_as_displayed_api_server(before, after):
+    raw = CREDENTIAL.replace(before, after)
+    with pytest.raises(account.AccountError, match="native_credential_endpoints"):
+        account.validate_native_credentials(raw, expected_api_origin=ORIGIN)
+
+
+def test_unapproved_root_api_origin_also_fails_closed():
+    with pytest.raises(account.AccountError, match="native_credential_api_origin"):
+        account.validate_native_credentials(CREDENTIAL, expected_api_origin="https://other.test")
 
 
 def status(**changes):
@@ -103,7 +173,7 @@ def scenario(tmp_path, monkeypatch):
     state.mkdir(mode=0o700)
     credentials = home / ".local/share/devin/credentials.toml"
     credentials.parent.mkdir(parents=True)
-    credentials.write_bytes(SECRET)
+    credentials.write_bytes(CREDENTIAL)
     credentials.chmod(0o600)
     (home / "never-copy-cache").write_text("private cached identity")
     binding = native.OwnershipBinding("owner", "key", 1, "slot", "a" * 32, 2, 3)
@@ -139,7 +209,7 @@ def scenario(tmp_path, monkeypatch):
         fresh = Path(kwargs["env"]["HOME"])
         assert fresh != home and fresh.parent == state
         assert stat.S_IMODE(fresh.stat().st_mode) == 0o700
-        assert (fresh / ".local/share/devin/credentials.toml").read_bytes() == SECRET
+        assert (fresh / ".local/share/devin/credentials.toml").read_bytes() == CREDENTIAL
         assert stat.S_IMODE((fresh / ".local/share/devin/credentials.toml").stat().st_mode) == 0o600
         assert not (fresh / "never-copy-cache").exists()
         assert set(kwargs["env"]) == {"HOME", "PATH", "LANG", "TERM", "NO_COLOR",
@@ -189,7 +259,7 @@ def test_verified_report_uses_live_metadata_and_private_change_guard(scenario, m
     assert result.report["observed_at"] == result.checked_at == 1800000000.0
     expected = account.parse_auth_status(status(), expected_api_origin=ORIGIN).fingerprint()
     assert result.report["account_fp"] == expected
-    assert result.credential_sha256 == hashlib.sha256(SECRET).hexdigest()
+    assert result.credential_sha256 == hashlib.sha256(CREDENTIAL).hexdigest()
     public = json.dumps(result.report) + repr(result)
     for private in (SUBJECT, SECRET.decode(), "private@example.test", result.credential_sha256):
         assert private not in public
@@ -206,6 +276,22 @@ def test_unproved_acquisition_profile_cannot_launch(scenario):
     result = scenario.run(popen_factory=scenario.popen)
     assert result.reason == "native_subject_source_unverified"
     assert not scenario.calls and not result.report["identity_verified"]
+
+
+@pytest.mark.parametrize("raw", [
+    CREDENTIAL.replace(b'https://api.devin.ai', b'https://evil.test'),
+    CREDENTIAL.replace(b'app.devin.ai', b'127.0.0.1'),
+    CREDENTIAL.replace(b'https://server.codeium.com', b'https://169.254.169.254'),
+    CREDENTIAL + b'additional_option = "unsafe"\n',
+    CREDENTIAL.replace(SECRET, b'escaped\\nvalue'),
+])
+def test_untrusted_credential_endpoints_or_toml_reject_before_any_home_or_native_launch(scenario, raw):
+    scenario.credentials.write_bytes(raw)
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason in {"native_credential_format", "native_credential_endpoints"}
+    assert not scenario.calls and not list(scenario.state.iterdir())
+    assert result.report["account_fp"] is None and result.credential_sha256 is None
+    assert result.cleanup_confirmed
 
 
 @pytest.mark.parametrize("field", ["native_version", "adapter_revision", "model_map_digest"])
@@ -404,7 +490,7 @@ def test_private_cli_loads_pins_and_returns_attestation_without_raw_metadata(sce
         popen_factory=scenario.popen) == 0
     value = json.loads(output.getvalue())
     assert len(pins) == 2 and pins[0][1] == "a" * 64 and pins[1][1] == "b" * 64
-    assert value["credential_sha256"] == hashlib.sha256(SECRET).hexdigest()
+    assert value["credential_sha256"] == hashlib.sha256(CREDENTIAL).hexdigest()
     assert set(value["report"]) == REPORT_FIELDS and value["cleanup_confirmed"]
     assert SUBJECT not in output.getvalue() and SECRET.decode() not in output.getvalue()
 

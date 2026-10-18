@@ -28,10 +28,10 @@ def test_devin_guide_has_separate_language_routes_and_a_library_link(language):
     assert index_target in Document(index).links
     if language == "en":
         assert "Why we are evaluating Devin" in page.text
-        assert "私有编程试点已通过" not in page.text
+        assert "Devin 是由运营方明确启用的试点" not in page.text
     else:
         assert "为什么评估 Devin" in page.text
-        assert "Private coding pilot passed" not in page.text
+        assert "Devin is an operator-enabled pilot" not in page.text
 
 
 def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence():
@@ -39,9 +39,10 @@ def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence
     english = Document(bilingual.project_html(source, "en", TARGET)).text
     chinese = Document(bilingual.project_html(source, "zh", TARGET)).text
     for phrase in (
-        "Private coding pilot passed; activation is pending",
-        "public Fleet endpoint has not yet been verified",
-        "operator-enabled own slot",
+        "Devin is an operator-enabled pilot",
+        "Your account page offers it only after your own slot has been verified",
+        "Anthropic remains the default",
+        "The public endpoint has not yet been verified",
         "official Claude Code",
         "your own Devin CLI on your assigned slot",
         "Fleet API address and key token stay the same",
@@ -55,13 +56,16 @@ def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence
         "history become labeled context",
         "Images, documents, prior thinking blocks",
         "count_tokens is unsupported",
+        "max_tokens is passed as context, not an enforced output or spending cap",
         "Universal Claude Code parity is unverified",
     ):
         assert phrase in english
-    for phrase in ("私有编程试点已通过", "公共 Fleet 入口尚未验证", "官方 Claude Code",
+    for phrase in ("Devin 是由运营方明确启用的试点", "只有自有节点通过验证后", "Anthropic 仍为默认服务",
+                   "公共入口尚未验证", "官方 Claude Code",
                    "自有 Devin CLI", "Fleet API 地址和密钥保持不变", "内部 MCP 桥",
                    "由你的电脑执行", "私有四步测试", "Opus 5.5 Max", "原生智能体兼容模式",
-                   "带标签的上下文", "启动前拒绝", "不支持 count_tokens"):
+                   "带标签的上下文", "启动前拒绝", "不支持 count_tokens",
+                   "max_tokens 仅作为上下文传入，不是强制的输出或费用上限"):
         assert phrase in chinese
     for removed_plan in ("Fleet front agent", "execution agent", "Outposts", "OpenCode",
                          "candidate model connection", "OpenAI-compatible format",
@@ -72,7 +76,7 @@ def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
-def test_provider_diagram_is_responsive_accessible_and_marks_public_activation_pending(language):
+def test_provider_diagram_is_responsive_accessible_and_makes_pilot_access_conditional(language):
     source = (ROOT / "docs/devin.html").read_text()
     page = Document(bilingual.project_html(source, language, TARGET))
     diagrams = [attrs for tag, attrs in page.tags if tag == "svg"]
@@ -84,8 +88,9 @@ def test_provider_diagram_is_responsive_accessible_and_marks_public_activation_p
     assert "Devin CLI" in page.text
     for diagram in diagrams:
         assert "Anthropic" in diagram["aria-label"] and "Devin" in diagram["aria-label"]
-        assert "public activation is pending" in diagram["aria-label"] if language == "en" else (
-            "公共入口仍待启用" in diagram["aria-label"])
+        assert "offered after verification" in diagram["aria-label"] if language == "en" else (
+            "自有节点验证后提供试点选择" in diagram["aria-label"])
+        assert "pending" not in diagram["aria-label"]
     assert "https://server.codeium.com" not in page.text
 
 
@@ -116,7 +121,9 @@ def test_native_operator_runbook_preserves_separate_verifier_and_private_grant_t
     assert "native-devin-operator-pilot" in page.ids
     assert "#native-devin-operator-pilot" in page.links
     for phrase in (
-        "public Fleet endpoint and production activation still require",
+        "public Fleet endpoint has not yet been verified in this record",
+        "account page offers Devin only after the holder's own slot is verified",
+        "max_tokens is passed as context, not an enforced output or spending cap",
         "CCFLEET_GATEWAY_DEVIN_ENABLED", "metadata.json", "template.json", "verifier_user",
         "different unprivileged UID", "same-UID stdout cannot attest",
         "auth status", "models list --format json", "original slot bytes",
