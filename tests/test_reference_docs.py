@@ -17,7 +17,7 @@ from ccfleetd.notify import LogNotifier
 from ccfleetd.store import Store
 
 CURRENT_DOCUMENTS = frozenset({"docs/index.html", "docs/public-gateway.html",
-                               "docs/platform-comparison.html"})
+                               "docs/platform-comparison.html", "docs/devin.html"})
 
 
 @pytest.fixture
@@ -226,6 +226,21 @@ def test_library_routes_project_current_guides_and_preserve_historical_body(libr
             assert "当前中文指南".encode() not in body
         else:
             assert body == (assets / name).read_bytes()
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_devin_library_aliases_project_one_language_only_on_product(library_server, language):
+    server, broker_only = library_server
+    path = f"/{language}/docs/library/docs/devin.html"
+    status, _, headers, body = request(server, path)
+    if broker_only:
+        assert status == 404
+    else:
+        assert status == 200
+        html_language = "en" if language == "en" else "zh-Hans"
+        assert f'<html lang="{html_language}">'.encode() in body
+        assert (b"docs/devin.html" in body) == (language == "en")
+        assert ("当前中文指南".encode() in body) == (language == "zh")
 
 
 @pytest.mark.parametrize("host", ["admin.example.com", "127.0.0.1", "localhost"])
