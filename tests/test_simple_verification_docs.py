@@ -80,4 +80,4 @@ def test_guidebook_preserves_historical_scope_and_links_current_user_check():
     page = read_document(ROOT / "docs/guidebook.html")
     assert "simple-verification" in page.ids
     assert "Historical hosted-terminal guidebook" in page.text[:1000]
-    assert "https://ccfleet.daichenlab.com/docs/guide#simple-verification" in page.links
+    assert "https://ccfleet.io/docs/guide#simple-verification" in page.links
