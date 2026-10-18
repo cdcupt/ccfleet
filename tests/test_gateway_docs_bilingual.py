@@ -54,7 +54,7 @@ def test_shared_runnable_examples_do_not_duplicate_or_expose_operator_configurat
     assert commands.count("ccfleet gateway setup --slots A B --routing sticky --replace") == 1
     assert commands.count("ccfleet gateway setup --slots A B --routing priority --replace") == 1
     assert commands.count("ccfleet local --slot A") == 1
-    assert commands.count("https://ccfleet.daichenlab.com/v1/messages") == 1
+    assert commands.count("https://ccfleet.io/v1/messages") == 1
     assert "YOUR_MATCHING_PUBLIC_KEY" not in commands
     assert "CCFLEET_GATEWAY_SSH" not in commands
 

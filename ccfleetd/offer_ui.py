@@ -29,6 +29,7 @@ vertical-align:middle;overflow-wrap:anywhere}
 font-weight:600;white-space:nowrap;background:var(--inset);border:1px solid var(--rule-soft)}
 .ip-category.residential{color:#60269c;background:#f4edff;border-color:#cdb5e8}
 .ip-category.isp{color:#1253a0;background:#edf5ff;border-color:#a9c9ec}
+.ip-category.datacenter{color:#374151;background:#f3f4f6;border-color:#cbd5e1}
 .offer-table tbody tr:last-child>*{border-bottom:0}.offer-table td:last-child{white-space:nowrap}
 .offer-note{font-size:13px;color:var(--muted);margin:12px 0}
 .alpha-badge{display:inline-flex;align-items:center;border:1px solid var(--acc-line);
@@ -75,8 +76,9 @@ overflow-wrap:anywhere}.offer-policy{margin:18px 0;font-size:13px}
 
 def ip_label(kind: str) -> str:
     en, zh = {"residential": ("Residential", "住宅 IP"),
-              "isp": ("ISP", "ISP IP")}.get(kind, ("Not verified", "尚未核实"))
-    style = kind if kind in ("residential", "isp") else "unknown"
+              "isp": ("ISP", "ISP IP"),
+              "datacenter": ("Datacenter", "机房 IP")}.get(kind, ("Not verified", "尚未核实"))
+    style = kind if kind in ("residential", "isp", "datacenter") else "unknown"
     return f'<span class="ip-category {style}">' + label(en, zh, inline=True) + '</span>'
 
 
@@ -215,7 +217,7 @@ def _browse_params(query: Mapping[str, str], brands: set[str]) -> dict[str, str]
 
     search, brand, kind, page = text("q", 80), text("brand", 48), text("type", 16), text("page", 7)
     return {"q": search, "brand": brand if brand in brands else "",
-            "type": kind if kind in ("residential", "isp") else "",
+            "type": kind if kind in ("residential", "isp", "datacenter") else "",
             "page": page if re.fullmatch(r"[0-9]{1,6}", page) else "1"}
 
 
@@ -247,7 +249,8 @@ def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: 
         number = status.public_machine_number(node)
         searchable = " ".join((public["host_brand"], public["ip_brand"], public["ip_type"],
                                f"Machine {number}", f"主机 {number}",
-                               "住宅" if public["ip_type"] == "residential" else "")).casefold()
+                               {"residential": "住宅", "datacenter": "机房"}
+                               .get(public["ip_type"], ""))).casefold()
         if (search and search not in searchable
                 or selected["brand"] and selected["brand"] not in (
                     public["host_brand"], public["ip_brand"])
@@ -274,7 +277,8 @@ def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: 
                + ''.join(_browse_option(value, en, zh, selected["type"] == value)
                          for value, en, zh in (("", "All network types", "全部网络类型"),
                                                ("residential", "Residential", "住宅 IP"),
-                                               ("isp", "ISP", "ISP IP")))
+                                               ("isp", "ISP", "ISP IP"),
+                                               ("datacenter", "Datacenter", "机房 IP")))
                + '</select></label><div class="slot-filter-actions"><button type="submit">'
                + label("Search", "搜索", inline=True) + '</button>'
                '<a href="' + path + '">' + label("Reset", "重置", inline=True)
@@ -364,11 +368,12 @@ def _pricing_policy() -> str:
          "reconciles any difference between rounded components and resource cost.",
          "年付成本除以 12，30 天成本乘以 365/360。成本缺失或尚未换算时，价格暂不可用。"
          "如单项舍入与资源成本合计存在差异，折算舍入行会说明差额。"),
-        ("ISP and residential describe network types, not a quality ranking or a "
+        ("ISP, residential and datacenter describe network types, not a quality ranking or a "
          "guarantee of Claude compatibility. Each customer receives a dedicated VPS "
-         "and dedicated exit IP. Bundled supplier costs are shown without an invented split.",
-         "ISP 与住宅表示网络类型，并非质量排名，也不保证 Claude 兼容性。每位客户使用独立 "
-         "VPS 和独立出口 IP。供应商打包成本按记录展示，不虚构拆分。"),
+         "and dedicated exit IP. All types use the same pricing formula. "
+         "Bundled supplier costs are shown without an invented split.",
+         "ISP、住宅与机房表示网络类型，并非质量排名，也不保证 Claude 兼容性。每位客户使用独立 "
+         "VPS 和独立出口 IP。所有类型采用同一定价公式。供应商打包成本按记录展示，不虚构拆分。"),
         ("Available means unallocated, not a promise of eligibility. Sign in to choose an "
          "available priced slot within your allowance. Payment is agreed directly "
          "with the operator; this site does not charge or renew automatically.",
@@ -434,7 +439,7 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
 
     distinct.sort(key=by_price)
     selected = []
-    for kind in ("residential", "isp"):
+    for kind in ("residential", "isp", "datacenter"):
         representative = next((node for node in distinct if node["offer"].ip_type == kind), None)
         if representative is not None:
             selected.append(representative)

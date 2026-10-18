@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from . import pricing
 
-IP_TYPES = ("residential", "isp", "unknown")
+IP_TYPES = ("residential", "isp", "datacenter", "unknown")
 PERIODS = ("month", "30_days", "year")
 MAX_LABEL = 48
 MAX_COST = Decimal("99999.999999")
@@ -102,7 +102,7 @@ class Offer:
         object.__setattr__(self, "host_brand", _label(self.host_brand))
         object.__setattr__(self, "ip_brand", _label(self.ip_brand))
         if self.ip_type not in IP_TYPES:
-            raise OfferError("IP type must be residential, isp or unknown")
+            raise OfferError("IP type must be residential, isp, datacenter or unknown")
         if any(value is not None and not isinstance(value, Cost)
                for value in (self.hosting, self.ip)):
             raise OfferError("supplier costs must be validated Cost values")

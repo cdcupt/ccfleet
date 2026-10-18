@@ -21,7 +21,7 @@ def offer(hosting, ip="0", *, kind="isp", currency="USD", host_period="month",
     ("20.05", "2.01", "22.06"), ("100", "10.00", "110.00"),
     ("0", "2.00", "2.00"),
 ])
-@pytest.mark.parametrize("kind", ["isp", "residential"])
+@pytest.mark.parametrize("kind", ["isp", "residential", "datacenter"])
 def test_alpha_acceptance_threshold_and_identical_network_type_policy(resource, fee, total, kind):
     value = offers.quote(offer(resource, kind=kind))
     assert value.resource == pricing.Price(f"{Decimal(resource):.2f}", "USD")

@@ -1604,10 +1604,10 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         "Slot providers and network exits",
         "槽位服务商与网络出口",
         [("The public slot list names the host provider and IP/exit provider separately, "
-          "with the operator-declared Residential or ISP category and monthly rate. "
+          "with the operator-declared Residential, ISP or Datacenter category and monthly rate. "
           "It uses neutral machine numbers and does not publish holder identities, "
           "slot nicknames, machine addresses or proxy credentials.",
-          "公开槽位列表分别展示主机及 IP／出口服务商、运营者标注的住宅或 ISP 类别和月费。"
+          "公开槽位列表分别展示主机及 IP／出口服务商、运营者标注的住宅、ISP 或机房类别和月费。"
           "列表使用中立主机编号，不公开持有人身份、槽位昵称、主机地址或代理凭据。"),
          ("A proxy-routed slot keeps provider TLS verification enabled. The exit provider "
           "can observe connection destinations, timing and encrypted traffic volume; "

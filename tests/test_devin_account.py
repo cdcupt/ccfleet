@@ -18,6 +18,7 @@ import pytest
 
 from ccfleet_agent import devin_account as account
 from ccfleet_agent import devin_native as native
+from tests.test_node_egress_review import protected as protected
 
 ORIGIN = "https://server.codeium.com"
 SUBJECT = "synthetic_user_subject_01234567890123456"
@@ -184,7 +185,7 @@ def scenario(tmp_path, monkeypatch):
                       "executable": {"path": "/fixed/devin", "sha256": "c" * 64}}}
     config = native.NativeConfig(tmp_path / "unused-policy", "d" * 64, json.dumps(data))
     flags = {"authorized": True, "cleanup": True, "returncode": 0, "mutate": False,
-             "revoke": False, "source_verified": True}
+             "revoke": False, "source_verified": True, "expected_proxy_environment": {}}
     monkeypatch.setattr(native.NativeConfig, "validate", lambda self: (home, state))
     runtime = {"bridge_contract": "native-agent-v1", "native_version": "3000.11.92",
                "adapter_revision": "b" * 64, "model_map_digest": account.model_map_digest(config)}
@@ -213,7 +214,10 @@ def scenario(tmp_path, monkeypatch):
         assert stat.S_IMODE((fresh / ".local/share/devin/credentials.toml").stat().st_mode) == 0o600
         assert not (fresh / "never-copy-cache").exists()
         assert set(kwargs["env"]) == {"HOME", "PATH", "LANG", "TERM", "NO_COLOR",
-                                      "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"}
+            "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"} | set(
+                flags["expected_proxy_environment"])
+        assert all(kwargs["env"].get(key) == value
+                   for key, value in flags["expected_proxy_environment"].items())
         policy = json.loads((fresh / ".config/devin/config.json").read_text())
         assert policy["auto_update"] is False and not any(policy["read_config_from"].values())
         assert kwargs["start_new_session"] is True
@@ -269,6 +273,37 @@ def test_verified_report_uses_live_metadata_and_private_change_guard(scenario, m
     detached = result.report
     detached["identity_verified"] = False
     assert result.report["identity_verified"] is True
+
+
+def test_metadata_verifier_uses_same_protected_proxy_for_both_commands(
+        scenario, protected, monkeypatch):
+    expected = native.egress.native_environment()
+    scenario.flags["expected_proxy_environment"] = expected
+    monkeypatch.setenv("HTTPS_PROXY", "http://ambient-secret@untrusted.invalid")
+    monkeypatch.setenv("NO_PROXY", "*")
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "verified" and result.cleanup_confirmed
+    assert len(scenario.calls) == 2
+    for _, kwargs, _ in scenario.calls:
+        environment = kwargs["env"]
+        assert environment["HTTPS_PROXY"] == native.egress.PROXY_URL
+        assert all(environment.get(key) == value for key, value in expected.items())
+        assert protected.config["password"] not in json.dumps(environment)
+        assert "ambient-secret" not in json.dumps(environment)
+
+
+@pytest.mark.parametrize("broken", ["orphan_upstream", "missing_upstream", "invalid_policy"])
+def test_metadata_incomplete_egress_fails_before_any_native_command(scenario, protected, broken):
+    if broken == "orphan_upstream":
+        protected.policy.unlink()
+    elif broken == "missing_upstream":
+        protected.upstream.unlink()
+    else:
+        protected.policy.write_text('{"version":1,"enabled":false}')
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_egress_unavailable" and not result.report["identity_verified"]
+    assert result.credential_sha256 is None and scenario.calls == []
+    assert result.cleanup_confirmed and list(scenario.state.iterdir()) == []
 
 
 def test_unproved_acquisition_profile_cannot_launch(scenario):

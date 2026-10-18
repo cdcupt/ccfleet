@@ -39,6 +39,7 @@ if __package__:
     from . import devin_acp as acp
     from . import devin_mcp as mcp
     from . import devin_tools as tools
+    from . import egress
     from . import local_relay as relay
 else:
     _package = types.ModuleType("ccfleet_native_pinned")
@@ -55,6 +56,7 @@ else:
         return module
 
     _sibling("inference_policy")
+    egress = _sibling("egress")
     acp, tools, mcp, relay = (_sibling(name) for name in (
         "devin_acp", "devin_tools", "devin_mcp", "local_relay"))
 
@@ -399,6 +401,7 @@ class NativeConfig:
                     "mcp": Path(mcp.__file__).resolve(), "tools": Path(tools.__file__).resolve(),
                     "relay": Path(relay.__file__).resolve(),
                     "inference_policy": Path(relay.inference_policy.__file__).resolve(),
+                    "egress": Path(egress.__file__).resolve(),
                     "package_init": Path(__file__).resolve().with_name("__init__.py"),
                     "native_config": home / ".config/devin/config.json",
                     "native_mcp_config": home / ".config/devin/mcp_config.json"}
@@ -724,6 +727,10 @@ def run_step(config: NativeConfig, binding: OwnershipBinding, request_id: str, m
             "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"),
             "XDG_CACHE_HOME": str(home / ".cache"), "PYTHONDONTWRITEBYTECODE": "1",
             mcp.RUN_DIR_ENV: str(run)}
+        try:
+            environment.update(egress.protected_native_environment())
+        except egress.EgressError:
+            raise NativeError("native_egress_unavailable") from None
         controller = _Controller(value["files"]["executable"]["path"], model=value["model_uid"],
             cwd=str(workspace), allowed_executables=[value["files"]["executable"]["path"]],
             verified_models=set(value["verified_models"]), allow_model_requests=True,

@@ -117,6 +117,16 @@ def test_provider_filter_exactly_matches_host_or_ip_brand_and_combines_with_type
     assert machines(render(inventory, {'brand': 'OVH', 'type': 'unknown'})) == [1, 2, 3]
 
 
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_datacenter_available_slots_have_explicit_filter_in_each_language(language):
+    inventory = Inventory(2)
+    inventory.nodes[1]['offer'] = offers.Offer('Example Host', 'Example Exit', 'datacenter',
+                                              offers.Cost('5.35', 'USD'), offers.Cost('0', 'USD'))
+    result = render(inventory, {'type': 'datacenter'}, language=language)
+    assert machines(result) == [2] and 'value="datacenter" selected' in result
+    assert ('Datacenter' if language == 'en' else '机房 IP') in result
+
+
 @pytest.mark.parametrize('restriction', ['disabled', 'capacity', 'reserved', 'held', 'present',
     'unknown-absence', 'stale', 'no-heartbeat', 'unpriced', 'non-usd', 'no-number', 'owner-slot'])
 def test_browser_uses_all_existing_eligibility_requirements_before_rendering(restriction):

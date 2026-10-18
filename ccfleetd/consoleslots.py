@@ -169,7 +169,8 @@ def _offer_prices_card(store: Store) -> str:
         identity = f'<span class="sub">Machine {number}</span>' if number else ""
         brands = escape(offer.host_brand or "Host provider not set")
         brands += '<span class="sub">' + escape(offer.ip_brand or "IP provider not set") + '</span>'
-        kind = {"residential": "Residential", "isp": "ISP"}.get(offer.ip_type, "Not verified")
+        kind = {"residential": "Residential", "isp": "ISP",
+                "datacenter": "Datacenter"}.get(offer.ip_type, "Not verified")
         value = offers.quote(offer)
         supplier = (escape(_offer_money(Decimal(value.resource.amount), "USD"))
                     if value is not None else '<span class="muted">Needs recorded USD costs</span>')
@@ -196,7 +197,8 @@ def _offer_prices_card(store: Store) -> str:
              'Providers, IP type &amp; price under Manage.</p>')
     return ('<h2 id="price">Alpha slot pricing</h2><div class="card offer-pricing">'
             '<p class="offer-rule"><strong>Recorded monthly resource cost + '
-            'max($2.00, 10% of resource cost)</strong> · same formula for ISP and residential.</p>'
+            'max($2.00, 10% of resource cost)</strong> · same formula for ISP, residential '
+            'and datacenter.</p>'
             + table
             + '<p class="note">Calendar-month costs stay unchanged; 30-day costs × 365 / 360; '
             'annual costs ÷ 12. Round the combined USD resource cost to cents, round the '
@@ -223,7 +225,9 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
               f'value="{escape(offer.ip_brand)}" placeholder="IP or proxy brand"></label>'
               '<label>IP type <select name="ip_type">'
               + ''.join(f'<option value="{kind}"'
-                        f'{" selected" if offer.ip_type == kind else ""}>{kind}</option>'
+                        f'{" selected" if offer.ip_type == kind else ""}>'
+                        + {"residential": "Residential", "isp": "ISP", "datacenter": "Datacenter",
+                           "unknown": "Not verified"}[kind] + '</option>'
                         for kind in offers.IP_TYPES) + '</select></label></fieldset>')
     for key, title, cost in (("hosting", "Hosting cost", offer.hosting),
                              ("ip", "IP cost", offer.ip)):

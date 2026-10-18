@@ -131,6 +131,48 @@ def test_absent_policy_keeps_legacy_route_but_present_invalid_policy_does_not(pr
         egress.native_environment()
 
 
+def test_protected_native_direct_route_requires_both_config_files_absent(protected):
+    protected.policy.unlink()
+    with pytest.raises(egress.EgressError):
+        egress.protected_native_environment()
+    protected.upstream.unlink()
+    assert egress.protected_native_environment() == {}
+
+
+def test_protected_native_proxy_environment_never_reads_private_contents(protected, monkeypatch):
+    read = egress._read
+    seen = []
+    def public_only(path, **kwargs):
+        assert path != protected.upstream
+        seen.append(path)
+        return read(path, **kwargs)
+    monkeypatch.setattr(egress, "_read", public_only)
+    assert egress.protected_native_environment() == egress.native_environment()
+    assert seen and all(path == protected.policy for path in seen)
+
+
+@pytest.mark.parametrize("kind", ["missing", "symlink", "hardlink", "empty", "public", "directory"])
+def test_unsafe_private_egress_metadata_cannot_select_direct_route(protected, kind):
+    if kind == "missing":
+        protected.upstream.unlink()
+    elif kind == "symlink":
+        other = protected.directory / "real.json"
+        protected.upstream.rename(other)
+        protected.upstream.symlink_to(other)
+    elif kind == "hardlink":
+        os.link(protected.upstream, protected.directory / "other.json")
+    elif kind == "empty":
+        protected.upstream.write_bytes(b"")
+    elif kind == "public":
+        protected.upstream.chmod(0o644)
+    else:
+        protected.upstream.unlink()
+        protected.upstream.mkdir()
+    with pytest.raises(egress.EgressError) as error:
+        egress.protected_native_environment()
+    assert PRIVATE not in str(error.value)
+
+
 def test_native_exec_overwrites_hostile_routes_without_reading_upstream_credentials(
         protected, monkeypatch):
     route = egress.native_environment()

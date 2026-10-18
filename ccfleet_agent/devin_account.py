@@ -482,6 +482,10 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
             environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
                 "TERM": "dumb", "NO_COLOR": "1", "XDG_CONFIG_HOME": str(home / ".config"),
                 "XDG_DATA_HOME": str(home / ".local/share"), "XDG_CACHE_HOME": str(home / ".cache")}
+            try:
+                environment.update(native.egress.protected_native_environment())
+            except native.egress.EgressError:
+                raise AccountError("native_egress_unavailable") from None
             outputs = []
             for arguments, limit in ((["auth", "status"], MAX_STATUS_BYTES),
                                      (["models", "list", "--format", "json"], 2 * 1024 * 1024)):

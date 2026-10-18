@@ -58,6 +58,28 @@ def test_home_includes_both_network_types_when_later_residential_configuration_e
     assert 'premium network category' not in result and 'standard category' not in result
 
 
+def test_home_can_represent_all_three_network_types_without_more_than_three_examples():
+    inventory = Inventory(40)
+    set_offer(inventory.nodes[20], host='Residential Host', kind='residential')
+    set_offer(inventory.nodes[30], host='Datacenter Host', kind='datacenter')
+    result = home(inventory)
+    assert result.count('<article class="offer-example">') == 3
+    for kind in ('isp', 'residential', 'datacenter'):
+        assert f'ip-category {kind}' in result
+
+
+@pytest.mark.parametrize('language,query', [('en', 'Datacenter'), ('zh', '机房')])
+def test_datacenter_filter_and_search_remain_public_metadata_only_in_each_language(language, query):
+    inventory = Inventory(3)
+    set_offer(inventory.nodes[1], host='Example Datacenter', kind='datacenter')
+    result = page(inventory, {'type': 'datacenter', 'q': query}, language=language)
+    table = result.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+    assert re.findall(r'(?:Machine|主机) ([0-9]+)', table) == ['2']
+    assert ('Datacenter' if language == 'en' else '机房 IP') in table
+    assert 'value="datacenter" selected' in result
+    assert all(secret not in result for secret in ('private-node', 'private-owner', '192.0.2.99'))
+
+
 def test_missing_price_never_becomes_a_home_example_and_public_catalogue_stays_honest():
     inventory = Inventory(2)
     inventory.nodes[0]['offer'] = offers.Offer('Unpriced Host', 'Unknown Exit', 'isp')
@@ -168,7 +190,9 @@ def test_network_badges_have_distinct_accessible_neutral_colors_and_text_labels(
     css = offer_ui.CSS
     residential = re.search(r'\.ip-category\.residential\{([^}]+)', css)[1]
     isp = re.search(r'\.ip-category\.isp\{([^}]+)', css)[1]
-    assert residential != isp and '#60269c' in residential and '#1253a0' in isp
+    datacenter = re.search(r'\.ip-category\.datacenter\{([^}]+)', css)[1]
+    assert len({residential, isp, datacenter}) == 3
+    assert '#60269c' in residential and '#1253a0' in isp and '#374151' in datacenter
 
     def luminance(color):
         channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
@@ -176,11 +200,14 @@ def test_network_badges_have_distinct_accessible_neutral_colors_and_text_labels(
                     ((channel + 0.055) / 1.055) ** 2.4) * weight
                    for channel, weight in zip(channels, (0.2126, 0.7152, 0.0722)))
 
-    for foreground, background in (('#60269c', '#f4edff'), ('#1253a0', '#edf5ff')):
+    for foreground, background in (('#60269c', '#f4edff'), ('#1253a0', '#edf5ff'),
+                                   ('#374151', '#f3f4f6')):
         ratio = (luminance(background) + 0.05) / (luminance(foreground) + 0.05)
         assert ratio >= 4.5
     assert 'Residential' in project_html(offer_ui.ip_label('residential'), 'en')
     assert 'ISP' in project_html(offer_ui.ip_label('isp'), 'en')
+    assert 'Datacenter' in project_html(offer_ui.ip_label('datacenter'), 'en')
+    assert '机房 IP' in project_html(offer_ui.ip_label('datacenter'), 'zh')
 
 
 def test_public_example_prices_are_the_authoritative_recorded_quotes():

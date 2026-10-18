@@ -345,6 +345,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             self._page_language = "en"
             self._page_target = self.path
             self._localized_page = False
+            if ctx.cfg.public_url_aliases:
+                hosts = self.headers.get_all("Host", [])
+                host = request_host(hosts[0]) if len(hosts) == 1 else ""
+                operator = host in LOOPBACK_HOSTS or bool(
+                    ctx.cfg.admin_host and host == ctx.cfg.admin_host)
+                if len(hosts) != 1 or not (self._public_url() or operator):
+                    self._json(404, {"error": "not found"})
+                    return None
             routed = route_target(self.path, method=method)
             if routed is None:
                 self._json(404, {"error": "not found"})
@@ -450,7 +458,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             return host == ctx.cfg.admin_host or host in LOOPBACK_HOSTS
 
         def _product_site(self) -> bool:
+            if ctx.cfg.public_url_aliases and not self._public_url():
+                return False
             return not ctx.cfg.admin_host or not self._admin_site()
+
+        def _public_url(self) -> str:
+            """Only a root-configured origin may receive a saved CLI credential."""
+            return ctx.cfg.public_origin_for_host(self.headers.get("Host"))
 
         def _redirect_uri(self) -> str:
             """Where Google sends a sign-in started here back to, or "" when
@@ -458,14 +472,20 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
             It has to be the hostname the sign-in left from: the session is a
             cookie only that hostname can set, and a session is bound to its
-            site. So only the two canonical hostnames sign anybody in — the
-            admin host, and the one the product's callback names. Loopback, or
-            any other alias pointing here, would send the person back to a host
-            whose cookie the browser that started never sees.
+            site. The admin callback is fixed. During migration, configured
+            product origins use their own default callbacks; an explicit product
+            override remains exact-host scoped. Every callback must be registered
+            with Google. Unconfigured aliases and loopback cannot start a flow.
             """
             host = request_host(self.headers.get("Host"))
             if ctx.cfg.admin_host and host == ctx.cfg.admin_host:
                 return ctx.cfg.admin_redirect_uri
+            if ctx.cfg.public_url_aliases and not ctx.cfg.google_redirect_uri:
+                # Every configured product origin keeps its own host-only flow
+                # cookie and callback. Operators register both URIs with Google;
+                # an explicit callback override retains its exact-host behavior.
+                origin = self._public_url()
+                return origin + "/auth/google/callback" if origin else ""
             product = ctx.cfg.redirect_uri
             if product and host == request_host(urllib.parse.urlsplit(product).netloc):
                 return product
@@ -818,7 +838,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             slots = ctx.store.list_slots(held_by=device["account_id"])
             native = gateway_ui.ready_provider_slots(ctx.store, ctx.cfg, device["account_id"],
                                                      slots, now=time.time())
-            self._json(200, {"available": True, "base_url": ctx.cfg.public_url,
+            self._json(200, {"available": True, "base_url": self._public_url(),
                             "providers": (list(gateway_providers.PROVIDERS)
                                           if native else ["anthropic"]),
                             "modes": ["sticky", "priority"], "slots": [
@@ -885,7 +905,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             secret = key.pop("key_token")
             safe = {name: key[name] for name in
                     ("id", "name", "slot_ids", "mode", "generation", "provider")}
-            self._json(201, {"secret": secret, "key": safe, "base_url": ctx.cfg.public_url},
+            self._json(201, {"secret": secret, "key": safe, "base_url": self._public_url()},
                        {"Referrer-Policy": "no-referrer"})
 
         def _gateway_status(self) -> None:
@@ -904,6 +924,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             result = ctx.gateway.status(key, pins[0] if pins else "")
             # Internal targets contain provider identity; only these fields are public.
             safe = {name: result[name] for name in ("ready", "mode", "base_url")}
+            safe["base_url"] = self._public_url()
             safe["slots"] = [{name: row[name] for name in ("id", "name", "state", "ready")
                               if name in row} for row in result.get("slots", [])
                              if isinstance(row, dict)]
@@ -921,7 +942,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if token is None:
                 self._json(401, {"error": "invalid pairing code"})
                 return
-            public = urllib.parse.urlsplit(ctx.cfg.public_url)
+            public = urllib.parse.urlsplit(self._public_url())
             if public.scheme not in ("http", "https") or not public.netloc:
                 self._json(503, {"error": "CLI access is not configured on this server"})
                 return
@@ -954,7 +975,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 "user": device["unix_user"],
                 "host_key": device["ssh_host_key"],
                 "gateway_available": ctx.gateway.enabled,
-                "gateway_base_url": ctx.cfg.public_url if ctx.gateway.enabled else "",
+                "gateway_base_url": self._public_url() if ctx.gateway.enabled else "",
             })
 
         def _cli_connect(self) -> None:
@@ -1059,7 +1080,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     return
                 answer = client_status.device_status(ctx.store, ctx.cfg, device, time.time())
                 answer.update({"gateway_available": ctx.gateway.enabled,
-                               "gateway_base_url": (ctx.cfg.public_url
+                               "gateway_base_url": (self._public_url()
                                                     if ctx.gateway.enabled else "")})
                 # Recheck after building the response: release/revocation can
                 # occur while the status snapshot is being assembled.

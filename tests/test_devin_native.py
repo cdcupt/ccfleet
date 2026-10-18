@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from ccfleet_agent import devin_native as native
+from tests.test_node_egress_review import protected as protected
 
 
 def binding():
@@ -257,6 +258,45 @@ def test_genuine_declared_tool_handoff_is_returned_only_after_cleanup(scenario, 
     assert result["accounting"]["actual_provider_requests"] is None
 
 
+def test_native_launch_uses_protected_proxy_without_upstream_secrets(
+        scenario, protected, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://ambient-secret@untrusted.invalid")
+    monkeypatch.setenv("NO_PROXY", "*")
+    result = scenario.run()
+    assert result.get("error_code") is None and result["prompt_requests"] == 1
+    environment = scenario.instances[0].options["env"]
+    expected = native.egress.native_environment()
+    assert all(environment.get(name) == value for name, value in expected.items())
+    assert environment["HTTPS_PROXY"] == native.egress.PROXY_URL
+    assert environment["NO_PROXY"] == environment["ALL_PROXY"] == ""
+    assert protected.config["password"] not in json.dumps(environment)
+    assert "ambient-secret" not in json.dumps(environment)
+
+
+@pytest.mark.parametrize("broken", ["orphan_upstream", "missing_upstream", "invalid_policy"])
+def test_native_incomplete_egress_never_launches_or_dispatches(scenario, protected, broken):
+    if broken == "orphan_upstream":
+        protected.policy.unlink()
+    elif broken == "missing_upstream":
+        protected.upstream.unlink()
+    else:
+        protected.policy.write_text('{"version":1,"enabled":false}')
+    result = scenario.run()
+    assert result["error_code"] == "native_egress_unavailable"
+    assert result["prompt_requests"] == 0 and scenario.instances == []
+    assert result["native_cleanup_confirmed"]
+
+
+def test_native_unconfigured_route_stays_closed_to_ambient_proxy(scenario, protected, monkeypatch):
+    protected.policy.unlink()
+    protected.upstream.unlink()
+    monkeypatch.setenv("HTTPS_PROXY", "http://ambient-secret@untrusted.invalid")
+    assert scenario.run().get("error_code") is None
+    assert not native.egress.protected_native_environment()
+    environment = scenario.instances[0].options["env"]
+    assert not {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"} & environment.keys()
+
+
 def test_continuation_uses_fresh_native_and_preserves_client_result_as_labeled_context(scenario):
     first = scenario.run(request_body=body("Bash"))
     continuation = body("Bash")
@@ -421,7 +461,7 @@ def policy(tmp_path, monkeypatch):
                     "command": shlex.join(["/immutable/python", "-I", "/immutable/mcp", "--hook"]),
                     "timeout": 5}]}]}}
     files = {name: {"path": "/immutable/" + name, "sha256": "a" * 64} for name in (
-        "executable", "python", "adapter", "acp", "mcp", "tools", "relay", "inference_policy",
+        "executable", "python", "adapter", "acp", "mcp", "tools", "relay", "inference_policy", "egress",
         "package_init", "native_config", "native_mcp_config")}
     files["native_config"]["path"] = str(native_config)
     files["native_mcp_config"]["path"] = str(native_mcp)
@@ -462,6 +502,12 @@ def test_valid_disabled_root_policy_loads_without_launch_and_can_be_revalidated(
     assert status["configured"] and not status["enabled"] and not status["mcp_ready"]
     assert status["model_requests"] == 0
     assert not config.status(replace(binding(), key_generation=2))["configured"]
+
+
+def test_native_policy_requires_root_pinned_egress_module(policy):
+    policy.value["files"].pop("egress")
+    with pytest.raises(native.NativeError, match="invalid_source_manifest"):
+        policy.load()
 
 
 @pytest.mark.parametrize("change", [
