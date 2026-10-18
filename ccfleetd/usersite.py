@@ -446,6 +446,7 @@ white-space:nowrap;font-weight:560}
 .sitefoot-in{max-width:1120px;margin:0 auto;padding:26px 20px 34px;display:flex;
 flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:14px 40px;
 font-size:13.5px;color:var(--muted)}
+.sitefoot-identity{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
 .sitefoot .brand{font-size:15px}
 .sitefoot .brand .mark{width:22px;height:22px}
 .sitefoot p{margin:10px 0 0;max-width:46ch}
@@ -690,9 +691,10 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
                 f'eader>'
                 f'<main class="page {escape(width)}">{body}</main>'
                 '<footer class="sitefoot"><div class="sitefoot-in"><div>'
+                '<div class="sitefoot-identity">'
                 f'<a class="brand" href="/">{MARK}<span>ccfleet</span></a>'
                 + offer_ui.alpha_label() +
-                "<p>"
+                "</div><p>"
             ) + label("Local Claude Code. Your accounts, your selected slots.",
                           (
                               'Claude Code 在本机运行，使用你选择的账号槽位。'
