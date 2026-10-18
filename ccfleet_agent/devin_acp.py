@@ -8,6 +8,10 @@ empty, permission requests cancel, and delegated actions are never executed.
 Notifications are opaque ACP observations, not Anthropic tools or usage counts.
 Trusted profiles may explicitly ignore up to eight underscore-prefixed vendor
 notification names. Their parameters are discarded; requests are never ignored.
+They may also opt into up to four explicit vendor notification namespaces.
+Namespace notices with a sessionId must belong to an active owned session.
+The exact-name legacy policy remains first and opaque, including global notices
+that carry an empty sessionId. Neither policy ever handles requests.
 """
 
 from __future__ import annotations
@@ -137,6 +141,7 @@ class ACPController:
                  max_notifications: int = MAX_NOTIFICATIONS,
                  max_prompt_bytes: int = MAX_PROMPT_BYTES,
                  ignored_notifications: Iterable[str] = (),
+                 ignored_notification_prefixes: Iterable[str] = (),
                  env: Optional[Mapping[str, str]] = None):
         target = Path(executable)
         if not target.is_absolute() or ".." in target.parts:
@@ -180,6 +185,14 @@ class ACPController:
                     not isinstance(name, str) or not re.fullmatch(r"_[A-Za-z0-9_/$.-]{1,99}", name)
                     for name in ignored_notifications)):
             raise ACPError("invalid ignored notification allowlist", "invalid_config")
+        if (not isinstance(ignored_notification_prefixes, (list, tuple, set, frozenset))
+                or len(ignored_notification_prefixes) > 4 or any(
+                    not isinstance(prefix, str) or len(prefix) > 80
+                    or not re.fullmatch(
+                        r"_[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)*/",
+                        prefix)
+                    for prefix in ignored_notification_prefixes)):
+            raise ACPError("invalid ignored notification namespaces", "invalid_config")
         self.executable, self.model, self.cwd = str(target), model, str(directory)
         self.allow_model_requests = allow_model_requests
         self.timeout_s = float(timeout_s)
@@ -190,6 +203,7 @@ class ACPController:
         self.max_prompt_bytes = _limit(max_prompt_bytes, 1, MAX_PROMPT_LIMIT, "prompt limit")
         self.env = None if env is None else dict(env)
         self._ignored_notifications = frozenset(ignored_notifications)
+        self._ignored_notification_prefixes = tuple(ignored_notification_prefixes)
         self._process: Optional[subprocess.Popen] = None
         self._selector: Optional[selectors.BaseSelector] = None
         self._buffer = bytearray()
@@ -283,9 +297,18 @@ class ACPController:
                         "code": -32601, "message": "Client method unsupported"}}, deadline)
                 return
             if method in self._ignored_notifications:
-                # This is a notification only: parameters were validated as an
-                # object above, but are neither retained nor interpreted. Output
-                # and message accounting still happened before this point.
+                # Legacy exact names are explicitly trusted opaque notices,
+                # including native startup logs with an empty global sessionId.
+                return
+            if method.startswith(self._ignored_notification_prefixes):
+                # ACP custom notifications are one-way and may be ignored.
+                # This optional namespace policy never interprets their payload
+                # or acknowledges them. An explicit session cannot cross owners.
+                if "sessionId" in params:
+                    session_id = params["sessionId"]
+                    if (not isinstance(session_id, str) or not _ID.fullmatch(session_id)
+                            or session_id not in self._sessions):
+                        raise ACPError("vendor notice does not belong to an active session")
                 return
             if method != "session/update" or not self.allow_model_requests:
                 raise ACPError("unsolicited or unsupported ACP notification", "unsupported_method")

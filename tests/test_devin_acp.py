@@ -31,7 +31,9 @@ for raw in sys.stdin.buffer:
                 'params':{'private':'must not be retained'}}
         if mode=='vendor-params':notice['params']=None
         if mode=='vendor-invalid-id':notice['id']=True
+        if mode=='vendor-null-id':notice['id']=None
         if mode=='vendor-request':notice['id']='vendor-1'
+        if mode=='vendor-prefix-unknown':notice['method']='_cognition.ai/newNotice'
         for _ in range(300 if mode=='vendor-flood' else 1):send(notice)
     if mode=='outside-update' and method=='initialize':
         send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake','update':{}}})
@@ -58,6 +60,9 @@ for raw in sys.stdin.buffer:
         answer(i,{'protocolVersion':2 if mode=='version' else 1,
                   'agentCapabilities':{},'authMethods':[],'agentInfo':{'name':'fake'}})
     elif method=='session/new':
+        if mode=='prefix-provisional':
+            send({'jsonrpc':'2.0','method':'_cognition.ai/newNotice',
+                  'params':{'sessionId':'session_fake'}})
         if mode.startswith('early-'):
             notice={'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
                     'update':{'sessionUpdate':'config_option_update','configOptions':[]}}}
@@ -75,6 +80,9 @@ for raw in sys.stdin.buffer:
             os.write(1,(json.dumps(reply)+'\n'+json.dumps(update)+'\n').encode())
         else:answer(i,{'sessionId':'session_fake'})
     elif method=='session/prompt':
+        if mode in ('prefix-owned','prefix-foreign'):
+            send({'jsonrpc':'2.0','method':'_cognition.ai/newNotice','params':{
+                'sessionId':'session_fake' if mode=='prefix-owned' else 'foreign'}})
         for n in range(3 if mode=='flood' else 1):
             send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
                   'update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':'日本語'}}}})
@@ -456,3 +464,131 @@ def test_unknown_session_update_outside_pending_new_is_never_quarantined(fake):
         controller.initialize()
     assert controller._provisional_notifications == []
     assert controller.drain_notifications() == []
+
+
+PREFIX = "_cognition.ai/"
+PREFIX_NOTICE = "_cognition.ai/newNotice"
+
+
+def test_prefix_policy_is_explicit_and_default_remains_strict(fake):
+    make, record, _ = fake
+    controller = make("vendor-prefix-unknown")
+    with pytest.raises(ACPError) as error:
+        controller.initialize()
+    assert error.value.code == "unsupported_method"
+    assert len(records(record)) == 1
+
+
+def test_explicit_prefix_ignores_unknown_global_notices_without_acks_or_queue(fake):
+    make, record, _ = fake
+    prefixes = [PREFIX]
+    controller = make("vendor-prefix-unknown", ignored_notification_prefixes=prefixes)
+    prefixes.clear()  # Constructor must freeze the trusted configuration.
+    with controller:
+        assert controller.drain_notifications() == []
+        assert controller._messages == 2 and controller._total > 0
+        assert controller.rejected_methods == []
+    assert [call["method"] for call in records(record)] == ["initialize"]
+
+
+def test_prefix_notices_with_owned_session_are_discarded_without_losing_real_updates(fake):
+    make, _, _ = fake
+    with make("prefix-owned", allow_model_requests=True,
+              ignored_notification_prefixes=(PREFIX,)) as controller:
+        session = controller.new_session()["sessionId"]
+        assert controller.prompt(session, "Synthetic test") == {"stopReason": "end_turn"}
+        assert len(controller.drain_notifications()) == 1
+
+
+@pytest.mark.parametrize("mode", ["prefix-foreign", "prefix-provisional"])
+def test_prefix_policy_rejects_foreign_and_unbound_session_notices(fake, mode):
+    make, _, _ = fake
+    with make(mode, allow_model_requests=True,
+              ignored_notification_prefixes=(PREFIX,)) as controller:
+        with pytest.raises(ACPError) as error:
+            session = controller.new_session()["sessionId"]
+            controller.prompt(session, "Synthetic test")
+        assert error.value.code == "protocol_error"
+        assert controller._process.returncode is not None
+
+
+@pytest.mark.parametrize("session", [None, "", True, [], {}, "foreign", "bad session"])
+def test_provided_prefix_session_must_be_valid_and_owned(fake, session):
+    make, _, _ = fake
+    controller = make(ignored_notification_prefixes=(PREFIX,))
+    with pytest.raises(ACPError):
+        controller._handle({"jsonrpc": "2.0", "method": PREFIX_NOTICE,
+                            "params": {"sessionId": session}}, time.monotonic() + 1)
+    assert controller._messages == 1 and controller.pid is None
+    assert controller.drain_notifications() == []
+    controller.close()
+
+
+def test_legacy_exact_notice_still_supports_empty_global_session_before_prefix_policy(fake):
+    make, _, _ = fake
+    controller = make(ignored_notifications=(VENDOR_NOTICE,),
+                      ignored_notification_prefixes=(PREFIX,))
+    controller._handle({"jsonrpc": "2.0", "method": VENDOR_NOTICE,
+                        "params": {"sessionId": ""}}, time.monotonic() + 1)
+    assert controller._messages == 1 and controller.drain_notifications() == []
+    controller.close()
+
+
+@pytest.mark.parametrize("rpc_id", [None, True, 1, "vendor-request"])
+def test_id_bearing_messages_never_enter_prefix_ignore_path(fake, rpc_id):
+    make, _, _ = fake
+    controller = make(ignored_notification_prefixes=(PREFIX,))
+    replies = []
+    controller._write = lambda response, deadline: replies.append(response)
+    message = {"jsonrpc": "2.0", "method": PREFIX_NOTICE, "id": rpc_id, "params": {}}
+    if rpc_id is None or rpc_id is True:
+        with pytest.raises(ACPError):
+            controller._handle(message, time.monotonic() + 1)
+        assert replies == []
+    else:
+        controller._handle(message, time.monotonic() + 1)
+        assert replies == [{"jsonrpc": "2.0", "id": rpc_id,
+                            "error": {"code": -32601, "message": "Client method unsupported"}}]
+        assert controller.rejected_methods == [PREFIX_NOTICE]
+    assert controller._messages == 1 and controller.drain_notifications() == []
+    controller.close()
+
+
+@pytest.mark.parametrize("change", [
+    {"params": None}, {"params": []}, {"extra": True}, {"method": "_cognition.ai/bad name"}])
+def test_prefix_policy_does_not_skip_envelope_method_or_parameter_validation(fake, change):
+    make, _, _ = fake
+    controller = make(ignored_notification_prefixes=(PREFIX,))
+    message = {"jsonrpc": "2.0", "method": PREFIX_NOTICE, "params": {}}
+    message.update(change)
+    with pytest.raises(ACPError):
+        controller._handle(message, time.monotonic() + 1)
+    assert controller._messages == 1 and controller.drain_notifications() == []
+    controller.close()
+
+
+@pytest.mark.parametrize("prefixes", [None, PREFIX, {}, [None], [""], ["_/"], ["_"],
+    ["cognition.ai/"], ["_cognition.ai"], ["_cognition.ai/*/"], ["_cognition.ai//"],
+    ["_cognition.ai/../"], ["_cognition.ai/\n"], ["_" + "x" * 80 + "/"],
+    ["_one/", "_two/", "_three/", "_four/", "_five/"]])
+def test_prefix_configuration_is_bounded_explicit_namespaces_only(fake, prefixes):
+    make, record, _ = fake
+    with pytest.raises(ACPError) as error:
+        make(ignored_notification_prefixes=prefixes)
+    assert error.value.code == "invalid_config" and not record.exists()
+
+
+@pytest.mark.parametrize("limit", ["messages", "bytes"])
+def test_prefix_notices_keep_wire_and_message_bounds_even_without_queue(fake, monkeypatch, limit):
+    make, _, _ = fake
+    options = {"max_notifications": 1, "ignored_notification_prefixes": (PREFIX,)}
+    if limit == "messages":
+        monkeypatch.setattr(devin_acp, "MAX_RPC_MESSAGES", 4)
+    else:
+        options["max_output_bytes"] = 512
+    controller = make("vendor-flood", **options)
+    with pytest.raises(ACPError) as error:
+        controller.initialize()
+    assert error.value.code == "limit_exceeded"
+    assert controller.drain_notifications() == []
+    assert controller._process.returncode is not None
