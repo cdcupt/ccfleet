@@ -80,6 +80,8 @@ class Config:
     broker_only: bool = False
     # Public model requests are an explicit, separate authority from opaque SSH.
     gateway_enabled: bool = False
+    # Dormant control plane only; no native dispatch is registered by this flag.
+    gateway_devin_enabled: bool = False
     gateway_ssh_key_path: str = ""
     gateway_ssh_public_key: str = ""
     gateway_max_active: int = 16
@@ -186,6 +188,7 @@ class Config:
             public_url=env.get(ENV_PREFIX + "PUBLIC_URL", "").rstrip("/"),
             broker_only=_env_bool(env, "BROKER_ONLY", False),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
+            gateway_devin_enabled=_env_bool(env, "GATEWAY_DEVIN_ENABLED", False),
             gateway_ssh_key_path=env.get(ENV_PREFIX + "GATEWAY_SSH_KEY_PATH", "").strip(),
             gateway_ssh_public_key=env.get(ENV_PREFIX + "GATEWAY_SSH_PUBLIC_KEY", "").strip(),
             gateway_max_active=_env_int(env, "GATEWAY_MAX_ACTIVE", 16, 1),

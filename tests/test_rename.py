@@ -416,6 +416,8 @@ NEITHER = {("accounts", "id"), ("payments", "id"), ("payments", "account_id"),
            ("outage_emails", "account_id"), ("cli_pairings", "account_id"),
            ("cli_devices", "id"), ("cli_devices", "account_id"),
            ("gateway_keys", "id"), ("gateway_keys", "account_id"),
+           ("gateway_provider_bindings", "owner_account_id"),
+           ("gateway_provider_bindings", "claim_id"),
            ("slots", "gateway_claim_id")}
 
 
