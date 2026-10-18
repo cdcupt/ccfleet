@@ -120,6 +120,38 @@ def native_environment() -> dict[str, str]:
             "ALL_PROXY": "", "all_proxy": "", "NO_PROXY": "", "no_proxy": ""}
 
 
+def protected_native_environment() -> dict[str, str]:
+    """Closed native launch policy; only a wholly unconfigured node is direct.
+
+    Verify private-file metadata without reading its credentials. The root
+    proxy service validates the private contents and never falls back directly.
+    Legacy Anthropic launch behavior remains in native_environment().
+    """
+    try:
+        try:
+            POLICY_FILE.lstat()
+            policy_present = True
+        except FileNotFoundError:
+            policy_present = False
+        try:
+            upstream = UPSTREAM_FILE.lstat()
+        except FileNotFoundError:
+            if not policy_present:
+                return {}
+            raise EgressError() from None
+        if not policy_present:
+            raise EgressError()
+        route = native_environment()
+        _parents(UPSTREAM_FILE)
+        if (not route or not stat.S_ISREG(upstream.st_mode) or upstream.st_uid != ROOT_UID
+                or upstream.st_mode & 0o077 or upstream.st_nlink != 1
+                or not 0 < upstream.st_size <= MAX_CONFIG):
+            raise EgressError()
+        return route
+    except (OSError, ValueError, TypeError):
+        raise EgressError() from None
+
+
 class _ProxiedHTTPSConnection(http.client.HTTPSConnection):
     """Keep the fixed provider identity while connecting only to loopback."""
 

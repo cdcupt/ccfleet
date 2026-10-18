@@ -180,6 +180,19 @@ def test_offer_editor_groups_invoice_fields_without_changing_action_scope(consol
     assert "Save to update the displayed preview" in text(panel)
 
 
+def test_datacenter_offer_is_named_and_selected_without_a_pricing_change(console):
+    store, call = console
+    shared(store, users=("slot01",))
+    machine_said(store)
+    store.set_node_offer("m1", host_brand="Example Host", ip_brand="Example Network",
+                         ip_type="datacenter", hosting=offers.Cost("5.35", "USD"),
+                         ip=offers.Cost("0", "USD"))
+    page = call("GET", "/admin").body
+    panel = under_manage(row_of(slots_card(page), "m1"))
+    assert '<option value="datacenter" selected>Datacenter</option>' in panel
+    assert "Datacenter" in price_card(page) and "$7.35" in price_card(page)
+
+
 def test_owner_login_cannot_see_private_cost_strategy(console):
     store, call = console
     shared(store, users=("slot01",))

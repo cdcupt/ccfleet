@@ -122,18 +122,19 @@ def test_claim_from_browse_keeps_csrf_pricing_and_race_rechecks(site):
     assert held['state'] == slots.CLAIMING
 
 
-def test_search_is_escaped_bounded_and_language_switch_keeps_only_filters(site):
+@pytest.mark.parametrize('kind', ['isp', 'datacenter'])
+def test_search_is_escaped_bounded_and_language_switch_keeps_only_filters(site, kind):
     store, sign_in, _ = site
     inventory(store)
     user = sign_in(quota=1)
     query = urllib.parse.urlencode({'q': '<script>alert(1)</script>', 'brand': 'Decodo',
-                                   'type': 'isp', 'page': '2', 'note': 'PRIVATE'})
+                                   'type': kind, 'page': '2', 'note': 'PRIVATE'})
     body = user.call('GET', '/en/account/available?' + query).body
     assert '<script>alert(1)</script>' not in body
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in body
     link = re.search(r'href="(/zh/account/available\?[^\"]+)"', body).group(1)
     assert 'note=' not in link and 'PRIVATE' not in link
-    assert 'brand=Decodo' in link and 'type=isp' in link and 'page=2' in link
+    assert 'brand=Decodo' in link and 'type=' + kind in link and 'page=2' in link
     excessive = '&'.join('field' + str(n) + '=x' for n in range(25))
     assert user.call('GET', '/account/available?' + excessive).status == 200
     assert user.call('HEAD', '/account/available').status == 200

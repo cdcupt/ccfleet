@@ -72,8 +72,12 @@ def test_public_helper_has_only_approved_fields_and_no_supplier_costs():
     assert offers.public({"access_host": "secret", "token": "secret"}) == offers.public(None)
     assert offers.from_json(offers.to_json(offer)) == offer
     assert offers.Offer("台北 VPS", "vps.taipei", "isp").host_brand == "台北 VPS"
+    datacenter = offers.Offer("Example Host", "Example Network", "datacenter", cost(), cost("0"))
+    assert offers.from_json(offers.to_json(datacenter)) == datacenter
+    assert offers.public(datacenter)["ip_type"] == "datacenter"
+    assert offers.monthly_price(datacenter) == pricing.Price("7.35", "USD")
     with pytest.raises(offers.OfferError):
-        offers.Offer(ip_type="datacenter")
+        offers.Offer(ip_type="hosting")
     with pytest.raises(offers.OfferError):
         offers.Offer(hosting={"amount": "1"})
 
@@ -156,7 +160,8 @@ def test_old_schema_reopens_additively_and_offer_is_persistent(tmp_path):
         store.close()
 
 
-def test_server_cli_offer_show_set_clear_are_explicit_and_scoped(tmp_path, capsys):
+@pytest.mark.parametrize("kind", ["residential", "datacenter"])
+def test_server_cli_offer_show_set_clear_are_explicit_and_scoped(tmp_path, capsys, kind):
     path = str(tmp_path / "cli.db")
     store = Store(path)
     store.add_node("node-a", "alice")
@@ -166,7 +171,7 @@ def test_server_cli_offer_show_set_clear_are_explicit_and_scoped(tmp_path, capsy
     assert cli.main([*prefix, "show", "node-a"]) == 0
     assert "no offer metadata" in capsys.readouterr().out
     args = [*prefix, "set", "node-a", "--host-brand", "Host", "--ip-brand", "Bundled",
-            "--ip-type", "residential", "--hosting-cost", "5.35", "--hosting-currency", "USD",
+            "--ip-type", kind, "--hosting-cost", "5.35", "--hosting-currency", "USD",
             "--hosting-period", "month", "--ip-cost", "0", "--ip-currency", "USD",
             "--ip-period", "month"]
     assert cli.main(args) == 0

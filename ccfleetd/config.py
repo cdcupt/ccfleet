@@ -65,6 +65,56 @@ def _parse_bind(raw: str) -> tuple[str, int]:
     return host, port_num
 
 
+def _public_origin(value: str) -> str:
+    """An operator-configured HTTPS origin; loopback HTTP is for local tests."""
+    if (not isinstance(value, str) or not value or len(value) > 512 or not value.isascii()
+            or any(ord(char) <= 32 or ord(char) == 127 for char in value)):
+        raise ConfigError("public URL aliases must be clean HTTPS origins")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        host, port = parsed.hostname, parsed.port
+        local = host in {"localhost", "127.0.0.1", "::1"}
+        if (not host or parsed.username is not None or parsed.password is not None
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+                or not (parsed.scheme == "https" or parsed.scheme == "http" and local)
+                or not (local or HOSTNAME_RE.fullmatch(host))
+                or port is not None and not 1 <= port <= 65535):
+            raise ValueError
+    except ValueError:
+        raise ConfigError("public URL aliases must be clean HTTPS origins") from None
+    host = "[" + host + "]" if ":" in host else host
+    default = 443 if parsed.scheme == "https" else 80
+    return parsed.scheme + "://" + host + (":" + str(port) if port not in (None, default) else "")
+
+
+def _public_aliases(raw: str) -> tuple[str, ...]:
+    if not raw.strip():
+        return ()
+    values = tuple(_public_origin(value.strip()) for value in raw.split(","))
+    if len(values) > 8 or len(set(values)) != len(values):
+        raise ConfigError("public URL aliases must be distinct, with at most eight origins")
+    return values
+
+
+def _authority_matches(header: Optional[str], origin: str) -> bool:
+    """Never reflect Host or forwarded headers into a credential destination."""
+    if (not isinstance(header, str) or not header or len(header) > 512 or not header.isascii()
+            or any(ord(char) <= 32 or ord(char) == 127 for char in header)):
+        return False
+    try:
+        supplied = urllib.parse.urlsplit("//" + header)
+        configured = urllib.parse.urlsplit(origin)
+        default = 443 if configured.scheme == "https" else 80
+        return bool(supplied.hostname and supplied.username is None and supplied.password is None
+            and not supplied.path and not supplied.query and not supplied.fragment
+            and not header.endswith(":")
+            and (supplied.port is None or 1 <= supplied.port <= 65535)
+            and supplied.hostname == configured.hostname
+            and (supplied.port or default) == (configured.port or default))
+    except ValueError:
+        return False
+
+
 @dataclass(frozen=True)
 class Config:
     """Immutable server settings. Build with :meth:`from_env`."""
@@ -77,6 +127,9 @@ class Config:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     public_url: str = ""
+    # Optional migration origins. Signed clients keep their saved origin; aliases
+    # serve the same state without HTTP redirects or credential retargeting.
+    public_url_aliases: tuple[str, ...] = ()
     broker_only: bool = False
     # Public model requests are an explicit, separate authority from opaque SSH.
     gateway_enabled: bool = False
@@ -176,6 +229,21 @@ class Config:
         scheme = "http" if self.public_url.startswith("http://") else "https"
         return f"{scheme}://{self.admin_host}/auth/google/callback"
 
+    def public_origin_for_host(self, host: Optional[str]) -> str:
+        """Return only a configured origin, preserving old clients during migration.
+
+        Unconfigured deployments retain their existing one-origin behavior.
+        Enabling aliases opts into strict canonical/alias Host admission.
+        """
+        if not self.public_url_aliases:
+            return self.public_url
+        try:
+            origins = tuple(_public_origin(value) for value in
+                            (self.public_url, *self.public_url_aliases))
+            return next((origin for origin in origins if _authority_matches(host, origin)), "")
+        except (ConfigError, TypeError, ValueError):
+            return ""
+
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None) -> Config:
         env = os.environ if env is None else env
@@ -189,6 +257,7 @@ class Config:
             telegram_bot_token=env.get(ENV_PREFIX + "TELEGRAM_BOT_TOKEN", ""),
             telegram_chat_id=env.get(ENV_PREFIX + "TELEGRAM_CHAT_ID", ""),
             public_url=env.get(ENV_PREFIX + "PUBLIC_URL", "").rstrip("/"),
+            public_url_aliases=_public_aliases(env.get(ENV_PREFIX + "PUBLIC_URL_ALIASES", "")),
             broker_only=_env_bool(env, "BROKER_ONLY", False),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
             gateway_devin_enabled=_env_bool(env, "GATEWAY_DEVIN_ENABLED", False),
@@ -251,6 +320,13 @@ class Config:
             raise ConfigError(
                 f"{ENV_PREFIX}ADMIN_HOST must be a hostname like admin.fleet.example.com, "
                 f"with no scheme, port or path; got {cfg.admin_host!r}")
+        if cfg.public_url_aliases:
+            canonical = _public_origin(cfg.public_url)
+            if (canonical in cfg.public_url_aliases
+                    or cfg.admin_host and any(
+                        urllib.parse.urlsplit(origin).hostname == cfg.admin_host
+                        for origin in (canonical, *cfg.public_url_aliases))):
+                raise ConfigError("public URL aliases must exclude the canonical and admin origins")
         # Half-configured sign-in is worse than none: the button appears and
         # then fails on the callback, which reads as the product being broken.
         google_bits = {

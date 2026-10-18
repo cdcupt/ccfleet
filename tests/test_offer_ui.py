@@ -245,16 +245,18 @@ def test_customer_pages_stop_promising_one_global_price(site, path):
     assert 'A slot costs <strong>$20' not in page.body
 
 
-def test_operator_can_set_offer_but_an_owner_and_missing_csrf_cannot(request):
+@pytest.mark.parametrize("kind", ["isp", "datacenter"])
+def test_operator_can_set_offer_but_an_owner_and_missing_csrf_cannot(request, kind):
     store, call = request.getfixturevalue("console")
     store.add_node('m1', 'operator', now=1)
-    fields = {'host_brand': 'ExampleHost', 'ip_brand': 'ExampleIP', 'ip_type': 'isp',
+    fields = {'host_brand': 'ExampleHost', 'ip_brand': 'ExampleIP', 'ip_type': kind,
               'hosting_cost': '4.70', 'hosting_currency': 'USD', 'hosting_period': 'month',
               'ip_cost': '5.00', 'ip_currency': 'USD', 'ip_period': 'month'}
     for kwargs in ({'who': 'owner'}, {'who': 'admin', 'csrf': 'bad'}):
         assert call('POST', '/actions/machine/m1/offer', fields, **kwargs).status == 403
         assert store.get_node_offer('m1') is None
     assert call('POST', '/actions/machine/m1/offer', fields).status == 303
+    assert store.get_node_offer('m1').ip_type == kind
     assert offers.monthly_price(store.get_node_offer('m1')).amount == '11.70'
     before = store.get_node_offer('m1')
     assert call('POST', '/actions/machine/m1/offer', {**fields, 'hosting_cost': 'NaN'}).status == 400

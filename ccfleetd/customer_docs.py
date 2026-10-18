@@ -191,14 +191,14 @@ def _rental_pricing_details() -> str:
         'any cent-level difference between individually rounded components and the '
         'rounded combined resource cost. Missing costs or costs not converted '
         'to USD make pricing unavailable. The host and IP-provider brands remain visible. '
-        'ISP and Residential describe network types, with the same pricing formula and '
-        'no separate residential premium; neither guarantees quality, speed or Claude '
+        'ISP, Residential and Datacenter describe network types, with the same pricing formula and '
+        'no separate residential premium; none guarantees quality, speed or Claude '
         'compatibility.</p>',
         '<p>公开明细展示 VPS 成本、单独记录的出口 IP 成本、服务费与总价。'
         '主机包含出口 IP 时，展示已记录的打包资源成本，不虚构拆分金额。若各项单独舍入后'
         '与合计资源成本存在美分差异，会以折算舍入行解释。成本缺失或尚未'
-        '转换为美元时，价格暂不可用。主机与 IP 服务商品牌保持可见。ISP 与住宅只描述'
-        '网络类型，两者采用同一公式，不另加住宅溢价；这些类型不保证质量、速度或 '
+        '转换为美元时，价格暂不可用。主机与 IP 服务商品牌保持可见。ISP、住宅与机房只描述'
+        '网络类型，均采用同一公式，不另加住宅溢价；这些类型不保证质量、速度或 '
         'Claude 兼容性。</p>',
     ) + _alpha_stage_details() + bi(
         '<p>Agree the price and paid period with the operator; the website does not charge '
@@ -240,14 +240,14 @@ def _available_slot_browsing() -> str:
         'together. To add a slot, choose <a href="/account/available">Browse available '
         'slots</a>. This signed-in page lets you search by host provider, IP provider or '
         'public machine label such as Machine 7, and filter by provider and network type '
-        '(ISP or Residential). Results appear in pages of up to 20 machines. Review a '
+        '(ISP, Residential or Datacenter). Results appear in pages of up to 20 machines. Review a '
         'machine’s price and cost breakdown, then claim that machine; you return to Your '
         'slots to manage it. Your allowance and the existing eligibility checks still '
         'apply, and claiming does not charge you automatically.</p>',
         '<p><a href="/account">我的槽位</a>集中展示你持有的槽位、操作和用量。'
         '需要增加槽位时，选择<a href="/account/available">浏览可用槽位</a>。此页面需要'
         '登录，可以按主机服务商、IP 服务商或“主机 7”等公开主机标签搜索，并按服务商及'
-        '网络类型（ISP 或住宅）筛选；每页最多展示 20 台主机。先核对主机价格与成本明细，'
+        '网络类型（ISP、住宅或机房）筛选；每页最多展示 20 台主机。先核对主机价格与成本明细，'
         '再领取该主机，随后返回“我的槽位”管理。原有槽位额度及领取条件仍然适用，'
         '领取不会自动扣款。</p>',
     )
@@ -260,16 +260,16 @@ def _public_slot_catalogue() -> str:
         'examples. Open the <a href="/slots">full public slot catalogue</a> for machine '
         'providers, network types, current availability and Alpha price breakdowns. Search '
         'host/IP-provider brands or a public label such as Machine 7, filter by provider '
-        'and IP type, and browse pages of up to 20 machines. The purple Residential and '
-        'blue ISP badges name network types; their text and color do not rank quality or '
-        'guarantee Claude compatibility. Browsing does not reserve a slot. Sign in and '
+        'and IP type, and browse pages of up to 20 machines. The purple Residential, blue ISP '
+        'and gray Datacenter badges name network types; their text and color do not rank '
+        'quality or guarantee Claude compatibility. Browsing does not reserve a slot. Sign in and '
         'use <a href="/account/available">Browse available slots</a> to choose and claim '
         'a machine within your allowance.</p>',
         '<p>首页“槽位与价格”展示最多三个实际配置示例。打开<a href="/slots">完整公开槽位目录</a>'
         '可查看主机服务商、网络类型、当前可用状态与 Alpha 报价明细。可按主机／IP 服务商'
         '或“主机 7”等公开标签搜索，按服务商与 IP 类型筛选，每页最多展示 20 台主机。'
-        '紫色住宅与蓝色 ISP 标签描述网络类型；文字与颜色不代表质量排名，也不保证 Claude '
-        '兼容性。浏览不会预留槽位。领取时请先登录，再通过'
+        '紫色住宅、蓝色 ISP 与灰色机房 IP 标签描述网络类型；文字与颜色不代表质量排名，'
+        '也不保证 Claude 兼容性。浏览不会预留槽位。领取时请先登录，再通过'
         '<a href="/account/available">浏览可用槽位</a>，在自己的额度内选择主机。</p>',
     )
 
@@ -631,7 +631,7 @@ def overview(
 
 def _model_connections(cfg: Config) -> str:
     """Account choices, shared examples and stable anchors."""
-    base_url = escape((cfg.public_url or "https://ccfleet.daichenlab.com").rstrip("/"))
+    base_url = escape((cfg.public_url or "https://ccfleet.io").rstrip("/"))
     choices = (
         (
             "Only one account",

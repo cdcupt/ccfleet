@@ -166,7 +166,7 @@ def _slot_search_query(query: str) -> str:
             value = value[:80]
         elif key == 'brand' and len(value) > 48:
             continue
-        elif key == 'type' and value not in {'isp', 'residential'}:
+        elif key == 'type' and value not in {'isp', 'residential', 'datacenter'}:
             continue
         elif key == 'page' and (not value.isascii() or not value.isdigit()
                                or not 0 < len(value) <= 6 or int(value) < 1):

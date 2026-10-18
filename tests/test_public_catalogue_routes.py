@@ -117,15 +117,16 @@ def test_public_inventory_keeps_offline_in_use_and_unknown_costs_but_hides_retir
     assert len(store.list_nodes()) == 4 and store.held_slot_count('private-holder') == 1
 
 
-def test_language_switch_preserves_bounded_search_only_and_escapes_input(site):
+@pytest.mark.parametrize('kind', ['isp', 'datacenter'])
+def test_language_switch_preserves_bounded_search_only_and_escapes_input(site, kind):
     store, _, make_browser = site
     inventory(store)
     query = urllib.parse.urlencode({'q': '<script>bad</script>', 'brand': 'Decodo',
-                                   'type': 'isp', 'page': '2', 'note': 'PRIVATE'})
+                                   'type': kind, 'page': '2', 'note': 'PRIVATE'})
     body = make_browser().call('GET', '/en/slots?' + query).body
     assert '<script>bad</script>' not in body and '&lt;script&gt;bad&lt;/script&gt;' in body
     zh = re.search(r'href="(/zh/slots\?[^"]+)"', body).group(1)
-    assert 'brand=Decodo' in zh and 'type=isp' in zh and 'page=2' in zh
+    assert 'brand=Decodo' in zh and 'type=' + kind in zh and 'page=2' in zh
     assert 'note=' not in zh and 'PRIVATE' not in zh
     assert make_browser().call('GET', '/slots?' + '&'.join(f'a{n}=x' for n in range(20))).status == 200
 
