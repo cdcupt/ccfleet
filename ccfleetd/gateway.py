@@ -503,6 +503,10 @@ class GatewayRuntime:
                 if status < 400:
                     self._success(session, target, key)
                 if (self.throughput is not None and handler.path.split("?", 1)[0] == "/v1/messages"
+                        # Native SSE is emitted after generation and cleanup;
+                        # its delivery span is not a live generation interval.
+                        and key.get("provider", gateway_providers.ANTHROPIC)
+                        != gateway_providers.DEVIN
                         and 200 <= status < 300
                         and reply["headers"].get("content-type") == "text/event-stream"):
                     with contextlib.suppress(Exception):

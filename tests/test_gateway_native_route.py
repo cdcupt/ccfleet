@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccfleetd import gateway_transport, slots
+from ccfleetd import gateway_transport, slots, throughput
 from ccfleetd.api import Context, build_server
 from ccfleetd.gateway import GatewayRuntime
 from ccfleetd.gateway_transport import GatewayTransportError, NativeSSHAttempt, SSHAttempt
@@ -131,6 +131,36 @@ def test_native_beta_messages_http_post_keeps_path_and_body(native_http):
     assert status == 200 and headers["x-should-retry"] == "false"
     assert len(c.pool.attempts) == len(c.pool.requests) == 1
     assert c.pool.requests[0]["path"] == path and c.pool.requests[0]["body"] == body
+
+
+@pytest.mark.parametrize("path", ["/v1/messages", "/v1/messages?beta=true"])
+@pytest.mark.parametrize("provider", ["devin", "anthropic"])
+def test_buffered_native_sse_is_excluded_from_live_stream_throughput(
+        native_http, monkeypatch, path, provider):
+    c = native_http
+    if provider == "anthropic":
+        c.store.move_slot("s1", slots.ACTIVE)
+        c.key = c.store.create_gateway_key("a1", "Anthropic endpoint", ["s1"], now=c.now)
+    created, submitted = [], []
+    sample = throughput.Sample(5000, 1000.0)
+    def observer(media_type, **kwargs):
+        created.append(media_type)
+        return SimpleNamespace(feed=lambda part: None, finish=lambda: sample, discard=lambda: None)
+    monkeypatch.setattr(throughput, "StreamObserver", observer)
+    monkeypatch.setattr(c.gateway.throughput, "submit", lambda value, **kwargs:
+                        submitted.append(value))
+    # Native response accounting stays untouched; only rate measurement is
+    # excluded. A fake observer would otherwise return a recordable sample.
+    response = (b'event: message_start\ndata: {"type":"message_start"}\n\n'
+        b'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5000}}\n\n'
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
+    c.pool.plans["s1"].append({"chunks": [response]})
+    status, data, _ = request(c, path=path)
+    assert status == 200 and data == response
+    assert len(c.pool.requests) == 1
+    assert created == ([] if provider == "devin" else ["text/event-stream"])
+    assert submitted == ([] if provider == "devin" else [sample])
+    assert c.gateway.throughput._thread is None
 
 
 @pytest.mark.parametrize("path", ["/v1/messages?beta=false", "/v1/messages?beta=true&extra=1",

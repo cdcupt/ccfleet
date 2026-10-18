@@ -42,7 +42,7 @@ def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence
         "Devin is an operator-enabled pilot",
         "Your account page offers it only after your own slot has been verified",
         "Anthropic remains the default",
-        "The public endpoint has not yet been verified",
+        "Check your account page for current provider readiness",
         "official Claude Code",
         "your own Devin CLI on your assigned slot",
         "Fleet API address and key token stay the same",
@@ -61,7 +61,7 @@ def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence
     ):
         assert phrase in english
     for phrase in ("Devin 是由运营方明确启用的试点", "只有自有节点通过验证后", "Anthropic 仍为默认服务",
-                   "公共入口尚未验证", "官方 Claude Code",
+                   "服务就绪状态", "官方 Claude Code",
                    "自有 Devin CLI", "Fleet API 地址和密钥保持不变", "内部 MCP 桥",
                    "由你的电脑执行", "私有四步测试", "Opus 5.5 Max", "原生智能体兼容模式",
                    "带标签的上下文", "启动前拒绝", "不支持 count_tokens",
@@ -121,7 +121,7 @@ def test_native_operator_runbook_preserves_separate_verifier_and_private_grant_t
     assert "native-devin-operator-pilot" in page.ids
     assert "#native-devin-operator-pilot" in page.links
     for phrase in (
-        "public Fleet endpoint has not yet been verified in this record",
+        "public Fleet endpoint checks must be recorded separately",
         "account page offers Devin only after the holder's own slot is verified",
         "max_tokens is passed as context, not an enforced output or spending cap",
         "CCFLEET_GATEWAY_DEVIN_ENABLED", "metadata.json", "template.json", "verifier_user",
