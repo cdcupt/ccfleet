@@ -33,6 +33,7 @@ MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_NOTIFICATIONS = 128
 MAX_RPC_MESSAGES = 2048
 MAX_PROMPT_BYTES = 64 * 1024
+MAX_PROMPT_LIMIT = 256 * 1024
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}\Z")
 _ID = re.compile(r"[A-Za-z0-9_.:/-]{1,200}\Z")
 
@@ -134,6 +135,7 @@ class ACPController:
                  allow_model_requests: bool = False, timeout_s: float = 5,
                  max_line_bytes: int = MAX_LINE_BYTES, max_output_bytes: int = MAX_OUTPUT_BYTES,
                  max_notifications: int = MAX_NOTIFICATIONS,
+                 max_prompt_bytes: int = MAX_PROMPT_BYTES,
                  ignored_notifications: Iterable[str] = (),
                  env: Optional[Mapping[str, str]] = None):
         target = Path(executable)
@@ -185,6 +187,7 @@ class ACPController:
         self.max_output_bytes = _limit(max_output_bytes, 256, MAX_OUTPUT_BYTES, "output limit")
         self.max_notifications = _limit(max_notifications, 1, MAX_NOTIFICATIONS,
                                         "notification limit")
+        self.max_prompt_bytes = _limit(max_prompt_bytes, 1, MAX_PROMPT_LIMIT, "prompt limit")
         self.env = None if env is None else dict(env)
         self._ignored_notifications = frozenset(ignored_notifications)
         self._process: Optional[subprocess.Popen] = None
@@ -426,7 +429,7 @@ class ACPController:
         self._model_guard()
         if not isinstance(session_id, str) or session_id not in self._sessions:
             raise ACPError("unknown ACP session", "invalid_state")
-        text = _text(text, "prompt")
+        text = _text(text, "prompt", self.max_prompt_bytes)
         result = self._rpc("session/prompt", {"sessionId": session_id,
                                               "prompt": [{"type": "text", "text": text}]})
         if result.get("stopReason") not in (

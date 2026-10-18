@@ -141,6 +141,42 @@ def test_guarded_session_prompt_and_opaque_notifications(fake):
     assert calls[2]["params"]["prompt"] == [{"type": "text", "text": "Synthetic test only"}]
 
 
+def test_original_prompt_bound_remains_default_and_rejects_before_send(fake):
+    make, record, _ = fake
+    with make(allow_model_requests=True) as controller:
+        session = controller.new_session()["sessionId"]
+        with pytest.raises(ACPError):
+            controller.prompt(session, "x" * (64 * 1024 + 1))
+    assert [call["method"] for call in records(record)] == ["initialize", "session/new"]
+
+
+def test_trusted_larger_prompt_limit_transmits_full_unicode_context(fake):
+    make, record, _ = fake
+    context = "é" * 40000
+    with make(allow_model_requests=True, max_prompt_bytes=90000) as controller:
+        session = controller.new_session()["sessionId"]
+        assert controller.prompt(session, context) == {"stopReason": "end_turn"}
+    assert records(record)[-1]["params"]["prompt"] == [{"type": "text", "text": context}]
+
+
+def test_prompt_limit_is_utf8_bytes_and_checked_before_rpc(fake):
+    make, record, _ = fake
+    with make(allow_model_requests=True, max_prompt_bytes=4) as controller:
+        session = controller.new_session()["sessionId"]
+        assert controller.prompt(session, "éé") == {"stopReason": "end_turn"}
+        with pytest.raises(ACPError):
+            controller.prompt(session, "ééé")
+    assert len([call for call in records(record) if call["method"] == "session/prompt"]) == 1
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, 256 * 1024 + 1, "65536"])
+def test_trusted_prompt_limit_still_has_a_hard_validated_bound(fake, limit):
+    make, record, _ = fake
+    with pytest.raises(ACPError):
+        make(max_prompt_bytes=limit)
+    assert not record.exists()
+
+
 @pytest.mark.parametrize("mode, code", [
     ("malformed", "protocol_error"), ("oversize", "limit_exceeded"),
     ("stderr", "limit_exceeded"), ("timeout", "timeout"),
