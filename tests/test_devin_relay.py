@@ -131,9 +131,32 @@ def test_genuine_client_tool_response_sse_is_framed_and_carries_exact_arguments(
     assert "cache_read_input_tokens" not in usage
 
 
-def test_count_tokens_is_501_without_running_or_forwarding(scenario):
-    code, replies = scenario.run(request(path="/v1/messages/count_tokens"))
+def test_sdk_beta_messages_path_uses_bound_wire_and_runs_exactly_once(scenario):
+    code, replies = scenario.run(request(path="/v1/messages?beta=true"))
+    assert code == 0 and scenario.state["called"] == 1 and len(replies) == 2
+    assert json.loads(replies[0][1])["binding_digest"] == binding().digest
+    assert replies[1][0] == {"version": 2, "status": 200,
+        "headers": {"content-type": "text/event-stream"}, "retryable": False}
+    events = [json.loads(line[6:]) for line in replies[1][1].splitlines()
+              if line.startswith(b"data: ")]
+    assert events[0]["type"] == "message_start"
+    assert events[-1] == {"type": "message_stop"}
+
+
+@pytest.mark.parametrize("path", ["/v1/messages/count_tokens", "/v1/messages/count_tokens?beta=true"])
+def test_count_tokens_is_501_without_running_or_forwarding(scenario, path):
+    code, replies = scenario.run(request(path=path))
     assert code == 2 and replies[1][0]["status"] == 501
+    assert scenario.state["called"] == 0
+
+
+@pytest.mark.parametrize("path", [
+    "/v1/messages?beta=false", "/v1/messages?beta=1", "/v1/messages?other=true",
+    "/v1/messages?beta=true&other=true", "/v1/messages?beta=true&beta=true",
+    "/v1/messages/?beta=true", "/v1/messages/count_tokens?other=true"])
+def test_arbitrary_query_or_path_variants_fail_before_runner(scenario, path):
+    code, replies = scenario.run(request(path=path))
+    assert code == 2 and replies[1][0]["status"] == 400
     assert scenario.state["called"] == 0
 
 

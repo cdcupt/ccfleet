@@ -386,7 +386,7 @@ def serve(input_, output, *, policy_loader=None, runner=None,
             raise WireError("invalid_native_request")
         if request["path"] in {"/v1/messages/count_tokens", "/v1/messages/count_tokens?beta=true"}:
             raise WireError("native_count_tokens_unavailable", 501)
-        if request["path"] != "/v1/messages":
+        if request["path"] not in {"/v1/messages", "/v1/messages?beta=true"}:
             raise WireError("invalid_native_path")
         size = request["body_size"]
         if type(size) is not int or not 0 < size <= MAX_BODY:

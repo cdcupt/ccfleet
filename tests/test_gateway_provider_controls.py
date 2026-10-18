@@ -19,6 +19,7 @@ from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.store import StoreError
 from tests.test_gateway_access import add_held_slot, public_key
+from tests.test_html_document_preservation import Document
 
 
 def configured(cfg, **changes):
@@ -211,6 +212,27 @@ def test_selector_is_hidden_until_verified_and_updates_existing_cli_key_without_
         form(key_id=key["id"], provider="anthropic"), c.now)
     assert "gateway-updated" in reverted.location
     assert c.store.resolve_gateway_key(key["key_token"], now=c.now)["provider"] == "anthropic"
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "devin"])
+def test_created_key_confirmation_describes_only_its_providers_supported_paths(controls, provider):
+    c = controls
+    if provider == "devin":
+        bind(c)
+    outcome = gateway_ui.act(c.store, c.cfg, c.account, "/account/gateway/create",
+                             form(provider=provider), c.now)
+    assert outcome.status == 200
+    text = Document(outcome.body).text
+    if provider == "devin":
+        assert "This Devin connection supports POST /v1/messages only" in text
+        assert "Token counting is unavailable" in text
+        assert "此 Devin 连接仅支持 POST /v1/messages" in text
+        assert "不支持 token 计数" in text
+        assert "POST /v1/messages/count_tokens" not in text
+    else:
+        assert "The gateway supports POST /v1/messages and POST /v1/messages/count_tokens" in text
+        assert "网关支持 POST /v1/messages 和 POST /v1/messages/count_tokens" in text
+        assert "Token counting is unavailable" not in text
 
 
 @pytest.mark.parametrize("gate", ["flag", "identity", "subject", "stale", "node", "present", "owner"])

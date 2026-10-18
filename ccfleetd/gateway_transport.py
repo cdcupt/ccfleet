@@ -25,6 +25,8 @@ from ccfleet_agent import inference_client as wire
 
 from . import cli_access, gateway_providers
 
+NATIVE_MESSAGE_PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true"})
+
 
 class GatewayTransportError(Exception):
     def __init__(self, message: str = "slot transport failed", *,
@@ -305,7 +307,7 @@ class NativeSSHAttempt(SSHAttempt):
 
     def start(self, headers: dict[str, str], body: bytes, *, path: str = "/v1/messages",
               before_model_send=lambda: True) -> None:
-        if path != "/v1/messages":
+        if path not in NATIVE_MESSAGE_PATHS:
             raise GatewayTransportError("native token counting is unavailable", status=501)
         super().start(headers, body, path=path, before_model_send=before_model_send)
 

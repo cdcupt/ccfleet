@@ -523,6 +523,16 @@ def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
             provider_runtime=runtime)
     except (StoreError, ValueError, TypeError):
         return usersite._back("gateway-invalid", "gateway")
+    if key.get("provider", gateway_providers.ANTHROPIC) == gateway_providers.DEVIN:
+        api_paths_en = ('<p>This Devin connection supports <code>POST /v1/messages</code> only. '
+                        'Token counting is unavailable.</p>')
+        api_paths_zh = ('<p>此 Devin 连接仅支持 <code>POST /v1/messages</code>，'
+                        '不支持 token 计数。</p>')
+    else:
+        api_paths_en = ('<p>The gateway supports <code>POST /v1/messages</code> and '
+                        '<code>POST /v1/messages/count_tokens</code>.</p>')
+        api_paths_zh = ('<p>网关支持 <code>POST /v1/messages</code> 和 '
+                        '<code>POST /v1/messages/count_tokens</code>。</p>')
     body = ('<div class="pagehead"><h1>'
             + label("Save your connection key", "保存你的连接密钥", inline=True)
             + '</h1></div><div class="card">'
@@ -543,14 +553,12 @@ def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
             + '<details><summary>'
             + label("API paths and guided CLI setup", "API 路径与命令行引导设置", inline=True)
             + '</summary>'
-            + bi('<p>The gateway supports <code>POST /v1/messages</code> and '
-                 '<code>POST /v1/messages/count_tokens</code>.</p>'
+            + bi(api_paths_en +
                  '<p>On an already paired computer, <code>ccfleet gateway setup</code> '
                  'creates or reuses its own key without printing it to your terminal. '
                  'It does not import the website key shown above. Then run '
                  '<code>ccfleet local</code>.</p>',
-                 '<p>网关支持 <code>POST /v1/messages</code> 和 '
-                 '<code>POST /v1/messages/count_tokens</code>。</p>'
+                 api_paths_zh +
                  '<p>已配对的电脑可以用 <code>ccfleet gateway setup</code> 创建或复用'
                  '命令行自己的密钥，密钥不会打印到终端。它不会导入上方的网页密钥。'
                  '完成后运行 <code>ccfleet local</code>。</p>')

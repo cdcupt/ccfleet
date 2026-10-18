@@ -113,12 +113,32 @@ def test_disabled_or_unregistered_native_runtime_never_dispatches(native_http, c
     assert not c.gateway.status(c.key)["ready"] and c.pool.attempts == []
 
 
-def test_native_count_tokens_is_explicitly_unsupported_without_any_transport(native_http):
+@pytest.mark.parametrize("path", ["/v1/messages/count_tokens", "/v1/messages/count_tokens?beta=true"])
+def test_native_count_tokens_is_explicitly_unsupported_without_any_transport(native_http, path):
     c = native_http
-    status, body, headers = request(c, path="/v1/messages/count_tokens")
+    status, body, headers = request(c, path=path)
     assert status == 501 and b"Token counting" in body
     assert headers["x-should-retry"] == "false"
     assert c.pool.attempts == [] and c.gateway.active == 0
+
+
+def test_native_beta_messages_http_post_keeps_path_and_body(native_http):
+    c = native_http
+    path = "/v1/messages?beta=true"
+    body = {"model": "opus", "max_tokens": 32, "stream": True,
+        "messages": [{"role": "user", "content": "Beta request"}]}
+    status, _, headers = request(c, body, path=path)
+    assert status == 200 and headers["x-should-retry"] == "false"
+    assert len(c.pool.attempts) == len(c.pool.requests) == 1
+    assert c.pool.requests[0]["path"] == path and c.pool.requests[0]["body"] == body
+
+
+@pytest.mark.parametrize("path", ["/v1/messages?beta=false", "/v1/messages?beta=true&extra=1",
+    "/v1/messages?", "/v1/messages?url=https://example.test"])
+def test_native_arbitrary_query_never_reaches_transport(native_http, path):
+    c = native_http
+    assert request(c, path=path)[0] == 400
+    assert c.pool.attempts == [] and c.pool.requests == []
 
 
 @pytest.mark.parametrize("plan", [{"pre_send_error": True}, {"ambiguous": True},
@@ -236,7 +256,8 @@ def test_native_fixed_command_keeps_host_pin_and_legacy_command_unchanged(contro
         native.close()
 
 
-def test_native_status_and_request_share_detached_binding_only_after_auth(controls, monkeypatch):
+@pytest.mark.parametrize("path", ["/v1/messages", "/v1/messages?beta=true"])
+def test_native_status_and_request_share_detached_binding_only_after_auth(controls, monkeypatch, path):
     target, attempt, process, _ = fake_attempt(controls, monkeypatch)
     native = copy.deepcopy(target["_native_context"])
     target["_native_context"]["binding"]["owner_id"] = "FORGED_AFTER_CONSTRUCTION"
@@ -246,7 +267,8 @@ def test_native_status_and_request_share_detached_binding_only_after_auth(contro
         return True
     try:
         body = b'{"model":"opus","messages":[{"role":"user","content":"PRIVATE_PROMPT"}]}'
-        attempt.start({"content-type": "application/json"}, body, before_model_send=authorized)
+        attempt.start({"content-type": "application/json"}, body, path=path,
+                      before_model_send=authorized)
         attempt.writer.join(2)
         assert not attempt.writer.is_alive() and not attempt.write_error
         before = io.BytesIO(observed[0])
@@ -256,7 +278,7 @@ def test_native_status_and_request_share_detached_binding_only_after_auth(contro
         first, second = decode_preamble(stream), decode_preamble(stream)
         assert first["native"] == second["native"] == native
         assert second == {"version": 2, "operation": "request", "method": "POST",
-            "path": "/v1/messages", "headers": {"content-type": "application/json"},
+            "path": path, "headers": {"content-type": "application/json"},
             "body_size": len(body), "native": native}
         assert stream.read() == body and attempt.model_started
         canonical = json.dumps(native["binding"], ensure_ascii=False, sort_keys=True,

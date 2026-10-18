@@ -20,7 +20,7 @@ from ccfleet_agent import inference_client as wire
 from ccfleet_agent import local_relay
 
 from . import gateway_providers, throughput
-from .gateway_transport import GatewayTransportError, transport_attempt
+from .gateway_transport import NATIVE_MESSAGE_PATHS, GatewayTransportError, transport_attempt
 
 PATHS = wire.PATHS
 RETRY_STATUSES = frozenset({401, 403, 409, 429, 502, 503, 504, 529})
@@ -379,7 +379,7 @@ class GatewayRuntime:
             model_error(handler, 403, "That slot is not selected for this endpoint.")
             return
         if (key.get("provider", gateway_providers.ANTHROPIC) == gateway_providers.DEVIN
-                and handler.path != "/v1/messages"):
+                and handler.path not in NATIVE_MESSAGE_PATHS):
             model_error(handler, 501, "Token counting is not available for the native agent.")
             return
         if not self._reserve(key["id"], size):
