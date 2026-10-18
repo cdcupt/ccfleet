@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CC Fleet operator task-router pilot</title>
+<style>
+:root{font:16px/1.6 system-ui,sans-serif;color:#171717;background:#f7f8fa}body{max-width:960px;margin:48px auto;padding:0 24px}h1,h2{line-height:1.2}h1{font-size:2.3rem}h2{margin-top:2.5rem}a{color:#124bc0}pre{background:white;border:1px solid #d5dce5;padding:20px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}code{font:14px/1.5 ui-monospace,monospace}svg{width:100%;height:auto;background:white;border:1px solid #d5dce5;border-radius:12px}.diagram-mobile{display:none}.note{padding:18px 22px;border-left:4px solid #124bc0;background:#eaf1ff}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #d5dce5;padding:12px}footer{margin:40px 0;color:#555}@media(max-width:600px){body{margin:24px auto;padding:0 16px}h1{font-size:1.8rem}.diagram-wide{display:none}.diagram-mobile{display:block}}
+</style>
+</head>
+<body>
+<p>Operator instructions · 18 October 2026</p>
+<h1>One Fleet entry point, explicit agent delegation</h1>
+<p>This pilot gives an outer agent a local JSON command interface and an optional stdio MCP facade for choosing either official Claude Code or Devin CLI. The chosen application runs a complete coding task on the operator's node. Fleet's existing model gateway, account assignments and signed laptop client continue to use their current paths.</p>
+<svg class="diagram-wide" viewBox="0 0 900 230" role="img" aria-label="User to outer agent, to local Fleet task router, then either official Claude Code or Devin CLI">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10" fill="#124bc0"/></marker></defs>
+<g fill="#eef3ff" stroke="#b8c8ec"><rect x="20" y="90" width="120" height="60" rx="12"/><rect x="190" y="90" width="160" height="60" rx="12"/><rect x="400" y="90" width="190" height="60" rx="12"/><rect x="660" y="35" width="220" height="60" rx="12"/><rect x="660" y="145" width="220" height="60" rx="12"/></g>
+<g stroke="#124bc0" stroke-width="2" fill="none" marker-end="url(#arrow)"><path d="M140 120H185"/><path d="M350 120H395"/><path d="M590 120H620V65H655"/><path d="M620 120V175H655"/></g>
+<g fill="#171717" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18"><text x="80" y="127">User</text><text x="270" y="127">Outer agent</text><text x="495" y="116">Fleet task router</text><text x="495" y="138" font-size="13">one active task</text><text x="770" y="72">Official Claude Code</text><text x="770" y="182">Devin CLI</text></g>
+</svg>
+<svg class="diagram-mobile" viewBox="0 0 360 375" role="img" aria-label="User to outer agent, to local Fleet task router, then either official Claude Code or Devin CLI">
+<defs><marker id="mobile-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10" fill="#124bc0"/></marker></defs>
+<g fill="#eef3ff" stroke="#b8c8ec"><rect x="120" y="20" width="120" height="44" rx="10"/><rect x="100" y="105" width="160" height="50" rx="10"/><rect x="85" y="190" width="190" height="55" rx="10"/><rect x="10" y="300" width="165" height="55" rx="10"/><rect x="185" y="300" width="165" height="55" rx="10"/></g>
+<g stroke="#124bc0" stroke-width="2" fill="none" marker-end="url(#mobile-arrow)"><path d="M180 64V100"/><path d="M180 155V185"/><path d="M180 245V270H92V295"/><path d="M180 270H268V295"/></g>
+<g fill="#171717" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16"><text x="180" y="48">User</text><text x="180" y="136">Outer agent</text><text x="180" y="213">Fleet task router</text><text x="180" y="233" font-size="12">one active task</text><text x="92" y="323">Official</text><text x="92" y="343">Claude Code</text><text x="268" y="334">Devin CLI</text></g>
+</svg>
+<p class="note"><strong>Operator-only, disabled by default.</strong> This is a local pilot behind the operator's OS permissions. It has no customer endpoint, tenant isolation or billing integration. Do not expose the command runner to customers or advertise a working paid service based on these synthetic tests.</p>
+
+<h2>Prepare the native applications</h2>
+<p>Install and authenticate each application using its official workflow as the node's dedicated operator. Confirm that the selected account and plan permit the intended use, establish the pilot's billing limit, and choose an exact model identifier supported by that account. The router does not log in, inspect token contents, buy a subscription or switch accounts.</p>
+<p>Devin's <code>auth status</code> command returned exit code zero when logged out in the observed 3000.11.92 build. The router therefore requires an operator <code>auth_verified</code> attestation and checks that the native credentials file exists with private ownership and mode 0600. It also runs <code>auth status</code> with output discarded and rejects a nonzero status. These checks do not prove token validity, model entitlement or subscription billing; native execution can still fail. See the official <a href="https://docs.devin.ai/cli/enterprise/devin-auth">Devin authentication guide</a>.</p>
+<p>Review each workspace and its native hooks, plugins, MCP tools and permissions before setting <code>trusted</code> to true. Devin retains its native workspace-trust check. Installed Claude Code help states that print mode skips its trust dialog, so the explicit operator trust flag is required before a Claude task can start. The router adds no permission-bypass or autonomous flags.</p>
+
+<h2>Create one operator configuration</h2>
+<p>Save an operator-owned regular JSON file with mode 0600 or 0644, outside every selected workspace. Paths must be absolute and free of symlinks; use the resolved native executable paths. The state directory must also be outside the workspaces and is created privately. No credentials belong in this file.</p>
+<pre><code>{
+  "version": 1,
+  "enabled": false,
+  "state_dir": "/home/operator/.local/state/ccfleet-task-router",
+  "timeout_s": 300,
+  "workspaces": {
+    "pilot": {
+      "path": "/home/operator/workspaces/pilot",
+      "trusted": false
+    }
+  },
+  "backends": {
+    "claude": {
+      "binary": "/home/operator/.local/share/claude/versions/VERIFIED_VERSION",
+      "model": "EXACT_SUPPORTED_MODEL",
+      "auth_verified": false
+    },
+    "devin": {
+      "binary": "/home/operator/.local/share/devin/VERIFIED_VERSION/devin",
+      "model": "EXACT_SUPPORTED_CLAUDE_MODEL",
+      "auth_verified": false
+    }
+  }
+}</code></pre>
+<p>The paths above are placeholders, not an installation recipe. Configure only the backends you have installed. After native sign-in, plan and billing verification, set that backend's <code>auth_verified</code> and the reviewed workspace's <code>trusted</code> to true, then explicitly set <code>enabled</code> to true. Omitting <code>enabled</code> keeps execution disabled. Unsupported fields, arbitrary commands and extra arguments are rejected.</p>
+
+<h2>Use the JSON command interface</h2>
+<p>Run from the installed Fleet repository, or install the Python package into the operator's environment. Give the outer agent the fixed configuration path and allowed workspace IDs. It supplies an explicit backend and a UTF-8 prompt file of at most 64 KiB. It cannot select an arbitrary directory, model, executable or extra CLI flags.</p>
+<pre><code>python3 -m ccfleet_agent.task_router --config /home/operator/router.json \
+  start --backend devin --workspace pilot --prompt-file /home/operator/task.txt
+
+python3 -m ccfleet_agent.task_router --config /home/operator/router.json status JOB_ID
+python3 -m ccfleet_agent.task_router --config /home/operator/router.json logs JOB_ID
+python3 -m ccfleet_agent.task_router --config /home/operator/router.json logs JOB_ID --stream stderr
+python3 -m ccfleet_agent.task_router --config /home/operator/router.json list
+python3 -m ccfleet_agent.task_router --config /home/operator/router.json stop JOB_ID</code></pre>
+<p><code>start</code> returns a job ID and the configured <code>selected_model</code>. Poll <code>status</code> and read the bounded logs as needed. A completed process is not proof that the code change is correct; inspect the result and run the project's checks. If submission times out or its outcome is uncertain, list existing tasks and resolve the record before submitting again. There is no retry, queue, cross-provider fallback or create-request idempotency guarantee.</p>
+<p>Set <code>enabled</code> to false to block new tasks. The supervisor checks configuration authorization every 15 seconds and stops a task if its exact configuration binding changes or becomes unavailable. Immediate cancellation uses <code>stop</code>. Keep the state directory path and readable configuration available for status and stop operations. Configuration edits do not roll back project files.</p>
+
+<h2>Connect the outer agent through local MCP</h2>
+<p>The optional facade uses stdio and exposes task tools separately from Fleet's existing read-only management MCP. Launch it on the operator node with the same fixed configuration:</p>
+<pre><code>python3 -I /installed/ccfleet/ccfleet_agent/task_mcp.py \
+  --config /home/operator/router.json</code></pre>
+<p>Configure the outer agent to run this fixed command as a local stdio MCP server. There is no network listener or remote customer authentication layer. The installed path above is a placeholder for the operator's reviewed Fleet checkout.</p>
+<ul>
+<li><code>fleet_agents {}</code> lists configured adapters and selected models.</li>
+<li><code>fleet_task_start</code> accepts <code>backend</code>, <code>workspace</code>, <code>prompt</code> and a caller-generated <code>request_id</code>. It accepts no executable paths, extra flags or model override.</li>
+<li><code>fleet_task_status</code> and <code>fleet_task_stop</code> take a <code>job_id</code>.</li>
+<li><code>fleet_task_logs</code> takes a <code>job_id</code>, optional <code>stream</code> and optional <code>bytes</code>; logs are returned only when requested.</li>
+<li><code>fleet_tasks {}</code> lists private task summaries.</li>
+</ul>
+<p>For a start request, use an opaque UUID as <code>request_id</code> and retain it. Repeating the same request ID with identical task inputs returns the recorded job rather than resubmitting the task. Changing inputs under the same ID is rejected. If a start outcome is unresolved, inspect existing tasks and resolve it with the operator; using a new request ID would authorize another task. Closing the MCP process leaves an existing task under its supervisor; use <code>fleet_task_stop</code> to cancel it.</p>
+
+<h2>What the pilot bounds</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Control</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td>Concurrency and duration</td><td>One active task across both adapters; 300 seconds by default, configurable from 1 through 900 seconds. Unknown cleanup blocks the next task until reviewed.</td></tr>
+<tr><td>Process supervision</td><td>The existing local-job guardian controls the owned process group, confirmed cancellation and timeout. The router never restarts a provider task.</td></tr>
+<tr><td>Native authentication</td><td>Credentials remain in native home locations. Inherited provider API keys, model overrides, routing variables, permission overrides and Python startup variables are omitted from provider children.</td></tr>
+<tr><td>Private records</td><td>Job specification, prompt, state and logs stay in mode-0700 task directories. Each stdout/stderr log is capped at 4 MiB. History holds at most 256 records; archive completed records using the existing local-job operator facilities before capacity is exhausted.</td></tr>
+<tr><td>Devin session settings</td><td>A private generated config requests the configured model, disables automatic installation of updates and disables Devin subagents. The native ATIF export is private and may contain full task content. Its size is not capped by the log limit.</td></tr>
+<tr><td>Model and spend evidence</td><td>The router records the selected model. Provider-reported actual model and billable use need separate verification. Timeouts and disabled subagents do not create a dollar, token or subscription quota guarantee.</td></tr>
+</tbody></table></div>
+<p>The workspace allowlist constrains routing input; it is not a filesystem sandbox. Each native agent has the operator OS user's authority and can access that user's files, credentials, network and task records subject to its own permissions. Same-user processes can alter those records. Use a dedicated pilot user and reviewed workspaces. This is insufficient for untrusted customer tasks or shared subscription access.</p>
+<p>Devin's model/configuration and export behavior follow the official <a href="https://docs.devin.ai/cli/reference/configuration/config-file">configuration reference</a> and <a href="https://docs.devin.ai/cli/reference/commands">commands reference</a>. Choosing a Claude model in Devin runs Devin's application; it does not authenticate the standalone Claude Code binary with a Devin subscription.</p>
+
+<h2>Verification and rollout status</h2>
+<p>The automated suite uses synthetic executable fixtures and local subprocesses to verify adapter arguments, private files, success and failure, authentication rejection, native trust failure, cancellation, timeouts, single concurrency, strict configuration, workspace selection, capped logs and provider environment filtering. It makes no provider calls. Real account sign-in, plan entitlement, billing, actual model use and a paid end-to-end task remain operator pilot checks.</p>
+<footer>This operator document is not a public route or product availability announcement.</footer>
+</body>
+</html>
