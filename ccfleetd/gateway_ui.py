@@ -1,10 +1,12 @@
 """Own-account HTTPS endpoint controls. Secrets appear only on the creation response."""
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from html import escape
-from typing import Any
+from typing import Any, Optional
 
+from . import gateway_providers
 from . import slots as slotstates
 from .bilingual import bi, label
 from .store import StoreError
@@ -22,6 +24,26 @@ def available(cfg: Any) -> bool:
     return getattr(cfg, "gateway_ready", False) is True
 
 
+def ready_provider_slots(store: Any, cfg: Any, account_id: str,
+                         held: list[Mapping[str, Any]], *, now: float) -> list[str]:
+    """Public-safe slot IDs only; account fingerprints and reports stay internal."""
+    runtime = gateway_providers.runtime_expectations(cfg)
+    if (not available(cfg) or getattr(cfg, "gateway_devin_enabled", False) is not True
+            or runtime is None):
+        return []
+    ready = []
+    for slot in _selectable(held):
+        try:
+            binding = store.gateway_provider_binding(slot["id"], account_id, "devin")
+            if binding and store.gateway_provider_binding_is_active(
+                    slot["id"], account_id, "devin", binding["claim_id"], binding["generation"],
+                    now=now, provider_runtime=runtime):
+                ready.append(str(slot["id"]))
+        except (StoreError, KeyError, TypeError, ValueError):
+            continue
+    return ready
+
+
 def _csrf(token: str) -> str:
     return '<input type="hidden" name="csrf" value="' + escape(token, quote=True) + '">'
 
@@ -32,7 +54,8 @@ def _selectable(held: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
                                      slotstates.ACTIVE)]
 
 
-def _choices(held: list[Mapping[str, Any]], selected: list[str]) -> str:
+def _choices(held: list[Mapping[str, Any]], selected: list[str],
+             native_ready: tuple[str, ...] = ()) -> str:
     rows = []
     positions = {identifier: index + 1 for index, identifier in enumerate(selected)}
     states = {
@@ -43,9 +66,12 @@ def _choices(held: list[Mapping[str, Any]], selected: list[str]) -> str:
     for slot in _selectable(held):
         identifier = str(slot["id"])
         name = str(slot.get("name") or identifier)
+        state = (("Devin ready", "Devin 已就绪")
+                 if identifier in native_ready and slot["state"] == slotstates.CLAIMED
+                 else states[slot["state"]])
         rows.append('<label class="gateway-slot"><span class="gateway-slot-identity"><b>'
                     + escape(name) + '</b><small>'
-                    + label(*states[slot["state"]], inline=True) + '</small></span>'
+                    + label(*state, inline=True) + '</small></span>'
                     '<span class="gateway-slot-priority">'
                     + label("Priority", "顺序", inline=True)
                     + '<input type="number" min="1" max="100" step="1" name="slot.'
@@ -63,10 +89,14 @@ def _choices(held: list[Mapping[str, Any]], selected: list[str]) -> str:
                  '<p class="gateway-hint">首选槽位填 <b>1</b>，备用槽位填 <b>2</b>；'
                  '留空表示不用。只选一个槽位，就始终使用这个账号。</p>')
             + '<div class="gateway-slot-list">' + ''.join(rows) + '</div>'
-            + bi('<p class="small muted">Only your own slots appear here. A slot still '
+            + (bi('<p class="small muted">Only your own slots appear here. Each provider needs '
+                  'its own verified sign-in. Devin uses exactly one ready slot.</p>',
+                  '<p class="small muted">这里只显示自有槽位。每个服务都需要自己的已验证登录；'
+                  'Devin 只使用一个已就绪槽位。</p>') if native_ready else
+               bi('<p class="small muted">Only your own slots appear here. A slot still '
                  'setting up or waiting for sign-in cannot handle requests yet.</p>',
                  '<p class="small muted">这里只显示你自己的槽位。正在准备或尚未登录 '
-                 'Claude 的槽位，暂时不能处理请求。</p>') + '</fieldset>')
+                 'Claude 的槽位，暂时不能处理请求。</p>')) + '</fieldset>')
 
 
 def _option(value: str, en: str, zh: str, selected: bool) -> str:
@@ -110,8 +140,40 @@ def _routing(mode: str) -> str:
                  '失败后使用已选的备用槽位。只选一个槽位时，不会切换账号。</p>') + '</details>')
 
 
+def _provider_name(provider: str) -> str:
+    if provider == gateway_providers.DEVIN:
+        return label("Devin · Claude agent", "Devin · Claude 智能体", inline=True)
+    if provider == gateway_providers.ANTHROPIC:
+        return "Anthropic"
+    return label("Unavailable provider", "服务暂不可用", inline=True)
+
+
+def _provider(providers: tuple[str, ...], current: str) -> str:
+    if gateway_providers.DEVIN not in providers:
+        if current != gateway_providers.DEVIN:
+            return ""
+        return ('<p class="gateway-hint">'
+                + label("Devin is unavailable for this connection. Its provider is unchanged.",
+                        "此连接的 Devin 暂不可用，已选服务保持不变。", inline=True)
+                + '</p><button class="btn" type="submit" name="provider" value="anthropic">'
+                + label("Switch to Anthropic", "切换至 Anthropic", inline=True) + '</button>')
+    return ('<label class="gateway-field">'
+            + label("Model provider", "模型服务", inline=True)
+            + '<select name="provider">'
+            + _option("anthropic", "Anthropic", "Anthropic", current == "anthropic")
+            + _option("devin", "Devin · Claude agent", "Devin · Claude 智能体", current == "devin")
+            + '</select></label>'
+            + bi('<p class="gateway-hint">Devin uses its own Claude agent and one verified '
+                 'slot of yours. Feature behavior can differ from direct Anthropic.</p>',
+                 '<p class="gateway-hint">Devin 使用自己的 Claude 智能体，'
+                 '以及一个已验证的自有槽位。'
+                 '功能行为可能与直接使用 Anthropic 不同。</p>'))
+
+
 def _form(action: str, csrf: str, held: list[Mapping[str, Any]], *,
-          key: Mapping[str, Any] | None = None) -> str:
+          key: Mapping[str, Any] | None = None,
+          providers: tuple[str, ...] = ("anthropic",),
+          native_ready: tuple[str, ...] = ()) -> str:
     creating = key is None
     selected = list(key.get("slot_ids") or []) if key else []
     identifier = ('<input type="hidden" name="key_id" value="'
@@ -122,7 +184,9 @@ def _form(action: str, csrf: str, held: list[Mapping[str, Any]], *,
             + label("Connection name", "连接名称", inline=True)
             + '<input name="name" maxlength="60" required value="'
             + escape(str(key.get("name", "")) if key else "Claude Code", quote=True)
-            + '"></label>' + _choices(held, selected)
+            + '"></label>'
+            + _provider(providers, str(key.get("provider", "anthropic")) if key else "anthropic")
+            + _choices(held, selected, native_ready)
             + _routing(str(key.get("mode")) if key else "sticky")
             + '<div class="gateway-form-actions"><button class="btn primary" type="submit">'
             + (label("Create key", "创建密钥", inline=True) if creating
@@ -130,11 +194,15 @@ def _form(action: str, csrf: str, held: list[Mapping[str, Any]], *,
 
 
 def panel(
-    store: Any, cfg: Any, account: Mapping[str, Any], csrf: str, held: list[Mapping[str, Any]]
+    store: Any, cfg: Any, account: Mapping[str, Any], csrf: str, held: list[Mapping[str, Any]],
+    *, now: Optional[float] = None
 ) -> str:
     if not available(cfg):
         return ""
     keys = store.list_gateway_keys(account["id"])
+    native_slots = ready_provider_slots(store, cfg, account["id"], held,
+                                         now=time.time() if now is None else now)
+    providers = gateway_providers.PROVIDERS if native_slots else ("anthropic",)
     active = [key for key in keys if not key.get("revoked_at")]
     base_url = cfg.public_url.rstrip("/")
     entries = []
@@ -165,9 +233,12 @@ def panel(
             '<span class="gateway-badges"><span class="gateway-badge">'
             + routing
             + '</span><span class="gateway-badge">'
+            + _provider_name(str(key.get("provider", "anthropic")))
+            + '</span><span class="gateway-badge">'
             + label(f"{count} selected", f"已选 {count} 个槽位", inline=True)
             + '</span></span></summary><div class="gateway-endpoint-body">'
-            + _form("update", csrf, held, key=key)
+            + _form("update", csrf, held, key=key, providers=providers,
+                    native_ready=tuple(native_slots))
             + '<div class="gateway-revoke">'
             + bi(
                 '<p class="small muted">Revoking stops this key, including its '
@@ -196,7 +267,7 @@ def panel(
                 '<p class="gateway-hint">适合手动配置的应用。为连接取个名字，选好账号，'
                 "然后保存只显示一次的密钥。</p>",
             )
-            + _form("create", csrf, held)
+            + _form("create", csrf, held, providers=providers, native_ready=tuple(native_slots))
             + "</div></details>"
         )
     else:
@@ -431,12 +502,25 @@ def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
         if action not in {'create', 'update'} or form.get("mode") not in MODES:
             raise ValueError("invalid action")
         slot_ids = selected_slots(store, account["id"], form)
+        provider = form.get("provider", None if action == "update" else "anthropic")
+        if provider is not None and gateway_providers.normalize_provider(provider) is None:
+            raise ValueError("invalid provider")
+        runtime = gateway_providers.runtime_expectations(cfg)
+        allow_devin = bool(available(cfg) and getattr(cfg, "gateway_devin_enabled", False) is True
+                           and runtime is not None)
+        if provider == "devin":
+            native = ready_provider_slots(store, cfg, account["id"],
+                store.list_slots(held_by=account["id"]), now=now)
+            if len(slot_ids) != 1 or slot_ids[0] not in native:
+                raise ValueError("provider is not available for this selection")
         if action == 'update':
             store.update_gateway_key(form.get("key_id", ""), account["id"], slot_ids,
-                                     form["mode"], name=form.get("name", ""), now=now)
+                form["mode"], name=form.get("name", ""), now=now, provider=provider,
+                allow_devin=allow_devin, provider_runtime=runtime)
             return usersite._back("gateway-updated", "gateway")
         key = store.create_gateway_key(account["id"], form.get("name", ""), slot_ids,
-                                      mode=form["mode"], now=now)
+            mode=form["mode"], now=now, provider=provider, allow_devin=allow_devin,
+            provider_runtime=runtime)
     except (StoreError, ValueError, TypeError):
         return usersite._back("gateway-invalid", "gateway")
     body = ('<div class="pagehead"><h1>'

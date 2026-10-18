@@ -2587,10 +2587,10 @@ class Store:
     def bind_gateway_provider(self, slot_id: str, account_id: str, provider: str,
                               claim_id: str, report: Mapping[str, Any], *,
                               expected_generation: int = 0, now: float) -> dict[str, Any]:
-        """Trusted login verifier only; not a heartbeat or customer enrollment API.
+        """Trusted machine verifier only; never a customer enrollment report.
 
         The caller must separately verify a stable native account subject, not a
-        token hash. No caller currently registers these observations in production.
+        token hash. Authenticated machine heartbeats supply the separate root verifier observations.
         A changed binding invalidates endpoint generations without rotating secrets.
         """
         if (gateway_providers.normalize_provider(provider) is None
@@ -2673,7 +2673,9 @@ class Store:
             return changed
 
     def gateway_provider_binding_is_active(self, slot_id: str, account_id: str, provider: str,
-                                           claim_id: str, generation: int, *, now: float) -> bool:
+                                           claim_id: str, generation: int, *, now: float,
+                                           provider_runtime: Optional[Mapping[str, Any]] = None
+                                           ) -> bool:
         if type(generation) is not int or generation < 1:
             return False
         try:
@@ -2683,14 +2685,15 @@ class Store:
                 return bool(slot["node_enabled"] and binding
                     and binding["generation"] == generation and binding["claim_id"] == claim_id
                     and gateway_providers.binding_ready(binding, dict(slot), account_id,
-                                                         provider, now=now))
+                        provider, now=now, provider_runtime=provider_runtime))
         except (StoreError, ValueError, TypeError):
             return False
 
     @staticmethod
     def _gateway_provider_selection(conn: sqlite3.Connection, account_id: str,
                                     selected: list[str], provider: str, *,
-                                    allow_devin: bool, now: float) -> None:
+                                    allow_devin: bool, now: float,
+                                    provider_runtime: Optional[Mapping[str, Any]] = None) -> None:
         if (gateway_providers.normalize_provider(provider) is None
                 or type(allow_devin) is not bool):
             raise StoreError("invalid gateway provider")
@@ -2704,7 +2707,7 @@ class Store:
             (selected[0], provider)).fetchone()
         if (not slot["node_enabled"] or row is None
                 or not gateway_providers.binding_ready(Store._provider_binding(row), dict(slot),
-                                                       account_id, provider, now=now)):
+                    account_id, provider, now=now, provider_runtime=provider_runtime)):
             raise StoreError("Devin binding is not ready for the current owner and rental")
 
     @staticmethod
@@ -2747,7 +2750,8 @@ class Store:
 
     def create_gateway_key(self, account_id: str, name: str, slot_ids: list[str],
                            mode: str = "sticky", *, now: float,
-                           provider: str = "anthropic", allow_devin: bool = False
+                           provider: str = "anthropic", allow_devin: bool = False,
+                           provider_runtime: Optional[Mapping[str, Any]] = None
                            ) -> dict[str, Any]:
         """Mint one API credential for an ordered pool of the holder's slots."""
         normalized_name = gateway_access.normalize_name(name)
@@ -2758,7 +2762,7 @@ class Store:
         with self._write_txn() as conn:
             selected, claims = self._gateway_selection(conn, account_id, slot_ids, mode)
             self._gateway_provider_selection(conn, account_id, selected, provider,
-                                             allow_devin=allow_devin, now=now)
+                allow_devin=allow_devin, now=now, provider_runtime=provider_runtime)
             count = conn.execute("SELECT COUNT(*) FROM gateway_keys WHERE account_id = ? "
                                  "AND revoked_at IS NULL", (account_id,)).fetchone()[0]
             if count >= gateway_access.MAX_KEYS_PER_ACCOUNT:
@@ -2782,7 +2786,8 @@ class Store:
     def update_gateway_key(self, key_id: str, account_id: str, slot_ids: list[str],
                            mode: str, *, name: Optional[str] = None,
                            now: Optional[float] = None, provider: Optional[str] = None,
-                           allow_devin: bool = False) -> dict[str, Any]:
+                           allow_devin: bool = False,
+                           provider_runtime: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         normalized_name = gateway_access.normalize_name(name) if name is not None else None
         if name is not None and normalized_name is None:
             raise StoreError("gateway key name must be 1-60 characters without controls")
@@ -2794,7 +2799,8 @@ class Store:
             selected, claims = self._gateway_selection(conn, account_id, slot_ids, mode)
             chosen = row["provider"] if provider is None else provider
             self._gateway_provider_selection(conn, account_id, selected, chosen,
-                allow_devin=allow_devin, now=time.time() if now is None else now)
+                allow_devin=allow_devin, now=time.time() if now is None else now,
+                provider_runtime=provider_runtime)
             conn.execute("UPDATE gateway_keys SET slot_ids = ?, claim_bindings = ?, mode = ?, "
                          "name = ?, provider = ?, generation = generation + 1 WHERE id = ?",
                          (json.dumps(selected), json.dumps(claims), mode,
@@ -2869,10 +2875,15 @@ class Store:
         return True
 
     @staticmethod
-    def _gateway_targets(conn: sqlite3.Connection, key: sqlite3.Row) -> list[dict[str, Any]]:
-        # Control-plane metadata is deliberately not a native transport registration.
-        # A Devin key must never fall through to Anthropic or borrow its readiness.
-        if key["revoked_at"] is not None or key["provider"] != gateway_providers.ANTHROPIC:
+    def _gateway_targets(conn: sqlite3.Connection, key: sqlite3.Row, *, allow_devin: bool = False,
+                         provider_runtime: Optional[Mapping[str, Any]] = None,
+                         now: Optional[float] = None) -> list[dict[str, Any]]:
+        if key["revoked_at"] is not None:
+            return []
+        if key["provider"] == gateway_providers.DEVIN:
+            return Store._gateway_native_targets(conn, key, allow_devin=allow_devin,
+                provider_runtime=provider_runtime, now=time.time() if now is None else now)
+        if key["provider"] != gateway_providers.ANTHROPIC:
             return []
         try:
             selected = json.loads(key["slot_ids"])
@@ -2907,17 +2918,67 @@ class Store:
             targets.append(target)
         return targets
 
-    def gateway_targets(self, key: Mapping[str, Any]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _gateway_native_targets(conn: sqlite3.Connection, key: sqlite3.Row, *, allow_devin: bool,
+                                provider_runtime: Optional[Mapping[str, Any]],
+                                now: float) -> list[dict[str, Any]]:
+        """Internal native DTO, never a browser/API response or Anthropic fallback."""
+        if allow_devin is not True or provider_runtime is None:
+            return []
+        try:
+            runtime = gateway_providers.clean_runtime(provider_runtime)
+            selected = json.loads(key["slot_ids"])
+            claims = json.loads(key["claim_bindings"])
+        except (ValueError, TypeError, RecursionError):
+            return []
+        if (runtime["bridge_contract"] != gateway_providers.NATIVE_AGENT_CONTRACT
+                or gateway_access.normalize_selection(selected, key["mode"]) is None
+                or len(selected) != 1 or not isinstance(claims, dict)):
+            return []
+        slot_id = selected[0]
+        row = conn.execute(
+            "SELECT s.*, n.enabled AS node_enabled, n.access_host, n.access_port, n.ssh_host_key "
+            "FROM slots s JOIN nodes n ON n.id = s.node_id "
+            "JOIN accounts a ON a.id = s.held_by "
+            "WHERE s.id = ? AND s.held_by = ? AND n.enabled = 1 "
+            "AND n.access_host != '' AND n.ssh_host_key != '' "
+            "AND NOT EXISTS (SELECT 1 FROM logins l WHERE l.node_id = ? "
+            "AND l.kind IN ('login', 'switch') "
+            "AND l.state IN ('requested', 'url_ready', 'code_sent'))",
+            (slot_id, key["account_id"], slot_login_key(slot_id))).fetchone()
+        bound = conn.execute(
+            "SELECT * FROM gateway_provider_bindings WHERE slot_id = ? AND provider = ?",
+            (slot_id, gateway_providers.DEVIN)).fetchone()
+        if (row is None or bound is None or claims.get(slot_id) != row["gateway_claim_id"]):
+            return []
+        binding = Store._provider_binding(bound)
+        if not gateway_providers.binding_ready(binding, dict(row), key["account_id"],
+                gateway_providers.DEVIN, now=now, provider_runtime=runtime):
+            return []
+        return [{"slot_id": slot_id, "node_id": row["node_id"], "unix_user": row["unix_user"],
+                 "claimed_at": row["claimed_at"], "claim_generation": row["gateway_generation"],
+                 "claim_id": row["gateway_claim_id"], "access_host": row["access_host"],
+                 "access_port": row["access_port"], "ssh_host_key": row["ssh_host_key"],
+                 "provider": gateway_providers.DEVIN,
+                 "provider_binding_generation": binding["generation"],
+                 "provider_account_fp": binding["account_fp"], **runtime}]
+
+    def gateway_targets(self, key: Mapping[str, Any], *, allow_devin: bool = False,
+                        provider_runtime: Optional[Mapping[str, Any]] = None,
+                        now: Optional[float] = None) -> list[dict[str, Any]]:
         """Resolve operator-owned connections; caller descriptions are revalidated."""
         with self._lock:
             row = self._conn.execute("SELECT * FROM gateway_keys WHERE id = ? AND account_id = ? "
                                      "AND generation = ? AND revoked_at IS NULL",
                                      (key.get("id"), key.get("account_id"),
                                       key.get("generation"))).fetchone()
-            return self._gateway_targets(self._conn, row) if row is not None else []
+            return self._gateway_targets(self._conn, row, allow_devin=allow_devin,
+                provider_runtime=provider_runtime, now=now) if row is not None else []
 
     def gateway_request_is_active(self, key_id: str, generation: int, slot_id: str,
-                                   claim_generation: int) -> bool:
+                                   claim_generation: int, *, allow_devin: bool = False,
+                                   provider_runtime: Optional[Mapping[str, Any]] = None,
+                                   now: Optional[float] = None) -> bool:
         """Fail closed throughout a stream after revocation or any access change."""
         if (isinstance(generation, bool) or not isinstance(generation, int)
                 or isinstance(claim_generation, bool) or not isinstance(claim_generation, int)):
@@ -2929,13 +2990,18 @@ class Store:
                 return False
             return any(target["slot_id"] == slot_id
                        and target["claim_generation"] == claim_generation
-                       for target in self._gateway_targets(self._conn, row))
+                       for target in self._gateway_targets(self._conn, row,
+                           allow_devin=allow_devin, provider_runtime=provider_runtime, now=now))
 
-    def gateway_public_keys(self, slot_id: str, service_public_key: str) -> list[str]:
+    def gateway_public_keys(self, slot_id: str, service_public_key: str, *,
+                            allow_devin: bool = False,
+                            provider_runtime: Optional[Mapping[str, Any]] = None,
+                            now: Optional[float] = None) -> list[str]:
         """Only the public service key reaches the selected slot's desired state."""
         normalized = cli_access.normalize_public_key(service_public_key)
         if normalized is None:
             return []
+
         with self._lock:
             # One key may never hold both service-only and terminal privileges.
             device = self._conn.execute("SELECT 1 FROM cli_devices WHERE slot_id = ? "
@@ -2951,10 +3017,54 @@ class Store:
                                       "AND revoked_at IS NULL", (slot["held_by"],)).fetchall()
             for key in keys:
                 if any(target["slot_id"] == slot_id
-                       for target in self._gateway_targets(self._conn, key)):
+                       for target in self._gateway_targets(self._conn, key,
+                           allow_devin=allow_devin, provider_runtime=provider_runtime, now=now)):
                     return [normalized]
             return []
 
+
+    def gateway_native_control(self, slot_id: str, *, allow_devin: bool = False,
+                               provider_runtime: Optional[Mapping[str, Any]] = None,
+                               now: Optional[float] = None) -> Optional[dict[str, Any]]:
+        """Private machine intent; empty keys permit root-approved metadata bootstrap.
+
+        No profile, executable, identity assertion or credential is sent. The
+        root reconciler independently requires an operator-installed profile.
+        """
+        if allow_devin is not True or provider_runtime is None:
+            return None
+        try:
+            runtime = gateway_providers.clean_runtime(provider_runtime)
+        except (ValueError, TypeError):
+            return None
+        if runtime["bridge_contract"] != gateway_providers.NATIVE_AGENT_CONTRACT:
+            return None
+        with self._lock:
+            slot = self._conn.execute(
+                "SELECT s.* FROM slots s JOIN nodes n ON n.id = s.node_id "
+                "JOIN accounts a ON a.id = s.held_by WHERE s.id = ? AND n.enabled = 1 "
+                "AND s.kind = 'machine' AND s.state IN ('claimed','active') "
+                "AND s.present = 1 AND NOT EXISTS (SELECT 1 FROM logins l WHERE l.node_id = ? "
+                "AND l.kind IN ('login','switch') "
+                "AND l.state IN ('requested','url_ready','code_sent'))",
+                (slot_id, slot_login_key(slot_id))).fetchone()
+            if slot is None or not slot["gateway_claim_id"]:
+                return None
+            keys = self._conn.execute(
+                "SELECT * FROM gateway_keys WHERE account_id = ? AND provider = 'devin' "
+                "AND revoked_at IS NULL ORDER BY id", (slot["held_by"],)).fetchall()
+            enrolled = []
+            for key in keys:
+                targets = self._gateway_targets(self._conn, key, allow_devin=True,
+                    provider_runtime=runtime, now=now)
+                target = next((t for t in targets if t["slot_id"] == slot_id), None)
+                if target is not None:
+                    enrolled.append({"key_id": key["id"], "key_generation": key["generation"],
+                        "provider_generation": target["provider_binding_generation"]})
+            return {"claim": {"owner_id": slot["held_by"], "slot_id": slot_id,
+                    "claim_id": slot["gateway_claim_id"],
+                    "claim_generation": slot["gateway_generation"]},
+                    "runtime": runtime, "keys": enrolled}
     def move_slot(self, slot_id: str, to: str) -> bool:
         """Move a slot to `to`, or raise if the lifecycle forbids it.
 

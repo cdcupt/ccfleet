@@ -80,8 +80,11 @@ class Config:
     broker_only: bool = False
     # Public model requests are an explicit, separate authority from opaque SSH.
     gateway_enabled: bool = False
-    # Dormant control plane only; no native dispatch is registered by this flag.
+    # Native compatibility requires this opt-in and an exact approved runtime profile.
     gateway_devin_enabled: bool = False
+    gateway_devin_native_version: str = ""
+    gateway_devin_adapter_revision: str = ""
+    gateway_devin_model_map_digest: str = ""
     gateway_ssh_key_path: str = ""
     gateway_ssh_public_key: str = ""
     gateway_max_active: int = 16
@@ -189,6 +192,12 @@ class Config:
             broker_only=_env_bool(env, "BROKER_ONLY", False),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
             gateway_devin_enabled=_env_bool(env, "GATEWAY_DEVIN_ENABLED", False),
+            gateway_devin_native_version=env.get(
+                ENV_PREFIX + "GATEWAY_DEVIN_NATIVE_VERSION", "").strip(),
+            gateway_devin_adapter_revision=env.get(
+                ENV_PREFIX + "GATEWAY_DEVIN_ADAPTER_REVISION", "").strip(),
+            gateway_devin_model_map_digest=env.get(
+                ENV_PREFIX + "GATEWAY_DEVIN_MODEL_MAP_DIGEST", "").strip(),
             gateway_ssh_key_path=env.get(ENV_PREFIX + "GATEWAY_SSH_KEY_PATH", "").strip(),
             gateway_ssh_public_key=env.get(ENV_PREFIX + "GATEWAY_SSH_PUBLIC_KEY", "").strip(),
             gateway_max_active=_env_int(env, "GATEWAY_MAX_ACTIVE", 16, 1),
@@ -273,6 +282,14 @@ class Config:
                 or cfg.gateway_body_budget_bytes < cfg.gateway_max_body_bytes
                 or cfg.gateway_body_budget_bytes > 128 * 1024 * 1024):
             raise ConfigError("CCFLEET_GATEWAY resource limits are inconsistent or too large")
+        if (cfg.gateway_devin_native_version and not re.fullmatch(
+                r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}", cfg.gateway_devin_native_version)):
+            raise ConfigError("CCFLEET_GATEWAY_DEVIN_NATIVE_VERSION must be "
+                              "an exact native version")
+        for suffix, value in (("ADAPTER_REVISION", cfg.gateway_devin_adapter_revision),
+                              ("MODEL_MAP_DIGEST", cfg.gateway_devin_model_map_digest)):
+            if value and not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ConfigError("CCFLEET_GATEWAY_DEVIN_" + suffix + " must be a SHA-256 digest")
         if cfg.gateway_enabled:
             from . import cli_access
             public = urllib.parse.urlsplit(cfg.public_url)

@@ -217,6 +217,11 @@ fetch ccfleet_agent/compatibility.py "$LIB_DIR/ccfleet_agent/compatibility.py" 6
 fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
 fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
 fetch ccfleet_agent/local_relay.py "$LIB_DIR/ccfleet_agent/local_relay.py" 644
+# Files alone grant nothing: the native path separately requires an operator
+# profile, a dedicated verifier principal and a fresh per-key root grant.
+for module in devin_acp devin_tools devin_mcp devin_native devin_account devin_provision devin_relay; do
+  fetch "ccfleet_agent/$module.py" "$LIB_DIR/ccfleet_agent/$module.py" 644
+done
 fetch ccfleet_agent/project_access.py "$LIB_DIR/ccfleet_agent/project_access.py" 644
 fetch ccfleet_agent/project_files.py "$LIB_DIR/ccfleet_agent/project_files.py" 644
 fetch ccfleet_agent/live_access.py "$LIB_DIR/ccfleet_agent/live_access.py" 644

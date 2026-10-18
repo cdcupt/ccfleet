@@ -37,6 +37,12 @@ def test_flag_defaults_off_and_anthropic_remains_the_only_option(cfg):
         "anthropic",)
     configured = replace(configured, gateway_devin_enabled=True)
     assert providers.available_providers(configured, binding(), scope(), "a1", now=NOW) == (
+        "anthropic",)
+    configured = replace(configured, gateway_devin_native_version="3000.11.92",
+        gateway_devin_adapter_revision="b" * 64, gateway_devin_model_map_digest="c" * 64)
+    native = binding(bridge_contract=providers.NATIVE_AGENT_CONTRACT,
+                     capabilities=dict.fromkeys(providers.NATIVE_AGENT_CAPABILITIES, True))
+    assert providers.available_providers(configured, native, scope(), "a1", now=NOW) == (
         "anthropic", "devin")
     assert providers.available_providers(configured, None, scope(), "a1", now=NOW) == ("anthropic",)
     assert providers.available_providers(configured, binding(), scope(), "a2", now=NOW) == (

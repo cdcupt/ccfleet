@@ -26,6 +26,8 @@ from . import (
     consoleslots,
     customer_docs,
     gateway,
+    gateway_providers,
+    gateway_ui,
     machine_health,
     oauth,
     reference_docs,
@@ -814,9 +816,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if device is None:
                 return
             slots = ctx.store.list_slots(held_by=device["account_id"])
+            native = gateway_ui.ready_provider_slots(ctx.store, ctx.cfg, device["account_id"],
+                                                     slots, now=time.time())
             self._json(200, {"available": True, "base_url": ctx.cfg.public_url,
+                            "providers": (list(gateway_providers.PROVIDERS)
+                                          if native else ["anthropic"]),
                             "modes": ["sticky", "priority"], "slots": [
-                {"id": s["id"], "name": s.get("name") or s["id"], "state": s["state"]}
+                {"id": s["id"], "name": s.get("name") or s["id"], "state": s["state"],
+                 "providers": ["anthropic", "devin"] if s["id"] in native else ["anthropic"]}
                 for s in slots if s["kind"] == slotstates.MACHINE_SLOT
                 and s["state"] in (slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)]})
 
@@ -858,10 +865,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         value.get("key_id", ""), device["account_id"], now=time.time())
                     self._json(200, {"revoked": bool(changed)})
                     return
+                runtime = gateway_providers.runtime_expectations(ctx.cfg)
                 key = ctx.store.create_gateway_key(
                     device["account_id"], value.get("name", "Claude Code"),
                     value.get("slot_ids", [device["slot_id"]]),
-                    value.get("mode", "sticky"), now=time.time())
+                    value.get("mode", "sticky"), now=time.time(),
+                    provider=value.get("provider", "anthropic"),
+                    allow_devin=bool(ctx.cfg.gateway_ready
+                        and ctx.cfg.gateway_devin_enabled is True and runtime is not None),
+                    provider_runtime=runtime)
             except (ValueError, TypeError, UnicodeError, RecursionError, StoreError):
                 self._json(400, {"error": "select your own slots and a valid routing mode"})
                 return
@@ -871,7 +883,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             finally:
                 timer.cancel()
             secret = key.pop("key_token")
-            safe = {name: key[name] for name in ("id", "name", "slot_ids", "mode", "generation")}
+            safe = {name: key[name] for name in
+                    ("id", "name", "slot_ids", "mode", "generation", "provider")}
             self._json(201, {"secret": secret, "key": safe, "base_url": ctx.cfg.public_url},
                        {"Referrer-Policy": "no-referrer"})
 
@@ -888,7 +901,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if len(pins) > 1 or (pins and pins[0] not in key["slot_ids"]):
                 self._json(403, {"error": "slot is not selected for this endpoint"})
                 return
-            self._json(200, ctx.gateway.status(key, pins[0] if pins else ""))
+            result = ctx.gateway.status(key, pins[0] if pins else "")
+            # Internal targets contain provider identity; only these fields are public.
+            safe = {name: result[name] for name in ("ready", "mode", "base_url")}
+            safe["slots"] = [{name: row[name] for name in ("id", "name", "state", "ready")
+                              if name in row} for row in result.get("slots", [])
+                             if isinstance(row, dict)]
+            safe["key"] = {name: result.get("key", {}).get(name) for name in
+                           ("id", "name", "slot_ids", "mode", "generation")}
+            safe["key"]["provider"] = key["provider"]
+            safe["provider"] = key["provider"]
+            safe["bridge_contract"] = (gateway_providers.NATIVE_AGENT_CONTRACT
+                if key["provider"] == "devin" else gateway_providers.BRIDGE_CONTRACT)
+            self._json(200, safe)
 
         def _cli_register(self) -> None:
             token = _prefixed_bearer(self.headers.get("Authorization"),
@@ -1248,6 +1273,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         self._record_login(report.get("login"),
                                            slot_login_key(slot["id"]), now)
                         self._record_update(report.get("claude_update"), slot["id"], now)
+                        self._record_gateway_provider(report.get("gateway_provider"), slot, now)
             # Somebody's own node, counted as their slot, says what it did about
             # an update asked for on their page under its own reconcile block.
             owned = ctx.store.list_slots(node_id=node["id"], kind=slotstates.OWNER_SLOT)
@@ -1262,6 +1288,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             # never told what to call itself.
             hostname = (machine_hostname(node["id"], slots)
                         if payload.get("mode") == slotstates.MACHINE_MODE else None)
+            native_runtime = gateway_providers.runtime_expectations(ctx.cfg)
+            native_enabled = bool(ctx.gateway.enabled and ctx.cfg.gateway_devin_enabled is True
+                                  and native_runtime is not None)
             self._json(200, {
                 "ok": True,
                 # Kept for agents predating the desired block; same value, new home.
@@ -1275,10 +1304,37 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     slot_cli_keys={s["id"]: ctx.store.cli_public_keys(s["id"])
                                    for s in slots},
                     slot_gateway_keys={s["id"]: ctx.store.gateway_public_keys(
-                        s["id"], ctx.cfg.gateway_ssh_public_key) for s in slots}
-                        if ctx.gateway.enabled else None),
+                        s["id"], ctx.cfg.gateway_ssh_public_key, allow_devin=native_enabled,
+                        provider_runtime=native_runtime, now=now) for s in slots}
+                        if ctx.gateway.enabled else None,
+                    slot_devin_gateways={s["id"]: value for s in slots
+                        if (value := ctx.store.gateway_native_control(s["id"],
+                            allow_devin=native_enabled, provider_runtime=native_runtime,
+                            now=now)) is not None}),
                 "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                 "events": len(events)})
+
+        def _record_gateway_provider(self, value, slot, now) -> None:
+            """Only the authenticated machine's root-produced current claim evidence."""
+            runtime = gateway_providers.runtime_expectations(ctx.cfg)
+            if (not ctx.gateway.enabled or ctx.cfg.gateway_devin_enabled is not True
+                    or runtime is None or not isinstance(value, dict)
+                    or value.get("claim_id") != slot.get("gateway_claim_id")
+                    or value.get("claim_generation") != slot.get("gateway_generation")
+                    or not slot.get("held_by")):
+                return
+            report = value.get("report")
+            if (not isinstance(report, dict)
+                    or any(report.get(k) != v for k, v in runtime.items())):
+                return
+            try:
+                current = ctx.store.gateway_provider_binding(slot["id"], slot["held_by"], "devin")
+                ctx.store.bind_gateway_provider(slot["id"], slot["held_by"], "devin",
+                    value["claim_id"], report,
+                    expected_generation=current["generation"] if current is not None else 0,
+                    now=now)
+            except StoreError:
+                return
 
         def _record_update(self, update: Any, slot_id: str, now: float) -> None:
             """What a node says it did about an update asked for on a page. The

@@ -1,8 +1,8 @@
-"""Dormant provider selection metadata; no dispatch, login or credential handling.
+"""Provider selection and readiness metadata; no credentials or native execution.
 
-Devin needs a separately verified stable provider-account subject and the full
-Messages bridge contract. A token hash, native login, catalog or PONG is not that
-evidence. No current customer UI or native transport registers this provider.
+Devin needs a separately verified stable provider-account subject and an explicit
+bridge contract. Native-agent compatibility does not assert raw Messages role or
+feature parity. A token hash, catalog, PONG or lone Read is not readiness evidence.
 """
 
 from __future__ import annotations
@@ -16,11 +16,24 @@ ANTHROPIC = "anthropic"
 DEVIN = "devin"
 PROVIDERS = (ANTHROPIC, DEVIN)
 BRIDGE_CONTRACT = "messages-v1"
+NATIVE_AGENT_CONTRACT = "native-agent-v1"
 MAX_BINDING_AGE_S = 300
 REQUIRED_CAPABILITIES = frozenset({
     "messages", "system", "history", "local_tools", "streaming", "request_features",
     "truthful_usage", "revocation",
 })
+NATIVE_AGENT_CAPABILITIES = frozenset({
+    # Labeled context is not raw role authority. Client tools must remain
+    # caller-local, SSE/cancellation must be honest, and unknown usage stays unknown.
+    "labeled_visible_context", "text", "client_tools", "streaming", "cancellation",
+    "unknown_usage", "revocation",
+})
+CONTRACT_CAPABILITIES = {
+    BRIDGE_CONTRACT: REQUIRED_CAPABILITIES,
+    NATIVE_AGENT_CONTRACT: NATIVE_AGENT_CAPABILITIES,
+}
+RUNTIME_FIELDS = frozenset({"bridge_contract", "native_version", "adapter_revision",
+                            "model_map_digest"})
 REPORT_FIELDS = frozenset({
     "account_fp", "identity_verified", "bridge_contract", "capabilities", "native_version",
     "adapter_revision", "model_map_digest", "observed_at",
@@ -39,6 +52,31 @@ def _instant(value: Any) -> float:
             or not math.isfinite(value)):
         raise ValueError("invalid provider observation time")
     return float(value)
+
+
+def clean_runtime(value: Any) -> dict[str, str]:
+    """Validate an operator-selected runtime; this never enables or discovers one."""
+    if (not isinstance(value, Mapping) or set(value) != RUNTIME_FIELDS
+            or not isinstance(value.get("bridge_contract"), str)
+            or value.get("bridge_contract") not in CONTRACT_CAPABILITIES
+            or not isinstance(value.get("native_version"), str)
+            or not _VERSION.fullmatch(value["native_version"])
+            or any(not isinstance(value.get(key), str) or not _DIGEST.fullmatch(value[key])
+                   for key in ("adapter_revision", "model_map_digest"))):
+        raise ValueError("invalid expected provider runtime")
+    return dict(value)
+
+
+def runtime_expectations(cfg: Any) -> Optional[dict[str, str]]:
+    """Format-only native-agent profile; flags and verified availability remain separate."""
+    value = {"bridge_contract": NATIVE_AGENT_CONTRACT,
+             "native_version": getattr(cfg, "gateway_devin_native_version", ""),
+             "adapter_revision": getattr(cfg, "gateway_devin_adapter_revision", ""),
+             "model_map_digest": getattr(cfg, "gateway_devin_model_map_digest", "")}
+    try:
+        return clean_runtime(value)
+    except (ValueError, TypeError):
+        return None
 
 
 def clean_report(value: Any) -> dict[str, Any]:
@@ -60,7 +98,8 @@ def clean_report(value: Any) -> dict[str, Any]:
             or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", contract)):
         raise ValueError("invalid provider bridge contract")
     capabilities = value["capabilities"]
-    if (not isinstance(capabilities, Mapping) or set(capabilities) - REQUIRED_CAPABILITIES
+    allowed = CONTRACT_CAPABILITIES.get(contract, REQUIRED_CAPABILITIES)
+    if (not isinstance(capabilities, Mapping) or set(capabilities) - allowed
             or any(type(item) is not bool for item in capabilities.values())):
         raise ValueError("invalid provider capability evidence")
     version = value["native_version"]
@@ -73,8 +112,9 @@ def clean_report(value: Any) -> dict[str, Any]:
             "capabilities": dict(capabilities), "observed_at": _instant(value["observed_at"])}
 
 
-def binding_ready(binding: Any, slot: Any, account_id: str, provider: str, *, now: float) -> bool:
-    """Require exact current owner/provider/rental and fresh full-contract evidence."""
+def binding_ready(binding: Any, slot: Any, account_id: str, provider: str, *, now: float,
+                  provider_runtime: Optional[Mapping[str, Any]] = None) -> bool:
+    """Default to strict Messages; native compatibility needs an exact expected profile."""
     if not isinstance(binding, Mapping) or not isinstance(slot, Mapping):
         return False
     if (normalize_provider(provider) is None or binding.get("provider") != provider
@@ -92,19 +132,26 @@ def binding_ready(binding: Any, slot: Any, account_id: str, provider: str, *, no
     try:
         report = clean_report({key: binding[key] for key in REPORT_FIELDS})
         age = _instant(now) - report["observed_at"]
+        runtime = clean_runtime(provider_runtime) if provider_runtime is not None else None
+        contract = runtime["bridge_contract"] if runtime is not None else BRIDGE_CONTRACT
     except (KeyError, ValueError, TypeError, OverflowError):
         return False
     return bool(report["identity_verified"] and report["account_fp"]
-                and report["bridge_contract"] == BRIDGE_CONTRACT
+                and report["bridge_contract"] == contract
+                and (runtime is None or all(report[key] == value for key, value in runtime.items()))
                 and 0 <= age <= MAX_BINDING_AGE_S
-                and all(report["capabilities"].get(key) is True for key in REQUIRED_CAPABILITIES))
+                and all(report["capabilities"].get(key) is True
+                        for key in CONTRACT_CAPABILITIES[contract]))
 
 
 def available_providers(cfg: Any, binding: Any, slot: Any, account_id: str, *, now: float
                         ) -> tuple[str, ...]:
-    """Future UI helper: flag alone, partial evidence and another owner never suffice."""
+    """Customer choices require the flag, approved runtime and fresh own-account evidence."""
+    runtime = runtime_expectations(cfg)
     if (getattr(cfg, "gateway_ready", False) is True
             and getattr(cfg, "gateway_devin_enabled", False) is True
-            and binding_ready(binding, slot, account_id, DEVIN, now=now)):
+            and runtime is not None
+            and binding_ready(binding, slot, account_id, DEVIN, now=now,
+                              provider_runtime=runtime)):
         return PROVIDERS
     return (ANTHROPIC,)
