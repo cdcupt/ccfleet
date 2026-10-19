@@ -423,12 +423,12 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     assert store.get_slot(slot["id"])["state"] == slots.ACTIVE
     shown = erik.page()
     assert "In use" in shown and "Max plan" in shown
-    assert "Claude Code CLI" in shown and "claude.ai/code" not in shown
-    assert "Run <code>ccfleet local</code>" in shown
-    assert "reads your files locally" in shown
-    assert "sends the selected context over HTTPS to Fleet" in shown
-    assert "uses that slot’s Claude sign-in" in shown
-    assert "file excerpts and tool results selected as model context" in shown
+    assert "CC Fleet CLI" in shown and "claude.ai/code" not in shown
+    assert "<code>ccfleet local</code>" in shown
+    assert "Claude Code runs on your computer" in shown
+    assert "native Devin CLI for model replies" in shown
+    assert "Where your data goes" in shown
+    assert "machine's administrators" in shown
     assert "remote-terminal command" not in shown
     assert "A dropped network connection resumes the same session" not in shown
     assert "900</b> tokens run on this slot itself" in shown
@@ -550,7 +550,7 @@ def test_slot_holders_are_not_offered_ssh_or_sync(site):
     shown = erik.page()
     assert "Add SSH key" not in shown
     assert "ccfleet-sync" not in shown
-    assert "Claude Code CLI" in shown
+    assert "CC Fleet CLI" in shown
     assert "In the cloud" not in shown
     assert "In a Claude client" not in shown
     response = erik.call("POST", f"/account/slots/{slot['id']}/ssh-key",

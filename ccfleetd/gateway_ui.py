@@ -256,16 +256,14 @@ def panel(
         )
     if _selectable(held):
         create = (
-            '<details class="gateway-create"'
-            + ("" if active else " open")
-            + "><summary>"
-            + label("New connection key", "新建连接密钥", inline=True)
+            '<details class="gateway-create"><summary>'
+            + label("Create a key for another app", "为其他应用创建密钥", inline=True)
             + '</summary><div class="gateway-endpoint-body">'
             + bi(
-                '<p class="gateway-hint">For an app you configure yourself. '
-                "Give it a name, choose your accounts, then save the key shown once.</p>",
-                '<p class="gateway-hint">适合手动配置的应用。为连接取个名字，选好账号，'
-                "然后保存只显示一次的密钥。</p>",
+                '<p class="gateway-hint">Name the app, choose your slots, then save '
+                "the key. You will only see it once.</p>",
+                '<p class="gateway-hint">填写应用名称，选择槽位，再保存密钥。'
+                "密钥只会显示一次。</p>",
             )
             + _form("create", csrf, held, providers=providers, native_ready=tuple(native_slots))
             + "</div></details>"
@@ -274,10 +272,9 @@ def panel(
         create = (
             '<div class="gateway-empty">'
             + bi(
-                "<h3>Start with a slot</h3><p>Claim a slot above, then sign in to "
-                "your own Claude account. You can create a connection "
-                "after claiming it.</p>",
-                "<h3>先准备一个槽位</h3><p>在上方领取槽位，再登录你自己的 Claude 账号。"
+                "<h3>Start with a slot</h3><p>Claim a slot above, then follow its "
+                "sign-in steps. You can create a connection after claiming it.</p>",
+                "<h3>先准备一个槽位</h3><p>在上方领取槽位，再按卡片上的步骤登录。"
                 "领取后，就可以创建连接。</p>",
             )
             + '<a href="/docs">'
@@ -285,68 +282,51 @@ def panel(
             + "</a></div>"
         )
     return (
-        '<section class="card gateway-card" id="gateway" aria-labelledby="gateway-title">'
-        '<div class="gateway-heading"><div><h2 id="gateway-title">'
-        + label("Connect Claude", "连接 Claude", inline=True)
-        + "</h2>"
+        '<details class="account-advanced gateway-advanced" id="gateway" '
+        'aria-labelledby="gateway-title"><summary id="gateway-title">'
+        + label("Advanced connections", "高级连接设置", inline=True)
+        + '</summary><div class="gateway-advanced-body">'
         + bi(
-            "<p>Use Claude Code on your computer. It sends a model request over "
-            "HTTPS to Fleet; Fleet chooses one of your selected accounts and sends "
-            "the reply back. Files, tools and saved history stay local, while "
-            "selected file excerpts and tool results travel as model context.</p>",
-            "<p>在电脑上运行 Claude Code。需要模型回复时，请求通过 HTTPS 发给 Fleet；"
-            "Fleet 使用你选定的账号，再把回复送回电脑。文件、工具和已保存的历史留在本机，"
-            "被选作上下文的文件片段、工具结果会随请求发送。</p>",
+            '<p class="gateway-hint">Use the steps on your slot card to get started. '
+            'Open these settings to connect another app or manage saved keys.</p>',
+            '<p class="gateway-hint">首次使用，请按槽位卡片上的步骤操作。'
+            '连接其他应用或管理已有密钥时，再使用这里的设置。</p>',
         )
-        + '</div><span class="gateway-badge gateway-https">HTTPS</span></div>'
-        '<div class="gateway-address"><div>'
+        + '<details class="gateway-help gateway-manual"><summary>'
+        + label("Connect another app", "连接其他应用", inline=True)
+        + '</summary>'
+        + bi(
+            '<p>For Claude Code or another app that supports the Messages API, '
+            'create a key below. Enter the key and this address in the app.</p>',
+            '<p>Claude Code 或其他支持 Messages API 的应用，可以使用下方创建的密钥。'
+            '在应用中填写密钥和这个地址即可。</p>',
+        )
+        + '<div class="gateway-address"><div>'
         + label("Base URL", "连接地址", inline=True)
-        + "</div><code>"
-        + escape(base_url)
-        + "</code></div>"
-        '<div class="gateway-start"><div><h3>'
-        + label("With the Fleet CLI", "使用 Fleet 命令行", inline=True)
-        + "</h3>"
+        + '</div><code>' + escape(base_url) + '</code></div>'
         + bi(
-            "<p>On an already paired computer, run these in order:</p>",
-            "<p>在已配对的电脑上，依次运行：</p>",
-        )
-        + "<pre><code>ccfleet gateway setup\nccfleet local</code></pre>"
-        + bi(
-            '<p class="small muted">Setup creates or reuses its own key. '
-            "It does not import a key created on this page.</p>",
-            '<p class="small muted">设置命令会创建或复用自己的密钥，'
-            "不会导入本页手动创建的密钥。</p>",
-        )
-        + "</div><div><h3>"
-        + label("With another app", "连接其他应用", inline=True)
-        + "</h3>"
-        + bi(
-            "<p>For original Claude Code or a compatible Messages API app, "
-            "create a connection key below and use it with this base URL.</p>",
-            "<p>原版 Claude Code 或兼容 Messages API 的应用，也可以使用下方创建的"
-            "连接密钥和上面的地址。</p>",
+            '<p class="small muted">The Fleet CLI creates or reuses its own key '
+            'during <code>ccfleet gateway setup</code>. It does not import a key '
+            'created on this page.</p>',
+            '<p class="small muted">Fleet 命令行会在运行 '
+            '<code>ccfleet gateway setup</code> 时创建或复用自己的密钥，'
+            '不会导入本页手动创建的密钥。</p>',
         )
         + '<a href="/docs/library/docs/public-gateway.html#keys">'
-        + label("Connection guide", "查看连接说明", inline=True)
-        + "</a></div></div>"
-        '<div class="gateway-section-heading"><h3>'
-        + label("Your connection keys", "你的连接密钥", inline=True)
-        + "</h3>"
-        '<span class="gateway-count">'
-        + str(len(active))
-        + "</span></div>"
+        + label("App connection guide", "查看应用连接说明", inline=True)
+        + '</a></details>'
+        + '<details class="gateway-keys"><summary>'
+        + label("Saved connection keys", "已保存的连接密钥", inline=True)
+        + '<span class="gateway-count">' + str(len(active)) + '</span></summary>'
         + (
             ""
             if active
             else bi(
-                '<p class="gateway-hint">No saved connections yet. '
-                "Choose guided CLI setup above, or create a key below.</p>",
-                '<p class="gateway-hint">还没有保存的连接。'
-                "可以用上面的命令引导设置，也可以在下方创建密钥。</p>",
+                '<p class="gateway-hint">No saved connections yet.</p>',
+                '<p class="gateway-hint">还没有保存的连接。</p>',
             )
         )
-        + "".join(entries)
+        + ''.join(entries) + '</details>'
         + create
         + '<details class="gateway-help gateway-technical"><summary>'
         + label("Switching, privacy and advanced setup", "切换、隐私与进阶设置", inline=True)
@@ -358,7 +338,7 @@ def panel(
             "the outcome is unknown or after response headers have been sent. "
             "Applications may have their own retry behavior.</p>"
             "<p>HTTPS encrypts traffic in transit, but our gateway can read model "
-            "requests and replies, including selected model context. "
+            "requests and replies, including selected file excerpts and tool results. "
             "Your Claude account credential "
             "remains on its slot.</p>"
             "<p>For several slots, use <code>ccfleet gateway setup --slots first-slot "
@@ -370,7 +350,8 @@ def panel(
             "<p>只能选择你自己的槽位。已确认属于可安全切换的拒绝，或确定还没把模型请求"
             "发出去就连接失败时，网关可以尝试已选的备用槽位。如果不知道请求是否已经送达，"
             "或已向客户端发出响应头，就不会再次尝试。应用本身可能有另外的重试规则。</p>"
-            "<p>HTTPS 会加密传输过程，但我们的网关在转发时能够读取模型请求和回复。"
+            "<p>HTTPS 会加密传输过程，但我们的网关在转发时能够读取模型请求和回复，"
+            "包括所选的文件片段和工具结果。"
             "你的 Claude 账号登录凭据仍保留在对应槽位上。</p>"
             "<p>选择多个槽位可以用 <code>ccfleet gateway setup --slots first-slot "
             "backup-slot --routing sticky</code>，请换成自己的槽位名。"
@@ -378,37 +359,31 @@ def panel(
             "不会自动切换到其他账号。</p>"
             "<p>槽位释放后重新领取，需要再次保存它的连接选择，才能使用这次领取后的账号。</p>",
         )
-        + "</details><style>"
+        + "</details></div><style>"
         + GATEWAY_CSS
-        + "</style></section>"
+        + "</style></details>"
     )
 
 
 GATEWAY_CSS = """
-#gateway{padding:24px;scroll-margin-top:96px}
-#gateway h2{margin:0;font-size:24px;letter-spacing:-.025em}
+#gateway{padding:0;scroll-margin-top:96px}
+#gateway>summary{padding:20px 24px;font-size:16px}
+#gateway[open]>summary{border-bottom:1px solid var(--rule-soft)}
+#gateway .gateway-advanced-body{padding:6px 24px 20px;min-width:0}
 #gateway h3{font-size:16px;margin:0 0 10px;letter-spacing:-.01em}
 #gateway p{line-height:1.6;margin:8px 0}
-#gateway .gateway-heading{display:flex;align-items:flex-start;justify-content:space-between;
-gap:20px;margin-bottom:20px}
-#gateway .gateway-heading p{color:var(--muted);max-width:64ch}
 #gateway .gateway-badge{display:inline-flex;align-items:center;padding:5px 9px;
 border:1px solid var(--rule-soft);border-radius:8px;background:var(--inset);
 font-size:12px;line-height:1.4;font-weight:550;color:var(--muted)}
-#gateway .gateway-https{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
 #gateway .gateway-address{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;
 align-items:center;padding:13px 16px;border:1px solid var(--rule-soft);border-radius:10px;
 background:var(--inset);font-size:13px}
 #gateway .gateway-address>div{color:var(--muted);font-weight:600}
 #gateway code{overflow-wrap:anywhere}
-#gateway .gateway-start{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-gap:24px;margin:24px 0;padding-bottom:24px;border-bottom:1px solid var(--rule-soft)}
-#gateway .gateway-start pre{margin:12px 0;white-space:pre-wrap;font-size:13px;
-background:var(--inset);border:1px solid var(--rule-soft)}
-#gateway .gateway-start>div{min-width:0}
-#gateway .gateway-section-heading{display:flex;align-items:center;gap:10px;margin:0 0 12px}
-#gateway .gateway-section-heading h3{margin:0}
-#gateway .gateway-count{font-size:12px;font-weight:600;color:var(--muted)}
+#gateway .gateway-count{display:inline-block;margin-left:10px;font-size:12px;
+font-weight:600;color:var(--muted)}
+#gateway .gateway-keys{margin:16px 0}
+#gateway .gateway-keys>summary{font-size:14px;padding:8px 0}
 #gateway .gateway-hint{font-size:13px;color:var(--muted)}
 #gateway summary{cursor:pointer;font-weight:600;border-radius:8px}
 #gateway summary:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
@@ -449,10 +424,8 @@ flex-wrap:wrap;gap:12px;margin-top:20px;padding-top:14px;border-top:1px solid va
 border-radius:12px;background:var(--inset)}
 #gateway .gateway-technical{padding-top:16px;margin-top:20px;border-top:1px solid var(--rule-soft)}
 @media(max-width:620px){
-#gateway{padding:18px}
-#gateway .gateway-heading{gap:12px}
-#gateway h2{font-size:21px}
-#gateway .gateway-start{grid-template-columns:minmax(0,1fr);gap:18px}
+#gateway>summary{padding:18px}
+#gateway .gateway-advanced-body{padding:4px 18px 16px}
 #gateway .gateway-address{grid-template-columns:minmax(0,1fr);gap:6px}
 #gateway .gateway-badges{display:flex;margin:8px 0 0 16px}
 #gateway .gateway-endpoint-body{padding:3px 13px 14px}

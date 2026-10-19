@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import math
 import re
+import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
 from html import escape
@@ -650,6 +651,122 @@ text-align:center}
 .account-nav [aria-current=page]{background:var(--acc-soft);color:var(--acc);
 border-color:var(--acc-line)}
 .slot-browse-link{min-width:0}.slot-browse-link p{margin:0 0 8px}
+
+/* Account setup: one clear action per slot; details stay available on demand. */
+.account-dashboard{min-width:0}
+.account-dashboard .account-heading{display:flex;justify-content:space-between;
+align-items:center;gap:20px;margin-bottom:24px}
+.account-dashboard .account-heading>div{min-width:0}
+.account-dashboard .account-eyebrow{margin:0 0 8px;color:var(--acc);font-size:11px;
+font-weight:750;letter-spacing:.14em}
+.account-dashboard .account-heading h1{font-size:32px;letter-spacing:-.035em}
+.account-dashboard .account-heading .sub{margin-top:10px;line-height:1.6}
+.account-dashboard .account-heading>.btn{flex-shrink:0;font-size:13px}
+.account-dashboard .account-nav{margin-bottom:18px}
+.account-dashboard .card.allowance{padding:14px 18px;margin-bottom:22px;box-shadow:none;
+border-color:var(--rule-soft);gap:12px 20px}
+.account-dashboard .allowance h2{font-size:12px;font-weight:650;color:var(--muted)}
+.account-dashboard .allowance p{font-size:13px;line-height:1.6}
+.account-dashboard .allowance .btn{font-size:13px;padding:9px 14px}
+.account-dashboard .slot-browse-link{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.account-dashboard .slot-browse-link p{margin:0;font-size:12px}
+.account-dashboard .slots{grid-template-columns:repeat(2,minmax(0,1fr));
+align-items:start;gap:20px}
+.account-dashboard .slots>.card.slot{min-width:0;margin:0;box-shadow:var(--shadow)}
+.account-dashboard .slot-head{padding:20px 20px 17px;background:var(--panel)}
+.account-dashboard .slot-head h2{font-family:var(--sans);font-size:20px;
+letter-spacing:-.025em;overflow-wrap:anywhere}
+.account-dashboard .slot-head .pill{font-size:11px;letter-spacing:0;padding:5px 8px}
+.account-dashboard .slot-body{padding:4px 20px 12px;min-width:0}
+.account-dashboard .slot-body p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.account-dashboard .slot-connect{margin:14px 0;border:1px solid var(--acc-line);
+border-radius:12px;overflow:hidden;background:var(--panel)}
+.account-dashboard .slot-connect>summary{display:flex;align-items:center;
+justify-content:space-between;gap:14px;list-style:none;padding:14px 16px;cursor:pointer;
+background:var(--acc);color:var(--on-acc);font-size:14px;font-weight:650;line-height:1.5}
+.account-dashboard .slot-connect>summary:hover{background:var(--acc-strong)}
+.account-dashboard .slot-connect>summary:focus-visible{outline:2px solid var(--on-acc);
+outline-offset:-5px}
+.account-dashboard .slot-connect>summary::-webkit-details-marker{display:none}
+.account-dashboard .slot-connect>summary::marker{content:""}
+.account-dashboard .connect-arrow{font-size:20px;line-height:1;flex-shrink:0}
+.account-dashboard .slot-connect[open]>summary .connect-arrow{transform:rotate(90deg)}
+.account-dashboard .connect-body{padding:4px 16px 16px;min-width:0}
+.account-dashboard .connect-body>p{margin:12px 0}
+.account-dashboard .connect-steps{list-style:decimal;
+margin:18px 0 0;padding:0 0 0 23px}
+.account-dashboard .connect-steps>li{display:list-item;
+margin:0 0 18px;padding-left:5px}
+.account-dashboard .connect-steps>li:last-child{margin-bottom:10px}
+.account-dashboard .connect-steps>li::marker{color:var(--acc);font-size:13px;font-weight:750}
+.account-dashboard .connect-steps>li>div{min-width:0}
+.account-dashboard .connect-steps b{display:block;font-size:13px;line-height:25px}
+.account-dashboard pre{max-width:100%;min-width:0;white-space:pre-wrap;
+overflow-wrap:anywhere;word-break:break-word;font-size:12px;line-height:1.7;
+padding:12px 13px;border-radius:9px;background:var(--inset)}
+.account-dashboard .connect-steps pre{margin:8px 0 0}
+.account-dashboard code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+.account-dashboard pre code{white-space:pre-wrap}
+.account-dashboard .connect-hint{color:var(--muted);padding-top:12px;
+border-top:1px solid var(--rule-soft)}
+.account-dashboard .connect-first-time{margin:14px 0;padding:10px 12px;
+border:1px solid var(--rule-soft);border-radius:9px;background:var(--inset)}
+.account-dashboard .connect-first-time>summary{cursor:pointer;font-size:12px;font-weight:600}
+.account-dashboard .slot-disclosure,.account-dashboard .provider-other{margin:0;
+padding:0;border:0;border-top:1px solid var(--rule-soft)}
+.account-dashboard .slot-disclosure>summary,.account-dashboard .provider-other>summary{
+display:flex;align-items:center;justify-content:space-between;gap:12px;list-style:none;
+padding:14px 0;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted)}
+.account-dashboard .slot-disclosure>summary::-webkit-details-marker,
+.account-dashboard .provider-other>summary::-webkit-details-marker{display:none}
+.account-dashboard .slot-disclosure>summary::marker,
+.account-dashboard .provider-other>summary::marker{content:""}
+.account-dashboard .slot-disclosure>summary::after,
+.account-dashboard .provider-other>summary::after{content:"+";font-size:17px;font-weight:400}
+.account-dashboard .slot-disclosure[open]>summary,
+.account-dashboard .provider-other[open]>summary{color:var(--ink)}
+.account-dashboard .slot-disclosure[open]>summary::after,
+.account-dashboard .provider-other[open]>summary::after{content:"−"}
+.account-dashboard .disclosure-body{padding:0 0 12px;min-width:0}
+.account-dashboard .slot-return>summary{font-size:11px}
+.account-dashboard .slot-return>summary:hover{color:var(--bad)}
+.account-dashboard .slot-return[open]>summary{color:var(--bad)}
+.account-dashboard .slot-return .row-line.release{margin:0;padding:4px 0 8px;border:0}
+.account-dashboard .row-line,.account-dashboard .actions{min-width:0;max-width:100%;
+flex-wrap:wrap;gap:9px}
+.account-dashboard .row-line form.inline{min-width:0;max-width:100%;flex-wrap:wrap}
+.account-dashboard .row-line form.inline input{flex:1 1 160px}
+.account-dashboard input,.account-dashboard select,.account-dashboard textarea{
+min-width:0;max-width:100%}
+.account-dashboard .btn,.account-dashboard button{white-space:normal;overflow-wrap:anywhere}
+.account-dashboard .usage{grid-template-columns:minmax(0,1fr);padding:12px}
+.account-dashboard .account-advanced{margin:20px 0 0;border:1px solid var(--rule-soft);
+border-radius:12px;background:var(--panel);min-width:0}
+.account-dashboard .account-advanced>summary{padding:16px 20px;cursor:pointer;
+font-size:13px;font-weight:600;color:var(--muted)}
+.account-dashboard .account-advanced[open]>summary{color:var(--ink)}
+.account-dashboard .account-advanced>p,
+.account-dashboard .account-advanced>div:not(.gateway-advanced-body){
+margin:0 20px 18px;font-size:13px;line-height:1.7}
+@media(max-width:860px){
+.account-dashboard .slots{grid-template-columns:minmax(0,1fr);gap:18px}}
+@media(max-width:760px){
+.site:has(.account-dashboard) .topbar .doc-nav{display:flex;flex-wrap:nowrap;
+overflow-x:auto;justify-content:flex-start}
+.site:has(.account-dashboard) .topbar .doc-nav a{white-space:nowrap}}
+@media(max-width:520px){
+.account-dashboard .account-heading{align-items:flex-start;gap:12px}
+.account-dashboard .account-heading h1{font-size:28px}
+.account-dashboard .account-heading .sub{font-size:13px}
+.account-dashboard .account-heading>.btn{font-size:12px;padding:7px 10px}
+.account-dashboard .card.allowance{padding:13px 16px}
+.account-dashboard .slot-head{padding:17px 16px 15px}
+.account-dashboard .slot-body{padding:3px 16px 10px}
+.account-dashboard .slot-connect>summary{padding:13px;font-size:13px}
+.account-dashboard .connect-body{padding:3px 12px 12px}
+.account-dashboard .connect-steps b{line-height:23px}
+.account-dashboard .connect-steps pre{padding:10px;font-size:12.5px}
+.account-dashboard .account-advanced>summary{padding:15px 16px}}
 """
 
 #: The pages anybody can read, in the order the bar on top shows them.
@@ -1087,28 +1204,42 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     since = store.listening_since()
     silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}
     native_states = {s["id"]: devin_ui.native_state(store, cfg, account, s, now=now) for s in held}
+    pairing_slots = [s for s in held if s.get("kind") == slotstates.MACHINE_SLOT
+                     and s["state"] == slotstates.ACTIVE
+                     and nodes.get(s["node_id"], {}).get("access_host")
+                     and nodes.get(s["node_id"], {}).get("ssh_host_key")]
+    authorizer = next((s for s in pairing_slots if cli_devices[s["id"]]),
+                      pairing_slots[0] if pairing_slots else None)
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
                                updates[s["id"]], channels, cli_devices[s["id"]],
                                machine_line=lines[s["id"]],
                                devin_state=native_states[s["id"]],
                                devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
+                               authorizer=authorizer,
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
-        '<div class="pagehead"><h1>' + label('Your slots', '我的槽位', inline=True) + '</h1>'
-        '<p class="sub">' + label('Signed in as', '当前账号', inline=True)
-        + f' <strong>{escape(str(account.get("email", "")))}'
-        "</strong></p></div>"
+        '<section class="account-dashboard" data-account-layout="setup-first">'
+        '<div class="pagehead account-heading"><div><p class="account-eyebrow">CC FLEET</p>'
+        '<h1>' + label('Your slots', '我的槽位', inline=True) + '</h1>'
+        '<p class="sub">' + label('Choose a slot. Connect your computer. Start coding.',
+                                  '选一个槽位，连接电脑，开始写代码。', inline=True)
+        + '</p></div><a class="btn quiet" href="/docs/guide">'
+        + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account") + banner
         + (
             '<div class="card allowance"><div><h2>'
         ) + label('Your allowance', '槽位额度', inline=True)
         + f'</h2>{allowance}</div>'
         f"{claim}</div>"
-        + gateway_ui.panel(store, cfg, account, csrf, held)
         + (f'<div class="slots">{cards}</div>' if cards else "")
-        + (_outage_emails(account, csrf) if cfg.emails_ready else "")
+        + gateway_ui.panel(store, cfg, account, csrf, held)
+        + ('<details class="account-advanced"><summary>'
+           + label('Email notifications', '邮件通知', inline=True) + '</summary>'
+           + _outage_emails(account, csrf) + '</details>' if cfg.emails_ready else "")
+        + '<details class="account-advanced account-privacy"><summary>'
+        + label('Where your data goes', '数据会发到哪里？', inline=True) + '</summary>'
         + (
             '<p class="note">Your slot is a Linux account on a '
             'machine we operate, with its own '
@@ -1133,14 +1264,14 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             '服务商登录凭据只写入槽位所在机器，Fleet '
             '服务器不保存它。'
         ),
-    ])
+    ]) + '</details></section>'
     updating = any(u.get("state") == "pending" for u in updates.values())
     # A usage read under way: come back soon, so the new numbers show.
     reading = any(quota_reading(s.get("quota_wanted_at"),
                                 (_report_for(s, latest.get(s["node_id"])).get("quota") or {})
                                 .get("checked_at"), now) for s in held)
     return _shell("your slots", body, _refresh(held, logins, updating or reading),
-                  viewer=viewer_for(account, session_id, cfg, store))
+                  viewer=viewer_for(account, session_id, cfg, store), width="wide")
 
 
 def slots_page(store: Store, cfg: Config, now: float, query: Mapping[str, str], *,
@@ -2171,6 +2302,80 @@ def _machine_line(state: status.State, now: float) -> str:
     ])
 
 
+def _slot_disclosure(english: str, chinese: str, content: str, cls: str,
+                     *, expanded: bool = False) -> str:
+    opened = ' open' if expanded else ''
+    return ('<details class="slot-disclosure ' + cls + '"' + opened + '><summary>'
+            + label(english, chinese, inline=True) + '</summary><div class="disclosure-body">'
+            + content + '</div></details>')
+
+
+def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
+                  cfg: Config, devin_state: Optional[str],
+                  authorizer: Optional[Mapping[str, Any]]) -> str:
+    """Show complete, secret-free instructions for an existing supported route.
+
+    CLI enrollment still requires a ready hosted Claude slot. A verified Devin
+    slot alone cannot mint that pairing; never present the CLI recipe without
+    an eligible authorizer, or imply that website key creation saves a CLI key.
+    """
+    if (slot.get('kind') == slotstates.OWNER_SLOT or not gateway_ui.available(cfg)
+            or slot.get('state') not in CAN_SIGN_IN):
+        return ''
+    providers = []
+    if devin_state == 'ready':
+        providers.append(('devin', 'Devin'))
+    if (slot.get('state') == slotstates.ACTIVE
+            and (report.get('credentials') or {}).get('logged_in') is True):
+        providers.append(('anthropic', 'Claude'))
+    result = []
+    for provider, name in providers:
+        title = label('Use ' + name + ' on my computer', '在电脑上使用 ' + name, inline=True)
+        start = ('<details class="slot-connect" data-slot-connect="' + provider
+                 + '"><summary><span>' + title
+                 + '</span><span class="connect-arrow" aria-hidden="true">→</span></summary>')
+        if authorizer is None:
+            result.append(start + '<div class="connect-body">' + bi(
+                '<p>First computer? This pilot needs assisted Fleet CLI setup. '
+                'You can also create a connection key for Claude Code in advanced connections.</p>',
+                '<p>首次连接电脑？当前试点需要协助设置 Fleet CLI。'
+                '也可以在高级连接设置中创建密钥，手动连接 Claude Code。</p>')
+                + '<a class="btn" href="/account#gateway">'
+                + label('Open connection settings', '打开连接设置', inline=True)
+                + '</a></div></details>')
+            continue
+        source = shlex.quote(names.display(authorizer))
+        target = shlex.quote(names.display(slot))
+        setup = ('ccfleet gateway setup --slot ' + source + ' --slots ' + target
+                 + ' --provider ' + provider)
+        launch = ('ccfleet local --transport gateway --slot ' + target
+                  + (' --model opus --effort max' if provider == 'devin' else '') + ' --new')
+        pair = ('<details class="connect-first-time"><summary>'
+                + label('First time on this computer?', '第一次在这台电脑上使用？', inline=True)
+                + '</summary>' + bi(
+                    '<p>Connect this computer once, then return here. '
+                    'Already used Fleet on this computer? Skip this step.</p>',
+                    '<p>先连接这台电脑，再返回这里。已经在这台电脑上用过 Fleet？跳过此步。</p>')
+                + _form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
+                        'Connect this computer', cls='primary') + '</details>')
+        steps = ''.join('<li><div><b>' + label(en, zh, inline=True)
+                        + '</b><pre><code>' + escape(command) + '</code></pre></div></li>'
+                        for en, zh, command in (
+                            ('Update Fleet', '更新 Fleet', 'ccfleet update'),
+                            ('Save this connection', '保存这个连接', setup),
+                            ('Start coding', '开始写代码', launch)))
+        result.append(start + '<div class="connect-body">' + bi(
+            '<p>Open Terminal in your project folder. Run these commands in order.</p>',
+            '<p>在项目文件夹中打开终端，按顺序运行下面的命令。</p>')
+            + pair + '<ol class="connect-steps">' + steps + '</ol>' + bi(
+                '<p class="connect-hint">Keep the setup command: it saves the connection '
+                'that the start command needs. Your tools and files stay on your computer; '
+                'selected context is sent for model replies.</p>',
+                '<p class="connect-hint">请先运行“保存这个连接”，再启动。工具与文件在电脑上，'
+                '选中的上下文会发送出去以获取模型回复。</p>') + '</div></details>')
+    return ''.join(result)
+
+
 def _slot_card(
     slot: Mapping[str, Any],
     node: Mapping[str, Any],
@@ -2188,6 +2393,7 @@ def _slot_card(
     listening: Optional[float] = None,
     devin_state: Optional[str] = None,
     devin_html: str = "",
+    authorizer: Optional[Mapping[str, Any]] = None,
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
@@ -2267,27 +2473,26 @@ def _slot_card(
             title_zh,
             inline=True,
         )
-        + f"</span>{mine}</h2>",
-        '<p class="slot-meta">'
+        + f"</span>{mine}</h2></div><div class=\"slot-body\">",
+    ]
+    technical = ['<p class="slot-meta">'
         + bi(
             (about + " · " if about else "") + "machine " + machine,
             (about_zh + " · " if about_zh else "") + "机器：" + machine_zh,
             inline=True,
         )
-        + "</p>"
-        '</div><div class="slot-body">',
-    ]
+        + "</p>"]
     if node.get("offer") is not None:
-        parts.append(offer_ui.details(node))
+        technical.append(offer_ui.details(node))
     # Its machine's state, as the status page says it (status.slot_line).
     if machine_line:
-        parts.append(machine_line)
+        technical.append(machine_line)
     public_number = status.public_machine_number(node)
     if public_number is not None:
         public_label = label(f"Public status: Machine {public_number}",
                              f"公共状态：主机 {public_number}", inline=True)
         monitored = heartbeat is not None and node.get("enabled") is not False
-        parts.append(
+        technical.append(
             '<p class="muted small">'
             + (f'<a href="/status#machine-{public_number}">{public_label}</a>'
                if monitored else public_label + ' · ' + label(
@@ -2301,25 +2506,19 @@ def _slot_card(
             else STATE_ZH.get(slot["state"], ("", detail))[1]
         )
         parts.append("<p>" + label(detail, detail_zh, inline=True) + "</p>")
-    parts.append(devin_html)
-    if devin_only:
-        parts.append('<details class="provider-other"><summary>' + label(
-            'Anthropic sign-in (optional)', 'Anthropic 登录（可选）', inline=True
-        ) + '</summary><p>' + label(
-            'These controls connect a separate Claude account. They are not needed to use '
-            'your ready Devin connection.',
-            '以下控件用于连接独立的 Claude 账号，'
-            '使用已就绪的 Devin 连接无需完成这一步。', inline=True
-        ) + '</p>')
+    parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer))
+    parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
+                 if devin_only else devin_html)
+    account_parts = []
     if not own and slot["state"] in CAN_SIGN_IN:
-        parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
+        account_parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
     if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):
         # The machine is working on it. The sentence above says what; this
         # says it is still moving, which a still page otherwise cannot.
         parts.append('<div class="progress" aria-hidden="true"><i></i></div>')
     signed_in = (report.get("credentials") or {}).get("logged_in") is True
     if signed_in if own else slot["state"] == slotstates.ACTIVE:
-        parts.append(
+        usage = [
             _in_use(
                 report,
                 now,
@@ -2328,13 +2527,14 @@ def _slot_card(
                     report.get("credentials"), heard, now, cfg.heartbeat_max_age_s, listening
                 ),
             )
-        )
+        ]
         if not own:
             since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
-            parts.append(
+            usage.append(
                 _relay_usage(report.get("relay"), heard, now, cfg.heartbeat_max_age_s, since=since)
             )
-            parts.append(_ways_to_use(report))
+        parts.append(_slot_disclosure('Usage & limits', '用量与额度', ''.join(usage),
+                                      'slot-usage'))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
@@ -2353,18 +2553,34 @@ def _slot_card(
     if ended and slot["state"] in CAN_SIGN_IN:
         parts.append(_ended(ended))
     if slot["state"] in CAN_SIGN_IN:
-        parts.append(_sign_in(slot, report, login, csrf, now))
-        parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
+        account_parts.append(_sign_in(slot, report, login, csrf, now))
+        technical.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         if not own:
-            parts.append(_cli_access(slot, node, cli_devices or [], csrf, now))
-    if devin_only:
-        parts.append('</details>')
+            # A Devin connection does not require a Claude sign-in or SSH pairing
+            # on this slot. Its paired authorizer is explained in the connect guide.
+            if not devin_only:
+                parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
+                    _cli_access(slot, node, cli_devices or [], csrf, now), 'slot-devices'))
+    if account_parts:
+        if devin_only:
+            parts.append('<details class="provider-other"><summary>' + label(
+                'Anthropic sign-in (optional)', 'Anthropic 登录（可选）', inline=True
+            ) + '</summary><p>' + label(
+                'This is for a separate Claude account. Your Devin connection is ready.',
+                '这里用于连接独立的 Claude 账号。你的 Devin 连接已经就绪。', inline=True
+            ) + '</p>' + ''.join(account_parts) + '</details>')
+        else:
+            needs_sign_in = not signed_in or bool(login)
+            parts.append(_slot_disclosure('Claude account', 'Claude 账号',
+                ''.join(account_parts), 'slot-account', expanded=needs_sign_in))
     if slot["state"] in CAN_SIGN_IN and not own:
-        parts.append(_rename(slot, csrf))
+        technical.append(_rename(slot, csrf))
+    parts.append(_slot_disclosure('Slot details', '槽位详情', ''.join(technical), 'slot-technical'))
     # Never on somebody's own node: giving back means wiping, and nothing
     # there is ours to wipe.
     if slot["state"] in slotstates.RELEASABLE and not own:
-        parts.append(_release(slot, csrf))
+        parts.append(_slot_disclosure('Return this slot', '归还槽位',
+                                      _release(slot, csrf), 'slot-return'))
     parts.append("</div></div>")
     return "".join(parts)
 

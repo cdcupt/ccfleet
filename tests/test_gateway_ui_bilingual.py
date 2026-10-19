@@ -20,11 +20,17 @@ class Controls(HTMLParser):
         self.forms = []
         self.current = None
         self.elements = []
+        self.details = []
+        self.open_details = []
         self.feed(html)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         self.elements.append((tag, attrs))
+        if tag == "details":
+            section = {"attrs": attrs, "parents": list(self.open_details)}
+            self.details.append(section)
+            self.open_details.append(attrs)
         if tag == "form":
             assert self.current is None, "forms must not be nested"
             self.current = {"attrs": attrs, "inputs": []}
@@ -35,6 +41,8 @@ class Controls(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "form":
             self.current = None
+        elif tag == "details":
+            self.open_details.pop()
 
 
 @pytest.fixture
@@ -89,8 +97,29 @@ def test_bilingual_cards_keep_form_actions_and_owned_priority_values(context):
     assert "Bob private" not in html and private["key_token"] not in html
     assert key["key_token"] not in html and "token_hash" not in html
     assert 'lang="en"' in html and 'lang="zh-Hans"' in html
-    assert "连接 Claude" in html and "Connect Claude" in html
+    assert "高级连接设置" in html and "Advanced connections" in html
     assert "API endpoints" not in html
+
+
+@pytest.mark.parametrize("with_key", [False, True])
+def test_advanced_connections_start_closed_and_keep_setup_secondary(context, with_key):
+    c = context
+    if with_key:
+        c.store.create_gateway_key("alice", "Laptop", [c.one["id"]], now=NOW)
+    html = render(c)
+    parsed = Controls(html)
+    outer = parsed.details[0]
+    assert outer["attrs"]["id"] == "gateway"
+    assert outer["attrs"]["aria-labelledby"] == "gateway-title"
+    assert not outer["parents"]
+    assert "account-advanced" in outer["attrs"]["class"].split()
+    assert all("open" not in section["attrs"] for section in parsed.details)
+    for section in parsed.details[1:]:
+        assert section["parents"][0]["id"] == "gateway"
+    assert "Use the steps on your slot card" in html
+    assert "首次使用，请按槽位卡片上的步骤操作" in html
+    assert "Saved connection keys" in html and "已保存的连接密钥" in html
+    assert "ccfleet local</code></pre>" not in html
 
 
 def test_untrusted_names_identifiers_and_address_are_escaped(context):
