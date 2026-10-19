@@ -275,7 +275,7 @@ def test_how_it_works_scopes_local_execution_and_gateway_outages():
 
     page = visible_html(render("/docs/how-it-works"))
     for phrase in (
-        "runs original Claude Code on your computer",
+        "Original Claude Code runs on your computer",
         "configured gateway",
         "eligible slot",
         "outage reports an error",

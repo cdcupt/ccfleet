@@ -517,12 +517,14 @@ def overview(
         )
         + '</div><div class="feature">'
         + ICONS["usage"]
-        + bi("<h3>One command anywhere</h3>", "<h3>一条命令开始工作</h3>")
+        + bi("<h3>Connect from your terminal</h3>", "<h3>从本机终端连接</h3>")
         + bi(
-            "<p>Run <code>ccfleet local</code> from your terminal. No manual SSH or proxy "
-            "configuration, and no slot Claude credential copied to your computer.</p>",
-            "<p>在终端运行 <code>ccfleet local</code>。无需手动设置 SSH "
-            "或代理，也不会把槽位上的 Claude 登录凭证复制到你的电脑。</p>",
+            "<p>Use an already paired Fleet client, or connect original Claude Code with "
+            'your Fleet address and connection key. '
+            '<a href="/docs/library/docs/public-gateway.html#keys">'
+            "Connection steps</a>.</p>",
+            "<p>使用已配对的 Fleet 客户端，或用 Fleet 地址与连接密钥直接配置原版 Claude Code。"
+            '<a href="/docs/library/docs/public-gateway.html#keys">查看连接步骤</a>。</p>',
         )
         + '</div></div></section><section class="band two"><div class="card">'
         + bi("<h2>What you need</h2>", "<h2>开始前需要什么</h2>")
@@ -1127,12 +1129,14 @@ def guide(
         + "</li>"
         + "<li>"
         + bi(
-            "<h3>Install on your computer</h3><p>Run the command below in your normal "
+            "<h3>Install on your computer</h3><p>For Anthropic or an already paired Fleet "
+            "client, run the command below in your normal "
             "terminal. It keeps an existing pairing and local Claude installation; if "
             "Claude is missing, it installs the original local CLI from the fixed vendor "
             'URL. Only if asked, choose <span class="btnlabel">Connect this computer</span>'
             " on your slot and paste a fresh pairing code.</p>",
-            "<h3>在电脑上安装</h3><p>在普通终端运行下面的命令。已有配对和本地 Claude "
+            "<h3>在电脑上安装</h3><p>使用 Anthropic 或已配对的 Fleet 客户端时，在普通终端"
+            "运行下面的命令。已有配对和本地 Claude "
             "安装会保留；尚未安装 Claude 时，会从固定的官方地址安装原版客户端。只有终端要求"
             '输入配对码时，才点击槽位上的 <span class="btnlabel">连接这台电脑</span>，输入'
             "新生成的配对码。</p>",
@@ -1407,12 +1411,12 @@ def how_it_works(
         + '<div class="card">'
         + bi("<h2>One question, step by step</h2>", "<h2>跟着一个问题走一遍</h2>")
         + bi(
-            "<p><code>ccfleet local</code> runs original Claude Code on your computer. "
+            "<p>Original Claude Code runs on your computer. "
             "Local tools may read a file and include relevant text in the model request. "
             "The request goes over HTTPS to our gateway with a separate Fleet "
             "connection key.</p>",
-            "<p><code>ccfleet local</code> 在你的电脑上运行原版 Claude "
-            "Code。本地工具可能读取文件，把相关文字放进模型请求，再带上独立的 Fleet "
+            "<p>原版 Claude Code 在你的电脑上运行。本地工具可能读取文件，把相关文字放进模型请求，"
+            "再带上独立的 Fleet "
             "连接密钥，通过 HTTPS 发给我们的网关。</p>",
         )
         + bi(
@@ -1436,6 +1440,15 @@ def how_it_works(
             '<strong>Devin 已就绪</strong> 后，打开<a href="/account#gateway">连接设置</a>。'
             '<a href="/docs/library/docs/devin.html#connect">设置步骤</a> · '
             '<a href="/docs/library/docs/devin.html#prices">订阅价格对比</a>。</p>',
+        )
+        + bi(
+            '<p>New Devin-only users connect with the Fleet address and connection key '
+            'in <a href="/docs/library/docs/public-gateway.html#keys">'
+            'direct Claude Code setup</a>. '
+            'This does not require signing in to Claude or pairing through an Anthropic slot.</p>',
+            '<p>首次只使用 Devin 时，按<a href="/docs/library/docs/public-gateway.html#keys">'
+            'Claude Code 直接连接说明</a>使用 Fleet 地址与连接密钥；无需先登录 Claude，'
+            '也无需通过 Anthropic 槽位配对。</p>',
         )
         + '</div><div class="card">'
         + bi("<h2>Your seat and your account</h2>", "<h2>你的槽位与你的账号</h2>")
