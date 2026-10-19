@@ -231,7 +231,8 @@ def test_new_metadata_is_public_in_both_languages_and_status_stays_neutral(site)
         assert words in page and 'ExampleHost' in page and '$11.70' in page
         assert ('价格暂不可用' not in page if lang == 'en' else 'Pricing unavailable' not in page)
     status = browser.call('GET', '/en/status').body
-    assert 'ExampleHost / ExampleIP' in status and 'secret-machine' not in status
+    status_text = re.sub(r'</?span[^>]*>', '', status)
+    assert 'ExampleHost / ExampleIP' in status_text and 'secret-machine' not in status
 
 
 @pytest.mark.parametrize('path', ['/en/docs/guide', '/en/docs/terms'])

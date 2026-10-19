@@ -25,6 +25,19 @@ border-bottom:1px solid var(--rule-soft);
 vertical-align:middle;overflow-wrap:anywhere}
 .offer-table thead th{font-size:11px;color:var(--muted);font-weight:600}
 .offer-table tbody th{text-transform:none;letter-spacing:normal;font-weight:600}
+.offer-tag{display:inline-flex;align-items:center;max-width:100%;padding:3px 9px;
+border:1px solid var(--rule);border-radius:999px;font-size:11.5px;font-weight:600;
+line-height:1.5;color:var(--muted);background:var(--inset);overflow-wrap:anywhere}
+.offer-tag.offer-host{color:#1e4b91;background:#edf5ff;border-color:#bad4f4}
+.offer-tag.offer-ip{color:#6933a7;background:#f4edff;border-color:#d8c4ef}
+.offer-tag.offer-available{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
+.offer-tag.offer-busy{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-line)}
+.offer-tag.offer-unavailable{color:var(--bad);background:var(--bad-bg);border-color:var(--bad-line)}
+@media(prefers-color-scheme:dark){
+:root:not([data-theme="light"]) .offer-tag.offer-host{
+color:#a5ccff;background:#132943;border-color:#355d8a}
+:root:not([data-theme="light"]) .offer-tag.offer-ip{
+color:#d9b8ff;background:#2c1b43;border-color:#60417e}}
 .ip-category{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
 font-weight:600;white-space:nowrap;background:var(--inset);border:1px solid var(--rule-soft)}
 .ip-category.residential{color:#60269c;background:#f4edff;border-color:#cdb5e8}
@@ -131,15 +144,26 @@ def quoted_rate(node: Mapping[str, Any]) -> str:
     return '<strong class="offer-rate">' + rate(node) + '</strong>' + breakdown(node)
 
 
-def _brand(value: str) -> str:
-    return escape(value) if value else label("Not provided", "尚未提供", inline=True)
+def _brand(value: str, kind: str) -> str:
+    style = kind if value and kind in {"host", "ip"} else "unknown"
+    text = escape(value) if value else label("Not provided", "尚未提供", inline=True)
+    return '<span class="offer-tag offer-' + style + '">' + text + '</span>'
+
+
+def _availability(value: tuple[str, str]) -> str:
+    en, zh = value
+    style = {"Available": "available", "In use": "busy", "Preparing": "busy",
+             "Unavailable": "unavailable"}.get(en, "unknown")
+    return ('<span class="offer-tag offer-' + style + '">'
+            + label(en, zh, inline=True) + '</span>')
 
 
 def details(node: Mapping[str, Any]) -> str:
     """A holder's own card, including honest unknowns for older unconfigured nodes."""
     offer = offers.public(node.get("offer"))
-    cells = ((label("Host provider", "主机服务商", inline=True), _brand(offer["host_brand"])),
-             (label("IP provider", "IP 服务商", inline=True), _brand(offer["ip_brand"])),
+    cells = ((label("Host provider", "主机服务商", inline=True),
+              _brand(offer["host_brand"], "host")),
+             (label("IP provider", "IP 服务商", inline=True), _brand(offer["ip_brand"], "ip")),
              (label("IP type", "IP 类型", inline=True), ip_label(offer["ip_type"])),
              (label("Current Alpha quote", "当前 Alpha 报价", inline=True), quoted_rate(node)))
     return '<div class="slot-offer">' + ''.join(
@@ -154,8 +178,8 @@ def compact(node: Mapping[str, Any]) -> str:
     if node.get("offer") is None:
         return ""
     offer = offers.public(node.get("offer"))
-    return ('<small class="offer-compact">' + _brand(offer["host_brand"]) + ' / '
-            + _brand(offer["ip_brand"]) + ' · ' + ip_label(offer["ip_type"]) + ' · '
+    return ('<small class="offer-compact">' + _brand(offer["host_brand"], "host") + ' / '
+            + _brand(offer["ip_brand"], "ip") + ' · ' + ip_label(offer["ip_type"]) + ' · '
             + label('Current Alpha quote: ', '当前 Alpha 报价：', inline=True)
             + rate(node) + '</small>')
 
@@ -296,11 +320,11 @@ def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: 
                   + '</button></form></td>') if can_claim else ''
         if reported is None or node["id"] in reported:
             machine = '<a href="/status#machine-' + str(number) + '">' + machine + '</a>'
-        state = ('<td>' + label(*availability[node["id"]], inline=True) + '</td>'
+        state = ('<td>' + _availability(availability[node["id"]]) + '</td>'
                  if public_inventory else '')
         rows.append('<tr><th scope="row">' + machine + '</th><td>'
-                    + _brand(public["host_brand"]) + '</td><td>'
-                    + _brand(public["ip_brand"]) + '</td><td>' + ip_label(public["ip_type"])
+                    + _brand(public["host_brand"], "host") + '</td><td>'
+                    + _brand(public["ip_brand"], "ip") + '</td><td>' + ip_label(public["ip_type"])
                     + '</td>' + state + '<td>' + quoted_rate(node) + '</td>' + action + '</tr>')
     heads = [("Slot machine", "槽位主机"), ("Host provider", "主机服务商"),
              ("IP provider", "IP 服务商"), ("IP type", "IP 类型"),
@@ -454,9 +478,10 @@ def catalogue(store: Any, now: float, max_age: float) -> str:
                      + label(f"Recorded on Machine {number}", f"记录来自主机 {number}", inline=True)
                      + '</p><dl class="offer-example-brands"><dt>'
                      + label("Host provider", "主机服务商", inline=True) + '</dt><dd>'
-                     + _brand(offer["host_brand"]) + '</dd><dt>'
+                     + _brand(offer["host_brand"], "host") + '</dd><dt>'
                      + label("IP provider", "IP 服务商", inline=True) + '</dt><dd>'
-                     + _brand(offer["ip_brand"]) + '</dd></dl>' + quoted_rate(node) + '</article>')
+                     + _brand(offer["ip_brand"], "ip") + '</dd></dl>'
+                     + quoted_rate(node) + '</article>')
     examples = ('<div class="offer-examples">' + ''.join(cards) + '</div>') if cards else (
         '<p class="offer-note">' + label(
             "Pricing unavailable until recorded costs support example quotes.",

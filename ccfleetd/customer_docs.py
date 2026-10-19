@@ -115,6 +115,10 @@ margin:18px 0}
 .connection-choice{border:1px solid var(--rule);border-radius:12px;padding:4px 16px 12px;
 background:var(--inset);min-width:0}
 .connection-choice p{font-size:14px;line-height:1.65}
+.doc-table-scroll{max-width:100%;min-width:0;overflow-x:auto;margin:18px 0;
+border:1px solid var(--rule);border-radius:10px}
+.doc-table-scroll table{min-width:620px;font-size:14px}
+.doc-table-scroll th,.doc-table-scroll td{white-space:normal;overflow-wrap:anywhere}
 .doc .card .bi h2:first-child,.how .card .bi h2:first-child{margin-top:20px}
 .doc .bi p,.how .bi p{overflow-wrap:anywhere}
 .hero .bi>.copy-en+.copy-zh h1{font-size:clamp(28px,4vw,42px);line-height:1.2}
@@ -946,14 +950,15 @@ def _client_command_reference() -> str:
             '<p>Fleet 0.2.7 新增这些熟悉的写法。旧客户端运行 <code>ccfleet update</code> '
             '即可安装新版；配对与本地历史保持不变。</p>',
         )
-        + '<table><thead><tr><th>'
+        + '<div class="doc-table-scroll" role="region" tabindex="0" '
+        + 'aria-labelledby="command-reference"><table><thead><tr><th scope="col">'
         + label('Command', '命令', inline=True)
-        + '</th><th>'
+        + '</th><th scope="col">'
         + label('Meaning', '用途', inline=True)
         + '</th></tr></thead><tbody>'
         + ''.join('<tr><td>' + command + '</td><td>' + label(en, zh, inline=True) + '</td></tr>'
                   for command, en, zh in rows)
-        + '</tbody></table>'
+        + '</tbody></table></div>'
         + bi(
             '<p>Put other supported Claude options after <code>--</code>, for example '
             '<code>ccfleet local -- --verbose</code>. Fleet still protects routing and '
