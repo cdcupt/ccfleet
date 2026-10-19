@@ -146,7 +146,7 @@ MATCHED = {
 
 def test_public_evidence_fixture_preserves_pinned_inputs_and_reproducible_blended_price():
     evidence = json.loads(EVIDENCE.read_text(), parse_float=Decimal)
-    assert evidence["schema_version"] == 1
+    assert evidence["schema_version"] == 2
     assert evidence["source_revision"] == PIN
     assert evidence["source_csv"] == PRIMARY + "data/adopted.csv"
     assert evidence["methodology"] == PRIMARY + "CONVENTIONS.md"
@@ -182,37 +182,121 @@ def test_public_evidence_fixture_preserves_pinned_inputs_and_reproducible_blende
     assert Decimal(0) < adopted_value - four_week_value < Decimal(".1")
 
 
-def test_matched_token_cost_recomputes_from_equal_price_and_specific_claude_baseline(rendered):
+ROUTES = [
+    ("claude-sub", "claude", "subscription", "Claude Opus 5.5", "13214.422", "four-weeks",
+     PRIMARY + "data/research/claude-opus55-max20x-round2-2026-09-30.json"),
+    ("devin-sub", "devin", "subscription", "Claude Opus 5.5", "2803.110", "four-weeks",
+     PRIMARY + "data/research/devin-opus55-round1-2026-09-23.json"),
+    ("codex-sub", "openai", "subscription", "GPT-6.1 Sol", "2084", "reported-month", SECONDARY),
+    ("claude-api", "claude", "api", "Claude Opus 5.5", "200", "pay-as-you-go",
+     "https://platform.claude.com/docs/en/about-claude/pricing"),
+    ("codex-api", "openai", "api", "GPT-6.1 Sol", "200", "pay-as-you-go",
+     "https://developers.openai.com/api/docs/models/gpt-6.1-sol"),
+]
+
+
+ASSUMPTIONS = {
+    "claude-sub": "community-four-weeks-full-use-97pct-cache",
+    "devin-sub": "community-four-weeks-full-use-97pct-cache",
+    "codex-sub": "reported-month-full-use-96.6pct-cache-new-rate-cohort",
+    "claude-api": "standard-list-budget-no-discounts-credits-tax-tools-storage",
+    "codex-api": "standard-list-budget-no-discounts-credits-tax-tools-storage",
+}
+
+
+def test_normalization_fixture_keeps_route_sources_periods_and_dollar_cost_formula():
+    evidence = json.loads(EVIDENCE.read_text(), parse_float=Decimal)
+    normalization = evidence["normalization"]
+    assert normalization["unit"] == "relative-api-equivalent-cost"
+    assert normalization["method"] == "cross-source-api-list-value"
+    assert normalization["budget_usd"] == 200
+    assert normalization["baseline_plan"] == "claude-max-20x"
+    assert normalization["baseline_api_value_usd"] == Decimal("13214.422")
+    assert normalization["formula"] == (
+        "(budget / route_api_value) / (budget / baseline_api_value)")
+    budget = Decimal(normalization["budget_usd"])
+    baseline_unit_cost = budget / normalization["baseline_api_value_usd"]
+    assert len(normalization["rows"]) == 5
+    for row, (route, provider, channel, model, value, period, source) in zip(
+            normalization["rows"], ROUTES):
+        assert (row["route"], row["provider"], row["channel"], row["model"],
+                row["source_period"], row["source"]) == (
+                    route, provider, channel, model, period, source)
+        assert row["api_value_usd"] == Decimal(value)
+        assert row["assumption"] == ASSUMPTIONS[route]
+        computed = ((budget / row["api_value_usd"]) / baseline_unit_cost).quantize(Decimal(".1"))
+        assert row["relative_cost"] == computed
+    scope = " ".join(normalization["scope"]).casefold()
+    for concept in ("cross-source", "not a new matched experiment", "four-week", "reported-month",
+                    "97%", "96.6%", "standard", "discount", "credits", "tax", "tools",
+                    "equal raw token", "quality", "completed work"):
+        assert concept in scope
+
+
+def test_five_routes_recompute_cost_from_one_explicit_api_value_denominator(rendered):
     _, _, _, root = rendered
     compared = table(root, "allowance")
-    assert compared.attrs["data-unit"] == "relative-token-cost"
+    assert compared.attrs["data-unit"] == "relative-api-equivalent-cost"
+    assert compared.attrs["data-normalization"] == "cross-source-api-list-value"
     assert compared.attrs["data-baseline-plan"] == "claude-max-20x"
-    assert compared.attrs["data-model"] == "claude-opus-5.5"
-    assert number(compared, "data-period-weeks") == 4
-    observed = {row.attrs["data-provider"]: row for row in rows(compared)}
-    assert len(rows(compared)) == 2 and set(observed) == set(MATCHED)
-    baseline_cost = Decimal(200) / (Decimal(MATCHED["claude"][0]) / 1000000)
-    baseline_tokens = Decimal(MATCHED["claude"][0])
-    for provider, row in observed.items():
-        tokens, start, end, source = MATCHED[provider]
-        assert number(row, "data-monthly-usd") == 200
-        assert number(row, "data-tokens") == tokens
-        assert row.attrs["data-confidence"] == "medium"
-        assert row.attrs["data-sample-start"] == start and row.attrs["data-sample-end"] == end
-        assert row.attrs["data-source"] == PRIMARY + "data/research/" + source
-        assert row.attrs["data-source"] in links(row)
-        token_price = Decimal(200) / (Decimal(tokens) / 1000000)
-        api_value = Decimal(tokens) / 1000000 * Decimal(".419")
-        assert abs(number(row, "data-effective-usd-per-mtok") - token_price) < Decimal(".000000001")
-        assert number(row, "data-api-value-usd") == api_value
-        cost_index = (token_price / baseline_cost).quantize(Decimal(".1"))
-        allowance_index = (Decimal(tokens) / baseline_tokens).quantize(Decimal(".01"))
+    assert number(compared, "data-baseline-api-value-usd") == Decimal("13214.422")
+    budget = number(compared, "data-budget-usd")
+    assert budget == 200
+    assert "data-model" not in compared.attrs and "data-period-weeks" not in compared.attrs
+    actual = rows(compared)
+    assert len(actual) == 5
+    assert [row.attrs["data-route"] for row in actual] == [route[0] for route in ROUTES]
+    baseline_unit_cost = budget / Decimal("13214.422")
+    for row, (route, provider, channel, model, value, period, source) in zip(actual, ROUTES):
+        assert row.attrs["data-route"] == route
+        assert row.attrs["data-provider"] == provider and row.attrs["data-channel"] == channel
+        assert row.attrs["data-model"] == model and model in row.text
+        assert row.attrs["data-source-period"] == period
+        assert row.attrs["data-assumption"] == ASSUMPTIONS[route]
+        assert number(row, "data-budget-usd") == budget
+        api_value = number(row, "data-api-value-usd")
+        assert api_value == Decimal(value)
+        cost_index = ((budget / api_value) / baseline_unit_cost).quantize(Decimal(".1"))
         assert number(row, "data-relative-cost") == cost_index
-        assert number(row, "data-relative-allowance") == allowance_index
-        visible = f"{cost_index:.1f}" if provider == "devin" else r"1(?:\.0)?"
-        assert re.search(r"(?<![0-9.])" + visible + r"\s*[×x倍]", row.text)
-    assert number(observed["devin"], "data-relative-cost") == Decimal("4.7")
-    assert number(observed["devin"], "data-relative-allowance") == Decimal(".21")
+        assert row.attrs["data-source"] == source and source in links(row)
+        visible_index = re.escape(f"{cost_index:.1f}") if cost_index != 1 else r"1(?:\.0)?"
+        assert re.search(r"(?<![0-9.])" + visible_index + r"\s*[×x倍]", row.text)
+        assert re.search(r"US\$200(?![0-9])", row.text)
+        visible_value = re.escape(format(api_value.quantize(Decimal("1")), ","))
+        assert re.search(r"US\$" + visible_value + r"(?:[.][0-9]+)?(?![0-9])", row.text)
+    # Both direct APIs buy their own list-price value dollar for dollar. This
+    # equality is a value denominator, never evidence that their token prices match.
+    api_rows = [row for row in actual if row.attrs["data-channel"] == "api"]
+    assert len(api_rows) == 2
+    assert all(number(row, "data-api-value-usd") == budget
+               and number(row, "data-relative-cost") == Decimal("66.1") for row in api_rows)
+    assert not any(attribute in node.attrs for node in compared.nodes() for attribute in (
+        "data-tokens", "data-relative-allowance", "data-effective-usd-per-mtok"))
+
+
+def test_cross_source_periods_api_budget_and_model_limitations_are_explicit(rendered):
+    language, _, _, root = rendered
+    cost = by_id(root, "cost")
+    text = cost.text.casefold()
+    concepts = (("cross-source", "cross-study"), ("four-week", "four weeks"),
+                ("reported month", "reported monthly", "reported-month", "source month"),
+                ("pay-as-you-go",), ("same token", "identical token", "different raw token counts"),
+                ("quality", "completed work"), ("discount",), ("credit",),
+                ("tax",), ("tool",), ("new-rate", "new rate")) if language == "en" else (
+                    ("跨来源", "跨研究"), ("四周", "4 周"), ("来源月", "报告月", "所报月", "来源报告的月度"),
+                    ("按量",), ("相同 token", "相同的 token", "token 数相同", "token 数仍然不同"),
+                    ("质量", "完成的工作"), ("折扣",), ("credits", "赠金", "抵扣"),
+                    ("税",), ("工具",), ("新额度", "新档"))
+    for alternatives in concepts:
+        assert any(term in text for term in alternatives), alternatives
+    assert "96.6%" in text and "97%" in text
+    if language == "en":
+        assert re.search(r"does not mean.{0,30}(?:equal|same|identical).{0,30}quality", text)
+        assert re.search(r"not.{0,40}official fixed-token", text)
+    else:
+        assert re.search(r"不代表.{0,20}(?:相同|同样).{0,20}质量", text)
+        assert re.search(r"不是官方.{0,20}token", text)
+    assert "october 29" in text if language == "en" else "10 月 29 日" in text
 
 
 def test_matched_estimate_scope_and_primary_method_are_visible_in_each_language(rendered):
@@ -223,7 +307,7 @@ def test_matched_estimate_scope_and_primary_method_are_visible_in_each_language(
     assert "97%" in text and "2.5%" in text and "0.5%" in text
     assert "0.419" in text and "2803.06" in text.replace(",", "")
     concepts = (("four-week", "four week", "4-week", "4 weeks"), ("cache",),
-                ("full",), ("estimate", "estimated"), ("not an official", "not a guaranteed"),
+                ("full",), ("estimate", "estimated"), ("not an official", "not a guaranteed", "official fixed-token guarantee"),
                 ("output",), ("pro",)) if language == "en" else (
                     ("四周", "4 周", "4周"), ("缓存",), ("用满", "全部用完", "用完"),
                     ("估算", "估计"), ("不是官方", "非官方", "不保证", "不代表官方"),
@@ -289,7 +373,6 @@ def test_devin_rows_are_bold_and_tinted_without_changing_the_cost_direction(rend
     row = next(row for row in rows(table(root, "allowance"))
                if row.attrs["data-provider"] == "devin")
     assert number(row, "data-relative-cost") == Decimal("4.7")
-    assert number(row, "data-relative-allowance") == Decimal(".21")
 
 
 def test_current_monthly_plan_prices_are_not_replaced_by_historical_study_prices(rendered):

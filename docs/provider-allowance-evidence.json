@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "dataset": "Real API Pricing community estimates",
   "source_revision": "0be92b7ce3edf7690672ce5217607032a4bc7c45",
   "source_snapshot": "2026-10-16",
@@ -57,5 +57,77 @@
     "Effective token price assumes all projected allowance is used.",
     "Normalized total includes cache-read tokens; it is not generated output tokens.",
     "No Devin Pro allowance is derived from the Max sample."
-  ]
+  ],
+  "normalization": {
+    "unit": "relative-api-equivalent-cost",
+    "method": "cross-source-api-list-value",
+    "budget_usd": 200,
+    "baseline_plan": "claude-max-20x",
+    "baseline_api_value_usd": 13214.422,
+    "formula": "(budget / route_api_value) / (budget / baseline_api_value)",
+    "rows": [
+      {
+        "route": "claude-sub",
+        "provider": "claude",
+        "channel": "subscription",
+        "model": "Claude Opus 5.5",
+        "api_value_usd": 13214.422,
+        "relative_cost": 1.0,
+        "source_period": "four-weeks",
+        "source": "https://github.com/Fei2411/real-api-pricing/blob/0be92b7ce3edf7690672ce5217607032a4bc7c45/data/research/claude-opus55-max20x-round2-2026-09-30.json",
+        "assumption": "community-four-weeks-full-use-97pct-cache"
+      },
+      {
+        "route": "devin-sub",
+        "provider": "devin",
+        "channel": "subscription",
+        "model": "Claude Opus 5.5",
+        "api_value_usd": 2803.11,
+        "relative_cost": 4.7,
+        "source_period": "four-weeks",
+        "source": "https://github.com/Fei2411/real-api-pricing/blob/0be92b7ce3edf7690672ce5217607032a4bc7c45/data/research/devin-opus55-round1-2026-09-23.json",
+        "assumption": "community-four-weeks-full-use-97pct-cache"
+      },
+      {
+        "route": "codex-sub",
+        "provider": "openai",
+        "channel": "subscription",
+        "model": "GPT-6.1 Sol",
+        "api_value_usd": 2084,
+        "relative_cost": 6.3,
+        "source_period": "reported-month",
+        "source": "https://www.zhihu.com/question/2090772030799061671/answer/2090892647946785906",
+        "assumption": "reported-month-full-use-96.6pct-cache-new-rate-cohort"
+      },
+      {
+        "route": "claude-api",
+        "provider": "claude",
+        "channel": "api",
+        "model": "Claude Opus 5.5",
+        "api_value_usd": 200,
+        "relative_cost": 66.1,
+        "source_period": "pay-as-you-go",
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "assumption": "standard-list-budget-no-discounts-credits-tax-tools-storage"
+      },
+      {
+        "route": "codex-api",
+        "provider": "openai",
+        "channel": "api",
+        "model": "GPT-6.1 Sol",
+        "api_value_usd": 200,
+        "relative_cost": 66.1,
+        "source_period": "pay-as-you-go",
+        "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "assumption": "standard-list-budget-no-discounts-credits-tax-tools-storage"
+      }
+    ],
+    "scope": [
+      "This is an illustrative cross-source API-equivalent-value cost index, not a new matched experiment.",
+      "Fei observations use a four-week month and 97% cache reads; the Codex reported-month value uses a separate study with 96.6% cache hits and new-rate accounts.",
+      "Keep each source period as reported; no unreported monthly conversion or token quota is inferred.",
+      "API rows mean a 200USD pay-as-you-go usage budget at each model own Standard list prices, excluding discounts/free credits/taxes/tools/storage.",
+      "Equal API-row indices do not imply equal raw token counts, model quality or completed work."
+    ]
+  }
 }
