@@ -221,6 +221,14 @@ def test_unready_Devin_does_not_advertise_ready_launch_commands(setup_context, f
     page = Flow(rendered(c, now=now))
     assert not page.find("details", data_slot_connect="devin")
     assert "ccfleet local --transport gateway --slot alice-devin" not in rendered(c, now=now)
+    if fault != "no-binding":
+        card = page.find("div", id="slot-devin")[0]
+        assert "Devin needs a check" in page.inside(card, "h2")[0].text
+        assert "Ready to sign in" not in page.inside(card, "h2")[0].text
+        assert "Finish signing in to Claude" not in card.text
+        optional = [item for item in page.inside(card, "details")
+                    if item.has_class("provider-other")]
+        assert len(optional) == 1 and "open" not in optional[0].attrs
 
 
 @pytest.mark.parametrize("stage", [None, "requested", "url_ready"])

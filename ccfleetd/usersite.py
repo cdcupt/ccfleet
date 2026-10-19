@@ -2419,10 +2419,13 @@ def _slot_card(
         slot = {**slot, "device_token_at": node.get("device_token_at") or 0}
     else:
         tone, title, detail = STATE_WORDS.get(slot["state"], ("disabled", slot["state"], ""))
-    devin_only = (not own and devin_state == "ready" and slot["state"] == slotstates.CLAIMED
+    devin_slot = (not own and devin_state in {"ready", "verification_required"}
+                  and slot["state"] == slotstates.CLAIMED
                   and (report.get("credentials") or {}).get("logged_in") is not True)
-    if devin_only:
-        tone, title, detail = "ok", "Devin ready", ""
+    devin_only = devin_slot and devin_state == "ready"
+    if devin_slot:
+        tone, title, detail = (("ok", "Devin ready", "") if devin_only
+                              else ("warn", "Devin needs a check", ""))
     heard = (heartbeat or {}).get("ts")
     if heard is None:
         machine = '<span class="bad-text">not heard from yet</span>'
@@ -2472,7 +2475,7 @@ def _slot_card(
         else ("", "")
     )
     signed_in_title = title == "In use"
-    title_zh = ("Devin 已就绪" if devin_only else
+    title_zh = (("Devin 已就绪" if devin_only else "Devin 需要检查") if devin_slot else
                 ("使用中" if signed_in_title else "等待登录") if own else
                 STATE_ZH.get(slot["state"], (title, ""))[0])
     parts = [
@@ -2569,16 +2572,20 @@ def _slot_card(
         if not own:
             # A Devin connection does not require a Claude sign-in or SSH pairing
             # on this slot. Its paired authorizer is explained in the connect guide.
-            if not devin_only:
+            if not devin_slot:
                 parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
                     _cli_access(slot, node, cli_devices or [], csrf, now), 'slot-devices'))
     if account_parts:
-        if devin_only:
+        if devin_slot:
             parts.append('<details class="provider-other"><summary>' + label(
                 'Anthropic sign-in (optional)', 'Anthropic 登录（可选）', inline=True
             ) + '</summary><p>' + label(
-                'This is for a separate Claude account. Your Devin connection is ready.',
-                '这里用于连接独立的 Claude 账号。你的 Devin 连接已经就绪。', inline=True
+                'This is for a separate Claude account. '
+                + ('Your Devin connection is ready.' if devin_only else
+                   'The Devin check is handled separately.'),
+                '这里用于连接独立的 Claude 账号。'
+                + ('你的 Devin 连接已经就绪。' if devin_only else 'Devin 检查会单独处理。'),
+                inline=True
             ) + '</p>' + ''.join(account_parts) + '</details>')
         else:
             needs_sign_in = not signed_in or bool(login)
