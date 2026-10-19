@@ -20,7 +20,18 @@ from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, devin_ui, names, offers, payments, plans, pricing
+from . import (
+    claude_versions,
+    devin_ui,
+    names,
+    offers,
+    payments,
+    plans,
+    pricing,
+    wallet,
+    wallet_routes,
+    wallet_ui,
+)
 from . import slots as slotstates
 from .config import Config
 from .desired import is_channel, machine_hostname
@@ -75,13 +86,18 @@ def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") ->
             f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
 
 
-def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None) -> str:
+def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None,
+            credit_actor: bool = False) -> str:
     """The slots card, the accounts card and the price, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
     body = (_slots_card(store, accounts, csrf, now, cfg=cfg)
-            + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store)))
+            + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store),
+                             wallet_enabled=bool(cfg and cfg.usd_slot_credit_enabled),
+                             credit_actor=credit_actor))
     price = _price_card(store, csrf, now)
-    return price + body if _has_offers(store) else body + price
+    result = price + body if _has_offers(store) else body + price
+    return result + ('<style>' + wallet_ui.CSS + '</style>'
+                     if cfg and cfg.usd_slot_credit_enabled else '')
 
 
 def _report_of(slot: Mapping[str, Any], payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -756,12 +772,24 @@ def _kept_for(node: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]]
 
 
 def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
-                   now: float, plans_held: Mapping[Optional[str], list[str]]) -> str:
+                   now: float, plans_held: Mapping[Optional[str], list[str]], *,
+                   wallet_enabled: bool = False, credit_actor: bool = False) -> str:
     ledger: dict[str, list[dict[str, Any]]] = {}
     for row in store.list_payments():
         ledger.setdefault(row["account_id"], []).append(row)
     lines = []
     for account in sorted(accounts.values(), key=lambda a: str(a["email"])):
+        credit = ''
+        if wallet_enabled:
+            try:
+                credit = '<p>Fleet credit: <strong>' + escape(wallet.display(
+                    store.wallet_balance(account["id"]))) + '</strong></p>'
+                credit += (wallet_ui.admin_credit_grant_form(account_id=account["id"], csrf=csrf,
+                            idempotency_key=wallet_routes.nonce()) if credit_actor else
+                           '<p class="muted">Sign in using an admin account to add credit.</p>')
+            except Exception:
+                credit = ('<p class="muted">Fleet credit is unavailable. '
+                          'Credit actions are paused.</p>')
         held = store.held_slot_count(account["id"])
         quota = int(account.get("slot_quota") or 0)
         paid = ledger.get(account["id"], [])
@@ -778,14 +806,20 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
                     "Set allowance",
                     '<input type="text" name="count" class="count" inputmode="numeric" '
                     f'value="{quota}" required>')
-            + "</div>" + _ledger(account, paid, csrf, now) + "</div>")
+            + "</div>" + credit + _ledger(account, paid, csrf, now) + "</div>")
     body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
-    return ('<h2 id="accounts">Accounts</h2><div class="card">' + body +
-            '<p class="note">An allowance is how many slots somebody may hold; it starts at '
+    note = ('Fleet credit pays for a chosen slot one UTC calendar month at a time. '
+            'Users confirm each purchase and renewal. Expired paid months pause new access '
+            'without releasing the slot. Existing operator-managed claims keep their old access. '
+            'Count allowances and manual payment records below do not add Fleet credit.'
+            if wallet_enabled else
+            'An allowance is how many slots somebody may hold; it starts at '
             "zero. Lowering it takes nothing away: they keep what they hold, and only claiming "
             "more stops. Payments are a record for you and nothing more: a lapsed one takes no "
-            "slot back and stops no claim. Operators are made on the server: "
-            "<code>ccfleetd account role &lt;email&gt; admin</code>.</p></div>")
+            "slot back and stops no claim.")
+    return ('<h2 id="accounts">Accounts</h2><div class="card">' + body
+            + '<p class="note">' + note + ' Operators are made on the server: '
+            '<code>ccfleetd account role &lt;email&gt; admin</code>.</p></div>')
 
 
 def _plans_said(plans_held: Mapping[Optional[str], list[str]],

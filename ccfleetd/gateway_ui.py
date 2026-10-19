@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
 
-from . import gateway_providers
+from . import gateway_providers, wallet_access
 from . import slots as slotstates
 from .bilingual import bi, label
 from .store import StoreError
@@ -475,6 +475,9 @@ def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
         if action not in {'create', 'update'} or form.get("mode") not in MODES:
             raise ValueError("invalid action")
         slot_ids = selected_slots(store, account["id"], form)
+        if any(not wallet_access.target_allowed(store, account["id"], {"slot_id": identifier},
+                                                now=now) for identifier in slot_ids):
+            return usersite._back("wallet-expired", "wallet")
         provider = form.get("provider", None if action == "update" else "anthropic")
         if provider is not None and gateway_providers.normalize_provider(provider) is None:
             raise ValueError("invalid provider")

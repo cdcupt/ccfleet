@@ -131,6 +131,14 @@ class Config:
     # serve the same state without HTTP redirects or credential retargeting.
     public_url_aliases: tuple[str, ...] = ()
     broker_only: bool = False
+    usd_slot_credit_enabled: bool = False
+    stripe_topup_enabled: bool = False
+    stripe_product_approved: bool = False
+    stripe_mode: str = "test"
+    stripe_expected_account_id: str = ""
+    stripe_api_key_file: str = ""
+    stripe_webhook_secret_file: str = ""
+    stripe_sandbox_database: bool = False
     # Public model requests are an explicit, separate authority from opaque SSH.
     gateway_enabled: bool = False
     # Native compatibility requires this opt-in and an exact approved runtime profile.
@@ -259,6 +267,14 @@ class Config:
             public_url=env.get(ENV_PREFIX + "PUBLIC_URL", "").rstrip("/"),
             public_url_aliases=_public_aliases(env.get(ENV_PREFIX + "PUBLIC_URL_ALIASES", "")),
             broker_only=_env_bool(env, "BROKER_ONLY", False),
+            usd_slot_credit_enabled=_env_bool(env, "USD_SLOT_CREDIT_ENABLED", False),
+            stripe_topup_enabled=_env_bool(env, "STRIPE_TOPUP_ENABLED", False),
+            stripe_product_approved=_env_bool(env, "STRIPE_PRODUCT_APPROVED", False),
+            stripe_mode=env.get(ENV_PREFIX + "STRIPE_MODE", "test"),
+            stripe_expected_account_id=env.get(ENV_PREFIX + "STRIPE_EXPECTED_ACCOUNT_ID", ""),
+            stripe_api_key_file=env.get(ENV_PREFIX + "STRIPE_API_KEY_FILE", ""),
+            stripe_webhook_secret_file=env.get(ENV_PREFIX + "STRIPE_WEBHOOK_SECRET_FILE", ""),
+            stripe_sandbox_database=_env_bool(env, "STRIPE_SANDBOX_DATABASE", False),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
             gateway_devin_enabled=_env_bool(env, "GATEWAY_DEVIN_ENABLED", False),
             gateway_devin_native_version=env.get(
@@ -377,6 +393,8 @@ class Config:
                     or public.path or public.query or public.fragment):
                 raise ConfigError("CCFLEET_GATEWAY needs its private service key path, "
                                   "public key and HTTPS public URL (loopback HTTP for tests)")
+        from . import stripe_config
+        stripe_config.validate(cfg)
         return cfg
 
     def require_admin_token(self) -> None:

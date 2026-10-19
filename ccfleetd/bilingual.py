@@ -9,7 +9,8 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
-    '/', '/slots', '/account', '/account/available', '/privacy', '/status', '/docs', '/docs/guide',
+    '/', '/slots', '/account', '/account/available', '/account/purchase', '/account/renew',
+    '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
     '/docs/library/docs/devin.html',
@@ -18,12 +19,14 @@ CURRENT_PAGES = frozenset({
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
 POST_PAGES = frozenset({'/account/claim', '/account/outage-emails', '/auth/signout',
+                       '/account/purchase', '/account/renew', '/account/topup',
                        '/account/gateway/create', '/account/gateway/update',
                        '/account/gateway/revoke'})
 VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
                   'meta', 'param', 'source', 'track', 'wbr'})
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
              '/account/available': '可用槽位',
+             '/account/purchase': '确认购买槽位', '/account/renew': '续费槽位',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
              '/docs/how-it-works': '工作原理', '/docs/terms': '服务条款',
              '/docs/library': '文档', '/docs/library/': '文档',

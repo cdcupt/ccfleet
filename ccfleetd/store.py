@@ -20,7 +20,7 @@ import time
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ccfleet_agent.relay_metrics import (
     DAY_SECONDS,
@@ -40,6 +40,8 @@ from . import (
     offers,
     payments,
     pricing,
+    wallet,
+    wallet_topups,
 )
 from . import sessions as sessionlib
 from . import slots as slotstates
@@ -290,6 +292,63 @@ CREATE TABLE IF NOT EXISTS payments (
     voided_at REAL
 );
 CREATE INDEX IF NOT EXISTS ix_payments_account ON payments(account_id);
+-- USD Fleet service credits are separate from historical manual payments.
+-- Every operation appends exactly one immutable entry; no stored balance can drift.
+CREATE TABLE IF NOT EXISTS wallet_entries (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    kind TEXT NOT NULL CHECK (kind IN ('admin_credit', 'admin_debit', 'slot_purchase',
+        'purchase_return', 'stripe_topup', 'stripe_reversal')),
+    delta_cents INTEGER NOT NULL CHECK (typeof(delta_cents) = 'integer'
+        AND delta_cents BETWEEN -99999999999 AND 99999999999 AND delta_cents != 0),
+    currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('account', 'console_user', 'provider')),
+    actor_id TEXT NOT NULL,
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 200),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    original_entry_id TEXT REFERENCES wallet_entries(id),
+    created_at REAL NOT NULL,
+    CHECK ((kind IN ('admin_credit', 'purchase_return', 'stripe_topup') AND delta_cents > 0)
+        OR (kind IN ('slot_purchase', 'admin_debit', 'stripe_reversal') AND delta_cents < 0)),
+    CHECK ((kind IN ('stripe_topup', 'stripe_reversal') AND actor_kind = 'provider')
+        OR (kind NOT IN ('stripe_topup', 'stripe_reversal')
+            AND actor_kind IN ('account', 'console_user'))),
+    CHECK (kind != 'purchase_return' OR original_entry_id IS NOT NULL),
+    CHECK (kind IN ('purchase_return', 'stripe_topup', 'stripe_reversal')
+        OR original_entry_id IS NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_wallet_entries_account ON wallet_entries(account_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_wallet_entries_original ON wallet_entries(original_entry_id);
+CREATE TABLE IF NOT EXISTS slot_purchases (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    operation TEXT NOT NULL DEFAULT 'purchase' CHECK (operation IN ('purchase', 'renewal')),
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    node_id TEXT NOT NULL REFERENCES nodes(id),
+    slot_id TEXT NOT NULL REFERENCES slots(id),
+    claim_id TEXT NOT NULL,
+    claim_generation INTEGER NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (typeof(amount_cents) = 'integer'
+        AND amount_cents BETWEEN 1 AND 99999999999),
+    currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
+    offer_snapshot TEXT NOT NULL,
+    period_start_at REAL NOT NULL,
+    period_end_at REAL NOT NULL CHECK (period_end_at > period_start_at),
+    wallet_entry_id TEXT NOT NULL UNIQUE REFERENCES wallet_entries(id),
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_slot_purchases_account ON slot_purchases(account_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_slot_purchases_claim
+ON slot_purchases(account_id, slot_id, claim_id, period_end_at);
+CREATE TRIGGER IF NOT EXISTS wallet_entries_no_update BEFORE UPDATE ON wallet_entries
+BEGIN SELECT RAISE(ABORT, 'wallet entries are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS wallet_entries_no_delete BEFORE DELETE ON wallet_entries
+BEGIN SELECT RAISE(ABORT, 'wallet entries are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS slot_purchases_no_update BEFORE UPDATE ON slot_purchases
+BEGIN SELECT RAISE(ABORT, 'slot purchases are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS slot_purchases_no_delete BEFORE DELETE ON slot_purchases
+BEGIN SELECT RAISE(ABORT, 'slot purchases are immutable'); END;
 -- Values kept one row per key: "price", which the operator sets from the
 -- console and the public pages show (see ccfleetd/pricing.py), a line people
 -- read and never something charged or enforced; the release channels' last read
@@ -435,6 +494,18 @@ class NoSlotAvailable(StoreError):
     """Nothing free to hand out right now."""
 
 
+class InsufficientWalletCredit(StoreError):
+    """The account cannot cover the current selected slot price."""
+
+
+class WalletQuoteChanged(StoreError):
+    """The user must review a different current slot quote before buying."""
+
+
+class WalletReplayMismatch(StoreError):
+    """An operation identity is already bound to a different immutable request."""
+
+
 class NotYours(StoreError):
     """The slot is not held by the account acting on it."""
 
@@ -537,7 +608,7 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store:
+class Store(wallet_topups.TopupStoreMixin):
     """Thread-safe wrapper around one SQLite connection."""
 
     def __init__(self, path: str,
@@ -554,7 +625,7 @@ class Store:
         with self._lock:
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(SCHEMA)
+            self._conn.executescript(SCHEMA + wallet_topups.SCHEMA)
             # CREATE TABLE IF NOT EXISTS does nothing to a table that already
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate
@@ -1210,6 +1281,7 @@ class Store:
         and so through a wipe.
         """
         with self._write_txn() as conn:
+            self._require_no_paid_resource_history(conn, "node_id", node_id)
             slot_rows = conn.execute(
                 "SELECT id, state, kind FROM slots WHERE node_id = ? ORDER BY unix_user",
                 (node_id,)).fetchall()
@@ -1231,7 +1303,7 @@ class Store:
             if cur.rowcount == 0:
                 raise StoreError(f"unknown node {node_id!r}")
 
-    # Every column that holds a node's id. A rename moves these and nothing
+    # Mutable columns that hold a node's id. A rename moves these and nothing
     # else, so the schema test that guards this list fails on any column added
     # later that names a node until it is listed here. `logins.node_id` is the
     # node's own sign-in row; a slot's shares the column as "slot:<id>", which
@@ -1240,6 +1312,24 @@ class Store:
     NODE_ID_COLUMNS = (("nodes", "id"), ("slots", "node_id"), ("heartbeats", "node_id"),
                        ("alerts", "node_id"), ("logins", "node_id"),
                        ("outages", "component"))
+
+    # A paid receipt keeps the original resource identifiers. These references
+    # block raw ID renames/deletions; they must never join the mutable lists.
+    IMMUTABLE_RESOURCE_ID_COLUMNS = (("slot_purchases", "node_id"),
+                                     ("slot_purchases", "slot_id"))
+
+    @staticmethod
+    def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
+                                          *identifiers: str) -> None:
+        if column not in {"node_id", "slot_id"}:
+            raise ValueError("unknown paid resource identifier")
+        for identifier in identifiers:
+            if conn.execute(f"SELECT 1 FROM slot_purchases WHERE {column} = ? LIMIT 1",
+                            (identifier,)).fetchone() is not None:
+                resource = "node" if column == "node_id" else "slot"
+                raise StoreError(
+                    f"Paid history keeps this {resource} ID. Disable or retire the machine "
+                    "instead of renaming or deleting its ID; a slot's display name may change.")
 
     def rename_node(self, old: str, new: str) -> None:
         """Give a node — an owner's node or a shared machine — a new id.
@@ -1264,6 +1354,7 @@ class Store:
                 raise StoreError(f"unknown node {old!r}")
             if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a node called {new!r} already exists")
+            self._require_no_paid_resource_history(conn, "node_id", old, new)
             # A machine answers to its id when its slot is free: no slot on
             # another machine may already be called that, by id or by name.
             if conn.execute("SELECT 1 FROM slots WHERE (id = ? OR name = ? OR pool_name = ?) "
@@ -1281,6 +1372,8 @@ class Store:
             carries = conn.execute(
                 "SELECT 1 FROM slots WHERE id = ? AND node_id = ? AND kind = ?",
                 (old, old, slotstates.OWNER_SLOT)).fetchone() is not None
+            if carries:
+                self._require_no_paid_resource_history(conn, "slot_id", old, new)
             for table in ("logins", "heartbeats", "alerts"):
                 conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
             conn.execute("DELETE FROM outages WHERE component = ?", (new,))
@@ -1975,6 +2068,372 @@ class Store:
                 query + " ORDER BY recorded_at DESC, id DESC", args).fetchall()
         return [dict(r) for r in rows]
 
+    # -- USD Fleet service credits ----------------------------------------
+
+    @staticmethod
+    def _wallet_account(conn: sqlite3.Connection, account_id: str) -> None:
+        try:
+            wallet.identity(account_id)
+        except wallet.WalletError as exc:
+            raise StoreError(str(exc)) from exc
+        if conn.execute("SELECT 1 FROM accounts WHERE id = ?", (account_id,)).fetchone() is None:
+            raise StoreError("no such credit account")
+
+    @staticmethod
+    def _wallet_balance(conn: sqlite3.Connection, account_id: str) -> int:
+        amount = conn.execute(
+            "SELECT COALESCE(SUM(delta_cents), 0) FROM wallet_entries WHERE account_id = ?",
+            (account_id,)).fetchone()[0]
+        if type(amount) is not int or not 0 <= amount <= wallet.MAX_CENTS:
+            raise StoreError("the stored credit balance is outside the supported range")
+        return amount
+
+    def wallet_balance(self, account_id: str) -> int:
+        """Current USD cents; this read is not a reservation for a later purchase."""
+        with self._lock:
+            self._wallet_account(self._conn, account_id)
+            return self._wallet_balance(self._conn, account_id)
+
+    def list_wallet_entries(self, account_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise StoreError("credit history limit must be between 1 and 100")
+        with self._lock:
+            self._wallet_account(self._conn, account_id)
+            rows = self._conn.execute(
+                "SELECT * FROM wallet_entries WHERE account_id = ? "
+                "ORDER BY sequence DESC LIMIT ?", (account_id, limit)).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_slot_purchases(self, account_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise StoreError("purchase history limit must be between 1 and 100")
+        with self._lock:
+            self._wallet_account(self._conn, account_id)
+            rows = self._conn.execute(
+                "SELECT * FROM slot_purchases WHERE account_id = ? "
+                "ORDER BY sequence DESC LIMIT ?", (account_id, limit)).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_slot_purchase(self, account_id: str, purchase_id: str) -> Optional[dict[str, Any]]:
+        """An account sees only its own order, including after the slot is released."""
+        try:
+            wallet.identity(purchase_id)
+        except wallet.WalletError as exc:
+            raise StoreError(str(exc)) from exc
+        with self._lock:
+            self._wallet_account(self._conn, account_id)
+            row = self._conn.execute(
+                "SELECT * FROM slot_purchases WHERE id = ? AND account_id = ?",
+                (purchase_id, account_id)).fetchone()
+        return dict(row) if row is not None else None
+
+    @staticmethod
+    def _wallet_current_slot(conn: sqlite3.Connection, account_id: str,
+                             slot_id: str, claim_id: Optional[str] = None) -> sqlite3.Row:
+        row = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+        if (row is None or row["held_by"] != account_id or row["state"] not in slotstates.HELD
+                or claim_id is not None and row["gateway_claim_id"] != claim_id):
+            raise NotYours("the slot is not held by this account and claim")
+        return row
+
+    def paid_slot_through(self, account_id: str, slot_id: str, *,
+                          claim_id: Optional[str] = None) -> Optional[float]:
+        """Current rental's paid end, or None for legacy access; never changes access."""
+        try:
+            wallet.identity(slot_id)
+            if claim_id is not None:
+                wallet.identity(claim_id)
+        except wallet.WalletError as exc:
+            raise StoreError(str(exc)) from exc
+        with self._lock:
+            self._wallet_account(self._conn, account_id)
+            # One SELECT binds the financial read to the same current rental,
+            # including when another Store connection changes its holder.
+            row = self._conn.execute(
+                "SELECT s.held_by, s.state, s.gateway_claim_id, "
+                "(SELECT MAX(p.period_end_at) FROM slot_purchases p "
+                "WHERE p.account_id = s.held_by AND p.slot_id = s.id "
+                "AND p.claim_id = s.gateway_claim_id) AS paid_end "
+                "FROM slots s WHERE s.id = ?", (slot_id,)).fetchone()
+            if (row is None or row["held_by"] != account_id or row["state"] not in slotstates.HELD
+                    or claim_id is not None and row["gateway_claim_id"] != claim_id):
+                raise NotYours("the slot is not held by this account and claim")
+        return float(row["paid_end"]) if row["paid_end"] is not None else None
+
+    def grant_wallet_credit(self, account_id: str, amount: Any, *, actor_id: str,
+                            reason: str, idempotency_key: str, now: float,
+                            actor_kind: str = "account") -> dict[str, Any]:
+        """Append an admin grant once; actor identity must come from server authentication.
+
+        A configured admin-token label is not a database principal. It cannot
+        grant credits until the caller has an explicit authenticated DB actor.
+        Historical manual payments are neither read nor converted here.
+        """
+        return self._adjust_wallet_credit(account_id, amount, kind="admin_credit",
+            actor_id=actor_id, actor_kind=actor_kind, reason=reason,
+            idempotency_key=idempotency_key, now=now)
+
+    def deduct_wallet_credit(self, account_id: str, amount: Any, *, actor_id: str,
+                             reason: str, idempotency_key: str, now: float,
+                             actor_kind: str = "account") -> dict[str, Any]:
+        """Append an audited admin correction, limited to available service credit.
+
+        This does not withdraw money, undo a payment or alter a paid slot period.
+        """
+        return self._adjust_wallet_credit(account_id, amount, kind="admin_debit",
+            actor_id=actor_id, actor_kind=actor_kind, reason=reason,
+            idempotency_key=idempotency_key, now=now)
+
+    def return_purchase_credit(self, account_id: str, purchase_id: str, amount: Any, *,
+                               actor_id: str, reason: str, idempotency_key: str, now: float,
+                               actor_kind: str = "account") -> dict[str, Any]:
+        """Explicit admin compensation tied to an immutable purchase debit.
+
+        This returns service credit only, up to the original order's unreturned
+        amount. It is not evidence that service was undelivered: current slot
+        state and retained heartbeats cannot establish a claim's full history.
+        It never releases a slot, changes its paid period or edits old records.
+        """
+        return self._adjust_wallet_credit(account_id, amount, kind="purchase_return",
+            actor_id=actor_id, actor_kind=actor_kind, reason=reason,
+            idempotency_key=idempotency_key, now=now, purchase_id=purchase_id)
+
+    @staticmethod
+    def _wallet_admin(conn: sqlite3.Connection, actor_id: str, actor_kind: str) -> None:
+        # Provider actors are reserved for verified provider settlement, never
+        # admitted through the manual credit or compensation methods.
+        if not isinstance(actor_kind, str) or actor_kind not in wallet.ACTOR_KINDS:
+            raise StoreError("a database admin actor is required for credit changes")
+        actor = (conn.execute("SELECT role FROM accounts WHERE id = ?", (actor_id,))
+                 if actor_kind == "account" else
+                 conn.execute("SELECT role FROM users WHERE username = ?", (actor_id,)))
+        row = actor.fetchone()
+        if row is None or row["role"] != "admin":
+            raise StoreError("a database admin actor is required for credit changes")
+
+    def _adjust_wallet_credit(self, account_id: str, amount: Any, *, kind: str,
+                              actor_id: str, actor_kind: str, reason: str,
+                              idempotency_key: str, now: float,
+                              purchase_id: Optional[str] = None) -> dict[str, Any]:
+        """Validate and append one manual adjustment within a single write transaction."""
+        try:
+            cents = wallet.usd_cents(amount)
+            actor_id = wallet.identity(actor_id)
+            reason = wallet.reason(reason)
+            idempotency_key = wallet.request_id(idempotency_key)
+            now = wallet.instant(now)
+            if purchase_id is not None:
+                purchase_id = wallet.identity(purchase_id)
+        except wallet.WalletError as exc:
+            raise StoreError(str(exc)) from exc
+        if kind not in {"admin_credit", "admin_debit", "purchase_return"}:
+            raise StoreError("unsupported manual credit operation")
+        if (kind == "purchase_return") != (purchase_id is not None):
+            raise StoreError("a purchase credit return needs its original order")
+        delta = -cents if kind == "admin_debit" else cents
+        with self._write_txn() as conn:
+            self._wallet_account(conn, account_id)
+            self._wallet_admin(conn, actor_id, actor_kind)
+            original_entry_id = None
+            order = None
+            if purchase_id is not None:
+                order = conn.execute(
+                    "SELECT p.*, e.kind AS debit_kind, e.account_id AS debit_account, "
+                    "e.delta_cents AS debit_cents, e.currency AS debit_currency "
+                    "FROM slot_purchases p JOIN wallet_entries e ON e.id = p.wallet_entry_id "
+                    "WHERE p.id = ? AND p.account_id = ?", (purchase_id, account_id)).fetchone()
+                if (order is None or order["debit_kind"] != "slot_purchase"
+                        or order["debit_account"] != account_id or order["currency"] != "USD"
+                        or order["debit_currency"] != "USD"
+                        or order["debit_cents"] != -order["amount_cents"]):
+                    raise StoreError("no matching purchase debit for this credit account")
+                original_entry_id = order["wallet_entry_id"]
+            expected = {"account_id": account_id, "kind": kind, "delta_cents": delta,
+                        "currency": "USD", "actor_kind": actor_kind, "actor_id": actor_id,
+                        "reason": reason, "original_entry_id": original_entry_id}
+            previous = conn.execute("SELECT * FROM wallet_entries WHERE idempotency_key = ?",
+                                    (idempotency_key,)).fetchone()
+            if previous is not None:
+                if any(previous[name] != value for name, value in expected.items()):
+                    raise WalletReplayMismatch(
+                        "the credit request identity was already used differently")
+                return dict(previous)
+            if order is not None:
+                returned = conn.execute(
+                    "SELECT COALESCE(SUM(delta_cents), 0) FROM wallet_entries "
+                    "WHERE kind = 'purchase_return' AND original_entry_id = ?",
+                    (original_entry_id,)).fetchone()[0]
+                if returned + cents > order["amount_cents"]:
+                    raise StoreError("the credit return exceeds the purchase's unreturned amount")
+            balance = self._wallet_balance(conn, account_id)
+            if balance + delta < 0:
+                raise InsufficientWalletCredit(
+                    "the credit adjustment exceeds the available balance")
+            if balance + delta > wallet.MAX_CENTS:
+                raise StoreError("the credit balance would exceed the supported range")
+            entry_id = secrets.token_hex(16)
+            conn.execute(
+                "INSERT INTO wallet_entries (id, account_id, kind, delta_cents, actor_kind, "
+                "actor_id, reason, idempotency_key, original_entry_id, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (entry_id, account_id, kind, delta, actor_kind, actor_id, reason,
+                 idempotency_key, original_entry_id, now))
+            return dict(conn.execute("SELECT * FROM wallet_entries WHERE id = ?",
+                                     (entry_id,)).fetchone())
+
+    def purchase_slot(self, account_id: str, node_id: str, *, expected_cents: int,
+                      idempotency_key: str, now: float, max_age_s: float) -> dict[str, Any]:
+        """Buy the chosen machine's slot with existing USD credits, once and atomically.
+
+        The paid path does not use the old manual count allowance. It still
+        requires an enabled, fresh, empty single-slot machine and the current
+        reservation. This records one calendar month; it neither renews nor
+        changes gateway expiry, provisioning or release behavior.
+        """
+        try:
+            wallet.identity(node_id)
+            expected_cents = wallet.positive_cents(expected_cents)
+            idempotency_key = wallet.request_id(idempotency_key)
+            now = wallet.instant(now)
+            max_age_s = wallet.freshness(max_age_s)
+            period_start, period_end = wallet.month_period(now)
+        except wallet.WalletError as exc:
+            raise StoreError(str(exc)) from exc
+        with self._write_txn() as conn:
+            self._wallet_account(conn, account_id)
+            previous = conn.execute("SELECT * FROM wallet_entries WHERE idempotency_key = ?",
+                                    (idempotency_key,)).fetchone()
+            if previous is not None:
+                order = conn.execute("SELECT * FROM slot_purchases WHERE wallet_entry_id = ?",
+                                     (previous["id"],)).fetchone()
+                if (previous["kind"] != "slot_purchase" or previous["account_id"] != account_id
+                        or previous["delta_cents"] != -expected_cents or order is None
+                        or order["account_id"] != account_id or order["node_id"] != node_id
+                        or order["amount_cents"] != expected_cents
+                        or order["operation"] != "purchase"):
+                    raise WalletReplayMismatch(
+                        "the purchase request identity was already used differently")
+                return dict(order)
+            if wallet_topups.spending_blocked(conn, account_id):
+                raise StoreError("account credit needs payment review before a new purchase")
+            _, offer, cents = self._wallet_priced_slot(conn, account_id, node_id, now, max_age_s)
+            if cents != expected_cents:
+                raise WalletQuoteChanged(
+                    "the slot price changed; review the current quote before purchasing")
+            if self._wallet_balance(conn, account_id) < cents:
+                raise InsufficientWalletCredit(
+                    "there is not enough USD service credit for this slot")
+            slot_id = self._claim_slot_in_transaction(conn, account_id, now=now,
+                node_id=node_id, heard_since=now - max_age_s, check_quota=False)
+            slot = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+            return self._wallet_order(conn, account_id, slot, offer, cents,
+                period_start, period_end, idempotency_key, now, operation="purchase")
+
+    @staticmethod
+    def _wallet_priced_slot(conn: sqlite3.Connection, account_id: str, node_id: str,
+                             now: float, max_age_s: float) -> tuple[sqlite3.Row, offers.Offer, int]:
+        """One current quote and eligible dedicated machine inside the caller's transaction."""
+        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        heartbeat = conn.execute(
+            "SELECT ts FROM heartbeats WHERE node_id = ? ORDER BY id DESC LIMIT 1",
+            (node_id,)).fetchone()
+        heartbeat = heartbeat[0] if heartbeat is not None else None
+        if (node is None or node["enabled"] != 1 or node["capacity"] != 1
+                or node["public_status_number"] is None
+                or node["reserved_for"] not in (None, account_id)
+                or type(heartbeat) not in (int, float)
+                or not 0 <= now - heartbeat <= max_age_s):
+            raise NoSlotAvailable("the chosen machine is not available for purchase")
+        declared = conn.execute(
+            "SELECT * FROM slots WHERE node_id = ?", (node_id,)).fetchall()
+        if len(declared) != 1 or declared[0]["kind"] != slotstates.MACHINE_SLOT:
+            raise NoSlotAvailable("purchases require a machine with exactly one dedicated slot")
+        observed = declared[0]["reported_at"]
+        if type(observed) not in (int, float) or not 0 <= now - observed <= max_age_s:
+            raise NoSlotAvailable("the chosen slot does not have a fresh slot report")
+        offer = offers.from_json(node["offer_json"])
+        quote = offers.quote(offer)
+        if not isinstance(offer, offers.Offer) or quote is None or quote.total.currency != "USD":
+            raise NoSlotAvailable("the chosen machine does not have a current USD quote")
+        cents = wallet.usd_cents(quote.total.amount)
+        return declared[0], offer, cents
+
+    @staticmethod
+    def _wallet_order(conn: sqlite3.Connection, account_id: str, slot: sqlite3.Row,
+                      offer: offers.Offer, cents: int, period_start: float, period_end: float,
+                      idempotency_key: str, now: float, *, operation: str) -> dict[str, Any]:
+        """Append a debit and its immutable order; caller owns the write transaction."""
+        entry_id, order_id = secrets.token_hex(16), secrets.token_hex(16)
+        conn.execute(
+            "INSERT INTO wallet_entries (id, account_id, kind, delta_cents, actor_kind, "
+            "actor_id, reason, idempotency_key, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (entry_id, account_id, "slot_purchase", -cents, "account", account_id,
+             "One calendar month of Fleet slot service", idempotency_key, now))
+        conn.execute(
+            "INSERT INTO slot_purchases (id, operation, account_id, node_id, slot_id, claim_id, "
+            "claim_generation, amount_cents, offer_snapshot, period_start_at, period_end_at, "
+            "wallet_entry_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (order_id, operation, account_id, slot["node_id"], slot["id"], slot["gateway_claim_id"],
+             slot["gateway_generation"], cents, offers.to_json(offer), period_start, period_end,
+             entry_id, now))
+        return dict(conn.execute("SELECT * FROM slot_purchases WHERE id = ?",
+                                 (order_id,)).fetchone())
+
+    def renew_paid_slot(self, account_id: str, slot_id: str, *, claim_id: str, expected_cents: int,
+                        idempotency_key: str, now: float, max_age_s: float) -> dict[str, Any]:
+        """Explicitly prepay another month for this same delivered wallet-backed claim."""
+        try:
+            wallet.identity(slot_id)
+            wallet.identity(claim_id)
+            expected_cents = wallet.positive_cents(expected_cents)
+            idempotency_key = wallet.request_id(idempotency_key)
+            now = wallet.instant(now)
+            max_age_s = wallet.freshness(max_age_s)
+        except wallet.WalletError as exc:
+            raise StoreError(str(exc)) from exc
+        with self._write_txn() as conn:
+            self._wallet_account(conn, account_id)
+            slot = self._wallet_current_slot(conn, account_id, slot_id, claim_id)
+            if (slot["kind"] != slotstates.MACHINE_SLOT
+                    or slot["state"] not in {slotstates.CLAIMED, slotstates.ACTIVE}):
+                raise StoreError("only a delivered paid machine slot can be renewed")
+            previous = conn.execute("SELECT * FROM wallet_entries WHERE idempotency_key = ?",
+                                    (idempotency_key,)).fetchone()
+            if previous is not None:
+                order = conn.execute("SELECT * FROM slot_purchases WHERE wallet_entry_id = ?",
+                                     (previous["id"],)).fetchone()
+                if (previous["kind"] != "slot_purchase" or previous["account_id"] != account_id
+                        or previous["delta_cents"] != -expected_cents or order is None
+                        or order["account_id"] != account_id or order["slot_id"] != slot_id
+                        or order["claim_id"] != slot["gateway_claim_id"]
+                        or order["amount_cents"] != expected_cents
+                        or order["operation"] != "renewal"):
+                    raise WalletReplayMismatch(
+                        "the renewal request identity was already used differently")
+                return dict(order)
+            if wallet_topups.spending_blocked(conn, account_id):
+                raise StoreError("account credit needs payment review before a new purchase")
+            last_end = conn.execute(
+                "SELECT MAX(period_end_at) FROM slot_purchases "
+                "WHERE account_id = ? AND slot_id = ? AND claim_id = ?",
+                (account_id, slot_id, slot["gateway_claim_id"])).fetchone()[0]
+            if last_end is None:
+                raise StoreError("legacy slots do not have a paid claim to renew")
+            current, offer, cents = self._wallet_priced_slot(
+                conn, account_id, slot["node_id"], now, max_age_s)
+            if current["id"] != slot_id or current["present"] != 1:
+                raise NoSlotAvailable("the current paid slot has not been confirmed present")
+            if cents != expected_cents:
+                raise WalletQuoteChanged(
+                    "the slot price changed; review the current quote before renewing")
+            if self._wallet_balance(conn, account_id) < cents:
+                raise InsufficientWalletCredit(
+                    "there is not enough USD service credit to renew this slot")
+            period_start, period_end = wallet.month_period(max(now, float(last_end)))
+            return self._wallet_order(conn, account_id, slot, offer, cents,
+                period_start, period_end, idempotency_key, now, operation="renewal")
+
+
     # -- the price --------------------------------------------------------
     #
     # Shown on the public pages, never charged. Like the ledger above, nothing
@@ -2246,6 +2705,7 @@ class Store:
                 (slot_id,)).fetchone()
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
+            self._require_no_paid_resource_history(conn, "slot_id", slot_id)
             if row["kind"] == slotstates.OWNER_SLOT:
                 raise StoreError(
                     f"{slot_id} is its holder's own machine, counted as their slot. "
@@ -2265,7 +2725,7 @@ class Store:
             conn.execute("DELETE FROM gateway_provider_bindings WHERE slot_id = ?", (slot_id,))
             conn.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
 
-    # Every column that holds a slot's id, beside its sign-in row, which
+    # Mutable columns that hold a slot's id, beside its sign-in row, which
     # `logins` keeps under "slot:<id>" and which moves with it. Guarded by the
     # same schema test as NODE_ID_COLUMNS.
     SLOT_ID_COLUMNS = (("slots", "id"), ("account_intents", "slot_id"),
@@ -2290,6 +2750,7 @@ class Store:
                 raise StoreError(f"no slot {old!r}")
             if conn.execute("SELECT 1 FROM slots WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a slot called {new!r} already exists")
+            self._require_no_paid_resource_history(conn, "slot_id", old, new)
             # A slot's id is its machine's name while it is free, so nothing
             # else may already answer to it: another slot's holder, or another
             # machine. Its own machine's id, and its own holder's name, may.
@@ -2376,7 +2837,8 @@ class Store:
 
     # -- local ccfleet CLI ------------------------------------------------
 
-    def request_cli_pairing(self, slot_id: str, account_id: str, *, now: float) -> str:
+    def request_cli_pairing(self, slot_id: str, account_id: str, *, now: float,
+                            admit: Optional[Callable[[Mapping[str, Any]], bool]] = None) -> str:
         """Mint a ten-minute, single-use code for one held, ready slot."""
         token = cli_access.PAIR_PREFIX + secrets.token_urlsafe(32)
         with self._write_txn() as conn:
@@ -2385,6 +2847,10 @@ class Store:
                 raise StoreError(f"{slot_id} can connect once it is signed in and in use")
             if row["kind"] != slotstates.MACHINE_SLOT:
                 raise StoreError("CLI pairing is enabled for hosted slots")
+            if admit is not None:
+                current = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+                if not callable(admit) or admit(dict(current)) is not True:
+                    raise StoreError("renew this slot before connecting a computer")
             endpoint = conn.execute(
                 "SELECT access_host, access_port, ssh_host_key FROM nodes WHERE id = ?",
                 (row["node_id"],)).fetchone()
@@ -2408,7 +2874,9 @@ class Store:
         return token
 
     def register_cli_device(self, pairing_token: str, public_key: str,
-                            device_name: str, *, now: float) -> dict[str, Any]:
+                            device_name: str, *, now: float,
+                            admit: Optional[Callable[[Mapping[str, Any]], bool]] = None
+                            ) -> dict[str, Any]:
         """Consume a pairing code and return the new device secret once."""
         if not cli_access.token_has_prefix(pairing_token, cli_access.PAIR_PREFIX):
             raise StoreError("that pairing code is not valid")
@@ -2431,6 +2899,8 @@ class Store:
                 "WHERE p.token_hash = ?", (digest,)).fetchone()
             if row is None or not hmac.compare_digest(row["token_hash"], digest):
                 raise StoreError("that pairing code is invalid or has already been used")
+            if admit is not None and (not callable(admit) or admit(dict(row)) is not True):
+                raise StoreError("renew this slot before connecting a computer")
             # Single-use even when it expired or the slot changed while the
             # page was open: a retry starts with a fresh code.
             conn.execute("DELETE FROM cli_pairings WHERE token_hash = ?", (digest,))
@@ -3507,14 +3977,29 @@ class Store:
         page shows differently, so they are two different exceptions rather
         than one absent return value.
         """
+        with self._write_txn() as conn:
+            slot_id = self._claim_slot_in_transaction(conn, account_id, now=now,
+                node_id=node_id, heard_since=heard_since)
+        return self.get_slot(slot_id)  # type: ignore[return-value]
+
+    def _claim_slot_in_transaction(self, conn: sqlite3.Connection, account_id: str, *,
+                                   now: float, node_id: Optional[str],
+                                   heard_since: Optional[float], check_quota: bool = True) -> str:
+        """Shared claim decision; caller owns the one write transaction.
+
+        Paid purchases supply their own credit entitlement. Legacy callers keep
+        the original count allowance. Neither path commits inside this helper.
+        """
+        if conn is not self._conn or not conn.in_transaction:
+            raise StoreError("slot claims require the caller's active write transaction")
         marks = ",".join("?" * len(slotstates.HELD))
         held_states = sorted(slotstates.HELD)
-        with self._write_txn() as conn:
-            account = conn.execute(
-                "SELECT slot_quota, email, handle FROM accounts WHERE id = ?",
-                (account_id,)).fetchone()
-            if account is None:
-                raise StoreError(f"no account {account_id!r}")
+        account = conn.execute(
+            "SELECT slot_quota, email, handle FROM accounts WHERE id = ?",
+            (account_id,)).fetchone()
+        if account is None:
+            raise StoreError(f"no account {account_id!r}")
+        if check_quota:
             quota = int(account["slot_quota"])
             held = int(conn.execute(
                 f"SELECT COUNT(*) AS n FROM slots WHERE held_by = ? "  # noqa: S608
@@ -3524,37 +4009,37 @@ class Store:
                 raise QuotaExceeded(
                     f"account holds {held} of {quota} slots"
                     if quota else "account has no slot allowance")
-            args: list[Any] = []
-            extra = ""
-            if node_id is not None:
-                extra += " AND s.node_id = ?"
-                args.append(node_id)
-            if heard_since is not None:
-                extra += " AND s.reported_at >= ?"
-                args.append(heard_since)
-            # A machine's slot only: an owner slot is somebody's own node,
-            # never on offer, whatever state a stray write left it in.
-            candidate = conn.execute(
-                "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
-                "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1 AND s.kind = ?"
-                " AND (n.reserved_for IS NULL OR n.reserved_for = ?)" + extra +
-                " ORDER BY n.reserved_for IS NULL, s.node_id, s.unix_user LIMIT 1",
-                (slotstates.FREE, slotstates.MACHINE_SLOT, account_id, *args)).fetchone()
-            if candidate is None:
-                raise NoSlotAvailable(
-                    f"no free slot on {node_id}" if node_id
-                    else "no free slot on any enabled machine")
-            name = self._name_for(conn, account)
-            cur = conn.execute(
-                "UPDATE slots SET state = ?, held_by = ?, claimed_at = ?, "
-                "released_at = NULL, name = ?, ssh_public_key = '', gateway_claim_id = ?, "
-                "gateway_generation = gateway_generation + 1 "
-                "WHERE id = ? AND state = ?",
-                (slotstates.CLAIMING, account_id, now, name, secrets.token_hex(16),
-                 candidate["id"], slotstates.FREE))
-            if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
-                raise NoSlotAvailable("the free slot was taken; try again")
-        return self.get_slot(candidate["id"])  # type: ignore[return-value]
+        args: list[Any] = []
+        extra = ""
+        if node_id is not None:
+            extra += " AND s.node_id = ?"
+            args.append(node_id)
+        if heard_since is not None:
+            extra += " AND s.reported_at >= ?"
+            args.append(heard_since)
+        # A machine's slot only: an owner slot is somebody's own node,
+        # never on offer, whatever state a stray write left it in.
+        candidate = conn.execute(
+            "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
+            "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1 AND s.kind = ?"
+            " AND (n.reserved_for IS NULL OR n.reserved_for = ?)" + extra +
+            " ORDER BY n.reserved_for IS NULL, s.node_id, s.unix_user LIMIT 1",
+            (slotstates.FREE, slotstates.MACHINE_SLOT, account_id, *args)).fetchone()
+        if candidate is None:
+            raise NoSlotAvailable(
+                f"no free slot on {node_id}" if node_id
+                else "no free slot on any enabled machine")
+        name = self._name_for(conn, account)
+        cur = conn.execute(
+            "UPDATE slots SET state = ?, held_by = ?, claimed_at = ?, "
+            "released_at = NULL, name = ?, ssh_public_key = '', gateway_claim_id = ?, "
+            "gateway_generation = gateway_generation + 1 "
+            "WHERE id = ? AND state = ?",
+            (slotstates.CLAIMING, account_id, now, name, secrets.token_hex(16),
+             candidate["id"], slotstates.FREE))
+        if cur.rowcount == 0:  # pragma: no cover - the write lock precludes it
+            raise NoSlotAvailable("the free slot was taken; try again")
+        return str(candidate["id"])
 
     # -- signing in --------------------------------------------------------
 

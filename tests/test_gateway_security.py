@@ -749,3 +749,21 @@ def test_real_sshd_bash_startup_reproduces_the_previous_forced_command_bypass(is
     os.chown(startup, sshd.account.pw_uid, sshd.account.pw_gid)
     reply = sshd.connect("service", "ccfleet-gateway-v1")
     assert reply.returncode == 0 and reply.stdout == b"USER_STARTUP_BYPASS\n"
+
+
+@pytest.mark.parametrize("selection", ["foreign", "missing", "mixed"])
+def test_invalid_enrollment_selection_never_reads_any_financial_status(
+        scenario, monkeypatch, selection):
+    token = paired_device_token(scenario)
+    chosen = ([scenario.foreign] if selection == "foreign" else ["missing-slot"]
+              if selection == "missing" else [scenario.own[0], scenario.foreign])
+    def forbidden_financial_read(*args, **kwargs):
+        pytest.fail("ownership must be validated before financial status")
+    monkeypatch.setattr(scenario.store, "paid_slot_through", forbidden_financial_read)
+    before = scenario.store.list_gateway_keys("owner-a")
+    body = json.dumps({"slot_ids": chosen}).encode()
+    answer = raw_request(scenario, "Content-Type: application/json\r\nContent-Length: "
+                         + str(len(body)) + "\r\n", target="/api/cli/gateway", body=body,
+                         token=token)
+    assert int(answer.split(b" ", 2)[1]) == 400
+    assert scenario.store.list_gateway_keys("owner-a") == before

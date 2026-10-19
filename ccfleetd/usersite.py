@@ -22,6 +22,8 @@ import hmac
 import math
 import re
 import shlex
+import time
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from html import escape
@@ -43,6 +45,9 @@ from . import (
     plans,
     resets,
     status,
+    wallet_access,
+    wallet_routes,
+    wallet_ui,
 )
 from . import slots as slotstates
 from .bilingual import CONTROLS, SCRIPT_TAG, bi, label
@@ -95,6 +100,12 @@ from .store import (
 # from the request: a message a link could write is a message a stranger could
 # put on this page, on our domain, in front of somebody signed in.
 NOTES = {
+    "checkout-returned": ("warn", "Checkout closed. Your balance shows confirmed credit; "
+                         "a payment may still be processing."),
+    "wallet-purchased": ("ok", "First month purchased. Your slot is being prepared."),
+    "wallet-renewed": ("ok", "Your slot has been renewed for one calendar month."),
+    "wallet-purchase-required": ("warn", "Choose a slot and review its USD price before buying."),
+    "wallet-expired": ("warn", "Renew this slot before starting a new connection."),
     "claimed": ("ok", "Your slot is being set up: an account on the machine, then Claude "
                       "Code. It takes a few minutes, and this page keeps up."),
     "no-slot": ("warn", "No slot is available right now. Try again later, or ask your operator."),
@@ -125,6 +136,11 @@ NOTES = {
 }
 
 NOTES_ZH = {
+    "checkout-returned": "付款页面已关闭。余额只显示已确认的入账，付款可能仍在处理中。",
+    "wallet-purchased": "已购买首月，正在准备槽位。",
+    "wallet-renewed": "已按 UTC 日历续费一个月。",
+    "wallet-purchase-required": "请选择槽位，确认美元月费后再购买。",
+    "wallet-expired": "请先续费此槽位，再建立新连接。",
     "claimed": (
         '槽位正在准备：先创建独立账号，再安装 Claude Code。'
         '通常需要几分钟，页面会自动更新。'
@@ -303,6 +319,8 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
     """Do what a form on this page asked, for this account and nobody else."""
     viewer = viewer_for(account, session_id, cfg, store)
     parts = path.strip("/").split("/")
+    if parts in (["account", "purchase"], ["account", "renew"]):
+        return wallet_routes.act(store, cfg, account, session_id, now, parts[1], form)
     if len(parts) == 3 and parts[:2] == ["account", "gateway"]:
         return gateway_ui.act(store, cfg, account, path, form, now, session_id)
     if parts == ["account", "claim"]:
@@ -327,6 +345,8 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
 
 def _claim(store: Store, cfg: Config, account: Mapping[str, Any], now: float,
            form: Optional[Mapping[str, str]] = None) -> Outcome:
+    if wallet_routes.enabled(cfg):
+        return _back("wallet-purchase-required", "wallet")
     node_id = None
     number = (form or {}).get("machine_number", "")
     configured = any(node.get("offer") is not None for node in store.list_nodes())
@@ -394,7 +414,10 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
             store.request_slot_login(slot_id, "", now, kind="switch", held_by=holder)
             return _back("switch", anchor)
         if action == "cli":
-            token = store.request_cli_pairing(slot_id, holder, now=now)
+            if not wallet_access.allowed(store, slot, now=now):
+                return _back("wallet-expired", anchor)
+            token = store.request_cli_pairing(slot_id, holder, now=now,
+                admit=lambda row: wallet_access.allowed(store, row, now=time.time()))
             return Outcome(200, body=cli_pairing_page(slot, token, viewer))
         if action == "cli-revoke":
             store.revoke_cli_device(slot_id, form.get("device_id", ""), held_by=holder)
@@ -1155,8 +1178,35 @@ def _span_zh(seconds: int) -> str:
     return f"{seconds} 秒"
 
 
+def _wallet_panel(store, account, *, topup_ready: bool = False, csrf: str = "",
+                  compact: bool = False) -> str:
+    try:
+        held = store.wallet_spending_blocked(account["id"])
+        balance = wallet_ui.balance_card(store.wallet_balance(account["id"]),
+            topup_ready=topup_ready and not held, csrf=csrf,
+            idempotency_key=wallet_routes.nonce() if topup_ready and not held else "",
+            compact=compact)
+        return (balance + ('<p class="note-banner warn">'
+                + label(*wallet_routes.ERRORS["hold"], inline=True) + '</p>' if held else ''))
+    except Exception:
+        # A failed financial read must never look like a zero/usable balance.
+        return ('<section class="wallet-ui"><h2>' + label("Fleet credit", "Fleet 余额", inline=True)
+                + '</h2><p>' + label("Credit is unavailable. Buying and renewing are paused.",
+                "余额暂不可用，已暂停购买与续费。", inline=True) + '</p></section>')
+
+
+def _wallet_history(store, account) -> str:
+    try:
+        body = wallet_ui.owner_ledger(store.list_wallet_entries(account["id"]))
+    except Exception:
+        body = ('<p>' + label("Credit history is unavailable.", "余额记录暂不可用。",
+                             inline=True) + '</p>')
+    return ('<details class="account-advanced wallet-history" id="credit-history"><summary>'
+            + label("Credit history", "余额记录", inline=True) + '</summary>' + body + '</details>')
+
+
 def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
-         session_id: str, now: float, note: str = "") -> str:
+         session_id: str, now: float, note: str = "", *, topup_ready: bool = False) -> str:
     """The whole page, for one person. Signed out, it offers sign-in and nothing else."""
     if account is None:
         return _signed_out(cfg)
@@ -1223,8 +1273,15 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     since = store.listening_since()
     silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}
     native_states = {s["id"]: devin_ui.native_state(store, cfg, account, s, now=now) for s in held}
+    financial = {}
+    for slot in held:
+        try:
+            end = wallet_access.paid_through(store, slot)
+            financial[slot["id"]] = (end, end is None or now < end)
+        except Exception:
+            financial[slot["id"]] = (None, False)
     pairing_slots = [s for s in held if s.get("kind") == slotstates.MACHINE_SLOT
-                     and s["state"] == slotstates.ACTIVE
+                     and s["state"] == slotstates.ACTIVE and financial[s["id"]][1]
                      and nodes.get(s["node_id"], {}).get("access_host")
                      and nodes.get(s["node_id"], {}).get("ssh_host_key")]
     authorizer = next((s for s in pairing_slots if cli_devices[s["id"]]),
@@ -1236,6 +1293,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                devin_state=native_states[s["id"]],
                                devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
                                authorizer=authorizer,
+                               payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
@@ -1248,12 +1306,13 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account") + banner
-        + (
-            '<div class="card allowance"><div><h2>'
-        ) + label('Your allowance', '槽位额度', inline=True)
-        + f'</h2>{allowance}</div>'
-        f"{claim}</div>"
+        + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
+           if wallet_routes.enabled(cfg) else
+           '<div class="card allowance"><div><h2>'
+           + label('Your allowance', '槽位额度', inline=True)
+           + f'</h2>{allowance}</div>{claim}</div>')
         + (f'<div class="slots">{cards}</div>' if cards else "")
+        + (_wallet_history(store, account) if wallet_routes.enabled(cfg) else "")
         + gateway_ui.panel(store, cfg, account, csrf, held)
         + ('<details class="account-advanced"><summary>'
            + label('Email notifications', '邮件通知', inline=True) + '</summary>'
@@ -1292,7 +1351,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                 .get("checked_at"), now) for s in held)
     return _shell("your slots", body,
                   _refresh(held, logins, updating or reading, idle_refresh=False),
-                  viewer=viewer_for(account, session_id, cfg, store), width="wide")
+                  viewer=viewer_for(account, session_id, cfg, store), width="wide",
+                  extra_css=wallet_ui.CSS if wallet_routes.enabled(cfg) else "")
 
 
 def slots_page(store: Store, cfg: Config, now: float, query: Mapping[str, str], *,
@@ -1330,7 +1390,7 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
     held = store.list_slots(held_by=account["id"])
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
-    can_claim = counted < quota
+    can_claim = wallet_routes.enabled(cfg) or counted < quota
     note = ('' if can_claim else '<p class="offer-note">' + label(
         "You have no unused slot allowance. You can browse prices; contact the operator "
         "before claiming another slot.",
@@ -1341,7 +1401,8 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
                     "搜索服务商与网络类型，再选择主机。", inline=True) + '</p></div>'
             + _account_nav("/account/available") + note
             + offer_ui.browse(store, account, csrf_for(session_id, cfg.cookie_secret), now,
-                              cfg.heartbeat_max_age_s, query, can_claim=can_claim))
+                              cfg.heartbeat_max_age_s, query, can_claim=can_claim,
+                              purchase=wallet_routes.enabled(cfg)))
     return _shell("Available slots", body, viewer=viewer_for(account, session_id, cfg, store),
                   width="wide")
 
@@ -1421,7 +1482,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-18"
+PRIVACY_UPDATED = "2026-10-19"
 
 
 def _span(seconds: int) -> str:
@@ -2179,6 +2240,38 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
         ],
     )
+    if cfg.usd_slot_credit_enabled:
+        body += card(
+            "Service credit and payments",
+            "服务余额与付款",
+            [
+                (
+                    "We keep credit amounts, slot purchases and renewals, paid dates, "
+                    "staff actions and private billing notes to check your balance and "
+                    "billing history. These records are append-only. Returning a slot "
+                    "does not remove them, and they do not expire automatically.",
+                    "我们保存余额变动、槽位购买与续费、有效期、工作人员操作及内部账目备注，"
+                    "用于核对余额和账单。记录以追加方式保存，归还槽位不会删除，也不会自动过期。",
+                ),
+                (
+                    'When online top-up is available, Stripe hosts the payment page. '
+                    'We send Stripe your Fleet account reference, top-up order reference, '
+                    'USD amount and currency. You enter payment details directly on Stripe, '
+                    'under <a href="https://stripe.com/privacy">its privacy policy</a>. '
+                    'Our billing history keeps payment references and payment-review status; '
+                    'it does not store card numbers or card security codes.',
+                    '在线充值开通后，付款页面由 Stripe 提供。我们向 Stripe 发送 Fleet 账号标识、'
+                    '充值订单标识、美元金额及币种。付款资料由你直接在 Stripe 页面填写，并适用'
+                    '<a href="https://stripe.com/privacy">Stripe 隐私政策</a>。我们的账目只保存'
+                    '付款关联标识和审核状态，不保存银行卡号或卡片安全码。',
+                ),
+                (
+                    "For account deletion, contact the operator to review the slots and "
+                    "billing records, including any financial-record retention requirements.",
+                    "删除账号时，请联系运营方，一并核对槽位、账目及需要保留财务记录的情况。",
+                ),
+            ],
+        )
     body += card(
         "Sharing, keeping and deleting",
         "共享、保存与删除",
@@ -2424,6 +2517,8 @@ def _slot_card(
     devin_state: Optional[str] = None,
     devin_html: str = "",
     authorizer: Optional[Mapping[str, Any]] = None,
+    payment_end: Optional[float] = None,
+    paid_access: bool = True,
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
@@ -2539,7 +2634,21 @@ def _slot_card(
             else STATE_ZH.get(slot["state"], ("", detail))[1]
         )
         parts.append("<p>" + label(detail, detail_zh, inline=True) + "</p>")
-    parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer))
+    if payment_end is not None:
+        state = label("Paid month active" if paid_access else "Renew to reconnect",
+                      "已付费月份有效" if paid_access else "续费后可重新连接", inline=True)
+        parts.append('<p class="' + ('muted' if paid_access else 'lapsed') + '">' + state
+                     + ' · ' + escape(wallet_ui._date(payment_end)) + '</p>')
+        if wallet_routes.enabled(cfg) and slot["state"] in (slotstates.CLAIMED, slotstates.ACTIVE):
+            parts.append('<p><a class="btn" href="/account/renew?'
+                         + urllib.parse.urlencode({"slot_id": slot["id"]}) + '">'
+                         + label("Renew one month", "续费一个月", inline=True) + '</a></p>')
+    elif not paid_access:
+        parts.append('<p class="lapsed">' + label(
+            "Payment status is unavailable. New connections are paused.",
+            "付费状态暂不可用，已暂停新连接。", inline=True) + '</p>')
+    if paid_access:
+        parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer))
     parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
                  if devin_only else devin_html)
     account_parts = []
@@ -2593,7 +2702,8 @@ def _slot_card(
             # on this slot. Its paired authorizer is explained in the connect guide.
             if not devin_slot:
                 parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
-                    _cli_access(slot, node, cli_devices or [], csrf, now), 'slot-devices'))
+                    _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access),
+                    'slot-devices'))
     if account_parts:
         if devin_slot:
             parts.append('<details class="provider-other"><summary>' + label(
@@ -3538,7 +3648,8 @@ def _claude_line_zh(said: Mapping[str, Any]) -> str:
 
 
 def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
-                devices: list[Mapping[str, Any]], csrf: str, now: float) -> str:
+                devices: list[Mapping[str, Any]], csrf: str, now: float,
+                *, paid_access: bool = True) -> str:
     """Pair and revoke local ccfleet installations. No Claude token is involved."""
     base = f"/account/slots/{escape(slot['id'])}"
     configured = bool(node.get("access_host") and node.get("ssh_host_key"))
@@ -3553,7 +3664,10 @@ def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
                     + '</span>' + _form(f"{base}/cli-revoke", csrf, "Remove",
                                         '<input type="hidden" name="device_id" value="'
                                         + escape(str(device["id"])) + '">', "quiet") + '</div>')
-    if ready:
+    if not paid_access:
+        button = '<span class="muted small">' + label("Renew this slot to connect a computer.",
+            "请先续费此槽位，再连接电脑。", inline=True) + '</span>'
+    elif ready:
         button = _form(f"{base}/cli", csrf,
                        "Connect another computer" if devices else "Connect this computer",
                        cls="primary")
