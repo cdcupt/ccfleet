@@ -124,6 +124,15 @@ def test_native_flags_mode_and_bare_auth(client):
     assert settings["env"]["ANTHROPIC_API_KEY"] == client.helper.Bridge.secret
 
 
+def test_clean_session_keeps_the_selected_fleet_route(client):
+    assert invoke(client, "--", "--safe-mode") == 0
+    command, options, _, settings, _ = client.calls[0]
+    assert "--safe-mode" in command
+    assert options["env"]["ANTHROPIC_AUTH_TOKEN"] == client.helper.Bridge.secret
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == client.helper.Bridge.base_url
+    assert settings["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == ""
+
+
 @pytest.mark.parametrize("provider", ["BEDROCK", "VERTEX", "FOUNDRY", "ANTHROPIC_AWS",
                                       "ANTHROPIC_GOOGLE_CLOUD", "MANTLE", "GATEWAY"])
 def test_all_installed_provider_selectors_are_pinned_off(client, monkeypatch, provider):

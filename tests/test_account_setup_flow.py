@@ -134,7 +134,8 @@ def test_setup_precedes_launch_with_distinct_own_authorizer_and_Devin_target(set
     assert commands == [
         "ccfleet update",
         "ccfleet gateway setup --slot alice-claude --slots alice-devin --provider devin",
-        "ccfleet local --transport gateway --slot alice-devin --model opus --effort max --new",
+        "ccfleet local --transport gateway --slot alice-devin --model claude-opus-5-5 "
+        "--effort max --new -- --safe-mode",
     ]
     assert "bob-private" not in source and "Bob private key" not in source
     secrets = (c.existing["key_token"], c.foreign["key_token"], SESSION,

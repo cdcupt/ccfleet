@@ -2349,7 +2349,8 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
         setup = ('ccfleet gateway setup --slot ' + source + ' --slots ' + target
                  + ' --provider ' + provider)
         launch = ('ccfleet local --transport gateway --slot ' + target
-                  + (' --model opus --effort max' if provider == 'devin' else '') + ' --new')
+                  + (' --model claude-opus-5-5 --effort max' if provider == 'devin' else '')
+                  + ' --new' + (' -- --safe-mode' if provider == 'devin' else ''))
         pair = ('<details class="connect-first-time"><summary>'
                 + label('First time on this computer?', '第一次在这台电脑上使用？', inline=True)
                 + '</summary>' + bi(
@@ -2364,6 +2365,11 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                             ('Update Fleet', '更新 Fleet', 'ccfleet update'),
                             ('Save this connection', '保存这个连接', setup),
                             ('Start coding', '开始写代码', launch)))
+        pilot = (bi(
+            '<p class="connect-hint">The Devin pilot starts with Claude Code’s built-in tools. '
+            'Custom plugins and MCP tools are off for this session.</p>',
+            '<p class="connect-hint">Devin 试点使用 Claude Code 内置工具，'
+            '本次会话不加载自定义插件和 MCP 工具。</p>') if provider == 'devin' else '')
         result.append(start + '<div class="connect-body">' + bi(
             '<p>Open Terminal in your project folder. Run these commands in order.</p>',
             '<p>在项目文件夹中打开终端，按顺序运行下面的命令。</p>')
@@ -2372,7 +2378,7 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                 'that the start command needs. Your tools and files stay on your computer; '
                 'selected context is sent for model replies.</p>',
                 '<p class="connect-hint">请先运行“保存这个连接”，再启动。工具与文件在电脑上，'
-                '选中的上下文会发送出去以获取模型回复。</p>') + '</div></details>')
+                '选中的上下文会发送出去以获取模型回复。</p>') + pilot + '</div></details>')
     return ''.join(result)
 
 
