@@ -1063,13 +1063,13 @@ def _devin_cli_connection() -> str:
             '<code>ccfleet list</code> shows saved pairings, which can contain old names. '
             'Use <code>--remote</code> to check current ownership and names. To authorize '
             'the lookup with a specific working pairing, run '
-            '<code>ccfleet list --remote --slot PAIRED_SLOT</code>.</p>',
+            '<code class="code-wrap">ccfleet list --remote --slot PAIRED_SLOT</code>.</p>',
             '<p>Devin 只接受一个已验证的自有槽位。这里保存的是 Fleet 连接密钥，不是登录 '
             'Devin；槽位未就绪时会拒绝配置。省略 <code>--provider</code> 时，同一配对和'
             '服务器保留已有服务选择，新连接默认 Anthropic。直接运行 <code>ccfleet list</code> '
             '只显示已保存的配对，其中可能有旧名称；加 <code>--remote</code> 查询当前归属'
             '与名称。若要用指定的有效配对查询，运行 '
-            '<code>ccfleet list --remote --slot PAIRED_SLOT</code>。</p>',
+            '<code class="code-wrap">ccfleet list --remote --slot PAIRED_SLOT</code>。</p>',
         )
     )
 
