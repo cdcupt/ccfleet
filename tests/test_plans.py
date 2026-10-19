@@ -66,6 +66,11 @@ def signed_in(tier, sub="max"):
             "credentials": {"logged_in": True, "subscription_type": sub, "plan": tier}}
 
 
+def accounts_card(page):
+    """The redesigned console puts accounts before slots; keep plan checks scoped."""
+    return page[page.index('id="accounts"'):page.index('id="slots"')]
+
+
 def test_the_slots_card_says_each_holders_plan(console):  # noqa: F811
     store, call = console
     held_slot(store)
@@ -107,8 +112,8 @@ def test_the_accounts_card_says_each_persons_plans(console):  # noqa: F811
     store.insert_heartbeat("erik-1", time.time(), {
         "node_id": "erik-1", "credentials": {"subscription_type": "pro"}})
     page = call("GET", "/admin").body
-    accounts = page[page.index('id="accounts"'):page.index('id="price"')]
-    assert "holds 2 (Max 20x, Pro) · " in accounts and "Team" not in accounts
+    accounts = accounts_card(page)
+    assert "2 slots (Max 20x, Pro) · " in accounts and "Team" not in accounts
 
 
 @pytest.mark.parametrize("credentials", [{"present": False},
@@ -121,16 +126,16 @@ def test_signed_out_slots_do_not_show_cached_plans_in_console_cards(console, cre
                         "plan": "default_claude_max_20x"}})
     page = call("GET", "/admin").body
     assert "Max 20x" not in slots_card(page)
-    accounts = page[page.index('id="accounts"'):page.index('id="price"')]
-    assert "Max 20x" not in accounts and "holds 1 · " in accounts
+    accounts = accounts_card(page)
+    assert "Max 20x" not in accounts and "1 slot · " in accounts
 
 
 def test_somebody_with_no_plan_says_none(console):  # noqa: F811
     store, call = console
     holder(store, email="bea@example.com")
     page = call("GET", "/admin").body
-    accounts = page[page.index('id="accounts"'):page.index('id="price"')]
-    assert "holds 0 · " in accounts and "()" not in accounts
+    accounts = accounts_card(page)
+    assert "0 slots · " in accounts and "()" not in accounts
 
 
 def test_a_row_with_no_plan_says_no_plan(console):  # noqa: F811

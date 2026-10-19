@@ -12,6 +12,23 @@ from ccfleetd.store import Store
 from tests.test_admin_host import PRODUCT, Browser
 
 
+class NoRecurringContractsStore:
+    """Metrics-only Context fixture with an explicit empty billing contract."""
+
+    def slot_subscription_processing_required(self):
+        return False
+
+
+class NoopMonitor:
+    """Context may attach its inactive recurring service; no worker is started."""
+
+    def __init__(self):
+        self._recurring = None
+
+    def run_forever(self, stop):
+        pass
+
+
 def test_infrastructure_collection_is_an_explicit_operator_choice():
     assert Config.from_env({}).public_machine_metrics_enabled is False
     assert Config.from_env({'CCFLEET_PUBLIC_MACHINE_METRICS_ENABLED': 'true'}).public_machine_metrics_enabled
@@ -24,8 +41,9 @@ def test_infrastructure_collection_is_an_explicit_operator_choice():
 def test_only_opted_in_primary_constructs_an_observer(monkeypatch, enabled, broker, expected):
     made = []
     monkeypatch.setattr(api.machine_health, 'Observer', lambda: made.append(object()) or made[-1])
-    ctx = api.Context(object(), Config(public_machine_metrics_enabled=enabled, broker_only=broker),
-                      object())
+    ctx = api.Context(NoRecurringContractsStore(),
+                      Config(public_machine_metrics_enabled=enabled, broker_only=broker),
+                      NoopMonitor())
     assert bool(made) is expected
     assert (ctx.machine_health is not None) is expected
 
@@ -102,7 +120,8 @@ def test_serving_loop_owns_sampler_start_stop_and_join(monkeypatch, enabled):
             pass
 
     server = Server()
-    ctx = api.Context(object(), Config(public_machine_metrics_enabled=enabled), Monitor())
+    ctx = api.Context(NoRecurringContractsStore(),
+                      Config(public_machine_metrics_enabled=enabled), Monitor())
     ctx.machine_health = Sampler() if enabled else None
     gateway_closed = []
     close_gateway = ctx.gateway.close

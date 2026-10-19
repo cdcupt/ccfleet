@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any, Optional
@@ -92,12 +93,23 @@ def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None
             credit_actor: bool = False) -> str:
     """The slots card, the accounts card and the price, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
-    body = (_slots_card(store, accounts, csrf, now, cfg=cfg)
-            + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store),
-                             wallet_enabled=bool(cfg and cfg.usd_slot_credit_enabled),
-                             credit_actor=credit_actor))
+    body = (_accounts_card(store, accounts, csrf, now, _plans_by_holder(store),
+                           wallet_enabled=bool(cfg and cfg.usd_slot_credit_enabled),
+                           credit_actor=credit_actor)
+            + _slots_card(store, accounts, csrf, now, cfg=cfg))
     price = _price_card(store, csrf, now)
-    result = price + body if _has_offers(store) else body + price
+    navigation = ('<nav class="admin-tasks" aria-label="Admin tasks">'
+        '<a href="#accounts"><span class="admin-task-icon" aria-hidden="true">$</span>'
+        '<span><strong>Accounts &amp; credit</strong>'
+        '<small>Add credit for a customer</small></span></a>'
+        '<a href="#slots"><span class="admin-task-icon" aria-hidden="true">▤</span>'
+        '<span><strong>Slots &amp; machines</strong>'
+        '<small>Check who is connected</small></span></a>'
+        '<a href="#price"><span class="admin-task-icon" aria-hidden="true">≡</span>'
+        '<span><strong>Monthly prices</strong>'
+        '<small>Review prices and supplier costs</small></span></a>'
+        '</nav>')
+    result = navigation + body + price
     return result + ('<style>' + wallet_ui.CSS + '</style>'
                      if cfg and cfg.usd_slot_credit_enabled else '')
 
@@ -186,8 +198,10 @@ def _offer_prices_card(store: Store) -> str:
         shown = names.display(slots[0]) if len(slots) == 1 else node["id"]
         number = node.get("public_status_number")
         identity = f'<span class="sub">Machine {number}</span>' if number else ""
-        brands = escape(offer.host_brand or "Host provider not set")
-        brands += '<span class="sub">' + escape(offer.ip_brand or "IP provider not set") + '</span>'
+        brands = ('<span class="admin-provider host-provider">Host · '
+                  + escape(offer.host_brand or "Not set") + '</span>')
+        brands += ('<span class="admin-provider ip-provider">IP · '
+                   + escape(offer.ip_brand or "Not set") + '</span>')
         kind = {"residential": "Residential", "isp": "ISP",
                 "datacenter": "Datacenter"}.get(offer.ip_type, "Not verified")
         value = offers.quote(offer)
@@ -214,7 +228,10 @@ def _offer_prices_card(store: Store) -> str:
              + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>' if rows else
              '<p class="quiet">No enabled machine offers yet. Configure an enabled machine’s '
              'Providers, IP type &amp; price under Manage.</p>')
-    return ('<h2 id="price">Alpha slot pricing</h2><div class="card offer-pricing">'
+    return ('<section class="admin-block admin-pricing"><h2 id="price">Alpha slot pricing</h2>'
+            '<div class="card offer-pricing"><p class="admin-section-intro">'
+            'Monthly slot prices. Open the breakdown to review supplier costs.</p>'
+            '<details class="admin-price-details"><summary>View prices and cost breakdown</summary>'
             '<p class="offer-rule"><strong>Recorded monthly resource cost + '
             'max($2.00, 10% of resource cost)</strong> · same formula for ISP, residential '
             'and datacenter.</p>'
@@ -228,9 +245,10 @@ def _offer_prices_card(store: Store) -> str:
             '&amp; price. Brands, network type and the normalized monthly cost breakdown are '
             'public; raw invoices remain here. Introductory Alpha pricing may change for future '
             'periods: provide an updated quote before renewal and honor the agreed price for '
-            'an already agreed period. Payments remain manually agreed; no automatic charges '
-            'or renewals. Claude subscriptions and Anthropic API usage are separate.'
-            '</p></div>')
+            'an already agreed period. Credit purchases are one-time payments. Recurring '
+            'billing requires a separate customer confirmation. Provider subscriptions '
+            'and API usage are separate.'
+            '</p></details></div></section>')
 
 
 def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
@@ -350,8 +368,10 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
         'on the server: <code class="code-wrap">ccfleetd slot add &lt;machine&gt; '
         "--machine &lt;machine&gt; "
         "--unix-user slot01</code>.</p>")
-    return ('<h2 id="slots">Slots</h2><div class="card slots">'
-            + _releases(look.channels, now) + body + f'<p class="note">{WIPE_NOTE}</p></div>')
+    return ('<section class="admin-block admin-slots"><h2 id="slots">Slots</h2>'
+            '<p class="admin-section-intro">See who holds each slot. Open Manage for changes.</p>'
+            '<div class="card slots">' + _releases(look.channels, now) + body
+            + f'<p class="note">{WIPE_NOTE}</p></div></section>')
 
 
 def _machine_rows(store: Store, node: Mapping[str, Any], said: Mapping[str, Any],
@@ -786,20 +806,30 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
         credit = ''
         if wallet_enabled:
             try:
-                credit = '<p>Fleet credit: <strong>' + escape(wallet.display(
-                    store.wallet_balance(account["id"]))) + '</strong></p>'
-                credit += (bilingual.project_html(wallet_ui.admin_credit_grant_form(
-                            account_id=account["id"], csrf=csrf,
-                            idempotency_key=wallet_routes.nonce()), 'en', target='/admin')
-                           if credit_actor else
+                credit = ('<div class="admin-credit-balance"><span>Fleet credit</span><strong>'
+                          + escape(wallet.display(store.wallet_balance(account["id"])))
+                          + '</strong></div>')
+                credit += ('<details class="admin-credit-action"><summary>Add credit</summary>'
+                           + bilingual.project_html(wallet_ui.admin_credit_grant_form(
+                               account_id=account["id"], csrf=csrf,
+                               idempotency_key=wallet_routes.nonce()), 'en', target='/admin')
+                           + '</details>' if credit_actor else
                            '<p class="muted">Sign in using an admin account to add credit.</p>')
+                entries = store.list_wallet_entries(account["id"])
+                if entries:
+                    credit += ('<details class="admin-credit-history">'
+                               '<summary>Credit history</summary>'
+                               + bilingual.project_html(wallet_ui.owner_ledger(entries),
+                                                        'en', target='/admin') + '</details>')
             except Exception:
                 credit = ('<p class="muted">Fleet credit is unavailable. '
                           'Credit actions are paused.</p>')
         held = store.held_slot_count(account["id"])
+        slot_word = 'slot' if held == 1 else 'slots'
         quota = int(account.get("slot_quota") or 0)
         paid = ledger.get(account["id"], [])
-        role = " · operator" if account.get("role") == "admin" else ""
+        role = ('<span class="admin-role">Admin</span>'
+                if account.get("role") == "admin" else '')
         seen = (f"last here {escape(_age(now, account['last_seen_at']))} ago"
                 if account.get("last_seen_at") else "never back")
         allowance = ('' if wallet_enabled else
@@ -809,15 +839,21 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
                     '<input type="text" name="count" class="count" inputmode="numeric" '
                     f'value="{quota}" required>')
             + '</div>')
+        plan = '' if wallet_enabled else _plans_said(plans_held, account)
+        standing = '' if wallet_enabled else _standing(paid, bool(held or quota), now)
+        payment_notes = (_ledger(account, paid, csrf, now, legacy=wallet_enabled)
+                         if paid or not wallet_enabled else '')
+        monthly = _monthly_account_history(store.list_slot_subscriptions(account["id"]))
         lines.append(
-            f'<div class="row-line"><div class="row-name">{escape(str(account["email"]))}'
-            f'<span class="muted">{role} · holds {held}{_plans_said(plans_held, account)}'
-            f' · {seen}'
-            f"{_standing(paid, bool(held or quota), now)}</span></div>"
-            + allowance + credit + _ledger(account, paid, csrf, now) + "</div>")
+            '<div class="row-line admin-account"><div class="admin-account-heading">'
+            f'<div class="row-name">{escape(str(account["email"]))}{role}'
+            f'<span class="muted">{held} {slot_word}{plan} · {seen}{standing}</span></div></div>'
+            + allowance + credit + monthly + payment_notes
+            + "</div>")
     body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
     note = ('Fleet credit pays for a chosen slot one UTC calendar month at a time. '
-            'Users confirm each purchase and renewal. Expired paid months pause new access '
+            'Users confirm each credit purchase and renewal. Recurring card billing '
+            'requires a separate customer confirmation. Expired paid months pause new access '
             'without releasing the slot. Existing operator-managed claims keep their old access. '
             'Earlier manual payment records below do not add Fleet credit.'
             if wallet_enabled else
@@ -825,9 +861,48 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
             "zero. Lowering it takes nothing away: they keep what they hold, and only claiming "
             "more stops. Payments are a record for you and nothing more: a lapsed one takes no "
             "slot back and stops no claim.")
-    return ('<h2 id="accounts">Accounts</h2><div class="card">' + body
-            + '<p class="note">' + note + ' Operators are made on the server: '
-            '<code class="code-wrap">ccfleetd account role &lt;email&gt; admin</code>.</p></div>')
+    return ('<section class="admin-block admin-accounts"><h2 id="accounts">Accounts</h2>'
+            '<p class="admin-section-intro">Choose a customer, check their balance, '
+            'then add credit when needed.</p><div class="card">' + body
+            + '<details class="admin-help"><summary>How accounts and credit work</summary>'
+            '<p class="note">' + note + ' Operators are made on the server: '
+            '<code class="code-wrap">ccfleetd account role &lt;email&gt; admin</code>.</p>'
+            '</details></div></section>')
+
+
+def _monthly_account_history(orders: list[Mapping[str, Any]]) -> str:
+    """Read-only billing notes: an admin never receives another customer's portal."""
+    bound = [order for order in orders if order.get("subscription_id")]
+    if not bound:
+        return ''
+    rows = []
+    for order in bound:
+        number = order.get("machine_number")
+        title = f'Machine {number}' if type(number) is int and number > 0 else 'Monthly slot'
+        try:
+            amount = wallet.display(wallet.positive_cents(order.get("amount_cents")))
+        except wallet.WalletError:
+            amount = 'Not available'
+        provider = order.get("provider_status")
+        state = {'active': 'Active', 'trialing': 'Trial', 'past_due': 'Payment needs attention',
+                 'unpaid': 'Payment needs attention', 'canceled': 'Ended',
+                 'incomplete_expired': 'Not started', 'paused': 'Paused'}.get(provider,
+                                                                              'Awaiting payment')
+        if order.get("cancel_at_period_end") in (True, 1):
+            state = 'Stops at period end'
+        try:
+            end = datetime.fromtimestamp(wallet.instant(order.get("period_end_at")),
+                                         tz=timezone.utc).strftime('%Y-%m-%d')
+        except (wallet.WalletError, ValueError, OverflowError, OSError):
+            end = 'Not confirmed'
+        rows.append('<tr><td>' + escape(title) + '</td><td>' + escape(amount)
+                    + ' / month</td><td>' + escape(state) + '</td><td>' + end + '</td></tr>')
+    return ('<details class="admin-monthly-history"><summary>Monthly payments · '
+            + str(len(bound)) + ' plans</summary><div class="admin-monthly-table">'
+            '<table><thead><tr><th>Slot</th><th>Rate · USD</th><th>Status</th>'
+            '<th>Paid through · UTC</th></tr></thead><tbody>' + ''.join(rows)
+            + '</tbody></table></div><p class="muted small">Customers manage or cancel '
+            'their own plans from Monthly payments on their account page.</p></details>')
 
 
 def _plans_said(plans_held: Mapping[Optional[str], list[str]],
@@ -857,7 +932,7 @@ def _standing(paid: list[Mapping[str, Any]], counts: bool, now: float) -> str:
 
 
 def _ledger(account: Mapping[str, Any], paid: list[Mapping[str, Any]], csrf: str,
-            now: float) -> str:
+            now: float, *, legacy: bool = False) -> str:
     items = "".join(_payment_line(p, csrf) for p in paid)
     # Whatever they paid in last time is the likeliest this time.
     currency = paid[0]["currency"] if paid else "USD"
@@ -873,7 +948,8 @@ def _ledger(account: Mapping[str, Any], paid: list[Mapping[str, Any]], csrf: str
         'required>'
         '<input type="text" name="note" placeholder="note, seen only here" size="18" '
         f'maxlength="{payments.NOTE_MAX}">')
-    return (f'<details class="ledger"><summary>Payments ({len(paid)})</summary>'
+    title = 'Earlier payment notes' if legacy else 'Payments'
+    return (f'<details class="ledger"><summary>{title} ({len(paid)})</summary>'
             f"{items}{record}</details>")
 
 

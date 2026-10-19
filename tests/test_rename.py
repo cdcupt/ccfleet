@@ -436,11 +436,40 @@ NEITHER = {("accounts", "id"), ("payments", "id"), ("payments", "account_id"),
            ("wallet_topup_review_resolutions", "hold_id"),
            ("wallet_topup_review_resolutions", "actor_id")}
 
+# Recurring ownership, receipts and provider references are not mutable machine IDs.
+# The original resource references remain in IMMUTABLE_RESOURCE_ID_COLUMNS below.
+NEITHER |= {
+    ("slot_subscription_customers", "id"), ("slot_subscription_customers", "account_id"),
+    ("slot_subscription_customers", "merchant_id"), ("slot_subscription_customers", "customer_id"),
+    ("slot_subscription_orders", "id"), ("slot_subscription_orders", "account_id"),
+    ("slot_subscription_orders", "merchant_id"), ("slot_subscription_orders", "claim_id"),
+    ("slot_subscription_sessions", "order_id"), ("slot_subscription_sessions", "session_id"),
+    ("slot_subscriptions", "order_id"), ("slot_subscriptions", "subscription_id"),
+    ("slot_subscriptions", "customer_id"),
+    ("slot_subscription_invoices", "invoice_id"), ("slot_subscription_invoices", "payment_intent_id"),
+    ("slot_subscription_invoices", "order_id"), ("slot_subscription_invoices", "subscription_id"),
+    ("slot_subscription_invoices", "customer_id"), ("slot_subscription_invoices", "claim_id"),
+    ("slot_subscription_invoices", "merchant_id"),
+    ("slot_subscription_events", "event_id"), ("slot_subscription_events", "order_id"),
+    ("slot_subscription_events", "invoice_id"),
+    ("slot_subscription_holds", "id"), ("slot_subscription_holds", "order_id"),
+    ("slot_subscription_holds", "subscription_id"), ("slot_subscription_holds", "event_id"),
+    ("slot_subscription_hold_resolutions", "hold_id"),
+    ("slot_subscription_hold_resolutions", "actor_id"),
+    ("slot_subscription_cancellations", "id"), ("slot_subscription_cancellations", "account_id"),
+    ("slot_subscription_cancellations", "order_id"),
+    ("slot_subscription_cancellations", "subscription_id"),
+    ("slot_subscription_cancellations", "customer_id"),
+}
+
 
 def test_every_id_column_in_the_schema_is_known_to_the_renames(st):
     mutable = set(Store.NODE_ID_COLUMNS) | set(Store.SLOT_ID_COLUMNS)
     snapshots = set(Store.IMMUTABLE_RESOURCE_ID_COLUMNS)
-    assert snapshots == {("slot_purchases", "node_id"), ("slot_purchases", "slot_id")}
+    assert snapshots == {
+        ("slot_purchases", "node_id"), ("slot_purchases", "slot_id"),
+        ("slot_subscription_orders", "node_id"), ("slot_subscription_orders", "slot_id"),
+    }
     assert not (snapshots & mutable or snapshots & NEITHER)
     covered = mutable | snapshots | NEITHER
     with st._lock:

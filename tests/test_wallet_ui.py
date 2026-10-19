@@ -55,7 +55,7 @@ def test_balance_is_exact_and_topup_is_honestly_disabled(balance, shown):
     source = wallet_ui.balance_card(balance)
     page, parsed = Document(source), Forms(source)
     assert shown in page.text and 'Fleet credit' in page.text and 'USD service credit' in page.text
-    assert 'Online top-ups are not connected yet' in page.text
+    assert 'Online top-ups are unavailable for this account' in page.text
     assert 'An admin can add Fleet credit' in page.text
     assert not parsed.forms
     [button] = [attrs for tag, attrs in parsed.elements if tag == 'button']
@@ -64,29 +64,49 @@ def test_balance_is_exact_and_topup_is_honestly_disabled(balance, shown):
     assert not any(tag in {'script', 'iframe'} for tag, _ in page.tags)
 
 
-def test_explicit_ready_topup_posts_only_server_nonces_and_fixed_usd_amount():
-    source = wallet_ui.balance_card(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
+def test_account_has_one_obvious_add_credit_link_without_starting_a_payment():
+    source = wallet_ui.balance_card(3000, topup_ready=True)
+    parsed, page = Forms(source), Document(source)
+    assert not parsed.forms
+    assert page.links == ['/account/topup', '/account/available']
+    [link] = [attrs for tag, attrs in page.tags
+              if tag == 'a' and attrs.get('href') == '/account/topup']
+    assert 'primary' in link['class'] and 'wallet-add-credit' in link['class']
+    assert 'Add credit' in page.text and 'subscription is separate' in page.text
+    assert not any(tag == 'select' for tag, _ in page.tags)
+
+
+def test_dedicated_topup_posts_only_server_nonces_and_four_native_radio_presets():
+    source = wallet_ui.topup_page(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
     parsed, page = Forms(source), Document(source)
     [form] = parsed.forms
     assert form['attrs']['action'] == '/account/topup' and form['attrs']['method'] == 'post'
-    assert {item['name']: item['value'] for item in form['inputs']} == {
+    hidden = [item for item in form['inputs'] if item['type'] == 'hidden']
+    assert {item['name']: item['value'] for item in hidden} == {
         'csrf': CSRF, 'idempotency_key': NONCE}
-    assert all(item['type'] == 'hidden' for item in form['inputs'])
-    [select] = [attrs for tag, attrs in page.tags if tag == 'select']
-    assert select['name'] == 'amount_cents'
-    options = [attrs for tag, attrs in page.tags if tag == 'option']
-    assert [item['value'] for item in options] == ['1000', '2000', '5000', '10000']
-    assert [item['value'] for item in options if 'selected' in item] == ['2000']
-    assert all(value in page.text for value in ('$10.00', '$20.00', '$50.00', '$100.00'))
+    radios = [item for item in form['inputs'] if item['type'] == 'radio']
+    assert [item['value'] for item in radios] == ['1000', '2000', '5000', '10000']
+    assert {item['name'] for item in radios} == {'amount_cents'}
+    assert all('required' in item for item in radios)
+    assert [item['value'] for item in radios if 'checked' in item] == ['2000']
+    assert all(value in page.text for value in ('$10', '$20', '$50', '$100'))
     buttons = [attrs for tag, attrs in page.tags if tag == 'button']
-    assert len(buttons) == 2
+    assert len(buttons) == 1
     assert buttons[0]['type'] == 'submit' and 'disabled' not in buttons[0]
-    assert buttons[1]['type'] == 'button' and 'disabled' in buttons[1]
-    assert buttons[1]['aria-describedby'] == 'wallet-alipay-help'
-    assert 'Pay on Stripe' in page.text and 'No automatic charges' in page.text
-    assert 'Alipay is not available yet' in page.text
-    assert 'Online top-ups are not connected yet' not in page.text
-    assert page.links == ['/account/available']
+    assert 'Pay on Stripe' in page.text and 'no automatic charges' in page.text
+    assert 'Continue to secure payment' in page.text
+    assert 'does not buy or renew a slot automatically' in page.text
+    assert 'Alipay is not available' in page.text
+    assert 'Online top-ups are unavailable for this account' not in page.text
+    assert page.links == ['/account#wallet']
+    assert sum(tag == 'fieldset' for tag, _ in page.tags) == 1
+    assert sum(tag == 'legend' for tag, _ in page.tags) == 1
+    numbers = [attrs for tag, attrs in page.tags if attrs.get('class') == 'wallet-step-number']
+    assert len(numbers) == 3 and all(item['aria-hidden'] == 'true' for item in numbers)
+    assert 'counter(wallet-step)' not in wallet_ui.CSS
+    assert 'input:focus-visible+.wallet-amount-tile' in wallet_ui.CSS
+    assert 'repeat(2,minmax(0,1fr))' in wallet_ui.CSS
+    assert 'body.site:has(.wallet-topup-page) .topbar .doc-nav{display:none}' in wallet_ui.CSS
     assert not any(key.startswith('on') for _, attrs in page.tags for key in attrs)
     assert not {'script', 'iframe'} & {tag for tag, _ in page.tags}
 
@@ -99,16 +119,16 @@ def test_explicit_ready_topup_posts_only_server_nonces_and_fixed_usd_amount():
 def test_active_topup_requires_explicit_readiness_and_valid_server_context(changes):
     values = dict(topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
     with pytest.raises(ValueError):
-        wallet_ui.balance_card(3000, **{**values, **changes})
+        wallet_ui.topup_page(3000, **{**values, **changes})
 
 
 @pytest.mark.parametrize('language', ['en', 'zh'])
 def test_active_card_topup_is_single_language_and_alipay_stays_inactive(language):
-    source = wallet_ui.balance_card(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
-    projected = project_html(source, language, target='/account')
+    source = wallet_ui.topup_page(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
+    projected = project_html(source, language, target='/account/topup')
     text = Document(projected).text
-    expected = ('Pay by card', 'Amount · USD', 'Alipay is not available yet')
-    removed = ('银行卡充值', '金额 · 美元', '支付宝充值暂未开通')
+    expected = ('Continue to secure payment', 'Choose amount', 'Alipay is not available')
+    removed = ('前往安全付款页面', '选择金额', '暂不支持支付宝')
     if language == 'zh':
         expected, removed = removed, expected
     assert all(value in text for value in expected)
@@ -119,14 +139,23 @@ def test_active_card_topup_is_single_language_and_alipay_stays_inactive(language
 @pytest.mark.parametrize('topup_ready', [False, True])
 def test_compact_existing_customer_card_keeps_balance_actions_but_skips_first_purchase_guide(
         topup_ready):
-    source = wallet_ui.balance_card(3000, compact=True, topup_ready=topup_ready,
-                                   csrf=CSRF, idempotency_key=NONCE)
+    source = wallet_ui.balance_card(3000, compact=True, topup_ready=topup_ready)
     parsed, text = Forms(source), Document(source).text
     assert '$30.00' in text and 'Fleet credit' in text and 'Choose a slot' in text
     assert 'Review the monthly price' not in text and 'Buy the first month' not in text
     assert not any(tag == 'ol' for tag, _ in parsed.elements)
-    assert len(parsed.forms) == int(topup_ready)
+    assert not parsed.forms
+    assert ('/account/topup' in Document(source).links) is topup_ready
     assert 'wallet-steps' in wallet_ui.balance_card(3000)
+
+
+@pytest.mark.parametrize('ready,blocked', [(False, False), (True, True), (False, True)])
+def test_unavailable_or_review_held_topup_page_never_exposes_a_payment_form(ready, blocked):
+    source = wallet_ui.topup_page(3000, topup_ready=ready, blocked=blocked)
+    assert '$30.00' in Document(source).text
+    assert not Forms(source).forms
+    assert not any(attrs.get('name') == 'amount_cents' for _, attrs in Document(source).tags)
+    assert ('under review' in Document(source).text) is blocked
 
 
 @pytest.mark.parametrize('renderer,action,targets', [

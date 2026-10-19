@@ -1,6 +1,7 @@
 """Synthetic HTTP -> stream observer -> persisted aggregate -> anonymous Status."""
 
 import json
+import threading
 import time
 
 import pytest
@@ -35,11 +36,27 @@ class DelayedChunks:
 
 @pytest.mark.parametrize("path", ["/v1/messages", "/v1/messages?beta=true"])
 def test_new_successful_streams_populate_public_tps_without_model_calls_from_status(
-        scenario, path):  # noqa: F811
+        scenario, path, monkeypatch):  # noqa: F811
+    committed = threading.Event()
+    actual_writer = scenario.store.try_record_gateway_throughput
+
+    def observe_commit(*args, **kwargs):
+        result = actual_writer(*args, **kwargs)
+        if result is True:
+            committed.set()
+        return result
+
+    monkeypatch.setattr(scenario.store, 'try_record_gateway_throughput', observe_commit)
     for _ in range(20):
+        committed.clear()
         scenario.pool.plans[scenario.own[0]].append({'chunks': DelayedChunks(scenario.clock)})
         status, body, _headers = request(scenario, path=path)
         assert status == 200 and body == START + TEXT + END
+        # This is a delivery-to-persisted-aggregate check, not a contention test.
+        # The real recorder is deliberately best-effort: a later request's
+        # admission reads can exhaust its three nonblocking storage attempts.
+        # Wait for this real commit before launching the next synthetic stream.
+        assert committed.wait(3), 'completed stream observation was not committed'
     wait_for(lambda: scenario.store.gateway_throughput_summary(time.time())['samples'] == 20)
     samples = scenario.store.gateway_throughput_summary(time.time())
     assert samples['output_tokens'] == 10_000

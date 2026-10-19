@@ -40,6 +40,7 @@ from . import (
     offers,
     payments,
     pricing,
+    slot_subscriptions,
     wallet,
     wallet_topups,
 )
@@ -486,6 +487,14 @@ class StoreError(ValueError):
     """Raised for invalid identifiers or missing rows."""
 
 
+class SubscriptionReleaseBlocked(StoreError):
+    """The provider contract or its remaining paid time still protects this slot."""
+
+
+class SubscriptionCheckoutPending(StoreError):
+    """Finish or authoritatively close an existing unpaid checkout before another."""
+
+
 class QuotaExceeded(StoreError):
     """The account holds as many slots as its allowance permits."""
 
@@ -608,7 +617,7 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store(wallet_topups.TopupStoreMixin):
+class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupStoreMixin):
     """Thread-safe wrapper around one SQLite connection."""
 
     def __init__(self, path: str,
@@ -625,7 +634,7 @@ class Store(wallet_topups.TopupStoreMixin):
         with self._lock:
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(SCHEMA + wallet_topups.SCHEMA)
+            self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA)
             # CREATE TABLE IF NOT EXISTS does nothing to a table that already
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate
@@ -1316,7 +1325,9 @@ class Store(wallet_topups.TopupStoreMixin):
     # A paid receipt keeps the original resource identifiers. These references
     # block raw ID renames/deletions; they must never join the mutable lists.
     IMMUTABLE_RESOURCE_ID_COLUMNS = (("slot_purchases", "node_id"),
-                                     ("slot_purchases", "slot_id"))
+                                     ("slot_purchases", "slot_id"),
+                                     ("slot_subscription_orders", "node_id"),
+                                     ("slot_subscription_orders", "slot_id"))
 
     @staticmethod
     def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
@@ -1324,8 +1335,15 @@ class Store(wallet_topups.TopupStoreMixin):
         if column not in {"node_id", "slot_id"}:
             raise ValueError("unknown paid resource identifier")
         for identifier in identifiers:
-            if conn.execute(f"SELECT 1 FROM slot_purchases WHERE {column} = ? LIMIT 1",
-                            (identifier,)).fetchone() is not None:
+            subscription_slots = conn.execute(
+                f"SELECT slot_id FROM slot_subscription_orders WHERE {column}=?",
+                (identifier,)).fetchall()
+            for subscription_slot in subscription_slots:
+                slot_subscriptions.require_release_allowed(
+                    conn, subscription_slot["slot_id"], time.time())
+            if any(conn.execute(f"SELECT 1 FROM {table} WHERE {column} = ? LIMIT 1",
+                                (identifier,)).fetchone() is not None
+                   for table in ("slot_purchases", "slot_subscription_orders")):
                 resource = "node" if column == "node_id" else "slot"
                 raise StoreError(
                     f"Paid history keeps this {resource} ID. Disable or retire the machine "
@@ -3535,19 +3553,22 @@ class Store(wallet_topups.TopupStoreMixin):
                     "claim_id": slot["gateway_claim_id"],
                     "claim_generation": slot["gateway_generation"]},
                     "runtime": runtime, "keys": enrolled}
-    def move_slot(self, slot_id: str, to: str) -> bool:
+    def move_slot(self, slot_id: str, to: str, *, now: Optional[float] = None) -> bool:
         """Move a slot to `to`, or raise if the lifecycle forbids it.
 
         The write is pinned to the state that was read, so a move decided
         against a stale read writes nothing rather than overwriting whatever
         happened in between.
         """
-        with self._lock:
-            row = self._conn.execute(
+        with self._write_txn() as conn:
+            row = conn.execute(
                 "SELECT state FROM slots WHERE id = ?", (slot_id,)).fetchone()
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
             frm = row["state"]
+            if to == slotstates.RELEASING:
+                slot_subscriptions.require_release_allowed(
+                    conn, slot_id, time.time() if now is None else wallet.instant(now))
             if to == slotstates.FREE:
                 # The lifecycle does allow releasing -> free, but not by this
                 # door. finish_release clears the holder, the claim time and
@@ -3558,15 +3579,14 @@ class Store(wallet_topups.TopupStoreMixin):
                     "a slot reaches free only through finish_release(), which "
                     "clears the holder in the same statement")
             slotstates.check_move(frm, to)
-            cur = self._conn.execute(
+            cur = conn.execute(
                 "UPDATE slots SET state = ?, gateway_generation = gateway_generation + 1 "
                 "WHERE id = ? AND state = ?",
                 (to, slot_id, frm))
-            self._conn.commit()
         return cur.rowcount > 0
 
     def begin_release(self, slot_id: str, *, held_by: Optional[str] = None,
-                      named: Optional[str] = None) -> bool:
+                      named: Optional[str] = None, now: Optional[float] = None) -> bool:
         """Start the wipe. Legal from every state a person can hold.
 
         Whatever sign-in was in flight goes with it: its URL, a code typed in,
@@ -3584,6 +3604,8 @@ class Store(wallet_topups.TopupStoreMixin):
         # the last one's URL, or read their minted token.
         with self._write_txn() as conn:
             row = self._held(conn, slot_id, held_by)
+            slot_subscriptions.require_release_allowed(
+                conn, slot_id, time.time() if now is None else wallet.instant(now))
             shown = row["name"] or slot_id
             if named is not None and named != shown:
                 raise StoreError(f"type the slot's name, {shown}, to confirm")
@@ -3658,6 +3680,7 @@ class Store(wallet_topups.TopupStoreMixin):
             "WHERE id = ? AND state = ?",
             (slotstates.FREE, now, pool_name, slot_id, slotstates.RELEASING))
         if cur.rowcount > 0:
+            slot_subscriptions.retire_released(conn, slot_id, now)
             # Nor their update: the next holder starts on the machine's pin.
             conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (slot_id,))
             conn.execute("DELETE FROM cli_pairings WHERE slot_id = ?", (slot_id,))
@@ -3692,7 +3715,7 @@ class Store(wallet_topups.TopupStoreMixin):
             # Machine slots only. An owner slot is somebody's own node counted
             # as theirs; nothing a report says may wipe-confirm it into free.
             rows = conn.execute(
-                "SELECT id, unix_user, state, claimed_at FROM slots "
+                "SELECT id, unix_user, state, claimed_at, gateway_claim_id FROM slots "
                 "WHERE node_id = ? AND kind = ?",
                 (node_id, slotstates.MACHINE_SLOT)).fetchall()
             for row in rows:
@@ -3704,6 +3727,11 @@ class Store(wallet_topups.TopupStoreMixin):
                     "UPDATE slots SET present = ?, reported_at = ? WHERE id = ?",
                     (int(present) if isinstance(present, bool) else None, now, row["id"]))
                 to = slotstates.next_state(row["state"], row["claimed_at"], report)
+                if to == slotstates.RELEASING and slot_subscriptions.reservation_blocks(
+                        conn, row["id"]):
+                    slot_subscriptions.hold_failed_provision(
+                        conn, row["id"], row["gateway_claim_id"], now)
+                    continue
                 if to is None:
                     if row["state"] == slotstates.FREE and present is False:
                         self._normalize_free_pool_names(conn, slot_id=row["id"])
@@ -3734,8 +3762,16 @@ class Store(wallet_topups.TopupStoreMixin):
         """
         with self._write_txn() as conn:
             rows = conn.execute(
-                "SELECT id FROM slots WHERE state = ? AND MAX(claimed_at, ?) < ?",
+                "SELECT id,gateway_claim_id FROM slots WHERE state = ? AND MAX(claimed_at, ?) < ?",
                 (slotstates.CLAIMING, listening_since or 0.0, older_than)).fetchall()
+            unprotected = []
+            for row in rows:
+                if slot_subscriptions.reservation_blocks(conn, row["id"]):
+                    slot_subscriptions.hold_failed_provision(
+                        conn, row["id"], row["gateway_claim_id"], time.time())
+                else:
+                    unprotected.append(row)
+            rows = unprotected
             for row in rows:
                 conn.execute("UPDATE slots SET state = ? WHERE id = ?",
                              (slotstates.RELEASING, row["id"]))
@@ -3984,7 +4020,8 @@ class Store(wallet_topups.TopupStoreMixin):
 
     def _claim_slot_in_transaction(self, conn: sqlite3.Connection, account_id: str, *,
                                    now: float, node_id: Optional[str],
-                                   heard_since: Optional[float], check_quota: bool = True) -> str:
+                                   heard_since: Optional[float], check_quota: bool = True,
+                                   reservation_id: Optional[str] = None) -> str:
         """Shared claim decision; caller owns the one write transaction.
 
         Paid purchases supply their own credit entitlement. Legacy callers keep
@@ -4022,9 +4059,12 @@ class Store(wallet_topups.TopupStoreMixin):
         candidate = conn.execute(
             "SELECT s.id FROM slots s JOIN nodes n ON n.id = s.node_id "  # noqa: S608
             "WHERE s.state = ? AND s.present = 0 AND n.enabled = 1 AND s.kind = ?"
-            " AND (n.reserved_for IS NULL OR n.reserved_for = ?)" + extra +
+            " AND (n.reserved_for IS NULL OR n.reserved_for = ?)"
+            " AND NOT EXISTS (SELECT 1 FROM slot_subscription_orders r WHERE r.slot_id=s.id "
+            "AND r.status!='closed' AND r.id!=?)" + extra +
             " ORDER BY n.reserved_for IS NULL, s.node_id, s.unix_user LIMIT 1",
-            (slotstates.FREE, slotstates.MACHINE_SLOT, account_id, *args)).fetchone()
+            (slotstates.FREE, slotstates.MACHINE_SLOT, account_id,
+             reservation_id or "", *args)).fetchone()
         if candidate is None:
             raise NoSlotAvailable(
                 f"no free slot on {node_id}" if node_id

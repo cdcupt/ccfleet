@@ -46,7 +46,7 @@ def test_console_hides_retired_rows_controls_alerts_and_flow_cadence(cfg):
         assert 'retired-empty' not in page and 'retired-vm' not in page
         assert 'obsolete machine issue' not in page
         assert 'offline-live' in page and 'active machine needs attention' in page
-        assert 'refreshing itself every minute' in page
+        assert 'Refreshing itself every minute' in page
         assert store.list_nodes() == before
         assert store.get_slot('retired-vm')['state'] == slots.FREE
 

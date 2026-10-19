@@ -78,7 +78,7 @@ def shared(store, node="m1", users=("slot01", "slot02"), capacity=None):
 
 def slots_card(page):
     """The Slots card alone; the Alerts card above it lists every alert anyway."""
-    return page[page.index('id="slots"'):page.index('id="accounts"')]
+    return page[page.index('id="slots"'):page.index('id="price"')]
 
 
 def accounts_card(page):

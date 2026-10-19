@@ -9,6 +9,7 @@ from . import slots, wallet
 
 EXPIRED = "This slot's paid period has ended. Renew it on Your slots."
 UNAVAILABLE = "This slot's payment status is unavailable. Check Your slots."
+SUBSCRIPTION_PAUSED = "This monthly rental is paused. Check Monthly payments on Your slots."
 
 def paid_through(store: Any, slot: Mapping[str, Any]) -> Optional[float]:
     """None means a grandfathered current claim, never a failed financial read."""
@@ -27,6 +28,11 @@ def paid_through(store: Any, slot: Mapping[str, Any]) -> Optional[float]:
 def allowed(store: Any, slot: Mapping[str, Any], *, now: float) -> bool:
     try:
         now = wallet.instant(now)
+        if slot.get("kind") != slots.OWNER_SLOT:
+            recurring = store.slot_subscription_access(slot.get("held_by"), slot.get("id"),
+                claim_id=slot.get("gateway_claim_id"), now=now)
+            if recurring is not None:
+                return recurring["allowed"] is True
         end = paid_through(store, slot)
         return end is None or now < end
     except Exception:
@@ -47,6 +53,10 @@ def target_pause_reason(store: Any, account_id: str, target: Mapping[str, Any],
                 and slot.get("gateway_generation") != target["claim_generation"]
                 or "claim_id" in target and slot.get("gateway_claim_id") != target["claim_id"]):
             return UNAVAILABLE
+        recurring = store.slot_subscription_access(account_id, slot["id"],
+            claim_id=slot["gateway_claim_id"], now=now)
+        if recurring is not None:
+            return "" if recurring["allowed"] is True else SUBSCRIPTION_PAUSED
         end = paid_through(store, slot)
         return EXPIRED if end is not None and now >= end else ""
     except Exception:

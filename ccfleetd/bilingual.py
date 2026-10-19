@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
     '/', '/slots', '/account', '/account/available', '/account/purchase', '/account/renew',
+    '/account/topup', '/account/subscribe', '/account/subscriptions',
     '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
@@ -20,6 +21,9 @@ SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli'
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
 POST_PAGES = frozenset({'/account/claim', '/account/outage-emails', '/auth/signout',
                        '/account/purchase', '/account/renew', '/account/topup',
+                       '/account/subscribe', '/account/subscriptions/portal',
+                       '/account/subscriptions/cancel', '/account/subscriptions/resume',
+                       '/account/subscriptions/cancel-checkout',
                        '/account/gateway/create', '/account/gateway/update',
                        '/account/gateway/revoke'})
 VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
@@ -27,6 +31,8 @@ VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'l
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
              '/account/available': '可用槽位',
              '/account/purchase': '确认购买槽位', '/account/renew': '续费槽位',
+             '/account/topup': '充值', '/account/subscribe': '确认月租',
+             '/account/subscriptions': '月租管理',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
              '/docs/how-it-works': '工作原理', '/docs/terms': '服务条款',
              '/docs/library': '文档', '/docs/library/': '文档',
@@ -178,6 +184,18 @@ def _slot_search_query(query: str) -> str:
     return urlencode(result)
 
 
+def _subscription_query(query: str) -> str:
+    """Keep only the public machine selector when changing review-page language."""
+    try:
+        choices = [value for key, value in parse_qsl(query, max_num_fields=16)
+                   if key == 'machine_number']
+    except ValueError:
+        return ''
+    if len(choices) != 1 or re.fullmatch(r'[1-9][0-9]{0,18}', choices[0]) is None:
+        return ''
+    return urlencode({'machine_number': choices[0]})
+
+
 class _Projection(HTMLParser):
     def __init__(self, language: str, target: str, public_origin: str):
         super().__init__(convert_charrefs=False)
@@ -222,12 +240,18 @@ class _Projection(HTMLParser):
                 attrs['aria-label'] = '语言' if self.language == 'zh' else 'Language'
             if 'data-language-link' in attrs:
                 choice = attrs['data-language-link']
-                switch_target = ('/account#gateway' if _form(urlsplit(self.target).path)
+                path = urlsplit(self.target).path
+                # The top-up chooser is also a safe GET page. Switching its
+                # language must not send the customer to advanced connections.
+                switch_target = ('/account#gateway' if _form(path)
+                                 and path not in {'/account/topup', '/account/subscribe'}
                                  else self.target)
                 switch_parts = urlsplit(switch_target)
                 search = ''
                 if switch_parts.path in {'/slots', '/account/available'}:
                     search = _slot_search_query(switch_parts.query)
+                elif switch_parts.path == '/account/subscribe':
+                    search = _subscription_query(switch_parts.query)
                 switch_target = urlunsplit(('', '', switch_parts.path, search,
                                              switch_parts.fragment))
                 attrs['href'] = localized_url(switch_target, choice, self.target,

@@ -96,7 +96,7 @@ def test_machine_cost_strategy_replaces_global_price_in_front_of_console(console
     before = store.get_price()
     page = call("GET", "/admin").body
     card = price_card(page)
-    assert page.index('id="price"') < page.index('id="slots"') < page.index('id="accounts"')
+    assert page.index('id="accounts"') < page.index('id="slots"') < page.index('id="price"')
     assert "Alpha slot pricing" in card and "max($2.00, 10% of resource cost)" in card
     for said in ("$5.35 USD", "$5.40 USD", "per 30 days", "$10.83 USD", "$12.83 USD / month"):
         assert said in text(card)

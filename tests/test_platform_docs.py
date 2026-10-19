@@ -37,7 +37,8 @@ def test_current_cli_reference_keeps_update_and_native_aliases_separate_from_fix
     gateway = read_document(ROOT / "docs/public-gateway.html")
     assert ("ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n"
             "ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n"
-            "ccfleet local --slot DEVIN_SLOT --new") in gateway.pre_codes
+            "ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 "
+            "--effort max --new -- --safe-mode") in gateway.pre_codes
     history = gateway.text
     assert "Recorded on October 11, 2026:" in history
     assert "signed Fleet client 0.2.5" in history

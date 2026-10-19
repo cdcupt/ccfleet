@@ -82,6 +82,8 @@ margin:12px 0 6px}.offer-example p{margin:8px 0}.offer-example .offer-rate{font-
 overflow-wrap:anywhere}.offer-policy{margin:18px 0;font-size:13px}
 .offer-policy>summary{cursor:pointer;color:var(--acc);font-weight:600}
 .slot-browser .offer-table form{margin:0}.slot-browser .offer-table td{padding-block:10px}
+.offer-purchase-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.offer-purchase-actions .btn{min-height:42px;white-space:normal}
 @media(max-width:560px){.slot-filters>label,.slot-filters .filter-search{flex-basis:100%}
 .slot-offer{gap:10px 16px}.slot-offer>div{flex:1 1 40%}}
 """
@@ -247,20 +249,22 @@ def _browse_params(query: Mapping[str, str], brands: set[str]) -> dict[str, str]
 
 def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
            max_age: float, query: Mapping[str, str], can_claim: bool = True,
-           *, purchase: bool = False) -> str:
+           *, purchase: bool = False, monthly: bool = False) -> str:
     """An eligible inventory page, separate from the holder's own slot controls.
 
     Search and pagination use approved public metadata only. These are choices,
     not reservations: the existing claim action rechecks eligibility atomically.
     """
     return _browser(available(store, account, now, max_age), query,
-                    path="/account/available", csrf=csrf, can_claim=can_claim, purchase=purchase)
+                    path="/account/available", csrf=csrf, can_claim=can_claim,
+                    purchase=purchase, monthly=monthly)
 
 
 def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: str,
              csrf: str = "", can_claim: bool = False,
              availability: Optional[Mapping[str, tuple[str, str]]] = None,
-             reported: Optional[set[str]] = None, purchase: bool = False) -> str:
+             reported: Optional[set[str]] = None, purchase: bool = False,
+             monthly: bool = False) -> str:
     """Shared bounded filters and rows; only the authenticated wrapper can claim."""
     public_inventory = availability is not None
     nodes = sorted(nodes, key=lambda node: status.public_machine_number(node) or 0)
@@ -313,16 +317,22 @@ def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: 
         public = offers.public(node.get("offer"))
         number = status.public_machine_number(node)
         machine = label(f"Machine {number}", f"主机 {number}", inline=True)
-        action = ('<td><form method="post" action="/account/claim">'
+        action = ('<form method="post" action="/account/claim">'
                   '<input type="hidden" name="csrf" value="' + escape(csrf) + '">'
                   f'<input type="hidden" name="machine_number" value="{number}">'
                   '<button class="primary" type="submit">'
                   + label("Claim this slot", "领取此槽位", inline=True)
-                  + '</button></form></td>') if can_claim else ''
+                  + '</button></form>') if can_claim else ''
         if can_claim and purchase:
-            action = ('<td><a class="btn primary" href="/account/purchase?machine_number='
+            action = ('<a class="btn primary" href="/account/purchase?machine_number='
                       + str(number) + '">'
-                      + label("Review price", "确认价格", inline=True) + '</a></td>')
+                      + label("Review price", "确认价格", inline=True) + '</a>')
+        if monthly:
+            action = ('<div class="offer-purchase-actions">' + action
+                      + '<a class="btn" href="/account/subscribe?machine_number='
+                      + str(number) + '">'
+                      + label("Pay monthly", "按月付款", inline=True) + '</a></div>')
+        action = '<td>' + action + '</td>' if action else ''
         if reported is None or node["id"] in reported:
             machine = '<a href="/status#machine-' + str(number) + '">' + machine + '</a>'
         state = ('<td>' + _availability(availability[node["id"]]) + '</td>'
@@ -336,7 +346,7 @@ def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: 
              ("Current Alpha quote", "当前 Alpha 报价")]
     if public_inventory:
         heads.insert(4, ("Availability", "可用情况"))
-    if can_claim:
+    if can_claim or monthly:
         heads.append(("Action", "操作"))
     region_en, region_zh = (("Slot catalogue", "槽位目录") if public_inventory else
                             ("Available slot machines", "可领取槽位主机"))

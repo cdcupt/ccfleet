@@ -123,6 +123,9 @@ class Store:
     def paid_slot_through(self, *_args, **_kwargs):
         return None  # This numeric-observer fixture represents a grandfathered rental.
 
+    def slot_subscription_access(self, _account_id, _slot_id, *, claim_id, now):
+        return None  # Explicitly no recurring contract in this observer fixture.
+
     def record_gateway_throughput(self, tokens, stream_ms, *, now):
         self.records.append((tokens, stream_ms, now))
         self.recorded.set()
