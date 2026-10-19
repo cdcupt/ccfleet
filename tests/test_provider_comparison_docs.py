@@ -119,15 +119,19 @@ def test_existing_public_prices_anchor_and_language_projection_are_preserved(ren
         assert "Compare subscription prices" not in page.text
 
 
-def test_requested_subscription_api_and_other_provider_categories_remain_distinct(rendered):
+def test_cost_comparison_is_limited_to_requested_claude_codex_and_devin(rendered):
     _, _, _, root = rendered
-    plans = {row.attrs["data-provider"] for row in rows(table(root, "plans"))}
-    api = {row.attrs["data-provider"] for row in rows(table(root, "api"))}
-    other = {row.attrs["data-provider"] for row in rows(table(root, "other-plans"))}
-    assert {"claude", "openai", "devin"} <= plans
-    assert "openai" in api and api.intersection({"claude", "anthropic"})
-    assert {"minimax", "google", "glm", "kimi"} <= plans | other
-    assert len(other) >= 3
+    cost = by_id(root, "cost")
+    plans = rows(table(root, "plans"))
+    assert len(plans) == 3
+    assert {row.attrs["data-provider"] for row in plans} == {"claude", "openai", "devin"}
+    api = rows(table(root, "api"))
+    assert len(api) == 4
+    assert {row.attrs["data-provider"] for row in api} == {"claude", "openai"}
+    assert not any(node.attrs.get("data-comparison") == "other-plans" for node in cost.nodes())
+    assert not re.search(r"Google|Gemini|MiniMax|Kimi|GLM|Z[.]AI|Cursor|Copilot", cost.text, re.I)
+    assert {node.attrs["data-provider"] for node in cost.nodes()
+            if "data-provider" in node.attrs} == {"claude", "openai", "devin"}
 
 
 # Independently pinned observations prevent a changed page and fixture from agreeing
@@ -240,7 +244,7 @@ def test_unrequested_generation_speed_ranking_and_hypothesis_are_removed(rendere
     assert "尚未证实" not in source
 
 
-def test_dated_wider_api_value_study_remains_separate_from_matched_token_cost(rendered):
+def test_dated_codex_api_value_reference_remains_separate_from_matched_token_cost(rendered):
     language, _, _, root = rendered
     compared = table(root, "value")
     assert compared.attrs["data-baseline-plan"] == "claude-max-20x"
@@ -259,9 +263,8 @@ def test_dated_wider_api_value_study_remains_separate_from_matched_token_cost(re
         assert row.attrs["data-source"] == SECONDARY
         assert number(row, "data-value-index") == ((value / fee) / baseline).quantize(Decimal(".01"))
         assert "data-relative-cost" not in row.attrs and "data-relative-allowance" not in row.attrs
-    assert observations == {("claude", 200): 11726, ("minimax", 132): 3088,
-                            ("glm", 168): 1942, ("openai", 500): 5386,
-                            ("openai", 200): 2084, ("kimi", 199): 1343}
+    assert observations == {("claude", 200): 11726, ("openai", 500): 5386,
+                            ("openai", 200): 2084}
     section = by_id(root, "allowance-value")
     assert {STUDY, SECONDARY} <= links(section)
     assert "96.6" in section.text
@@ -270,24 +273,23 @@ def test_dated_wider_api_value_study_remains_separate_from_matched_token_cost(re
         ("separate", "different workload") if language == "en" else ("分开", "不同", "另一项")))
 
 
-def test_minimax_current_monthly_m31_prices_are_distinct_from_the_historical_m3_study(rendered):
-    language, _, _, root = rendered
-    current = [row for kind in ("plans", "other-plans") for row in rows(table(root, kind))
-               if row.attrs["data-provider"] == "minimax"]
-    assert len(current) == 1 and current[0].attrs["data-model"] == "M3.1 Flash Preview"
-    plans = {node.attrs["data-plan"]: number(node, "data-monthly-usd")
-             for node in current[0].nodes() if "data-plan" in node.attrs}
-    assert plans == {"Go": 22, "Explore": 55, "Build": 132}
-    historical = [row for row in rows(table(root, "value"))
-                  if row.attrs["data-provider"] == "minimax"]
-    assert len(historical) == 1 and historical[0].attrs["data-model"] == "M3"
-    assert historical[0].attrs["data-snapshot"] == "2026-10-05"
-    assert number(historical[0], "data-monthly-usd") == 132
-    assert "Ultra" in historical[0].text
-    context = by_id(root, "allowance-value").text
-    assert ("histor" in context.lower()) if language == "en" else (
-        "历史" in context or "旧" in context)
-    assert "M3.1" in context
+def test_devin_rows_are_bold_and_tinted_without_changing_the_cost_direction(rendered):
+    _, source, _, root = rendered
+    for comparison in ("plans", "allowance"):
+        selected = [row for row in rows(table(root, comparison))
+                    if row.attrs["data-provider"] == "devin"]
+        assert len(selected) == 1
+        assert any(node.tag == "strong" and "Devin" in node.text for node in selected[0].nodes())
+    # The highlight must be a fixed provider selector, not a script or an
+    # attribute that falsely changes the numeric comparison.
+    styles = re.findall(r"<style[^>]*>(.*?)</style>", source, flags=re.S)
+    assert any(re.search(r"[^{}]*\[data-provider=[\"']?devin[\"']?\][^{}]*"
+                         r"\{[^{}]*background(?:-color)?\s*:", style)
+               for style in styles)
+    row = next(row for row in rows(table(root, "allowance"))
+               if row.attrs["data-provider"] == "devin")
+    assert number(row, "data-relative-cost") == Decimal("4.7")
+    assert number(row, "data-relative-allowance") == Decimal(".21")
 
 
 def test_current_monthly_plan_prices_are_not_replaced_by_historical_study_prices(rendered):
@@ -296,9 +298,6 @@ def test_current_monthly_plan_prices_are_not_replaced_by_historical_study_prices
         "claude": [("Pro", 20), ("Max 5x", 100), ("Max 20x", 200)],
         "openai": [("Plus", 20), ("Pro", 100), ("Pro", 200), ("Pro", 500)],
         "devin": [("Pro", 20), ("Max", 200)],
-        "glm": [("Lite", 18), ("Pro", 80), ("Max", 168)],
-        "kimi": [("Plus", 19), ("Pro", 39), ("Max", 99), ("Ultra", 199)],
-        "minimax": [("Go", 22), ("Explore", 55), ("Build", 132)],
     }
     compared = table(root, "plans")
     assert compared.attrs["data-unit"] == "usd-per-month"
@@ -321,8 +320,6 @@ def test_public_api_rates_preserve_cache_and_output_denominators(rendered):
         "Claude Sonnet 5.5": ("2", "2.50 / 4", "0.1", "10"),
         "GPT-6.1 Sol": ("2", "2.50", "0.1", "10"),
         "GPT-6 Astra": ("10", "12.50", "1", "50"),
-        "Gemini 4 Argon": ("2", "—", "0.1", "10"),
-        "Gemini 3.8 Flash": ("0.75", "—", "0.075", "3.75"),
     }
     actual = {}
     for row in rows(compared):
@@ -362,7 +359,7 @@ def test_comparison_tables_and_sources_are_accessible_and_no_secrets_or_ips_are_
     _, source, page, root = rendered
     assert not re.search(r"(?<![0-9])(?:[0-9]{1,3}[.]){3}[0-9]{1,3}(?![0-9])", source)
     assert not re.search(r"ccf_api_[A-Za-z0-9_-]{43}|sk-(?:proj-)?[A-Za-z0-9_-]{24,}", source)
-    for kind in ("plans", "allowance", "value", "api", "other-plans"):
+    for kind in ("plans", "allowance", "value", "api"):
         compared = table(root, kind)
         assert any(node.tag == "caption" and node.text for node in compared.nodes()), kind
         headers = [node for node in compared.nodes() if node.tag == "th"]
