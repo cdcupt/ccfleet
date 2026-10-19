@@ -1281,6 +1281,7 @@ class Store(wallet_topups.TopupStoreMixin):
         and so through a wipe.
         """
         with self._write_txn() as conn:
+            self._require_no_paid_resource_history(conn, "node_id", node_id)
             slot_rows = conn.execute(
                 "SELECT id, state, kind FROM slots WHERE node_id = ? ORDER BY unix_user",
                 (node_id,)).fetchall()
@@ -1302,7 +1303,7 @@ class Store(wallet_topups.TopupStoreMixin):
             if cur.rowcount == 0:
                 raise StoreError(f"unknown node {node_id!r}")
 
-    # Every column that holds a node's id. A rename moves these and nothing
+    # Mutable columns that hold a node's id. A rename moves these and nothing
     # else, so the schema test that guards this list fails on any column added
     # later that names a node until it is listed here. `logins.node_id` is the
     # node's own sign-in row; a slot's shares the column as "slot:<id>", which
@@ -1311,6 +1312,24 @@ class Store(wallet_topups.TopupStoreMixin):
     NODE_ID_COLUMNS = (("nodes", "id"), ("slots", "node_id"), ("heartbeats", "node_id"),
                        ("alerts", "node_id"), ("logins", "node_id"),
                        ("outages", "component"))
+
+    # A paid receipt keeps the original resource identifiers. These references
+    # block raw ID renames/deletions; they must never join the mutable lists.
+    IMMUTABLE_RESOURCE_ID_COLUMNS = (("slot_purchases", "node_id"),
+                                     ("slot_purchases", "slot_id"))
+
+    @staticmethod
+    def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
+                                          *identifiers: str) -> None:
+        if column not in {"node_id", "slot_id"}:
+            raise ValueError("unknown paid resource identifier")
+        for identifier in identifiers:
+            if conn.execute(f"SELECT 1 FROM slot_purchases WHERE {column} = ? LIMIT 1",
+                            (identifier,)).fetchone() is not None:
+                resource = "node" if column == "node_id" else "slot"
+                raise StoreError(
+                    f"Paid history keeps this {resource} ID. Disable or retire the machine "
+                    "instead of renaming or deleting its ID; a slot's display name may change.")
 
     def rename_node(self, old: str, new: str) -> None:
         """Give a node — an owner's node or a shared machine — a new id.
@@ -1335,6 +1354,7 @@ class Store(wallet_topups.TopupStoreMixin):
                 raise StoreError(f"unknown node {old!r}")
             if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a node called {new!r} already exists")
+            self._require_no_paid_resource_history(conn, "node_id", old, new)
             # A machine answers to its id when its slot is free: no slot on
             # another machine may already be called that, by id or by name.
             if conn.execute("SELECT 1 FROM slots WHERE (id = ? OR name = ? OR pool_name = ?) "
@@ -1352,6 +1372,8 @@ class Store(wallet_topups.TopupStoreMixin):
             carries = conn.execute(
                 "SELECT 1 FROM slots WHERE id = ? AND node_id = ? AND kind = ?",
                 (old, old, slotstates.OWNER_SLOT)).fetchone() is not None
+            if carries:
+                self._require_no_paid_resource_history(conn, "slot_id", old, new)
             for table in ("logins", "heartbeats", "alerts"):
                 conn.execute(f"DELETE FROM {table} WHERE node_id = ?", (new,))  # noqa: S608
             conn.execute("DELETE FROM outages WHERE component = ?", (new,))
@@ -2683,6 +2705,7 @@ class Store(wallet_topups.TopupStoreMixin):
                 (slot_id,)).fetchone()
             if row is None:
                 raise StoreError(f"no slot {slot_id!r}")
+            self._require_no_paid_resource_history(conn, "slot_id", slot_id)
             if row["kind"] == slotstates.OWNER_SLOT:
                 raise StoreError(
                     f"{slot_id} is its holder's own machine, counted as their slot. "
@@ -2702,7 +2725,7 @@ class Store(wallet_topups.TopupStoreMixin):
             conn.execute("DELETE FROM gateway_provider_bindings WHERE slot_id = ?", (slot_id,))
             conn.execute("DELETE FROM slots WHERE id = ?", (slot_id,))
 
-    # Every column that holds a slot's id, beside its sign-in row, which
+    # Mutable columns that hold a slot's id, beside its sign-in row, which
     # `logins` keeps under "slot:<id>" and which moves with it. Guarded by the
     # same schema test as NODE_ID_COLUMNS.
     SLOT_ID_COLUMNS = (("slots", "id"), ("account_intents", "slot_id"),
@@ -2727,6 +2750,7 @@ class Store(wallet_topups.TopupStoreMixin):
                 raise StoreError(f"no slot {old!r}")
             if conn.execute("SELECT 1 FROM slots WHERE id = ?", (new,)).fetchone() is not None:
                 raise StoreError(f"a slot called {new!r} already exists")
+            self._require_no_paid_resource_history(conn, "slot_id", old, new)
             # A slot's id is its machine's name while it is free, so nothing
             # else may already answer to it: another slot's holder, or another
             # machine. Its own machine's id, and its own holder's name, may.

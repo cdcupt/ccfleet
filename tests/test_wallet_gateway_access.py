@@ -102,3 +102,21 @@ def test_grandfathered_claim_still_runs_and_missing_financial_authority_fails_cl
     assert code == 403 and wallet_access.UNAVAILABLE.encode() in body
     assert b"PRIVATE" not in body
     c.store.paid_slot_through = original
+
+
+def test_expired_owned_enrollment_keeps_renewal_403_without_issuing_a_key(paid, monkeypatch):
+    from tests.test_gateway_end_to_end import raw_request
+    from tests.test_gateway_security import paired_device_token
+    c = paid
+    token = paired_device_token(c)
+    before = c.store.list_gateway_keys("owner-a")
+    monkeypatch.setattr("ccfleetd.api.time.time", lambda: c.order["period_end_at"])
+    import json
+    body = json.dumps({"slot_ids": [c.paid_id]}).encode()
+    answer = raw_request(c, "Content-Type: application/json\r\nContent-Length: "
+                         + str(len(body)) + "\r\n", target="/api/cli/gateway", body=body,
+                         token=token)
+    assert int(answer.split(b" ", 2)[1]) == 403
+    assert wallet_access.EXPIRED.encode() in answer
+    assert c.store.list_gateway_keys("owner-a") == before
+    assert not c.pool.requests

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ccfleetd import bilingual, customer_docs
+from ccfleetd import bilingual, customer_docs, usersite
 from ccfleetd.config import Config
 
 
@@ -66,3 +66,20 @@ def test_disabled_mode_keeps_current_manual_contract():
     terms = bilingual.project_html(customer_docs.terms(Config()), "en")
     assert "Agree the quote and paid period directly with the operator" in terms
     assert "new Fleet access pauses" not in terms
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_enabled_credit_privacy_explains_billing_data_processor_and_retention(language):
+    enabled = bilingual.project_html(
+        usersite.privacy_page(Config(usd_slot_credit_enabled=True)), language
+    )
+    disabled = bilingual.project_html(usersite.privacy_page(Config()), language)
+    assert 'href="https://stripe.com/privacy"' in enabled
+    assert 'href="https://stripe.com/privacy"' not in disabled
+    if language == "en":
+        for words in ("append-only", "do not expire automatically", "account reference",
+                      "does not store card numbers", "online top-up is available"):
+            assert words in enabled
+    else:
+        for words in ("追加方式保存", "不会自动过期", "账号标识", "不保存银行卡号", "在线充值开通后"):
+            assert words in enabled

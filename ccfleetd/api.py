@@ -1015,6 +1015,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 if (not isinstance(selected, list) or not 1 <= len(selected) <= 100
                         or any(not isinstance(identifier, str) for identifier in selected)):
                     raise ValueError("invalid selected slots")
+                owned = {slot["id"] for slot in ctx.store.list_slots(
+                    held_by=device["account_id"])}
+                if any(identifier not in owned for identifier in selected):
+                    raise ValueError("selected slot is not held by this account")
                 reasons = [wallet_access.target_pause_reason(ctx.store, device["account_id"],
                     {"slot_id": identifier}, now=time.time()) for identifier in selected]
                 if any(reasons):

@@ -1482,7 +1482,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-18"
+PRIVACY_UPDATED = "2026-10-19"
 
 
 def _span(seconds: int) -> str:
@@ -2240,6 +2240,38 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
         ],
     )
+    if cfg.usd_slot_credit_enabled:
+        body += card(
+            "Service credit and payments",
+            "服务余额与付款",
+            [
+                (
+                    "We keep credit amounts, slot purchases and renewals, paid dates, "
+                    "staff actions and private billing notes to check your balance and "
+                    "billing history. These records are append-only. Returning a slot "
+                    "does not remove them, and they do not expire automatically.",
+                    "我们保存余额变动、槽位购买与续费、有效期、工作人员操作及内部账目备注，"
+                    "用于核对余额和账单。记录以追加方式保存，归还槽位不会删除，也不会自动过期。",
+                ),
+                (
+                    'When online top-up is available, Stripe hosts the payment page. '
+                    'We send Stripe your Fleet account reference, top-up order reference, '
+                    'USD amount and currency. You enter payment details directly on Stripe, '
+                    'under <a href="https://stripe.com/privacy">its privacy policy</a>. '
+                    'Our billing history keeps payment references and payment-review status; '
+                    'it does not store card numbers or card security codes.',
+                    '在线充值开通后，付款页面由 Stripe 提供。我们向 Stripe 发送 Fleet 账号标识、'
+                    '充值订单标识、美元金额及币种。付款资料由你直接在 Stripe 页面填写，并适用'
+                    '<a href="https://stripe.com/privacy">Stripe 隐私政策</a>。我们的账目只保存'
+                    '付款关联标识和审核状态，不保存银行卡号或卡片安全码。',
+                ),
+                (
+                    "For account deletion, contact the operator to review the slots and "
+                    "billing records, including any financial-record retention requirements.",
+                    "删除账号时，请联系运营方，一并核对槽位、账目及需要保留财务记录的情况。",
+                ),
+            ],
+        )
     body += card(
         "Sharing, keeping and deleting",
         "共享、保存与删除",
