@@ -3393,10 +3393,10 @@ def _rename(slot: Mapping[str, Any], csrf: str) -> str:
                     ))
             + '<p class="small muted">' + label(
                 (
-                    'What claude.ai shows for this machine, so Anthropic '
-                    'sees it too: pick anything but your email address.'
+                    'This also becomes the machine hostname. '
+                    'Pick anything but your email address.'
                 ),
-                "这个名称会显示在 claude.ai，也会被 Anthropic 看到。请不要用邮箱命名。",
+                "这个名称也会成为机器主机名。请不要用邮箱命名。",
                 inline=True) + '</p></div>')
 
 
@@ -3409,12 +3409,12 @@ def _release(slot: Mapping[str, Any], csrf: str) -> str:
                     '<label class="check"><input type="checkbox" name="confirm" value="wipe" '
                     'required> ' + label(
                         (
-                            'Delete everything on it: files, sessions and the Claude '
-                            'sign-in. Your Claude account itself is untouched.'
+                            'Delete everything on it: files, sessions and provider '
+                            'sign-ins. Your provider accounts and subscriptions are untouched.'
                         ),
                         (
-                            '删除槽位中的文件、会话和 Claude 登录信息；'
-                            '不会删除你的 Claude 账号。'
+                            '删除槽位中的文件、会话和服务商登录信息；'
+                            '不会删除你的服务商账号或取消订阅。'
                         ),
                         inline=True) + '</label>', "danger")
             + "</div>")

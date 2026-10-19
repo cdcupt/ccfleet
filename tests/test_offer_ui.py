@@ -377,7 +377,7 @@ def test_alpha_stage_and_renewal_terms_are_visible_with_neutral_network_types(si
         for words in ('Alpha is still being tested', 'one residential slot',
                       'multiple users', 'updated quote before renewal',
                       'retains its agreed price', 'does not charge or renew automatically',
-                      'Anthropic API usage is billed separately', 'Available'):
+                      'Claude or Devin subscription and extra usage are billed separately', 'Available'):
             assert words in section
         assert '>Free<' not in section and 'our premium' not in section
     else:

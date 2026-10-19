@@ -359,10 +359,10 @@ def _pricing_policy() -> str:
          "service fee of 10% of resource cost, with a $2 minimum per slot. "
          "Costs are normalized to an average calendar month and converted to USD "
          "by the operator. Resource cost and service fee are each rounded to cents, "
-         "then added. Your Claude subscription or Anthropic API usage is billed separately.",
+         "then added. Your Claude or Devin subscription and extra usage are billed separately.",
          "Alpha 定价按已记录的 VPS 与出口 IP 成本，加收资源成本 10% 的月服务费，"
          "每个槽位的服务费最低为 2 美元。成本折算为平均自然月并由运营者换算为美元；"
-         "资源成本和服务费分别舍入到美分后相加。Claude 订阅或 Anthropic API 用量另行计费。"),
+         "资源成本和服务费分别舍入到美分后相加。Claude 或 Devin 订阅及额外用量另行计费。"),
         ("Annual costs divide by 12; 30-day costs multiply by 365/360. Missing or "
          "unconverted costs leave pricing unavailable. A normalization rounding line "
          "reconciles any difference between rounded components and resource cost.",
