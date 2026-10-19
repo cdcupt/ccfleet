@@ -316,7 +316,35 @@ class Billing:
                     ):
                         return "ignored"
                     bound = self.store.get_slot_subscription(tags.get("ccfleet_order_id"))
-                    need(bound is not None and bound.get("session_id") == data.get("id"))
+                    need(bound is not None)
+                    if bound.get("session_id") is None:
+                        # A lost create response must not orphan a paid contract.
+                        # Event metadata is only a lookup hint: retrieve the exact
+                        # Session and validate every saved order/customer field.
+                        need(
+                            kind
+                            in {
+                                "checkout.session.completed",
+                                "checkout.session.async_payment_succeeded",
+                            }
+                        )
+                        self._scope(bound)
+                        local = self._order(bound)
+                        verified = self.client.retrieve_session(
+                            data.get("id"), local, self._known_customer(bound)
+                        )
+                        need(
+                            verified.get("id") == data.get("id")
+                            and verified.get("status") == "complete"
+                            and verified.get("payment_status") == "paid"
+                        )
+                        bound = self.store.attach_slot_subscription_session(
+                            bound["id"],
+                            session_id=verified["id"],
+                            expires_at=local.expires_at,
+                            now=now,
+                        )
+                    need(bound.get("session_id") == data.get("id"))
                 self._scope(bound)
                 if kind == "checkout.session.expired":
                     customer = self._known_customer(bound)
