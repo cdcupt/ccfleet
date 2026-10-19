@@ -230,7 +230,7 @@ def test_device_status_uses_authenticated_get_only(platform, monkeypatch):
     assert called == [(("https://broker.invalid/api/cli/status", PRIVATE), {"method": "GET"})]
 
 
-def test_version_update_and_rollback_delegate_to_signed_release_boundary(platform, monkeypatch, capsys):
+def test_version_update_upgrade_and_rollback_delegate_to_signed_release_boundary(platform, monkeypatch, capsys):
     called = []
     helper = SimpleNamespace(
         status=lambda *a: called.append(("status", a)) or {"signature_verified": False},
@@ -241,7 +241,9 @@ def test_version_update_and_rollback_delegate_to_signed_release_boundary(platfor
     monkeypatch.setitem(platform.scope, "client_release", lambda: helper)
     for args, action in [(["version", "--json"], "status"),
                          (["update", "--json"], "update"),
-                         (["update", "--rollback", "--json"], "rollback")]:
+                         (["upgrade", "--json"], "update"),
+                         (["update", "--rollback", "--json"], "rollback"),
+                         (["upgrade", "--rollback", "--json"], "rollback")]:
         assert invoke(platform, *args) == 0
         report = json.loads(capsys.readouterr().out)
         assert called[-1][0] == action

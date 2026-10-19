@@ -26,7 +26,8 @@ def test_simple_check_uses_current_client_and_no_system_inspection(section, requ
     if request.node.callspec.params["section"] == "website":
         assert "current native-local client" in section
     else:
-        assert "Signed Fleet client 0.2.5" in section
+        assert "current signed Fleet client" in section
+        assert "Signed Fleet client 0.2.5" not in section
         assert "saved HTTPS gateway configuration by default" in section
     for phrase in ("normal terminal", "not inside Claude",
                    "ccfleet local --check", "does not scan projects", "start a Claude session",

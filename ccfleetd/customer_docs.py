@@ -831,10 +831,10 @@ def _domain_move() -> str:
             '新版也会使用新地址。连接密钥、所选槽位和登录保持不变。</p>',
         )
         + bi(
-            '<p><strong>Try the new client beside your working one.</strong> '
+            '<p><strong>Try the fixed 0.2.6 client beside your working one.</strong> '
             'If your current Fleet CLI is already connected, install the separate '
             '<code>ccfleet-next</code> command:</p>',
-            '<p><strong>先并排试用新版。</strong>如果现有 Fleet CLI 已连接好，'
+            '<p><strong>先并排试用固定的 0.2.6 版本。</strong>如果现有 Fleet CLI 已连接好，'
             '可以安装独立的 <code>ccfleet-next</code> 命令：</p>',
         )
         + '<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/'
@@ -911,11 +911,105 @@ def _prompt_example(commands: str, prompt_en: str, prompt_zh: str) -> str:
     return "<pre><code>" + code + "</code></pre>"
 
 
+def _client_command_reference() -> str:
+    rows = (
+        ('<code>ccfleet update</code> / <code>ccfleet upgrade</code>',
+         'Update Fleet; add --rollback to restore the previous client.',
+         '更新 Fleet；加 --rollback 可回退至上一客户端版本。'),
+        ('<code>ccfleet -v</code> / <code>ccfleet --version</code>',
+         'Show the Fleet version; ccfleet version --json gives the detailed report.',
+         '显示 Fleet 版本；ccfleet version --json 提供详细安装报告。'),
+        ('<code>ccfleet local -c</code> / <code>--continue</code>',
+         'Continue the last native Claude conversation in this directory.',
+         '继续当前目录最近的原生 Claude 会话。'),
+        ('<code>ccfleet local -r</code> / <code>--resume [NAME_OR_ID]</code>',
+         'Open native history, or resume a conversation by name or ID.',
+         '打开原生历史，或按名称、ID 恢复会话。'),
+        ('<code>ccfleet local --permission-mode plan</code>',
+         'Choose native permissions; --mode remains an alias.',
+         '选择原生权限模式；--mode 仍为兼容别名。'),
+        ('<code>ccfleet local --slot A --project PATH</code>',
+         'Fleet-specific: pin an already selected slot and choose the local working directory.',
+         'Fleet 专用：固定使用已选中的槽位，并指定本地工作目录。'),
+        ('<code>ccfleet list --remote</code>',
+         'Fetch your current own-slot names from the server; plain list shows saved pairings.',
+         '从服务器读取当前自有槽位名称；不加参数的 list 显示已保存的配对。'),
+    )
+    return (
+        '<h3 id="command-reference">'
+        + label('Familiar Claude options, Fleet connections',
+                '熟悉的 Claude 选项，Fleet 连接方式', inline=True)
+        + '</h3>'
+        + bi(
+            '<p>Fleet 0.2.7 adds these familiar spellings. Existing clients can install '
+            'it with <code>ccfleet update</code>; pairing and local history are preserved.</p>',
+            '<p>Fleet 0.2.7 新增这些熟悉的写法。旧客户端运行 <code>ccfleet update</code> '
+            '即可安装新版；配对与本地历史保持不变。</p>',
+        )
+        + '<table><thead><tr><th>'
+        + label('Command', '命令', inline=True)
+        + '</th><th>'
+        + label('Meaning', '用途', inline=True)
+        + '</th></tr></thead><tbody>'
+        + ''.join('<tr><td>' + command + '</td><td>' + label(en, zh, inline=True) + '</td></tr>'
+                  for command, en, zh in rows)
+        + '</tbody></table>'
+        + bi(
+            '<p>Put other supported Claude options after <code>--</code>, for example '
+            '<code>ccfleet local -- --verbose</code>. Fleet still protects routing and '
+            'authentication options. The separate <code>--next</code> trial remains fixed '
+            'at 0.2.6 with its original command set.</p>',
+            '<p>其他受支持的 Claude 选项放在 <code>--</code> 后，例如 '
+            '<code>ccfleet local -- --verbose</code>。Fleet 仍会保护路由与认证选项。'
+            '独立的 <code>--next</code> 试用版仍固定为 0.2.6，命令保持原样。</p>',
+        )
+    )
+
+
+def _devin_cli_connection() -> str:
+    return (
+        '<h3 id="devin-cli">'
+        + label('Choose Devin from an already paired computer',
+                '在已配对的电脑上选择 Devin', inline=True)
+        + '</h3>'
+        + bi(
+            '<p>Once your own slot says <strong>Devin ready</strong>, Fleet 0.2.7 can '
+            'save that choice directly from the CLI. Replace <code>PAIRED_SLOT</code> '
+            'with a working saved pairing that authorizes your account. Replace '
+            '<code>DEVIN_SLOT</code> with the current name or ID from the remote list:</p>',
+            '<p>自己的槽位显示 <strong>Devin 已就绪</strong>后，Fleet 0.2.7 可直接在 '
+            'CLI 保存这个选择。把 <code>PAIRED_SLOT</code> 换成可用的已有配对，用它授权'
+            '访问自己的账号；把 <code>DEVIN_SLOT</code> 换成远程列表中的当前名称或 ID：</p>',
+        )
+        + '<pre><code>ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n'
+        'ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n'
+        'ccfleet local --slot DEVIN_SLOT --new</code></pre>'
+        + bi(
+            '<p>Devin requires exactly one verified slot of your own. This setup saves '
+            'a Fleet connection key; it does not sign in to Devin. An unready slot is '
+            'rejected. Omitting <code>--provider</code> preserves the provider for the same '
+            'saved pairing and server; a new connection defaults to Anthropic. Plain '
+            '<code>ccfleet list</code> shows saved pairings, which can contain old names. '
+            'Use <code>--remote</code> to check current ownership and names. To authorize '
+            'the lookup with a specific working pairing, run '
+            '<code>ccfleet list --remote --slot PAIRED_SLOT</code>.</p>',
+            '<p>Devin 只接受一个已验证的自有槽位。这里保存的是 Fleet 连接密钥，不是登录 '
+            'Devin；槽位未就绪时会拒绝配置。省略 <code>--provider</code> 时，同一配对和'
+            '服务器保留已有服务选择，新连接默认 Anthropic。直接运行 <code>ccfleet list</code> '
+            '只显示已保存的配对，其中可能有旧名称；加 <code>--remote</code> 查询当前归属'
+            '与名称。若要用指定的有效配对查询，运行 '
+            '<code>ccfleet list --remote --slot PAIRED_SLOT</code>。</p>',
+        )
+    )
+
+
 def _client_tools() -> str:
     """Current local controls; commands are shared between the language pages."""
     return (
         '<div class="card" id="client-tools">'
         + bi("<h2>Everyday commands</h2>", "<h2>日常操作</h2>")
+        + _client_command_reference()
+        + _devin_cli_connection()
         + bi(
             "<p>Use the menu to start a new conversation, continue your last one, or "
             "resume a saved conversation. Your native Claude history stays private on this "
@@ -924,7 +1018,7 @@ def _client_tools() -> str:
             "历史留在这台电脑上，CC Fleet 不会导入或同步会话。</p>",
         )
         + "<pre><code>ccfleet start\nccfleet sessions\nccfleet preferences set --model "
-        "opus --effort high --mode plan\nccfleet preferences show\nccfleet preferences "
+        "opus --effort high --permission-mode plan\nccfleet preferences show\nccfleet preferences "
         "clear</code></pre>"
         + bi(
             "<p>Preferences apply to new local sessions in this project, or use "
@@ -1249,7 +1343,8 @@ def guide(
         )
         + _prompt_example(
             "ccfleet local --new --name work\n"
-            "ccfleet local --new --name research --mode plan --model opus --effort high\n"
+            "ccfleet local --new --name research --permission-mode plan "
+            "--model opus --effort high\n"
             "ccfleet local --resume\n"
             "ccfleet local --resume work\n"
             "ccfleet local --continue\n"
@@ -1277,12 +1372,14 @@ def guide(
             "file and tool access, including outside that directory. New conversations "
             "default to <code>bypassPermissions</code>, Opus and max effort, so tools can "
             "modify, delete or transmit data without individual approval prompts. Choose "
-            "<code>--mode plan</code> or another supported mode when appropriate. Inside "
+            "<code>--permission-mode plan</code> or another supported mode when appropriate. "
+            "Inside "
             "Claude, <code>/model</code> and <code>/effort</code> change your choices. "
             "Higher effort usually uses more of your plan allowance.</p>",
             "<p>工作目录不是沙箱。原生 Claude 权限决定文件与工具访问，也可能涉及目录外的文"
             "件。新会话默认使用 <code>bypassPermissions</code>、Opus 和 max "
-            "effort，工具可能不逐次询问就修改、删除或传输数据。需要时，选择 <code>--mode "
+            "effort，工具可能不逐次询问就修改、删除或传输数据。需要时，选择 "
+            "<code>--permission-mode "
             "plan</code> 或其他受支持的模式。会话内可用 <code>/model</code> 和 "
             "<code>/effort</code> 调整；更高推理强度通常消耗更多额度。</p>",
         )
