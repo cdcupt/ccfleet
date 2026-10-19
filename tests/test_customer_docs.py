@@ -297,7 +297,7 @@ def test_public_guides_explain_current_gateway_visibility_and_own_slots():
         assert 'href="/docs/library/docs/public-gateway.html' in source
         assert "--transport bridge" not in text
     how = render("/docs/how-it-works")
-    assert 'aria-labelledby="gateway-diag-t gateway-diag-d"' in how
+    assert 'aria-labelledby="provider-title provider-desc"' in how
     assert "Those heartbeat reports do not contain prompts" in how
     assert "direct HTTPS gateway receives" in how
 

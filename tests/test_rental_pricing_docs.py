@@ -19,11 +19,11 @@ def test_offer_guidance_replaces_the_legacy_global_rate_in_each_language(page, l
     for phrase in (("monthly USD rate", "365/360", "divided by 12", "10%", "half up",
                     "$2 minimum", "round the normalized USD resource cost", "Alpha",
                     "does not charge automatically", "renew automatically", "rewrite past payments",
-                    "temporarily offline", "existing holder", "Anthropic API usage")
+                    "temporarily offline", "existing holder", "Claude or Devin subscription")
                    if language == "en" else
                    ("美元月费", "365/360", "除以 12", "10%", "四舍五入到美分", "最低 $2",
                     "Alpha", "不会自动扣款", "自动续费", "不会改写过去的付款记录", "暂时离线",
-                    "已有持有者", "Anthropic API 用量")):
+                    "已有持有者", "Claude 或 Devin 订阅")):
         assert phrase in document.text
 
 

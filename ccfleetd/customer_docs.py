@@ -6,9 +6,8 @@ also shows a masked public usage summary; no machine address or private account
 identity is disclosed. Every button it quotes is the label
 the user site really shows.
 
-The one fact that must never soften is the plan requirement: ccfleet sells a
-machine, not Claude. Every person brings their own Claude plan and signs in to
-it themselves; no page may suggest otherwise.
+CC Fleet provides the hosted slot, not a shared provider subscription. Each
+person brings their own provider account; Devin remains a verified own-slot pilot.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-17"
+DOCS_UPDATED = "2026-10-18"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -168,7 +167,7 @@ def _rental_pricing_details() -> str:
         '<p><strong>Alpha pricing.</strong> Each machine has its own monthly USD rate in the '
         '<a href="/slots">public slot catalogue</a>. Alpha pricing passes through recorded '
         'VPS and exit-IP costs, plus a monthly service fee of 10% of resource cost, with a '
-        '$2 minimum per slot. Your Claude subscription or Anthropic API usage is billed '
+        '$2 minimum per slot. Your Claude or Devin subscription and extra usage are billed '
         'separately.</p><p>Recorded costs are normalized to a calendar month. '
         'A 30-day cost is multiplied by 365/360; an annual cost is divided by 12. '
         'For a customer quote, round the normalized USD resource cost to cents, half up; '
@@ -178,8 +177,8 @@ def _rental_pricing_details() -> str:
         'per month. The fee remains $2 through $20 of resource cost.</p>',
         '<p><strong>Alpha 定价。</strong>每台主机的美元月费分别列于'
         '<a href="/slots">公开槽位目录</a>。按已记录的 VPS 与出口 IP 成本计价，'
-        '另收资源成本 10% 的月度服务费，每槽位最低 $2。你自己的 Claude 订阅或 '
-        'Anthropic API 用量另行付费。</p><p>已记录成本统一折算为日历月：30 天成本乘以 '
+        '另收资源成本 10% 的月度服务费，每槽位最低 $2。你自己的 Claude 或 '
+        'Devin 订阅及额外用量另行付费。</p><p>已记录成本统一折算为日历月：30 天成本乘以 '
         '365/360，年付成本除以 12。报价先将折算后的美元资源成本四舍五入到美分，再取其 '
         '10% 并将服务费四舍五入到美分，服务费最低 $2，最后将两项显示金额相加。'
         '资源成本 $8.68、$10.83、$22.28 和 $27.44，分别对应月费 $10.68、$12.83、'
@@ -453,20 +452,20 @@ def overview(
                   'slot catalogue</a> lists providers, IP types, availability and monthly '
                   'USD quotes. Alpha pricing adds a service fee of 10% of '
                   'recorded monthly resource cost, with a $2 minimum per slot. Your Claude '
-                  'subscription or Anthropic API usage is billed separately. Choose a '
+                  'or Devin subscription and any extra usage are billed separately. Choose a '
                   'machine at its displayed rate and pay the operator directly; this site '
                   'does not charge automatically or renew automatically.')
         paying_zh = ('<a href="#slot-pricing">槽位与价格</a>展示最多三个实际配置示例。'
                      '<a href="/slots">完整公开槽位目录</a>列出服务商、IP 类型、可用状态'
                      '与美元月费。'
                      'Alpha 定价在已记录的美元月度资源成本上，收取 10% 服务费，'
-                     '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
+                     '每槽位最低 $2。Claude 或 Devin 订阅及额外用量另计。'
                      '按所示价格选择主机，直接支付给运营者；本站不会自动扣款或自动续费。')
     body = (
         '<section class="hero"><div class="hero-copy"><div class="hero-top">'
         + bi(
-            '<p class="eyebrow">Bring your own Claude plan</p>',
-            '<p class="eyebrow">使用你自己的 Claude 订阅</p>',
+            '<p class="eyebrow">Your computer. Your provider account.</p>',
+            '<p class="eyebrow">在你的电脑工作，使用你自己的账号</p>',
         )
         + bi('<p class="eyebrow">Alpha — Early Access</p>',
              '<p class="eyebrow">Alpha — 早期体验</p>')
@@ -477,16 +476,15 @@ def overview(
             "<h1>Claude Code 在本地运行，账号留在你的槽位</h1>",
         )
         + bi(
-            '<p class="lead">ccfleet gives you a <strong>slot</strong>: a dedicated VPS '
-            "and dedicated exit IP, with a private Linux account signed in to "
-            "<em>your own</em> Claude account. "
-            "Run <code>ccfleet local</code> for original Claude Code, files, tools and "
-            "history on your computer. Supported model requests go over HTTPS to our "
-            "gateway, then through a slot you selected.</p>",
-            '<p class="lead">CC Fleet 提供一个<strong>槽位</strong>：专属 VPS 与专属出口 '
-            "IP，以及登录<em>你自己的</em> Claude 账号的独立 Linux 用户环境。运行 <code>ccfleet "
-            "local</code>，原版 Claude Code、文件、工具和历史在你的电脑上；支持的模型请求通"
-            "过 HTTPS 到网关，再经过你选中的槽位。</p>",
+            '<p class="lead">Keep using Claude Code on your computer. A <strong>slot</strong> '
+            "is your private account environment on a dedicated VPS and dedicated exit IP. Fleet "
+            "sends supported requests through your selected slot to Anthropic, or to "
+            'native Devin when your own slot is verified. Your tools and saved files stay '
+            'local.</p>',
+            '<p class="lead">继续在自己的电脑使用 Claude Code。<strong>槽位</strong>是在专属 '
+            "VPS 与专属出口 IP 上，为你的账号准备的独立环境。Fleet 把支持的请求经由你选定的槽位"
+            '发给 Anthropic；自己的槽位通过验证后，也能选择原生 '
+            'Devin。工具和保存的文件仍在本机。</p>',
         )
         + way_in
         + "</div>"
@@ -494,10 +492,10 @@ def overview(
         + '</section><section class="band">'
         + bi("<h2>What you get</h2>", "<h2>你会获得什么</h2>")
         + bi(
-            '<p class="band-lead">For anybody with a Claude plan that includes Claude Code '
-            "who wants a dedicated account-bound slot for model access.</p>",
-            '<p class="band-lead">适合已有 Claude Code 订阅，希望通过自己的专属账号环境使用'
-            "模型的人。</p>",
+            '<p class="band-lead">One familiar coding tool, with your provider choice saved '
+            "on the website. Anthropic is the default; Devin is an own-account pilot.</p>",
+            '<p class="band-lead">继续使用熟悉的编程工具，在网页选择模型服务。默认使用 '
+            "Anthropic；Devin 目前为自有账号试点。</p>",
         )
         + '<div class="features"><div class="feature">'
         + ICONS["account"]
@@ -531,25 +529,36 @@ def overview(
         + "<ul>"
         + "<li>"
         + bi(
-            "Your own paid Claude plan that includes Claude Code: <strong>Pro, Max, Team "
+            'For Anthropic, your own paid Claude plan that includes Claude Code: '
+            '<strong>Pro, Max, Team '
             "or Enterprise</strong>. You sign that account in to your slot once; API keys "
             "do not replace that subscription sign-in.",
-            "你自己的 Claude 付费订阅，并且包含 Claude Code：<strong>Pro、Max、Team 或 "
+            '使用 Anthropic 时，需要你自己的 Claude 付费订阅，并且包含 Claude '
+            'Code：<strong>Pro、Max、Team 或 '
             "Enterprise</strong>。你需要亲自在槽位上登录该账号，普通 API key "
             "不能代替这一步。",
             inline=True,
         )
         + "</li>"
+        + '<li>' + bi(
+            'For Devin, your own Devin plan and an operator-enabled, verified slot. '
+            '<a href="/docs/library/docs/devin.html#connect">Devin setup</a> · '
+            '<a href="/docs/library/docs/devin.html#prices">Compare subscription prices</a>.',
+            '使用 Devin 时，需要自己的 Devin 订阅，以及运营者开通并验证的槽位。'
+            '<a href="/docs/library/docs/devin.html#connect">Devin 设置说明</a> · '
+            '<a href="/docs/library/docs/devin.html#prices">订阅价格对比</a>。', inline=True,
+        ) + '</li>'
         + "<li>"
         + bi("A Google account, to sign in here.", "一个 Google 账号，用于登录本站。", inline=True)
         + "</li>"
         + "</ul>"
         + bi(
-            '<p class="callout">ccfleet sells the machine, not Claude. Nobody else&#x27;s '
-            "Claude account is ever shared with you, and yours is never shared with "
+            '<p class="callout">ccfleet sells the machine, not Claude or Devin '
+            'subscriptions. Nobody else&#x27;s '
+            "provider account is ever shared with you, and yours is never shared with "
             "anybody.</p>",
-            '<p class="callout">CC Fleet 提供托管的槽位环境，不出售 Claude '
-            "订阅。你只能使用自己的 Claude 账号；我们不会把其他用户的账号分给你，也不会把你"
+            '<p class="callout">CC Fleet 提供托管的槽位环境，不出售 Claude 或 Devin '
+            "订阅。你只能使用自己的账号；我们不会把其他用户的账号分给你，也不会把你"
             "的账号分给其他用户。</p>",
         )
         + '</div><div class="card">'
@@ -1028,14 +1037,15 @@ def guide(
         price_en = ('Each slot has its own provider, IP type and monthly price in the '
                     '<a href="/slots">public slot catalogue</a>. Alpha pricing passes through '
                     'recorded monthly VPS and exit-IP costs, plus a 10% service fee with '
-                    'a $2 minimum per slot, in USD. Your Claude subscription or Anthropic '
-                    'API usage is billed separately. Choose the machine at its displayed '
+                    'a $2 minimum per slot, in USD. Your Claude or Devin subscription '
+                    'and any extra usage are billed separately. Choose the machine at its '
+                    'displayed '
                     'rate in <a href="/account/available">Browse available slots</a> '
                     'and pay the operator directly; this site '
                     'does not charge automatically or renew automatically.')
         price_zh = ('每个槽位的服务商、IP 类型及月费见<a href="/slots">公开槽位目录</a>，'
                     'Alpha 定价按已记录的 VPS 与出口 IP 美元月成本，加 10% 服务费，'
-                    '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
+                    '每槽位最低 $2。Claude 或 Devin 订阅及额外用量另计。'
                     '在<a href="/account/available">浏览可用槽位</a>按所示价格选择主机，'
                     '并直接向运营者付款；'
                     '本站不会自动扣款或自动续费。')
@@ -1043,9 +1053,9 @@ def guide(
         '<div class="dochead">'
         + bi("<h1>Getting started</h1>", "<h1>开始使用</h1>")
         + bi(
-            '<p class="lead">Your computer does the work; your own Claude account on a '
+            '<p class="lead">Your computer does the work; your own provider account on a '
             "slot handles model access. Follow these steps to get both ready.</p>",
-            '<p class="lead">你的电脑负责工作，槽位上你自己的 Claude '
+            '<p class="lead">你的电脑负责工作，槽位上你自己的服务商 '
             "账号负责模型访问。按下面几步，把两边准备好。</p>",
         )
         + '</div><ol class="steps">'
@@ -1088,15 +1098,31 @@ def guide(
         + "</li>"
         + "<li>"
         + bi(
-            '<h3>Sign in to Claude</h3><p>At <span class="pill warn">Ready to sign '
+            '<h3>Choose your provider</h3><p><strong>Anthropic:</strong> at <span '
+            'class="pill warn">Ready to sign '
             'in</span>, choose <span class="btnlabel">Sign in to Claude</span>. Open the '
             "link, sign in with your own paid Claude account, copy its code and paste it "
             'back. Choose <span class="btnlabel">Send code</span>. A completed sign-in '
             'shows <span class="pill ok">In use</span>.</p>',
-            '<h3>登录你的 Claude 账号</h3><p>显示 <span class="pill warn">可以登录</span> '
+            '<h3>选择模型服务</h3><p><strong>Anthropic：</strong>显示 <span class="pill '
+            'warn">可以登录</span> '
             '后，点击 <span class="btnlabel">登录 Claude</span>。打开链接，用你自己的付费 '
             'Claude 账号登录，把提供的代码复制回来，再点击 <span class="btnlabel">提交代码<'
             '/span>。成功后显示 <span class="pill ok">使用中</span>。</p>',
+        )
+        + bi(
+            '<p><strong>Devin:</strong> open the slot’s <a '
+            'href="/docs/library/docs/devin.html#connect">How to connect Devin</a> '
+            'guide. The operator prepares the pilot; you sign in to your own account '
+            'through the official CLI. Once the card says <strong>Devin ready</strong>, '
+            'open <a href="/account#gateway">Connection settings</a> and choose Devin '
+            'and that slot for your connection key. Claude sign-in is not required for '
+            'this route.</p>',
+            '<p><strong>Devin：</strong>打开槽位上的<a '
+            'href="/docs/library/docs/devin.html#connect">如何连接 Devin</a>说明。'
+            '运营者准备试点环境，你通过官方 CLI 登录自己的账号。显示<strong>Devin 已就绪</strong>'
+            '后，在<a href="/account#gateway">连接设置</a>中为连接密钥选择 Devin 和该槽位。'
+            '这条路线不要求登录 Claude 账号。</p>',
         )
         + "</li>"
         + "<li>"
@@ -1112,6 +1138,17 @@ def guide(
             "新生成的配对码。</p>",
         )
         + "</li></ol>"
+        + bi(
+            '<p>For a Devin-only setup, you can connect original Claude Code directly '
+            'with the website’s Fleet address and connection key. '
+            '<a href="/docs/library/docs/public-gateway.html#keys">Direct Claude Code setup</a> '
+            'does not require pairing through a Claude-signed-in slot. '
+            '<a href="/docs/library/docs/devin.html#prices">Compare subscription prices</a>.</p>',
+            '<p>只使用 Devin 时，也可以用网页提供的 Fleet 地址和连接密钥直接配置原版 Claude Code。'
+            '<a href="/docs/library/docs/public-gateway.html#keys">Claude Code 直接连接说明</a>'
+            '不要求先通过已登录 Claude 的槽位进行配对。'
+            '<a href="/docs/library/docs/devin.html#prices">订阅价格对比</a>。</p>',
+        )
         + '<div class="card" id="setup">'
         + bi("<h2>Install, check, then start</h2>", "<h2>安装、检查，然后开始</h2>")
         + "<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/la"
@@ -1142,7 +1179,9 @@ def guide(
             "启用的槽位。</p>",
         )
         + "</div>"
-        + _model_connections(cfg)
+        + '<details class="card"><summary>' + label(
+            'Advanced Anthropic account routing', 'Anthropic 账号路由进阶说明', inline=True
+        ) + '</summary>' + _model_connections(cfg) + '</details>'
         + '<div class="card" id="local-work">'
         + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
         + bi(
@@ -1284,41 +1323,6 @@ def guide(
 # -- how it works -----------------------------------------------------------------------
 
 
-GATEWAY_PICTURE = """<svg class="diag" viewBox="0 0 360 520" role="img"
-aria-labelledby="gateway-diag-t gateway-diag-d">
-<title id="gateway-diag-t">HTTPS gateway model request path</title>
-<desc id="gateway-diag-d">Original Claude Code sends supported model requests over HTTPS
-to our gateway. The gateway reads the request and chooses one of your selected own slots.
-A restricted SSH service connection reaches that slot, which uses its native Claude
-credential over HTTPS to Anthropic. Files, tools and history remain local.</desc>
-<defs><marker id="gateway-ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7"
-orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
-<rect class="box you" x="20" y="14" width="320" height="70" rx="12"/>
-<text x="180" y="44" text-anchor="middle">Local original Claude Code</text>
-<text class="sub" x="180" y="66" text-anchor="middle">local files, tools and history</text>
-<path class="arrow" d="M180,88 L180,126" marker-start="url(#gateway-ah)"
-marker-end="url(#gateway-ah)"/>
-<text class="sub" x="190" y="111">HTTPS + endpoint key</text>
-<rect class="side" x="20" y="130" width="320" height="70" rx="12"/>
-<text x="180" y="160" text-anchor="middle">Our HTTPS gateway</text>
-<text class="sub" x="180" y="182" text-anchor="middle">Can read model contents</text>
-<path class="arrow" d="M180,204 L180,242" marker-start="url(#gateway-ah)"
-marker-end="url(#gateway-ah)"/>
-<text class="sub" x="190" y="227">Restricted service SSH</text>
-<rect class="slot" x="20" y="246" width="320" height="114" rx="12"/>
-<text x="180" y="276" text-anchor="middle">Your selected own slot</text>
-<text class="sub" x="180" y="300" text-anchor="middle">one bound Claude account</text>
-<text class="sub" x="180" y="322" text-anchor="middle">native authentication and renewal</text>
-<text class="sub" x="180" y="344" text-anchor="middle">credential stays on the slot</text>
-<path class="arrow" d="M180,364 L180,408" marker-start="url(#gateway-ah)"
-marker-end="url(#gateway-ah)"/>
-<text class="sub" x="190" y="392">HTTPS to Anthropic</text>
-<rect class="box" x="20" y="412" width="320" height="82" rx="12"/>
-<text x="180" y="444" text-anchor="middle">Anthropic</text>
-<text class="sub" x="180" y="468" text-anchor="middle">runs the model; streams the answer</text>
-</svg>"""
-
-
 def _diagram_zh(svg: str, namespace: str, text: dict[str, str]) -> str:
     """Translate a trusted static SVG, including its accessible description.
 
@@ -1331,38 +1335,50 @@ def _diagram_zh(svg: str, namespace: str, text: dict[str, str]) -> str:
     return translated
 
 
-_DIAGRAM_COMMON = {
-    "Local original Claude Code": "电脑上的原版 Claude Code",
-    "local files, tools and history": "本地文件、工具与会话记录",
-    "credential stays on the slot": "登录凭证留在槽位",
-}
+PROVIDER_PICTURE = '''<svg class="diag" viewBox="0 0 360 430" role="img"
+aria-labelledby="provider-title provider-desc" xmlns="http://www.w3.org/2000/svg">
+<title id="provider-title">One client, your provider choice</title>
+<desc id="provider-desc">Local Claude Code sends a request to CC Fleet. Your website setting selects
+Anthropic or native Devin CLI on your own slot.
+Tools run on your computer; credentials stay on the slot.</desc>
+<defs><marker id="provider-arrow" viewBox="0 0 10 10" refX="8" refY="5"
+markerWidth="6" markerHeight="6" orient="auto">
+<path d="M0 0L10 5L0 10Z" fill="currentColor"/></marker></defs>
+<rect class="box" x="35" y="10" width="290" height="76" rx="12"/>
+<text x="180" y="40" text-anchor="middle">Your Claude Code</text>
+<text class="sub" x="180" y="64" text-anchor="middle">Files and tools on your computer</text>
+<path class="arrow" d="M180 90V125" marker-end="url(#provider-arrow)"/>
+<rect class="side" x="35" y="130" width="290" height="76" rx="12"/>
+<text x="180" y="160" text-anchor="middle">CC Fleet</text>
+<text class="sub" x="180" y="184" text-anchor="middle">Your website provider setting</text>
+<path class="arrow" d="M180 210V246H87V280" marker-end="url(#provider-arrow)"/>
+<path class="arrow" d="M180 246H273V280" marker-end="url(#provider-arrow)"/>
+<text class="sub" x="180" y="265" text-anchor="middle">Your selected own slot</text>
+<rect class="slot" x="6" y="285" width="168" height="82" rx="12"/>
+<text x="90" y="317" text-anchor="middle">Anthropic</text>
+<text class="sub" x="90" y="343" text-anchor="middle">Your Claude account</text>
+<rect class="slot" x="186" y="285" width="168" height="82" rx="12"/>
+<text x="270" y="317" text-anchor="middle">Devin CLI</text>
+<text class="sub" x="270" y="343" text-anchor="middle">Your Devin account</text>
+<text class="sub" x="180" y="397" text-anchor="middle">The reply comes back to your computer</text>
+<text class="sub" x="180" y="419" text-anchor="middle">Provider credentials stay on the slot</text>
+</svg>'''
 
-
-GATEWAY_PICTURE_ZH = _diagram_zh(
-    GATEWAY_PICTURE,
-    "gateway",
-    {
-        **_DIAGRAM_COMMON,
-        "HTTPS gateway model request path": "HTTPS 网关模型请求路线",
-        "Original Claude Code sends supported model requests over HTTPS\nto our "
-        "gateway. The gateway reads the request and chooses one of your selected own "
-        "slots.\nA restricted SSH service connection reaches that slot, which uses its "
-        "native Claude\ncredential over HTTPS to Anthropic. Files, tools and history "
-        "remain local.": "原版 Claude Code 通过 HTTPS 将支持的模型请求发给我们的网关。网关"
-        "读取请求，在你选中的自己的槽位里选择一个。权限受限的 SSH "
-        "服务连接到该槽位，再由槽位用原生 Claude 凭证通过 HTTPS 访问 "
-        "Anthropic。文件、工具和历史仍在电脑上。",
-        "HTTPS + endpoint key": "HTTPS + 连接密钥",
-        "Our HTTPS gateway": "我们的 HTTPS 网关",
-        "Can read model contents": "可读取模型消息",
-        "Restricted service SSH": "权限受限的服务 SSH",
-        "Your selected own slot": "你选中的自己的槽位",
-        "one bound Claude account": "绑定一个 Claude 账号",
-        "native authentication and renewal": "原生 Claude 管理登录与续期",
-        "HTTPS to Anthropic": "HTTPS 到 Anthropic",
-        "runs the model; streams the answer": "运行模型；流式返回回复",
-    },
-)
+PROVIDER_PICTURE_ZH = _diagram_zh(PROVIDER_PICTURE, 'provider', {
+    'One client, your provider choice': '同一个客户端，自选模型服务',
+    'Local Claude Code sends a request to CC Fleet.': '本地 Claude Code 向 Fleet 发出请求。',
+    'Your website setting selects': '网页设置决定使用',
+    'Anthropic or native Devin CLI on your own slot.': '自己槽位上的 Anthropic 或原生 Devin CLI。',
+    'Tools run on your computer; credentials stay on the slot.': '工具在本机执行，凭证留在槽位。',
+    'Your Claude Code': '电脑上的 Claude Code',
+    'Files and tools on your computer': '文件和工具在你的电脑上',
+    'Your website provider setting': '按网页上的服务商设置转发',
+    'Your selected own slot': '你选定的自有槽位',
+    'Your Claude account': '你自己的 Claude 账号',
+    'Your Devin account': '你自己的 Devin 账号',
+    'The reply comes back to your computer': '回复返回电脑，工具继续在本机执行',
+    'Provider credentials stay on the slot': '服务商登录凭证留在槽位',
+})
 
 
 def how_it_works(
@@ -1372,15 +1388,14 @@ def how_it_works(
         '<div class="dochead">'
         + bi("<h1>How it works</h1>", "<h1>CC Fleet 如何工作</h1>")
         + bi(
-            '<p class="lead">Think of the gateway as a reception desk and your slot as a '
-            "seat reserved for your own Claude account. Your computer sends the question; "
-            "the desk chooses one of your selected seats; Anthropic runs the model.</p>",
-            '<p class="lead">把网关想成收件前台，把槽位想成留给你自己的 Claude '
-            "账号的座位。电脑送出问题，前台从你选中的座位里挑一个，Anthropic "
-            "运行模型并回答。</p>",
+            '<p class="lead">Your computer does the file work. Fleet is the reception desk: '
+            "it sends your question through your own slot, using the provider you chose "
+            "on the website. The answer comes back to Claude Code.</p>",
+            '<p class="lead">电脑负责文件操作，Fleet 像收件前台：按你在网页选择的模型服务，'
+            "把问题经由自己的槽位发出，再把回答送回 Claude Code。</p>",
         )
         + '</div><div class="how"><figure class="card diagram">'
-        + bi(GATEWAY_PICTURE, GATEWAY_PICTURE_ZH)
+        + bi(PROVIDER_PICTURE, PROVIDER_PICTURE_ZH)
         + "<figcaption>"
         + bi(
             "Model requests go over HTTPS. Your files, tools and history stay local; model "
@@ -1401,26 +1416,38 @@ def how_it_works(
             "连接密钥，通过 HTTPS 发给我们的网关。</p>",
         )
         + bi(
-            "<p>The gateway checks your key and ownership, then chooses one of your "
-            "selected own slots. The gateway uses a restricted inference-only SSH connection to "
-            "that slot. The slot uses its bound native Claude credential over HTTPS to "
-            "Anthropic. The answer streams back along this route; permitted tools execute "
-            "on your computer. Credentials are not copied to your laptop or the gateway.</p>",
-            "<p>网关验证密钥与槽位归属，从你选中的自己的槽位中选择一个。网关"
-            "通过只允许模型转发的受限 SSH 连接到槽位。槽位使用绑定的原生 Claude 凭证，通过 "
-            "HTTPS 请求 Anthropic。回答沿原路分段返回，获准的工具仍在你的电脑上执行；Claude"
-            " 凭证不会复制到电脑或网关。</p>",
+            "<p>Fleet checks your connection key and uses a slot you selected. "
+            "<strong>Anthropic</strong> uses your Claude sign-in. <strong>Devin</strong> "
+            "uses its own native CLI and your Devin sign-in on the slot. The reply and "
+            "tool requests return to Claude Code. Read, Edit and Bash run on your computer "
+            "with its permissions. Credentials are not copied to your laptop or the gateway.</p>",
+            "<p>Fleet 验证连接密钥，使用你选定的槽位。<strong>Anthropic</strong> 路线使用"
+            "你的 Claude 登录；<strong>Devin</strong> 路线使用槽位上的原生 Devin CLI 和"
+            "你的 Devin 登录。回复和工具请求返回 Claude Code；Read、Edit、Bash 按本机权限"
+            "在电脑执行。服务商凭证不会复制到电脑或网关。</p>",
+        )
+        + bi(
+            '<p>Anthropic is the default. Devin is an operator-enabled own-account pilot: '
+            'look for <strong>Devin ready</strong> on your slot, then open '
+            '<a href="/account#gateway">Connection settings</a>. '
+            '<a href="/docs/library/docs/devin.html#connect">Setup steps</a> · '
+            '<a href="/docs/library/docs/devin.html#prices">Compare plan prices</a>.</p>',
+            '<p>默认使用 Anthropic。Devin 目前是运营者开通的自有账号试点：槽位显示 '
+            '<strong>Devin 已就绪</strong> 后，打开<a href="/account#gateway">连接设置</a>。'
+            '<a href="/docs/library/docs/devin.html#connect">设置步骤</a> · '
+            '<a href="/docs/library/docs/devin.html#prices">订阅价格对比</a>。</p>',
         )
         + '</div><div class="card">'
         + bi("<h2>Your seat and your account</h2>", "<h2>你的槽位与你的账号</h2>")
         + bi(
             "<p>Each customer receives a dedicated VPS and dedicated exit IP. The slot "
-            "has a private Linux home directory and one bound Claude account. You sign "
+            'has a private Linux home directory and your own provider sign-in. For '
+            'Anthropic, you sign '
             "in yourself through "
             "Anthropic; native Claude owns authentication and renewal. Renewal can fail or "
             "be revoked, so the page may ask you to <strong>Sign in again</strong>.</p>",
-            "<p>每位客户获得专属 VPS 与专属出口 IP。槽位有独立的 Linux 主目录，并绑定一个 "
-            "Claude 账号。你通过 Anthropic "
+            "<p>每位客户获得专属 VPS 与专属出口 IP。槽位有独立的 Linux 主目录，登录自己的"
+            "服务商账号。使用 Anthropic 时，你通过 Anthropic "
             "亲自登录，认证与续期由原版 Claude 管理。续期可能失败，登录也可能被撤销，因此页"
             "面仍可能要求<strong>重新登录</strong>。</p>",
         )
@@ -1435,28 +1462,32 @@ def how_it_works(
             "。机器时钟使用 UTC；槽位卡片上的额度重置时间按你所在的时区显示。</p>",
         )
         + "</div>"
-        + _model_connections(cfg)
+        + '<details class="card"><summary>' + label(
+            'Advanced Anthropic account routing', 'Anthropic 账号路由进阶说明', inline=True
+        ) + '</summary>' + _model_connections(cfg) + '</details>'
         + '<div class="card">'
         + bi("<h2>Who can read what</h2>", "<h2>谁能看到什么</h2>")
         + bi(
             "<p><strong>The gateway can read model requests and responses.</strong> HTTPS protects "
             "each connection, but the gateway decrypts messages to route them. The gateway, the "
-            "selected slot and Anthropic process model context, including any prompts, "
+            "selected slot and your chosen provider process model context, including any prompts, "
             "file contents and tool results it contains. Local files stay local as files; "
             "relevant contents can still be sent to the model.</p>",
             "<p><strong>网关可以读取模型请求和回复。</strong>HTTPS "
-            "保护每段连接，但网关为路由会解密消息。网关、选中的槽位和 Anthropic "
+            "保护每段连接，但网关为路由会解密消息。网关、选中的槽位和你选择的服务商 "
             "都会处理模型上下文，包括其中的提示、文件内容和工具结果。文件本身仍在本地，但相"
             "关内容可能发给模型。</p>",
         )
         + bi(
-            "<p>The Fleet server receives slot sign-in state, the bound Claude email and "
+            '<p>For Anthropic, the Fleet server receives slot sign-in state, the bound '
+            'Claude email and '
             "plan, quota observations, hourly token counts and paired-device facts. Those "
             "heartbeat reports do not contain prompts, conversations, file contents or the "
             "Claude credential. Separately, the direct HTTPS gateway receives and "
             "processes model requests. The server stores only a hash of your connection "
             "key; the native Claude credential remains on the slot.</p>",
-            "<p>Fleet 服务收到槽位登录状态、绑定的 Claude 邮箱与订阅、配额观察、按小时的 "
+            '<p>使用 Anthropic 时，Fleet 服务收到槽位登录状态、绑定的 Claude '
+            '邮箱与订阅、配额观察、按小时的 '
             "token 数和设备配对信息。这样的状态报告不包含提示、会话、文件内容或 Claude "
             "凭证；我们的 HTTPS 网关则另外接收和处理模型消息。服务端只保存连接密钥的哈希"
             "，原生 Claude 凭证留在槽位。</p>",
@@ -1480,7 +1511,16 @@ def how_it_works(
             '整文件，但这不消除 root 访问能力。完整数据范围与保存时长见<a href="/privacy">'
             "隐私说明</a>。</p>",
         )
-        + '</div><div class="card">'
+        + bi(
+            '<p>Devin can keep selected context, replies and tool-handoff records on your '
+            'slot. They may remain until it is cleared. This is separate from your local '
+            'Claude Code history. <a href="/privacy">Read the privacy details</a>.</p>',
+            '<p>Devin 可能在槽位保存选定的上下文、回复和工具交接记录，并一直保留到槽位被清理。'
+            '它们与本机 Claude Code 历史分开。<a href="/privacy">查看隐私详情</a>。</p>',
+        )
+        + '</div><details class="card"><summary>' + label(
+            'Updates, outages and returning a slot', '更新、故障与归还', inline=True
+        ) + '</summary>'
         + bi("<h2>Updates, outages and returning a slot</h2>", "<h2>更新、故障与归还</h2>")
         + bi(
             "<p>Local Claude updates separately from the slot and the Fleet client. "
@@ -1526,18 +1566,27 @@ def how_it_works(
             "中的进程，删除 Linux 用户与所有槽位文件；只有机器确认删除完成，槽位才会再次开"
             "放领取。本地文件和历史不会因此删除。</p>",
         )
-        + "</div></div></div>"
+        + "</details></div></div>"
     )
     body += '<div class="card" id="rental-pricing">' + bi(
         '<h2>Slot providers, IP types and rates</h2>',
         '<h2>槽位服务商、IP 类型与价格</h2>',
-    ) + _public_slot_catalogue() + _rental_pricing_details() + bi(
+    ) + bi(
+        '<p>Your monthly total is the Fleet slot price plus your own provider subscription, '
+        'and any extra provider usage or tax. <a href="/slots">See available slot prices</a> · '
+        '<a href="/docs/library/docs/devin.html#prices">Compare Claude and Devin plans</a>.</p>',
+        '<p>每月总费用是 Fleet 槽位价格，加你自己的服务商订阅，以及额外用量或税费。'
+        '<a href="/slots">查看槽位价格</a> · '
+        '<a href="/docs/library/docs/devin.html#prices">比较 Claude 与 Devin 套餐</a>。</p>',
+    ) + '<details><summary>' + label(
+        'Slot types and price breakdown', '网络类型与费用明细', inline=True
+    ) + '</summary>' + _public_slot_catalogue() + _rental_pricing_details() + bi(
         '<p>An ISP slot can use a '
         'separate approved exit proxy; provider HTTPS remains encrypted through that '
         'tunnel. Your account page shows the same labels before you choose a slot.</p>',
         '<p>ISP 槽位可以使用独立获准的出口代理，'
         '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p>',
-    ) + '</div>'
+    ) + '</details></div>'
     return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
@@ -1557,13 +1606,13 @@ def terms(
         paying = ('Monthly rates are listed separately for each slot in the '
                   '<a href="/slots">public slot catalogue</a>. Alpha pricing adds a service '
                   'fee of 10% of recorded monthly VPS and exit-IP resource cost, with a '
-                  '$2 minimum per slot, in USD. Your Claude subscription or Anthropic API '
-                  'usage is billed separately. Agree the price and paid period directly '
+                  '$2 minimum per slot, in USD. Your Claude or Devin subscription and extra '
+                  'usage are billed separately. Agree the price and paid period directly '
                   'with the operator; claiming a slot does not charge you automatically '
                   'or renew automatically.')
         paying_zh = ('各槽位月费分别列于<a href="/slots">公开槽位目录</a>：'
                      'Alpha 定价在已记录的 VPS 与出口 IP 美元月度资源成本上，加 10% 服务费，'
-                     '每槽位最低 $2。Claude 订阅或 Anthropic API 用量另计。'
+                     '每槽位最低 $2。Claude 或 Devin 订阅及额外用量另计。'
                      '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款或自动续费。')
     body = (
         '<div class="dochead">'
@@ -1577,21 +1626,23 @@ def terms(
         + bi(
             "<p>A slot provides one person with a dedicated VPS and dedicated exit IP, "
             "with a private Linux account and Claude Code installed. You bring your own "
-            "Claude plan and sign in to it "
+            "provider plan and sign in to it "
             "yourself; ccfleet does not provide access to Claude. CC Fleet is independent "
-            "and is not affiliated with or endorsed by Anthropic.</p>",
+            "and is not affiliated with or endorsed by Anthropic or Cognition. Devin is "
+            "a verified own-account pilot, not a bundled or shared subscription.</p>",
             "<p>槽位为一人提供专属 VPS 与专属出口 IP，包含独立 Linux 用户环境，并安装了 Claude "
-            "Code。你自行准备 Claude 订阅并亲自登录；CC Fleet 不提供 Claude 订阅或账号。CC "
-            "Fleet 独立运营，与 Anthropic 没有隶属关系，也未获其背书。</p>",
+            "Code。你自行准备服务商订阅并亲自登录；CC Fleet 不提供 Claude 或 Devin 订阅或账号。CC "
+            "Fleet 独立运营，与 Anthropic 或 Cognition 没有隶属关系，也未获其背书。Devin "
+            "仅作为通过验证的自有账号试点，不打包或共享订阅。</p>",
         )
         + '</div><div class="card">'
-        + bi("<h2>Your Claude account</h2>", "<h2>你的 Claude 账号</h2>")
+        + bi("<h2>Your provider account</h2>", "<h2>你的服务商账号</h2>")
         + bi(
-            "<p>Use your own Claude account in your slot, and only yours. You are "
-            "responsible for following Anthropic&#x27;s terms and usage policy, as you "
+            "<p>Use your own provider account in your slot, and only yours. You are "
+            "responsible for following your provider&#x27;s terms and usage policy, as you "
             "would on your own computer. Do not share your slot, or your sign-in, with "
             "anybody else.</p>",
-            "<p>槽位只能使用你自己的 Claude 账号。你需要遵守 Anthropic "
+            "<p>槽位只能使用你自己的服务商账号。你需要遵守所选服务商 "
             "的条款与使用政策，和在自己电脑上使用时一样。不要向他人共享槽位或登录。</p>",
         )
         + '</div><div class="card">'
