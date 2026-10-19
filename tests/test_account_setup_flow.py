@@ -129,6 +129,8 @@ def connection(parsed, provider="devin"):
 def test_setup_precedes_launch_with_distinct_own_authorizer_and_Devin_target(setup_context, language):
     c = setup_context
     source = rendered(c, language)
+    assert 'http-equiv="refresh"' not in source
+    assert ('Refresh status' if language == 'en' else '刷新状态') in source
     page = Flow(source)
     commands = [element.text for element in page.inside(connection(page), "code")]
     assert commands == [

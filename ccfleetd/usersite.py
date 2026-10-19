@@ -1225,7 +1225,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         '<h1>' + label('Your slots', '我的槽位', inline=True) + '</h1>'
         '<p class="sub">' + label('Choose a slot. Connect your computer. Start coding.',
                                   '选一个槽位，连接电脑，开始写代码。', inline=True)
-        + '</p></div><a class="btn quiet" href="/docs/guide">'
+        + ' <a href="/account">' + label('Refresh status', '刷新状态', inline=True)
+        + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account") + banner
         + (
@@ -1270,7 +1271,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     reading = any(quota_reading(s.get("quota_wanted_at"),
                                 (_report_for(s, latest.get(s["node_id"])).get("quota") or {})
                                 .get("checked_at"), now) for s in held)
-    return _shell("your slots", body, _refresh(held, logins, updating or reading),
+    return _shell("your slots", body,
+                  _refresh(held, logins, updating or reading, idle_refresh=False),
                   viewer=viewer_for(account, session_id, cfg, store), width="wide")
 
 
@@ -2207,7 +2209,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
 
 
 def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, Any]],
-             updating: bool = False) -> str:
+             updating: bool = False, *, idle_refresh: bool = True) -> str:
     """Come back soon while something is moving; never while a code is being typed.
 
     Always to the bare page, never the address the page was opened at. After an
@@ -2225,6 +2227,9 @@ def _refresh(held: list[Mapping[str, Any]], logins: Mapping[str, Mapping[str, An
     moving = updating or any(s["state"] in (slotstates.CLAIMING, slotstates.RELEASING)
                              for s in held)
     soon = moving or bool(states & {"requested", "code_sent"})
+    if not soon and not idle_refresh:
+        # Do not close setup instructions or erase an unfinished connection form.
+        return ""
     seconds = ACTIVE_REFRESH_S if soon else IDLE_REFRESH_S
     return f'<meta http-equiv="refresh" content="{seconds};url=/account">'
 

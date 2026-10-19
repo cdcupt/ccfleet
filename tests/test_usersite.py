@@ -492,7 +492,7 @@ def test_the_page_comes_back_soon_only_while_something_moves(site):
     store, sign_in, _ = site
     machine(store)
     erik = sign_in(quota=1)
-    assert refresh_of(erik.page()) == (60, "/account")
+    assert refresh_of(erik.page()) is None, "quiet pages must keep setup instructions open"
     erik.press("/account/claim")
     assert refresh_of(erik.page()) == (4, "/account"), "setting up, and nobody would see it finish"
 
