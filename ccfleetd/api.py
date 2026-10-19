@@ -1630,7 +1630,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                     now, ctx.cfg, csrf_token(ctx.cfg), who,
                                     logins=logins,
                                     extra=(consoleslots.section(ctx.store, csrf_token(ctx.cfg),
-                                                                now)
+                                                                now, cfg=ctx.cfg)
                                            if who.is_admin else ""),
                                     corner=self._console_corner())
 

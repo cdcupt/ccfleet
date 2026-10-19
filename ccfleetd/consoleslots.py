@@ -20,8 +20,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any, Optional
 
-from . import claude_versions, names, offers, payments, plans, pricing
+from . import claude_versions, devin_ui, names, offers, payments, plans, pricing
 from . import slots as slotstates
+from .config import Config
 from .desired import is_channel, machine_hostname
 from .render import _age, _free_pool_slot
 from .store import Store, StoreError
@@ -74,10 +75,10 @@ def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") ->
             f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
 
 
-def section(store: Store, csrf: str, now: float) -> str:
+def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None) -> str:
     """The slots card, the accounts card and the price, for an admin's console."""
     accounts = {a["id"]: a for a in store.list_accounts()}
-    body = (_slots_card(store, accounts, csrf, now)
+    body = (_slots_card(store, accounts, csrf, now, cfg=cfg)
             + _accounts_card(store, accounts, csrf, now, _plans_by_holder(store)))
     price = _price_card(store, csrf, now)
     return price + body if _has_offers(store) else body + price
@@ -291,6 +292,8 @@ class _Look:
     #: When the serving loop began listening: a claim is not stuck for time
     #: the server was down (see status.machine_state).
     listening: Optional[float] = None
+    #: Read-only provider state checked for the actual holder, never the admin viewer.
+    devin_states: Optional[Mapping[tuple[str, Optional[str], Optional[str]], str]] = None
 
 
 @dataclass(frozen=True)
@@ -306,11 +309,20 @@ class _Machine:
 
 
 def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: str,
-                now: float) -> str:
+                now: float, *, cfg: Optional[Config] = None) -> str:
     """A row a machine, its slot being the row; each row's actions wait under
     its Manage, so nothing that wipes somebody sits out in the open."""
+    provider_states = {}
+    if cfg is not None:
+        for slot in store.list_slots(kind=slotstates.MACHINE_SLOT):
+            holder = accounts.get(slot.get("held_by") or "")
+            if holder is not None:
+                state = devin_ui.native_state(store, cfg, holder, slot, now=now)
+                if state in {"ready", "verification_required"}:
+                    identity = (slot["id"], slot.get("held_by"), slot.get("gateway_claim_id"))
+                    provider_states[identity] = state
     look = _Look(accounts, store.open_alerts(), store.get_channel_versions(), csrf, now,
-                 store.listening_since())
+                 store.listening_since(), provider_states)
     latest = store.latest_heartbeats()
     rows = "".join(_machine_rows(store, node, (latest.get(node["id"]) or {}).get("payload") or {},
                                  look)
@@ -369,8 +381,11 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
     keeper = _kept_for(node, look.accounts)
     if free_pool and keeper:
         pills.append(_pill("warn", "reserved"))
+    provider_state = (look.devin_states or {}).get(
+        (slot["id"], slot.get("held_by"), slot.get("gateway_claim_id")))
     cells = _cells(_name(shown, sub + ([keeper] if keeper and not free_pool else [])),
-                   _holder(slot, look.accounts, report), _state_pill(slot),
+                   _holder(slot, look.accounts, report),
+                   _state_pill(slot, report, devin_state=provider_state),
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     crowded = len(machine.rows) > slotstates.MAX_SLOTS_PER_MACHINE
@@ -468,15 +483,20 @@ def _holder(slot: Mapping[str, Any], accounts: Mapping[str, Mapping[str, Any]],
     return '<span class="muted">available</span>' if slot["state"] == slotstates.FREE else "&mdash;"
 
 
-def _state_pill(slot: Mapping[str, Any], report: Optional[Mapping[str, Any]] = None) -> str:
+def _state_pill(slot: Mapping[str, Any], report: Optional[Mapping[str, Any]] = None,
+                *, devin_state: Optional[str] = None) -> str:
     """The state in the words and colours the holder's own page uses. An
     owner's own node never goes through the lifecycle: it is signed in or
     not, by the node's own word."""
     state = str(slot["state"])
+    creds = (report or {}).get("credentials")
+    signed_in = isinstance(creds, Mapping) and creds.get("logged_in") is True
     if slot.get("kind") == slotstates.OWNER_SLOT:
-        creds = (report or {}).get("credentials")
-        signed_in = isinstance(creds, Mapping) and creds.get("logged_in") is True
         tone, words = STATE_WORDS[slotstates.ACTIVE][:2] if signed_in else NOT_SIGNED_IN
+    elif (state == slotstates.CLAIMED and not signed_in
+            and devin_state in {"ready", "verification_required"}):
+        tone, words = (("ok", "Devin ready") if devin_state == "ready"
+                       else ("warn", "Devin needs a check"))
     else:
         tone, words = (STATE_WORDS[state][:2] if state in STATE_WORDS
                        else FREE_WORDS if state == slotstates.FREE else ("disabled", state))
