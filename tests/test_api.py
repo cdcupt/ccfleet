@@ -17,6 +17,13 @@ from ccfleetd.store import Store
 from tests.conftest import heartbeat, next_load
 
 
+class NoRecurringContractsStore:
+    """Logging-only Context fixture: no recurring contracts or database work."""
+
+    def slot_subscription_processing_required(self):
+        return False
+
+
 @pytest.fixture
 def server(cfg):
     store = Store(":memory:", max_slots_per_machine=8)
@@ -74,7 +81,7 @@ def test_http_access_logs_do_not_record_request_or_response_bodies(server, caplo
 
 
 def test_http_parser_error_logging_never_interpolates_raw_request_details(cfg, caplog):
-    handler_type = make_handler(Context(None, cfg, None))
+    handler_type = make_handler(Context(NoRecurringContractsStore(), cfg, None))
     handler = handler_type.__new__(handler_type)
     handler.client_address = ("127.0.0.1", 12345)
     handler.command = "GET"
@@ -98,7 +105,7 @@ def test_http_parser_error_logging_never_interpolates_raw_request_details(cfg, c
 ])
 def test_access_logs_emit_templates_without_dynamic_identifiers_or_unknown_paths(
         cfg, caplog, path, route):
-    handler_type = make_handler(Context(None, cfg, None))
+    handler_type = make_handler(Context(NoRecurringContractsStore(), cfg, None))
     handler = handler_type.__new__(handler_type)
     handler.client_address = ("127.0.0.1", 12345)
     handler.command = "POST"

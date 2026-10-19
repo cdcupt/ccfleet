@@ -405,18 +405,18 @@ def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
     # opened at, which after an action ends in #<card>) and never a fragment.
     idle = page({})
     assert refresh_of(idle) == (IDLE_REFRESH_S, CONSOLE_PATH)
-    assert "refreshing itself every minute" in idle
+    assert "Refreshing itself every minute" in idle
 
     for state in ("requested", "code_sent"):
         active = page({"att3": {"state": state, "kind": "token"}})
         assert refresh_of(active) == (ACTIVE_REFRESH_S, CONSOLE_PATH), f"{state} is worth watching"
-        assert "keeping up with a sign-in" in active
+        assert "Keeping up with a sign-in" in active
 
     # Except while someone is typing, where any reload throws away the code.
     typing = page({"att3": {"state": "url_ready", "kind": "token",
                             "url": "https://claude.com/x"}})
     assert 'http-equiv="refresh"' not in typing
-    assert "waiting for you to paste a code" in typing
+    assert "Waiting for you to paste a code" in typing
 
 
 def test_what_the_page_says_it_is_doing_is_not_read_back_out_of_its_markup(cfg, monkeypatch):
@@ -429,8 +429,8 @@ def test_what_the_page_says_it_is_doing_is_not_read_back_out_of_its_markup(cfg, 
     monkeypatch.setattr(render, "CONSOLE_PATH", path)
     idle = render_dashboard([], [], NOW, cfg, csrf="TOK", logins={})
     assert refresh_of(idle) == (render.IDLE_REFRESH_S, path), "the target is the console's"
-    assert "refreshing itself every minute" in idle
-    assert "keeping up with a sign-in" not in idle
+    assert "Refreshing itself every minute" in idle
+    assert "Keeping up with a sign-in" not in idle
 
 
 def test_the_card_remembers_that_a_token_was_issued():

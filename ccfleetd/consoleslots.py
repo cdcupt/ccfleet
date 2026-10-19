@@ -825,6 +825,7 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
                 credit = ('<p class="muted">Fleet credit is unavailable. '
                           'Credit actions are paused.</p>')
         held = store.held_slot_count(account["id"])
+        slot_word = 'slot' if held == 1 else 'slots'
         quota = int(account.get("slot_quota") or 0)
         paid = ledger.get(account["id"], [])
         role = ('<span class="admin-role">Admin</span>'
@@ -846,7 +847,7 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
         lines.append(
             '<div class="row-line admin-account"><div class="admin-account-heading">'
             f'<div class="row-name">{escape(str(account["email"]))}{role}'
-            f'<span class="muted">{held} slots{plan} · {seen}{standing}</span></div></div>'
+            f'<span class="muted">{held} {slot_word}{plan} · {seen}{standing}</span></div></div>'
             + allowance + credit + monthly + payment_notes
             + "</div>")
     body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
