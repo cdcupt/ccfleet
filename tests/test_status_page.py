@@ -290,7 +290,7 @@ def test_public_inventory_omits_disabled_offers_but_keeps_an_enabled_outage(stor
     assert f'id="machine-{nodes["retired-private"]["public_status_number"]}"' not in raw
     outage = machine_row(raw, nodes['pool-8']['public_status_number'])
     # Recorded monthly costs: $4.70 + $5.00 = $9.70; Alpha minimum fee $2.00.
-    assert 'VisibleHost / VisibleIP' in outage and '$11.70' in outage
+    assert 'VisibleHost / VisibleIP' in shown(outage) and '$11.70' in outage
     assert ('Down' if language == 'en' else '离线') in shown(outage)
     assert all(secret not in raw for secret in ('RetiredHost', 'RetiredIP', 'retired-private',
                                                 'private-owner', 'private-user', 'retired-slot',
