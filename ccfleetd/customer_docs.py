@@ -817,6 +817,54 @@ def _model_connections(cfg: Config) -> str:
     )
 
 
+def _domain_move() -> str:
+    return (
+        '<div class="card" id="new-domain">'
+        + bi("<h2>New address, same account</h2>", "<h2>地址换新，账号不变</h2>")
+        + bi(
+            '<p>Our address is <strong>https://ccfleet.io</strong>. Fleet client '
+            '0.2.6 uses it for HTTPS and secure WebSocket connections, including when '
+            'your saved setup still contains the old standard address. Your connection '
+            'keys, selected slots and sign-ins stay the same.</p>',
+            '<p>新地址是 <strong>https://ccfleet.io</strong>。Fleet 客户端 0.2.6 '
+            '通过它建立 HTTPS 和安全 WebSocket 连接；即使已保存的配置仍写着旧标准地址，'
+            '新版也会使用新地址。连接密钥、所选槽位和登录保持不变。</p>',
+        )
+        + bi(
+            '<p><strong>Try the new client beside your working one.</strong> '
+            'If your current Fleet CLI is already connected, install the separate '
+            '<code>ccfleet-next</code> command:</p>',
+            '<p><strong>先并排试用新版。</strong>如果现有 Fleet CLI 已连接好，'
+            '可以安装独立的 <code>ccfleet-next</code> 命令：</p>',
+        )
+        + '<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/'
+        'laptop/install.sh | bash -s -- --next\n'
+        '$HOME/.local/bin/ccfleet-next version --json\n'
+        '$HOME/.local/bin/ccfleet-next local --check\n'
+        '$HOME/.local/bin/ccfleet-next local</code></pre>'
+        + bi(
+            '<p>This verifies a signed release and adds a separate launcher. It reuses '
+            'your saved connection and local Claude history. It keeps your existing '
+            '<code>ccfleet</code> executable and running sessions. The readiness check '
+            'does not call a model or upload a project. You do not need to pair again '
+            'or create another connection key for this address change.</p>',
+            '<p>安装会验证发布签名，并添加独立启动器；它复用已保存的连接和本地 Claude '
+            '历史，保留现有 <code>ccfleet</code> 程序与正在运行的会话。就绪检查不调用模型，'
+            '也不上传项目。更换这个地址不需要重新配对或创建连接密钥。</p>',
+        )
+        + bi(
+            '<p>To update your usual launcher later, run <code>ccfleet update</code>. '
+            '<code>ccfleet update --rollback</code> restores its previous client. '
+            'Already running sessions keep their original process. The old API address '
+            'remains available during the transition.</p>',
+            '<p>以后想更新常用启动器时，运行 <code>ccfleet update</code>；需要回退时，'
+            '运行 <code>ccfleet update --rollback</code>。已运行的会话继续使用原进程。'
+            '过渡期间，旧 API 地址继续可用。</p>',
+        )
+        + '</div>'
+    )
+
+
 def _version_choices() -> str:
     return (
         '<div class="card" id="versions">'
@@ -1252,6 +1300,7 @@ def guide(
             "电脑直接联网。可选遥测控制不是拦截所有流量的防火墙。</p>",
         )
         + "</div>"
+        + _domain_move()
         + _version_choices()
         + _client_tools()
         + '<div class="card" id="slot-care">'

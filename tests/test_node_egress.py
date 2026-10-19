@@ -195,13 +195,32 @@ def test_managed_settings_persist_only_credential_free_route_and_leave_other_pol
     assert not list(directory.glob("*.tmp.*"))
 
 
-def test_current_signed_laptop_bundle_bytes_remain_unchanged():
+def test_current_signed_laptop_bundle_matches_its_release():
+    import ast
     import hashlib
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
-    manifest = json.loads((root / "laptop/releases/0.2.5.json").read_text())
+    source = ast.parse((root / "laptop/ccfleet").read_bytes())
+    version = next(node.value.value for node in source.body
+                   if isinstance(node, ast.Assign) and len(node.targets) == 1
+                   and isinstance(node.targets[0], ast.Name)
+                   and node.targets[0].id == "CLIENT_VERSION")
+    manifest = json.loads((root / ("laptop/releases/" + version + ".json")).read_text())
+    assert manifest["version"] == version
     for item in manifest["files"]:
         assert hashlib.sha256((root / item["path"]).read_bytes()).hexdigest() == item["sha256"]
+
+
+def test_previous_025_release_metadata_stays_immutable():
+    import hashlib
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "laptop/releases"
+    expected = {
+        "0.2.5.json": "677901131f004dceaed91e1a9add78701afa7d358ce32d833e9474347945bde2",
+        "0.2.5.json.sig": "68589d18f5c4297bbe7f76dda931e5ed8ffe73af63b44a28e6f434a09e27490c",
+    }
+    for name, digest in expected.items():
+        assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
 
 
 @pytest.mark.parametrize("threshold", ["0", "912", "not-a-number", "65537"])

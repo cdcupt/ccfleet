@@ -46,8 +46,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
-DEFAULT_SERVER = "https://ccfleet.daichenlab.com"
-CLIENT_VERSION = "0.2.5"
+DEFAULT_SERVER = "https://ccfleet.io"
+CLIENT_VERSION = "0.2.6"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -132,8 +132,37 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def canonical_runtime_url(value: str) -> str:
+    """Resolve one approved service alias only when sending, never in storage.
+
+    This signed client knows both service names. It does not discover a new
+    credential destination from redirects, DNS, response JSON or saved metadata.
+    Other origins and loopback transports keep their existing addresses.
+    """
+    if (not isinstance(value, str) or not value or len(value) > 8192
+            or any(ord(char) <= 32 or ord(char) == 127 for char in value)
+            or "\\" in value):
+        raise CliError("service endpoint URL is invalid")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if (parsed.username is not None or parsed.password is not None or parsed.fragment):
+            raise ValueError("credential or fragment in endpoint")
+        # Accessing port rejects malformed/out-of-range authorities before I/O.
+        _port = parsed.port
+    except ValueError as exc:
+        raise CliError("service endpoint URL is invalid") from exc
+    if (parsed.scheme in {"https", "wss"}
+            and parsed.netloc in {"ccfleet.daichenlab.com", "ccfleet.daichenlab.com:443"}):
+        prefix = parsed.scheme + "://" + parsed.netloc
+        if value.startswith(prefix):
+            # Keep the path/query byte-for-byte, including empty query markers.
+            return parsed.scheme + "://ccfleet.io" + value[len(prefix):]
+    return value
+
+
 def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
              method: str = "POST", *, timeout: float = 20) -> dict[str, Any]:
+    url = canonical_runtime_url(url)
     body = json.dumps(payload).encode() if payload is not None else b""
     request = urllib.request.Request(
         url, data=body, method=method,
@@ -174,7 +203,7 @@ def _gateway_url(value: Any) -> str:
         _port = parsed.port
     except ValueError as exc:
         raise CliError("gateway Base URL port is invalid") from exc
-    return value.rstrip("/")
+    return canonical_runtime_url(value.rstrip("/"))
 
 
 def _gateway_profile(value: Any) -> dict[str, Any]:
@@ -578,6 +607,7 @@ class FrameReader:
 
 
 def open_websocket(endpoint: str, token: str) -> tuple[socket.socket, bytes]:
+    endpoint = canonical_runtime_url(endpoint)
     parsed = urllib.parse.urlsplit(endpoint)
     local_ws = (parsed.scheme == "ws"
                 and parsed.hostname in ("127.0.0.1", "::1", "localhost"))
@@ -2113,7 +2143,7 @@ def native_settings(env: dict[str, str], base_url: str, secret: str, *,
     # Process environment alone loses to saved settings.env in native Claude.
     # The last explicit settings file pins only routing/privacy, leaving tools,
     # permissions, project customizations and native history under user control.
-    pinned = {"ANTHROPIC_BASE_URL": base_url,
+    pinned = {"ANTHROPIC_BASE_URL": canonical_runtime_url(base_url),
               "ANTHROPIC_AUTH_TOKEN": "" if bare else secret,
               "ANTHROPIC_API_KEY": secret if bare else "",
               "CLAUDE_CODE_OAUTH_TOKEN": "",

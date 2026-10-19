@@ -8,6 +8,8 @@ DEST="${CCFLEET_INSTALL_DIR:-$HOME/.local/bin}"
 URL="${CCFLEET_INSTALL_URL:-https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet}"
 MIGRATE=no
 SETUP=no
+NEXT=no
+SETUP_OPTIONS=no
 APPROVE_MIGRATION=no
 DEVICE_NAME=computer
 SLOT=""
@@ -17,6 +19,7 @@ usage() {
 Install the CC Fleet terminal client.
 
   install.sh
+  install.sh --next
   install.sh --migrate [--name "My computer"]
   install.sh --setup [--name "My computer"] [--slot SLOT] [--yes]
 
@@ -26,6 +29,8 @@ legacy ccfleet-connect token setup. Have a fresh pairing code from /account.
 pairs if needed, checks slot inference, then retires the legacy setup and
 configures PATH. It never uploads a project or starts a Claude session.
 --yes explicitly approves ending this computer's old live-folder sessions.
+--next installs signed 0.2.6 separately as ccfleet-next. It leaves ccfleet,
+pairing, Claude Code, shell configuration and the stable release state alone.
 USAGE
 }
 
@@ -33,18 +38,23 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --migrate) MIGRATE=yes; shift ;;
     --setup) SETUP=yes; shift ;;
-    --yes) APPROVE_MIGRATION=yes; shift ;;
+    --next) NEXT=yes; shift ;;
+    --yes) APPROVE_MIGRATION=yes; SETUP_OPTIONS=yes; shift ;;
     --slot)
       [ $# -ge 2 ] && [ -n "$2" ] \
         || { printf 'error: --slot needs a slot name or id\n' >&2; exit 2; }
-      SLOT="$2"; shift 2 ;;
+      SLOT="$2"; SETUP_OPTIONS=yes; shift 2 ;;
     --name)
       [ $# -ge 2 ] || { printf 'error: --name needs a device label\n' >&2; exit 2; }
-      DEVICE_NAME="$2"; shift 2 ;;
+      DEVICE_NAME="$2"; SETUP_OPTIONS=yes; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'error: unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
+[ "$NEXT" != yes ] || { [ "$MIGRATE" = no ] && [ "$SETUP" = no ] && [ "$SETUP_OPTIONS" = no ]; } \
+  || { printf 'error: --next cannot be combined with setup, migration, name, slot or --yes\n' >&2; exit 2; }
+[ "$NEXT" != yes ] || [ "$URL" = https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet ] \
+  || { printf 'error: --next requires the official signed-release bootstrap\n' >&2; exit 2; }
 [ "$MIGRATE" != yes ] || [ "$SETUP" != yes ] \
   || { printf 'error: use either --setup or --migrate, not both\n' >&2; exit 2; }
 [ "$MIGRATE" = yes ] || [ "$SETUP" = yes ] || [ "$DEVICE_NAME" = computer ] \
@@ -83,7 +93,35 @@ fetch_file() {
   esac
 }
 
-mkdir -p "$DEST"
+if [ "$NEXT" = yes ]; then
+  # Do not follow a supplied installation-directory symlink even for temporary
+  # bootstrap files. The leaf may be shared with the existing private client.
+  python3 -I - "$DEST" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    for part in path.parts[1:]:
+        try:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except FileNotFoundError:
+            os.mkdir(part, 0o700, dir_fd=fd)
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        os.close(fd)
+        fd = child
+    info = os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise SystemExit("ccfleet-next destination must be an owned, non-writable-by-others directory")
+finally:
+    os.close(fd)
+PY
+else
+  mkdir -p "$DEST"
+fi
 CLIENT_TMP="$(mktemp "$DEST/.ccfleet.XXXXXX")"
 HELPER_TMP=""
 LIVE_FILES_TMP=""
@@ -181,18 +219,24 @@ if [ -n "$CLIENT_EXPERIENCE_SHA256" ]; then
                local-jobs "$LOCAL_JOBS_TMP" "$LOCAL_JOBS_SHA256"
                client-release "$CLIENT_RELEASE_TMP" "$CLIENT_RELEASE_SHA256")
 fi
-python3 -I - "$CLIENT_TMP" "$DEST" "$URL" "${HELPER_ARGS[@]}" <<'PY'
+python3 -I - "$CLIENT_TMP" "$DEST" "$URL" "$NEXT" "${HELPER_ARGS[@]}" <<'PY'
 import ast
 import hashlib
 import os
 import pathlib
+import shlex
+import stat
 import sys
+import tempfile
 import types
 
 client, destination = map(pathlib.Path, sys.argv[1:3])
 origin = sys.argv[3]
+next_mode = sys.argv[4] == "yes"
+# Immutable manifest publication commit, separate from the signed client source.
+NEXT_MANIFEST_REVISION = "e72304ee613b5765c12aab6f49a96234cc4e1407"
 verified = []
-for offset in range(4, len(sys.argv), 3):
+for offset in range(5, len(sys.argv), 3):
     name, path, digest = sys.argv[offset:offset + 3]
     helper = pathlib.Path(path)
     source = helper.read_bytes()
@@ -206,6 +250,8 @@ for offset in range(4, len(sys.argv), 3):
 release = next((item for item in verified if item[0] == "client-release"), None)
 signed = (release is not None and origin ==
           "https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet")
+if next_mode and not signed:
+    raise SystemExit("ccfleet-next needs the checksum-verified signed release helper")
 if signed:
     tree = ast.parse(client.read_bytes())
     keys = [node.value for node in tree.body if isinstance(node, ast.Assign)
@@ -218,7 +264,81 @@ if signed:
     sys.modules[module.__name__] = module
     # Execute the checksum-verified helper bytes, not a reopened path or cache.
     exec(compile(release[2], str(release[1]), "exec"), module.__dict__)
-    result = module.install_channel(keys[0].value, destination)
+    if next_mode:
+        isolated = destination / ".ccfleet-next"
+        wrapper = ("#!/bin/sh\n# ccfleet-next-isolated: 0.2.6\nexec "
+                   + shlex.quote(str(isolated / "ccfleet")) + ' "$@"\n').encode()
+        parent = module._directory(destination)
+        try:
+            module._owned(os.fstat(parent), directory=True)
+
+            def current_wrapper():
+                try:
+                    fd = os.open("ccfleet-next", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=parent)
+                except FileNotFoundError:
+                    return None
+                with os.fdopen(fd, "rb") as source:
+                    info = os.fstat(source.fileno())
+                    module._owned(info)
+                    if stat.S_IMODE(info.st_mode) != 0o700 or info.st_size != len(wrapper):
+                        raise SystemExit("existing ccfleet-next wrapper is not the expected private wrapper")
+                    raw = source.read(len(wrapper) + 1)
+                    if raw != wrapper:
+                        raise SystemExit("existing ccfleet-next wrapper differs; it was left unchanged")
+                    return raw
+
+            previous = current_wrapper()
+            try:
+                info = os.stat(".ccfleet-next", dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                if previous is not None:
+                    raise SystemExit("existing ccfleet-next wrapper has no isolated release")
+            else:
+                module._owned(info, directory=True)
+                if stat.S_IMODE(info.st_mode) != 0o700:
+                    raise SystemExit("ccfleet-next release directory must be private (0700)")
+                if (isolated / "ccfleet").exists() or (isolated / "ccfleet").is_symlink():
+                    status = module.status(isolated, keys[0].value)
+                    if status.get("managed") is not True or status.get("signature_verified") is not True:
+                        raise SystemExit("existing isolated client is not a verified managed release")
+                elif previous is not None:
+                    raise SystemExit("existing ccfleet-next wrapper has no signed launcher")
+                elif any(isolated.iterdir()):
+                    raise SystemExit("existing isolated release directory is not empty")
+            manifest_url = ("https://raw.githubusercontent.com/cdcupt/ccfleet/"
+                            + NEXT_MANIFEST_REVISION + "/laptop/releases/0.2.6.json")
+            cached = {manifest_url: module.download(manifest_url, module.MAX_MANIFEST),
+                      manifest_url + ".sig": module.download(manifest_url + ".sig", module.MAX_SIGNATURE)}
+            manifest = module.verify_manifest(cached[manifest_url], cached[manifest_url + ".sig"],
+                                              keys[0].value)
+            if manifest["version"] != "0.2.6":
+                raise SystemExit("ccfleet-next requires the signed 0.2.6 manifest")
+
+            def fetch(url, limit):
+                return cached[url] if url in cached else module.download(url, limit)
+
+            result = module.install(manifest_url, manifest_url + ".sig", keys[0].value,
+                                    isolated, fetch=fetch, expected=manifest)
+            if current_wrapper() != previous:
+                raise SystemExit("ccfleet-next wrapper changed; review it before using the isolated client")
+            if previous is None:
+                descriptor, temporary = tempfile.mkstemp(prefix=".ccfleet-next-wrapper-", dir=destination)
+                try:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(wrapper)
+                        os.fchmod(output.fileno(), 0o700)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    # Atomic creation cannot overwrite an unexpected late file.
+                    os.link(temporary, "ccfleet-next", dst_dir_fd=parent, follow_symlinks=False)
+                finally:
+                    os.unlink(temporary)
+                os.fsync(parent)
+        finally:
+            os.close(parent)
+    else:
+        result = module.install_channel(keys[0].value, destination)
     print("Verified signed CC Fleet release " + result["version"])
     client.unlink()
     for _, helper, _, _ in verified:
@@ -236,6 +356,11 @@ else:
 PY
 trap - EXIT
 
+if [ "$NEXT" = yes ]; then
+  printf 'Installed signed 0.2.6 separately at %s\n' "$DEST/ccfleet-next"
+  printf 'Existing ccfleet, pairing and shell settings were left unchanged.\n'
+  exit 0
+fi
 printf 'Installed ccfleet to %s\n' "$DEST/ccfleet"
 if [ "$SETUP" != yes ]; then
   case ":$PATH:" in
