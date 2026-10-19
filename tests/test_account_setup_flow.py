@@ -231,6 +231,19 @@ def test_unready_Devin_does_not_advertise_ready_launch_commands(setup_context, f
         assert len(optional) == 1 and "open" not in optional[0].attrs
 
 
+def test_machine_health_remains_visible_without_opening_settings(setup_context):
+    c = setup_context
+    slot = c.store.get_slot("claude")
+    node = c.store.get_node(slot["node_id"])
+    heartbeat = c.store.latest_heartbeats()[slot["node_id"]]
+    body = usersite._slot_card(slot, node, heartbeat, {}, "csrf", c.cfg, NOW,
+        machine_line='<p id="synthetic-health">Machine: unreachable</p>')
+    page = Flow(body)
+    observation = page.find("p", id="synthetic-health")[0]
+    assert not any(parent.tag == "details" for parent in observation.parents)
+    assert "Machine: unreachable" in observation.text
+
+
 @pytest.mark.parametrize("stage", [None, "requested", "url_ready"])
 def test_Claude_first_sign_in_and_pending_authorization_stay_expanded(setup_context, stage):
     c = setup_context

@@ -2500,7 +2500,7 @@ def _slot_card(
         technical.append(offer_ui.details(node))
     # Its machine's state, as the status page says it (status.slot_line).
     if machine_line:
-        technical.append(machine_line)
+        parts.append(machine_line)
     public_number = status.public_machine_number(node)
     if public_number is not None:
         public_label = label(f"Public status: Machine {public_number}",
