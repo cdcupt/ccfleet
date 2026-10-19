@@ -347,8 +347,8 @@ def test_a_confirmed_free_pool_slot_says_its_neutral_name_alone(console):
     primary = on_the_row(row)
     assert 'row-name">pool-1</span>' in primary and 'class="sub"' not in primary
     assert "on m2" not in text(primary)
-    assert '<code>m2</code>' in under_manage(row)
-    assert '<code>m2-01</code>' in under_manage(row)
+    assert '<code class="code-wrap">m2</code>' in under_manage(row)
+    assert '<code class="code-wrap">m2-01</code>' in under_manage(row)
     assert 'action="/actions/slot/m2-01/remove"' in under_manage(row)
     assert "on pool-4" not in text(on_the_row(row_of(card, "pool-4")))
 
@@ -365,7 +365,8 @@ def test_a_reserved_free_pool_label_keeps_its_warning_and_management_details(con
     visible = text("<div " + primary)
     assert "erik-2" not in visible and account["email"] not in visible
     assert "kept for ana@example.com" in manage
-    assert '<code>erik-2</code>' in manage and '<code>erik-2-01</code>' in manage
+    assert '<code class="code-wrap">erik-2</code>' in manage
+    assert '<code class="code-wrap">erik-2-01</code>' in manage
     assert 'action="/actions/machine/erik-2/unreserve"' in manage
     assert store.get_node("erik-2")["reserved_for"] == account["id"]
     assert store.get_slot("erik-2-01")["held_by"] is None
@@ -959,7 +960,7 @@ def test_an_own_machines_row_carries_no_command(console):
     store, call = console
     own_machine(store)
     row = row_of(slots_card(call("GET", "/admin").body), "erik-1")
-    assert "ccfleetd" not in on_the_row(row) and "<code>" not in on_the_row(row)
+    assert "ccfleetd" not in on_the_row(row) and "<code" not in on_the_row(row)
     assert "own machine" in text(on_the_row(row))
     assert under_manage(row).count("ccfleetd node hold erik-1 --none") == 1
     assert "<form" not in row

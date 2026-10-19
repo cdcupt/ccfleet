@@ -21,6 +21,7 @@ from html import escape
 from typing import Any, Optional
 
 from . import (
+    bilingual,
     claude_versions,
     devin_ui,
     names,
@@ -75,7 +76,8 @@ SLOT_HEAD = ('<div class="slothead" aria-hidden="true"><span>Slot</span><span>Ho
              "<span>Attention</span></div>")
 EMPTY_SAYS = "No slot declared yet: nobody can claim it until it has one."
 OWN_NOTE = ("Counted as their slot, and never wiped or handed out from here. To stop "
-            "counting it, on the server: <code>ccfleetd node hold {node} --none</code>")
+            'counting it, on the server: <code class="code-wrap">'
+            'ccfleetd node hold {node} --none</code>')
 WIPE_NOTE = ("Take back is a wipe: everything on the slot goes, and it is available again once the "
              "machine confirms.")
 
@@ -345,7 +347,8 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                    for node in store.list_nodes())
     body = SLOT_HEAD + rows if rows else (
         '<p class="quiet">No shared machines yet. A machine joins with its one slot, declared '
-        "on the server: <code>ccfleetd slot add &lt;machine&gt; --machine &lt;machine&gt; "
+        'on the server: <code class="code-wrap">ccfleetd slot add &lt;machine&gt; '
+        "--machine &lt;machine&gt; "
         "--unix-user slot01</code>.</p>")
     return ('<h2 id="slots">Slots</h2><div class="card slots">'
             + _releases(look.channels, now) + body + f'<p class="note">{WIPE_NOTE}</p></div>')
@@ -405,8 +408,9 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     crowded = len(machine.rows) > slotstates.MAX_SLOTS_PER_MACHINE
-    identity = (_part("Machine identity", "", f"Node <code>{escape(node['id'])}</code>; "
-                      f"slot <code>{escape(slot['id'])}</code>; "
+    identity = (_part("Machine identity", "", f'Node <code class="code-wrap">'
+                      f'{escape(node["id"])}</code>; slot <code class="code-wrap">'
+                      f'{escape(slot["id"])}</code>; '
                       f"owner {escape(node['owner'])}; region {escape(node['region'] or '-')}.")
                 if free_pool else "")
     manage = (identity + _slot_actions(slot, look.csrf) + _offer_part(node, look.csrf)
@@ -784,8 +788,10 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
             try:
                 credit = '<p>Fleet credit: <strong>' + escape(wallet.display(
                     store.wallet_balance(account["id"]))) + '</strong></p>'
-                credit += (wallet_ui.admin_credit_grant_form(account_id=account["id"], csrf=csrf,
-                            idempotency_key=wallet_routes.nonce()) if credit_actor else
+                credit += (bilingual.project_html(wallet_ui.admin_credit_grant_form(
+                            account_id=account["id"], csrf=csrf,
+                            idempotency_key=wallet_routes.nonce()), 'en', target='/admin')
+                           if credit_actor else
                            '<p class="muted">Sign in using an admin account to add credit.</p>')
             except Exception:
                 credit = ('<p class="muted">Fleet credit is unavailable. '
@@ -796,22 +802,24 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
         role = " · operator" if account.get("role") == "admin" else ""
         seen = (f"last here {escape(_age(now, account['last_seen_at']))} ago"
                 if account.get("last_seen_at") else "never back")
-        lines.append(
-            f'<div class="row-line"><div class="row-name">{escape(str(account["email"]))}'
-            f'<span class="muted">{role} · holds {held}{_plans_said(plans_held, account)}'
-            f' · {seen}'
-            f"{_standing(paid, bool(held or quota), now)}</span></div>"
+        allowance = ('' if wallet_enabled else
             '<div class="actions">'
             + _form(f"/actions/account/{escape(account['id'])}/allowance", csrf,
                     "Set allowance",
                     '<input type="text" name="count" class="count" inputmode="numeric" '
                     f'value="{quota}" required>')
-            + "</div>" + credit + _ledger(account, paid, csrf, now) + "</div>")
+            + '</div>')
+        lines.append(
+            f'<div class="row-line"><div class="row-name">{escape(str(account["email"]))}'
+            f'<span class="muted">{role} · holds {held}{_plans_said(plans_held, account)}'
+            f' · {seen}'
+            f"{_standing(paid, bool(held or quota), now)}</span></div>"
+            + allowance + credit + _ledger(account, paid, csrf, now) + "</div>")
     body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
     note = ('Fleet credit pays for a chosen slot one UTC calendar month at a time. '
             'Users confirm each purchase and renewal. Expired paid months pause new access '
             'without releasing the slot. Existing operator-managed claims keep their old access. '
-            'Count allowances and manual payment records below do not add Fleet credit.'
+            'Earlier manual payment records below do not add Fleet credit.'
             if wallet_enabled else
             'An allowance is how many slots somebody may hold; it starts at '
             "zero. Lowering it takes nothing away: they keep what they hold, and only claiming "
@@ -819,7 +827,7 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
             "slot back and stops no claim.")
     return ('<h2 id="accounts">Accounts</h2><div class="card">' + body
             + '<p class="note">' + note + ' Operators are made on the server: '
-            '<code>ccfleetd account role &lt;email&gt; admin</code>.</p></div>')
+            '<code class="code-wrap">ccfleetd account role &lt;email&gt; admin</code>.</p></div>')
 
 
 def _plans_said(plans_held: Mapping[Optional[str], list[str]],
