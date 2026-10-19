@@ -23,7 +23,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-18"
+DOCS_UPDATED = "2026-10-19"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -165,7 +165,33 @@ def _cost_zh(price: pricing.Price) -> str:
     return f"<strong>{escape(pricing.display(price))}</strong>／月"
 
 
-def _rental_pricing_details() -> str:
+def _wallet_rental_details() -> str:
+    return bi(
+        '<p><strong>Your balance pays for Fleet slots only.</strong> Ask the operator to add '
+        'USD service credit to your account. Card and Alipay top-ups are available only '
+        'when the account page offers a working checkout; a disabled button cannot take a '
+        'payment. Credit cannot be transferred or withdrawn, and does not pay for Claude '
+        'or Devin subscriptions.</p><p>Choose a machine, review its price, then confirm '
+        'the purchase. The shown price is deducted once for one calendar month in UTC, '
+        'starting when you buy. To keep using a paid slot, confirm another month yourself. '
+        'There is no automatic renewal or automatic top-up.</p><p>When its paid period '
+        'ends, new Fleet access pauses until you renew. Expiry does not automatically '
+        'return the slot or erase its files. Existing slots from before the credit system '
+        'keep their previous arrangement. For a failed setup or a billing mistake, contact '
+        'the operator to review a credit correction; returning a slot does not itself '
+        'issue a credit or cash refund.</p>',
+        '<p><strong>余额只用于支付 Fleet 槽位。</strong>请联系运营者为账号添加美元服务余额。'
+        '只有账号页提供可用的收银台时，才能使用银行卡或支付宝充值；灰色按钮不会收款。'
+        '余额不能转让或提现，也不支付 Claude 或 Devin 订阅。</p><p>选择主机、核对价格，'
+        '再确认购买。系统一次扣除所示金额，服务期从购买时起按 UTC 计算一个日历月。'
+        '需要继续使用付费槽位时，请自行确认再买一个月。系统不会自动续费或自动充值。</p>'
+        '<p>付费期结束后，新的 Fleet 访问会暂停，续费后恢复。到期不会自动归还槽位或删除文件。'
+        '余额系统启用前已有的槽位保留原有安排。准备失败或账目有误时，请联系运营者核对并'
+        '调整服务余额；归还槽位本身不会自动退回余额或现金。</p>',
+    )
+
+
+def _rental_pricing_details(wallet_enabled: bool = False) -> str:
     """Current catalogue policy, shared by the guide, explanation and terms."""
     return bi(
         '<p><strong>Alpha pricing.</strong> Each machine has its own monthly USD rate in the '
@@ -203,12 +229,12 @@ def _rental_pricing_details() -> str:
         '转换为美元时，价格暂不可用。主机与 IP 服务商品牌保持可见。ISP、住宅与机房只描述'
         '网络类型，均采用同一公式，不另加住宅溢价；这些类型不保证质量、速度或 '
         'Claude 兼容性。</p>',
-    ) + _alpha_stage_details() + bi(
+    ) + _alpha_stage_details() + (_wallet_rental_details() if wallet_enabled else bi(
         '<p>Agree the price and paid period with the operator; the website does not charge '
         'automatically, renew automatically or rewrite past payments.</p>',
         '<p>价格及服务有效期直接与运营者约定；网站不会自动扣款、自动续费，'
         '也不会改写过去的付款记录。</p>',
-    ) + bi(
+    )) + bi(
         '<p>Retired machines are removed from the rental catalogue. A temporarily '
         'offline machine that remains in service still appears on '
         '<a href="/status#slot-machines">Status</a>. Retirement does not release an '
@@ -236,8 +262,21 @@ def _alpha_stage_details() -> str:
     )
 
 
-def _available_slot_browsing() -> str:
+def _available_slot_browsing(wallet_enabled: bool = False) -> str:
     """Keep choosing an unallocated machine separate from managing held slots."""
+    if wallet_enabled:
+        return bi(
+            '<p>Open <a href="/account/available">Browse available slots</a>. Search by '
+            'host provider, IP provider or machine label, and review the monthly USD '
+            'price. Choose <strong>Review purchase</strong>, then confirm the price on '
+            'the next page. A successful purchase deducts that amount from your service '
+            'balance once and takes you back to <a href="/account">Your slots</a>. '
+            'Browsing or opening the confirmation page does not spend credit.</p>',
+            '<p>打开<a href="/account/available">浏览可用槽位</a>，按主机服务商、IP 服务商或'
+            '主机标签搜索，核对美元月费。选择<strong>核对购买</strong>，在下一页确认价格。'
+            '购买成功后，系统只扣一次服务余额，并返回<a href="/account">我的槽位</a>。'
+            '浏览列表或打开确认页不会扣费。</p>',
+        )
     return bi(
         '<p><a href="/account">Your slots</a> keeps your held slots, controls and usage '
         'together. To add a slot, choose <a href="/account/available">Browse available '
@@ -256,8 +295,18 @@ def _available_slot_browsing() -> str:
     )
 
 
-def _public_slot_catalogue() -> str:
+def _public_slot_catalogue(wallet_enabled: bool = False) -> str:
     """Explain public discovery while keeping claims in the signed-in account flow."""
+    if wallet_enabled:
+        return bi(
+            '<p>The <a href="/slots">public slot catalogue</a> shows host and IP providers, '
+            'network types, availability and monthly prices. These labels describe the '
+            'machine; they do not guarantee model compatibility or speed. Browsing does '
+            'not reserve a machine. Sign in to choose a slot and review its purchase.</p>',
+            '<p><a href="/slots">公开槽位目录</a>展示主机与 IP 服务商、网络类型、可用状态和月费。'
+            '这些标签描述机器，不保证模型兼容性或速度。浏览不会预留主机；购买时请先登录，'
+            '再选择槽位并核对价格。</p>',
+        )
     return bi(
         '<p>The homepage’s Slots &amp; pricing section shows up to three real configuration '
         'examples. Open the <a href="/slots">full public slot catalogue</a> for machine '
@@ -292,6 +341,21 @@ def contact(cfg: Config) -> str:
         address = escape(cfg.contact_email)
         return f'<a href="mailto:{address}">{address}</a>'
     return "the person who sent you this page"
+
+
+def _wallet_buy_steps(cfg: Config) -> str:
+    return '<ol class="buy"><li>' + bi(
+        '<a href="/account">Sign in with Google</a> to create your Fleet account.',
+        '<a href="/account">使用 Google 登录</a>，创建 Fleet 用户账号。', inline=True,
+    ) + '</li><li>' + bi(
+        f'Ask {contact(cfg)} to add USD service credit. Your balance appears on Your slots.',
+        f'联系 {_contact_zh(cfg)} 添加美元服务余额，在“我的槽位”查看。', inline=True,
+    ) + '</li><li>' + bi(
+        '<a href="/account/available">Choose a slot</a>, review its monthly price, then '
+        'confirm the purchase. Your balance pays for one month. Renew only when you choose.',
+        '<a href="/account/available">选择槽位</a>、核对月费，再确认购买。余额支付一个月，'
+        '续费由你自己确认。', inline=True,
+    ) + '</li></ol>'
 
 
 def _page(
@@ -396,6 +460,7 @@ def overview(
     ranking: Optional[Mapping[str, Any]] = None,
     catalogue: str = "",
     per_slot_pricing: bool = False,
+    wallet_enabled: bool = False,
 ) -> str:
     """The site's front page: the bare address and /docs serve it alike, and
     it names the bare address as the one to keep. At its top, whether the
@@ -569,7 +634,7 @@ def overview(
         )
         + '</div><div class="card">'
         + bi("<h2>How to buy</h2>", "<h2>如何开通</h2>")
-        + '<ol class="buy">'
+        + (_wallet_buy_steps(cfg) if wallet_enabled else '<ol class="buy">'
         + "<li>"
         + bi(
             'First <a href="/account">sign in once</a> with Google, so there is an account '
@@ -593,7 +658,8 @@ def overview(
             inline=True,
         )
         + "</li>"
-        + '</ol></div></section>'
+        + '</ol>')
+        + '</div></section>'
         + '<section class="band">'
         + bi('<h2>Alpha — Early Access</h2>', '<h2>Alpha — 早期体验</h2>')
         + _alpha_stage_details()
@@ -1177,7 +1243,7 @@ def _client_tools() -> str:
 
 def guide(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
-    per_slot_pricing: bool = False,
+    per_slot_pricing: bool = False, wallet_enabled: bool = False,
 ) -> str:
     price_en = ("Pricing is unavailable until the recorded resource costs support a quote. "
                 "Agree the quote and payment directly with the operator.")
@@ -1219,16 +1285,32 @@ def guide(
         )
         + "</li>"
         + "<li>"
-        + bi(
+        + (bi(
+            '<h3>Add service credit</h3><p>Ask the operator to add USD credit to your '
+            'Fleet account. Check the balance on <a href="/account">Your slots</a>. '
+            'A disabled card or Alipay button means online top-up is not available yet.</p>',
+            '<h3>添加服务余额</h3><p>请联系运营者为 Fleet 账号添加美元余额，并在'
+            '<a href="/account">我的槽位</a>核对。银行卡或支付宝按钮呈灰色时，'
+            '表示暂不支持在线充值。</p>',
+        ) if wallet_enabled else bi(
             f"<h3>Get a slot</h3><p>Ask {contact(cfg)} for a slot using the Google "
             f"address you signed in with. {price_en} The operator enables access "
             "for that account.</p>",
             f"<h3>开通槽位</h3><p>联系 {_contact_zh(cfg)}，提供登录本站所用的 Google "
             f"邮箱。{price_zh} 运营者会为这个用户账号开通领取权限。</p>",
-        )
+        ))
         + "</li>"
         + "<li>"
-        + bi(
+        + (bi(
+            '<h3>Choose, review, buy</h3><p>Open '
+            '<a href="/account/available">Browse available slots</a>. Choose a machine, '
+            'review its monthly price and confirm the purchase. Your balance pays once '
+            'for one calendar month. You return to Your slots while the machine prepares '
+            'your account. This usually takes a few minutes.</p>',
+            '<h3>选择、核对、购买</h3><p>打开<a href="/account/available">浏览可用槽位</a>，'
+            '选择主机、核对月费，再确认购买。余额只扣一次，支付一个日历月。随后返回“我的槽位”，'
+            '等待主机准备账号，通常需要几分钟。</p>',
+        ) if wallet_enabled else bi(
             '<h3>Choose and claim a machine</h3><p>From <a href="/account">Your slots</a>, '
             'choose <a href="/account/available">Browse available slots</a>. Search or '
             'filter the list, review a machine’s price, then choose '
@@ -1243,7 +1325,7 @@ def guide(
             '机器会建立独'
             '立的 Linux 用户环境并安装 Claude Code，此时显示 <span class="pill '
             'busy">正在准备</span>。通常需要几分钟，页面会自动更新。</p>',
-        )
+        ))
         + "</li>"
         + "<li>"
         + bi(
@@ -1470,8 +1552,8 @@ def guide(
     if per_slot_pricing:
         body += ('<div class="card" id="rental-pricing">'
                  + bi('<h2>Choosing a slot and its rate</h2>', '<h2>选择槽位与价格</h2>')
-                 + _public_slot_catalogue() + _available_slot_browsing()
-                 + _rental_pricing_details() + '</div>')
+                 + _public_slot_catalogue(wallet_enabled) + _available_slot_browsing(wallet_enabled)
+                 + _rental_pricing_details(wallet_enabled) + '</div>')
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
@@ -1537,7 +1619,8 @@ PROVIDER_PICTURE_ZH = _diagram_zh(PROVIDER_PICTURE, 'provider', {
 
 
 def how_it_works(
-    cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None
+    cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
+    wallet_enabled: bool = False,
 ) -> str:
     body = (
         '<div class="dochead">'
@@ -1744,7 +1827,9 @@ def how_it_works(
         '<a href="/docs/library/docs/devin.html#prices">比较 Claude 与 Devin 套餐</a>。</p>',
     ) + '<details><summary>' + label(
         'Slot types and price breakdown', '网络类型与费用明细', inline=True
-    ) + '</summary>' + _public_slot_catalogue() + _rental_pricing_details() + bi(
+    ) + '</summary>' + _public_slot_catalogue(wallet_enabled) + _rental_pricing_details(
+        wallet_enabled
+    ) + bi(
         '<p>An ISP slot can use a '
         'separate approved exit proxy; provider HTTPS remains encrypted through that '
         'tunnel. Your account page shows the same labels before you choose a slot.</p>',
@@ -1759,7 +1844,7 @@ def how_it_works(
 
 def terms(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
-    per_slot_pricing: bool = False,
+    per_slot_pricing: bool = False, wallet_enabled: bool = False,
 ) -> str:
     paying = ("Pricing is unavailable until the recorded resource costs support a quote. "
               "Agree the quote and paid period directly with the operator, who enables "
@@ -1778,6 +1863,20 @@ def terms(
                      'Alpha 定价在已记录的 VPS 与出口 IP 美元月度资源成本上，加 10% 服务费，'
                      '每槽位最低 $2。Claude 或 Devin 订阅及额外用量另计。'
                      '价格及服务有效期直接与运营者约定，领取槽位不会自动扣款或自动续费。')
+    if wallet_enabled:
+        paying = ('The slot catalogue shows each machine’s monthly USD price. Confirming '
+                  'a purchase deducts that price from your Fleet service balance once '
+                  'for one calendar month, starting at purchase. Renewals require a new '
+                  'confirmation. Provider subscriptions and extra usage are separate.')
+        paying_zh = ('槽位目录显示每台主机的美元月费。确认购买后，系统一次扣除所示服务余额，'
+                     '从购买时起支付一个日历月。续费需要再次确认；服务商订阅与额外用量另计。')
+    lapse = (" If a payment lapses, the operator may take a slot back, and taking a slot "
+             "back deletes everything in it.") if not wallet_enabled else (
+             " When a paid period ends, new Fleet access pauses until renewal. Expiry "
+             "does not automatically return the slot or delete its files.")
+    lapse_zh = (' 逾期未付款时，运营者可能收回槽位；收回会删除槽位内的所有内容。'
+                if not wallet_enabled else ' 付费期结束后，新的 Fleet 访问暂停，续费后恢复。'
+                '到期不会自动归还槽位或删除文件。')
     body = (
         '<div class="dochead">'
         + bi("<h1>Terms</h1>", "<h1>服务条款</h1>")
@@ -1812,11 +1911,10 @@ def terms(
         + '</div><div class="card">'
         + bi("<h2>Paying</h2>", "<h2>费用与付款</h2>")
         + bi(
-            f"<p>{paying} If a payment lapses, the operator may take a slot "
-            f"back, and "
-            f"taking a slot back deletes everything in it.</p>",
-            f"<p>{paying_zh} 逾期未付款时，运营者可能收回槽位；收回会删除槽位内的所有内容。</p>",
+            f"<p>{paying}{lapse}</p>",
+            f"<p>{paying_zh}{lapse_zh}</p>",
         )
+        + (_wallet_rental_details() if wallet_enabled else '')
         + '</div><div class="card">'
         + bi("<h2>Your files</h2>", "<h2>文件与备份</h2>")
         + bi(
@@ -1861,7 +1959,7 @@ def terms(
     if per_slot_pricing:
         body += ('<div class="card" id="rental-pricing">'
                  + bi('<h2>Per-machine rental rates</h2>', '<h2>逐台主机的出租价格</h2>')
-                 + _rental_pricing_details() + '</div>')
+                 + _rental_pricing_details(wallet_enabled) + '</div>')
     return _page("/docs/terms", "terms", body, viewer=viewer)
 
 
