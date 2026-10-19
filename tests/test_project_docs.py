@@ -174,9 +174,10 @@ def test_privacy_page_preserves_history_and_discloses_current_model_context():
 def test_overview_and_how_it_works_describe_local_execution_without_slot_only_overclaim():
     summary = visible(overview(Config()))
     assert "Local Claude Code, your own account on your slot" in summary
-    assert "files, tools and history on your computer" in summary
+    assert "Your tools and saved files stay local" in summary
+    assert "native history" in summary
     details = visible(how_it_works(Config()))
-    assert "runs original Claude Code on your computer" in details
+    assert "Original Claude Code runs on your computer" in details
     assert "dedicated VPS and dedicated exit IP" in details
     assert "Slots may share a physical machine and its internet address" not in details
     assert "only Claude Code on the slot talks to Anthropic" not in details

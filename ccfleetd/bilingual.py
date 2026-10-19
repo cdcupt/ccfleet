@@ -240,7 +240,11 @@ class _Projection(HTMLParser):
                                               self.target, self.public_origin)
                         if self.language == 'en':
                             parts = urlsplit(value)
-                            if parts.path == '/en' or parts.path.startswith('/en/'):
+                            origin = urlsplit(self.public_origin)
+                            same_site = (not parts.scheme and not parts.netloc or
+                                         bool(origin.netloc) and parts.scheme == origin.scheme
+                                         and parts.netloc.lower() == origin.netloc.lower())
+                            if same_site and (parts.path == '/en' or parts.path.startswith('/en/')):
                                 value = urlunsplit((parts.scheme, parts.netloc,
                                                     parts.path[3:] or '/',
                                                     parts.query, parts.fragment))

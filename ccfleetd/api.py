@@ -37,8 +37,8 @@ from . import (
     usersite,
 )
 from . import slots as slotstates
+from .bilingual import CURRENT_PAGES, _slot_search_query, localized_url, project_html, route_target
 from .bilingual import SCRIPT_CSP as LANGUAGE_LINKS_CSP
-from .bilingual import localized_url, project_html, route_target
 from .config import Config
 from .desired import desired_state, machine_hostname
 from .heartbeat import HeartbeatError, validate_heartbeat
@@ -124,6 +124,45 @@ def access_log_route(target: Any) -> str:
         if kind == "price" and parts[2] == "slot" and action in {"set", "clear"}:
             return "/actions/price/slot/" + action
     return "unknown_route"
+
+
+def _browser_page_path(path: str) -> bool:
+    return (path in CURRENT_PAGES or customer_docs.page_for(path) is not None
+            or reference_docs.relative_path(path) is not None)
+
+
+def legacy_browser_target(target: str) -> Optional[str]:
+    """A fixed UI path with bounded browse controls, never auth/API secrets."""
+    if (not isinstance(target, str) or not 0 < len(target) <= 4096
+            or any(ord(char) < 32 or ord(char) == 127 for char in target)):
+        return None
+    try:
+        original = urllib.parse.urlsplit(target)
+        routed = route_target(target)
+        if (routed is None or original.scheme or original.netloc or original.fragment
+                or "%" in original.path or "\\" in original.path or "//" in original.path
+                or any(part in {".", ".."} for part in original.path.split("/"))):
+            return None
+        path = urllib.parse.urlsplit(routed[0]).path
+        if not _browser_page_path(path):
+            return None
+        language, localized = routed[1:]
+        try:
+            pairs = urllib.parse.parse_qsl(original.query, keep_blank_values=True,
+                                          max_num_fields=16)
+        except ValueError:
+            pairs = []
+        choices = [value for key, value in pairs if key == "lang"]
+        if choices and choices[0] in {"en", "zh"}:
+            candidate = "/" + choices[0] + ("/" if path == "/" else path)
+            if route_target(candidate) is not None:
+                language, localized = choices[0], True
+        selected = "/" + language + ("/" if path == "/" else path) if localized else path
+        query = (_slot_search_query(original.query)
+                 if path in {"/slots", "/account/available"} else "")
+        return urllib.parse.urlunsplit(("", "", selected, query, ""))
+    except (TypeError, ValueError):
+        return None
 
 
 class Context:
@@ -409,6 +448,27 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             # The explicit old query wins over an alias prefix for this redirect.
             self._localized_page = False
             self._redirect(destination)
+            return True
+
+        def _legacy_site_redirect(self) -> bool:
+            """Retire alias browser pages while existing clients keep their origin."""
+            if (self.command not in {"GET", "HEAD"} or ctx.cfg.broker_only
+                    or not ctx.cfg.public_url_aliases or not self._product_site()
+                    or self._public_url() not in ctx.cfg.public_url_aliases):
+                return False
+            target = legacy_browser_target(self.path)
+            if target is None:
+                if _browser_page_path(urllib.parse.urlsplit(self._page_target).path):
+                    self._json(404, {"error": "not found"})
+                    return True
+                return False
+            canonical = ctx.cfg.public_origin_for_host(
+                urllib.parse.urlsplit(ctx.cfg.public_url).netloc)
+            if not canonical or canonical == self._public_url():
+                return False
+            self._send(308, b"", {"Location": canonical + target,
+                                  "Cache-Control": "no-store",
+                                  "Referrer-Policy": "no-referrer"})
             return True
 
         def _send(self, status: int, body: bytes, headers: dict[str, str]) -> None:
@@ -1041,7 +1101,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             path = self._page_route("GET")
-            if path is None or self._legacy_language_redirect():
+            if (path is None or self._legacy_site_redirect()
+                    or self._legacy_language_redirect()):
                 return
             if path in ("/api/cli/gateway/options", "/api/gateway/status"):
                 if not self._product_site() or ctx.cfg.broker_only:

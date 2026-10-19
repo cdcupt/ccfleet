@@ -275,7 +275,7 @@ def test_how_it_works_scopes_local_execution_and_gateway_outages():
 
     page = visible_html(render("/docs/how-it-works"))
     for phrase in (
-        "runs original Claude Code on your computer",
+        "Original Claude Code runs on your computer",
         "configured gateway",
         "eligible slot",
         "outage reports an error",
@@ -297,7 +297,7 @@ def test_public_guides_explain_current_gateway_visibility_and_own_slots():
         assert 'href="/docs/library/docs/public-gateway.html' in source
         assert "--transport bridge" not in text
     how = render("/docs/how-it-works")
-    assert 'aria-labelledby="gateway-diag-t gateway-diag-d"' in how
+    assert 'aria-labelledby="provider-title provider-desc"' in how
     assert "Those heartbeat reports do not contain prompts" in how
     assert "direct HTTPS gateway receives" in how
 

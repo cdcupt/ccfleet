@@ -33,6 +33,7 @@ from . import (
     cli_access,
     client_status,
     compatibility,
+    devin_ui,
     gateway_ui,
     names,
     oauth,
@@ -424,6 +425,10 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
 # footer, the same on every page people are sent to), the account page, the
 # doors, and the progress a slot shows while the machine works on it.
 USER_CSS = CSS + """
+.devin-connection{border:1px solid var(--rule);border-radius:12px;padding:0 16px 16px;margin:16px 0}
+.devin-connection p{max-width:66ch}
+.provider-other{margin:16px 0;border-top:1px solid var(--rule);padding-top:12px}
+.provider-other>summary{cursor:pointer;font-weight:650}
 body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
 .site main [id]{scroll-margin-top:144px}
 @media(max-width:760px){.site main [id]{scroll-margin-top:164px}}
@@ -1081,10 +1086,13 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         for s in held}
     since = store.listening_since()
     silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}
+    native_states = {s["id"]: devin_ui.native_state(store, cfg, account, s, now=now) for s in held}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
                                updates[s["id"]], channels, cli_devices[s["id"]],
                                machine_line=lines[s["id"]],
+                               devin_state=native_states[s["id"]],
+                               devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
@@ -1104,12 +1112,13 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + (
             '<p class="note">Your slot is a Linux account on a '
             'machine we operate, with its own '
-            'home, its own Claude Code and your own Claude sign-in. '
+            'home and your own provider sign-in. Claude Code runs on your computer; '
+            'a verified Devin slot uses native Devin CLI for model replies. '
             "Other people's slots on the "
             "machine cannot read yours; the machine's administrators "
             'technically can. This page '
             'never shows your files or conversations, and nothing '
-            'here holds your Claude '
+            'here holds your provider '
             'credential: it is written on the machine when you sign '
             'in, and nowhere else.</p>'
         ))
@@ -1117,10 +1126,11 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     body = body[:note_start] + _blocks(body[note_start:], [
         (
             '槽位是在我们运营的机器上的独立 Linux 账号，'
-            '拥有自己的目录、Claude Code 和 Claude 登录。'
+            '拥有自己的目录和服务商登录。Claude Code 在本机运行；通过验证的 Devin 槽位'
+            '使用原生 Devin CLI 获取模型回复。'
             '普通用户的其他槽位无法读取你的文件，'
             '但机器管理员在技术上可以。本页不展示文件或对话。'
-            'Claude 登录凭据只写入槽位所在机器，Fleet '
+            '服务商登录凭据只写入槽位所在机器，Fleet '
             '服务器不保存它。'
         ),
     ])
@@ -1140,7 +1150,11 @@ def slots_page(store: Store, cfg: Config, now: float, query: Mapping[str, str], 
             + label("Slots & pricing", "槽位与价格", inline=True) + ' '
             + offer_ui.alpha_label() + '</h1><p class="sub">'
             + label("Compare providers, network types and current Alpha quotes.",
-                    "比较服务商、网络类型与当前 Alpha 报价。", inline=True) + '</p></div>'
+                    "比较服务商、网络类型与当前 Alpha 报价。", inline=True) + '</p><p>'
+            + '<a href="/docs/library/docs/devin.html#prices">'
+            + label('Compare Claude and Devin subscription prices',
+                    '比较 Claude 与 Devin 订阅价格', inline=True)
+            + '</a></p></div>'
             + offer_ui.public_browse(store, now, cfg.heartbeat_max_age_s, query))
     return _shell("Slots & pricing", body, here="/slots", viewer=viewer, width="wide")
 
@@ -1219,8 +1233,8 @@ def _signed_out(cfg: Config) -> str:
         f'1>'
         '<p>ccfleet gives you a slot on a machine we operate: '
         'your own Linux '
-        'account there, with Claude Code, signed in to your own '
-        'Claude account. '
+        'account there for your own provider sign-in. Use original Claude Code on your '
+        'computer; choose Anthropic or a verified Devin pilot slot on this website. '
         'The operator decides who gets slots.</p>'
         '<p>Sign in to see the slots you hold.</p>'
         '<div class="sign-in-action"><a class="btn primary big" '
@@ -1239,7 +1253,8 @@ def _signed_out(cfg: Config) -> str:
         "登录管理我的槽位",
         (
             'Fleet 槽位是在我们运营的机器上的独立 Linux 账号。'
-            '每个槽位安装 Claude Code，登录你自己的 Claude 账号。'
+            '槽位保存你自己的服务商登录。原版 Claude Code 在本机运行；网页可以选择 '
+            'Anthropic，或通过验证的 Devin 试点槽位。'
             '槽位由运营方分配。'
         ),
         "登录后可查看并管理你持有的槽位。",
@@ -1254,7 +1269,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-15"
+PRIVACY_UPDATED = "2026-10-18"
 
 
 def _span(seconds: int) -> str:
@@ -1303,13 +1318,15 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 (
                     "ccfleet gives you a slot on a machine we operate: "
                     "your own Linux account there, "
-                    "with Claude Code, signed in to your own Claude "
-                    "account. The operator decides who gets "
+                    "for your own provider sign-in. Original Claude Code runs on your "
+                    'computer. Anthropic is the default; verified own-slot Devin is a '
+                    'pilot. The operator decides who gets '
                     f"slots. To reach the operator, write to {contact}."
                 ),
                 (
                     "Fleet 槽位是在我们运营的机器上的独立 Linux 账号，"
-                    "安装 Claude Code 并登录你自己的 Claude 账号。"
+                    "保存你自己的服务商登录，原版 Claude Code 在你的电脑上运行。默认使用 "
+                    "Anthropic；通过验证的自有槽位也能使用 Devin 试点。"
                     f"槽位由运营方分配。联系运营方：{contact_zh}。"
                 ),
             ),
@@ -1320,16 +1337,16 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "Your computer does the file and tool work. It sends "
                     "selected model context over HTTPS "
                     "to Fleet; Fleet chooses one of your selected slots "
-                    "and uses its Claude sign-in to "
-                    "request a reply from Anthropic. The reply returns "
+                    "and uses its selected provider account to "
+                    "request a reply from Anthropic or native Devin. The reply returns "
                     "to your computer."
                 ),
                 (
                     "可以把 Fleet 看作接待台：电脑负责文件和工具操作，"
                     "需要模型回复时，把选定的上下文通过 HTTPS 发给 "
                     "Fleet。"
-                    "Fleet 选择你指定的槽位，使用它的 Claude 登录向 "
-                    "Anthropic 请求回复，再把回复送回电脑。"
+                    "Fleet 选择你指定的槽位，按设置使用自己的 Anthropic 或原生 Devin "
+                    "账号请求回复，再把回复送回电脑。"
                 ),
             ),
         ],
@@ -1353,6 +1370,38 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "我们只保留邮箱和 ID，不请求姓名、照片、联系人，"
                     "也不获取 Gmail、Drive 等其他 Google 服务的访问权限。"
                 ),
+            ),
+        ],
+    )
+    body += card(
+        "When you choose Devin", "选择 Devin 时", [
+            (
+                "Devin runs its own native agent on your slot. It receives the selected "
+                "model context and returns replies and tool requests. The gateway and "
+                "machine administrators can read that context. Read, Edit and Bash still "
+                "run on your computer with Claude Code’s permissions.",
+                "Devin 在你的槽位上运行自己的原生智能体，接收选定的模型上下文，返回回复和工具请求。"
+                '网关和机器管理员能够读取这些上下文。Read、Edit、Bash 仍按 Claude Code '
+                '的权限在本机执行。',
+            ),
+            (
+                "Native Devin may keep session data and tool-handoff records on the slot, "
+                "including selected context and replies. These are separate from your "
+                "local Claude Code history and may remain until the slot is cleared. "
+                "The provider credential stays on the slot; the Fleet website does not "
+                "offer a password or provider-token collection form.",
+                "原生 Devin 可能在槽位保存会话数据与工具交接记录，其中可能包含选定的上下文和回复。"
+                "它们与本机 Claude Code 历史分开，可能一直保留到槽位被清理。服务商凭证保存在槽位；"
+                "Fleet 网页目前不提供收集服务商密码或令牌的表单。",
+            ),
+            (
+                "Fleet stores your provider choice and account-verification fingerprint, "
+                "runtime version, supported features and latest verification time. This "
+                "lets it check that the account still belongs to the current slot holder. "
+                '<a href="/docs/library/docs/devin.html#connect">Devin setup and limits</a>.',
+                "Fleet 保存你选择的服务商、账号验证指纹、运行版本、受支持功能和最近验证时间，"
+                "用于检查账号是否仍属于当前槽位持有者。"
+                '<a href="/docs/library/docs/devin.html#connect">Devin 设置与限制</a>。',
             ),
         ],
     )
@@ -2137,6 +2186,8 @@ def _slot_card(
     *,
     machine_line: str = "",
     listening: Optional[float] = None,
+    devin_state: Optional[str] = None,
+    devin_html: str = "",
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
@@ -2151,6 +2202,10 @@ def _slot_card(
         slot = {**slot, "device_token_at": node.get("device_token_at") or 0}
     else:
         tone, title, detail = STATE_WORDS.get(slot["state"], ("disabled", slot["state"], ""))
+    devin_only = (not own and devin_state == "ready" and slot["state"] == slotstates.CLAIMED
+                  and (report.get("credentials") or {}).get("logged_in") is not True)
+    if devin_only:
+        tone, title, detail = "ok", "Devin ready", ""
     heard = (heartbeat or {}).get("ts")
     if heard is None:
         machine = '<span class="bad-text">not heard from yet</span>'
@@ -2200,15 +2255,16 @@ def _slot_card(
         else ("", "")
     )
     signed_in_title = title == "In use"
+    title_zh = ("Devin 已就绪" if devin_only else
+                ("使用中" if signed_in_title else "等待登录") if own else
+                STATE_ZH.get(slot["state"], (title, ""))[0])
     parts = [
         f'<div class="card slot" id="slot-{escape(slot["id"])}" '
         f'data-state="{escape(str(slot["state"]))}"{kind}><div class="slot-head">'
         f'<h2>{escape(name)} <span class="pill {tone}">'
         + label(
             title,
-            ("使用中" if signed_in_title else "等待登录")
-            if own
-            else STATE_ZH.get(slot["state"], (title, ""))[0],
+            title_zh,
             inline=True,
         )
         + f"</span>{mine}</h2>",
@@ -2245,6 +2301,16 @@ def _slot_card(
             else STATE_ZH.get(slot["state"], ("", detail))[1]
         )
         parts.append("<p>" + label(detail, detail_zh, inline=True) + "</p>")
+    parts.append(devin_html)
+    if devin_only:
+        parts.append('<details class="provider-other"><summary>' + label(
+            'Anthropic sign-in (optional)', 'Anthropic 登录（可选）', inline=True
+        ) + '</summary><p>' + label(
+            'These controls connect a separate Claude account. They are not needed to use '
+            'your ready Devin connection.',
+            '以下控件用于连接独立的 Claude 账号，'
+            '使用已就绪的 Devin 连接无需完成这一步。', inline=True
+        ) + '</p>')
     if not own and slot["state"] in CAN_SIGN_IN:
         parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
     if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):
@@ -2291,6 +2357,8 @@ def _slot_card(
         parts.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         if not own:
             parts.append(_cli_access(slot, node, cli_devices or [], csrf, now))
+    if devin_only:
+        parts.append('</details>')
     if slot["state"] in CAN_SIGN_IN and not own:
         parts.append(_rename(slot, csrf))
     # Never on somebody's own node: giving back means wiping, and nothing
@@ -3325,10 +3393,10 @@ def _rename(slot: Mapping[str, Any], csrf: str) -> str:
                     ))
             + '<p class="small muted">' + label(
                 (
-                    'What claude.ai shows for this machine, so Anthropic '
-                    'sees it too: pick anything but your email address.'
+                    'This also becomes the machine hostname. '
+                    'Pick anything but your email address.'
                 ),
-                "这个名称会显示在 claude.ai，也会被 Anthropic 看到。请不要用邮箱命名。",
+                "这个名称也会成为机器主机名。请不要用邮箱命名。",
                 inline=True) + '</p></div>')
 
 
@@ -3341,12 +3409,12 @@ def _release(slot: Mapping[str, Any], csrf: str) -> str:
                     '<label class="check"><input type="checkbox" name="confirm" value="wipe" '
                     'required> ' + label(
                         (
-                            'Delete everything on it: files, sessions and the Claude '
-                            'sign-in. Your Claude account itself is untouched.'
+                            'Delete everything on it: files, sessions and provider '
+                            'sign-ins. Your provider accounts and subscriptions are untouched.'
                         ),
                         (
-                            '删除槽位中的文件、会话和 Claude 登录信息；'
-                            '不会删除你的 Claude 账号。'
+                            '删除槽位中的文件、会话和服务商登录信息；'
+                            '不会删除你的服务商账号或取消订阅。'
                         ),
                         inline=True) + '</label>', "danger")
             + "</div>")

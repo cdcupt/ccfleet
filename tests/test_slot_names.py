@@ -167,7 +167,7 @@ def test_the_page_offers_a_rename_under_the_name_it_has(site):  # noqa: F811
     page = erik.page()
     assert f'action="/account/slots/{slot["id"]}/rename"' in page
     assert f'placeholder="{slot["name"]}"' in page
-    assert "pick anything but your email address" in page
+    assert "pick anything but your email address" in page.lower()
 
 
 def test_renaming_from_the_page(site):  # noqa: F811

@@ -201,8 +201,8 @@ def test_release_confirmation_and_csrf_are_not_duplicated_by_translation():
     assert page.inputs == [{'type': 'hidden', 'name': 'csrf', 'value': CSRF},
                            {'type': 'checkbox', 'name': 'confirm', 'value': 'wipe', 'required': None}]
     assert 'Delete everything on it' in page.copy('en')
-    assert '删除槽位中的文件、会话和 Claude 登录信息' in page.copy('zh')
-    assert '不会删除你的 Claude 账号' in page.copy('zh')
+    assert '删除槽位中的文件、会话和服务商登录信息' in page.copy('zh')
+    assert '不会删除你的服务商账号或取消订阅' in page.copy('zh')
 
 
 def test_slot_and_device_names_are_escaped_and_never_treated_as_copy_labels():
@@ -276,7 +276,7 @@ def test_single_language_projection_keeps_release_authority_and_confirmation():
         {'type': 'checkbox', 'name': 'confirm', 'value': 'wipe', 'required': None},
     ]
     assert 'Delete everything on it' in english.copy('en') and english.copy('zh') == ''
-    assert '删除槽位中的文件、会话和 Claude 登录信息' in chinese.copy('zh') and chinese.copy('en') == ''
+    assert '删除槽位中的文件、会话和服务商登录信息' in chinese.copy('zh') and chinese.copy('en') == ''
 
 
 def test_single_language_signin_fields_keep_form_names_and_localize_accessible_labels():

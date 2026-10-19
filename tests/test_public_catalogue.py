@@ -178,7 +178,7 @@ def test_public_controls_and_complete_alpha_policy_work_in_each_language(languag
         for words in ('Sign in to choose a slot', '10% of resource cost, with a $2 minimum',
                       '365/360', 'does not charge or renew automatically',
                       'already agreed billing period retains its agreed price',
-                      'multiple users', 'Anthropic API usage is billed separately'):
+                      'multiple users', 'Claude or Devin subscription and extra usage are billed separately'):
             assert words in result
         assert '全部服务商' not in result
     else:

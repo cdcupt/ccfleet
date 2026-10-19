@@ -47,7 +47,7 @@ class LanguageCopy(HTMLParser):
 @pytest.mark.parametrize(
     "page,english,chinese",
     [
-        (customer_docs.overview, "Bring your own Claude plan", "使用你自己的 Claude 订阅"),
+        (customer_docs.overview, "Your computer. Your provider account.", "在你的电脑工作，使用你自己的账号"),
         (customer_docs.guide, "Getting started", "开始使用"),
         (customer_docs.how_it_works, "How it works", "CC Fleet 如何工作"),
         (customer_docs.terms, "The service", "服务内容"),
@@ -149,20 +149,20 @@ def test_terms_and_prices_do_not_imply_included_claude_or_reveal_raw_markup():
     assert "Pricing is unavailable" in source
     copy = LanguageCopy(source)
     assert "does not provide access to Claude" in copy.text("en")
-    assert "不提供 Claude 订阅或账号" in copy.text("zh-Hans")
+    assert "不提供 Claude 或 Devin 订阅或账号" in copy.text("zh-Hans")
     assert "not backed up" in copy.text("en") and "没有备份" in copy.text("zh-Hans")
 
 
 def test_diagrams_and_privacy_have_distinct_language_ids_and_plain_explanations():
     source = customer_docs.how_it_works(Config())
     document = Document(source)
-    for namespace in ("gateway", "gateway-zh"):
-        assert f"{namespace}-diag-t" in document.ids
-        assert f'aria-labelledby="{namespace}-diag-t {namespace}-diag-d"' in source
+    for namespace in ("provider", "provider-zh"):
+        assert f"{namespace}-title" in document.ids
+        assert f'aria-labelledby="{namespace}-title {namespace}-desc"' in source
     assert not document.duplicate_ids
     copy = LanguageCopy(source)
-    assert "Can read model contents" in copy.text("en")
-    assert "可读取模型消息" in copy.text("zh-Hans")
+    assert "The gateway can read model requests and responses" in copy.text("en")
+    assert "网关可以读取模型请求和回复" in copy.text("zh-Hans")
     assert "机器管理员拥有 root 权限" in copy.text("zh-Hans")
     assert "真实线上验证使用了一个实际账号" in copy.text("zh-Hans")
 

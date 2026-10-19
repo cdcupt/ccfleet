@@ -214,3 +214,55 @@ def test_public_usage_ranking_explains_masking_coverage_and_api_equivalent_estim
                    "遮盖不等于匿名", "五分钟缓存写入价格", "不是 Claude Pro/Max 账单",
                    "原生、桥接与网关模型调用", "不需要迁移到 HTTPS"):
         assert phrase in chinese
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_provider_choice_and_manual_original_client_do_not_require_fleet_pairing(language):
+    document = Document(bilingual.project_html(GUIDE.read_text(), language, TARGET))
+    if language == "en":
+        phrases = (
+            "Anthropic is the default", "Devin is an operator-enabled pilot",
+            "No local Devin installation or Anthropic sign-in is required",
+            "does not require a paired Fleet device or the Fleet CLI",
+            "Edit that existing key’s provider", "saved key and address stay the same",
+            "New guided CLI setup uses Anthropic by default",
+            "not a browser-only login button", "token counting is unavailable",
+            "not automatically retry a dispatched native request",
+            "context rather than an enforced output or spending cap",
+        )
+    else:
+        phrases = (
+            "Anthropic 是默认服务", "Devin 是由运营人员启用的试点",
+            "不要求本机安装 Devin，也不要求登录 Anthropic",
+            "手动配置不要求配对 Fleet 设备，也不要求使用 Fleet CLI",
+            "网站修改该连接现有密钥的服务", "密钥与地址保持不变",
+            "命令行引导配置默认使用 Anthropic", "并非纯网页登录按钮",
+            "不提供 token 计数", "不会自动重试已发出的原生请求",
+            "不是强制输出或消费上限",
+        )
+    for phrase in phrases:
+        assert phrase in document.text
+    assert "providers" in document.ids and "keys" in document.ids
+    assert any(link.endswith("devin.html#connect") for link in document.links)
+    assert any(link.endswith("devin.html#prices") for link in document.links)
+    assert "ANTHROPIC_BASE_URL=https://ccfleet.io" in document.text
+    assert "read -r -s ANTHROPIC_AUTH_TOKEN" in document.text
+    assert "export ANTHROPIC_AUTH_TOKEN" in document.text
+    assert "env -u ANTHROPIC_API_KEY ANTHROPIC_BASE_URL=https://ccfleet.io" in document.text
+    assert "claude --model opus --effort max" in document.text
+    assert "ANTHROPIC_AUTH_TOKEN=YOUR_FLEET_CONNECTION_KEY" not in document.text
+    assert "unset ANTHROPIC_AUTH_TOKEN" in document.text
+    assert "Recorded on October 11, 2026" in document.text if language == "en" else "2026 年 10 月 11 日记录" in document.text
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_documentation_index_names_actual_pilot_and_manual_setup(language):
+    source = GUIDE.with_name("index.html").read_text()
+    document = Document(bilingual.project_html(source, language, "/docs/library/docs/index.html"))
+    assert ("Anthropic remains the default" if language == "en" else "Anthropic 仍是默认服务") in document.text
+    assert ("operator-enabled pilot" if language == "en" else "运营人员启用的试点") in document.text
+    assert ("without Fleet pairing" if language == "en" else "无需 Fleet 配对") in document.text
+    assert "compatibility is unverified" not in document.text
+    assert "兼容性尚待验证" not in document.text
+    assert any(link.endswith("devin.html#connect") for link in document.links)
+    assert any(link.endswith("devin.html#prices") for link in document.links)
