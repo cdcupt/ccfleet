@@ -7,7 +7,7 @@ from html import escape
 from typing import Any, Optional
 from urllib.parse import quote
 
-from . import wallet
+from . import stripe_checkout, wallet
 from .bilingual import label
 
 CSS = """
@@ -48,13 +48,16 @@ font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 border-top:1px solid var(--rule-soft)}
 .wallet-ui .wallet-form{display:grid;gap:14px;min-width:0;max-width:100%;margin-top:16px}
 .wallet-ui .wallet-field{display:grid;gap:7px;min-width:0;margin:0;font-size:13px}
-.wallet-ui .wallet-field input{box-sizing:border-box;width:100%;min-width:0;max-width:100%;
+.wallet-ui .wallet-field input,.wallet-ui .wallet-field select{box-sizing:border-box;
+width:100%;min-width:0;max-width:100%;
 min-height:42px;padding:10px 12px;border:1px solid var(--rule);border-radius:9px;
 background:var(--panel);color:var(--ink);font:inherit}
 .wallet-ui .wallet-field small{color:var(--muted);font-size:12px}
-.wallet-ui input:focus-visible,.wallet-ui button:focus-visible,
+.wallet-ui input:focus-visible,.wallet-ui select:focus-visible,.wallet-ui button:focus-visible,
 .wallet-ui a:focus-visible,.wallet-ui .wallet-ledger-sheet:focus-visible{
 outline:2px solid var(--acc);outline-offset:3px}
+.wallet-ui .wallet-topup{display:flex;flex-wrap:wrap;align-items:end;gap:10px}
+.wallet-ui .wallet-topup .wallet-field{min-width:130px;flex:1}
 @media(max-width:560px){.wallet-ui{padding:16px;border-radius:12px}
 .wallet-ui .wallet-actions{align-items:stretch}
 .wallet-ui .wallet-actions>.btn,.wallet-ui .wallet-actions>form,
@@ -87,24 +90,55 @@ def _date(value: Any) -> str:
     return moment.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def balance_card(balance_cents: int) -> str:
+def balance_card(balance_cents: int, *, topup_ready: bool = False, csrf: str = "",
+                 idempotency_key: str = "", compact: bool = False) -> str:
     shown = escape(wallet.display(balance_cents))
+    if type(topup_ready) is not bool:
+        raise ValueError("top-up readiness must be an explicit server boolean")
+    if type(compact) is not bool:
+        raise ValueError("compact credit display must be an explicit server boolean")
+    if topup_ready:
+        if (not isinstance(csrf, str) or not 1 <= len(csrf) <= 1024
+                or any(ord(char) < 32 or ord(char) == 127 for char in csrf)):
+            raise ValueError("a server CSRF nonce is required for top-ups")
+        controls = ('<form class="wallet-topup" method="post" action="/account/topup">'
+            + _security(csrf, idempotency_key) + '<label class="wallet-field">'
+            + label("Amount · USD", "金额 · 美元", inline=True)
+            + '<select name="amount_cents">' + ''.join(
+                '<option value="' + str(amount) + '"'
+                + (' selected' if amount == 2000 else '') + '>'
+                + escape(wallet.display(amount)) + '</option>'
+                for amount in stripe_checkout.DEFAULT_AMOUNTS) + '</select></label>'
+            + '<button class="btn primary" type="submit">'
+            + label("Pay by card", "银行卡充值", inline=True) + '</button></form>'
+            + '<button type="button" disabled aria-describedby="wallet-alipay-help">'
+            + label("Alipay · coming later", "支付宝 · 暂未开通", inline=True) + '</button>')
+        help_text = ('<p class="wallet-muted" id="wallet-topup-help">'
+            + label("Pay on Stripe. Credit appears after payment is confirmed. "
+                    "No automatic charges.",
+                    "在 Stripe 页面付款，确认到账后添加余额。不会自动扣款。", inline=True)
+            + '</p><p class="wallet-muted" id="wallet-alipay-help">'
+            + label("Alipay is not available yet.", "支付宝充值暂未开通。", inline=True) + '</p>')
+    else:
+        controls = ('<button type="button" disabled aria-describedby="wallet-topup-help">'
+            + label("Add credit · card / Alipay", "充值 · 银行卡／支付宝", inline=True)
+            + '</button>')
+        help_text = ('<p class="wallet-muted" id="wallet-topup-help">'
+            + label("Online top-ups are not connected yet. An admin can add Fleet credit.",
+                    "在线充值暂未开通，可由管理员添加 Fleet 余额。", inline=True) + '</p>')
+    steps = ('' if compact else '<ol class="wallet-steps">' + ''.join(
+        '<li>' + label(en, zh, inline=True) + '</li>'
+        for en, zh in (("Choose a slot", "选择槽位"),
+                       ("Review the monthly price", "确认月费"),
+                       ("Buy the first month", "购买首月"))) + '</ol>')
     return ('<section class="wallet-ui wallet-card" id="wallet"><h2>'
             + label("Fleet credit", "Fleet 余额", inline=True) + '</h2>'
             + '<div class="wallet-balance"><strong>' + shown + '</strong><small>'
             + label("USD service credit", "美元服务余额", inline=True) + '</small></div>'
-            + '<ol class="wallet-steps">' + ''.join('<li>' + label(en, zh, inline=True) + '</li>'
-                for en, zh in (("Choose a slot", "选择槽位"),
-                               ("Review the monthly price", "确认月费"),
-                               ("Buy the first month", "购买首月"))) + '</ol>'
+            + steps
             + '<div class="wallet-actions"><a class="btn primary" href="/account/available">'
             + label("Choose a slot", "选择槽位", inline=True) + '</a>'
-            + '<button type="button" disabled aria-describedby="wallet-topup-help">'
-            + label("Add credit · card / Alipay", "充值 · 银行卡／支付宝", inline=True)
-            + '</button></div><p class="wallet-muted" id="wallet-topup-help">'
-            + label("Online top-ups are not connected yet. An admin can add Fleet credit.",
-                    "在线充值暂未开通，可由管理员添加 Fleet 余额。", inline=True)
-            + '</p></section>')
+            + controls + '</div>' + help_text + '</section>')
 
 
 def owner_ledger(entries: Sequence[Mapping[str, Any]], *, limit: int = 8) -> str:
@@ -115,6 +149,9 @@ def owner_ledger(entries: Sequence[Mapping[str, Any]], *, limit: int = 8) -> str
     for entry in entries[:limit]:
         kind = entry.get("kind") if isinstance(entry.get("kind"), str) else ""
         en, zh = {"admin_credit": ("Credit added", "余额入账"),
+                  "admin_debit": ("Credit removed", "余额扣减"),
+                  "purchase_return": ("Service credit returned", "服务余额退回"),
+                  "stripe_topup": ("Online top-up", "在线充值"),
                   "slot_purchase": ("Slot month", "槽位月费")}.get(
                       kind, ("Credit adjustment", "余额调整"))
         try:

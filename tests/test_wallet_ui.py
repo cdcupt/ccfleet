@@ -64,6 +64,71 @@ def test_balance_is_exact_and_topup_is_honestly_disabled(balance, shown):
     assert not any(tag in {'script', 'iframe'} for tag, _ in page.tags)
 
 
+def test_explicit_ready_topup_posts_only_server_nonces_and_fixed_usd_amount():
+    source = wallet_ui.balance_card(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
+    parsed, page = Forms(source), Document(source)
+    [form] = parsed.forms
+    assert form['attrs']['action'] == '/account/topup' and form['attrs']['method'] == 'post'
+    assert {item['name']: item['value'] for item in form['inputs']} == {
+        'csrf': CSRF, 'idempotency_key': NONCE}
+    assert all(item['type'] == 'hidden' for item in form['inputs'])
+    [select] = [attrs for tag, attrs in page.tags if tag == 'select']
+    assert select['name'] == 'amount_cents'
+    options = [attrs for tag, attrs in page.tags if tag == 'option']
+    assert [item['value'] for item in options] == ['1000', '2000', '5000', '10000']
+    assert [item['value'] for item in options if 'selected' in item] == ['2000']
+    assert all(value in page.text for value in ('$10.00', '$20.00', '$50.00', '$100.00'))
+    buttons = [attrs for tag, attrs in page.tags if tag == 'button']
+    assert len(buttons) == 2
+    assert buttons[0]['type'] == 'submit' and 'disabled' not in buttons[0]
+    assert buttons[1]['type'] == 'button' and 'disabled' in buttons[1]
+    assert buttons[1]['aria-describedby'] == 'wallet-alipay-help'
+    assert 'Pay on Stripe' in page.text and 'No automatic charges' in page.text
+    assert 'Alipay is not available yet' in page.text
+    assert 'Online top-ups are not connected yet' not in page.text
+    assert page.links == ['/account/available']
+    assert not any(key.startswith('on') for _, attrs in page.tags for key in attrs)
+    assert not {'script', 'iframe'} & {tag for tag, _ in page.tags}
+
+
+@pytest.mark.parametrize('changes', [
+    {'topup_ready': 'true'}, {'topup_ready': 1}, {'topup_ready': None},
+    {'csrf': ''}, {'csrf': None}, {'csrf': 'bad\nnonce'}, {'csrf': 'x' * 1025},
+    {'idempotency_key': ''}, {'idempotency_key': 'browser nonce <script>'},
+])
+def test_active_topup_requires_explicit_readiness_and_valid_server_context(changes):
+    values = dict(topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
+    with pytest.raises(ValueError):
+        wallet_ui.balance_card(3000, **{**values, **changes})
+
+
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_active_card_topup_is_single_language_and_alipay_stays_inactive(language):
+    source = wallet_ui.balance_card(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
+    projected = project_html(source, language, target='/account')
+    text = Document(projected).text
+    expected = ('Pay by card', 'Amount · USD', 'Alipay is not available yet')
+    removed = ('银行卡充值', '金额 · 美元', '支付宝充值暂未开通')
+    if language == 'zh':
+        expected, removed = removed, expected
+    assert all(value in text for value in expected)
+    assert all(value not in text for value in removed)
+    assert len(Forms(projected).forms) == 1
+
+
+@pytest.mark.parametrize('topup_ready', [False, True])
+def test_compact_existing_customer_card_keeps_balance_actions_but_skips_first_purchase_guide(
+        topup_ready):
+    source = wallet_ui.balance_card(3000, compact=True, topup_ready=topup_ready,
+                                   csrf=CSRF, idempotency_key=NONCE)
+    parsed, text = Forms(source), Document(source).text
+    assert '$30.00' in text and 'Fleet credit' in text and 'Choose a slot' in text
+    assert 'Review the monthly price' not in text and 'Buy the first month' not in text
+    assert not any(tag == 'ol' for tag, _ in parsed.elements)
+    assert len(parsed.forms) == int(topup_ready)
+    assert 'wallet-steps' in wallet_ui.balance_card(3000)
+
+
 @pytest.mark.parametrize('renderer,action,targets', [
     (purchase, '/account/purchase', {'machine_number': '7'}),
     (renewal, '/account/renew', {'slot_id': 'slot-1', 'claim_id': 'current-claim'}),
@@ -225,3 +290,17 @@ def test_component_CSS_is_scoped_and_provides_keyboard_focus_and_narrow_screen_w
     assert '.wallet-ui .wallet-ledger-sheet:focus-visible' in wallet_ui.CSS
     assert 'overflow-x:auto' in wallet_ui.CSS and 'min-width:0' in wallet_ui.CSS
     assert '@media(max-width:' in wallet_ui.CSS and 'overflow-wrap:anywhere' in wallet_ui.CSS
+
+
+@pytest.mark.parametrize('kind,en,zh',[
+    ('admin_debit','Credit removed','余额扣减'),
+    ('purchase_return','Service credit returned','服务余额退回'),
+    ('stripe_topup','Online top-up','在线充值'),
+])
+def test_known_credit_adjustments_have_generic_owner_labels_without_private_notes(kind,en,zh):
+    source=wallet_ui.owner_ledger([dict(kind=kind,delta_cents=-100 if kind=='admin_debit' else 100,
+        currency='USD',created_at=1700000000,reason='PRIVATE_ADMIN_NOTE',actor_id='PRIVATE_ADMIN',
+        id='PRIVATE_REFERENCE',payment_intent_id='PRIVATE_STRIPE_ID')])
+    assert en in Document(project_html(source,'en',target='/account')).text
+    assert zh in Document(project_html(source,'zh',target='/account')).text
+    assert 'PRIVATE_' not in source and not Forms(source).forms

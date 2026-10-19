@@ -33,13 +33,17 @@ from . import (
     reference_docs,
     sessions,
     statuspage,
+    stripe_config,
+    stripe_routes,
     usage,
     usersite,
+    wallet_access,
+    wallet_routes,
 )
 from . import slots as slotstates
 from .bilingual import CURRENT_PAGES, _slot_search_query, localized_url, project_html, route_target
 from .bilingual import SCRIPT_CSP as LANGUAGE_LINKS_CSP
-from .config import Config
+from .config import Config, _authority_matches
 from .desired import desired_state, machine_hostname
 from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
@@ -87,6 +91,8 @@ def access_log_route(target: Any) -> str:
     except ValueError:
         return "unknown_route"
     if path in {"/", "/healthz", "/slots", "/account", "/account/available", "/privacy", "/status",
+                "/account/purchase", "/account/renew", "/account/topup",
+                "/api/payments/stripe/webhook",
                 "/auth/basic",
                 "/auth/google/start", "/auth/google/callback", "/auth/signout",
                 "/api/nodes", "/api/alerts", "/api/heartbeat", "/api/cli/status",
@@ -114,7 +120,7 @@ def access_log_route(target: Any) -> str:
                  "remove"},
         "machine": {"capacity", "slot-add", "reserve", "unreserve"},
         "slot": {"reclaim", "quota", "remove"},
-        "account": {"allowance", "payment"},
+        "account": {"allowance", "payment", "credit"},
         "payment": {"void"},
     }
     if len(parts) == 4 and parts[0] == "actions":
@@ -166,10 +172,12 @@ def legacy_browser_target(target: str) -> Optional[str]:
 
 
 class Context:
-    def __init__(self, store: Store, cfg: Config, monitor: Monitor) -> None:
+    def __init__(self, store: Store, cfg: Config, monitor: Monitor, *, billing=None) -> None:
         self.store = store
         self.cfg = cfg
         self.monitor = monitor
+        self.billing = (None if cfg.broker_only else
+                        billing if billing is not None else stripe_config.build_billing(cfg, store))
         self.gateway = gateway.GatewayRuntime(cfg, store)
         self.machine_health = (machine_health.Observer()
                                if cfg.public_machine_metrics_enabled and not cfg.broker_only
@@ -414,6 +422,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
             current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
+                       "/account/purchase", "/account/renew", "/account/topup",
                        "/docs/library",
                        "/docs/library/", "/docs/library/docs/index.html",
                        "/docs/library/docs/public-gateway.html",
@@ -522,6 +531,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return False
             return not ctx.cfg.admin_host or not self._admin_site()
 
+        def _payment_site(self) -> bool:
+            return (not ctx.cfg.broker_only and self._product_site()
+                    and len(self.headers.get_all("Host", [])) == 1
+                    and any(_authority_matches(self.headers.get("Host"), origin)
+                            for origin in (ctx.cfg.public_url, *ctx.cfg.public_url_aliases)))
+
         def _public_url(self) -> str:
             """Only a root-configured origin may receive a saved CLI credential."""
             return ctx.cfg.public_origin_for_host(self.headers.get("Host"))
@@ -592,6 +607,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return True
             self._json(403, {"error": "this account cannot manage nodes"})
             return False
+
+        def _database_admin_actor(self) -> Optional[tuple[str, str]]:
+            header = self.headers.get("Authorization")
+            if _admin_ok(header, ctx.cfg):
+                return None
+            basic = identify(header, ctx.cfg, ctx.store)
+            if basic is not None:
+                return ("console_user", basic.label) if basic.is_admin else None
+            account, _ = self._signed_in()
+            if account is not None and account.get("role") == "admin":
+                return "account", account["id"]
+            return None
 
         # -- signing in with Google ----------------------------------------
 
@@ -666,6 +693,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     ctx.store, now, ctx.cfg.heartbeat_max_age_s), "per_slot_pricing": per_slot})
             elif page in (customer_docs.guide, customer_docs.terms):
                 extra["per_slot_pricing"] = per_slot
+            extra["wallet_enabled"] = ctx.cfg.usd_slot_credit_enabled
             self._send(200, page(ctx.cfg, viewer=self._viewer(),
                                  price=current["price"] if current and not per_slot else None,
                                  **extra).encode("utf-8"),
@@ -690,8 +718,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             return "product"
 
         def _csrf_ok(self, form: dict[str, str], session_id: str) -> bool:
-            return hmac.compare_digest(
-                form.get("csrf", ""), usersite.csrf_for(session_id, ctx.cfg.cookie_secret))
+            supplied = form.get("csrf", "")
+            return supplied.isascii() and hmac.compare_digest(
+                supplied, usersite.csrf_for(session_id, ctx.cfg.cookie_secret))
 
         def _sign_in_start(self) -> None:
             if not ctx.cfg.google_ready:
@@ -830,14 +859,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # page, which offers sign-in, rather than an error.
                 self._redirect("/account")
                 return
-            form = self._form()
+            form = self._form(strict=path in {
+                "/account/purchase", "/account/renew", "/account/topup"})
             if form is None:
                 return
             if not self._csrf_ok(form, session_id):
                 self._json(403, {"error": "bad or missing csrf token"})
                 return
-            outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
-                                   session_id)
+            if path == "/account/topup":
+                outcome = stripe_routes.start(ctx.billing, ctx.cfg, account, form, time.time())
+            else:
+                outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
+                                       session_id)
             if outcome.location:
                 self._redirect(outcome.location)
             else:
@@ -879,6 +912,36 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- routes --------------------------------------------------------
 
+        def _stripe_webhook(self) -> None:
+            self.close_connection = True
+            if not stripe_routes.enabled(ctx.billing, ctx.cfg):
+                self._json(503, {"error": "online top-ups are unavailable"})
+                return
+            try:
+                size, signature = stripe_routes.webhook_frame(self.headers)
+            except stripe_routes.WebhookRequestError as exc:
+                self._json(exc.status, {"error": "invalid payment notification framing"})
+                return
+
+            def expire_body():
+                with contextlib.suppress(OSError):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+
+            timer = threading.Timer(10, expire_body)
+            timer.daemon = True
+            self.connection.settimeout(10)
+            timer.start()
+            try:
+                body = stripe_routes.read_webhook_body(self.rfile, size)
+            except stripe_routes.WebhookRequestError as exc:
+                self._json(exc.status, {"error": "invalid payment notification body"})
+                return
+            finally:
+                timer.cancel()
+            status_code, answer = stripe_routes.webhook(ctx.billing, ctx.cfg, body, signature,
+                                                        time.time())
+            self._json(status_code, answer)
+
         def _paired_gateway_device(self):
             if not ctx.gateway.enabled:
                 self._json(503, {"error": "gateway is not configured"})
@@ -896,6 +959,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if device is None:
                 return
             slots = ctx.store.list_slots(held_by=device["account_id"])
+            slots = [slot for slot in slots
+                     if wallet_access.allowed(ctx.store, slot, now=time.time())]
             native = gateway_ui.ready_provider_slots(ctx.store, ctx.cfg, device["account_id"],
                                                      slots, now=time.time())
             self._json(200, {"available": True, "base_url": self._public_url(),
@@ -946,9 +1011,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._json(200, {"revoked": bool(changed)})
                     return
                 runtime = gateway_providers.runtime_expectations(ctx.cfg)
+                selected = value.get("slot_ids", [device["slot_id"]])
+                if (not isinstance(selected, list) or not 1 <= len(selected) <= 100
+                        or any(not isinstance(identifier, str) for identifier in selected)):
+                    raise ValueError("invalid selected slots")
+                reasons = [wallet_access.target_pause_reason(ctx.store, device["account_id"],
+                    {"slot_id": identifier}, now=time.time()) for identifier in selected]
+                if any(reasons):
+                    self._json(403, {"error": next(reason for reason in reasons if reason)})
+                    return
                 key = ctx.store.create_gateway_key(
                     device["account_id"], value.get("name", "Claude Code"),
-                    value.get("slot_ids", [device["slot_id"]]),
+                    selected,
                     value.get("mode", "sticky"), now=time.time(),
                     provider=value.get("provider", "anthropic"),
                     allow_devin=bool(ctx.cfg.gateway_ready
@@ -983,7 +1057,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             result = ctx.gateway.status(key, pins[0] if pins else "")
             # Internal targets contain provider identity; only these fields are public.
-            safe = {name: result[name] for name in ("ready", "mode", "base_url")}
+            safe = {name: result[name] for name in ("ready", "mode", "base_url",
+                                                   "billing_paused", "detail") if name in result}
             safe["base_url"] = self._public_url()
             safe["slots"] = [{name: row[name] for name in ("id", "name", "state", "ready")
                               if name in row} for row in result.get("slots", [])
@@ -1017,12 +1092,23 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if not isinstance(supplied, dict):
                 self._json(400, {"error": "body must be a JSON object"})
                 return
+            payment_failure = []
+
+            def admit(row):
+                reason = wallet_access.target_pause_reason(ctx.store, row["account_id"],
+                                                          row, now=time.time())
+                if reason:
+                    payment_failure.append(reason)
+                return not reason
+
             try:
                 device = ctx.store.register_cli_device(
                     token, str(supplied.get("public_key") or ""),
-                    str(supplied.get("device_name") or ""), now=time.time())
+                    str(supplied.get("device_name") or ""), now=time.time(),
+                    admit=admit)
             except StoreError as exc:
-                self._json(400, {"error": str(exc)})
+                self._json(403 if payment_failure else 400,
+                           {"error": payment_failure[0] if payment_failure else str(exc)})
                 return
             ws_scheme = "wss" if public.scheme == "https" else "ws"
             self._json(201, {
@@ -1046,6 +1132,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             token = _prefixed_bearer(self.headers.get("Authorization"),
                                      cli_access.DEVICE_PREFIX)
             device = ctx.store.resolve_cli_device(token or "", now=time.time())
+            if device is not None:
+                reason = wallet_access.target_pause_reason(ctx.store, device["account_id"],
+                                                          device, now=time.time())
+                if reason:
+                    self._json(403, {"error": reason})
+                    return
             if device is None:
                 self._json(401, {"error": "device is not authorized"})
                 return
@@ -1139,6 +1231,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 if device is None:
                     self._json(401, {"error": "device is not authorized"})
                     return
+                reason = wallet_access.target_pause_reason(ctx.store, device["account_id"],
+                                                          device, now=time.time())
+                if reason:
+                    self._json(403, {"error": reason})
+                    return
                 answer = client_status.device_status(ctx.store, ctx.cfg, device, time.time())
                 answer.update({"gateway_available": ctx.gateway.enabled,
                                "gateway_base_url": (self._public_url()
@@ -1158,7 +1255,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    (path in ("/slots", "/account", "/account/available", "/privacy", "/status")
+                    (path in ("/slots", "/account", "/account/available", "/account/purchase",
+                              "/account/renew", "/privacy", "/status")
                      or customer_docs.page_for(path))
                     and not self._product_site()):
                 # Each site answers only for its own audience: the product
@@ -1178,10 +1276,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     viewer=self._viewer()).encode("utf-8"), HTML_HEADERS)
             elif path == "/account":
                 account, session_id = self._signed_in()
-                note = urllib.parse.parse_qs(
-                    urllib.parse.urlparse(self.path).query).get("note", [""])[0]
+                try:
+                    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query,
+                                                   max_num_fields=16)
+                except ValueError:
+                    self._json(400, {"error": "too many query fields"})
+                    return
+                note = query.get("note", [""])[0]
+                if query.get("checkout") in (["returned"], ["cancelled"]):
+                    note = "checkout-returned"
                 self._send(200, usersite.page(ctx.store, ctx.cfg, account, session_id,
-                                              time.time(), note).encode("utf-8"),
+                    time.time(), note, topup_ready=stripe_routes.enabled(
+                        ctx.billing, ctx.cfg)).encode("utf-8"),
                            HTML_HEADERS)
             elif path == "/account/available":
                 account, session_id = self._signed_in()
@@ -1189,6 +1295,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     ctx.store, ctx.cfg, account, session_id, time.time(),
                     self._slot_query()).encode("utf-8"),
                     HTML_HEADERS)
+            elif path in ("/account/purchase", "/account/renew"):
+                account, session_id = self._signed_in()
+                try:
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query,
+                                                   max_num_fields=16)
+                except ValueError:
+                    self._json(400, {"error": "too many query fields"})
+                    return
+                outcome = wallet_routes.page(ctx.store, ctx.cfg, account, session_id,
+                    time.time(), path.rsplit("/", 1)[1],
+                    {name: values[0] for name, values in query.items()})
+                self._send(outcome.status, outcome.body.encode("utf-8"), HTML_HEADERS)
             elif path == "/privacy":
                 # Public: Google links here from its sign-in screen.
                 self._send(200, usersite.privacy_page(ctx.cfg, self._viewer()).encode("utf-8"),
@@ -1240,11 +1358,33 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def do_HEAD(self) -> None:  # noqa: N802
             self.do_GET()
 
-        def _form(self) -> Optional[dict[str, str]]:
+        def _form(self, *, strict: bool = False) -> Optional[dict[str, str]]:
+            if strict:
+                lengths = self.headers.get_all("Content-Length", [])
+                if (len(lengths) != 1 or not lengths[0].isascii()
+                        or not lengths[0].isdigit() or len(lengths[0]) > 10
+                        or str(int(lengths[0])) != lengths[0]
+                        or any(self.headers.get_all(name) for name in
+                               ("Transfer-Encoding", "Content-Encoding", "Expect"))
+                        or len(self.headers.get_all("Content-Type", [])) != 1
+                        or self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                        != "application/x-www-form-urlencoded"):
+                    self.close_connection = True
+                    self._json(400, {"error": "invalid credit request framing"})
+                    return None
             body = self._read_body()
             if body is None:
                 return None
-            parsed = urllib.parse.parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True)
+            try:
+                parsed = urllib.parse.parse_qs(
+                    body.decode("utf-8", "strict" if strict else "replace"),
+                    keep_blank_values=True, max_num_fields=16 if strict else None)
+                if strict and (len(body) != int(self.headers["Content-Length"])
+                               or any(len(value) != 1 for value in parsed.values())):
+                    raise ValueError("duplicate credit field")
+            except (UnicodeError, ValueError):
+                self._json(400, {"error": "invalid credit request fields"})
+                return None
             return {k: v[0] for k, v in parsed.items()}
 
         # Which part of the page an action belongs to. A POST redirects to the
@@ -1277,6 +1417,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             path = self._page_route("POST")
             if path is None:
+                return
+            if path == "/api/payments/stripe/webhook":
+                if not self._payment_site():
+                    self._json(404, {"error": "not found"})
+                else:
+                    self._stripe_webhook()
+                return
+            if path == "/account/topup" and not self._payment_site():
+                self._json(404, {"error": "not found"})
                 return
             if path in ("/v1/messages", "/v1/messages/count_tokens"):
                 if not self._product_site() or ctx.cfg.broker_only:
@@ -1383,7 +1532,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     hostname=hostname, channels=ctx.store.get_channel_versions(),
                     slot_updates={s["id"]: ctx.store.get_claude_update(s["id"]) for s in slots},
                     own_update=ctx.store.get_claude_update(owned[0]["id"]) if owned else None,
-                    slot_cli_keys={s["id"]: ctx.store.cli_public_keys(s["id"])
+                    slot_cli_keys={s["id"]: (ctx.store.cli_public_keys(s["id"])
+                                   if wallet_access.allowed(ctx.store, s, now=now) else [])
                                    for s in slots},
                     slot_gateway_keys={s["id"]: ctx.store.gateway_public_keys(
                         s["id"], ctx.cfg.gateway_ssh_public_key, allow_devin=native_enabled,
@@ -1475,10 +1625,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             who = self._identity()
             if who is None:
                 return
-            form = self._form()
+            form = self._form(strict=bool(re.fullmatch(r"/actions/account/[^/]+/credit", path)))
             if form is None:
                 return
-            if not hmac.compare_digest(form.get("csrf", ""), csrf_token(ctx.cfg)):
+            supplied_csrf = form.get("csrf", "")
+            if not supplied_csrf.isascii() or not hmac.compare_digest(
+                    supplied_csrf, csrf_token(ctx.cfg)):
                 self._json(403, {"error": "bad or missing csrf token"})
                 return
             parts = path.strip("/").split("/")          # actions/node/<id|add>/<action>
@@ -1495,6 +1647,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                                       "payment", "price"):
                     # Slots and the people who hold them are the operator's alone.
                     if not self._require_admin():
+                        return
+                    if parts[1] == "account" and parts[3] == "credit":
+                        if not ctx.cfg.usd_slot_credit_enabled:
+                            self._json(404, {"error": "not found"})
+                            return
+                        actor = self._database_admin_actor()
+                        if actor is None:
+                            self._json(403, {"error":
+                                "Sign in using an admin account to add credit."})
+                            return
+                        ctx.store.grant_wallet_credit(urllib.parse.unquote(parts[2]),
+                            form.get("amount", ""), actor_kind=actor[0], actor_id=actor[1],
+                            reason=form.get("reason", ""),
+                            idempotency_key=form.get("idempotency_key", ""), now=time.time())
+                        self._redirect(f"{CONSOLE_PATH}#accounts")
                         return
                     anchor = consoleslots.act(ctx.store, parts[1], parts[2], parts[3],
                                               form, time.time(), by=who.label)
@@ -1630,7 +1797,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                     now, ctx.cfg, csrf_token(ctx.cfg), who,
                                     logins=logins,
                                     extra=(consoleslots.section(ctx.store, csrf_token(ctx.cfg),
-                                                                now, cfg=ctx.cfg)
+                                                                now, cfg=ctx.cfg,
+                                                                credit_actor=bool(
+                                                                    self._database_admin_actor()))
                                            if who.is_admin else ""),
                                     corner=self._console_corner())
 

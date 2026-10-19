@@ -246,20 +246,21 @@ def _browse_params(query: Mapping[str, str], brands: set[str]) -> dict[str, str]
 
 
 def browse(store: Any, account: Mapping[str, Any], csrf: str, now: float,
-           max_age: float, query: Mapping[str, str], can_claim: bool = True) -> str:
+           max_age: float, query: Mapping[str, str], can_claim: bool = True,
+           *, purchase: bool = False) -> str:
     """An eligible inventory page, separate from the holder's own slot controls.
 
     Search and pagination use approved public metadata only. These are choices,
     not reservations: the existing claim action rechecks eligibility atomically.
     """
     return _browser(available(store, account, now, max_age), query,
-                    path="/account/available", csrf=csrf, can_claim=can_claim)
+                    path="/account/available", csrf=csrf, can_claim=can_claim, purchase=purchase)
 
 
 def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: str,
              csrf: str = "", can_claim: bool = False,
              availability: Optional[Mapping[str, tuple[str, str]]] = None,
-             reported: Optional[set[str]] = None) -> str:
+             reported: Optional[set[str]] = None, purchase: bool = False) -> str:
     """Shared bounded filters and rows; only the authenticated wrapper can claim."""
     public_inventory = availability is not None
     nodes = sorted(nodes, key=lambda node: status.public_machine_number(node) or 0)
@@ -318,6 +319,10 @@ def _browser(nodes: list[Mapping[str, Any]], query: Mapping[str, str], *, path: 
                   '<button class="primary" type="submit">'
                   + label("Claim this slot", "领取此槽位", inline=True)
                   + '</button></form></td>') if can_claim else ''
+        if can_claim and purchase:
+            action = ('<td><a class="btn primary" href="/account/purchase?machine_number='
+                      + str(number) + '">'
+                      + label("Review price", "确认价格", inline=True) + '</a></td>')
         if reported is None or node["id"] in reported:
             machine = '<a href="/status#machine-' + str(number) + '">' + machine + '</a>'
         state = ('<td>' + _availability(availability[node["id"]]) + '</td>'

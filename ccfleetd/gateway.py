@@ -19,7 +19,7 @@ from typing import Any
 from ccfleet_agent import inference_client as wire
 from ccfleet_agent import local_relay
 
-from . import gateway_providers, throughput
+from . import gateway_providers, throughput, wallet_access
 from .gateway_transport import NATIVE_MESSAGE_PATHS, GatewayTransportError, transport_attempt
 
 PATHS = wire.PATHS
@@ -118,8 +118,10 @@ def session_id(headers, body: dict[str, Any]) -> str:
 
 
 class GatewayRuntime:
-    def __init__(self, cfg, store, *, transport_factory=None, clock=time.monotonic):
+    def __init__(self, cfg, store, *, transport_factory=None, clock=time.monotonic,
+                 wall_clock=time.time):
         self.cfg, self.store, self.clock = cfg, store, clock
+        self.wall_clock = wall_clock
         self.transport_factory = transport_factory or transport_attempt
         self.lock = threading.RLock()
         self.active = 0
@@ -179,6 +181,16 @@ class GatewayRuntime:
     def _store_targets(self, key):
         return self.store.gateway_targets(key, **self._provider_options(key))
 
+    def _paid_access(self, key, target) -> bool:
+        return not self._paid_reason(key, target)
+
+    def _paid_reason(self, key, target) -> str:
+        return wallet_access.target_pause_reason(
+            self.store, key["account_id"], target, now=self.wall_clock())
+
+    def _new_targets(self, key):
+        return [target for target in self._store_targets(key) if self._paid_access(key, target)]
+
     @staticmethod
     def _route_identity(key, target):
         """A native snapshot cannot inherit health, affinity or cooldown after rebinding."""
@@ -216,7 +228,10 @@ class GatewayRuntime:
 
     def status(self, key, pinned: str = "") -> dict[str, Any]:
         """Bounded, read-only slot readiness; this never sends a model POST."""
-        targets = self._store_targets(key)
+        raw_targets = self._store_targets(key)
+        paused = [self._paid_reason(key, target) for target in raw_targets
+                  if not pinned or target["slot_id"] == pinned]
+        targets = [target for target in raw_targets if self._paid_access(key, target)]
         if pinned:
             targets = [target for target in targets if target["slot_id"] == pinned]
         ready = {}
@@ -260,10 +275,13 @@ class GatewayRuntime:
         rows = [{"id": identifier, "name": held[identifier].get("name") or identifier,
                  "state": held[identifier]["state"], "ready": ready.get(identifier, False)}
                 for identifier in ids if identifier in held]
-        return {"ready": any(row["ready"] for row in rows), "mode": key["mode"],
+        result = {"ready": any(row["ready"] for row in rows), "mode": key["mode"],
                 "base_url": self.cfg.public_url, "slots": rows,
                 "key": {name: key[name] for name in
                         ("id", "name", "slot_ids", "mode", "generation")}}
+        if not result["ready"] and any(paused):
+            result.update({"billing_paused": True, "detail": next(item for item in paused if item)})
+        return result
 
     def _cache_put(self, cache, key, value) -> None:
         cache[key] = value
@@ -272,7 +290,7 @@ class GatewayRuntime:
             cache.popitem(last=False)
 
     def _targets(self, key, session_key: str, pinned: str, model_key: str):
-        targets = self._store_targets(key)
+        targets = self._new_targets(key)
         if pinned:
             targets = [t for t in targets if t["slot_id"] == pinned]
         now = self.clock()
@@ -431,6 +449,11 @@ class GatewayRuntime:
         handler._gateway_native_no_retry = key.get("provider") == gateway_providers.DEVIN
         targets = self._targets(key, session, pinned, model_key)
         if not targets:
+            paused = [self._paid_reason(key, target) for target in self._store_targets(key)
+                      if not pinned or target["slot_id"] == pinned]
+            if any(paused):
+                model_error(handler, 403, next(item for item in paused if item))
+                return
             model_error(handler, 503, "No selected slot is currently ready.")
             return
         deadline = self.clock() + self.cfg.gateway_request_timeout_s
@@ -439,6 +462,10 @@ class GatewayRuntime:
                 return
             if self.clock() >= deadline:
                 model_error(handler, 504, "The gateway request deadline expired.")
+                return
+            reason = self._paid_reason(key, target)
+            if reason:
+                model_error(handler, 403, reason)
                 return
             if not self._authorized(key, target):
                 # An endpoint configuration change is not permission to use the
@@ -461,10 +488,19 @@ class GatewayRuntime:
             watcher.start()
             committed = False
             observer = None
+            payment_failure = []
+
+            def admitted_before_send(target=target, payment_failure=payment_failure):
+                reason = self._paid_reason(key, target)
+                if reason:
+                    payment_failure.append(reason)
+                    return False
+                return (self._authorized(key, target) and not self._disconnected(handler)
+                        and self.clock() < deadline)
+
             try:
                 attempt.start(headers, body, path=handler.path,
-                              before_model_send=lambda target=target: (self._authorized(key, target)
-                                  and not self._disconnected(handler) and self.clock() < deadline))
+                              before_model_send=admitted_before_send)
                 if not self._authorized(key, target) or self._disconnected(handler):
                     model_error(handler, 403, "Endpoint authorization changed.")
                     return
@@ -551,6 +587,9 @@ class GatewayRuntime:
                 return
             except GatewayTransportError as exc:
                 if committed:
+                    return
+                if payment_failure:
+                    model_error(handler, 403, payment_failure[0])
                     return
                 if (exc.retryable and position + 1 < len(targets) and not pinned
                         and not (target.get("provider") == gateway_providers.DEVIN

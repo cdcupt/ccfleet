@@ -116,6 +116,13 @@ class Store:
     def gateway_request_is_active(self, *_args):
         return self.active
 
+    def get_slot(self, identifier):
+        return {"id": identifier, "held_by": "PRIVATE_ACCOUNT", "kind": "machine",
+                "gateway_claim_id": "PRIVATE_CLAIM", "gateway_generation": "PRIVATE_GENERATION"}
+
+    def paid_slot_through(self, *_args, **_kwargs):
+        return None  # This numeric-observer fixture represents a grandfathered rental.
+
     def record_gateway_throughput(self, tokens, stream_ms, *, now):
         self.records.append((tokens, stream_ms, now))
         self.recorded.set()

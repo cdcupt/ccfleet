@@ -19,6 +19,8 @@ REASON_MAX = 200
 IDENTITY_MAX = 128
 AMOUNT = re.compile(r"[0-9]{1,9}(?:\.[0-9]{1,2})?\Z")
 REQUEST = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+# Manual credit changes require a real DB admin. Provider actors reserved by the
+# ledger schema are admitted only through verified provider settlement methods.
 ACTOR_KINDS = frozenset({"account", "console_user"})
 
 
