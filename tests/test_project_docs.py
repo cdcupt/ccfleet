@@ -88,7 +88,7 @@ def test_native_session_controls_and_local_permission_defaults_are_documented():
         "ccfleet local --continue",
         "ccfleet local --resume work --fork-session",
         'ccfleet local --print "Summarize this project"',
-        "--mode plan --model opus --effort high",
+        "--permission-mode plan --model opus --effort high",
     ):
         assert command in text
     assert "default to bypassPermissions" in text
