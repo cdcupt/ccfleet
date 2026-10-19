@@ -112,6 +112,22 @@ marked retired. If setup still reports unconfirmed cleanup, stop and follow that
 error; do not bypass it by deleting the saved record. Approve the prompt again
 only when ready to end the old live-folder work. Files and history are retained.</p>
 <h2 id="daily-use-and-native-sessions">Daily use and native sessions</h2>
+<p>Fleet 0.2.7 adds Claude-style command aliases. Install the current signed release
+with <code>ccfleet update</code>; existing pairing and local history are preserved.</p>
+<table><thead><tr><th>Command</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>ccfleet update</code> / <code>ccfleet upgrade</code></td><td>Update Fleet; append <code>--rollback</code> for the previous client.</td></tr>
+<tr><td><code>ccfleet -v</code> / <code>ccfleet --version</code></td><td>Fleet version; use <code>ccfleet version --json</code> for the detailed report.</td></tr>
+<tr><td><code>ccfleet local -c</code> / <code>--continue</code></td><td>Continue the latest conversation in this directory.</td></tr>
+<tr><td><code>ccfleet local -r</code> / <code>--resume [NAME_OR_ID]</code></td><td>Open native history or choose a saved conversation.</td></tr>
+<tr><td><code>ccfleet local --permission-mode plan</code></td><td>Native permissions; <code>--mode</code> remains an alias.</td></tr>
+<tr><td><code>ccfleet local --slot A --project PATH</code></td><td>Fleet-specific: select an already configured slot and the local working directory.</td></tr>
+<tr><td><code>ccfleet list --remote</code></td><td>Fetch current own-slot names from the server; plain <code>ccfleet list</code> shows saved pairings.</td></tr>
+</tbody></table>
+<p>For a verified own Devin slot, follow <a href="https://ccfleet.io/docs/guide#devin-cli">the CLI provider-selection recipe</a>: refresh the remote slot list, authorize with a working pairing, then choose exactly one Devin slot with <code>--provider devin</code>.</p>
+<p>Other supported native Claude options go after <code>--</code>, such as
+<code>ccfleet local -- --verbose</code>. Protected routing and authentication options
+remain restricted. The fixed <code>--next</code> domain trial installs 0.2.6;
+its original command set is unchanged.</p>
 <pre><code class="language-bash">cd ~/code/my-project
 ccfleet local --check
 ccfleet start
@@ -148,7 +164,7 @@ which files and commands it may use, including outside the current directory.
 New sessions default to <code>bypassPermissions</code>, Opus and max effort: tools can change,
 delete or transmit data without individual approval prompts. Choose a different
 mode when appropriate:</p>
-<pre><code class="language-bash">ccfleet local --new --name research --mode plan --model opus --effort high
+<pre><code class="language-bash">ccfleet local --new --name research --permission-mode plan --model opus --effort high
 ccfleet local --resume
 ccfleet local --resume work
 ccfleet local --continue
@@ -208,7 +224,7 @@ status; authorization changes invalidate the process. Missing observations are
 unknown, not zero. Relay totals cover seven UTC calendar days and are not billing
 or current-day totals. A reported-ready heartbeat is not a provider acceptance test.</p></section>
 <h2 id="project-defaults">Project defaults</h2>
-<pre><code class="language-bash">ccfleet preferences set --model opus --effort high --mode plan
+<pre><code class="language-bash">ccfleet preferences set --model opus --effort high --permission-mode plan
 ccfleet preferences show
 ccfleet preferences clear
 </code></pre>

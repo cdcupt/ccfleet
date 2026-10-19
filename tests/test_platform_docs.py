@@ -18,6 +18,31 @@ NOW = 1_800_000_000.0
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_current_cli_reference_keeps_update_and_native_aliases_separate_from_fixed_trial():
+    for relative in ("README.html", "docs/local-relay.html"):
+        document = read_document(ROOT / relative)
+        text = document.text
+        for command in ("ccfleet update", "ccfleet upgrade", "ccfleet -v", "ccfleet --version",
+                        "ccfleet local -c", "ccfleet local -r",
+                        "ccfleet local --permission-mode plan", "--mode",
+                        "ccfleet local --slot A --project PATH", "ccfleet local -- --verbose"):
+            assert command in text, (relative, command)
+        assert "0.2.7" in text
+    runbook = read_document(ROOT / "docs/runbooks.html").text
+    assert "fixed signed 0.2.6 manifest" in runbook
+    assert "fixed 0.2.6 trial does not acquire these new aliases" in runbook
+    for relative in ("README.html", "docs/guidebook.html", "docs/reliability-privacy.html"):
+        text = read_document(ROOT / relative).text
+        assert "current signed 0.2.5" not in text
+    gateway = read_document(ROOT / "docs/public-gateway.html")
+    assert ("ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n"
+            "ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n"
+            "ccfleet local --slot DEVIN_SLOT --new") in gateway.pre_codes
+    history = gateway.text
+    assert "Recorded on October 11, 2026:" in history
+    assert "signed Fleet client 0.2.5" in history
+
+
 def credentials(**changes):
     return {"present": True, "logged_in": True, "bound_fp": "a" * 16,
             "account_fp": "a" * 16, "expires_at": (NOW + 3600) * 1000, **changes}

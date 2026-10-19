@@ -233,12 +233,12 @@ def test_full_shell_commands_survive_as_literal_escaped_code(relative, commands)
 # snapshots retain their original conversion baselines.
 @pytest.mark.parametrize("relative,count,digest", [
     # 2026-10-18: add the signed side-by-side canonical-domain client example.
-    ("README.html", 14, "7901264babb4960aab49c3589360cdcf29395b4aaed3903e786c509413c75c60"),
+    ("README.html", 14, "f6cb0e80c00ecdf245ca2a0ba8e3c64fb976647d6482c8d74164ff3c1275e451"),
     ("gateway/README.html", 2, "05a5875a4103537bf322ea6a96eaf76efd2d1b47bdaa9da8d1ec89921a9feb69"),
     ("docs/compliance.html", 1, "2ded188e10c277d7ba59ba03370ff9b307bcae82bf0704dba331489a5a70208d"),
     ("docs/design.html", 4, "7f419e01e1cc8c555781096ad52e2c6b3cdb122d828a16e0801be29e047efb2b"),
     # 2026-10-12: provider-neutral broker role in the explicit bridge diagram.
-    ("docs/local-relay.html", 11, "7afe6a67167912b362e71c8b10e5b8099cca9d1fc0675f5a91d5fbce7d63c5a1"),
+    ("docs/local-relay.html", 11, "487a6d771723fee88a70869ca19d06ddf63317b68112d31781e7c1c9af62a0cb"),
     ("docs/project-workspaces.html", 3, "4ffcd619921bc03a4b1a8e660378d00f67b01746ceb7b34ee10553917c4538e0"),
     ("docs/tunnel.html", 8, "d5068c44dd70fc6f7dc50e6ffd9d8abae4f0fb160ab3917aedd732558743e492"),
 ])

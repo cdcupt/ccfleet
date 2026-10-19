@@ -122,6 +122,53 @@ def test_native_commands_stay_shared_and_website_is_an_alternative_to_cli():
     assert "更新槽位不会改变你电脑上的 Claude Code" in text
 
 
+def test_command_reference_explains_native_aliases_and_fleet_only_controls_in_both_languages():
+    source = customer_docs.guide(Config())
+    document = Document(source)
+    assert "command-reference" in document.ids
+    commands = (
+        "ccfleet update", "ccfleet upgrade", "ccfleet -v", "ccfleet --version",
+        "ccfleet version --json", "ccfleet local -c", "--continue", "ccfleet local -r",
+        "--resume [NAME_OR_ID]", "ccfleet local --permission-mode plan",
+        "ccfleet local --slot A --project PATH", "ccfleet local -- --verbose",
+        "ccfleet list --remote",
+    )
+    for language in ("en", "zh"):
+        rendered = bilingual.project_html(source, language, "/docs/guide")
+        text = Document(rendered).text
+        assert all(command in text for command in commands)
+        assert "0.2.7" in text and "0.2.6" in text
+        assert "--mode" in text
+    copy = LanguageCopy(source)
+    for phrase in ("pairing and local history are preserved", "Fleet-specific",
+                   "already selected slot", "routing and authentication options",
+                   "original command set"):
+        assert phrase in copy.text("en")
+    for phrase in ("配对与本地历史保持不变", "Fleet 专用", "已选中的槽位",
+                   "路由与认证选项", "命令保持原样"):
+        assert phrase in copy.text("zh-Hans")
+
+
+def test_devin_cli_recipe_distinguishes_pairing_authorization_current_slot_and_provider():
+    source = customer_docs.guide(Config())
+    assert "devin-cli" in Document(source).ids
+    recipe = ("ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n"
+              "ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n"
+              "ccfleet local --slot DEVIN_SLOT --new")
+    assert recipe in Document(source).pre_codes
+    for language in ("en", "zh"):
+        rendered = bilingual.project_html(source, language, "/docs/guide")
+        assert recipe in Document(rendered).pre_codes
+    copy = LanguageCopy(source)
+    for phrase in ("exactly one verified slot of your own", "does not sign in to Devin",
+                   "new connection defaults to Anthropic", "same saved pairing and server",
+                   "saved pairings, which can contain old names"):
+        assert phrase in copy.text("en")
+    for phrase in ("一个已验证的自有槽位", "不是登录 Devin", "新连接默认 Anthropic",
+                   "同一配对和服务器保留已有服务选择", "可能有旧名称"):
+        assert phrase in copy.text("zh-Hans")
+
+
 def test_gateway_address_and_published_contact_are_escaped_in_both_copies():
     source = customer_docs.guide(
         Config(

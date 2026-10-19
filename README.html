@@ -37,7 +37,7 @@ now run on DMIT. Public URLs and existing device pairings are unchanged. The
 server and broker names below describe their roles, independent of hosting provider.</p>
 <p>The primary command, <code>ccfleet local</code>, runs the original Claude Code CLI on the
 user's computer. Files, tools, settings and conversation history stay in their
-native local locations. With a saved gateway, the current signed 0.2.5 client sends
+native local locations. With a saved gateway, the current signed Fleet client sends
 supported model requests directly over HTTPS using a separate Fleet connection key:
 </p>
 <pre><code class="language-text">original Claude Code on laptop: files, tools, history
@@ -119,14 +119,14 @@ New conversations default to <code>bypassPermissions</code>, Opus and max effort
 tools can modify, delete or transmit data without individual approval prompts.</p>
 <pre><code class="language-bash">ccfleet local --check
 ccfleet local --new --name work
-ccfleet local --new --name research --mode plan --model opus --effort high
+ccfleet local --new --name research --permission-mode plan --model opus --effort high
 ccfleet local --resume
 ccfleet local --resume work
 ccfleet local --continue
 ccfleet local --resume work --fork-session
 ccfleet local --print &quot;Summarize this project&quot;
 ccfleet sessions
-ccfleet preferences set --model opus --effort high --mode plan
+ccfleet preferences set --model opus --effort high --permission-mode plan
 ccfleet preferences show
 ccfleet preferences clear
 </code></pre>
@@ -144,6 +144,22 @@ Interactive foreground sessions, <code>--print</code>, <code>--resume</code>, an
 sessions are supported. <code>ccfleet sessions</code> opens native history; project preferences
 affect new local sessions, with explicit flags taking precedence. They do not
 rewrite existing conversations or synchronize history between computers.</p>
+<section id="command-reference"><h2>Familiar Claude options, Fleet connections</h2>
+<p>Fleet 0.2.7 adds these familiar spellings. Existing clients can install it with
+<code>ccfleet update</code>; pairing and local history are preserved.</p>
+<table><thead><tr><th>Fleet command</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>ccfleet update</code> (alias: <code>ccfleet upgrade</code>)</td><td>Install a verified signed Fleet release; add <code>--rollback</code> to restore the previous client.</td></tr>
+<tr><td><code>ccfleet -v</code> or <code>ccfleet --version</code></td><td>Show the Fleet version. <code>ccfleet version --json</code> gives the detailed installation report.</td></tr>
+<tr><td><code>ccfleet local -c</code> or <code>--continue</code></td><td>Continue the last native Claude conversation in this directory.</td></tr>
+<tr><td><code>ccfleet local -r</code> or <code>--resume [NAME_OR_ID]</code></td><td>Open native history, or resume the named conversation.</td></tr>
+<tr><td><code>ccfleet local --permission-mode plan</code></td><td>Choose native permissions; <code>--mode</code> remains an alias.</td></tr>
+<tr><td><code>ccfleet local --slot A --project PATH</code></td><td>Fleet-specific: pin one already selected slot and choose the local working directory.</td></tr>
+<tr><td><code>ccfleet list --remote</code></td><td>Fetch current own-slot names from the server; plain <code>ccfleet list</code> shows saved pairings.</td></tr>
+</tbody></table>
+<p>For a verified own Devin slot, follow <a href="https://ccfleet.io/docs/guide#devin-cli">the CLI provider-selection recipe</a>: refresh the remote slot list, authorize with a working pairing, then choose exactly one Devin slot with <code>--provider devin</code>.</p>
+<p>Put other supported Claude options after <code>--</code>, for example
+<code>ccfleet local -- --verbose</code>. Fleet still protects routing and authentication
+options. Updating Fleet does not update Claude Code or the operator-managed Devin runtime.</p></section>
 <section id="new-domain"><h2>Use the new address with your existing account</h2>
 <p>Signed Fleet client 0.2.6 uses <strong>https://ccfleet.io</strong> for HTTPS and secure WebSocket connections. Existing standard old-domain profiles use the new address without replacing saved keys, pairings, slot choices or provider settings. Existing 0.2.5 processes keep working through the compatibility address.</p>
 <p>Try the separate launcher first; it leaves your current <code>ccfleet</code> executable in place:</p>
@@ -232,9 +248,9 @@ terminal mapping from the current inference relay; it makes no approval claim.</
 <p>Plain <code>ccfleet</code> still opens original Claude Code on the slot, with projects in
 <code>~/workspace</code> and persistent tmux. The default remains Opus, max effort and
 <code>bypassPermissions</code>, as the slot Linux user. Named remote sessions remain:</p>
-<pre><code class="language-bash">ccfleet new research --model fable --effort xhigh --mode plan
+<pre><code class="language-bash">ccfleet new research --model fable --effort xhigh --permission-mode plan
 ccfleet attach --session research
-ccfleet restart --session research --model opus --effort max --mode auto
+ccfleet restart --session research --model opus --effort max --permission-mode auto
 </code></pre>
 <p>These commands do not operate on local Claude conversation history. An intentional
 remote <code>restart</code> terminates that session before replacing it.</p>

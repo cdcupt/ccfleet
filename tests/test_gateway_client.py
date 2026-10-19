@@ -76,7 +76,8 @@ def test_explicit_slot_pins_header_without_cross_account_fallback(client, monkey
     profile(client)
     rpc = status(client, monkeypatch)
     assert invoke(client, "--slot", "one") == 0
-    assert rpc[0][0].endswith("?slot=slot-one")
+    assert rpc[0][0] == "https://fleet.invalid/api/gateway/status"
+    assert rpc[-1][0].endswith("?slot=slot-one")
     assert client.calls[0][3]["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "X-CCFleet-Slot: slot-one"
 
 
@@ -307,7 +308,7 @@ def test_changed_gateway_setup_keeps_previous_key_for_running_launches(client, m
             return {"available": True, "base_url": "https://fleet.invalid",
                     "slots": [{"id": "slot-one", "name": "one"}, {"id": "slot-two", "name": "two"}]}
         if url.endswith("/api/gateway/status"):
-            assert token == replacement
+            assert token in {previous["secret"], replacement}
             return {"ready": True}
         assert url.endswith("/api/cli/gateway")
         return {"base_url": "https://fleet.invalid", "secret": replacement,
@@ -352,11 +353,16 @@ def test_fixed_gateway_slot_failure_never_uses_a_ready_backup(client, monkeypatc
     calls = []
     def api(url, token, *a, **kw):
         calls.append(url)
+        if url.endswith("/api/gateway/status"):
+            return {"ready": True, "slots": [{"id": "slot-one", "name": "one", "ready": False},
+                                             {"id": "slot-two", "name": "two", "ready": True}]}
         assert url.endswith("?slot=slot-one")
         return {"ready": False, "slots": [{"id": "slot-two", "name": "two", "ready": True}]}
     monkeypatch.setitem(client.scope, "api_json", api)
     assert invoke(client, "--slot", "one") == 2
-    assert len(calls) == 1 and not client.calls
+    assert calls == ["https://fleet.invalid/api/gateway/status",
+                     "https://fleet.invalid/api/gateway/status?slot=slot-one"]
+    assert not client.calls
 
 
 def test_gateway_launch_describes_fixed_account_and_pool_mode(client, monkeypatch, capsys):
