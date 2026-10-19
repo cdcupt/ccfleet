@@ -123,7 +123,7 @@ def test_badge_addition_keeps_pairing_and_reauthentication_csrf_forms():
             form = re.search(rf'<form[^>]+action="/account/slots/s1/{action}".*?</form>', body)
             assert form and label in form[0]
             assert 'name="csrf" value="CSRF_SYNTHETIC"' in form[0]
-        assert "ccfleet start" in body and "ccfleet sessions" in body
+        assert "<code>ccfleet local</code>" in body
     finally:
         store.close()
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from ccfleetd import devin_ui, gateway_providers, slots
+from ccfleetd.bilingual import project_html
 from ccfleetd.config import Config
 from ccfleetd.store import Store
 from tests.test_cli_access import active_slot
@@ -44,10 +45,16 @@ def test_ready_only_after_trusted_current_verification(context):
     document = Document(html)
     assert devin_ui.native_state(c.store, c.cfg, c.account, c.slot, now=NOW) == "ready"
     assert "Devin ready" in document.text and "Devin 已就绪" in document.text
-    assert "/account#gateway" in document.links
-    assert "You do not need to install Devin CLI locally" in document.text
+    assert "Devin is connected. Use this slot from Claude Code on your computer." in document.text
+    assert "No local Devin CLI installation is needed" in document.text
     assert "无需在本机安装 Devin CLI" in document.text
     assert "Claude Code and its tools run on your computer" in document.text
+    assert "/privacy" in document.links and devin_ui.GUIDE in document.links
+    assert "/account#gateway" not in document.links
+    disclosures = [attrs for tag, attrs in document.tags if tag == "details"]
+    assert len(disclosures) == 1 and "open" not in disclosures[0]
+    assert "Sent context and replies may be saved on the slot" in document.text
+    assert "read by its administrators" in document.text
     assert not any(tag in {"form", "input", "button", "script"} for tag, _ in document.tags)
 
 
@@ -55,13 +62,41 @@ def test_setup_is_guidance_not_a_fake_login_action(context):
     html = render(context)
     document = Document(html)
     assert 'data-native-state="setup_required"' in html
-    assert "Setup required" in document.text and "需要设置" in document.text
+    assert "Add Devin (optional)" in document.text and "添加 Devin（可选）" in document.text
     assert devin_ui.GUIDE in document.links
-    assert "How to connect Devin" in document.text
-    assert "setup is assisted" in document.text and "纯网页自助登录" in document.text
-    assert "Signing in to Claude does not sign you in to Devin" in document.text
+    assert "Devin setup guide" in document.text
+    assert "setup is assisted" in document.text and "尚不支持在网页上登录 Devin" in document.text
+    assert "Ask the operator to enable it for this slot" in document.text
+    assert "Website sign-in is not available yet" in document.text
+    disclosures = [attrs for tag, attrs in document.tags if tag == "details"]
+    assert len(disclosures) == 1 and "open" not in disclosures[0]
     assert "Log in to Devin" not in document.text
     assert "/account#gateway" not in document.links
+
+
+@pytest.mark.parametrize("state", [slots.CLAIMING, slots.CLAIMED])
+def test_unconfigured_slot_shows_honest_assisted_setup(context, state):
+    context.slot["state"] = state
+    document = Document(render(context))
+    assert "Set up Devin" in document.text and "设置 Devin" in document.text
+    assert "Ask the operator to enable it for this slot" in document.text
+    assert "Add Devin (optional)" not in document.text
+    assert not any(tag == "details" for tag, _ in document.tags)
+    assert not any(tag in {"form", "input", "button", "script"} for tag, _ in document.tags)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_compact_guidance_is_localized_without_duplicate_setup_commands(context, language):
+    bind(context)
+    source = project_html(render(context), language, "/account")
+    document = Document(source)
+    assert document.text.count("Devin 已就绪" if language == "zh" else "Devin ready") == 1
+    assert "ccfleet gateway setup" not in document.text
+    assert "ccfleet local" not in document.text
+    assert "Your Devin account is verified for this slot" not in document.text
+    assert all(language in attrs.get("lang", language) for tag, attrs in document.tags
+               if "lang" in attrs)
+    assert not document.duplicate_ids
 
 
 @pytest.mark.parametrize("changes", [
@@ -74,7 +109,10 @@ def test_unverified_partial_or_wrong_runtime_never_ready(context, changes):
     bind(context, **changes)
     html = render(context)
     assert 'data-native-state="verification_required"' in html
-    assert "Verification required" in Document(html).text
+    assert "Devin needs a check" in Document(html).text
+    assert "Devin requests are paused while the operator checks this slot" in Document(html).text
+    assert "Your Devin login needs to be checked again" not in html
+    assert "sign in again" not in html.lower()
     assert "/account#gateway" not in Document(html).links
 
 

@@ -487,7 +487,7 @@ def test_on_latest_and_current_it_says_so_with_a_way_back(site):  # noqa: F811
     assert_version_button(row, slot['id'], 'stable', 'Back to Stable',
                           '切回稳定版', 'quiet', erik.token())
     assert "Update to" not in row
-    assert refresh_of(page)[0] == usersite.IDLE_REFRESH_S
+    assert refresh_of(page) is None, "completed maintenance must leave setup forms open"
     assert "note=stable" in erik.press(f"/account/slots/{slot['id']}/stable").getheader(
         "Location")
     assert store.get_slot(slot["id"])["claude_channel"] == "stable"

@@ -165,7 +165,8 @@ def test_the_holders_page_offers_a_refresh_and_then_says_it_is_reading(site):  #
     page = erik.page()
     assert f'action="/account/slots/{slot["id"]}/quota"' in page
     assert "read 1m ago · every five minutes" in page
-    assert 'content="60;' in page
+    assert 'http-equiv="refresh"' not in page
+    assert 'Refresh status' in page
     reply = erik.press(f"/account/slots/{slot['id']}/quota")
     assert "note=reading" in urllib.parse.unquote(reply.getheader("Location"))
     page = erik.page()
