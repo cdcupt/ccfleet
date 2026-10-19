@@ -55,7 +55,7 @@ def test_balance_is_exact_and_topup_is_honestly_disabled(balance, shown):
     source = wallet_ui.balance_card(balance)
     page, parsed = Document(source), Forms(source)
     assert shown in page.text and 'Fleet credit' in page.text and 'USD service credit' in page.text
-    assert 'Online top-ups are not connected yet' in page.text
+    assert 'Online top-ups are unavailable for this account' in page.text
     assert 'An admin can add Fleet credit' in page.text
     assert not parsed.forms
     [button] = [attrs for tag, attrs in parsed.elements if tag == 'button']
@@ -84,8 +84,8 @@ def test_explicit_ready_topup_posts_only_server_nonces_and_fixed_usd_amount():
     assert buttons[1]['type'] == 'button' and 'disabled' in buttons[1]
     assert buttons[1]['aria-describedby'] == 'wallet-alipay-help'
     assert 'Pay on Stripe' in page.text and 'No automatic charges' in page.text
-    assert 'Alipay is not available yet' in page.text
-    assert 'Online top-ups are not connected yet' not in page.text
+    assert 'Alipay is not available for Fleet credit' in page.text
+    assert 'Online top-ups are unavailable for this account' not in page.text
     assert page.links == ['/account/available']
     assert not any(key.startswith('on') for _, attrs in page.tags for key in attrs)
     assert not {'script', 'iframe'} & {tag for tag, _ in page.tags}
@@ -107,8 +107,8 @@ def test_active_card_topup_is_single_language_and_alipay_stays_inactive(language
     source = wallet_ui.balance_card(3000, topup_ready=True, csrf=CSRF, idempotency_key=NONCE)
     projected = project_html(source, language, target='/account')
     text = Document(projected).text
-    expected = ('Pay by card', 'Amount · USD', 'Alipay is not available yet')
-    removed = ('银行卡充值', '金额 · 美元', '支付宝充值暂未开通')
+    expected = ('Pay by card', 'Amount · USD', 'Alipay is not available for Fleet credit')
+    removed = ('银行卡充值', '金额 · 美元', 'Fleet 余额暂不支持支付宝充值')
     if language == 'zh':
         expected, removed = removed, expected
     assert all(value in text for value in expected)

@@ -167,10 +167,14 @@ def _cost_zh(price: pricing.Price) -> str:
 
 def _wallet_rental_details() -> str:
     return bi(
-        '<p><strong>Your balance pays for Fleet slots only.</strong> Ask the operator to add '
-        'USD service credit to your account. Card and Alipay top-ups are available only '
-        'when the account page offers a working checkout; a disabled button cannot take a '
-        'payment. Credit cannot be transferred or withdrawn, and does not pay for Claude '
+        '<p><strong>Your balance pays for Fleet slots only.</strong> On '
+        '<a href="/account">Your slots</a>, choose $10, $20, $50 or $100 and use '
+        '<strong>Pay by card</strong> when available. Complete payment on Stripe, then '
+        'check your Fleet balance. Credit appears after payment is confirmed; returning '
+        'to Fleet alone does not add credit. Adding credit does not buy or renew a slot; '
+        'you confirm that separately. If card top-up is unavailable for your '
+        'account, ask the operator for help. Alipay is not available. '
+        'Credit cannot be transferred or withdrawn, and does not pay for Claude '
         'or Devin subscriptions.</p><p>Choose a machine, review its price, then confirm '
         'the purchase. The shown price is deducted once for one calendar month in UTC, '
         'starting when you buy. To keep using a paid slot, confirm another month yourself. '
@@ -180,8 +184,12 @@ def _wallet_rental_details() -> str:
         'keep their previous arrangement. For a failed setup or a billing mistake, contact '
         'the operator to review a credit correction; returning a slot does not itself '
         'issue a credit or cash refund.</p>',
-        '<p><strong>余额只用于支付 Fleet 槽位。</strong>请联系运营者为账号添加美元服务余额。'
-        '只有账号页提供可用的收银台时，才能使用银行卡或支付宝充值；灰色按钮不会收款。'
+        '<p><strong>余额只用于支付 Fleet 槽位。</strong>在<a href="/account">我的槽位</a>'
+        '选择 10、20、50 或 100 美元，使用可用的<strong>银行卡充值</strong>按钮。'
+        '到 Stripe 页面付款后，'
+        '返回 Fleet 核对余额；付款确认后才会到账，仅返回页面不会增加余额。'
+        '充值不会自动购买或续费槽位，需要另外确认。如果你的账号暂时无法银行卡充值，'
+        '请联系运营者。支付宝暂未开通。'
         '余额不能转让或提现，也不支付 Claude 或 Devin 订阅。</p><p>选择主机、核对价格，'
         '再确认购买。系统一次扣除所示金额，服务期从购买时起按 UTC 计算一个日历月。'
         '需要继续使用付费槽位时，请自行确认再买一个月。系统不会自动续费或自动充值。</p>'
@@ -1044,30 +1052,42 @@ def _devin_cli_connection() -> str:
                 '在已配对的电脑上选择 Devin', inline=True)
         + '</h3>'
         + bi(
-            '<p>Once your own slot says <strong>Devin ready</strong>, Fleet 0.2.7 can '
-            'save that choice directly from the CLI. Replace <code>PAIRED_SLOT</code> '
+            '<p>Devin works through your own verified slot. Once it says '
+            '<strong>Devin ready</strong>, open <a href="/account">Your slots</a> and '
+            'choose <strong>Use Devin on my computer</strong>. Follow its three steps '
+            'in order: update Fleet, save the connection, then start coding.</p>'
+            '<p>For an already paired computer, Fleet 0.2.7 can also save that choice '
+            'directly from the CLI. Replace <code>PAIRED_SLOT</code> '
             'with a working saved pairing that authorizes your account. Replace '
             '<code>DEVIN_SLOT</code> with the current name or ID from the remote list:</p>',
-            '<p>自己的槽位显示 <strong>Devin 已就绪</strong>后，Fleet 0.2.7 可直接在 '
-            'CLI 保存这个选择。把 <code>PAIRED_SLOT</code> 换成可用的已有配对，用它授权'
+            '<p>Devin 通过你自己已验证的槽位工作。显示 <strong>Devin 已就绪</strong>后，'
+            '打开<a href="/account">我的槽位</a>，选择<strong>在电脑上使用 Devin</strong>，'
+            '依次完成三步：更新 Fleet、保存连接、开始编程。</p>'
+            '<p>电脑已有配对时，Fleet 0.2.7 也可直接在 CLI 保存这个选择。'
+            '把 <code>PAIRED_SLOT</code> 换成可用的已有配对，用它授权'
             '访问自己的账号；把 <code>DEVIN_SLOT</code> 换成远程列表中的当前名称或 ID：</p>',
         )
         + '<pre><code>ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n'
         'ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n'
-        'ccfleet local --slot DEVIN_SLOT --new</code></pre>'
+        'ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 '
+        '--effort max --new -- --safe-mode</code></pre>'
         + bi(
             '<p>Devin requires exactly one verified slot of your own. This setup saves '
             'a Fleet connection key; it does not sign in to Devin. An unready slot is '
             'rejected. Omitting <code>--provider</code> preserves the provider for the same '
             'saved pairing and server; a new connection defaults to Anthropic. Plain '
             '<code>ccfleet list</code> shows saved pairings, which can contain old names. '
-            'Use <code>--remote</code> to check current ownership and names. To authorize '
+            'The first slot authorizes the lookup; the second is where Devin runs. '
+            'The first launch above turns off custom plugins and MCP tools for that '
+            'session. Use <code>--remote</code> to check current ownership and names. To authorize '
             'the lookup with a specific working pairing, run '
             '<code class="code-wrap">ccfleet list --remote --slot PAIRED_SLOT</code>.</p>',
             '<p>Devin 只接受一个已验证的自有槽位。这里保存的是 Fleet 连接密钥，不是登录 '
             'Devin；槽位未就绪时会拒绝配置。省略 <code>--provider</code> 时，同一配对和'
             '服务器保留已有服务选择，新连接默认 Anthropic。直接运行 <code>ccfleet list</code> '
-            '只显示已保存的配对，其中可能有旧名称；加 <code>--remote</code> 查询当前归属'
+            '只显示已保存的配对，其中可能有旧名称。第一个槽位用来授权查询，第二个槽位才是 '
+            'Devin 运行的位置。上述首次启动会仅在本次会话关闭自定义插件与 MCP 工具。'
+            '加 <code>--remote</code> 查询当前归属'
             '与名称。若要用指定的有效配对查询，运行 '
             '<code class="code-wrap">ccfleet list --remote --slot PAIRED_SLOT</code>。</p>',
         )
@@ -1286,12 +1306,18 @@ def guide(
         + "</li>"
         + "<li>"
         + (bi(
-            '<h3>Add service credit</h3><p>Ask the operator to add USD credit to your '
-            'Fleet account. Check the balance on <a href="/account">Your slots</a>. '
-            'A disabled card or Alipay button means online top-up is not available yet.</p>',
-            '<h3>添加服务余额</h3><p>请联系运营者为 Fleet 账号添加美元余额，并在'
-            '<a href="/account">我的槽位</a>核对。银行卡或支付宝按钮呈灰色时，'
-            '表示暂不支持在线充值。</p>',
+            '<h3>Add service credit</h3><p>On <a href="/account">Your slots</a>, '
+            'choose $10, $20, $50 or $100 and select <span class="btnlabel">Pay by card</span> '
+            'when available. Pay on Stripe, then return to check your balance. '
+            'Credit is added after payment is confirmed. It stays in your balance until '
+            'you separately buy or renew a slot; top-up does neither automatically. '
+            'If the card button is unavailable '
+            'for your account, ask the operator for help. Alipay is not available.</p>',
+            '<h3>添加服务余额</h3><p>在<a href="/account">我的槽位</a>选择 10、20、50 或 100 美元，'
+            '点击可用的 <span class="btnlabel">银行卡充值</span>，到 Stripe 页面付款，'
+            '再返回核对余额。付款确认后才会到账，随后由你另外确认购买或续费槽位；'
+            '充值本身不会自动购买或续费。如果你的账号暂时无法银行卡充值，'
+            '请联系运营者。支付宝暂未开通。</p>',
         ) if wallet_enabled else bi(
             f"<h3>Get a slot</h3><p>Ask {contact(cfg)} for a slot using the Google "
             f"address you signed in with. {price_en} The operator enables access "

@@ -112,20 +112,22 @@ def balance_card(balance_cents: int, *, topup_ready: bool = False, csrf: str = "
             + '<button class="btn primary" type="submit">'
             + label("Pay by card", "银行卡充值", inline=True) + '</button></form>'
             + '<button type="button" disabled aria-describedby="wallet-alipay-help">'
-            + label("Alipay · coming later", "支付宝 · 暂未开通", inline=True) + '</button>')
+            + label("Alipay · unavailable", "支付宝 · 暂不可用", inline=True) + '</button>')
         help_text = ('<p class="wallet-muted" id="wallet-topup-help">'
             + label("Pay on Stripe. Credit appears after payment is confirmed. "
                     "No automatic charges.",
                     "在 Stripe 页面付款，确认到账后添加余额。不会自动扣款。", inline=True)
             + '</p><p class="wallet-muted" id="wallet-alipay-help">'
-            + label("Alipay is not available yet.", "支付宝充值暂未开通。", inline=True) + '</p>')
+            + label("Alipay is not available for Fleet credit.",
+                    "Fleet 余额暂不支持支付宝充值。", inline=True) + '</p>')
     else:
         controls = ('<button type="button" disabled aria-describedby="wallet-topup-help">'
-            + label("Add credit · card / Alipay", "充值 · 银行卡／支付宝", inline=True)
+            + label("Card top-up unavailable", "银行卡充值暂不可用", inline=True)
             + '</button>')
         help_text = ('<p class="wallet-muted" id="wallet-topup-help">'
-            + label("Online top-ups are not connected yet. An admin can add Fleet credit.",
-                    "在线充值暂未开通，可由管理员添加 Fleet 余额。", inline=True) + '</p>')
+            + label("Online top-ups are unavailable for this account. "
+                    "An admin can add Fleet credit.",
+                    "此账户暂不可在线充值，可由管理员添加 Fleet 余额。", inline=True) + '</p>')
     steps = ('' if compact else '<ol class="wallet-steps">' + ''.join(
         '<li>' + label(en, zh, inline=True) + '</li>'
         for en, zh in (("Choose a slot", "选择槽位"),
