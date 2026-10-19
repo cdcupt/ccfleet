@@ -63,6 +63,26 @@ def quote(node) -> int:
     return wallet.usd_cents(current.total.amount)
 
 
+def topup_page(store, cfg, account, session_id: str, *, topup_ready: bool):
+    """A read-only own-account amount chooser; never creates a Checkout Session."""
+    from . import usersite
+    viewer = usersite.viewer_for(account, session_id, cfg, store)
+    if not enabled(cfg):
+        return usersite.not_found(viewer)
+    if account is None:
+        return usersite.Outcome(200, body=usersite._signed_out(cfg))
+    try:
+        blocked = store.wallet_spending_blocked(account["id"])
+        body = wallet_ui.topup_page(store.wallet_balance(account["id"]),
+            topup_ready=topup_ready, blocked=blocked,
+            csrf=usersite.csrf_for(session_id, cfg.cookie_secret),
+            idempotency_key=nonce() if topup_ready and not blocked else "")
+    except Exception:
+        return failure(cfg, viewer, "quote")
+    return usersite.Outcome(200, body=usersite._shell("Add credit", body,
+        extra_css=wallet_ui.CSS, viewer=viewer))
+
+
 def page(store, cfg, account, session_id: str, now: float, operation: str,
          query: Mapping[str, str]):
     from . import usersite

@@ -35,6 +35,8 @@ from . import (
     statuspage,
     stripe_config,
     stripe_routes,
+    subscription_config,
+    subscription_routes,
     usage,
     usersite,
     wallet_access,
@@ -92,7 +94,10 @@ def access_log_route(target: Any) -> str:
         return "unknown_route"
     if path in {"/", "/healthz", "/slots", "/account", "/account/available", "/privacy", "/status",
                 "/account/purchase", "/account/renew", "/account/topup",
-                "/api/payments/stripe/webhook",
+                "/account/subscribe", "/account/subscriptions",
+                "/account/subscriptions/portal", "/account/subscriptions/cancel",
+                "/account/subscriptions/resume", "/account/subscriptions/cancel-checkout",
+                "/api/payments/stripe/webhook", "/api/payments/stripe/subscriptions/webhook",
                 "/auth/basic",
                 "/auth/google/start", "/auth/google/callback", "/auth/signout",
                 "/api/nodes", "/api/alerts", "/api/heartbeat", "/api/cli/status",
@@ -172,12 +177,17 @@ def legacy_browser_target(target: str) -> Optional[str]:
 
 
 class Context:
-    def __init__(self, store: Store, cfg: Config, monitor: Monitor, *, billing=None) -> None:
+    def __init__(self, store: Store, cfg: Config, monitor: Monitor, *, billing=None,
+                 recurring=None) -> None:
         self.store = store
         self.cfg = cfg
         self.monitor = monitor
         self.billing = (None if cfg.broker_only else
                         billing if billing is not None else stripe_config.build_billing(cfg, store))
+        self.recurring = (None if cfg.broker_only else recurring if recurring is not None
+                          else subscription_config.build_billing(cfg, store))
+        if monitor is not None:
+            monitor._recurring = self.recurring
         self.gateway = gateway.GatewayRuntime(cfg, store)
         self.machine_health = (machine_health.Observer()
                                if cfg.public_machine_metrics_enabled and not cfg.broker_only
@@ -423,6 +433,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
             current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
                        "/account/purchase", "/account/renew", "/account/topup",
+                "/account/subscribe", "/account/subscriptions",
+                "/account/subscriptions/portal", "/account/subscriptions/cancel",
+                "/account/subscriptions/resume", "/account/subscriptions/cancel-checkout",
                        "/docs/library",
                        "/docs/library/", "/docs/library/docs/index.html",
                        "/docs/library/docs/public-gateway.html",
@@ -860,7 +873,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._redirect("/account")
                 return
             form = self._form(strict=path in {
-                "/account/purchase", "/account/renew", "/account/topup"})
+                "/account/purchase", "/account/renew", "/account/topup",
+                "/account/subscribe", "/account/subscriptions", "/account/subscriptions/portal",
+                "/account/subscriptions/cancel", "/account/subscriptions/resume",
+                "/account/subscriptions/cancel-checkout"})
             if form is None:
                 return
             if not self._csrf_ok(form, session_id):
@@ -868,6 +884,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             if path == "/account/topup":
                 outcome = stripe_routes.start(ctx.billing, ctx.cfg, account, form, time.time())
+            elif path == "/account/subscribe":
+                outcome = subscription_routes.start(ctx.recurring, ctx.store, ctx.cfg,
+                                                    account, form, time.time())
+            elif path == "/account/subscriptions/portal":
+                outcome = subscription_routes.portal(ctx.recurring, ctx.cfg, account, form)
+            elif path == "/account/subscriptions/cancel":
+                outcome = subscription_routes.cancel(
+                    ctx.recurring, ctx.cfg, account, form, now=time.time())
+            elif path in {"/account/subscriptions/resume",
+                          "/account/subscriptions/cancel-checkout"}:
+                outcome = subscription_routes.checkout_action(ctx.recurring, ctx.cfg, account,
+                    form, now=time.time(), resume=path.endswith("/resume"))
             else:
                 outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
                                        session_id)
@@ -940,6 +968,36 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 timer.cancel()
             status_code, answer = stripe_routes.webhook(ctx.billing, ctx.cfg, body, signature,
                                                         time.time())
+            self._json(status_code, answer)
+
+        def _stripe_subscription_webhook(self) -> None:
+            self.close_connection = True
+            if not subscription_routes.managing(ctx.recurring, ctx.cfg):
+                self._json(503, {"error": "subscription processing is unavailable"})
+                return
+            try:
+                size, signature = stripe_routes.webhook_frame(self.headers)
+            except stripe_routes.WebhookRequestError as exc:
+                self._json(exc.status, {"error": "invalid payment notification framing"})
+                return
+
+            def expire_body():
+                with contextlib.suppress(OSError):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+
+            timer = threading.Timer(10, expire_body)
+            timer.daemon = True
+            self.connection.settimeout(10)
+            timer.start()
+            try:
+                body = stripe_routes.read_webhook_body(self.rfile, size)
+            except stripe_routes.WebhookRequestError as exc:
+                self._json(exc.status, {"error": "invalid payment notification body"})
+                return
+            finally:
+                timer.cancel()
+            status_code, answer = subscription_routes.webhook(
+                ctx.recurring, ctx.cfg, body, signature, now=time.time())
             self._json(status_code, answer)
 
         def _paired_gateway_device(self):
@@ -1260,7 +1318,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
                     (path in ("/slots", "/account", "/account/available", "/account/purchase",
-                              "/account/renew", "/privacy", "/status")
+                              "/account/renew", "/account/topup", "/privacy", "/status")
                      or customer_docs.page_for(path))
                     and not self._product_site()):
                 # Each site answers only for its own audience: the product
@@ -1299,6 +1357,30 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     ctx.store, ctx.cfg, account, session_id, time.time(),
                     self._slot_query()).encode("utf-8"),
                     HTML_HEADERS)
+            elif path == "/account/topup":
+                if not self._payment_site():
+                    self._json(404, {"error": "not found"})
+                    return
+                account, session_id = self._signed_in()
+                outcome = wallet_routes.topup_page(ctx.store, ctx.cfg, account, session_id,
+                    topup_ready=stripe_routes.enabled(ctx.billing, ctx.cfg))
+                self._send(outcome.status, outcome.body.encode("utf-8"), HTML_HEADERS)
+            elif path in ("/account/subscribe", "/account/subscriptions"):
+                if not self._payment_site():
+                    self._json(404, {"error": "not found"})
+                    return
+                account, session_id = self._signed_in()
+                try:
+                    pairs = urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query,
+                                                   keep_blank_values=True, max_num_fields=16)
+                    if len({key for key, _ in pairs}) != len(pairs):
+                        raise ValueError()
+                except ValueError:
+                    self._json(400, {"error": "invalid subscription query"})
+                    return
+                outcome = subscription_routes.page(ctx.recurring, ctx.store, ctx.cfg, account,
+                    session_id, time.time(), path, dict(pairs))
+                self._send(outcome.status, outcome.body.encode("utf-8"), HTML_HEADERS)
             elif path in ("/account/purchase", "/account/renew"):
                 account, session_id = self._signed_in()
                 try:
@@ -1382,6 +1464,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             try:
                 parsed = urllib.parse.parse_qs(
                     body.decode("utf-8", "strict" if strict else "replace"),
+                    errors="strict" if strict else "replace",
                     keep_blank_values=True, max_num_fields=16 if strict else None)
                 if strict and (len(body) != int(self.headers["Content-Length"])
                                or any(len(value) != 1 for value in parsed.values())):
@@ -1422,13 +1505,22 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self._page_route("POST")
             if path is None:
                 return
+            if path == "/api/payments/stripe/subscriptions/webhook":
+                if not self._payment_site():
+                    self._json(404, {"error": "not found"})
+                else:
+                    self._stripe_subscription_webhook()
+                return
             if path == "/api/payments/stripe/webhook":
                 if not self._payment_site():
                     self._json(404, {"error": "not found"})
                 else:
                     self._stripe_webhook()
                 return
-            if path == "/account/topup" and not self._payment_site():
+            if (path in {"/account/topup", "/account/subscribe", "/account/subscriptions/portal",
+                        "/account/subscriptions/cancel", "/account/subscriptions/resume",
+                        "/account/subscriptions/cancel-checkout"}
+                    and not self._payment_site()):
                 self._json(404, {"error": "not found"})
                 return
             if path in ("/v1/messages", "/v1/messages/count_tokens"):

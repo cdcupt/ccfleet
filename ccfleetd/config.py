@@ -139,6 +139,10 @@ class Config:
     stripe_api_key_file: str = ""
     stripe_webhook_secret_file: str = ""
     stripe_sandbox_database: bool = False
+    # Enrollment may be off while existing recurring contracts continue processing.
+    stripe_subscriptions_enabled: bool = False
+    stripe_subscription_webhook_secret_file: str = ""
+    stripe_subscription_portal_configuration_id: str = ""
     # Public model requests are an explicit, separate authority from opaque SSH.
     gateway_enabled: bool = False
     # Native compatibility requires this opt-in and an exact approved runtime profile.
@@ -275,6 +279,11 @@ class Config:
             stripe_api_key_file=env.get(ENV_PREFIX + "STRIPE_API_KEY_FILE", ""),
             stripe_webhook_secret_file=env.get(ENV_PREFIX + "STRIPE_WEBHOOK_SECRET_FILE", ""),
             stripe_sandbox_database=_env_bool(env, "STRIPE_SANDBOX_DATABASE", False),
+            stripe_subscriptions_enabled=_env_bool(env, "STRIPE_SUBSCRIPTIONS_ENABLED", False),
+            stripe_subscription_webhook_secret_file=env.get(
+                ENV_PREFIX + "STRIPE_SUBSCRIPTION_WEBHOOK_SECRET_FILE", ""),
+            stripe_subscription_portal_configuration_id=env.get(
+                ENV_PREFIX + "STRIPE_SUBSCRIPTION_PORTAL_CONFIGURATION_ID", ""),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
             gateway_devin_enabled=_env_bool(env, "GATEWAY_DEVIN_ENABLED", False),
             gateway_devin_native_version=env.get(
@@ -395,6 +404,8 @@ class Config:
                                   "public key and HTTPS public URL (loopback HTTP for tests)")
         from . import stripe_config
         stripe_config.validate(cfg)
+        from . import subscription_config
+        subscription_config.validate(cfg)
         return cfg
 
     def require_admin_token(self) -> None:

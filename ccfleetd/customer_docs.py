@@ -168,8 +168,9 @@ def _cost_zh(price: pricing.Price) -> str:
 def _wallet_rental_details() -> str:
     return bi(
         '<p><strong>Your balance pays for Fleet slots only.</strong> On '
-        '<a href="/account">Your slots</a>, choose $10, $20, $50 or $100 and use '
-        '<strong>Pay by card</strong> when available. Complete payment on Stripe, then '
+        '<a href="/account">Your slots</a>, choose <strong>Add credit</strong>. '
+        'Choose $10, $20, $50 or $100, then <strong>Continue to secure payment</strong>. '
+        'Complete payment on Stripe, then '
         'check your Fleet balance. Credit appears after payment is confirmed; returning '
         'to Fleet alone does not add credit. Adding credit does not buy or renew a slot; '
         'you confirm that separately. If card top-up is unavailable for your '
@@ -178,25 +179,76 @@ def _wallet_rental_details() -> str:
         'or Devin subscriptions.</p><p>Choose a machine, review its price, then confirm '
         'the purchase. The shown price is deducted once for one calendar month in UTC, '
         'starting when you buy. To keep using a paid slot, confirm another month yourself. '
-        'There is no automatic renewal or automatic top-up.</p><p>When its paid period '
+        'For a credit purchase, there is no automatic renewal or automatic top-up. '
+        'A separate <strong>Pay monthly</strong> option may be offered for new slots; '
+        'it requires your explicit agreement and does not use this balance.</p><p>'
+        'When its paid period '
         'ends, new Fleet access pauses until you renew. Expiry does not automatically '
         'return the slot or erase its files. Existing slots from before the credit system '
         'keep their previous arrangement. For a failed setup or a billing mistake, contact '
         'the operator to review a credit correction; returning a slot does not itself '
         'issue a credit or cash refund.</p>',
         '<p><strong>余额只用于支付 Fleet 槽位。</strong>在<a href="/account">我的槽位</a>'
-        '选择 10、20、50 或 100 美元，使用可用的<strong>银行卡充值</strong>按钮。'
-        '到 Stripe 页面付款后，'
+        '点击<strong>充值</strong>，选择 10、20、50 或 100 美元，'
+        '再点击<strong>前往安全付款页面</strong>。到 Stripe 页面付款后，'
         '返回 Fleet 核对余额；付款确认后才会到账，仅返回页面不会增加余额。'
         '充值不会自动购买或续费槽位，需要另外确认。如果你的账号暂时无法银行卡充值，'
         '请联系运营者。支付宝暂未开通。'
         '余额不能转让或提现，也不支付 Claude 或 Devin 订阅。</p><p>选择主机、核对价格，'
         '再确认购买。系统一次扣除所示金额，服务期从购买时起按 UTC 计算一个日历月。'
-        '需要继续使用付费槽位时，请自行确认再买一个月。系统不会自动续费或自动充值。</p>'
+        '需要继续使用付费槽位时，请自行确认再买一个月。余额购买不会自动续费或自动充值。'
+        '新槽位也可能提供独立的<strong>按月付款</strong>选项；需由你明确同意，不使用这笔余额。</p>'
         '<p>付费期结束后，新的 Fleet 访问会暂停，续费后恢复。到期不会自动归还槽位或删除文件。'
         '余额系统启用前已有的槽位保留原有安排。准备失败或账目有误时，请联系运营者核对并'
         '调整服务余额；归还槽位本身不会自动退回余额或现金。</p>',
     )
+
+
+def _subscription_rental_details(cfg: Config, *, terms: bool = False) -> str:
+    if not cfg.stripe_subscriptions_enabled and not terms:
+        return ''
+    return '<div class="card" id="monthly-payments">' + bi(
+        '<h2>Optional monthly card payments</h2><p>When offered for a new available slot, '
+        'choose <strong>Pay monthly</strong> instead of buying one month with Fleet credit. '
+        'Review the monthly USD quote and tick the recurring-payment agreement. '
+        'Complete the first payment on Stripe. The next bill follows the paid period. Each slot '
+        'has its own subscription; its confirmed rate stays fixed. Fleet credit is not '
+        'spent on this option. Two slots mean two independent monthly plans. Existing '
+        'slots, balances and prepaid time are not enrolled or converted automatically.</p>'
+        '<p>To stop one plan, open <a href="/account/subscriptions">Monthly payments</a> '
+        'and choose <strong>Cancel renewal</strong> on that slot. Once confirmed, '
+        'cancellation stops the next renewal and keeps your paid period. '
+        '<strong>Cancellation pending</strong> means it is not confirmed yet. '
+        'Payment review pauses new connections, but you can still request cancellation. '
+        'The general Stripe portal is paused while a payment review or cancellation is pending. '
+        'Failed payment '
+        'does not add more access. When paid time ends, new connections pause without '
+        'automatically deleting files. Cancel billing and wait for paid time to end '
+        'before explicitly returning a slot. Your own Claude or Devin subscription '
+        'remains separate.</p><p>Only one unfinished monthly checkout can be open at a time. '
+        'Open Monthly payments to <strong>Continue checkout</strong> or '
+        '<strong>Cancel checkout</strong> before choosing another slot. This does not limit '
+        'your paid plans. An unpaid checkout closes only after Stripe confirms expiry. '
+        'If payment already completed, you keep that month and confirmed cancellation stops '
+        'future renewal; it does not automatically refund money. If confirmation is pending, '
+        'keep checking that same checkout instead of starting a replacement.</p>',
+        '<h2>可选：每月银行卡付款</h2><p>新的可用槽位提供此选项时，可选择<strong>按月付款</strong>，'
+        '而不是用 Fleet 余额购买一个月。先核对美元月费，再勾选同意每月自动付款。'
+        '在 Stripe 完成首笔付款，下次账单接在已付费服务期之后。每个槽位独立订阅，'
+        '确认后的价格保持不变。两个槽位就是两份独立的月付计划。此方式不扣 Fleet 余额，'
+        '也不会自动转换已有槽位、余额或预付费服务期。</p>'
+        '<p>如需停止某一份计划，打开<a href="/account/subscriptions">月付管理</a>，'
+        '在对应槽位选择<strong>停止续费</strong>。取消确认后不再续下一个月，'
+        '已付款的服务期仍保留到期。<strong>正在确认取消</strong>表示结果尚未确认。'
+        '付款核查会暂停新连接，但仍可申请取消；核查或取消结果待确认期间，暂停通用 Stripe 管理入口。'
+        '付款失败不会增加可用时间；付费期结束后暂停新连接，不会自动删除文件。'
+        '如需归还槽位，请先取消月付，等付费期结束后再明确确认归还。'
+        '你自己的 Claude 或 Devin 订阅仍需另外准备。</p>'
+        '<p>一次只能有一笔未完成的月付结账。在“月付管理”选择<strong>继续付款</strong>或'
+        '<strong>取消这次付款</strong>，再选择其他槽位；已付费的计划数量不受此限制。'
+        '未付款的页面只有在 Stripe 确认过期后才会关闭。若已经付款，已付费的月份仍保留，'
+        '取消确认后停止今后的续费，不会自动退款。若结果仍待确认，请继续核对同一笔结账，不要另开一笔。</p>',
+    ) + '</div>'
 
 
 def _rental_pricing_details(wallet_enabled: bool = False) -> str:
@@ -238,9 +290,10 @@ def _rental_pricing_details(wallet_enabled: bool = False) -> str:
         '网络类型，均采用同一公式，不另加住宅溢价；这些类型不保证质量、速度或 '
         'Claude 兼容性。</p>',
     ) + _alpha_stage_details() + (_wallet_rental_details() if wallet_enabled else bi(
-        '<p>Agree the price and paid period with the operator; the website does not charge '
-        'automatically, renew automatically or rewrite past payments.</p>',
-        '<p>价格及服务有效期直接与运营者约定；网站不会自动扣款、自动续费，'
+        '<p>For operator-managed slots, agree the price and paid period with the operator. '
+        'That arrangement does not charge automatically, renew automatically '
+        'or rewrite past payments.</p>',
+        '<p>由运营方管理的槽位，价格及服务有效期直接与运营者约定；该方式不会自动扣款、自动续费，'
         '也不会改写过去的付款记录。</p>',
     )) + bi(
         '<p>Retired machines are removed from the rental catalogue. A temporarily '
@@ -276,12 +329,12 @@ def _available_slot_browsing(wallet_enabled: bool = False) -> str:
         return bi(
             '<p>Open <a href="/account/available">Browse available slots</a>. Search by '
             'host provider, IP provider or machine label, and review the monthly USD '
-            'price. Choose <strong>Review purchase</strong>, then confirm the price on '
+            'price. Choose <strong>Review price</strong>, then confirm the price on '
             'the next page. A successful purchase deducts that amount from your service '
             'balance once and takes you back to <a href="/account">Your slots</a>. '
             'Browsing or opening the confirmation page does not spend credit.</p>',
             '<p>打开<a href="/account/available">浏览可用槽位</a>，按主机服务商、IP 服务商或'
-            '主机标签搜索，核对美元月费。选择<strong>核对购买</strong>，在下一页确认价格。'
+            '主机标签搜索，核对美元月费。选择<strong>确认价格</strong>，在下一页确认价格。'
             '购买成功后，系统只扣一次服务余额，并返回<a href="/account">我的槽位</a>。'
             '浏览列表或打开确认页不会扣费。</p>',
         )
@@ -352,12 +405,27 @@ def contact(cfg: Config) -> str:
 
 
 def _wallet_buy_steps(cfg: Config) -> str:
+    if cfg.stripe_subscriptions_enabled:
+        return '<ol class="buy"><li>' + bi(
+            '<a href="/account">Sign in with Google</a> to create your Fleet account.',
+            '<a href="/account">使用 Google 登录</a>，创建 Fleet 用户账号。', inline=True,
+        ) + '</li><li>' + bi(
+            '<a href="/account/available">Choose a slot</a> and review its USD monthly price.',
+            '<a href="/account/available">选择槽位</a>，核对美元月费。', inline=True,
+        ) + '</li><li>' + bi(
+            'Use Fleet credit for one month, or choose <strong>Pay monthly</strong> when '
+            'offered. Agree to recurring payments only if you want them.',
+            '可用 Fleet 余额购买一个月，或选择提供的<strong>按月付款</strong>。'
+            '只有你明确同意，才会开通每月付款。', inline=True,
+        ) + '</li></ol>'
     return '<ol class="buy"><li>' + bi(
         '<a href="/account">Sign in with Google</a> to create your Fleet account.',
         '<a href="/account">使用 Google 登录</a>，创建 Fleet 用户账号。', inline=True,
     ) + '</li><li>' + bi(
-        f'Ask {contact(cfg)} to add USD service credit. Your balance appears on Your slots.',
-        f'联系 {_contact_zh(cfg)} 添加美元服务余额，在“我的槽位”查看。', inline=True,
+        'On Your slots, choose <strong>Add credit</strong>, select a USD amount, '
+        'then continue to secure payment on Stripe.',
+        '在“我的槽位”点击<strong>充值</strong>，选择美元金额，再前往 Stripe 安全付款。',
+        inline=True,
     ) + '</li><li>' + bi(
         '<a href="/account/available">Choose a slot</a>, review its monthly price, then '
         'confirm the purchase. Your balance pays for one month. Renew only when you choose.',
@@ -642,7 +710,8 @@ def overview(
         )
         + '</div><div class="card">'
         + bi("<h2>How to buy</h2>", "<h2>如何开通</h2>")
-        + (_wallet_buy_steps(cfg) if wallet_enabled else '<ol class="buy">'
+        + (_wallet_buy_steps(cfg) if wallet_enabled or cfg.stripe_subscriptions_enabled
+           else '<ol class="buy">'
         + "<li>"
         + bi(
             'First <a href="/account">sign in once</a> with Google, so there is an account '
@@ -712,6 +781,7 @@ def overview(
         )
         + "</span></a></div></section>"
     )
+    body += _subscription_rental_details(cfg)
     return _page("/", "about", body, width="", viewer=viewer, canonical="/")
 
 
@@ -1306,15 +1376,26 @@ def guide(
         + "</li>"
         + "<li>"
         + (bi(
+            '<h3>Choose how to pay</h3><p>Open '
+            '<a href="/account/available">Browse available slots</a> and review a machine. '
+            'Use Fleet credit to buy one month, or choose <strong>Pay monthly</strong> when '
+            'offered. Monthly payment is a separate card subscription for that slot. '
+            'It does not use your Fleet balance.</p>',
+            '<h3>选择付费方式</h3><p>打开<a href="/account/available">浏览可用槽位</a>，'
+            '查看主机。可用 Fleet 余额购买一个月，或选择提供的<strong>按月付款</strong>。'
+            '月付是这个槽位独立的银行卡订阅，不使用 Fleet 余额。</p>',
+        ) if cfg.stripe_subscriptions_enabled else bi(
             '<h3>Add service credit</h3><p>On <a href="/account">Your slots</a>, '
-            'choose $10, $20, $50 or $100 and select <span class="btnlabel">Pay by card</span> '
-            'when available. Pay on Stripe, then return to check your balance. '
+            'choose <span class="btnlabel">Add credit</span>. Select $10, $20, $50 or $100, '
+            'then <span class="btnlabel">Continue to secure payment</span>. '
+            'Pay on Stripe, then return to check your balance. '
             'Credit is added after payment is confirmed. It stays in your balance until '
             'you separately buy or renew a slot; top-up does neither automatically. '
             'If the card button is unavailable '
             'for your account, ask the operator for help. Alipay is not available.</p>',
-            '<h3>添加服务余额</h3><p>在<a href="/account">我的槽位</a>选择 10、20、50 或 100 美元，'
-            '点击可用的 <span class="btnlabel">银行卡充值</span>，到 Stripe 页面付款，'
+            '<h3>添加服务余额</h3><p>在<a href="/account">我的槽位</a>点击 '
+            '<span class="btnlabel">充值</span>，选择 10、20、50 或 100 美元，'
+            '再点击<span class="btnlabel">前往安全付款页面</span>，到 Stripe 页面付款，'
             '再返回核对余额。付款确认后才会到账，随后由你另外确认购买或续费槽位；'
             '充值本身不会自动购买或续费。如果你的账号暂时无法银行卡充值，'
             '请联系运营者。支付宝暂未开通。</p>',
@@ -1328,6 +1409,16 @@ def guide(
         + "</li>"
         + "<li>"
         + (bi(
+            '<h3>Review and confirm</h3><p>For a credit purchase, confirm the price to pay '
+            'for one month; renew it yourself when needed. For <strong>Pay monthly</strong>, '
+            'review the USD rate, tick the monthly-payment agreement and complete the first '
+            'payment on Stripe. Each slot renews independently until canceled. Then return '
+            'to Your slots while your account is prepared.</p>',
+            '<h3>核对并确认</h3><p>使用余额时，确认价格后只购买一个月，需要时再自行续费。'
+            '选择<strong>按月付款</strong>时，先核对美元月费，勾选同意每月付款，'
+            '再到 Stripe 完成首笔付款。每个槽位独立续费，直到取消。随后返回“我的槽位”，'
+            '等待账号准备完成。</p>',
+        ) if cfg.stripe_subscriptions_enabled else bi(
             '<h3>Choose, review, buy</h3><p>Open '
             '<a href="/account/available">Browse available slots</a>. Choose a machine, '
             'review its monthly price and confirm the purchase. Your balance pays once '
@@ -1580,6 +1671,7 @@ def guide(
                  + bi('<h2>Choosing a slot and its rate</h2>', '<h2>选择槽位与价格</h2>')
                  + _public_slot_catalogue(wallet_enabled) + _available_slot_browsing(wallet_enabled)
                  + _rental_pricing_details(wallet_enabled) + '</div>')
+    body += _subscription_rental_details(cfg)
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
@@ -1862,6 +1954,7 @@ def how_it_works(
         '<p>ISP 槽位可以使用独立获准的出口代理，'
         '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p>',
     ) + '</details></div>'
+    body += _subscription_rental_details(cfg)
     return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
@@ -1896,12 +1989,23 @@ def terms(
                   'confirmation. Provider subscriptions and extra usage are separate.')
         paying_zh = ('槽位目录显示每台主机的美元月费。确认购买后，系统一次扣除所示服务余额，'
                      '从购买时起支付一个日历月。续费需要再次确认；服务商订阅与额外用量另计。')
+    if cfg.stripe_subscriptions_enabled:
+        paying = ('The slot catalogue shows each machine’s monthly USD price. '
+                  'A Fleet-credit purchase pays for one calendar month and needs a new '
+                  'confirmation to renew. The separate Pay monthly option starts only '
+                  'after your recurring-payment agreement and first Stripe payment. '
+                  'Each slot has its own plan; provider subscriptions remain separate.')
+        paying_zh = ('槽位目录显示每台主机的美元月费。使用 Fleet 余额只购买一个日历月，'
+                     '续费需要再次确认。独立的按月付款选项，只有你同意每月付款并在 Stripe '
+                     '完成首笔付款后才会开通。每个槽位各有一份计划，服务商订阅仍需另付。')
     lapse = (" If a payment lapses, the operator may take a slot back, and taking a slot "
-             "back deletes everything in it.") if not wallet_enabled else (
+             "back deletes everything in it."
+             ) if not wallet_enabled and not cfg.stripe_subscriptions_enabled else (
              " When a paid period ends, new Fleet access pauses until renewal. Expiry "
              "does not automatically return the slot or delete its files.")
     lapse_zh = (' 逾期未付款时，运营者可能收回槽位；收回会删除槽位内的所有内容。'
-                if not wallet_enabled else ' 付费期结束后，新的 Fleet 访问暂停，续费后恢复。'
+                if not wallet_enabled and not cfg.stripe_subscriptions_enabled else
+                ' 付费期结束后，新的 Fleet 访问暂停，续费后恢复。'
                 '到期不会自动归还槽位或删除文件。')
     body = (
         '<div class="dochead">'
@@ -1986,6 +2090,7 @@ def terms(
         body += ('<div class="card" id="rental-pricing">'
                  + bi('<h2>Per-machine rental rates</h2>', '<h2>逐台主机的出租价格</h2>')
                  + _rental_pricing_details(wallet_enabled) + '</div>')
+    body += _subscription_rental_details(cfg, terms=True)
     return _page("/docs/terms", "terms", body, viewer=viewer)
 
 

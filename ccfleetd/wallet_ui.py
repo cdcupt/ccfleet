@@ -11,6 +11,7 @@ from . import stripe_checkout, wallet
 from .bilingual import label
 
 CSS = """
+body.site:has(.wallet-topup-page) .topbar .doc-nav{display:none}
 .wallet-ui{min-width:0;max-width:100%;margin:20px 0;padding:20px;
 border:1px solid var(--rule-soft);border-radius:14px;background:var(--panel)}
 .wallet-ui h2{margin:0 0 12px;font-size:18px;line-height:1.3}
@@ -58,12 +59,66 @@ background:var(--panel);color:var(--ink);font:inherit}
 outline:2px solid var(--acc);outline-offset:3px}
 .wallet-ui .wallet-topup{display:flex;flex-wrap:wrap;align-items:end;gap:10px}
 .wallet-ui .wallet-topup .wallet-field{min-width:130px;flex:1}
+.wallet-ui .wallet-add-credit{display:inline-flex;align-items:center;justify-content:center;
+gap:10px;padding:12px 20px;font-weight:650}
+.wallet-ui .wallet-plus{font-size:21px;line-height:1;font-weight:400}
+.wallet-topup-page{max-width:640px;margin:12px auto;padding:24px}
+.wallet-topup-page .wallet-back{display:inline-flex;gap:7px;font-size:13px;color:var(--muted);
+margin-bottom:18px;text-decoration:none}
+.wallet-topup-page .wallet-eyebrow{margin:0 0 8px;font-size:11px;letter-spacing:.1em;
+font-weight:650;text-transform:uppercase;color:var(--muted)}
+.wallet-topup-page h1{font-size:clamp(27px,5vw,34px);letter-spacing:-.035em;
+line-height:1.15;margin:0 0 8px}
+.wallet-topup-page .wallet-intro{font-size:15px;color:var(--muted);margin:0}
+.wallet-topup-page .wallet-current{display:flex;align-items:center;justify-content:space-between;
+gap:16px;margin:18px 0;padding:12px 16px;background:var(--inset);border-radius:10px;
+font-size:13px;color:var(--muted)}
+.wallet-topup-page .wallet-current strong{font-size:23px;color:var(--ink);
+font-variant-numeric:tabular-nums;overflow-wrap:anywhere;text-align:right}
+.wallet-topup-page .wallet-progress{display:flex;list-style:none;
+padding:0;margin:18px 0;gap:12px;font-size:12px;color:var(--muted)}
+.wallet-topup-page .wallet-progress li{flex:1;display:flex;gap:8px;align-items:center;
+min-width:0;overflow-wrap:anywhere}
+.wallet-topup-page .wallet-step-number{width:23px;height:23px;
+flex:0 0 23px;display:grid;place-items:center;border:1px solid var(--rule);border-radius:50%}
+.wallet-topup-page .wallet-progress li[aria-current=step]{color:var(--ink);font-weight:600}
+.wallet-topup-page .wallet-progress li[aria-current=step] .wallet-step-number{background:var(--acc);
+border-color:var(--acc);color:var(--panel)}
+.wallet-topup-page .wallet-topup-form{margin:0;display:grid;gap:14px}
+.wallet-topup-page fieldset{min-width:0;margin:0;padding:0;border:0}
+.wallet-topup-page legend{font-size:14px;font-weight:650;padding:0;margin-bottom:12px}
+.wallet-topup-page .wallet-amounts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+gap:10px}
+.wallet-topup-page .wallet-amount{position:relative;display:block;min-width:0;cursor:pointer}
+.wallet-topup-page .wallet-amount input{position:absolute;opacity:0;width:1px;height:1px}
+.wallet-topup-page .wallet-amount-tile{display:grid;place-items:center;gap:4px;min-height:78px;
+padding:10px 6px;border:1px solid var(--rule);border-radius:12px;background:var(--panel);
+transition:border-color .15s,background .15s,box-shadow .15s}
+.wallet-topup-page .wallet-amount-tile strong{font-size:25px;line-height:1.2;
+font-variant-numeric:tabular-nums;letter-spacing:-.035em;color:var(--ink)}
+.wallet-topup-page .wallet-amount-tile small{font-size:11px;color:var(--muted)}
+.wallet-topup-page .wallet-amount input:checked+.wallet-amount-tile{
+border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc);background:var(--inset)}
+.wallet-topup-page .wallet-amount input:focus-visible+.wallet-amount-tile{
+outline:2px solid var(--acc);outline-offset:3px}
+.wallet-topup-page .wallet-amount:hover .wallet-amount-tile{border-color:var(--acc)}
+.wallet-topup-page .wallet-checkout-button{width:100%;display:flex;align-items:center;
+justify-content:center;gap:12px;min-height:50px;font-size:14px;font-weight:650}
+.wallet-topup-page .wallet-payment-note{font-size:12px;text-align:center;
+color:var(--muted);margin:0}
+.wallet-topup-page .wallet-after{margin:20px 0 0;padding-top:16px;
+border-top:1px solid var(--rule-soft);color:var(--muted)}
 @media(max-width:560px){.wallet-ui{padding:16px;border-radius:12px}
 .wallet-ui .wallet-actions{align-items:stretch}
 .wallet-ui .wallet-actions>.btn,.wallet-ui .wallet-actions>form,
 .wallet-ui .wallet-actions>form>button{width:100%}
 .wallet-ui .wallet-review-data{gap:9px 12px}
-.wallet-ui .wallet-steps{display:grid;gap:6px}}
+.wallet-ui .wallet-steps{display:grid;gap:6px}
+.wallet-topup-page{padding:22px 18px;margin:12px 0}
+.wallet-topup-page .wallet-amounts{grid-template-columns:repeat(2,minmax(0,1fr))}
+.wallet-topup-page .wallet-progress{gap:7px;font-size:11px}
+.wallet-topup-page .wallet-progress li{gap:5px;align-items:flex-start}
+.wallet-topup-page .wallet-current{padding:14px;gap:10px}}
 """
 
 
@@ -90,36 +145,22 @@ def _date(value: Any) -> str:
     return moment.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def balance_card(balance_cents: int, *, topup_ready: bool = False, csrf: str = "",
-                 idempotency_key: str = "", compact: bool = False) -> str:
+def balance_card(balance_cents: int, *, topup_ready: bool = False,
+                 compact: bool = False) -> str:
     shown = escape(wallet.display(balance_cents))
     if type(topup_ready) is not bool:
         raise ValueError("top-up readiness must be an explicit server boolean")
     if type(compact) is not bool:
         raise ValueError("compact credit display must be an explicit server boolean")
     if topup_ready:
-        if (not isinstance(csrf, str) or not 1 <= len(csrf) <= 1024
-                or any(ord(char) < 32 or ord(char) == 127 for char in csrf)):
-            raise ValueError("a server CSRF nonce is required for top-ups")
-        controls = ('<form class="wallet-topup" method="post" action="/account/topup">'
-            + _security(csrf, idempotency_key) + '<label class="wallet-field">'
-            + label("Amount · USD", "金额 · 美元", inline=True)
-            + '<select name="amount_cents">' + ''.join(
-                '<option value="' + str(amount) + '"'
-                + (' selected' if amount == 2000 else '') + '>'
-                + escape(wallet.display(amount)) + '</option>'
-                for amount in stripe_checkout.DEFAULT_AMOUNTS) + '</select></label>'
-            + '<button class="btn primary" type="submit">'
-            + label("Pay by card", "银行卡充值", inline=True) + '</button></form>'
-            + '<button type="button" disabled aria-describedby="wallet-alipay-help">'
-            + label("Alipay · unavailable", "支付宝 · 暂不可用", inline=True) + '</button>')
+        controls = ('<a class="btn primary wallet-add-credit" href="/account/topup">'
+            + '<span class="wallet-plus" aria-hidden="true">+</span>'
+            + label("Add credit", "充值", inline=True) + '</a>')
         help_text = ('<p class="wallet-muted" id="wallet-topup-help">'
-            + label("Pay on Stripe. Credit appears after payment is confirmed. "
-                    "No automatic charges.",
-                    "在 Stripe 页面付款，确认到账后添加余额。不会自动扣款。", inline=True)
-            + '</p><p class="wallet-muted" id="wallet-alipay-help">'
-            + label("Alipay is not available for Fleet credit.",
-                    "Fleet 余额暂不支持支付宝充值。", inline=True) + '</p>')
+            + label("Add credit by card for Fleet slot rentals. Your Claude or Devin "
+                    "subscription is separate.",
+                    "使用银行卡充值，余额用于租用 Fleet 槽位。Claude 或 Devin 订阅需要另付。",
+                    inline=True) + '</p>')
     else:
         controls = ('<button type="button" disabled aria-describedby="wallet-topup-help">'
             + label("Card top-up unavailable", "银行卡充值暂不可用", inline=True)
@@ -138,9 +179,74 @@ def balance_card(balance_cents: int, *, topup_ready: bool = False, csrf: str = "
             + '<div class="wallet-balance"><strong>' + shown + '</strong><small>'
             + label("USD service credit", "美元服务余额", inline=True) + '</small></div>'
             + steps
-            + '<div class="wallet-actions"><a class="btn primary" href="/account/available">'
+            + '<div class="wallet-actions">' + controls
+            + '<a class="btn" href="/account/available">'
             + label("Choose a slot", "选择槽位", inline=True) + '</a>'
-            + controls + '</div>' + help_text + '</section>')
+            + '</div>' + help_text + '</section>')
+
+
+def topup_page(balance_cents: int, *, topup_ready: bool, csrf: str = "",
+               idempotency_key: str = "", blocked: bool = False) -> str:
+    """Choose an existing preset; creation and settlement stay at existing boundaries."""
+    shown = escape(wallet.display(balance_cents))
+    if type(topup_ready) is not bool or type(blocked) is not bool:
+        raise ValueError("top-up readiness must be an explicit server boolean")
+    active = topup_ready and not blocked
+    controls = ''
+    if active:
+        if (not isinstance(csrf, str) or not 1 <= len(csrf) <= 1024
+                or any(ord(char) < 32 or ord(char) == 127 for char in csrf)):
+            raise ValueError("a server CSRF nonce is required for top-ups")
+        amounts = ''.join(
+            '<label class="wallet-amount"><input type="radio" name="amount_cents" value="'
+            + str(amount) + '"' + (' checked' if amount == 2000 else '') + ' required>'
+            + '<span class="wallet-amount-tile"><strong>'
+            + escape(wallet.display(amount).removesuffix('.00'))
+            + '</strong><small>USD</small></span></label>'
+            for amount in stripe_checkout.DEFAULT_AMOUNTS)
+        controls = ('<form class="wallet-topup-form" method="post" action="/account/topup">'
+            + _security(csrf, idempotency_key) + '<fieldset><legend>'
+            + label("How much would you like to add?", "你想充值多少？", inline=True)
+            + '</legend><div class="wallet-amounts">' + amounts + '</div></fieldset>'
+            + '<button class="btn primary wallet-checkout-button" type="submit">'
+            + label("Continue to secure payment", "前往安全付款页面", inline=True)
+            + '<span aria-hidden="true">→</span></button>'
+            + '<p class="wallet-payment-note">'
+            + label("Pay by card on Stripe. One payment, no automatic charges.",
+                    "在 Stripe 使用银行卡付款。仅充值一次，不会自动扣款。", inline=True)
+            + '</p></form>')
+    else:
+        message = (("Your credit is under review. Top-ups are paused.",
+                    "余额正在核查，暂时无法充值。") if blocked else
+                   ("Card top-up is unavailable for this account. Ask the operator for help.",
+                    "此账户暂时无法银行卡充值，请联系运营者。"))
+        controls = '<p class="wallet-muted">' + label(*message, inline=True) + '</p>'
+    progress = '<ol class="wallet-progress">' + ''.join(
+        '<li' + (' aria-current="step"' if index == 0 else '') + '>'
+        + '<span class="wallet-step-number" aria-hidden="true">' + str(index + 1) + '</span>'
+        + label(en, zh, inline=True) + '</li>'
+        for index, (en, zh) in enumerate((("Choose amount", "选择金额"),
+            ("Pay on Stripe", "Stripe 付款"), ("Credit added", "余额到账")))) + '</ol>'
+    return ('<section class="wallet-ui wallet-topup-page">'
+            + '<a class="wallet-back" href="/account#wallet"><span aria-hidden="true">←</span>'
+            + label("Your balance", "返回余额", inline=True) + '</a>'
+            + '<p class="wallet-eyebrow">CC Fleet</p><h1>'
+            + label("Add credit", "充值", inline=True) + '</h1><p class="wallet-intro">'
+            + label("Top up now. Choose or renew your slot when you are ready.",
+                    "先充值，再按需要选择或续费槽位。", inline=True)
+            + '</p><div class="wallet-current"><span>'
+            + label("Current balance", "当前余额", inline=True) + '</span><strong>'
+            + shown + '</strong></div>' + progress + controls
+            + '<div class="wallet-after"><p>'
+            + label("After payment is confirmed, the credit appears in your Fleet balance. "
+                    "Adding credit does not buy or renew a slot automatically.",
+                    "付款确认后，余额会添加到你的 Fleet 账户。充值不会自动购买或续费槽位。",
+                    inline=True) + '</p><p>'
+            + label("Fleet credit pays for our slot rentals only. It cannot be transferred "
+                    "or withdrawn. Claude and Devin subscriptions are separate. "
+                    "Alipay is not available.",
+                    "Fleet 余额仅用于支付槽位租金，不能转让或提现。Claude 和 Devin 订阅需要另付。"
+                    "暂不支持支付宝。", inline=True) + '</p></div></section>')
 
 
 def owner_ledger(entries: Sequence[Mapping[str, Any]], *, limit: int = 8) -> str:
@@ -253,8 +359,10 @@ def admin_credit_grant_form(*, account_id: str, csrf: str, idempotency_key: str)
     return ('<section class="wallet-ui wallet-admin"><h2>'
             + label("Add Fleet credit", "添加 Fleet 余额", inline=True) + '</h2>'
             + '<p class="wallet-muted">' + label(
-                "Manual service credit. Record a private admin reason.",
-                "手动添加服务余额，请填写管理员内部备注。", inline=True) + '</p>'
+                "Manual service credit. This does not charge a card. "
+                "Record a private admin reason.",
+                "手动添加 Fleet 余额，不会从用户银行卡扣款。请填写管理员内部备注。",
+                inline=True) + '</p>'
             + '<form class="wallet-form" method="post" action="' + escape(action, quote=True) + '">'
             + _security(csrf, idempotency_key)
             + '<label class="wallet-field"><span>'

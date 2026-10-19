@@ -90,3 +90,20 @@ def test_admin_inline_commands_and_machine_identity_wrap_without_changing_text(w
         "ccfleetd node hold own-machine --none", "node-a", "slot-node-a",
     }
     assert all(code.has_class("code-wrap") for code in codes)
+
+
+def test_admin_monthly_history_is_read_only_and_hides_provider_identifiers():
+    orders = [{"machine_number": 7, "amount_cents": 1283, "provider_status": "active",
+               "subscription_id": "sub_private_do_not_render", "customer_id": "cus_private",
+               "session_id": "cs_private", "claim_id": "private-claim",
+               "cancel_at_period_end": True, "period_end_at": 1_800_000_000},
+              {"machine_number": 8, "amount_cents": 1068, "status": "checkout_open",
+               "subscription_id": None}]
+    body = consoleslots._monthly_account_history(orders)
+    parsed = Flow(body)
+    assert "Machine 7" in body and "$12.83" in body and "Stops at period end" in body
+    assert "Machine 8" not in body
+    assert not parsed.find("form") and not parsed.find("input")
+    assert not any(value in body for value in
+                   ("sub_private", "cus_private", "cs_private", "private-claim", "/portal"))
+    assert consoleslots._monthly_account_history([]) == ""

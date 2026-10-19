@@ -38,6 +38,8 @@ class Monitor:
         self._notifier = notifier
         self._clock = clock or time.time
         self._last_prune = 0.0
+        self._recurring = None
+        self._last_recurring_check = 0.0
         # One lock serialises "read heartbeats -> evaluate -> reconcile alerts" so the
         # periodic loop and concurrent heartbeat handlers never interleave on a node.
         self._lock = threading.RLock()
@@ -133,7 +135,20 @@ class Monitor:
         self._expire_updates(now)
         self._refresh_channels(now)
         self._maybe_prune(now)
+        self._reconcile_recurring(now)
         return events
+
+    def _reconcile_recurring(self, now: float) -> None:
+        """Bounded current-payment recovery; clocks never free a payable reservation."""
+        with self._lock:
+            service = self._recurring
+            if service is None or now - self._last_recurring_check < 60:
+                return
+            self._last_recurring_check = now
+        try:
+            service.reconcile_pending(now=now, limit=2)
+        except Exception:
+            log.warning("recurring reservation reconciliation could not be confirmed")
 
     def _expire_claims(self, now: float) -> None:
         """Give up on provisioning that never finished.

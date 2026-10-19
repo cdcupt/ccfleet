@@ -45,6 +45,7 @@ from . import (
     plans,
     resets,
     status,
+    wallet,
     wallet_access,
     wallet_routes,
     wallet_ui,
@@ -94,6 +95,7 @@ from .store import (
     QuotaExceeded,
     Store,
     StoreError,
+    SubscriptionReleaseBlocked,
 )
 
 # What a page may say after an action. Chosen by a fixed code, never text taken
@@ -111,6 +113,8 @@ NOTES = {
     "no-slot": ("warn", "No slot is available right now. Try again later, or ask your operator."),
     "no-allowance": ("warn", "You already hold every slot your allowance covers."),
     "released": ("ok", "Given back. Everything on it is being deleted."),
+    "monthly-release-blocked": ("warn", "Cancel monthly billing first, then keep the slot "
+                                 "through its paid period. Manage it under Monthly payments."),
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
     "signin": ("ok", "Starting the sign-in on your slot…"),
     "switch": ("ok", "Starting the change of account on your slot…"),
@@ -148,6 +152,7 @@ NOTES_ZH = {
     "no-slot": "目前没有可领取槽位。请稍后再试，或联系运营方。",
     "no-allowance": "你已领取额度内的全部槽位。",
     "released": "槽位已归还，正在删除其中的所有内容。",
+    "monthly-release-blocked": "请先取消月付，并保留槽位至已付费服务期结束。可在“月付管理”操作。",
     "confirm": "请先勾选确认框：归还槽位会删除其中的所有内容。",
     "signin": "正在槽位上启动 Claude 登录…", "switch": "正在槽位上启动账号更换…",
     "cli-revoked": "这台电脑已无法通过原配对连接该槽位。", "code": "授权码已发往槽位。",
@@ -439,6 +444,8 @@ def _on_slot(store: Store, slot: Mapping[str, Any], holder: str, action: str,
         return _back("cancelled", anchor)
     except NotYours:
         raise
+    except SubscriptionReleaseBlocked:
+        return _back("monthly-release-blocked", anchor)
     except (StoreError, slotstates.TransitionError):
         return _back("not-now", anchor)
 
@@ -1183,9 +1190,7 @@ def _wallet_panel(store, account, *, topup_ready: bool = False, csrf: str = "",
     try:
         held = store.wallet_spending_blocked(account["id"])
         balance = wallet_ui.balance_card(store.wallet_balance(account["id"]),
-            topup_ready=topup_ready and not held, csrf=csrf,
-            idempotency_key=wallet_routes.nonce() if topup_ready and not held else "",
-            compact=compact)
+            topup_ready=topup_ready and not held, compact=compact)
         return (balance + ('<p class="note-banner warn">'
                 + label(*wallet_routes.ERRORS["hold"], inline=True) + '</p>' if held else ''))
     except Exception:
@@ -1211,6 +1216,15 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     if account is None:
         return _signed_out(cfg)
     held = store.list_slots(held_by=account["id"])
+    recurring_slots = set()
+    if held:
+        try:
+            recurring_slots = {row["slot_id"] for row in store.list_slot_subscriptions(
+                account["id"], limit=100) if row.get("status") != "closed"}
+        except Exception:
+            # Rendering never changes a contract. The Store's transactional
+            # release guard remains authoritative if this read is unavailable.
+            pass
     latest = store.latest_heartbeats()
     nodes = {n["id"]: n for n in store.list_nodes()}
     # From wherever each slot keeps it: an owner's node counted as their slot
@@ -1276,6 +1290,14 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     financial = {}
     for slot in held:
         try:
+            recurring = (store.slot_subscription_access(account["id"], slot["id"],
+                claim_id=slot["gateway_claim_id"], now=now)
+                if slot.get("kind") != slotstates.OWNER_SLOT else None)
+            if recurring is not None:
+                end = wallet.instant(recurring["paid_through"])
+                financial[slot["id"]] = (end if end > 0 else None,
+                                          recurring["allowed"] is True)
+                continue
             end = wallet_access.paid_through(store, slot)
             financial[slot["id"]] = (end, end is None or now < end)
         except Exception:
@@ -1294,6 +1316,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
                                authorizer=authorizer,
                                payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
+                               recurring=s["id"] in recurring_slots,
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
@@ -1305,7 +1328,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + ' <a href="/account">' + label('Refresh status', '刷新状态', inline=True)
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
-        + _account_nav("/account") + banner
+        + _account_nav("/account", monthly=_monthly_management(store, cfg, account)) + banner
         + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
            if wallet_routes.enabled(cfg) else
            '<div class="card allowance"><div><h2>'
@@ -1371,14 +1394,27 @@ def slots_page(store: Store, cfg: Config, now: float, query: Mapping[str, str], 
     return _shell("Slots & pricing", body, here="/slots", viewer=viewer, width="wide")
 
 
-def _account_nav(current: str) -> str:
+def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -> bool:
+    """Enrollment is optional; existing own contracts keep a way to manage them."""
+    if getattr(cfg, "stripe_subscriptions_enabled", False) is True:
+        return True
+    try:
+        return bool(store.list_slot_subscriptions(account["id"], limit=1))
+    except Exception:
+        return False
+
+
+def _account_nav(current: str, *, monthly: bool = False) -> str:
+    pages = [("/account", "Your slots", "我的槽位"),
+             ("/account/available", "Available slots", "可用槽位")]
+    if monthly:
+        pages.append(("/account/subscriptions", "Monthly payments", "月付管理"))
     return ('<nav class="account-nav" aria-label="Slot pages" '
             'data-aria-label-en="Slot pages" data-aria-label-zh="槽位页面">'
             + ''.join('<a class="btn" href="' + path + '"'
                       + (' aria-current="page"' if path == current else '') + '>'
                       + label(en, zh, inline=True) + '</a>'
-                      for path, en, zh in (("/account", "Your slots", "我的槽位"),
-                                           ("/account/available", "Available slots", "可用槽位")))
+                      for path, en, zh in pages)
             + '</nav>')
 
 
@@ -1391,7 +1427,8 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
     can_claim = wallet_routes.enabled(cfg) or counted < quota
-    note = ('' if can_claim else '<p class="offer-note">' + label(
+    monthly = getattr(cfg, "stripe_subscriptions_enabled", False) is True
+    note = ('' if can_claim or monthly else '<p class="offer-note">' + label(
         "You have no unused slot allowance. You can browse prices; contact the operator "
         "before claiming another slot.",
         "当前没有剩余槽位额度。你仍可浏览价格；领取其他槽位前请联系运营者。", inline=True) + '</p>')
@@ -1399,10 +1436,11 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
             + label("Available slots", "可用槽位", inline=True) + '</h1><p class="sub">'
             + label("Search providers and network types, then choose a machine.",
                     "搜索服务商与网络类型，再选择主机。", inline=True) + '</p></div>'
-            + _account_nav("/account/available") + note
+            + _account_nav("/account/available",
+                           monthly=_monthly_management(store, cfg, account)) + note
             + offer_ui.browse(store, account, csrf_for(session_id, cfg.cookie_secret), now,
                               cfg.heartbeat_max_age_s, query, can_claim=can_claim,
-                              purchase=wallet_routes.enabled(cfg)))
+                              purchase=wallet_routes.enabled(cfg), monthly=monthly))
     return _shell("Available slots", body, viewer=viewer_for(account, session_id, cfg, store),
                   width="wide")
 
@@ -2519,6 +2557,7 @@ def _slot_card(
     authorizer: Optional[Mapping[str, Any]] = None,
     payment_end: Optional[float] = None,
     paid_access: bool = True,
+    recurring: bool = False,
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
@@ -2635,18 +2674,32 @@ def _slot_card(
         )
         parts.append("<p>" + label(detail, detail_zh, inline=True) + "</p>")
     if payment_end is not None:
-        state = label("Paid month active" if paid_access else "Renew to reconnect",
-                      "已付费月份有效" if paid_access else "续费后可重新连接", inline=True)
+        state = (label("Paid period active" if paid_access else "Check monthly payment",
+                       "已付费服务期有效" if paid_access else "请检查月付款项", inline=True)
+                 if recurring else label(
+                      "Paid month active" if paid_access else "Renew to reconnect",
+                      "已付费月份有效" if paid_access else "续费后可重新连接", inline=True))
         parts.append('<p class="' + ('muted' if paid_access else 'lapsed') + '">' + state
                      + ' · ' + escape(wallet_ui._date(payment_end)) + '</p>')
-        if wallet_routes.enabled(cfg) and slot["state"] in (slotstates.CLAIMED, slotstates.ACTIVE):
+        if recurring:
+            parts.append('<p><a class="btn" href="/account/subscriptions">'
+                         + label("Manage monthly payment", "管理月付", inline=True) + '</a></p>')
+        elif (wallet_routes.enabled(cfg)
+              and slot["state"] in (slotstates.CLAIMED, slotstates.ACTIVE)):
             parts.append('<p><a class="btn" href="/account/renew?'
                          + urllib.parse.urlencode({"slot_id": slot["id"]}) + '">'
                          + label("Renew one month", "续费一个月", inline=True) + '</a></p>')
     elif not paid_access:
-        parts.append('<p class="lapsed">' + label(
-            "Payment status is unavailable. New connections are paused.",
-            "付费状态暂不可用，已暂停新连接。", inline=True) + '</p>')
+        if recurring:
+            parts.append('<p class="lapsed">' + label(
+                "This monthly rental is paused. Check your monthly payment before reconnecting.",
+                "此月付槽位已暂停，请先查看月付款项，再重新连接。", inline=True)
+                + ' <a href="/account/subscriptions">'
+                + label("Monthly payments", "月付管理", inline=True) + '</a></p>')
+        else:
+            parts.append('<p class="lapsed">' + label(
+                "Payment status is unavailable. New connections are paused.",
+                "付费状态暂不可用，已暂停新连接。", inline=True) + '</p>')
     if paid_access:
         parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer))
     parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
@@ -2726,6 +2779,12 @@ def _slot_card(
     # Never on somebody's own node: giving back means wiping, and nothing
     # there is ours to wipe.
     if slot["state"] in slotstates.RELEASABLE and not own:
+        if recurring:
+            parts.append('<p class="slot-monthly-return-note">' + label(
+                "Cancel monthly billing first, then keep the slot through its paid period. ",
+                "请先取消月付，并保留槽位至已付费服务期结束。", inline=True)
+                + '<a href="/account/subscriptions">'
+                + label("Manage monthly payments", "管理月付", inline=True) + '</a></p>')
         parts.append(_slot_disclosure('Return this slot', '归还槽位',
                                       _release(slot, csrf), 'slot-return'))
     parts.append("</div></div>")

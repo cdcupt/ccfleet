@@ -208,6 +208,59 @@ font-weight:600}
 .console h2{font-size:12px;line-height:1.4;letter-spacing:.08em;text-transform:uppercase;
 color:var(--muted);margin:30px 0 10px;font-weight:680}
 .console .card h2{margin:16px 0 10px}
+.console .admin-block>h2{font-size:22px;line-height:1.3;letter-spacing:-.02em;
+text-transform:none;color:var(--ink);margin:32px 0 6px;scroll-margin-top:24px}
+.admin-section-intro{font-size:14px;color:var(--muted);margin:0 0 14px}
+.admin-tasks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:24px 0}
+.admin-tasks>a{display:flex;align-items:center;gap:14px;padding:20px;min-width:0;
+text-decoration:none;color:var(--ink);border:1px solid var(--rule);border-radius:16px;
+background:var(--panel);box-shadow:var(--shadow)}
+.admin-tasks>a:hover{border-color:var(--acc-line);background:var(--acc-soft)}
+.admin-tasks strong,.admin-tasks small{display:block}
+.admin-tasks strong{font-size:15px}
+.admin-tasks small{color:var(--muted);font-size:12px;margin-top:3px}
+.admin-task-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;
+background:var(--acc-soft);color:var(--acc);font-size:24px;font-weight:650;flex-shrink:0}
+.admin-accounts .card{padding:4px 20px 16px}
+.admin-accounts .admin-account{display:grid;grid-template-columns:minmax(0,1fr) auto auto;
+align-items:center;gap:12px 24px;padding:22px 0}
+.console .admin-account .row-name{font-family:var(--sans);font-size:15px;overflow-wrap:anywhere}
+.admin-account .row-name>.muted{display:block;font-size:12px;font-weight:400;margin-top:5px}
+.admin-role{font-size:10px;font-weight:650;border-radius:5px;padding:3px 6px;
+margin-left:8px;color:var(--acc);background:var(--acc-soft)}
+.admin-credit-balance{text-align:right;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.admin-credit-balance>span{display:block;font-size:11px;color:var(--muted)}
+.admin-credit-balance>strong{font-size:24px;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.admin-credit-action>summary{list-style:none;padding:9px 16px;cursor:pointer;font-size:13px;
+font-weight:650;color:var(--on-acc);background:var(--acc);border-radius:10px;text-align:center}
+.admin-credit-action>summary::-webkit-details-marker{display:none}
+.admin-credit-action[open]{grid-column:1/-1}
+.admin-credit-action[open]>summary{display:inline-block}
+.admin-account .ledger{grid-column:1/-1;margin:0;color:var(--muted);font-size:12px}
+.admin-account .admin-credit-history{grid-column:1/-1;color:var(--muted);font-size:12px}
+.admin-credit-history>summary{cursor:pointer}
+.admin-account .admin-monthly-history{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.admin-monthly-history>summary{cursor:pointer;font-weight:600;color:var(--acc)}
+.admin-monthly-table{overflow-x:auto;max-width:100%;margin-top:12px;border:1px solid var(--rule);
+border-radius:10px}.admin-monthly-table table{min-width:520px;font-size:12px}
+.admin-help{margin-top:16px;font-size:13px;color:var(--muted)}
+.admin-help>summary,.admin-price-details>summary{cursor:pointer;font-weight:600;padding:12px 0}
+.admin-price-details>summary{font-size:14px;color:var(--acc)}
+.admin-provider{display:block;width:fit-content;margin:3px 0;padding:3px 7px;border-radius:6px;
+font-size:11px;line-height:1.5;font-weight:600;white-space:normal}
+.admin-provider.host-provider{color:var(--acc);background:var(--acc-soft)}
+.admin-provider.ip-provider{color:var(--ok);background:var(--ok-bg)}
+.admin-advanced{margin-top:24px;border:1px solid var(--rule);border-radius:14px;
+background:var(--panel);padding:4px 18px 16px;min-width:0;max-width:100%}
+.admin-advanced>summary{padding:14px 0;font-size:15px;font-weight:650;cursor:pointer}
+.admin-advanced:not([open]){padding-bottom:4px}
+.admin-advanced h2:first-of-type{margin-top:10px}
+@media(max-width:720px){.admin-tasks{grid-template-columns:1fr;gap:8px}
+.admin-tasks>a{padding:14px 16px}.admin-task-icon{width:36px;height:36px;font-size:20px}
+.admin-accounts .admin-account{grid-template-columns:minmax(0,1fr) auto;gap:12px}
+.admin-account-heading{grid-column:1/-1}.admin-credit-balance{text-align:left}
+.admin-credit-action{justify-self:end}.admin-credit-action[open]{justify-self:stretch}
+.admin-accounts .card{padding-left:16px;padding-right:16px}}
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
 padding:4px 20px 16px;margin:0;box-shadow:var(--shadow)}
 .card.form{max-width:760px;margin-top:26px}
@@ -1507,6 +1560,22 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     if who is not None:
         whoami = (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
                   + ("" if is_admin else " · showing only your nodes"))
+    diagnostics = ('<h2 id="machine-diagnostics">Machine diagnostics</h2>'
+        '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
+        '<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Claude sign-in</th>'
+        '<th>Remote Control</th></tr></thead>'
+        f'<tbody>{body_rows}</tbody></table></div>'
+        + _usage_html(rows, now, csrf if is_admin else ''))
+    if is_admin:
+        diagnostics = ('<details class="admin-advanced"><summary>Diagnostics &amp; usage</summary>'
+                       + diagnostics + '</details>')
+    management = _manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else ''
+    if management:
+        management = ('<details class="admin-advanced"><summary>Advanced machine controls</summary>'
+                      + management + '</details>')
+    heading = 'Fleet admin' if is_admin else 'Your machines'
+    introduction = ('Manage accounts, credit and slots.' if is_admin
+                    else 'Check your machines and sign-in status.')
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -1515,24 +1584,18 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f"<style>{CSS}</style></head><body class=\"console\">"
         + _console_bar(corner, product_href(cfg, "/")) + "<div class=\"page\">"
         '<header class="mast"><div>'
-        "<h1>Fleet</h1>"
-        '<p class="sub">One owner, one account, one node · heartbeat max age '
-        f"{cfg.heartbeat_max_age_s // 60} min · {cadence}{whoami}</p></div>"
+        f'<h1>{heading}</h1><p class="sub">{introduction}</p>'
+        f'<p class="sub small">{cadence.capitalize()}{whoami}</p></div>'
         + _strip_html(counts) +
         "</header>" + extra
-        + '<h2 id="machine-diagnostics">Machine diagnostics</h2>'
-        '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
-        "<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Login</th>"
-        "<th>Remote Control</th></tr></thead>"
-        f"<tbody>{body_rows}</tbody></table></div>"
-        f'<h2>Open alerts</h2><div class="card">{alert_items}</div>'
+        + f'<h2>Open alerts</h2><div class="card">{alert_items}</div>'
         # Management is the operator's. An owner sees their nodes and nothing to
         # press, which is why they get no CSRF token either: there is no form.
         # The sign-in card belongs to whoever owns the node, admin or not: needing
         # the operator to sign you in would only move the bottleneck.
-        + _usage_html(rows, now, csrf if is_admin else "")
+        + diagnostics
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
-        + (_manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else "")
+        + management
         + "</div>" + LOCAL_TIMES_TAG + "</body></html>"
     )
