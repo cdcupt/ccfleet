@@ -158,7 +158,9 @@ def test_direct_cancellation_submits_only_local_order_and_server_security_contex
     assert all(item['type'] == 'hidden' for item in fields.values())
     [button] = page.inside(form, 'button')
     assert button.attrs['type'] == 'submit' and 'Cancel renewal' in button.text
-    assert 'paid period' in form.text and 'not deleted automatically' in form.text
+    assert 'current billing period' in form.text and 'paid time' in form.text
+    assert 'unpaid invoice may still be retried' in form.text
+    assert 'not deleted automatically' in form.text
     assert 'local-order-one' not in Document(source).text
     assert 'PRIVATE_' not in source
     assert not page.find('a')

@@ -47,7 +47,9 @@ def test_monthly_terms_stay_readable_when_new_enrollment_is_disabled(enabled, la
     if language == 'en':
         assert 'When offered' in page.text and 'independent monthly plans' in page.text
         assert 'not enrolled or converted automatically' in page.text
-        assert 'cancel' in page.text.lower() and 'paid period' in page.text
+        assert 'current billing period' in page.text and 'access is limited to paid time' in page.text
+        assert 'unpaid invoice already issued may still be retried' in page.text
     else:
         assert '提供此选项时' in page.text and '独立的月付计划' in page.text
-        assert '不会自动转换' in page.text and '已付款的服务期仍保留到期' in page.text
+        assert '不会自动转换' in page.text and 'Stripe 当前账期结束后停止' in page.text
+        assert '已有未付款账单仍可能重试扣款' in page.text

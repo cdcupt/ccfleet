@@ -120,10 +120,13 @@ def review(machine_number: int, monthly_cents: int, *, csrf: str,
     facts = (
         ("Your first payment is completed on Stripe before the slot starts.",
          "先到 Stripe 完成首笔付款，槽位才会开通。"),
-        ("It renews monthly until you cancel. The next bill follows the paid period.",
-         "之后每月续费，直到你取消；下一次账单接在已付费服务期之后。"),
-        ("Cancel on Stripe at any time. Your paid time continues until the period ends.",
-         "可随时在 Stripe 取消，已支付的服务仍可使用至本期结束。"),
+        ("It renews monthly until you cancel. Stripe shows the billing dates.",
+         "之后每月续费，直到你取消；账单日期以 Stripe 显示为准。"),
+        ("Cancel renewal at any time. It stops after Stripe’s current billing period; "
+         "access is limited to time already paid.",
+         "可随时停止续费，在 Stripe 当前账期结束时生效；只能使用已付费的服务时间。"),
+        ("An unpaid invoice already issued may still be retried after you request cancellation.",
+         "申请取消后，已经开出的未付款账单仍可能重试扣款。"),
     )
     return ('<section class="subscription-ui subscription-review">'
             + '<a class="subscription-back" href="/account/available">'
@@ -215,9 +218,12 @@ def _cancel_form(order: Mapping[str, Any], csrf: str) -> str:
             + _hidden("idempotency_key", wallet.request_id(nonce))
             + '<button class="btn" type="submit">'
             + label("Cancel renewal", "停止续费", inline=True) + '</button><p>'
-            + label("After cancellation is confirmed, you keep the paid period. "
+            + label("Once confirmed, renewal stops after Stripe’s current billing period. "
+                    "Access is limited to paid time. "
+                    "An existing unpaid invoice may still be retried. "
                     "Files are not deleted automatically.",
-                    "取消确认后，已付费服务仍保留到期，不会自动删除文件。", inline=True)
+                    "续费在 Stripe 当前账期结束后停止；只能使用已付费的服务时间。"
+                    "已有未付款账单仍可能重试扣款，不会自动删除文件。", inline=True)
             + '</p></form>')
 
 
@@ -283,8 +289,11 @@ def summary(orders: Sequence[Mapping[str, Any]], *, csrf: str,
                 escape(next_bill) if next_bill else label("See Stripe", "请在 Stripe 查看",
                                                           inline=True)) + '</dd>'
         note = ('<p class="subscription-cancel-note">'
-                + label("No further monthly renewal. Paid access ends with this period.",
-                        "不再按月续费，已付费使用权限在本期结束时到期。", inline=True)
+                + label("No new monthly cycle after Stripe’s current billing period. "
+                        "Access is limited to paid time. "
+                        "Existing unpaid invoices may still be retried.",
+                        "Stripe 当前账期结束后不再开新账期；只能使用已付费的时间。"
+                        "已有未付款账单仍可能重试扣款。", inline=True)
                 + '</p>' if cancel and order.get("status") != "closed" else '')
         pending = order.get("cancel_required") is True
         extra_status = ('<span class="subscription-status">'

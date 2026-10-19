@@ -134,7 +134,9 @@ def test_recurring_slot_explains_cancel_first_and_guarded_return_leaves_paid_cla
     assert response.status == 303 and 'note=monthly-release-blocked' in response.getheader('Location')
     assert financial(c) == before and c.store.get_slot('slot-node-a')['state'] == slots.CLAIMED
     refreshed = user.call('GET', response.getheader('Location'), headers=c.public)
-    assert ('请先取消月付' if language == 'zh' else 'Cancel monthly billing first') in refreshed.body
+    assert ('请先停止续费' if language == 'zh' else 'Cancel monthly billing first') in refreshed.body
+    assert ('月付计划与已付费服务时间都结束' if language == 'zh'
+            else 'monthly plan and paid time have both ended') in refreshed.body
     other = c.browser('bob')
     denied = other.call('POST', '/account/slots/slot-node-a/release', form={
         'csrf': usersite.csrf_for(other.session, c.cfg.cookie_secret), 'confirm': 'wipe'},

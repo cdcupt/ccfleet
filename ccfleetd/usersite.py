@@ -114,7 +114,8 @@ NOTES = {
     "no-allowance": ("warn", "You already hold every slot your allowance covers."),
     "released": ("ok", "Given back. Everything on it is being deleted."),
     "monthly-release-blocked": ("warn", "Cancel monthly billing first, then keep the slot "
-                                 "through its paid period. Manage it under Monthly payments."),
+                                 "until its monthly plan and paid time have both ended. "
+                                 "Manage it under Monthly payments."),
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
     "signin": ("ok", "Starting the sign-in on your slot…"),
     "switch": ("ok", "Starting the change of account on your slot…"),
@@ -152,7 +153,8 @@ NOTES_ZH = {
     "no-slot": "目前没有可领取槽位。请稍后再试，或联系运营方。",
     "no-allowance": "你已领取额度内的全部槽位。",
     "released": "槽位已归还，正在删除其中的所有内容。",
-    "monthly-release-blocked": "请先取消月付，并保留槽位至已付费服务期结束。可在“月付管理”操作。",
+    "monthly-release-blocked": ("请先停止续费，等月付计划与已付费服务时间都结束后再归还。"
+                                "可在“月付管理”操作。"),
     "confirm": "请先勾选确认框：归还槽位会删除其中的所有内容。",
     "signin": "正在槽位上启动 Claude 登录…", "switch": "正在槽位上启动账号更换…",
     "cli-revoked": "这台电脑已无法通过原配对连接该槽位。", "code": "授权码已发往槽位。",
@@ -2781,8 +2783,9 @@ def _slot_card(
     if slot["state"] in slotstates.RELEASABLE and not own:
         if recurring:
             parts.append('<p class="slot-monthly-return-note">' + label(
-                "Cancel monthly billing first, then keep the slot through its paid period. ",
-                "请先取消月付，并保留槽位至已付费服务期结束。", inline=True)
+                "Cancel renewal first. Return this slot only after its monthly plan "
+                "and paid time end. ",
+                "请先停止续费，等月付计划与已付费服务时间都结束后再归还。", inline=True)
                 + '<a href="/account/subscriptions">'
                 + label("Manage monthly payments", "管理月付", inline=True) + '</a></p>')
         parts.append(_slot_disclosure('Return this slot', '归还槽位',
