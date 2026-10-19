@@ -47,7 +47,9 @@ def native_details(store: Any, cfg: Any, account: Mapping[str, Any],
     state = native_state(store, cfg, account, slot, now=now)
     if state is None:
         return ""
-    opening = ('<section class="devin-connection" data-provider="devin" data-native-state="'
+    optional = state == "setup_required" and slot.get("state") == slotstates.ACTIVE
+    section_class = "devin-connection devin-optional" if optional else "devin-connection"
+    opening = ('<section class="' + section_class + '" data-provider="devin" data-native-state="'
                + state + '">')
     guide = ('<a href="' + GUIDE + '">'
              + label("Devin setup guide", "Devin 设置指南", inline=True) + '</a>')
@@ -86,10 +88,13 @@ def native_details(store: Any, cfg: Any, account: Mapping[str, Any],
             '<p>Devin 试点需要运营人员协助启用。请联系运营人员设置此槽位，'
             '目前尚不支持在网页上登录 Devin。</p>')
             + '<p>' + guide + ' · ' + privacy + '</p>')
-        if slot.get("state") == slotstates.ACTIVE:
+        if optional:
             body = ('<details class="provider-optional"><summary>'
+                    + '<span class="provider-add-icon" aria-hidden="true">+</span>'
+                    + '<span class="provider-add-label">'
                     + label("Add Devin (optional)", "添加 Devin（可选）", inline=True)
-                    + '</summary>' + setup + '</details>')
+                    + '</span><span class="provider-add-arrow" aria-hidden="true">›</span>'
+                    + '</summary><div class="provider-add-body">' + setup + '</div></details>')
         else:
             body = ('<h3>' + label("Set up Devin", "设置 Devin", inline=True)
                     + '</h3>' + setup)
