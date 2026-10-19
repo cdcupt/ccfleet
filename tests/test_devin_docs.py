@@ -119,10 +119,7 @@ def test_devin_guide_discloses_cost_and_commercial_limits_with_official_sources(
     assert not any("checkout" in url or "signup" in url for url in page.links)
     for unverified_claim in ("unlimited usage", "ban-proof"):
         assert unverified_claim not in page.text
-    assert any(attrs.get("data-claim") == "devin-4-6x"
-               and attrs.get("data-status") == "unverified" for _, attrs in page.tags)
-    for definition in ("Price:", "Speed:", "Allowance value:"):
-        assert definition in page.text
+    assert not any(attrs.get("data-claim") == "devin-4-6x" for _, attrs in page.tags)
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
@@ -130,23 +127,23 @@ def test_prices_keep_current_plans_and_fleet_fees_separate_from_other_metrics(la
     source = (ROOT / "docs/devin.html").read_text()
     page = Document(bilingual.project_html(source, language, TARGET))
     comparisons = {attrs.get("data-comparison") for tag, attrs in page.tags if tag == "table"}
-    assert {"plans", "speed", "value", "api"} <= comparisons
+    assert {"plans", "allowance", "value", "api"} <= comparisons
     prices = {(attrs["data-plan"], float(attrs["data-monthly-usd"]))
               for _, attrs in page.tags if "data-plan" in attrs}
     assert {("Pro", 20), ("Max 5x", 100), ("Max 20x", 200), ("Max", 200)} <= prices
     if language == "en":
         for phrase in ("US$200/year prepaid", "about US$17/month", "Claude Max is monthly only",
                        "five-hour and weekly limits", "larger weekly allowance, no daily cap",
-                       "not cross-provider token or speed conversions", "tax",
-                       "provider subscription + your selected Fleet slot quote + any extra usage and tax",
-                       "US$20 is not an all-in Fleet price", "billing period"):
+                       "tax",
+                       "provider subscription + selected Fleet slot + extra usage and tax",
+                       "billing period"):
             assert phrase in page.text
         assert "Fleet 槽位费用另计" not in page.text
     else:
         for phrase in ("预付每年 200 美元", "约每月 17 美元", "Claude Max 只按月订阅",
-                       "五小时及每周额度", "无每日上限", "不是跨服务的 token 或速度换算", "税费",
-                       "提供商订阅费 + 所选 Fleet 槽位报价 + 额外用量及税费",
-                       "20 美元不是 Fleet 全包价", "计费周期"):
+                       "五小时及每周额度", "无每日上限", "税费",
+                       "提供商订阅 + 所选 Fleet 槽位 + 额外用量及税费",
+                       "计费周期"):
             assert phrase in page.text
         assert "The Fleet slot costs extra" not in page.text
 

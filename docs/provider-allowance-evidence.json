@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "dataset": "Real API Pricing community estimates",
+  "source_revision": "0be92b7ce3edf7690672ce5217607032a4bc7c45",
+  "source_snapshot": "2026-10-16",
+  "reviewed_on": "2026-10-19",
+  "source_csv": "https://github.com/Fei2411/real-api-pricing/blob/0be92b7ce3edf7690672ce5217607032a4bc7c45/data/adopted.csv",
+  "methodology": "https://github.com/Fei2411/real-api-pricing/blob/0be92b7ce3edf7690672ce5217607032a4bc7c45/CONVENTIONS.md",
+  "period_weeks": 4,
+  "model": "claude-opus-5.5",
+  "workload_share": {
+    "cache_read": 0.97,
+    "cache_write_5m": 0.025,
+    "output": 0.005
+  },
+  "api_usd_per_million": {
+    "cache_read": 0.2,
+    "cache_write_5m": 5,
+    "output": 20
+  },
+  "api_blended_usd_per_million": 0.419,
+  "baseline_plan": "claude-max-20x",
+  "rows": [
+    {
+      "provider": "claude",
+      "plan": "claude-max-20x",
+      "monthly_usd": 200,
+      "tokens": 31538000000,
+      "confidence": "medium",
+      "sample_start": "2026-09-22",
+      "sample_end": "2026-09-27",
+      "source": "https://github.com/Fei2411/real-api-pricing/blob/0be92b7ce3edf7690672ce5217607032a4bc7c45/data/research/claude-opus55-max20x-round2-2026-09-30.json",
+      "method": "Community estimate combines observed window consumption with weekly-window and cross-plan assumptions."
+    },
+    {
+      "provider": "devin",
+      "plan": "devin-max",
+      "monthly_usd": 200,
+      "tokens": 6690000000,
+      "confidence": "medium",
+      "sample_start": "2026-09-23",
+      "sample_end": "2026-09-23",
+      "source": "https://github.com/Fei2411/real-api-pricing/blob/0be92b7ce3edf7690672ce5217607032a4bc7c45/data/research/devin-opus55-round1-2026-09-23.json",
+      "raw_sample": {
+        "quota_points": 48,
+        "input": 2672,
+        "output": 1917552,
+        "cache_read": 483137835,
+        "cache_write_5m": 40275697
+      },
+      "source_monthly_api_value_usd": 2803.06,
+      "method": "One account sample; quota share attributed to Opus and normalized using token-type price ratios."
+    }
+  ],
+  "interpretation": [
+    "Projected four-week allowance at full utilization, not an official fixed-token entitlement.",
+    "Effective token price assumes all projected allowance is used.",
+    "Normalized total includes cache-read tokens; it is not generated output tokens.",
+    "No Devin Pro allowance is derived from the Max sample."
+  ]
+}
