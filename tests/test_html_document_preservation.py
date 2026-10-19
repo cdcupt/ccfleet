@@ -232,8 +232,8 @@ def test_full_shell_commands_survive_as_literal_escaped_code(relative, commands)
 # Intentional current-document updates are reviewed and dated below; historical
 # snapshots retain their original conversion baselines.
 @pytest.mark.parametrize("relative,count,digest", [
-    # 2026-10-12: current HTTPS route and administration in the live container.
-    ("README.html", 13, "697e33e2b83f9b0322373144017a9af521a9500090a3696602417059c9a892e9"),
+    # 2026-10-18: add the signed side-by-side canonical-domain client example.
+    ("README.html", 14, "7901264babb4960aab49c3589360cdcf29395b4aaed3903e786c509413c75c60"),
     ("gateway/README.html", 2, "05a5875a4103537bf322ea6a96eaf76efd2d1b47bdaa9da8d1ec89921a9feb69"),
     ("docs/compliance.html", 1, "2ded188e10c277d7ba59ba03370ff9b307bcae82bf0704dba331489a5a70208d"),
     ("docs/design.html", 4, "7f419e01e1cc8c555781096ad52e2c6b3cdb122d828a16e0801be29e047efb2b"),
