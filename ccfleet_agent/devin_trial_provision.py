@@ -9,18 +9,18 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import grp
 import hashlib
 import importlib.util
 import json
 import math
 import os
-from pathlib import Path
 import pwd
-import grp
 import stat
 import sys
 import time
 import uuid
+from pathlib import Path
 
 if __package__:
     from . import devin_provision as provision

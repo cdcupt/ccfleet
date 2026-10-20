@@ -166,13 +166,16 @@ def scene(tmp_path, monkeypatch):
     }
     write(Path(reg["state_path"]), machine)
     write(t.GRANT, b"PREVIOUS_GRANT", 0o640)
-    lookup = lambda name: {source.pw_name: source, trial.pw_name: trial}[name]
-    run = lambda **kw: t.refresh(
-        now=kw.pop("now", lambda: 1020),
-        lookup=lookup,
-        groups_of=kw.pop("groups_of", lambda _: set()),
-        **kw,
-    )
+    def lookup(name):
+        return {source.pw_name: source, trial.pw_name: trial}[name]
+
+    def run(**kw):
+        return t.refresh(
+            now=kw.pop("now", lambda: 1020),
+            lookup=lookup,
+            groups_of=kw.pop("groups_of", lambda _: set()),
+            **kw,
+        )
     return SimpleNamespace(**locals())
 
 
