@@ -6,8 +6,8 @@ also shows a masked public usage summary; no machine address or private account
 identity is disclosed. Every button it quotes is the label
 the user site really shows.
 
-CC Fleet provides the hosted slot, not a shared provider subscription. Each
-person brings their own provider account; Devin remains a verified own-slot pilot.
+Paid private slots use each customer's own provider account. The optional
+Fleet-managed daily Devin trial is a separate explicitly gated route.
 """
 
 from __future__ import annotations
@@ -641,7 +641,8 @@ def overview(
         + bi("<h2>What you get</h2>", "<h2>你会获得什么</h2>")
         + bi(
             '<p class="band-lead">One familiar coding tool, with your provider choice saved '
-            "on the website. Anthropic is the default; Devin is an own-account pilot.</p>",
+            'on the website. For private slots, Anthropic is the default; Devin is '
+            'an own-account pilot.</p>',
             '<p class="band-lead">继续使用熟悉的编程工具，在网页选择模型服务。默认使用 '
             "Anthropic；Devin 目前为自有账号试点。</p>",
         )
@@ -703,13 +704,14 @@ def overview(
         + "</li>"
         + "</ul>"
         + bi(
-            '<p class="callout">ccfleet sells the machine, not Claude or Devin '
-            'subscriptions. Nobody else&#x27;s '
-            "provider account is ever shared with you, and yours is never shared with "
-            "anybody.</p>",
-            '<p class="callout">CC Fleet 提供托管的槽位环境，不出售 Claude 或 Devin '
-            "订阅。你只能使用自己的账号；我们不会把其他用户的账号分给你，也不会把你"
-            "的账号分给其他用户。</p>",
+            '<p class="callout">For paid private slots, ccfleet sells the machine, not Claude '
+            'or Devin subscriptions. They use only your own provider sign-in; '
+            'your private slot and '
+            'sign-in are never assigned to another customer. The optional daily Devin trial '
+            'is a separate Fleet-managed service, only when Try Devin is offered.</p>',
+            '<p class="callout">付费私人槽位提供托管机器，不包含 Claude 或 Devin 订阅。'
+            '私人槽位只使用你自己的服务登录，不会将你的私人槽位或登录分给其他用户。'
+            '可选的每日 Devin 试用是独立的 Fleet 管理服务，仅在显示「试用 Devin」时提供。</p>',
         )
         + '</div><div class="card">'
         + bi("<h2>How to buy</h2>", "<h2>如何开通</h2>")
@@ -785,6 +787,10 @@ def overview(
         + "</span></a></div></section>"
     )
     body += _subscription_rental_details(cfg)
+    if getattr(cfg, "devin_trial_enabled", False) and not getattr(cfg, "broker_only", False):
+        from . import trial_routes
+
+        body = trial_routes.entry(cfg) + body + trial_routes.privacy()
     return _page("/", "about", body, width="", viewer=viewer, canonical="/")
 
 
@@ -1675,6 +1681,10 @@ def guide(
                  + _public_slot_catalogue(wallet_enabled) + _available_slot_browsing(wallet_enabled)
                  + _rental_pricing_details(wallet_enabled) + '</div>')
     body += _subscription_rental_details(cfg)
+    if getattr(cfg, "devin_trial_enabled", False) and not getattr(cfg, "broker_only", False):
+        from . import trial_routes
+
+        body = trial_routes.guide() + body
     return _page("/docs/guide", "getting started", body, viewer=viewer)
 
 
@@ -1748,10 +1758,11 @@ def how_it_works(
         + bi("<h1>How it works</h1>", "<h1>CC Fleet 如何工作</h1>")
         + bi(
             '<p class="lead">Your computer does the file work. Fleet is the reception desk: '
-            "it sends your question through your own slot, using the provider you chose "
+            'for paid private slots it sends your question through your own slot, '
+            'using the provider you chose '
             "on the website. The answer comes back to Claude Code.</p>",
             '<p class="lead">电脑负责文件操作，Fleet 像收件前台：按你在网页选择的模型服务，'
-            "把问题经由自己的槽位发出，再把回答送回 Claude Code。</p>",
+            "付费私人槽位会把问题经由自己的槽位发出，再把回答送回 Claude Code。</p>",
         )
         + '</div><div class="how"><figure class="card diagram">'
         + bi(PROVIDER_PICTURE, PROVIDER_PICTURE_ZH)
@@ -1775,12 +1786,14 @@ def how_it_works(
             "连接密钥，通过 HTTPS 发给我们的网关。</p>",
         )
         + bi(
-            "<p>Fleet checks your connection key and uses a slot you selected. "
+            '<p>For paid private slots, Fleet checks your connection key and uses '
+            'a slot you selected. '
             "<strong>Anthropic</strong> uses your Claude sign-in. <strong>Devin</strong> "
             "uses its own native CLI and your Devin sign-in on the slot. The reply and "
             "tool requests return to Claude Code. Read, Edit and Bash run on your computer "
             "with its permissions. Credentials are not copied to your laptop or the gateway.</p>",
-            "<p>Fleet 验证连接密钥，使用你选定的槽位。<strong>Anthropic</strong> 路线使用"
+            '<p>付费私人槽位中，Fleet 验证连接密钥，使用你选定的槽位。<s'
+            'trong>Anthropic</strong> 路线使用'
             "你的 Claude 登录；<strong>Devin</strong> 路线使用槽位上的原生 Devin CLI 和"
             "你的 Devin 登录。回复和工具请求返回 Claude Code；Read、Edit、Bash 按本机权限"
             "在电脑执行。服务商凭证不会复制到电脑或网关。</p>",
@@ -1958,6 +1971,10 @@ def how_it_works(
         '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p>',
     ) + '</details></div>'
     body += _subscription_rental_details(cfg)
+    if getattr(cfg, "devin_trial_enabled", False) and not getattr(cfg, "broker_only", False):
+        from . import trial_routes
+
+        body = trial_routes.guide() + body
     return _page("/docs/how-it-works", "how it works", body, width="", viewer=viewer)
 
 
@@ -2020,14 +2037,17 @@ def terms(
         + '</div><div class="card">'
         + bi("<h2>The service</h2>", "<h2>服务内容</h2>")
         + bi(
-            "<p>A slot provides one person with a dedicated VPS and dedicated exit IP, "
+            '<p>A paid private slot provides one person with a dedicated VPS and '
+            'dedicated exit IP, '
             "with a private Linux account and Claude Code installed. You bring your own "
             "provider plan and sign in to it "
             "yourself; ccfleet does not provide access to Claude. CC Fleet is independent "
             "and is not affiliated with or endorsed by Anthropic or Cognition. Devin is "
             "a verified own-account pilot, not a bundled or shared subscription.</p>",
-            "<p>槽位为一人提供专属 VPS 与专属出口 IP，包含独立 Linux 用户环境，并安装了 Claude "
-            "Code。你自行准备服务商订阅并亲自登录；CC Fleet 不提供 Claude 或 Devin 订阅或账号。CC "
+            '<p>付费私人槽位为一人提供专属 VPS 与专属出口 IP，包含独立 '
+            'Linux 用户环境，并安装了 Claude '
+            'Code。你自行准备服务商订阅并亲自登录；CC Fleet 不提供 C'
+            'laude 或 Devin 订阅或账号。CC '
             "Fleet 独立运营，与 Anthropic 或 Cognition 没有隶属关系，也未获其背书。Devin "
             "仅作为通过验证的自有账号试点，不打包或共享订阅。</p>",
         )
@@ -2094,6 +2114,10 @@ def terms(
                  + bi('<h2>Per-machine rental rates</h2>', '<h2>逐台主机的出租价格</h2>')
                  + _rental_pricing_details(wallet_enabled) + '</div>')
     body += _subscription_rental_details(cfg, terms=True)
+    if getattr(cfg, "devin_trial_enabled", False) and not getattr(cfg, "broker_only", False):
+        from . import trial_routes
+
+        body = trial_routes.guide() + body
     return _page("/docs/terms", "terms", body, viewer=viewer)
 
 

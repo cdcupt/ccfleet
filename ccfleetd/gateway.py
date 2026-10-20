@@ -69,7 +69,7 @@ def model_error(handler, status: int, message: str) -> None:
     handler.send_header("Content-Length", str(len(raw)))
     if getattr(handler, "_gateway_native_no_retry", False):
         handler.send_header("x-should-retry", "false")
-    if status == 503:
+    if status == 503 or (status == 429 and getattr(handler, "_trial_busy", False)):
         handler.send_header("Retry-After", "3")
     handler.end_headers()
     with contextlib.suppress(OSError):
