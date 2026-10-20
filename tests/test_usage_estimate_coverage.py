@@ -71,7 +71,7 @@ def test_unpriced_legacy_unknown_and_tiered_usage_is_not_fake_zero_price(model):
     assert result["priced_tokens"] is None and result["priced_token_state"] == "unknown"
     assert result["unpriced_tokens"] == result["tokens"]
     assert result["unpriced_token_state"] == "complete"
-    assert result["estimated_usd"] is None and result["entries"][0]["rank"] is None
+    assert result["estimated_usd"] is None and result["entries"][0]["rank"] == 1
     assert_partition(result)
 
 
