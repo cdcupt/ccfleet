@@ -607,7 +607,7 @@ border-bottom:1px solid var(--rule-soft);font-variant-numeric:tabular-nums}
 letter-spacing:.04em;white-space:nowrap}
 .usage-ranking tbody th{background:none;text-transform:none}
 .usage-ranking .usage-ranking-row th,.usage-ranking .usage-ranking-row td{border-bottom:0}
-.usage-ranking .usage-rank{width:28px;color:var(--muted);font-size:12px}
+.usage-ranking .usage-rank{width:72px;color:var(--muted);font-size:12px}
 .usage-ranking .usage-user{min-width:72px;padding-top:18px}
 .usage-ranking .usage-observed{min-width:115px}
 .usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:19px;font-weight:700;
@@ -1037,10 +1037,10 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
         "Tokens are reported input, output and cache-read/write subtotals. Missing coverage is "
         "unknown, not zero. Model details and estimates use new model-aware observations; "
         "older aggregate tokens can remain unpriced. Unknown values are not ranked. "
-        "Nicknames are partly masked, which is not anonymity.",
+        "Names use partly masked nicknames or a masked member code; this is not anonymity.",
         "Token 是已报告的输入、输出和缓存读取／写入小计。缺失的覆盖表示未知，不是零。模型明细"
-        "与估值使用新的带模型信息观测；旧汇总 Token 可能仍未计价。未知估值不参与排名。昵称"
-        "部分遮盖，这不等于匿名。", inline=True) + '</p><p>' + label(
+        "与估值使用新的带模型信息观测；旧汇总 Token 可能仍未计价。未知估值不参与排名。名称"
+        "使用部分遮盖的昵称或用户编号，这不等于匿名。", inline=True) + '</p><p>' + label(
         "API value is an estimate, not a Claude Pro/Max bill, amount paid or quota balance. "
         "Pricing assumes standard global API rates and 5-minute cache writes; actual cache "
         "TTL, context and service tiers can change API pricing. Haiku 5.5 remains unpriced "
@@ -1079,30 +1079,50 @@ def public_usage_panel(ranking: Any) -> str:
     report = ranking if isinstance(ranking, Mapping) else {}
     entries = report.get("entries") if report.get("state") in ("partial", "ready") else []
     rows = []
-    for entry in entries[:50] if isinstance(entries, list) else []:
+    for position, entry in enumerate(entries[:50] if isinstance(entries, list) else [], 1):
         if not isinstance(entry, Mapping):
             continue
         handle = entry.get("masked_handle")
+        code = entry.get("member_code")
+        code = code if isinstance(code, str) and re.fullmatch(r"[0-9]{8}", code) else None
+        member = label("Member ", "用户 ", inline=True) + "••" + (code or f"{position:02d}")
         masked = (escape(handle) if isinstance(handle, str) and len(handle) <= 40
+                  and handle.strip("*")
                   and re.fullmatch(r"[a-z0-9-]{0,2}\*{1,32}[a-z0-9-]{0,2}", handle)
-                  else label("User", "用户", inline=True))
+                  else member)
         rank = _public_usage_count(entry.get("rank"))
-        rank_text = str(rank) if rank is not None and 1 <= rank <= 50 else "—"
         priced = entry.get("priced_tokens")
         priced = priced if isinstance(priced, Mapping) else {}
         known = (_public_usage_price_known(entry)
                  and _public_usage_count(priced.get("total_tokens")) is not None)
-        value = _public_usage_value(entry) if known else label("—", "—", inline=True)
-        scope = (label("for ", "对应 ", inline=True)
-                 + _public_usage_token(priced.get("total_tokens"))
-                 + label(" priced tokens", " 已计价 Token", inline=True) if known else label(
-                     "Estimate unavailable", "暂无可用估值", inline=True))
+        rank_text = (str(rank) if known and rank is not None and 1 <= rank <= 50
+                     else label("Not ranked yet", "暂未排名", inline=True))
+        value = (_public_usage_value(entry) if known else label(
+            "Pricing unavailable", "暂无计价信息", inline=True))
+        recorded = entry.get("tokens")
+        recorded = recorded if isinstance(recorded, Mapping) else {}
+        recorded_known = _public_usage_count(recorded.get("total_tokens")) is not None
+        if known:
+            scope = (label("for ", "对应 ", inline=True)
+                     + _public_usage_token(priced.get("total_tokens"))
+                     + label(" priced tokens", " 已计价 Token", inline=True))
+            token_scope = label("Priced tokens", "已计价 Token", inline=True)
+        elif recorded_known:
+            scope = label("Recorded usage is shown; model pricing is unavailable.",
+                          "已展示实际用量，暂缺模型计价信息。", inline=True)
+            token_scope = label("Recorded · unpriced", "已记录 · 未计价", inline=True)
+        else:
+            scope = label("No token measurement is available yet.",
+                          "暂缺 Token 用量观测。", inline=True)
+            token_scope = label("No measurement yet", "暂无观测", inline=True)
         badge = _public_usage_badge(entry) if known else ''
+        total = priced.get("total_tokens") if known else recorded.get("total_tokens")
+        amount = (_public_usage_token(total) if _public_usage_count(total) is not None else
+                  label("Usage unavailable", "暂无用量信息", inline=True))
         rows.append('<tr class="usage-ranking-row"><td class="usage-rank">' + rank_text
                     + '</td><th class="usage-user" scope="row">' + masked
                     + '</th><td class="usage-observed"><strong>'
-                    + _public_usage_token(priced.get("total_tokens") if known else None)
-                    + '</strong></td>'
+                    + amount + '</strong><small>' + token_scope + '</small></td>'
                     '<td class="usage-estimate"><div class="usage-estimate-value">'
                     + value + badge + '</div><small class="usage-estimate-scope">' + scope
                     + '</small></td></tr><tr class="usage-ranking-detail"><td colspan="4">'
@@ -1117,9 +1137,11 @@ def public_usage_panel(ranking: Any) -> str:
         "Last 7 UTC days · ranked by estimated API value",
         "最近 7 个 UTC 日期 · 按估算 API 等价值排名",
         inline=True) + '</p><p class="usage-scope">' + label(
-        "Ranking token totals and costs use the same priceable scope; older/unpriced "
-        "reported usage is in details.",
-        "排行 Token 总量与估值使用同一计价范围；旧数据／未计价上报用量在明细中。",
+        "Each row represents a user with recorded activity. Estimates rank priced usage; "
+        "users without model pricing still show their recorded tokens, without a rank. "
+        "Each dollar estimate names the tokens it covers.",
+        "每一行都来自有实际活动的用户。已计价用量参与排名；暂缺模型价格的用户仍展示已记录 "
+        "Token，并标为暂未排名。每项美元估值都注明对应的 Token 数量。",
         inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
@@ -1129,7 +1151,7 @@ def public_usage_panel(ranking: Any) -> str:
     source += ('<div class="usage-ranking-sheet" role="region" '
                'aria-labelledby="usage-ranking-title" tabindex="0"><table><thead><tr>'
                + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>' for en, zh in (
-                   ("Rank", "排名"), ("User", "用户"), ("Priced tokens", "已计价 Token"),
+                   ("Rank", "排名"), ("User", "用户"), ("Tokens", "Token 用量"),
                    ("API estimate · USD", "API 估值 · 美元")))
                + '</tr></thead><tbody>' + (''.join(rows) if rows else empty)
                + '</tbody></table></div><p class="usage-units">' + label(
@@ -2088,17 +2110,19 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 'The <a href="/#usage-ranking">homepage ranking</a> is visible to everyone. '
                 "It publishes each contributing user's measured token totals, a compact "
                 "model breakdown and an estimated standard API-equivalent USD value over "
-                "seven UTC calendar days. Only a partly masked nickname chosen by the user "
-                "is shown; short nicknames are fully masked. Users without a chosen nickname "
-                "receive a generic label. An email address or account ID is never used as "
-                "the public name. "
+                "seven UTC calendar days. Names use a partly masked user-chosen nickname "
+                "when available; missing or fully masked short nicknames use a masked member "
+                "code. The code is a purpose-specific pseudonym; "
+                "rotating the website's signing secret changes it. Full email addresses and "
+                "account IDs are never published as names. "
                 "Masking is not anonymity: a nickname or activity pattern may still identify "
                 "someone. The ranking can include one contributing user.",
                 '<a href="/#usage-ranking">首页用量排行</a>对所有人公开，展示每位参与用户在七个 '
                 "UTC "
                 "日期内观测到的 Token 总量、简要模型明细，以及按标准 API 价格估算的美元价值。"
-                "名称只使用用户自己选择的昵称，并遮盖其中一部分；较短的昵称全部遮盖，未设置昵称"
-                "时显示通用标签。公开名称绝不使用邮箱或账号 ID。遮盖不等于匿名：昵称或活动模式"
+                "名称优先使用部分遮盖的自选昵称；较短且已完全遮盖的昵称或未设置昵称的用户，"
+                "显示遮盖的用户编号。编号是仅用于此排行的化名，网站签名密钥轮换后会变化。"
+                "公开名称绝不展示完整邮箱或账号 ID。遮盖不等于匿名：昵称或活动模式"
                 "仍可能让人识别出某位用户。排行可以包含仅一位参与用户。",
             ),
             (

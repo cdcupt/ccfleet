@@ -5,6 +5,8 @@ observations: never distribute historical tokens across an inferred model mix.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import math
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -47,6 +49,15 @@ def _masked_handle(value):
     if not names.valid_handle(value):
         return None
     return value[0] + "***" + value[-1] if len(value) >= 4 else "***"
+
+
+def _member_code(holder, secret):
+    """A purpose-separated public pseudonym, never an email or raw account ID."""
+    if not isinstance(holder, str) or not isinstance(secret, str) or not secret:
+        return None
+    digest = hmac.new(secret.encode(), b"public-usage-member-v1\0" + holder.encode(),
+                      hashlib.sha256).digest()
+    return f"{int.from_bytes(digest[:8], 'big') % 100_000_000:08d}"
 
 
 def _bucket():
@@ -196,7 +207,9 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
                     "unpriced_token_state",
                     "estimated_usd", "cost_state"):
             result[key] = totals[key]
-        entries = [_entry(value, accounts.get(holder)) for holder, value in groups.items()
+        entries = [{**_entry(value, accounts.get(holder)),
+                    "member_code": _member_code(holder, getattr(cfg, "cookie_secret", None))}
+                   for holder, value in groups.items()
                    if value["usage_eligible_messages"] or value["usage_samples"]]
         entries.sort(key=lambda row: (row["estimated_usd"] is None,
                                      -(row["estimated_usd"] or 0),
