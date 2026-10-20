@@ -243,9 +243,10 @@ def _offer_prices_card(store: Store) -> str:
             'foreign invoices. Missing or unconverted costs leave pricing unavailable.</p>'
             '<p class="note">Edit each machine under its slot’s Manage → Providers, IP type '
             '&amp; price. Brands, network type and the normalized monthly cost breakdown are '
-            'public; raw invoices remain here. Introductory Alpha pricing may change for future '
-            'periods: provide an updated quote before renewal and honor the agreed price for '
-            'an already agreed period. Credit purchases are one-time payments. Recurring '
+            'public; raw invoices remain here. Introductory Alpha pricing may change for new '
+            'purchases or credit renewals: provide the current quote for confirmation and honor '
+            'the agreed price for an already agreed period. Existing monthly card plans keep '
+            'their confirmed rate. Credit purchases are one-time payments. Recurring '
             'billing requires a separate customer confirmation. Provider subscriptions '
             'and API usage are separate.'
             '</p></details></div></section>')
@@ -304,7 +305,8 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
                  "Enter 0 only for an exit IP included in the recorded bundled hosting cost; "
                  "a blank component or unconverted foreign costs leave pricing unavailable. "
                  "Alpha pricing rounds resource cost, adds a rounded service fee of 10% with "
-                 "a $2 minimum; no automatic charges or renewals. "
+                 "a $2 minimum. Changing this quote does not itself charge customers or "
+                 "change an existing monthly plan's confirmed rate. "
                  "Save to update the displayed preview.")
 
 
