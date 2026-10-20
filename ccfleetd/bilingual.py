@@ -238,6 +238,20 @@ class _Projection(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self._start(tag, attrs, True)
 
+    def _ui_url(self, url):
+        """Use bare English UI paths for navigation, forms and timed refreshes."""
+        value = localized_url(url, self.language, self.target, self.public_origin)
+        if self.language == 'en':
+            parts = urlsplit(value)
+            origin = urlsplit(self.public_origin)
+            same_site = (not parts.scheme and not parts.netloc or
+                         bool(origin.netloc) and parts.scheme == origin.scheme
+                         and parts.netloc.lower() == origin.netloc.lower())
+            if same_site and (parts.path == '/en' or parts.path.startswith('/en/')):
+                value = urlunsplit((parts.scheme, parts.netloc, parts.path[3:] or '/',
+                                    parts.query, parts.fragment))
+        return value
+
     def _start(self, tag, attrs, closed):
         attrs = dict(attrs)
         classes = set((attrs.get('class') or '').split())
@@ -287,24 +301,11 @@ class _Projection(HTMLParser):
             elif tag == 'meta' and (attrs.get('http-equiv') or '').lower() == 'refresh':
                 delay, separator, destination = (attrs.get('content') or '').partition(';url=')
                 if separator:
-                    attrs['content'] = delay + separator + localized_url(
-                        destination, self.language, self.target, self.public_origin)
+                    attrs['content'] = delay + separator + self._ui_url(destination)
             else:
                 for attribute in ('href', 'action'):
                     if attribute in attrs:
-                        value = localized_url(attrs[attribute], self.language,
-                                              self.target, self.public_origin)
-                        if self.language == 'en':
-                            parts = urlsplit(value)
-                            origin = urlsplit(self.public_origin)
-                            same_site = (not parts.scheme and not parts.netloc or
-                                         bool(origin.netloc) and parts.scheme == origin.scheme
-                                         and parts.netloc.lower() == origin.netloc.lower())
-                            if same_site and (parts.path == '/en' or parts.path.startswith('/en/')):
-                                value = urlunsplit((parts.scheme, parts.netloc,
-                                                    parts.path[3:] or '/',
-                                                    parts.query, parts.fragment))
-                        attrs[attribute] = value
+                        attrs[attribute] = self._ui_url(attrs[attribute])
             for attribute in ('placeholder', 'aria-label', 'title', 'data-label'):
                 name = ('label' if attribute == 'data-label' else attribute)
                 source = 'data-' + name + '-' + self.language

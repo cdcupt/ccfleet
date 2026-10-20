@@ -149,6 +149,12 @@ def test_buffered_native_sse_is_excluded_from_live_stream_throughput(
     monkeypatch.setattr(throughput, "StreamObserver", observer)
     monkeypatch.setattr(c.gateway.throughput, "submit", lambda value, **kwargs:
                         submitted.append(value))
+    accounting_complete = threading.Event()
+    release = c.gateway._release
+    def record_completion(key_id, size):
+        release(key_id, size)
+        accounting_complete.set()
+    monkeypatch.setattr(c.gateway, "_release", record_completion)
     # Native response accounting stays untouched; only rate measurement is
     # excluded. A fake observer would otherwise return a recordable sample.
     response = (b'event: message_start\ndata: {"type":"message_start"}\n\n'
@@ -157,6 +163,10 @@ def test_buffered_native_sse_is_excluded_from_live_stream_throughput(
     c.pool.plans["s1"].append({"chunks": [response]})
     status, data, _ = request(c, path=path)
     assert status == 200 and data == response
+    # The client can receive the terminal chunk before the server submits its
+    # sample. Wait for final request cleanup for both providers, so absence of
+    # Devin accounting is checked only after accounting could have occurred.
+    assert accounting_complete.wait(timeout=5), "gateway response accounting did not complete"
     assert len(c.pool.requests) == 1
     assert created == ([] if provider == "devin" else ["text/event-stream"])
     assert submitted == ([] if provider == "devin" else [sample])
