@@ -145,6 +145,10 @@ class Config:
     stripe_subscription_portal_configuration_id: str = ""
     # Public model requests are an explicit, separate authority from opaque SSH.
     gateway_enabled: bool = False
+    devin_trial_enabled: bool = False
+    devin_trial_directory: str = ""
+    devin_trial_worker_file: str = ""
+    devin_trial_ssh_key_file: str = ""
     # Native compatibility requires this opt-in and an exact approved runtime profile.
     gateway_devin_enabled: bool = False
     gateway_devin_native_version: str = ""
@@ -285,6 +289,10 @@ class Config:
             stripe_subscription_portal_configuration_id=env.get(
                 ENV_PREFIX + "STRIPE_SUBSCRIPTION_PORTAL_CONFIGURATION_ID", ""),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
+            devin_trial_enabled=_env_bool(env, "DEVIN_TRIAL_ENABLED", False),
+            devin_trial_directory=env.get(ENV_PREFIX + "DEVIN_TRIAL_DIRECTORY", ""),
+            devin_trial_worker_file=env.get(ENV_PREFIX + "DEVIN_TRIAL_WORKER_FILE", ""),
+            devin_trial_ssh_key_file=env.get(ENV_PREFIX + "DEVIN_TRIAL_SSH_KEY_FILE", ""),
             gateway_devin_enabled=_env_bool(env, "GATEWAY_DEVIN_ENABLED", False),
             gateway_devin_native_version=env.get(
                 ENV_PREFIX + "GATEWAY_DEVIN_NATIVE_VERSION", "").strip(),
@@ -402,6 +410,8 @@ class Config:
                     or public.path or public.query or public.fragment):
                 raise ConfigError("CCFLEET_GATEWAY needs its private service key path, "
                                   "public key and HTTPS public URL (loopback HTTP for tests)")
+        from . import trial_runtime
+        trial_runtime.validate(cfg)
         from . import stripe_config
         stripe_config.validate(cfg)
         from . import subscription_config

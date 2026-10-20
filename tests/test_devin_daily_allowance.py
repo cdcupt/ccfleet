@@ -299,15 +299,14 @@ def test_daily_requests_and_admission_caps_are_not_refunded_by_zero_usage(scene)
         ledger.allowance(ALICE).remaining_requests == 0
         and ledger.admit(ALICE).code == "daily_limit_reached"
     )
-    for _ in range(t.DAILY_LEASES):
-        lease = enter(ledger, BOB)
-        ledger.close(BOB, lease, cleanup_confirmed=True)
-    assert ledger.admit(BOB).code == "daily_limit_reached"
+    # The hard global turn cap is now also twenty. Other accounts cannot
+    # bypass it after this user's twenty requests, even with measured zero.
+    assert ledger.admit(BOB).code == "global_daily_limit_reached"
 
 
 def test_runtime_reservations_accumulate_across_leases(scene):
     ledger, _, _ = scene
-    for _ in range(2):
+    for _ in range(t.DAILY_RUNTIME_S // 60):
         lease = enter(ledger)
         step = begin(ledger, lease, seconds=60)
         finish(ledger, lease, step, 0)
@@ -371,7 +370,7 @@ def test_two_connections_cannot_double_reserve_same_remaining_daily_budget(tmp_p
     try:
         assert (
             db.execute("SELECT reserved_tokens FROM devin_trial_account_days").fetchone()[0]
-            == t.DEFAULT_DAILY_TOKENS
+            == t.TURN_RESERVATION_TOKENS
         )
     finally:
         db.close()
@@ -398,13 +397,11 @@ def test_global_daily_request_cap_is_shared_across_accounts():
     db = sqlite3.connect(":memory:")
     ledger = t.TrialLedger(db, enabled=True, clock=lambda: float(DAY))
     try:
-        for number in range(5):
+        for number in range(t.GLOBAL_DAILY_REQUESTS):
             user = t.VerifiedAccount("user" + str(number), True)
-            for _ in range(4):
-                lease = enter(ledger, user)
-                for _ in range(5):
-                    finish(ledger, lease, begin(ledger, lease, user), 0, user)
-                ledger.close(user, lease, cleanup_confirmed=True)
+            lease = enter(ledger, user)
+            finish(ledger, lease, begin(ledger, lease, user), 0, user)
+            ledger.close(user, lease, cleanup_confirmed=True)
         assert ledger.admit(t.VerifiedAccount("next", True)).code == "global_daily_limit_reached"
     finally:
         db.close()
@@ -414,7 +411,7 @@ def test_global_runtime_cap_is_charged_before_execution_and_not_refunded():
     db = sqlite3.connect(":memory:")
     ledger = t.TrialLedger(db, enabled=True, clock=lambda: float(DAY))
     try:
-        for number in range(10):
+        for number in range(t.GLOBAL_DAILY_RUNTIME_S // 120):
             user = t.VerifiedAccount("user" + str(number), True)
             lease = enter(ledger, user)
             for _ in range(2):

@@ -135,7 +135,7 @@ def test_unused_lease_expiry_allows_same_day_return_with_bounded_admissions(scen
     assert ledger.admit(BOB).code == "admitted"
 
 
-@pytest.mark.parametrize("body", [b"", b"a" * (64 * 1024 + 1), "{}", bytearray(b"{}"), None])
+@pytest.mark.parametrize("body", [b"", b"a" * (trial.MAX_REQUEST_BYTES + 1), "{}", bytearray(b"{}"), None])
 def test_request_limit_is_checked_before_a_step_reservation(scene, body):
     ledger, connection, _ = scene
     lease = admitted(ledger)
@@ -146,7 +146,7 @@ def test_request_limit_is_checked_before_a_step_reservation(scene, body):
 def test_exact_request_byte_limit_is_accepted(scene):
     ledger, _, _ = scene
     lease = admitted(ledger)
-    started(ledger, lease, request=b"a" * (64 * 1024))
+    started(ledger, lease, request=b"a" * trial.MAX_REQUEST_BYTES)
 
 
 @pytest.mark.parametrize("seconds", [0, -1, 61, True, 1.5, "60"])

@@ -1,8 +1,8 @@
-"""Disabled offline DAILY reported-token admission ledger, never a provider adapter.
+"""Dedicated DAILY reported-token admission ledger, never a provider adapter.
 
-VerifiedAccount/VerifiedUsage must come from future trusted server/supervisor
-boundaries. No route, provider credential, agent execution or shared access is
-created here. Reported usage arrives after the turn; an in-flight turn can exceed
+VerifiedAccount/VerifiedUsage come only from trusted server/worker boundaries.
+No provider credential or agent execution lives in this module. Reported usage
+arrives after the turn; an in-flight turn can exceed
 its reservation. This is not a hard token, provider-quota or dollar spending cap.
 """
 
@@ -25,12 +25,14 @@ MAX_LEASE_S = 600
 MAX_STEPS = 5
 MAX_RUNTIME_S = 120
 MAX_STEP_S = 60
-MAX_REQUEST_BYTES = 64 * 1024
+MAX_REQUEST_BYTES = 192 * 1024
+TURN_RESERVATION_TOKENS = 20_000
 DAILY_REQUESTS = 20
-GLOBAL_DAILY_REQUESTS = 100
-GLOBAL_DAILY_RUNTIME_S = 1200
-DAILY_LEASES = 5
-GLOBAL_DAILY_LEASES = 50
+GLOBAL_DAILY_REQUESTS = 20
+DAILY_RUNTIME_S = 20 * MAX_STEP_S
+GLOBAL_DAILY_RUNTIME_S = 20 * MAX_STEP_S
+DAILY_LEASES = 20
+GLOBAL_DAILY_LEASES = 20
 DEFAULT_DAILY_TOKENS = 100_000
 DEFAULT_GLOBAL_DAILY_TOKENS = 1_000_000
 MAX_REPORTED_TOKENS = 10**12
@@ -41,6 +43,7 @@ _TABLES = {
     "devin_trial_sessions",
     "devin_trial_account_days",
     "devin_trial_global_days",
+    "devin_trial_unmeasured",
 }
 _COLUMNS = (
     "trial_id",
@@ -72,10 +75,23 @@ class VerifiedAccount:
 
 @dataclass(frozen=True)
 class VerifiedUsage:
-    """Future trusted supervisor's COMPLETE final measured usage, not a client claim."""
+    """Trusted supervisor's COMPLETE final measured usage, not a client claim."""
 
     reported_tokens: int
     complete: bool = False
+
+
+@dataclass(frozen=True)
+class VerifiedCacheReadUnmeasured:
+    """Trusted CLEAN completed turn with only the native cache-read meter absent.
+
+    The worker must prove the served model, complete other three integer
+    categories, valid reply, child cleanup and entire artifact removal. This is
+    never a complete actual-token receipt or an authorization from visitor JSON.
+    """
+
+    known_tokens: int
+    verified_clean_reply: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,6 +107,8 @@ class DailyAllowance:
     paused: bool
     enabled: bool
     hard_generation_stop: bool = False
+    unmeasured_reserved_tokens: int = 0
+    partial_reported_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -122,9 +140,11 @@ class TrialLedger:
     """Dedicated offline ledger. Daily rollover never clears unresolved work/pause.
 
     Time and requests are charged at reservation, with no refunds. Tokens reserve
-    the WHOLE smaller remaining user/global allowance; complete trusted usage and
-    cleanup settle actual tokens, including overshoot. Unknown usage or cleanup
-    latches pause and retains reservation. No automatic unpause/reset exists.
+    at most 20,000 remaining user/global allowance units.
+    Complete trusted usage and cleanup settle actual tokens including overshoot.
+    Only a verified clean cache-read-missing reply may retain a conservative
+    unmeasured hold and close; all other unknown usage/cleanup latches pause.
+    No automatic unpause/reset exists.
     """
 
     def __init__(
@@ -153,12 +173,13 @@ class TrialLedger:
         )
         limits = json.dumps(
             [
-                2,
+                4,
+                TURN_RESERVATION_TOKENS,
                 daily_token_limit,
                 global_daily_token_limit,
                 DAILY_REQUESTS,
                 GLOBAL_DAILY_REQUESTS,
-                MAX_RUNTIME_S,
+                DAILY_RUNTIME_S,
                 GLOBAL_DAILY_RUNTIME_S,
                 DAILY_LEASES,
                 GLOBAL_DAILY_LEASES,
@@ -192,6 +213,10 @@ class TrialLedger:
                 active_step TEXT, step_deadline REAL,
                 active_seconds INTEGER CHECK(active_seconds BETWEEN 1 AND 60),
                 utc_day INTEGER NOT NULL, active_tokens INTEGER CHECK(active_tokens>0));
+            CREATE TABLE IF NOT EXISTS devin_trial_unmeasured (
+                step_id TEXT PRIMARY KEY, trial_id TEXT NOT NULL, account_id TEXT NOT NULL,
+                utc_day INTEGER NOT NULL, held_tokens INTEGER NOT NULL CHECK(held_tokens>0),
+                known_tokens INTEGER NOT NULL CHECK(known_tokens>=0), settled_at REAL NOT NULL);
             CREATE UNIQUE INDEX IF NOT EXISTS devin_trial_one_active
                 ON devin_trial_sessions ((1)) WHERE state IN ('open','closing');
             CREATE UNIQUE INDEX IF NOT EXISTS devin_trial_one_account_active
@@ -388,6 +413,13 @@ class TrialLedger:
                     ).fetchone()[0]
                 ),
                 self.enabled,
+                False,
+                *self.connection.execute(
+                    "SELECT COALESCE(SUM(held_tokens),0), "
+                    "COALESCE(SUM(known_tokens),0) FROM devin_trial_unmeasured "
+                    "WHERE account_id=? AND utc_day=?",
+                    (principal.account_id, day),
+                ).fetchone(),
             )
 
     def admit(self, principal: VerifiedAccount, *, lease_seconds: int = MAX_LEASE_S) -> Decision:
@@ -404,7 +436,7 @@ class TrialLedger:
             if (
                 user[0] + user[1] >= self.daily_token_limit
                 or user[2] >= DAILY_REQUESTS
-                or user[3] >= MAX_RUNTIME_S
+                or user[3] >= DAILY_RUNTIME_S
                 or user[4] >= DAILY_LEASES
             ):
                 return Decision("daily_limit_reached")
@@ -473,6 +505,7 @@ class TrialLedger:
                 return Decision("trial_limit_reached")
             user, total = self._days(principal.account_id, row["utc_day"])
             tokens = min(
+                TURN_RESERVATION_TOKENS,
                 self.daily_token_limit - user[0] - user[1],
                 self.global_daily_token_limit - total[0] - total[1],
             )
@@ -482,7 +515,7 @@ class TrialLedger:
                 return Decision("global_daily_limit_reached")
             if (
                 row["reserved_seconds"] + seconds > MAX_RUNTIME_S
-                or user[3] + seconds > MAX_RUNTIME_S
+                or user[3] + seconds > DAILY_RUNTIME_S
                 or total[3] + seconds > GLOBAL_DAILY_RUNTIME_S
             ):
                 return Decision("runtime_reservation_limit")
@@ -532,10 +565,10 @@ class TrialLedger:
         permit: StepPermit,
         *,
         cleanup_confirmed: bool,
-        usage: Optional[VerifiedUsage] = None,
+        usage: Optional[object] = None,
     ) -> Decision:
         with self._transaction():
-            self._tick()
+            instant = self._tick()
             row = self._row(principal, lease)
             if not self._permit_matches(row, permit):
                 return Decision("invalid_step_receipt")
@@ -546,6 +579,47 @@ class TrialLedger:
                     (row["trial_id"],),
                 )
                 return Decision("cleanup_unconfirmed")
+            if type(usage) is VerifiedCacheReadUnmeasured and (
+                usage.verified_clean_reply is True
+                and type(usage.known_tokens) is int
+                and 0 <= usage.known_tokens <= MAX_REPORTED_TOKENS
+            ):
+                reserved = row["active_tokens"]
+                held = max(reserved, usage.known_tokens)
+                extra = held - reserved
+                self.connection.execute(
+                    "UPDATE devin_trial_account_days SET "
+                    "reserved_tokens=reserved_tokens+? WHERE account_id=? AND utc_day=?",
+                    (extra, principal.account_id, row["utc_day"]),
+                )
+                self.connection.execute(
+                    "UPDATE devin_trial_global_days SET "
+                    "reserved_tokens=reserved_tokens+? WHERE utc_day=?",
+                    (extra, row["utc_day"]),
+                )
+                self.connection.execute(
+                    "INSERT INTO devin_trial_unmeasured VALUES(?,?,?,?,?,?,?)",
+                    (
+                        permit.step_id,
+                        row["trial_id"],
+                        principal.account_id,
+                        row["utc_day"],
+                        held,
+                        usage.known_tokens,
+                        instant,
+                    ),
+                )
+                # Durable accounting is now complete under the conservative
+                # policy, but actual cache-read tokens remain explicitly unknown.
+                # Close the turn before releasing the global worker; no replay
+                # can settle it again and no timer/day rollover deletes its hold.
+                self.connection.execute(
+                    "UPDATE devin_trial_sessions SET state='closed',"
+                    "active_step=NULL,step_deadline=NULL,active_seconds=NULL,active_tokens=NULL "
+                    "WHERE trial_id=?",
+                    (row["trial_id"],),
+                )
+                return Decision("step_finished_unmeasured")
             if (
                 type(usage) is not VerifiedUsage
                 or usage.complete is not True
@@ -583,6 +657,51 @@ class TrialLedger:
                 )
                 return Decision("step_finished_over_allowance")
             return Decision("step_finished")
+
+    def finish_unsent(
+        self,
+        principal: VerifiedAccount,
+        lease: Lease,
+        permit: StepPermit,
+        *,
+        model_started: bool,
+        cleanup_confirmed: bool,
+    ) -> Decision:
+        """Trusted transport proof only: no request-frame write ever began.
+
+        Unlike uncertain sent work, a failed model-free SSH readiness check must
+        not consume the global twenty model-turn/time budget. The closed row is
+        retained; per-account API throttling separately bounds repeated probes.
+        """
+        with self._transaction():
+            row = self._row(principal, lease)
+            if (
+                model_started is not False
+                or cleanup_confirmed is not True
+                or not self._permit_matches(row, permit)
+                or row["steps"] != 1
+            ):
+                return Decision("invalid_unsent_receipt")
+            self.connection.execute(
+                "UPDATE devin_trial_account_days SET reserved_tokens="
+                "reserved_tokens-?,requests=requests-1,runtime_seconds=runtime_seconds-?,"
+                "leases=leases-1 WHERE account_id=? AND utc_day=?",
+                (row["active_tokens"], row["active_seconds"], principal.account_id, row["utc_day"]),
+            )
+            self.connection.execute(
+                "UPDATE devin_trial_global_days SET reserved_tokens="
+                "reserved_tokens-?,requests=requests-1,runtime_seconds=runtime_seconds-?,"
+                "leases=leases-1 WHERE utc_day=?",
+                (row["active_tokens"], row["active_seconds"], row["utc_day"]),
+            )
+            self.connection.execute(
+                "UPDATE devin_trial_sessions SET state='closed',"
+                "active_step=NULL,step_deadline=NULL,active_seconds=NULL,active_tokens=NULL "
+                "WHERE trial_id=?",
+                (row["trial_id"],),
+            )
+            self._tick()  # Close the proven unsent work before expiry processing.
+            return Decision("step_not_sent")
 
     def cancel(self, principal: VerifiedAccount, lease: Lease) -> Decision:
         with self._transaction():
