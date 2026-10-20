@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
     '/', '/slots', '/account', '/account/available', '/account/purchase', '/account/renew',
-    '/account/topup', '/account/subscribe', '/account/subscriptions',
+    '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
     '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
@@ -29,7 +29,8 @@ ADMIN_ACTIONS = {
 }
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
-POST_PAGES = frozenset({'/account/claim', '/account/outage-emails', '/auth/signout',
+POST_PAGES = frozenset({'/account/devin-trial/create', '/account/devin-trial/revoke',
+                       '/account/claim', '/account/outage-emails', '/auth/signout',
                        '/account/purchase', '/account/renew', '/account/topup',
                        '/account/subscribe', '/account/subscriptions/portal',
                        '/account/subscriptions/cancel', '/account/subscriptions/resume',
@@ -41,7 +42,8 @@ VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'l
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
              '/account/available': '可用槽位',
              '/account/purchase': '确认购买槽位', '/account/renew': '续费槽位',
-             '/account/topup': '充值', '/account/subscribe': '确认月租',
+             '/account/devin-trial': 'Devin 试用', '/account/topup': '充值',
+             '/account/subscribe': '确认月租',
              '/account/subscriptions': '月租管理',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
              '/docs/how-it-works': '工作原理', '/docs/terms': '服务条款',

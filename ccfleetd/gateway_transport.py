@@ -130,6 +130,11 @@ class SSHAttempt:
                 "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
                 f"{user}@{host}", self._remote_command()]
 
+    def _spawn(self, command):
+        return subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": os.defpath, "LANG": "C", "LC_ALL": "C"})
+
     def start(self, headers: dict[str, str], body: bytes, *, path: str = "/v1/messages",
               before_model_send=lambda: True) -> None:
         try:
@@ -139,10 +144,7 @@ class SSHAttempt:
             if self.closed.is_set():
                 self.close()
                 raise GatewayTransportError(retryable=True)
-            self.process = subprocess.Popen(
-                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env={"PATH": os.defpath, "LANG": "C", "LC_ALL": "C"})
+            self.process = self._spawn(command)
             if self.closed.is_set():
                 self.close()
                 raise GatewayTransportError(retryable=True)

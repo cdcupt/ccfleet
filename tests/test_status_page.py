@@ -65,7 +65,7 @@ def shown(page):
 def test_everything_up_is_all_systems_operational(store, cfg):
     fleet(store)
     page = shown(page_of(store, cfg))
-    assert "All systems operational" in page and "3 of 3 operational" in page
+    assert "No reported machine outage" in page and "3 of 3 operational" in page
     assert "Website and account pages" in page and "Slot machines" in page
 
 
@@ -94,7 +94,7 @@ def test_every_machine_down_is_a_major_outage(store, cfg):
 def test_no_machines_yet(store, cfg):
     raw = page_of(store, cfg)
     page = shown(raw)
-    assert "All systems operational" in page and "No slot machines yet" in page
+    assert "No reported machine outage" in page and "No slot machines yet" in page
     assert "No uptime counted yet" in page
     assert 'aria-label="Website and account pages: no data yet"' in raw
 
@@ -175,7 +175,8 @@ def test_machine_status_shows_original_timestamp_during_restart_grace(store, cfg
     store.set_listening_since(NOW - 5)
     raw = page_of(store, cfg)
     assert '3 of 3 operational' in shown(raw)
-    assert raw.count(f'datetime="{status.utc_iso(NOW - 600)}" data-local') == 3
+    sheet = raw[raw.index('id="slot-machines"'):]
+    assert sheet.count(f'datetime="{status.utc_iso(NOW - 600)}" data-local') == 3
 
 
 def test_compact_machine_sheet_omits_uptime_and_keeps_aggregate_history_read_once(
@@ -517,7 +518,7 @@ def test_each_day_says_what_it_was(store, cfg):
 def test_the_status_page_is_public_on_the_product_and_absent_from_the_console(split):  # noqa: F811
     _, browser, _ = split
     reply = browser(PRODUCT).call("GET", "/status")
-    assert reply.status == 200 and "All systems operational" in reply.body
+    assert reply.status == 200 and "No reported machine outage" in reply.body
     assert browser(ADMIN).call("GET", "/status").status == 404
 
 
@@ -733,7 +734,7 @@ def test_the_front_page_says_it_at_its_top_and_no_other_page_does(split):  # noq
         page = browser(PRODUCT).call("GET", path).body
         main = page[page.index("<main"):]
         assert main.index('class="pill st-pill') < main.index("<h1>"), path
-        assert Page(pill_on(page)).copy('en').strip() == "All systems operational", path
+        assert Page(pill_on(page)).copy('en').strip() == "No reported machine outage", path
         assert Page(pill_on(page)).copy('zh').strip() == '', path
         chinese = browser(PRODUCT).call("GET", "/zh" + (path if path != '/' else '/')).body
         assert Page(pill_on(chinese, 'zh')).copy('zh').strip() == statuspage.BANNERS_ZH[status.GREEN], path
@@ -777,7 +778,7 @@ def test_a_restart_after_a_long_outage_finds_every_machine_up(store, cfg):
     them is late for it, the server is."""
     fleet(store, ages=(600, 600, 600))
     store.set_listening_since(NOW - 5)
-    assert "All systems operational" in shown(page_of(store, cfg))
+    assert "No reported machine outage" in shown(page_of(store, cfg))
 
 
 def test_a_machine_down_before_the_restart_is_still_down_after_it(store, cfg):

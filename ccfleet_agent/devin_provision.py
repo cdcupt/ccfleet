@@ -36,12 +36,15 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _USER = re.compile(r"[a-z][a-z0-9_-]{1,31}\Z")
 # Closed collector codes only. Never treat exception text or native output as a
 # diagnostic: even a syntactically plausible unknown string can contain a secret.
+# Retain old combined codes for installed collectors while newer collectors
+# identify the failing metadata command or label shape without copying output.
 COLLECTOR_FAILURE_REASONS = frozenset({
     "account_profile_or_authorization_changed", "invalid_metadata_factory",
     "invalid_native_api_origin", "invalid_source_profile", "invalid_source_profile_origin",
     "metadata_authorization_or_timeout", "metadata_authorization_revoked",
     "metadata_execution_disabled", "metadata_registration_rejected",
-    "native_account_changed_during_verification", "native_credential_api_origin",
+    "native_account_changed_during_verification", "native_auth_status_rejected",
+    "native_models_list_rejected", "native_credential_api_origin",
     "native_credential_endpoints", "native_credential_format", "native_credential_size",
     "native_credential_unavailable", "native_egress_unavailable",
     "native_metadata_cleanup_unconfirmed", "native_metadata_output_bound",
@@ -50,6 +53,7 @@ COLLECTOR_FAILURE_REASONS = frozenset({
     "native_status_encoding", "native_status_line_bound", "native_status_origin_mismatch",
     "native_status_size", "native_status_subject_invalid", "native_status_subject_unverified",
     "native_status_unknown_line", "native_status_unknown_or_duplicate_label",
+    "native_status_unknown_label", "native_status_duplicate_label",
     "native_subject_source_unverified", "source_profile_changed",
 })
 

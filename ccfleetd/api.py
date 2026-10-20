@@ -37,6 +37,8 @@ from . import (
     stripe_routes,
     subscription_config,
     subscription_routes,
+    trial_routes,
+    trial_runtime,
     usage,
     usersite,
     wallet_access,
@@ -123,7 +125,10 @@ def access_log_route(target: Any) -> str:
                 "/account/claim", "/account/outage-emails", "/actions/node/add",
                 "/v1/messages", "/v1/messages/count_tokens", "/api/cli/gateway",
                 "/api/cli/gateway/options", "/api/cli/gateway/revoke", "/api/gateway/status",
-                "/account/gateway/create", "/account/gateway/update", "/account/gateway/revoke"}:
+                "/account/gateway/create", "/account/gateway/update", "/account/gateway/revoke",
+                "/account/devin-trial", "/account/devin-trial/create",
+                "/account/devin-trial/revoke",
+                "/trial/v1/messages", "/trial/v1/messages/count_tokens"}:
         return path
     if path.rstrip("/") == CONSOLE_PATH:
         return CONSOLE_PATH
@@ -196,7 +201,7 @@ def legacy_browser_target(target: str) -> Optional[str]:
 
 class Context:
     def __init__(self, store: Store, cfg: Config, monitor: Monitor, *, billing=None,
-                 recurring=None) -> None:
+                 recurring=None, trial=None) -> None:
         self.store = store
         self.cfg = cfg
         self.monitor = monitor
@@ -206,6 +211,8 @@ class Context:
                           else subscription_config.build_billing(cfg, store))
         if monitor is not None:
             monitor._recurring = self.recurring
+        self.trial = (None if cfg.broker_only else trial if trial is not None
+                      else trial_runtime.build(cfg, store))
         self.gateway = gateway.GatewayRuntime(cfg, store)
         self.machine_health = (machine_health.Observer()
                                if cfg.public_machine_metrics_enabled and not cfg.broker_only
@@ -360,7 +367,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def setup(self) -> None:
             super().setup()
-            if ctx.cfg.gateway_enabled:
+            if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled:
                 self.connection.settimeout(ctx.cfg.gateway_header_timeout_s)
                 self.rfile = _HeaderBudgetReader(self.rfile)
 
@@ -368,7 +375,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if isinstance(self.rfile, _HeaderBudgetReader):
                 self.rfile.remaining = 65536
             self._header_timer = None
-            if ctx.cfg.gateway_enabled:
+            if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled:
                 def expire_headers():
                     with contextlib.suppress(OSError):
                         self.connection.shutdown(socket.SHUT_RDWR)
@@ -392,7 +399,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._header_timer.cancel()
 
         def handle_expect_100(self) -> bool:
-            if getattr(self, "path", "").startswith("/v1/"):
+            if getattr(self, "path", "").startswith(("/v1/", "/trial/v1/")):
                 gateway.model_error(self, 417, "Expect requests are not supported.")
                 return False
             return super().handle_expect_100()
@@ -456,6 +463,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
             current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
                        "/account/purchase", "/account/renew", "/account/topup",
+                       "/account/devin-trial",
                 "/account/subscribe", "/account/subscriptions",
                 "/account/subscriptions/portal", "/account/subscriptions/cancel",
                 "/account/subscriptions/resume", "/account/subscriptions/cancel-checkout",
@@ -1381,6 +1389,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     time.time(), note, topup_ready=stripe_routes.enabled(
                         ctx.billing, ctx.cfg)).encode("utf-8"),
                            HTML_HEADERS)
+            elif path == trial_routes.PAGE:
+                if not self._product_site() or ctx.cfg.broker_only:
+                    self._json(404, {"error": "not found"})
+                    return
+                account, session_id = self._signed_in()
+                status_code, body = trial_routes.page(ctx.trial, ctx.cfg, account, session_id)
+                self._send(status_code, body.encode(), HTML_HEADERS)
             elif path == "/account/available":
                 account, session_id = self._signed_in()
                 self._send(200, usersite.available_page(
@@ -1534,6 +1549,40 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             path = self._page_route("POST")
             if path is None:
+                return
+            if path in {trial_routes.API, trial_routes.API + "/count_tokens"}:
+                if not self._product_site() or ctx.cfg.broker_only:
+                    gateway.model_error(self, 404, "This endpoint is not available on this host.")
+                elif path.endswith("count_tokens"):
+                    gateway.model_error(self, 501, "Native trial token counting is unavailable.")
+                else:
+                    trial_routes.handle(ctx.trial, self)
+                return
+            if path in {trial_routes.PAGE + "/create", trial_routes.PAGE + "/revoke"}:
+                if not self._product_site() or ctx.cfg.broker_only or ctx.trial is None:
+                    self._json(404, {"error": "not found"})
+                    return
+                account, session_id = self._signed_in()
+                if account is None:
+                    self._json(401, {"error": "sign in to Fleet first"})
+                    return
+                form = self._form(strict=True)
+                if form is None:
+                    return
+                if set(form) != {"csrf"} or not self._csrf_ok(form, session_id):
+                    self._json(403, {"error": "invalid trial request"})
+                    return
+                token, failed = "", False
+                try:
+                    if path.endswith("/create"):
+                        token = ctx.trial.create_key(account)
+                    else:
+                        ctx.trial.revoke(account)
+                except Exception:
+                    failed = True
+                status_code, body = trial_routes.page(ctx.trial, ctx.cfg, account, session_id,
+                                                      token=token, failed=failed)
+                self._send(status_code, body.encode(), HTML_HEADERS)
                 return
             if path == "/api/payments/stripe/subscriptions/webhook":
                 if not self._payment_site():
@@ -1969,7 +2018,8 @@ def build_server(ctx: Context, host: Optional[str] = None,
     host = ctx.cfg.bind_host if host is None else host
     port = ctx.cfg.bind_port if port is None else port
     server = (_BoundedHTTPServer((host, port), make_handler(ctx), ctx.cfg.gateway_max_connections)
-              if ctx.cfg.gateway_enabled else ThreadingHTTPServer((host, port), make_handler(ctx)))
+              if ctx.cfg.gateway_enabled or ctx.cfg.devin_trial_enabled
+              else ThreadingHTTPServer((host, port), make_handler(ctx)))
     server.daemon_threads = True
     return server
 

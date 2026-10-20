@@ -1338,6 +1338,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     """The whole page, for one person. Signed out, it offers sign-in and nothing else."""
     if account is None:
         return _signed_out(cfg)
+    from . import trial_routes
+
     held = store.list_slots(held_by=account["id"])
     recurring_slots = set()
     if held:
@@ -1406,6 +1408,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     lines = {s["id"]: _machine_line(status.machine_state(
         latest.get(s["node_id"]), store.open_alerts(s["node_id"]),
         s.get("kind") != slotstates.OWNER_SLOT, now, listening(s["node_id"])), now)
+        + '<div id="machine-health-' + escape(s["id"]) + '" data-fleet-readonly>'
+        + status.health_html(status.machine_check(latest.get(s["node_id"]),
+            store.open_alerts(s["node_id"]), s.get("kind") != slotstates.OWNER_SLOT, now), now)
+        + '</div>'
         for s in held}
     since = store.listening_since()
     silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}
@@ -1453,6 +1459,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account", monthly=_monthly_management(store, cfg, account)) + banner
+        + trial_routes.entry(cfg)
         + (_wallet_panel(store, account, topup_ready=topup_ready, csrf=csrf, compact=bool(held))
            if wallet_routes.enabled(cfg) else
            '<div class="card allowance"><div><h2>'
@@ -1688,7 +1695,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         [
             (
                 (
-                    "ccfleet gives you a slot on a machine we operate: "
+                    "A paid private slot is on a machine we operate: "
                     "your own Linux account there, "
                     "for your own provider sign-in. Original Claude Code runs on your "
                     'computer. Anthropic is the default; verified own-slot Devin is a '
@@ -2484,6 +2491,10 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
         ],
     )
+    if cfg.devin_trial_enabled and not cfg.broker_only:
+        from . import trial_routes
+
+        body += trial_routes.privacy()
     return _shell("privacy", body, here="/privacy", width="doc", viewer=viewer)
 
 

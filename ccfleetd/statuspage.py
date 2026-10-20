@@ -15,15 +15,16 @@ from html import escape
 from typing import Any, Optional
 
 from . import offer_ui, performance, status
+from . import slots as slotstates
 from .bilingual import bi, label
 from .config import Config
 from .usersite import Viewer, _shell
 
 SITE_NAME = "Website and account pages"
 MACHINES_NAME = "Slot machines"
-BANNERS = {status.GREEN: "All systems operational", status.YELLOW: "Partial outage",
+BANNERS = {status.GREEN: "No reported machine outage", status.YELLOW: "Partial outage",
            status.RED: "Major outage"}
-BANNERS_ZH = {status.GREEN: "监测中的机器运行正常", status.YELLOW: "部分机器异常",
+BANNERS_ZH = {status.GREEN: "未收到主机故障报告", status.YELLOW: "部分机器异常",
               status.RED: "全部监测机器离线"}
 COMPONENT_ZH = {SITE_NAME: "网站与账号页面", MACHINES_NAME: "槽位主机"}
 WORDS_ZH = {status.GREEN: "正常", status.YELLOW: "性能或容量异常", status.RED: "离线"}
@@ -105,6 +106,11 @@ overflow-wrap:anywhere}
 .st-machine-name{display:block;color:var(--muted);font-size:12px;font-weight:400;margin-top:2px}
 .st-machine-table time{font-size:13px;color:var(--muted)}
 .st-machine-empty{color:var(--muted)}
+.st-diagnosis{padding:20px 22px;margin:0 0 18px}.st-diagnosis h2{margin:0 0 8px}
+.st-health-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));
+gap:12px}.st-health-item{min-width:0;background:var(--inset);border:1px solid var(--rule-soft);
+border-radius:10px;padding:12px 14px}.st-health-item h3{font-size:15px;margin:0}
+.st-health-help{font-size:13px;color:var(--muted);line-height:1.6}
 @media (max-width:560px){.st-bar{gap:1px;height:30px}
 .st-bar .d:nth-child(-n+60){display:none}.st-scale .d90{display:none}
 .st-scale .d30{display:inline}.st-overall{margin-left:0;flex-basis:100%}
@@ -119,6 +125,74 @@ overflow-wrap:anywhere}
 .st-machine-table thead th:first-child,.st-machine-table tbody th>.bi-inline{white-space:nowrap}
 .st-machine-table th,.st-machine-table td{padding:9px 6px}}
 """
+
+
+def diagnosis_panel(store: Any, report: Optional[Mapping[str, Any]], now: float) -> str:
+    """Correlate existing reports without probing a provider or exposing a holder."""
+    platform = status.platform_check(report, now)
+    latest = store.latest_heartbeats()
+    slots = store.list_slots()
+    occupied = {row["node_id"] for row in slots
+                if row.get("held_by")
+                and row.get("state") in slotstates.HELD}
+    alerts: dict[str, list[Mapping[str, Any]]] = {}
+    for alert in store.open_alerts():
+        alerts.setdefault(alert["node_id"], []).append(alert)
+    shared = {row["node_id"] for row in slots
+              if row.get("kind") == slotstates.MACHINE_SLOT}
+    rows, checks = [], []
+    for node in store.list_nodes():
+        number = status.public_machine_number(node)
+        if node["id"] not in occupied or number is None:
+            continue
+        check = status.machine_check(latest.get(node["id"]), alerts.get(node["id"], ()),
+                                     node["id"] in shared, now)
+        checks.append(check)
+        rows.append('<article class="st-health-item"><h3>'
+                    + label(f"Machine {number}", f"主机 {number}", inline=True) + '</h3>'
+                    + status.health_html(check, now) + '</article>')
+    if platform.level in {status.YELLOW, status.RED}:
+        message = ("Start with the platform: resource pressure there can affect several slots. "
+                   "It is a clue, not proof of a DMIT outage.",
+                   "先检查平台：平台资源压力可能影响多个槽位。"
+                   "这是排查线索，不代表已确认 DMIT 故障。")
+    elif any(check.level in {status.YELLOW, status.RED} for check in checks):
+        message = (("Platform resources look normal; check the flagged slot machines next. "
+                    "This does not rule out network or model-provider errors.")
+                   if platform.level == status.GREEN else
+                   "Some slot machines need attention. Platform health is still unknown.",
+                   "平台资源未见异常，接着检查被标记的槽位主机；仍不能排除网络或模型服务商错误。"
+                   if platform.level == status.GREEN else
+                   "部分槽位主机需要留意；平台状态仍然未知。")
+    elif platform.level == status.UNKNOWN or any(check.level == status.UNKNOWN for check in checks):
+        message = ("Some checks are missing. We cannot yet tell whether an error starts at the "
+                   "platform or a slot machine.",
+                   "部分检查缺失，暂时不能判断错误来自平台还是槽位主机。")
+    else:
+        message = ("No issue appears in these machine checks. Check your connection, sign-in, "
+                   "usage limits and the model provider if a request still fails.",
+                   "这些主机检查未见异常。请求仍失败时，请继续检查本地连接、登录、用量额度和模型服务商。")
+    empty = '<p class="st-health-help">' + label(
+        "No occupied slot machines to show yet.", "暂无正在使用的槽位主机。", inline=True) + '</p>'
+    return ('<section class="card st-diagnosis" id="health-checks"><h2>'
+            + label("Where is the problem?", "哪里出了问题？", inline=True) + '</h2><p>'
+            + label(*message, inline=True) + '</p><div class="st-health-grid">'
+            '<article class="st-health-item"><h3>'
+            + label("CC Fleet platform", "CC Fleet 平台", inline=True) + '</h3>'
+            + status.health_html(platform, now) + '<p class="st-health-help">'
+            + label("On our DMIT deployment, this is the website and gateway server. "
+                    "It does not measure DMIT\u2019s entire network or physical hardware.",
+                    "在我们的 DMIT 部署中，这是网站与网关服务器；"
+                    "不代表 DMIT 整个网络或物理硬件的状态。", inline=True)
+            + '</p></article>' + ''.join(rows) + '</div>' + (empty if not rows else '')
+            + '<p class="st-health-help">' + label(
+                "Only occupied machines are shown here. Green covers the reported resources, "
+                "not a successful model call. External provider availability and your computer's "
+                "connection are not automatically tested. Your account page separately shows "
+                "sign-in and usage. No prompts are sent by these checks.",
+                "这里只展示正在使用的主机。绿色仅表示已上报资源正常，不表示模型调用成功。外部服务商和"
+                "你的电脑连接没有自动测试；账号页面会单独显示登录与用量。这些检查不发送提示词。",
+                inline=True) + '</p></section>')
 
 
 def _day_title(day: status.Day, group: bool = False) -> str:
@@ -801,6 +875,7 @@ def page(store: object, cfg: Config, viewer: Optional[Viewer], now: float,
             inline=True,
         )
         + "</span></div>"
+        + diagnosis_panel(store, machine_report, now)
         + performance_panel(performance.summary(store, cfg, now), now)
         + (machine_panel(machine_report, now) if machine_report is not None else '')
         + '<div class="card st-list">'
