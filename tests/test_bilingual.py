@@ -60,10 +60,10 @@ def test_options_attributes_and_language_links_do_not_echo_request_parameters():
     assert 'href="/en/account"' in html and 'href="/zh/account"' in html
 
 
-def test_localization_never_creates_api_admin_or_foreign_aliases():
-    for target in ['/zh/v1/messages', '/en/api/nodes', '/zh/admin',
+def test_localization_never_creates_api_or_foreign_aliases():
+    for target in ['/zh/v1/messages', '/en/api/nodes',
                    '/zh/docs/library/../README.html', '/zh/docs%2fguide']:
         assert bilingual.route_target(target) is None
-    for url in ['https://accounts.google.com/auth?secret=x', '/v1/messages', '/admin',
+    for url in ['https://accounts.google.com/auth?secret=x', '/v1/messages',
                 '/auth/google/callback?code=FAKE']:
         assert bilingual.localized_url(url, 'zh', public_origin='https://fleet.example') == url

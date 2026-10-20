@@ -23,7 +23,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-19"
+DOCS_UPDATED = "2026-10-20"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -123,6 +123,30 @@ border:1px solid var(--rule);border-radius:10px}
 .doc .bi p,.how .bi p{overflow-wrap:anywhere}
 .hero .bi>.copy-en+.copy-zh h1{font-size:clamp(28px,4vw,42px);line-height:1.2}
 .how .diagram>.bi>.copy-en+.copy-zh{border-top:1px solid var(--rule);padding-top:12px}
+.technical-overview{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;
+align-items:center;padding:22px 24px;margin:0 0 24px;border:1px solid var(--acc-line);
+border-radius:var(--radius);background:var(--acc-soft)}
+.technical-overview h2{font-size:21px;margin:0 0 6px;letter-spacing:-.02em}
+.technical-overview p{margin:0;max-width:66ch;color:var(--muted);font-size:14.5px}
+.technical-overview .technical-links{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px}
+.technical-overview .technical-links a{font-weight:600;font-size:14px}
+.routing-details{overflow:hidden}
+.doc .routing-details,.how .routing-details{padding:0}
+.routing-details>summary{cursor:pointer;list-style:none;display:flex;align-items:center;
+gap:16px;padding:20px 24px;font-weight:650;font-size:16px;line-height:1.5}
+.routing-details>summary::-webkit-details-marker{display:none}
+.routing-details>summary::after{content:'+';margin-left:auto;flex:none;color:var(--acc);
+font:500 24px/1 var(--mono)}
+.routing-details[open]>summary::after{content:'−'}
+.routing-details>summary:hover{background:var(--inset)}
+.routing-details>summary:focus-visible{outline:3px solid var(--acc);outline-offset:-4px}
+.routing-details[open]>summary{border-bottom:1px solid var(--rule)}
+.routing-details .routing-guide{padding:4px 24px 22px;min-width:0}
+.routing-details .routing-guide h2{font-size:20px;margin:20px 0 10px}
+.routing-details .connection-choices{grid-template-columns:minmax(0,1fr);gap:10px}
+.routing-details .connection-choice{padding:12px 16px}
+.routing-details .connection-choice h3{margin:0 0 4px;font-size:15px}
+.routing-details .connection-choice p{margin:6px 0;font-size:14px}
 
 /* How it works: the picture beside the words, where there is room for both. */
 .how{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:18px;
@@ -144,6 +168,9 @@ align-items:start}
 @media (max-width:980px){.hero{grid-template-columns:minmax(0,1fr);gap:30px}
 .how{grid-template-columns:minmax(0,1fr)}.how .diagram{position:static}}
 @media (max-width:640px){.features,.two,.next{grid-template-columns:minmax(0,1fr)}
+.technical-overview{grid-template-columns:minmax(0,1fr);gap:16px;padding:20px}
+.routing-details>summary{padding:18px 20px}
+.routing-details .routing-guide{padding:2px 20px 18px}
 .connection-choices{grid-template-columns:minmax(0,1fr)}
 .band{margin-top:40px}.band>h2{font-size:22px}
 .steps>li{padding:16px 16px 14px 58px}
@@ -791,9 +818,10 @@ def overview(
 # -- getting started ----------------------------------------------------------------
 
 
-def _model_connections(cfg: Config) -> str:
+def _model_connections(cfg: Config, *, framed: bool = True) -> str:
     """Account choices, shared examples and stable anchors."""
     base_url = escape((cfg.public_url or "https://ccfleet.io").rstrip("/"))
+    container_class = "card" if framed else "routing-guide"
     choices = (
         (
             "Only one account",
@@ -839,7 +867,7 @@ def _model_connections(cfg: Config) -> str:
             + "</div>"
         )
     return (
-        '<div class="card" id="model-connections">'
+        f'<div class="{container_class}" id="model-connections">'
         + bi(
             "<h2>Choose the accounts your model connection may use</h2>",
             "<h2>选择模型连接可以使用的账号</h2>",
@@ -953,18 +981,29 @@ def _model_connections(cfg: Config) -> str:
             "并只放入你愿意信任服务方处理的数据。</p>",
         )
         + bi(
-            '<p>For diagrams and the comparison with CC Host, read the <a href="/docs/libra'
-            'ry/docs/platform-comparison.html">comparison guide</a>. The recorded '
+            '<p>For the architecture, routing comparison and dated evidence, read <a '
+            'href="/docs/library/docs/platform-comparison.html">Fleet architecture and '
+            'verification</a>. The recorded '
             "verification on October 11, 2026 used one actual live account; multi-slot "
             "routing and faults used controlled peers, not two live accounts. See <a "
             'href="/docs/library/docs/public-gateway.html#verification">verification '
             "scope</a> for the evidence.</p>",
-            '<p>路线图与 CC Host 对比见<a href="/docs/library/docs/platform-comparison.html'
-            '">对比指南</a>。2026 年 10 月 11 日记录的真实线上验证使用了一个实际账号；多槽'
+            '<p>架构、路由对比与有日期的验证记录见<a '
+            'href="/docs/library/docs/platform-comparison.html'
+            '">Fleet 架构与验证</a>。2026 年 10 月 11 日记录的真实线上验证使用了一个实际账号；多槽'
             "位路由和故障使用受控测试，并非两个真实账号的线上实测。证据范围见<a "
             'href="/docs/library/docs/public-gateway.html#verification">验证说明</a>。</p>',
         )
         + "</div>"
+    )
+
+
+def _advanced_model_connections(cfg: Config) -> str:
+    """One accessible disclosure, with no nested card or cramped three-column copy."""
+    return (
+        '<details class="card routing-details"><summary>'
+        + label('Advanced Anthropic account routing', 'Anthropic 账号路由进阶说明', inline=True)
+        + '</summary>' + _model_connections(cfg, framed=False) + '</details>'
     )
 
 
@@ -1532,9 +1571,7 @@ def guide(
             "启用的槽位。</p>",
         )
         + "</div>"
-        + '<details class="card"><summary>' + label(
-            'Advanced Anthropic account routing', 'Anthropic 账号路由进阶说明', inline=True
-        ) + '</summary>' + _model_connections(cfg) + '</details>'
+        + _advanced_model_connections(cfg)
         + '<div class="card" id="local-work">'
         + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
         + bi(
@@ -1753,7 +1790,22 @@ def how_it_works(
             '<p class="lead">电脑负责文件操作，Fleet 像收件前台：按你在网页选择的模型服务，'
             "把问题经由自己的槽位发出，再把回答送回 Claude Code。</p>",
         )
-        + '</div><div class="how"><figure class="card diagram">'
+        + '</div><section class="technical-overview" id="technical-overview">'
+        + '<div>' + bi('<h2>See the architecture. Check the evidence.</h2>',
+                       '<h2>看清技术路线，核对验证依据。</h2>')
+        + bi('<p>Follow a request from your computer to your own slot, understand account '
+             'routing, and see what has been tested and what remains unverified.</p>',
+             '<p>跟随请求从电脑到自己的槽位，了解账号路由，并核对已完成的测试与尚未验证的范围。</p>')
+        + '<div class="technical-links"><a '
+        'href="/docs/library/docs/platform-comparison.html#architecture">'
+        + label('Request architecture', '请求架构', inline=True)
+        + '</a><a href="/docs/library/docs/platform-comparison.html#verification">'
+        + label('Verification records', '验证记录', inline=True)
+        + '</a><a href="/docs/library/docs/platform-comparison.html#sources">'
+        + label('Technical references', '技术资料', inline=True)
+        + '</a></div></div><a class="btn" href="/docs/library/docs/platform-comparison.html">'
+        + label('Explore the technical guide', '查看技术指南', inline=True)
+        + '</a></section><div class="how"><figure class="card diagram">'
         + bi(PROVIDER_PICTURE, PROVIDER_PICTURE_ZH)
         + "<figcaption>"
         + bi(
@@ -1830,9 +1882,7 @@ def how_it_works(
             "。机器时钟使用 UTC；槽位卡片上的额度重置时间按你所在的时区显示。</p>",
         )
         + "</div>"
-        + '<details class="card"><summary>' + label(
-            'Advanced Anthropic account routing', 'Anthropic 账号路由进阶说明', inline=True
-        ) + '</summary>' + _model_connections(cfg) + '</details>'
+        + _advanced_model_connections(cfg)
         + '<div class="card">'
         + bi("<h2>Who can read what</h2>", "<h2>谁能看到什么</h2>")
         + bi(

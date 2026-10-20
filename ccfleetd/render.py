@@ -10,12 +10,17 @@ from html import escape
 from shlex import quote as shq
 from typing import Any, Optional
 
-from . import compatibility, plans, resets
+from . import bilingual, compatibility, plans, resets
 from . import names as slotnames
 from . import slots as slotstates
+from .admin_locale import attributes as admin_attributes
+from .admin_locale import label as admin_label
+from .bilingual import bi
+from .bilingual import label as bi_label
 from .config import Config
 from .credential_health import access_expiry
 from .desired import is_channel, is_login_url
+from .heartbeat import relay_report
 
 LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 
@@ -24,11 +29,15 @@ LEVEL_ORDER = {"ok": 0, "warn": 1, "critical": 2}
 #: needs no zone at all and is what shows if this does not run. The one script
 #: the site runs, allowed by its hash (LOCAL_TIMES_CSP) and nothing else.
 LOCAL_TIMES_JS = (
+    '(function(){function update(){'
     'document.querySelectorAll("time[data-local]").forEach(function(t){'
+    'if(t.hasAttribute("data-local-formatted"))return;'
     'var d=new Date(t.dateTime);if(isNaN(d))return;'
     'var o={hour:"numeric",minute:"2-digit",timeZoneName:"short"};'
     'if(d-Date.now()>864e5)o.weekday="short";'
-    't.textContent=d.toLocaleString(undefined,o)+" ("+t.textContent+")";});')
+    't.textContent=d.toLocaleString(undefined,o)+" ("+t.textContent+")";'
+    't.setAttribute("data-local-formatted","");});}'
+    'document.addEventListener("ccfleet:quota",update);update();})();')
 LOCAL_TIMES_TAG = f"<script>{LOCAL_TIMES_JS}</script>"
 LOCAL_TIMES_CSP = ("'sha256-" + base64.b64encode(
     hashlib.sha256(LOCAL_TIMES_JS.encode("utf-8")).digest()).decode("ascii") + "'")
@@ -126,6 +135,43 @@ finally{busy.delete('status');}});
 PANEL_ACTION_CSP = "'sha256-" + base64.b64encode(
     hashlib.sha256(PANEL_ACTION_JS.encode()).digest()).decode() + "'"
 PANEL_ACTION_TAG = '<script>' + PANEL_ACTION_JS + '</script>'
+
+# A quota request is asynchronous: poll only its read-only region until the
+# machine acknowledges it, a new reading arrives, or the five-minute bound ends.
+ADMIN_QUOTA_POLL_JS = r'''(function(){
+var timer=null,running=false,until=0;
+function pending(){return Array.from(document.querySelectorAll('[data-admin-quota-pending]'));}
+function stop(nodes){nodes.forEach(function(n){n.removeAttribute('data-admin-quota-pending');
+var area=n.closest('[data-fleet-quota]'),button=area&&area.querySelector('button[type="submit"]');
+if(button)button.disabled=false;
+n.textContent=document.documentElement.lang.toLowerCase().startsWith('zh')?
+'未收到新的额度读数。请稍后重试；旧读数不能证明还有剩余额度。':
+'No new quota reading arrived. Try again later; old readings do not confirm remaining quota.';});}
+async function poll(){timer=null;var nodes=pending();if(!nodes.length)return;
+if(Date.now()>=until){stop(nodes);return;}running=true;
+var controller=new AbortController(),abort=setTimeout(function(){controller.abort();},10000);
+try{var path=location.pathname;
+if(!/^\/(?:en\/|zh\/)?admin\/?$/.test(path))throw Error('path');
+var r=await fetch(path,{credentials:'same-origin',cache:'no-store',redirect:'error',
+signal:controller.signal});if(!r.ok)throw Error('response');
+var text=await r.text();if(text.length>2097152)throw Error('size');
+var page=new DOMParser().parseFromString(text,'text/html');
+nodes.forEach(function(n){var current=n.closest('[data-fleet-quota]');
+var fresh=current&&page.getElementById(current.id);
+if(!fresh||!fresh.hasAttribute('data-fleet-quota')||fresh.querySelector(
+'input:not([type="hidden"]),textarea,select,[contenteditable]'))throw Error('target');
+current.replaceChildren(...Array.from(fresh.childNodes).map(function(c){
+return document.importNode(c,true);}));});
+document.dispatchEvent(new Event('ccfleet:quota'));
+}catch(e){stop(pending());}
+finally{clearTimeout(abort);running=false;if(pending().length)timer=setTimeout(poll,10000);}}
+function start(){if(timer!==null||running||!pending().length)return;
+until=Date.now()+300000;timer=setTimeout(poll,10000);}
+document.addEventListener('ccfleet:quota',start);start();
+})();'''
+ADMIN_QUOTA_POLL_CSP = "'sha256-" + base64.b64encode(
+    hashlib.sha256(ADMIN_QUOTA_POLL_JS.encode()).digest()).decode() + "'"
+ADMIN_QUOTA_POLL_TAG = '<script>' + ADMIN_QUOTA_POLL_JS + '</script>'
 
 # How often the page comes back for more. Fast enough while a sign-in is moving
 # that a step finishing on the node shows up almost at once; slow the rest of
@@ -578,12 +624,13 @@ a.back{font-size:14px;font-weight:600;text-decoration:none}
 
 /* Usage: who, the two windows, then the trend. */
 .usage-row{display:grid;
-grid-template-columns:minmax(150px,.9fr) minmax(200px,1fr) minmax(190px,1.1fr);
+grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);
 gap:16px 22px;align-items:start;padding:16px 0;border-bottom:1px solid var(--rule-soft)}
 .usage-row:last-of-type{border-bottom:0}
-.usage-name{font-family:var(--mono);font-weight:650;font-size:13.5px;min-width:0;
+.usage-name{font-family:var(--sans);font-weight:400;font-size:13.5px;min-width:0;
 overflow-wrap:anywhere}
-.usage-name span{font-family:var(--sans);font-weight:400}
+.usage-slot-title{font-family:var(--mono);font-size:16px;margin:0 0 12px}
+.quota-historical .meter-fill{background:var(--muted);opacity:.5}
 .usage-quota,.usage-spark{min-width:0}
 .usage-total{margin-top:9px;font-size:13px}
 .usage-total b{font-family:var(--mono);font-size:22px;font-weight:650;
@@ -745,6 +792,9 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             # it is the operator's to schedule, and nothing is broken meanwhile.
             "reboot_required": payload.get("reboot_required") is True,
             "usage": facts.get("usage") or {},
+            "relay": facts.get("relay"),
+            "usage_since": max(mine[0].get("claimed_at") or 0,
+                               mine[0].get("account_switched_at") or 0) if len(mine) == 1 else 0,
             "quota": facts.get("quota") or {},
             "open_alerts": [a["rule"] for a in node_alerts],
         })
@@ -769,7 +819,8 @@ def _actions_html(row: Mapping[str, Any], csrf: str) -> str:
     def form(action: str, label: str, extra: str = "", cls: str = "") -> str:
         return (f'<form class="inline" method="post" action="/actions/node/{node}/{action}">'
                 f'<input type="hidden" name="csrf" value="{escape(csrf)}">{extra}'
-                f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+                f'<button class="{cls}" type="submit"{admin_attributes(label)}>'
+                f'{escape(label)}</button></form>')
     toggle = form("disable", "Disable") if row["enabled"] else form("enable", "Enable")
     rc = form("rc-off", "RC alert off") if row["rc_expected"] else form("rc-on", "RC alert on")
     pin = ""
@@ -905,7 +956,8 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
         def form(action: str, label: str, extra: str = "", cls: str = "", node=node) -> str:
             return (f'<form class="inline" method="post" action="/actions/node/{node}/{action}">'
                     f'<input type="hidden" name="csrf" value="{escape(csrf)}">{extra}'
-                    f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+                    f'<button class="{cls}" type="submit"{admin_attributes(label)}>'
+                    f'{escape(label)}</button></form>')
 
         buttons = [form("disable", "Disable") if row["enabled"] else form("enable", "Enable")]
         # A shared machine is never judged on Remote Control: its slot runs it,
@@ -924,7 +976,8 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
         by = f'<span class="muted"> · {escape(beside)}</span>' if beside else ""
         items.append(f'<div class="row-line"><div class="row-name">{escape(shown)}{by}</div>'
                      f'<div class="actions">{"".join(buttons)}</div></div>')
-    return ('<h2 id="manage">Manage nodes</h2><div class="card">' + "".join(items) +
+    return ('<h2 id="manage" data-copy-zh=\"管理节点\">Manage nodes'
+        '</h2><div class="card">' + "".join(items) +
             '<p class="note">'
             "New token replaces the node's credential immediately, so update the node after. "
             "Remove deletes its history and cannot be undone.</p></div>")
@@ -932,16 +985,16 @@ def _manage_html(rows: list[Mapping[str, Any]], csrf: str) -> str:
 
 def _add_form(csrf: str) -> str:
     return (
-        '<h2 id="add-node">Add a node</h2><div class="card form">'
+        '<h2 id="add-node" data-copy-zh=\"添加节点\">Add a node</h2><div class="card form">'
         '<form method="post" action="/actions/node/add">'
         f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
         '<div class="fields">'
-        '<div><label for="node_id">Node name</label>'
+        '<div><label for="node_id" data-copy-zh=\"节点名称\">Node name</label>'
         '<input type="text" id="node_id" name="node_id" placeholder="laptop-erik" required '
         'pattern="[a-z0-9][a-z0-9-]{1,39}" title="lowercase letters, digits and hyphens"></div>'
-        '<div><label for="owner">Owner</label>'
+        '<div><label for="owner" data-copy-zh=\"所有者\">Owner</label>'
         '<input type="text" id="owner" name="owner" placeholder="erik" required></div>'
-        '<div><label for="region">Region</label>'
+        '<div><label for="region" data-copy-zh=\"地区\">Region</label>'
         '<input type="text" id="region" name="region" placeholder="us-west"></div>'
         '<label class="check"><input type="checkbox" name="rc_expected" value="1"> '
         'Alert if Remote Control stops</label>'
@@ -1013,8 +1066,8 @@ def _console_bar(corner: str = "", home: str = "/") -> str:
     """
     return ('<header class="topbar"><div class="topbar-in">'
             f'<a class="brand" href="{escape(home)}">{MARK}<span>ccfleet</span></a>'
-            '<span class="tag">console</span>'
-            f'<div class="topbar-end">{corner}</div></div></header>')
+            '<span class="tag" data-copy-zh=\"管理后台\">console</span>'
+            f'<div class="topbar-end">{bilingual.CONTROLS}{corner}</div></div></header>')
 
 
 def _console_open(title: str, corner: str = "", home: str = "/") -> str:
@@ -1023,7 +1076,7 @@ def _console_open(title: str, corner: str = "", home: str = "/") -> str:
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>ccfleet · {escape(title)}</title>"
             f'<link rel="icon" href="{FAVICON}">'
-            f"<style>{CSS}</style></head><body class=\"console\">"
+            f"<style>{CSS}{bilingual.CSS}</style></head><body class=\"console\">"
             + _console_bar(corner, home) + "<div class=\"page\">")
 
 
@@ -1031,7 +1084,7 @@ def _console_open(title: str, corner: str = "", home: str = "/") -> str:
 
 #: The bar's corner for somebody not signed in: the way to their slots, which
 #: begins by signing in.
-SIGN_IN_LINK = '<a class="btn primary" href="/account">Sign in</a>'
+SIGN_IN_LINK = '<a class="btn primary" href="/account" data-copy-zh=\"登录\">Sign in</a>'
 #: How many avatar grounds there are (--av0 to --av5 in the stylesheet).
 AVATAR_TONES = 6
 
@@ -1076,10 +1129,11 @@ def user_menu(account: Mapping[str, Any], csrf: str, *, operator: bool,
         return f'<span class="avatar t{tone}{size}" aria-hidden="true">{initial}</span>'
 
     held = f'<span class="menu-pill">{int(slots_held)}</span>' if slots_held > 0 else ""
-    links = f'<a href="{escape(slots_href)}"><span>Your slots</span>{held}</a>'
+    links = (f'<a href="{escape(slots_href)}"><span data-copy-zh=\"我的槽位\">Your slots</span>'
+        f'{held}</a>')
     if operator:
-        links += (f'<a href="{escape(console_href)}"><span>Console</span>'
-                  '<span class="menu-pill">operator</span></a>')
+        links += (f'<a href="{escape(console_href)}"><span data-copy-zh=\"管理后台\">Console</span>'
+                  '<span class="menu-pill" data-copy-zh=\"管理员\">operator</span></a>')
     # Shown with a break allowed after the @, so a long address wraps there on a
     # phone rather than mid-word; each part is escaped on its own.
     local, at, domain = str(account.get("email") or "").partition("@")
@@ -1088,11 +1142,13 @@ def user_menu(account: Mapping[str, Any], csrf: str, *, operator: bool,
             f'<summary aria-label="Account menu for {email}" title="{email}">'
             + face() + "</summary>"
             '<div class="menu"><div class="menu-who">' + face(" big")
-            + f"<p><span>Signed in as</span><strong>{shown}</strong></p></div>"
+            + f"<p><span data-copy-zh=\"当前登录\">Signed in as</span><strong>{shown}</strong>"
+                f"</p></div>"
             f'<nav class="menu-links" aria-label="Your account">{links}</nav>'
             '<form method="post" action="/auth/signout">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
-            '<button type="submit" class="signout">Sign out</button></form></div></details>')
+            '<button type="submit" class="signout" data-copy-zh=\"退出登录\">Sign out</button>'
+                '</form></div></details>')
 
 
 def console_href(cfg: Config) -> str:
@@ -1222,7 +1278,8 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
             return (f'<form class="inline" method="post" '
                     f'action="/actions/node/{node}/{action}">'
                     f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
-                    f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+                    f'<button class="{cls}" type="submit"{admin_attributes(label)}>'
+                    f'{escape(label)}</button></form>')
 
         if not state:
             # Say if one has been issued before. The flow deletes itself when it
@@ -1259,7 +1316,8 @@ def _token_html(rows: list[Mapping[str, Any]], csrf: str,
         cls = "row-line stacked" if state and state != "ready" else "row-line"
         items.append(f'<div class="{cls}"><div class="row-name">{node}</div>'
                      f'<div class="actions">{body}</div></div>')
-    return ('<h2 id="device-tokens">Device tokens</h2><div class="card">' + "".join(items) +
+    return ('<h2 id="device-tokens" data-copy-zh=\"设备令牌\">Device tokens</h2><div '
+        'class="card">' + "".join(items) +
             '<p class="note">'
             "A device token lets <code>claude</code> run on your own machine, on that "
             "machine's own files, with no login. It is minted on the node from the account "
@@ -1304,7 +1362,8 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
             return (f'<form class="inline" method="post" '
                     f'action="/actions/node/{node}/{action}">'
                     f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
-                    f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+                    f'<button class="{cls}" type="submit"{admin_attributes(label)}>'
+                    f'{escape(label)}</button></form>')
 
         if not state:
             signed_in = row.get("credentials_present")
@@ -1340,7 +1399,8 @@ def _signin_html(rows: list[Mapping[str, Any]], csrf: str,
         cls = "row-line stacked" if state else "row-line"
         items.append(f'<div class="{cls}"><div class="row-name">{node}</div>'
                      f'<div class="actions">{body}</div></div>')
-    return ('<h2 id="sign-in">Sign in</h2><div class="card">' + "".join(items) +
+    return ('<h2 id="sign-in" data-copy-zh=\"登录\">Sign in</h2>'
+        '<div class="card">' + "".join(items) +
             '<p class="note">'
             "Starting a sign-in runs Claude Code's own login on the node. The credential is "
             "written there and never reaches this server; only the verification URL and the "
@@ -1431,7 +1491,8 @@ def _meter(used: Any, label: str, resets: Any, read_at: Any = None,
     yourself, every time you look. ``read_at`` is when the window was read,
     which a reset time without a date needs to be placed.
     """
-    if not isinstance(used, (int, float)) or isinstance(used, bool):
+    if (not isinstance(used, (int, float)) or isinstance(used, bool)
+            or not math.isfinite(used)):
         return ""
     pct = max(0.0, min(100.0, float(used)))
     level = "crit" if pct >= 90 else "warn" if pct >= 75 else "ok"
@@ -1485,95 +1546,197 @@ def quota_reading(wanted_at: Any, checked_at: Any, now: float, refresh: Any = No
     return wanted_at > read
 
 
+def _quota_notice(en: str, zh: str, cls: str = "muted small") -> str:
+    return f'<p class="{cls}">' + bi(en, zh, inline=True) + '</p>'
+
+
 def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) -> str:
-    """The operator's Refresh, for a machine's one slot."""
+    """Request once, then report the machine's result without restamping its data."""
     slot_id = row.get("slot_id")
     if not csrf or not slot_id:
         return ""
-    if quota_reading(row.get("quota_wanted_at"), checked, now,
-                     (row.get("quota") or {}).get("refresh")):
-        return '<p class="muted small">reading now&hellip;</p>'
-    return (f'<form class="inline" method="post" action="/actions/slot/{escape(slot_id)}/quota" '
-            'data-fleet-action="admin-quota">'
+    if row.get('slot_state') not in (None, slotstates.ACTIVE):
+        return _quota_notice('Quota refresh is available once the slot is in use.',
+                              '槽位开始使用后即可刷新额度。')
+    wanted = row.get("quota_wanted_at")
+    acknowledgement = (row.get("quota") or {}).get("refresh")
+    form = (f'<form class="inline" method="post" '
+            f'action="/actions/slot/{escape(slot_id)}/quota" data-fleet-action="admin-quota">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
-            '<button type="submit">Refresh</button></form>')
+            '<button type="submit">' + bi_label('Refresh', '刷新', inline=True)
+            + '</button></form>')
+    if quota_reading(wanted, checked, now, acknowledgement):
+        return ('<p class="muted small" role="status" data-admin-quota-pending="'
+                + escape(slot_id) + '">' + bi_label(
+                    'Reading now… This panel checks for a result for up to five minutes.',
+                    '正在读取… 此面板会在五分钟内检查结果。', inline=True) + '</p>'
+                + form.replace('<button type="submit">', '<button type="submit" disabled>'))
+    known = type(checked) in (int, float) and math.isfinite(checked) and 0 < checked <= now
+    requested = type(wanted) in (int, float) and math.isfinite(wanted) and 0 < wanted <= now
+    completed = quota_refresh_completed(wanted, acknowledgement, now)
+    unanswered = requested and (not known or wanted > checked)
+    failed = unanswered and (quota_refresh_failed(wanted, acknowledgement, now)
+                            or not completed and now - wanted >= QUOTA_READ_WAIT_S)
+    result = (_quota_notice(
+        'No new quota reading was received. The machine may be busy or unable to read '
+        'Claude usage. Missing data does not mean quota remains.',
+        '未收到新的额度读数。机器可能繁忙或无法读取 Claude 用量；没有读数不代表还有剩余额度。',
+        'small lapsed') if failed else '')
+    if completed and not failed and known and requested and checked < wanted:
+        result += _quota_notice(
+            'Claude returned its latest available native reading; its actual reading time '
+            'is shown above and may be earlier than this request.',
+            'Claude 返回了原版客户端最新可用的读数；上方保留真实读取时间，可能早于本次请求。')
+    return result + form
 
 
 def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
-    """The two windows an owner actually asks about: this session, this week.
-
-    These belong to the Claude account, not to the node: every device signed
-    in as that account spends them. Said above the bars, because beside a
-    per-node token count they read as if they were the same thing, and the
-    count then looks stuck while the bars move.
-    """
+    """Keep historical account readings visibly distinct from current availability."""
     quota = row.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     checked = quota.get("checked_at")
-    refresh = _quota_refresh(row, checked, now, csrf)
+    known = (type(checked) in (int, float) and math.isfinite(checked)
+             and 0 < checked <= now)
+    since = row.get('usage_since', 0)
+    previous_account = (known and type(since) in (int, float)
+                        and math.isfinite(since) and checked < since)
+    if previous_account:
+        session, week, checked, known = {}, {}, None, False
+    historical = not known or now - checked > 10 * 60
     region = (f'<div id="admin-quota-{escape(row["slot_id"])}" data-fleet-quota '
               'data-fleet-readonly>' if row.get("slot_id") else '<div>')
-    if not session and not week:
-        return region + '<p class="muted small">No window reading yet.</p>' + refresh + '</div>'
-    bars = ('<div class="usage-nums muted">Claude account &middot; every device</div>'
-            + _meter(session.get("used_pct"), "5-hour session", session.get("resets"),
-                     checked, now, session.get("resets_at"))
-            + _meter(week.get("used_pct"), "This week", week.get("resets"), checked, now,
-                     week.get("resets_at")))
-    if isinstance(checked, (int, float)) and not isinstance(checked, bool):
-        bars += f'<p class="muted small">read {escape(_age(now, checked))} ago</p>'
-    return region + bars + refresh + '</div>'
+    bars = ''
+    if previous_account:
+        bars += _quota_notice('Waiting for a quota reading for the current account.',
+                              '正在等待当前账号的额度读数。')
+    elif not session and not week:
+        bars += _quota_notice('No window reading yet. Current quota is unknown.',
+                              '尚无窗口读数，当前额度未知。')
+    elif historical:
+        bars += _quota_notice('<strong>Historical reading · current quota unknown.</strong>',
+                              '<strong>历史读数 · 当前额度未知。</strong>', 'small lapsed')
+    bars += '<div class="usage-nums muted">' + bi_label(
+        'Claude account · every device · reported usage',
+        'Claude 账号 · 所有设备合计 · 上报用量', inline=True) + '</div>'
+    for window, en, zh in ((session, '5-hour session', '五小时窗口'),
+                           (week, 'This week', '本周窗口')):
+        meter = _meter(window.get('used_pct'), en, window.get('resets'),
+                       checked if known else None, now, window.get('resets_at'))
+        if meter:
+            meter = meter.replace(f'<span>{en}</span>', '<span>' + bi_label(en, zh, inline=True)
+                                  + '</span>').replace('<div class="meter-foot">resets ',
+                '<div class="meter-foot">' + bi_label('resets', '重置时间', inline=True) + ' ')
+        else:
+            meter = '<div class="meter">' + bi_label(en, zh, inline=True) + _quota_notice(
+                'Current quota is unavailable. This does not mean quota remains.',
+                '当前额度未知，不代表还有剩余额度。') + '</div>'
+        bars += meter
+    if known:
+        age = escape(_age(now, checked))
+        bars += _quota_notice(f'read {age} ago', f'最近读取：{age} 前')
+    return (region + ('<div class="quota-historical">' if historical else '<div>')
+            + bars + '</div>' + _quota_refresh(row, checked, now, csrf) + '</div>')
+
+
+def _admin_relay_usage(row: Mapping[str, Any], now: float) -> str:
+    report = relay_report(row.get('relay'), now)
+    if report is None or report['observed_at'] < row.get('usage_since', 0):
+        return _quota_notice('Gateway response usage: not reported; total unknown.',
+                              '网关响应用量：尚未上报，总数未知。')
+    observed = report['observed_at']
+    age = escape(_age(now, min(observed, now)))
+    heard = row.get('last_seen_ts')
+    fresh = (type(heard) in (int, float) and now - 15 * 60 <= heard <= now + 60
+             and observed >= now - 15 * 60)
+    text = _quota_notice(
+        f'Gateway responses · seven UTC calendar days · observed {age} ago',
+        f'网关响应 · 过去七个 UTC 日 · {age} 前观测')
+    if not fresh:
+        text += _quota_notice('Historical report; current totals unknown.',
+                              '历史报告，当前总数未知。', 'small lapsed')
+    usage = report.get('token_usage')
+    if not usage or not usage['samples']:
+        return text + _quota_notice('Response token totals unknown: no complete usage samples.',
+                                    '没有完整用量样本，响应 Token 总数未知。')
+    text += _quota_notice(
+        f"<strong>{usage['input_tokens']:,}</strong> input · "
+        f"<strong>{usage['output_tokens']:,}</strong> output tokens",
+        f"输入 <strong>{usage['input_tokens']:,}</strong> · "
+        f"输出 <strong>{usage['output_tokens']:,}</strong> Token")
+    for prefix, en, zh in (('cache_read', 'Cache-read input', '缓存读取输入'),
+                           ('cache_creation', 'Cache-write input', '缓存写入输入')):
+        count = usage[prefix + '_samples']
+        text += _quota_notice(
+            f"{en}: {usage[prefix + '_input_tokens']:,} tokens ({count} samples)" if count
+            else f'{en}: unknown (no samples)',
+            f"{zh}：{usage[prefix + '_input_tokens']:,} Token（{count} 个样本）" if count
+            else f'{zh}：未知（没有样本）')
+    return text + _quota_notice(
+        f"Coverage: {usage['samples']} complete samples / {usage['eligible']} eligible "
+        'responses. Missing usage is not zero. These observed sums are not account quota.',
+        f"覆盖：{usage['samples']} 个完整样本 / {usage['eligible']} 个可统计响应。"
+        '缺失用量不是零；观测总数不是账号额度。')
 
 
 def _usage_html(rows: list[Mapping[str, Any]], now: float, csrf: str = "") -> str:
-    """Per-node, per-account token use, counted from transcripts on each node."""
+    """Separate account limits, gateway responses and on-slot transcript counts."""
     def reporting(row: Mapping[str, Any]) -> bool:
-        return bool((row.get("usage") or {}).get("total_tokens") or (row.get("quota") or {}))
+        return bool(row.get('slot_id')
+                    and row.get('slot_state') in (slotstates.CLAIMED, slotstates.ACTIVE)
+                    or (row.get('usage') or {}).get('total_tokens') or row.get('quota')
+                    or relay_report(row.get('relay'), now))
 
     live = [r for r in rows if reporting(r)]
     if not live:
         return ""
-    # A row of dashes says nothing an operator can act on, and four of them bury
-    # the two that matter. Name the quiet nodes in one line instead.
     quiet = [_called(r)[0] for r in rows if not reporting(r)]
     tail = ""
     if quiet:
         names = ", ".join(escape(str(q)) for q in quiet[:8])
         more = f" and {len(quiet) - 8} more" if len(quiet) > 8 else ""
-        tail = (f'<p class="quiet">No usage reported yet from <span class="mono">{names}'
-                f'</span>{more}.</p>')
+        tail = _quota_notice(f'No usage reported yet from {names}{more}.',
+                              f'以下机器尚未上报用量：{names}{more}。')
     items = []
     for row in live:
-        usage = row.get("usage") or {}
-        total = usage.get("total_tokens") or 0
-        cached = usage.get("cache_read_input_tokens") or 0
-        share = f"{cached / total * 100:.0f}%" if total else "-"
-        spark, caption = _usage_chart(usage)
-        # Which model did the work is left out: it is whatever each person
-        # chose in their session, and can change turn by turn.
+        usage = row.get('usage') or {}
         shown, beside = _called(row)
-        place = "slot" if row.get("machine") else "node"
-        by = f'<span class="muted"> &middot; {escape(beside)}</span>' if beside else ""
-        items.append(
-            f'<div class="usage-row"><div class="usage-name">{escape(shown)}{by}'
-            f'<div class="usage-total"><b>{escape(_human_tokens(total))}</b>'
-            f'<span class="muted"> tokens run on this {place}, last '
-            f'{escape(_usage_span(usage))}</span></div>'
-            f'<div class="usage-meta muted">'
-            f'{escape(_plural(usage.get("sessions") or 0, "session"))} &middot; '
-            f'{escape(share)} cached</div></div>'
-            f'<div class="usage-quota">{_quota_html(row, now, csrf)}</div>'
-            f'<div class="usage-spark">{spark}{caption}</div></div>')
-    return ('<h2 id="usage">Usage and quota</h2><div class="card">' + "".join(items) + tail +
-            '<p class="note">'
-            "Windows come from <code>/usage</code> inside a Claude Code session on the node, "
-            "or in the slot on a shared machine, "
-            "read on a slow schedule &mdash; Claude Code reporting on itself, not a usage "
-            "endpoint. The windows are the whole Claude account&#x27;s, used anywhere: "
-            "claude.ai, the Claude app, and Claude Code on any computer, device tokens "
-            "included. Token counts are only what ran on this node or slot, from the "
-            "transcripts Claude Code writes there. Conversation content never leaves the "
-            "node; only counts do.</p></div>")
+        by = f'<span class="muted"> &middot; {escape(beside)}</span>' if beside else ''
+        transcript = _quota_notice('Transcript usage: not reported; total unknown.',
+                                   '原版对话记录用量：尚未上报，总数未知。')
+        chart = ''
+        if usage:
+            total = usage.get('total_tokens')
+            if type(total) in (int, float) and math.isfinite(total):
+                transcript = _quota_notice(
+                    f'<b>{escape(_human_tokens(total))}</b> transcript tokens on this '
+                    f'{"slot" if row.get("machine") else "node"}, last '
+                    f'{escape(_usage_span(usage))} · '
+                    f'{escape(_plural(usage.get("sessions") or 0, "session"))}',
+                    f'<b>{escape(_human_tokens(total))}</b> Token · 此机器过去 '
+                    f'{escape(_usage_span(usage))} 的原版对话记录 · '
+                    f'{escape(str(usage.get("sessions") or 0))} 个会话')
+                spark, caption = _usage_chart(usage)
+                chart = spark + caption
+        transcript += _quota_notice(
+            'Transcript counts exclude gateway requests from local clients. '
+            'Zero transcript tokens does not mean zero account usage.',
+            '原版对话记录不包含本机客户端经网关发出的请求；记录为零不代表账号没有使用。')
+        items.append('<div class="usage-row"><div class="usage-name">'
+                     + '<h3 class="usage-slot-title">' + escape(shown) + by + '</h3>'
+                     + _admin_relay_usage(row, now)
+                     + '<details><summary>' + bi_label('On-slot transcripts', '槽位原版记录',
+                        inline=True) + '</summary>' + transcript + chart + '</details></div>'
+                     + '<div class="usage-quota">' + _quota_html(row, now, csrf)
+                     + '</div></div>')
+    return ('<h2 id="usage">' + bi_label('Usage and quota', '用量与额度', inline=True)
+            + '</h2><div class="card">' + ''.join(items) + tail + _quota_notice(
+                'Quota windows come from <code>/usage</code> in Claude Code and cover the '
+                'whole Claude account on every device. Gateway counts include only validated '
+                'completed response samples. Transcript counts cover only the node or slot. '
+                'Conversation content never leaves the node in these numeric reports.',
+                '额度窗口来自 Claude Code 的 <code>/usage</code>，包含账号在所有设备的用量。'
+                '网关统计仅包含已验证的完整响应样本；对话记录统计仅覆盖当前机器或槽位。'
+                '这些数字报告不包含对话内容。', 'note') + '</div>')
 
 
 def _usage_span(usage: Mapping[str, Any]) -> str:
@@ -1619,7 +1782,7 @@ def _strip_html(counts: Mapping[str, int]) -> str:
     for key, label in TILES:
         n = int(counts.get(key) or 0)
         cls = f"tile {key}" if n else "tile zero"
-        tiles.append(f'<div class="{cls}"><b>{n}</b><span>{escape(label)}</span></div>')
+        tiles.append(f'<div class="{cls}"><b>{n}</b><span>{admin_label(label)}</span></div>')
     return f'<div class="strip">{"".join(tiles)}</div>'
 
 
@@ -1643,7 +1806,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     empty = ("No nodes yet. Use the form below." if is_admin else
              "No nodes are assigned to you yet. Your operator adds them.")
     body_rows = "".join(_row_html(r, now) for r in rows) or (
-        f'<tr><td colspan="9" class="muted">{escape(empty)}</td></tr>')
+        f'<tr><td colspan="9" class="muted">{admin_label(empty)}</td></tr>')
     # An alert is about a node: say it by the name that node goes by.
     called = {r["id"]: _called(r)[0] for r in rows}
     alert_items = "".join(
@@ -1653,7 +1816,9 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f'<span class="alert-msg">{escape(a["message"])}</span>'
         f'<span class="muted small">{escape(_age(now, a["opened_at"]))} ago</span></div>'
         for a in alerts) or (
-        '<p class="quiet">Nothing open. Every node is inside its thresholds.</p>')
+        '<p class="quiet" data-copy-zh=\"当前没有告警，'
+            '所有节点均在阈值范围内。\">Nothing open. Every '
+            'node is inside its thresholds.</p>')
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
@@ -1685,20 +1850,27 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
                     f'<meta http-equiv="refresh" content="{every};url={CONSOLE_PATH}">')
     whoami = ""
     if who is not None:
-        whoami = (f" · signed in as <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
-                  + ("" if is_admin else " · showing only your nodes"))
-    diagnostics = ('<h2 id="machine-diagnostics">Machine diagnostics</h2>'
-        '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
-        '<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Claude sign-in</th>'
+        whoami = (" · " + bi_label("signed in as", "当前登录", inline=True)
+                  + f" <strong>{escape(str(getattr(who, 'label', '')))}</strong>"
+                  + ("" if is_admin else " · " + bi_label(
+                      "showing only your nodes", "仅显示您的节点", inline=True)))
+    diagnostics = ('<h2 id="machine-diagnostics" data-copy-zh=\"机器诊断\">Machine diagnostics</h2>'
+        '<div class="wrap"><table><thead><tr><th data-copy-zh=\"状态\">Status</th><th '
+            'data-copy-zh=\"节点\">Node</th><th data-copy-zh=\"最近在线\">Last seen</th>'
+        '<th>Claude Code</th><th data-copy-zh=\"出口 IP\">Egress IP</th><th '
+            'data-copy-zh=\"磁盘\">Disk</th><th data-copy-zh=\"负载\">Load</th><th '
+            'data-copy-zh=\"Claude 登录\">Claude sign-in</th>'
         '<th>Remote Control</th></tr></thead>'
         f'<tbody id="admin-machine-readings" data-fleet-readonly>{body_rows}</tbody></table></div>'
         + _usage_html(rows, now, csrf if is_admin else ''))
     if is_admin:
-        diagnostics = ('<details class="admin-advanced"><summary>Diagnostics &amp; usage</summary>'
+        diagnostics = ('<details class="admin-advanced"><summary data-copy-zh=\"诊断与用量\">'
+            'Diagnostics &amp; usage</summary>'
                        + diagnostics + '</details>')
     management = _manage_html(rows, csrf) + _add_form(csrf) if csrf and is_admin else ''
     if management:
-        management = ('<details class="admin-advanced"><summary>Advanced machine controls</summary>'
+        management = ('<details class="admin-advanced"><summary data-copy-zh=\"高级机器控制\">'
+            'Advanced machine controls</summary>'
                       + management + '</details>')
     heading = 'Fleet admin' if is_admin else 'Your machines'
     introduction = ('Manage accounts, credit and slots.' if is_admin
@@ -1708,15 +1880,17 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'{auto_refresh}<title>ccfleet console</title>'
         f'<link rel="icon" href="{FAVICON}">'
-        f"<style>{CSS}</style></head><body class=\"console\">"
+        f"<style>{CSS}{bilingual.CSS}</style></head><body class=\"console\">"
         + _console_bar(corner, product_href(cfg, "/")) + "<div class=\"page\">"
         '<header class="mast"><div>'
-        f'<h1>{heading}</h1><p class="sub">{introduction}</p>'
-        f'<p class="sub small">{cadence.capitalize()}{whoami}</p></div>'
+        f'<h1>{admin_label(heading)}</h1><p class="sub">{admin_label(introduction)}</p>'
+        f'<p class="sub small">{admin_label(cadence.capitalize())}{whoami}</p></div>'
         + '<div id="admin-health-counts" data-fleet-readonly>' + _strip_html(counts) + '</div>' +
         "</header>" + extra
-        + '<p><a href="/admin" data-fleet-status="admin">Refresh status</a></p>'
-        + '<h2>Open alerts</h2><div class="card" id="admin-alerts" data-fleet-readonly>'
+        + '<p><a href="/admin" data-fleet-status="admin" data-copy-zh=\"刷新状态\">Refresh '
+            'status</a></p>'
+        + '<h2 data-copy-zh=\"当前告警\">Open alerts</h2><div class="card" '
+            'id="admin-alerts" data-fleet-readonly>'
         + alert_items + '</div>'
         # Management is the operator's. An owner sees their nodes and nothing to
         # press, which is why they get no CSRF token either: there is no form.
@@ -1726,5 +1900,6 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + management
-        + "</div>" + LOCAL_TIMES_TAG + PANEL_ACTION_TAG + "</body></html>"
+        + "</div>" + LOCAL_TIMES_TAG + PANEL_ACTION_TAG + ADMIN_QUOTA_POLL_TAG
+        + bilingual.SCRIPT_TAG + "</body></html>"
     )

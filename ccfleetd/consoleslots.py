@@ -35,6 +35,9 @@ from . import (
     wallet_ui,
 )
 from . import slots as slotstates
+from .admin_locale import attributes as admin_attributes
+from .admin_locale import hint as admin_hint
+from .admin_locale import label as admin_label
 from .config import Config
 from .desired import is_channel, machine_hostname
 from .render import _age, _free_pool_slot
@@ -72,9 +75,11 @@ OWN_REPORT = ("claude", "credentials")
 RELEASE_ORDER = ("latest", "stable")
 #: The column heads, for the eye only: each cell also says what it is, to a
 #: screen reader, and on a phone, where the rows stack as cards, to everybody.
-SLOT_HEAD = ('<div class="slothead" aria-hidden="true"><span>Slot</span><span>Holder</span>'
-             "<span>State</span><span>Claude Code</span><span>Held</span>"
-             "<span>Attention</span></div>")
+SLOT_HEAD = ('<div class="slothead" aria-hidden="true"><span data-copy-zh=\"槽位\">Slot'
+    '</span><span data-copy-zh=\"持有人\">Holder</span>'
+             "<span data-copy-zh=\"状态\">State</span><span>Claude Code</span><span "
+                 "data-copy-zh=\"持有时长\">Held</span>"
+             "<span data-copy-zh=\"待处理\">Attention</span></div>")
 EMPTY_SAYS = "No slot declared yet: nobody can claim it until it has one."
 OWN_NOTE = ("Counted as their slot, and never wiped or handed out from here. To stop "
             'counting it, on the server: <code class="code-wrap">'
@@ -86,7 +91,8 @@ WIPE_NOTE = ("Take back is a wipe: everything on the slot goes, and it is availa
 def _form(action: str, csrf: str, label: str, inner: str = "", cls: str = "") -> str:
     return (f'<form class="field" method="post" action="{escape(action)}">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
-            f'<button class="{cls}" type="submit">{escape(label)}</button></form>')
+            f'<button class="{cls}" type="submit"{admin_attributes(label)}>'
+            f'{escape(label)}</button></form>')
 
 
 def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None,
@@ -100,14 +106,15 @@ def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None
     price = _price_card(store, csrf, now)
     navigation = ('<nav class="admin-tasks" aria-label="Admin tasks">'
         '<a href="#accounts"><span class="admin-task-icon" aria-hidden="true">$</span>'
-        '<span><strong>Accounts &amp; credit</strong>'
-        '<small>Add credit for a customer</small></span></a>'
+        '<span><strong data-copy-zh=\"账户与余额\">Accounts &amp; credit</strong>'
+        '<small data-copy-zh=\"为客户增加余额\">Add credit for a customer</small></span></a>'
         '<a href="#slots"><span class="admin-task-icon" aria-hidden="true">▤</span>'
-        '<span><strong>Slots &amp; machines</strong>'
-        '<small>Check who is connected</small></span></a>'
+        '<span><strong data-copy-zh=\"槽位与机器\">Slots &amp; machines</strong>'
+        '<small data-copy-zh=\"查看连接状态\">Check who is connected</small></span></a>'
         '<a href="#price"><span class="admin-task-icon" aria-hidden="true">≡</span>'
-        '<span><strong>Monthly prices</strong>'
-        '<small>Review prices and supplier costs</small></span></a>'
+        '<span><strong data-copy-zh=\"月租价格\">Monthly prices</strong>'
+        '<small data-copy-zh=\"查看价格与供应商成本\">Review '
+            'prices and supplier costs</small></span></a>'
         '</nav>')
     result = navigation + body + price
     return result + ('<style>' + wallet_ui.CSS + '</style>'
@@ -199,49 +206,70 @@ def _offer_prices_card(store: Store) -> str:
         number = node.get("public_status_number")
         identity = f'<span class="sub">Machine {number}</span>' if number else ""
         brands = ('<span class="admin-provider host-provider">Host · '
-                  + escape(offer.host_brand or "Not set") + '</span>')
+                  + (escape(offer.host_brand) if offer.host_brand else admin_label("Not set"))
+                  + '</span>')
         brands += ('<span class="admin-provider ip-provider">IP · '
-                   + escape(offer.ip_brand or "Not set") + '</span>')
+                   + (escape(offer.ip_brand) if offer.ip_brand else admin_label("Not set"))
+                   + '</span>')
         kind = {"residential": "Residential", "isp": "ISP",
                 "datacenter": "Datacenter"}.get(offer.ip_type, "Not verified")
         value = offers.quote(offer)
         supplier = (escape(_offer_money(Decimal(value.resource.amount), "USD"))
-                    if value is not None else '<span class="muted">Needs recorded USD costs</span>')
+                    if value is not None else '<span class="muted" '
+                        'data-copy-zh=\"需要记录美元成本\">'
+                        'Needs recorded USD costs</span>')
         bundled = value is not None and value.bundled
         hosting_invoice = _offer_invoice(offer.hosting)
         if bundled:
-            hosting_invoice += '<span class="sub">VPS + exit IP bundled invoice</span>'
-        ip_invoice = ('<span class="muted">Included in bundled invoice</span>' if bundled
+            hosting_invoice += ('<span class="sub" data-copy-zh=\"VPS '
+                '与出口 IP 合并账单\">VPS + exit '
+                'IP bundled invoice</span>')
+        ip_invoice = ('<span class="muted" data-copy-zh=\"包含在合并账单中\">Included in bundled '
+            'invoice</span>' if bundled
                       else _offer_invoice(offer.ip))
         service_fee = (escape(pricing.display(value.service_fee)) if value is not None
-                       else '<span class="muted">Unavailable</span>')
+                       else '<span class="muted" data-copy-zh=\"暂无数据\">Unavailable</span>')
         rows.append('<tr><th scope="row">' + escape(shown) + identity + '</th><td>'
-                    + brands + '<span class="sub">' + kind + '</span></td><td>'
+                    + brands + '<span class="sub">' + admin_label(kind) + '</span></td><td>'
                     + hosting_invoice + '</td><td>' + ip_invoice
                     + '</td><td>' + supplier + '</td><td>' + service_fee + '</td><td><strong>'
                     + escape(_offer_rate(offer)) + '</strong></td></tr>')
     table = ('<div class="offer-costs" role="region" '
              'aria-label="Machine supplier costs and prices" tabindex="0"><table><thead><tr>'
-             + ''.join(f'<th scope="col">{label}</th>' for label in (
+             + ''.join(f'<th scope="col">{admin_label(label)}</th>' for label in (
                  "Machine", "Providers / IP type", "Hosting invoice", "IP invoice",
                  "Resource / month", "Service fee / month", "Customer / month"))
              + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>' if rows else
              '<p class="quiet">No enabled machine offers yet. Configure an enabled machine’s '
              'Providers, IP type &amp; price under Manage.</p>')
-    return ('<section class="admin-block admin-pricing"><h2 id="price">Alpha slot pricing</h2>'
-            '<div class="card offer-pricing"><p class="admin-section-intro">'
+    return ('<section class="admin-block admin-pricing"><h2 id="price" '
+        'data-copy-zh=\"Alpha 槽位价格\">Alpha slot pricing</h2>'
+            '<div class="card offer-pricing"><p class="admin-section-intro" '
+            'data-copy-zh="槽位的每月价格。展开明细可查看供应商成本。">'
             'Monthly slot prices. Open the breakdown to review supplier costs.</p>'
-            '<details class="admin-price-details"><summary>View prices and cost breakdown</summary>'
+            '<details class="admin-price-details"><summary data-copy-zh=\"查看价格与成本明细\">'
+                'View prices and cost breakdown</summary>'
             '<p class="offer-rule"><strong>Recorded monthly resource cost + '
             'max($2.00, 10% of resource cost)</strong> · same formula for ISP, residential '
             'and datacenter.</p>'
             + table
-            + '<p class="note">Calendar-month costs stay unchanged; 30-day costs × 365 / 360; '
+            + '<p class="note" data-copy-zh=\"自然月成本保持原值；30 '
+                '天成本 × 365 / 360；年成本 ÷ 12。'
+                '资源成本与服务费分别四舍五入到美分后相加。美元报价优先显示，不自动换汇。外币账单需先记录运营方换算的美元成本，缺少完整美元成本时不提供报价。\">'
+                'Calendar-month costs stay unchanged; 30-day costs × 365 / 360; '
             'annual costs ÷ 12. Round the combined USD resource cost to cents, round the '
             'service fee to cents, then add them. USD is listed first; currencies are never '
             'converted automatically. Record operator-converted USD costs before quoting '
             'foreign invoices. Missing or unconverted costs leave pricing unavailable.</p>'
-            '<p class="note">Edit each machine under its slot’s Manage → Providers, IP type '
+            '<p class="note" data-copy-zh=\"在对应槽位的“管理 → '
+                '供应商、IP 类型与价格”中编辑。品牌、'
+                '网络类型和月度成本明细公开展示，原始账单仅管理员可见。'
+                    'Alpha 初期价格可能适用于后续新购或余额续费，'
+                    '需由用户确认报价；'
+                '已约定时段及现有月租方案保持已确认价格。'
+                    '余额购买为单次付款，自动续费需要单独确认。'
+                    '供应商订阅和 API 用量另行计算。\">Edit each '
+                'machine under its slot’s Manage → Providers, IP type '
             '&amp; price. Brands, network type and the normalized monthly cost breakdown are '
             'public; raw invoices remain here. Introductory Alpha pricing may change for new '
             'purchases or credit renewals: provide the current quote for confirmation and honor '
@@ -256,14 +284,21 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
     """Public labels and exact private cost inputs, scoped to this machine."""
     offer = node.get("offer") or offers.Offer()
     base = f"/actions/machine/{node['id']}"
-    fields = ('<div class="offer-fields"><fieldset><legend>Providers and IP type</legend>'
-              '<label>Host provider <input name="host_brand" maxlength="48" '
-              f'value="{escape(offer.host_brand)}" placeholder="Hosting brand"></label>'
-              '<label>IP provider <input name="ip_brand" maxlength="48" '
-              f'value="{escape(offer.ip_brand)}" placeholder="IP or proxy brand"></label>'
-              '<label>IP type <select name="ip_type">'
+    fields = ('<div class="offer-fields"><fieldset><legend data-copy-zh=\"供应商与 IP 类型\">'
+        'Providers and IP type</legend>'
+              '<label><span data-copy-zh=\"主机供应商\">Host provider</span> <input '
+                  'name="host_brand" maxlength="48" '
+              f'value="{escape(offer.host_brand)}" placeholder="Hosting brand" '
+                  f'data-placeholder-zh="主机品牌"></label>'
+              '<label><span data-copy-zh=\"IP 供应商\">IP provider</span> <input '
+                  'name="ip_brand" maxlength="48" '
+              f'value="{escape(offer.ip_brand)}" placeholder="IP or proxy brand" '
+                  f'data-placeholder-zh="IP 或代理品牌"></label>'
+              '<label><span data-copy-zh=\"IP 类型\">IP type</span> <select name="ip_type">'
               + ''.join(f'<option value="{kind}"'
-                        f'{" selected" if offer.ip_type == kind else ""}>'
+                        f'{" selected" if offer.ip_type == kind else ""} data-copy-zh="'
+                        + {"residential": "住宅网络", "isp": "ISP", "datacenter": "数据中心",
+                           "unknown": "尚未验证"}[kind] + '">'
                         + {"residential": "Residential", "isp": "ISP", "datacenter": "Datacenter",
                            "unknown": "Not verified"}[kind] + '</option>'
                         for kind in offers.IP_TYPES) + '</select></label></fieldset>')
@@ -272,18 +307,24 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
         amount = cost.amount if cost is not None else ""
         currency = cost.currency if cost is not None else "USD"
         period = cost.period if cost is not None else "month"
-        fields += (f'<fieldset><legend>{title}</legend><label>Invoice amount '
+        fields += (f'<fieldset><legend>{admin_label(title)}</legend><label><span '
+            f'data-copy-zh=\"账单金额\">Invoice amount</span> '
                    f'<input name="{key}_cost" inputmode="decimal" '
-                   f'value="{escape(amount)}" size="9" placeholder="Not set"></label>'
-                   f'<label>Currency <select name="{key}_currency" '
+                   f'value="{escape(amount)}" size="9" placeholder="Not set" '
+                       f'data-placeholder-zh="尚未设置"></label>'
+                   f'<label><span data-copy-zh=\"币种\">Currency</span> <select '
+                       f'name="{key}_currency" '
                    f'aria-label="{title} currency">'
                    + ''.join(f'<option value="{code}"'
                              f'{" selected" if code == currency else ""}>{code}</option>'
                              for code in pricing.CURRENCIES) + '</select></label>'
-                   f'<label>Billing period <select class="offer-period" name="{key}_period" '
+                   f'<label><span data-copy-zh=\"计费周期\">Billing period</span> <select '
+                       f'class="offer-period" name="{key}_period" '
                    f'aria-label="{title} period">'
                    + ''.join(f'<option value="{value}"'
-                             f'{" selected" if value == period else ""}>{words}</option>'
+                             f'{" selected" if value == period else ""} data-copy-zh="'
+                             + {"month": "自然月", "30_days": "30 天", "year": "年"}[value]
+                             + f'">{words}</option>'
                              for value, words in (("month", "Calendar month"),
                                                   ("30_days", "30 days"), ("year", "Year")))
                    + '</select></label></fieldset>')
@@ -293,10 +334,15 @@ def _offer_part(node: Mapping[str, Any], csrf: str) -> str:
     supplier = (pricing.display(value.resource) if value is not None
                 else "Both recorded USD costs are required")
     fee = pricing.display(value.service_fee) if value is not None else "Unavailable"
-    body = ('<p class="offer-preview"><span class="sub">Saved customer price</span><strong>'
-            + escape(preview) + '</strong><span class="sub">Monthly supplier cost: '
-            + escape(supplier) + '</span><span class="sub">Monthly service fee: '
-            + escape(fee) + '</span></p>'
+    body = ('<p class="offer-preview"><span class="sub" data-copy-zh=\"已保存的客户价格\">Saved '
+        'customer price</span><strong>'
+            + escape(preview) + '</strong><span class="sub"><span '
+                'data-copy-zh=\"每月供应商成本：\">'
+                'Monthly supplier cost: </span>'
+            + admin_label(supplier) + '</span><span class="sub"><span '
+                'data-copy-zh=\"每月服务费：\">'
+                'Monthly service fee: </span>'
+            + admin_label(fee) + '</span></p>'
             + _form(base + "/offer", csrf, "Save slot offer", fields, "primary")
             + (_form(base + "/offer-clear", csrf, "Clear slot offer")
                if node.get("offer") is not None else ""))
@@ -370,10 +416,16 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
         'on the server: <code class="code-wrap">ccfleetd slot add &lt;machine&gt; '
         "--machine &lt;machine&gt; "
         "--unix-user slot01</code>.</p>")
-    return ('<section class="admin-block admin-slots"><h2 id="slots">Slots</h2>'
-            '<p class="admin-section-intro">See who holds each slot. Open Manage for changes.</p>'
+    return ('<section class="admin-block admin-slots"><h2 '
+        'id="slots" data-copy-zh=\"槽位\">Slots</h2>'
+            '<p class="admin-section-intro" '
+                'data-copy-zh=\"查看每个槽位的持有人，'
+                '展开“管理”可进行修改。\">See '
+                'who holds each slot. Open Manage for changes.</p>'
             '<div class="card slots">' + _releases(look.channels, now) + body
-            + f'<p class="note">{WIPE_NOTE}</p></div></section>')
+            + f'<p class="note" data-copy-zh="收回槽位会清除全部数据，'
+                f'机器确认完成后槽位才能重新使用。">{WIPE_NOTE}</p>'
+                f'</div></section>')
 
 
 def _machine_rows(store: Store, node: Mapping[str, Any], said: Mapping[str, Any],
@@ -487,7 +539,8 @@ def _row(machine_id: str, state: str, shown: str, cells: str, notes: list[str], 
     return (f'<div class="slotrow" data-machine="{escape(machine_id)}" '
             f'data-state="{escape(state)}"><div class="slotline" '
             f'id="admin-line-{key}" data-fleet-readonly>{cells}</div>{said}'
-            f'<details class="manage"{" open" if opened else ""}><summary>Manage'
+            f'<details class="manage"{" open" if opened else ""}>'
+            f'<summary data-copy-zh="管理 {escape(shown)}">Manage'
             f'<span class="vh"> {escape(shown)}</span> '
             '<span class="caret" aria-hidden="true">&#9662;</span></summary>'
             f'<div class="manage-panel">{manage}</div></details></div>')
@@ -557,7 +610,8 @@ def _held_for(slot: Mapping[str, Any], now: float) -> str:
     if slot["state"] not in slotstates.HELD or not claimed:
         return ""
     age = escape(_age(now, claimed))
-    return f'<span class="lbl">held </span><span title="claimed {age} ago">{age}</span>'
+    return ('<span class="lbl" data-copy-zh="持有 ">held </span>'
+            f'<span title="claimed {age} ago" data-title-zh="{age} 前领取">{age}</span>')
 
 
 def _claude_cell(slot: Mapping[str, Any], node: Mapping[str, Any], report: Mapping[str, Any],
@@ -595,7 +649,8 @@ def _update_word(slot: Mapping[str, Any], node: Mapping[str, Any], version: str,
     # The operator's exact pin on a machine: only it can be behind, since a
     # channel has no number to compare, and nobody else moves it.
     if slot.get("kind") != slotstates.OWNER_SLOT and pin and not is_channel(pin):
-        return ' <span class="pill warn">update pending</span>' if version != pin else ""
+        return (' <span class="pill warn" data-copy-zh=\"等待更新\">'
+            'update pending</span>') if version != pin else ""
     kind = (said or {}).get("status")
     if kind == "updating":
         to = (said or {}).get("to")
@@ -604,7 +659,8 @@ def _update_word(slot: Mapping[str, Any], node: Mapping[str, Any], version: str,
     if kind == "updated":
         return (' <span class="pill busy" title="Remote Control switches over once no session '
                 'is open">restart pending</span>')
-    return ' <span class="cc-new">update available</span>' if kind == "available" else ""
+    return (' <span class="cc-new" data-copy-zh=\"有可用更新\">'
+        'update available</span>') if kind == "available" else ""
 
 
 def _follows(target: claude_versions.Target) -> str:
@@ -619,14 +675,19 @@ def _follows(target: claude_versions.Target) -> str:
 def _releases(channels: Mapping[str, Any], now: float) -> str:
     """Where Anthropic's release channels stood when last read: what a slot's
     holder is offered to move to, said once above every slot."""
-    known = [f"{channel.capitalize()} <b>{escape(number)}</b>" for channel in RELEASE_ORDER
+    known = [admin_label(channel.capitalize()) + f" <b>{escape(number)}</b>"
+             for channel in RELEASE_ORDER
              if (number := claude_versions.channel_version(channels, channel))]
     if not known:
-        return ('<p class="muted small releases">Claude Code releases: not read yet. The server '
+        return ('<p class="muted small releases" '
+                'data-copy-zh="Claude Code 版本：尚未读取，服务器大约每小时检查一次。">'
+                'Claude Code releases: not read yet. The server '
                 "reads them about once an hour.</p>")
     checked = channels.get("checked_at")
-    when = f" &middot; checked {escape(_age(now, checked))} ago" if checked else ""
-    return (f'<p class="muted small releases">Claude Code releases: '
+    when = (" &middot; " + bilingual.label(f"checked {_age(now, checked)} ago",
+             f"最近检查：{_age(now, checked)} 前", inline=True) if checked else "")
+    return ('<p class="muted small releases">'
+            + bilingual.label('Claude Code releases: ', 'Claude Code 版本：', inline=True) +
             f'{" &middot; ".join(known)}{when}</p>')
 
 
@@ -715,7 +776,7 @@ def _machine_problems(node: Mapping[str, Any], rows: tuple[Mapping[str, Any], ..
 def _pill(tone: str, words: str, title: str = "") -> str:
     """A pill. The words and the title come escaped."""
     hint = f' title="{title}"' if title else ""
-    return f'<span class="pill {tone}"{hint}>{words}</span>'
+    return f'<span class="pill {tone}"{hint}{admin_attributes(words)}>{words}</span>'
 
 
 def _note(text: str, tone: str = "bad-text") -> str:
@@ -728,8 +789,9 @@ def _note(text: str, tone: str = "bad-text") -> str:
 def _part(title: str, body: str, hint: str = "") -> str:
     """One part of a row's Manage: a head, its forms, and a line saying what
     they do. The hint comes escaped."""
-    said = f'<p class="mhint">{hint}</p>' if hint else ""
-    return f'<div class="mpart"><p class="mhead">{escape(title)}</p>{body}{said}</div>'
+    said = f'<p class="mhint">{admin_hint(hint)}</p>' if hint else ""
+    return (f'<div class="mpart"><p class="mhead"{admin_attributes(title)}>'
+            f'{escape(title)}</p>{body}{said}</div>')
 
 
 def _slot_actions(slot: Mapping[str, Any], csrf: str) -> str:
@@ -741,11 +803,16 @@ def _slot_actions(slot: Mapping[str, Any], csrf: str) -> str:
     if slot["state"] in slotstates.RELEASABLE:
         # Typed, not pre-filled: this deletes somebody's work.
         box = (f'<input type="text" name="confirm" placeholder="type {typed}" '
+               f'data-placeholder-zh="输入 {typed}" '
                f'size="{max(12, len(shown) + 6)}" autocomplete="off" required '
-               f'aria-label="Type {typed} to confirm">')
+               f'aria-label="Type {typed} to confirm" '
+               f'data-aria-label-zh="输入 {typed} 以确认收回并清除数据">')
         return _part("Take back", _form(f"{base}/reclaim", csrf, "Take back", box, "danger"),
-                     f"Wipes it: everything on it goes, its Claude sign-in with it. Type "
-                     f"<b>{typed}</b> to confirm.")
+                     bilingual.bi(
+                         "Wipes it: everything on it goes, its Claude sign-in with it. Type "
+                         f"<b>{typed}</b> to confirm.",
+                         "收回槽位会清除其中的所有文件和 Claude 登录信息。请输入 "
+                         f"<b>{typed}</b> 确认收回。", inline=True))
     if slot["state"] == slotstates.FREE:
         return _part("Remove the slot", _form(f"{base}/remove", csrf, "Remove"),
                      f"Takes {typed} off the machine. It is available, so there is nothing on it "
@@ -763,7 +830,8 @@ def _keep_part(node: Mapping[str, Any], csrf: str, *, keeper: str = "") -> str:
                      + "Once cleared, anybody with an allowance may claim it.")
     return _part("Keep for somebody",
                  _form(f"{base}/reserve", csrf, "Reserve",
-                       '<input type="email" name="email" placeholder="their email" size="20" '
+                       '<input type="email" name="email" placeholder="their email" '
+                           'data-placeholder-zh="用户邮箱" size="20" '
                        'aria-label="Email of the account to keep it for" required>'),
                  "While it is available, only they can claim it.")
 
@@ -784,9 +852,11 @@ def _advanced_part(machine: _Machine, csrf: str) -> str:
     # The server refuses a second slot, so declaring is only for a machine
     # with none.
     declare = _form(f"{base}/slot-add", csrf, "Declare its slot",
-                    '<input type="text" name="slot_id" placeholder="slot id" size="10" '
+                    '<input type="text" name="slot_id" placeholder="slot id" '
+                        'data-placeholder-zh="槽位标识" size="10" '
                     'aria-label="Slot id" required><input type="text" name="unix_user" '
-                    'placeholder="unix user" size="10" aria-label="Unix user" required>')
+                    'placeholder="unix user" data-placeholder-zh="Unix 用户名" size="10" '
+                        'aria-label="Unix user" required>')
     first = "Set its capacity to 1, then declare its slot" if capacity < 1 else "Its slot"
     return _part("Advanced", declare + sized,
                  f"{first}: usually the machine's own id, {escape(node['id'])}, with the "
@@ -814,32 +884,40 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
         credit = ''
         if wallet_enabled:
             try:
-                credit = ('<div class="admin-credit-balance"><span>Fleet credit</span><strong>'
+                credit = ('<div class="admin-credit-balance"><span data-copy-zh=\"Fleet 余额\">'
+                    'Fleet credit</span><strong>'
                           + escape(wallet.display(store.wallet_balance(account["id"])))
                           + '</strong></div>')
-                credit += ('<details class="admin-credit-action"><summary>Add credit</summary>'
-                           + bilingual.project_html(wallet_ui.admin_credit_grant_form(
+                credit += ('<details class="admin-credit-action"><summary '
+                    'data-copy-zh=\"增加余额\">Add credit</summary>'
+                           + wallet_ui.admin_credit_grant_form(
                                account_id=account["id"], csrf=csrf,
-                               idempotency_key=wallet_routes.nonce()), 'en', target='/admin')
+                               idempotency_key=wallet_routes.nonce())
                            + '</details>' if credit_actor else
-                           '<p class="muted">Sign in using an admin account to add credit.</p>')
+                           '<p class="muted" '
+                               'data-copy-zh=\"请使用管理员账户登录后增加余额。\">'
+                               'Sign in using '
+                               'an admin account to add credit.</p>')
                 entries = store.list_wallet_entries(account["id"])
                 if entries:
                     credit += ('<details class="admin-credit-history">'
-                               '<summary>Credit history</summary>'
-                               + bilingual.project_html(wallet_ui.owner_ledger(entries),
-                                                        'en', target='/admin') + '</details>')
+                               '<summary data-copy-zh=\"余额记录\">Credit history</summary>'
+                               + wallet_ui.owner_ledger(entries) + '</details>')
             except Exception:
                 credit = ('<p class="muted">Fleet credit is unavailable. '
                           'Credit actions are paused.</p>')
         held = store.held_slot_count(account["id"])
-        slot_word = 'slot' if held == 1 else 'slots'
+        slot_words = bilingual.label(f'{held} slot' if held == 1 else f'{held} slots',
+                                     f'{held} 个槽位', inline=True)
         quota = int(account.get("slot_quota") or 0)
         paid = ledger.get(account["id"], [])
-        role = ('<span class="admin-role">Admin</span>'
+        role = ('<span class="admin-role" data-copy-zh=\"管理员\">Admin</span>'
                 if account.get("role") == "admin" else '')
-        seen = (f"last here {escape(_age(now, account['last_seen_at']))} ago"
-                if account.get("last_seen_at") else "never back")
+        seen = (bilingual.label(
+            f"last here {_age(now, account['last_seen_at'])} ago",
+            f"最近访问：{_age(now, account['last_seen_at'])} 前", inline=True)
+            if account.get("last_seen_at") else bilingual.label(
+                "never back", "尚未再次访问", inline=True))
         allowance = ('' if wallet_enabled else
             '<div class="actions">'
             + _form(f"/actions/account/{escape(account['id'])}/allowance", csrf,
@@ -855,10 +933,12 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
         lines.append(
             '<div class="row-line admin-account"><div class="admin-account-heading">'
             f'<div class="row-name">{escape(str(account["email"]))}{role}'
-            f'<span class="muted">{held} {slot_word}{plan} · {seen}{standing}</span></div></div>'
+            f'<span class="muted">{slot_words}{plan} · {seen}{standing}</span></div></div>'
             + allowance + credit + monthly + payment_notes
             + "</div>")
-    body = "".join(lines) or '<p class="quiet">Nobody has signed in yet.</p>'
+    body = "".join(lines) or ('<p class="quiet" '
+        'data-copy-zh=\"尚无用户登录。\">Nobody has signed in '
+        'yet.</p>')
     note = ('Fleet credit pays for a chosen slot one UTC calendar month at a time. '
             'Users confirm each credit purchase and renewal. Recurring card billing '
             'requires a separate customer confirmation. Expired paid months pause new access '
@@ -869,11 +949,25 @@ def _accounts_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf
             "zero. Lowering it takes nothing away: they keep what they hold, and only claiming "
             "more stops. Payments are a record for you and nothing more: a lapsed one takes no "
             "slot back and stops no claim.")
-    return ('<section class="admin-block admin-accounts"><h2 id="accounts">Accounts</h2>'
-            '<p class="admin-section-intro">Choose a customer, check their balance, '
+    return ('<section class="admin-block admin-accounts"><h2 id="accounts" '
+        'data-copy-zh=\"账户\">Accounts</h2>'
+            '<p class="admin-section-intro" '
+                'data-copy-zh=\"选择客户，查看余额，并按需增加余额。\">'
+                'Choose a '
+                'customer, check their balance, '
             'then add credit when needed.</p><div class="card">' + body
-            + '<details class="admin-help"><summary>How accounts and credit work</summary>'
-            '<p class="note">' + note + ' Operators are made on the server: '
+            + '<details class="admin-help"><summary data-copy-zh=\"账户与余额说明\">How accounts '
+                'and credit work</summary>'
+            '<p class="note">' + bilingual.bi(note, (
+                'Fleet 余额每次为指定槽位支付一个 UTC 自然月。用户需逐次确认购买和续费。'
+                '银行卡自动续费需要用户单独确认。已付月份到期会暂停新访问，不会释放槽位。'
+                '现有运营方管理的槽位维持原有访问规则。早期手动付款记录不会增加 Fleet 余额。'
+                if wallet_enabled else
+                '槽位上限决定用户最多可以持有多少槽位，初始为零。降低上限不会收回已有槽位，'
+                '只会限制继续领取。付款记录仅供管理员参考，过期不会收回槽位，也不会阻止领取。'
+            ), inline=True) + bilingual.label(' Operators are made on the server: ',
+                                              ' 管理员权限需在服务器设置：', inline=True) +
+            ' '
             '<code class="code-wrap">ccfleetd account role &lt;email&gt; admin</code>.</p>'
             '</details></div></section>')
 
@@ -905,11 +999,17 @@ def _monthly_account_history(orders: list[Mapping[str, Any]]) -> str:
             end = 'Not confirmed'
         rows.append('<tr><td>' + escape(title) + '</td><td>' + escape(amount)
                     + ' / month</td><td>' + escape(state) + '</td><td>' + end + '</td></tr>')
-    return ('<details class="admin-monthly-history"><summary>Monthly payments · '
-            + str(len(bound)) + ' plans</summary><div class="admin-monthly-table">'
-            '<table><thead><tr><th>Slot</th><th>Rate · USD</th><th>Status</th>'
-            '<th>Paid through · UTC</th></tr></thead><tbody>' + ''.join(rows)
-            + '</tbody></table></div><p class="muted small">Customers manage or cancel '
+    return ('<details class="admin-monthly-history"><summary>'
+            + bilingual.label(f'Monthly payments · {len(bound)} plans',
+                              f'月租付款 · {len(bound)} 个方案', inline=True)
+            + '</summary><div class="admin-monthly-table">'
+            '<table><thead><tr><th data-copy-zh=\"槽位\">Slot</th><th data-copy-zh=\"价格 · '
+                '美元\">Rate · USD</th><th data-copy-zh=\"状态\">Status</th>'
+            '<th data-copy-zh=\"已付至 · UTC\">Paid through · UTC'
+                '</th></tr></thead><tbody>' + ''.join(rows)
+            + '</tbody></table></div><p class="muted small" '
+                'data-copy-zh=\"客户可在自己账户页面的“月租付款”中管理'
+                    '或取消方案。\">Customers manage or cancel '
             'their own plans from Monthly payments on their account page.</p></details>')
 
 
@@ -948,16 +1048,18 @@ def _ledger(account: Mapping[str, Any], paid: list[Mapping[str, Any]], csrf: str
     through = payments.next_through(payments.paid_through(paid), payments.today(now))
     record = _form(
         f"/actions/account/{escape(account['id'])}/payment", csrf, "Record payment",
-        '<input type="text" name="amount" placeholder="amount" inputmode="decimal" '
+        '<input type="text" name="amount" placeholder="amount" '
+            'data-placeholder-zh="金额" inputmode="decimal" '
         'size="7" required>'
         f'<input type="text" name="currency" value="{escape(currency)}" size="4" '
         'maxlength="3" required>'
         f'<input type="date" name="through" title="paid through" value="{escape(through)}" '
         'required>'
-        '<input type="text" name="note" placeholder="note, seen only here" size="18" '
+        '<input type="text" name="note" placeholder="note, seen only here" '
+            'data-placeholder-zh="仅管理员可见的备注" size="18" '
         f'maxlength="{payments.NOTE_MAX}">')
     title = 'Earlier payment notes' if legacy else 'Payments'
-    return (f'<details class="ledger"><summary>{title} ({len(paid)})</summary>'
+    return (f'<details class="ledger"><summary>{admin_label(title)} ({len(paid)})</summary>'
             f"{items}{record}</details>")
 
 

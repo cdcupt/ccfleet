@@ -202,4 +202,4 @@ def test_the_console_offers_a_refresh_for_a_slot_in_use(console):  # noqa: F811
     assert reply.status == 303 and reply.getheader("Location").endswith("#usage")
     assert store.get_slot(slot["id"])["quota_wanted_at"] is not None
     usage = call("GET", "/admin").body
-    assert "reading now" in usage[usage.index('id="usage"'):]
+    assert "Reading now" in usage[usage.index('id="usage"'):]

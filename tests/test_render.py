@@ -269,11 +269,12 @@ def test_a_node_supplied_quota_cannot_break_a_meter():
 def test_the_strip_counts_the_fleet_and_keeps_zeroes_quiet():
     """The summary before the detail: four tiles, not a count inside a sentence."""
     from ccfleetd.render import _strip_html
+    from tests.test_html_document_preservation import Document
     html = _strip_html({"ok": 2, "critical": 1})
     assert '<div class="tile ok"><b>2</b>' in html
     assert '<div class="tile critical"><b>1</b>' in html
     # A window with nothing in it must not compete with the one that matters.
-    assert '<div class="tile zero"><b>0</b><span>warning</span>' in html
+    assert Document(html).text.count('warning') == 1
     assert _strip_html({}).count("tile zero") == 4
 
 
@@ -296,7 +297,7 @@ def test_the_chart_caption_does_not_outlive_the_chart():
     html = _usage_html(one_day, NOW)
     assert "one day so far" in html and "tokens per day, last" not in html
     # Singular, too.
-    assert "1 session " in html and "1 sessions" not in html
+    assert "1 session" in html and "1 sessions" not in html
 
     two_days = [{"id": "n", "owner": "e", "usage": {
         "total_tokens": 90, "sessions": 2, "window_days": 14,
@@ -321,7 +322,7 @@ def test_the_week_is_drawn_by_the_hour_and_says_whose_it_is():
     are the account's, spent by every device. Side by side and unlabelled, the
     count looked stuck while the bars moved."""
     html = _usage_html(_hourly(40897, [0] * 160 + [10] * 8), NOW)
-    assert "tokens run on this node, last 7 days" in html
+    assert "transcript tokens on this node, last 7 days" in html
     assert "tokens per hour, last 7 days" in html and "<svg" in html
     assert "168 hour(s) of token use" in html
     assert "claude-opus-5" not in html, "the model is the person's choice, not a fact to show"
@@ -340,7 +341,7 @@ def test_a_quiet_week_says_so_rather_than_drawing_a_floor():
 def test_the_windows_are_labelled_as_the_accounts():
     rows = [{"id": "n", "owner": "e", "usage": {"total_tokens": 5},
              "quota": {"session": {"used_pct": 6}, "week": {"used_pct": 20}}}]
-    assert "Claude account &middot; every device" in _usage_html(rows, NOW)
+    assert "Claude account · every device" in _usage_html(rows, NOW)
 
 
 def test_each_button_sends_you_back_to_the_card_you_pressed_it_on():
