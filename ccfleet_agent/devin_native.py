@@ -327,10 +327,42 @@ def _pinned(record, *, expected=None, uid=0, private=False):
         raise NativeError("source_path_guard")
     if uid == 0:
         _root_ancestry(path)
-    raw = _read(path, uid=uid, maximum=256 * 1024 * 1024, private=private)
-    if hashlib.sha256(raw).hexdigest() != record["sha256"]:
+    if _file_sha256(path, uid=uid, maximum=256 * 1024 * 1024,
+                    private=private) != record["sha256"]:
         raise NativeError("source_digest_guard")
     return path
+
+
+def _file_sha256(path, *, uid, maximum, private=False):
+    """Hash every byte on every check, without retaining a large runtime file."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != uid or before.st_nlink != 1
+                or before.st_mode & (0o077 if private else 0o022)
+                or not 0 < before.st_size <= maximum):
+            raise NativeError("file_guard")
+        digest, total = hashlib.sha256(), 0
+        while total <= maximum:
+            part = os.read(fd, min(65536, maximum + 1 - total))
+            if not part:
+                break
+            total += len(part)
+            digest.update(part)
+        if not total or total > maximum:
+            raise NativeError("file_limit")
+        after = os.fstat(fd)
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+                  "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (total != before.st_size
+                or any(getattr(before, field) != getattr(after, field) for field in fields)):
+            raise NativeError("file_changed")
+        named = os.stat(path, follow_symlinks=False)
+        if any(getattr(named, field) != getattr(after, field) for field in fields):
+            raise NativeError("file_changed")
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
 
 
 @dataclass(frozen=True)

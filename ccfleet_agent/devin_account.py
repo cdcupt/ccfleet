@@ -168,15 +168,19 @@ def _json(value):
                       sort_keys=True, separators=(",", ":"))
 
 
+def _model_map_digest(data):
+    """Canonical model identity from data validated by the immediate caller."""
+    value = {"model_uid": data["model_uid"], "request_models": sorted(data["request_models"]),
+             "verified_models": sorted(data["verified_models"])}
+    return hashlib.sha256(_json(value).encode()).hexdigest()
+
+
 def model_map_digest(config):
     """Effective alias/model choice from the already root-pinned NativeConfig."""
     if type(config) is not native.NativeConfig:
         raise AccountError("root_native_config_required")
     config.validate()
-    data = config.data
-    value = {"model_uid": data["model_uid"], "request_models": sorted(data["request_models"]),
-             "verified_models": sorted(data["verified_models"])}
-    return hashlib.sha256(_json(value).encode()).hexdigest()
+    return _model_map_digest(config.data)
 
 
 @dataclass(frozen=True)
@@ -459,7 +463,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                 or runtime["native_version"] != source["native_version"]
                 or runtime["adapter_revision"] != data["files"]["adapter"]["sha256"]
                 or runtime["adapter_revision"] != source["adapter_revision"]
-                or runtime["model_map_digest"] != model_map_digest(config)
+                or runtime["model_map_digest"] != _model_map_digest(data)
                 or runtime["model_map_digest"] != source["model_map_digest"]
                 or data["files"]["executable"]["sha256"] != source["native_sha256"]):
             raise AccountError("account_profile_or_authorization_changed")
