@@ -1122,7 +1122,12 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
             classified = native_probe_outcome(pane, time.time())
             if classified["outcome"] != "native_refresh_unconfirmed":
                 observation.update(classified)
-                break
+                # A model rate-limit banner does not establish that the native
+                # /usage command is unavailable. Try it once, then keep polling
+                # within this same deadline without resending. Old banner text
+                # can remain above a valid newly drawn usage screen.
+                if classified["outcome"] != "native_rate_limited":
+                    break
             # A fresh working directory asks whether the folder is trusted. It is
             # the probe's own empty directory; answer once and carry on.
             if "trust this folder" in pane:
@@ -1222,6 +1227,18 @@ def _asked(wanted_at: Any, answered: float) -> bool:
             and wanted_at > answered)
 
 
+def _quota_refresh(requested_at: Any, attempted_at: Any, outcome: Any) -> dict[str, Any]:
+    """A completed explicit read attempt, without native text or account data."""
+    if (type(requested_at) not in (int, float) or type(attempted_at) not in (int, float)
+            or not 0 < requested_at <= attempted_at < 1e11
+            or not math.isfinite(requested_at) or not math.isfinite(attempted_at)):
+        return {}
+    if not isinstance(outcome, str) or outcome not in NATIVE_PROBE_OUTCOMES | {"quota_read"}:
+        outcome = "native_refresh_unconfirmed"
+    return {"refresh": {"requested_at": requested_at, "attempted_at": attempted_at,
+                        "outcome": outcome}}
+
+
 def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
                   now: Optional[float] = None, *, config_dir: Optional[Path] = None,
                   wanted_at: Any = None) -> tuple[Optional[dict[str, Any]],
@@ -1241,7 +1258,8 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
     theirs = cached_usage(config_dir, global_config=_native_global_config(config_dir))
     if (theirs and theirs["checked_at"] > kept and now - theirs["checked_at"] < QUOTA_REFRESH_S
             and (not asked or theirs["checked_at"] >= wanted_at)):
-        return theirs, {**theirs, "ts": theirs["checked_at"]}
+        ack = _quota_refresh(wanted_at, max(now, time.time()), "quota_read") if asked else {}
+        return {**theirs, **ack}, {**theirs, "ts": theirs["checked_at"], **ack}
     if cached and not asked and now - kept < QUOTA_REFRESH_S:
         return _quota_report(cached), None
     # A read asked for is tried once, whatever comes of it: a slot that cannot
@@ -1255,18 +1273,25 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
         # at the node.
         log.warning("quota not read: %s", why)
         last = {k: v for k, v in (cached or {}).items() if k != "skipped"}
-        return {**_quota_report(last), "skipped": why}, {**last, "skipped": why, **tried}
-    fresh = read_quota(runner, now, expected_config_dir=config_dir)
+        ack = _quota_refresh(wanted_at, max(now, time.time()), "native_probe_busy") if asked else {}
+        return ({**_quota_report(last), "skipped": why, **ack},
+                {**last, "skipped": why, **tried, **ack})
+    observation: dict[str, Any] = {}
+    fresh = read_quota(runner, now, expected_config_dir=config_dir, probe_result=observation)
     theirs = cached_usage(config_dir, global_config=_native_global_config(config_dir))
     if theirs and theirs["checked_at"] >= now - QUOTA_CACHE_SLACK_S:
-        return theirs, {**theirs, "ts": now, **tried}
+        ack = _quota_refresh(wanted_at, max(now, time.time()), "quota_read") if asked else {}
+        return {**theirs, **ack}, {**theirs, "ts": now, **tried, **ack}
     if fresh is None:
         # Keep showing the last known answer rather than blanking the card; it is
         # stamped, so the console can say how old it is.
-        return ((_quota_report(cached) if cached else None),
-                ({**(cached or {}), **tried} if tried else None))
+        ack = (_quota_refresh(wanted_at, max(now, time.time()), observation.get("outcome"))
+               if asked else {})
+        return (({**_quota_report(cached or {}), **ack} if cached or ack else None),
+                ({**(cached or {}), **tried, **ack} if tried else None))
     fresh["checked_at"] = now
-    return fresh, {**fresh, "ts": now, **tried}
+    ack = _quota_refresh(wanted_at, max(now, time.time()), "quota_read") if asked else {}
+    return {**fresh, **ack}, {**fresh, "ts": now, **tried, **ack}
 
 
 def _quota_report(cached: Mapping[str, Any]) -> dict[str, Any]:

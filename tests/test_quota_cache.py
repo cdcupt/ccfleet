@@ -226,11 +226,83 @@ def test_a_failed_read_with_nothing_kept_is_marked_tried_too(tmp_path, probe):
     found["screen"] = None
     report, store = agent.quota_summary({}, now=NOW, config_dir=tmp_path / ".claude",
                                         wanted_at=NOW - 10)
-    assert calls == [NOW] and report is None and store == {"asked": NOW - 10}
+    assert calls == [NOW] and set(report) == {"refresh"}
+    assert store == {"asked": NOW - 10, "refresh": report["refresh"]}
     agent.quota_summary({"quota": store}, now=NOW + 60, config_dir=tmp_path / ".claude",
                         wanted_at=NOW - 10)
     assert calls == [NOW, NOW + 60], "nothing kept: read on schedule, not for the request"
     assert agent._asked(NOW - 10, max(0.0, store["asked"])) is False
+
+
+def test_failed_explicit_refresh_reports_closed_completion_without_restamping(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent.time, "time", lambda: NOW + 7)
+    monkeypatch.setattr(agent, "quota_probe_dir", lambda: (str(tmp_path), None))
+    def fail(*args, **kwargs):
+        kwargs["probe_result"].update(outcome="native_rate_limited", raw_pane="PRIVATE_TOKEN")
+        return None
+    monkeypatch.setattr(agent, "read_quota", fail)
+    original = {"session": {"used_pct": 14}, "checked_at": NOW - 7200, "ts": NOW - 7200}
+    report, store = agent.quota_summary({"quota": original}, now=NOW,
+        config_dir=tmp_path / ".claude", wanted_at=NOW - 1)
+    assert report == {"session": {"used_pct": 14}, "checked_at": NOW - 7200,
+        "refresh": {"requested_at": NOW - 1, "attempted_at": NOW + 7,
+                    "outcome": "native_rate_limited"}}
+    assert store["ts"] == NOW - 7200 and store["asked"] == NOW - 1
+    assert "PRIVATE_TOKEN" not in json.dumps(report) + json.dumps(store)
+
+
+def test_successful_explicit_refresh_reports_completion_separate_from_reading(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent.time, "time", lambda: NOW + 7)
+    monkeypatch.setattr(agent, "quota_probe_dir", lambda: (str(tmp_path), None))
+    monkeypatch.setattr(agent, "read_quota", lambda *a, **k: {"session": {"used_pct": 100}})
+    report, store = agent.quota_summary({}, now=NOW, config_dir=tmp_path / ".claude",
+                                        wanted_at=NOW - 1)
+    assert report["checked_at"] == NOW and store["ts"] == NOW
+    assert report["refresh"] == {"requested_at": NOW - 1, "attempted_at": NOW + 7,
+                                  "outcome": "quota_read"}
+
+
+def test_fresh_native_cache_answers_refresh_without_restamping_or_launch(tmp_path, probe, monkeypatch):
+    calls, _ = probe
+    monkeypatch.setattr(agent.time, "time", lambda: NOW + 7)
+    config = saved(tmp_path, fetched=NOW - 5)
+    report, store = agent.quota_summary(kept(NOW - 60), now=NOW, config_dir=config,
+                                        wanted_at=NOW - 10)
+    assert calls == [] and report["checked_at"] == store["ts"] == NOW - 5
+    assert report["refresh"] == {"requested_at": NOW - 10, "attempted_at": NOW + 7,
+                                  "outcome": "quota_read"}
+
+
+def test_refresh_ack_can_report_latest_native_reading_from_before_click(tmp_path, probe, monkeypatch):
+    calls, found = probe
+    monkeypatch.setattr(agent.time, "time", lambda: NOW + 7)
+    found["screen"] = None
+    found["writes"] = lambda: saved(tmp_path, fetched=NOW - 30)
+    report, _ = agent.quota_summary(kept(NOW - 60), now=NOW,
+        config_dir=tmp_path / ".claude", wanted_at=NOW - 10)
+    assert calls == [NOW] and report["checked_at"] == NOW - 30
+    assert report["refresh"] == {"requested_at": NOW - 10, "attempted_at": NOW + 7,
+                                  "outcome": "quota_read"}
+    assert report["checked_at"] < report["refresh"]["requested_at"]
+
+
+def test_unknown_native_failure_cannot_escape_in_refresh_outcome(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent.time, "time", lambda: NOW + 7)
+    monkeypatch.setattr(agent, "quota_probe_dir", lambda: (str(tmp_path), None))
+    def fail(*args, **kwargs):
+        kwargs["probe_result"]["outcome"] = "PRIVATE_TOKEN /private/path account@example.test"
+        return None
+    monkeypatch.setattr(agent, "read_quota", fail)
+    report, _ = agent.quota_summary({}, now=NOW, config_dir=tmp_path / ".claude",
+                                    wanted_at=NOW - 1)
+    assert report["refresh"]["outcome"] == "native_refresh_unconfirmed"
+    assert "PRIVATE" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("requested,completed", [(True, NOW), (NOW, True), (float("nan"), NOW),
+    (NOW, float("inf")), (-1, NOW), (NOW + 1, NOW), (NOW, 1e11), ("now", NOW)])
+def test_refresh_ack_rejects_invalid_or_out_of_order_instants(requested, completed):
+    assert agent._quota_refresh(requested, completed, "native_timeout") == {}
 
 
 def test_a_request_is_marked_tried_when_there_is_nowhere_to_probe(tmp_path, monkeypatch):

@@ -86,6 +86,12 @@ def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
 
 #: Beyond any moment a usage window could reset at, in seconds since 1970.
 MAX_INSTANT = 1e11
+QUOTA_REFRESH_OUTCOMES = frozenset({
+    "quota_read", "native_refreshed", "native_refresh_not_due", "native_auth_rejected",
+    "native_login_expired", "native_network_error", "native_rate_limited", "native_timeout",
+    "native_launch_failed", "native_probe_busy", "native_refresh_unconfirmed",
+    "native_auth_source", "native_extensions",
+})
 
 def _quota(section: Mapping[str, Any]) -> dict[str, Any]:
     """Subscription windows, as /usage on the node reported them.
@@ -110,6 +116,15 @@ def _quota(section: Mapping[str, Any]) -> dict[str, Any]:
     checked = _num(section.get("checked_at"))
     if checked is not None:
         out["checked_at"] = checked
+    refresh = section.get("refresh")
+    if isinstance(refresh, Mapping) and set(refresh) == {"requested_at", "attempted_at", "outcome"}:
+        requested, attempted = _num(refresh.get("requested_at")), _num(refresh.get("attempted_at"))
+        outcome = refresh.get("outcome")
+        if (requested is not None and attempted is not None
+                and 0 < requested <= attempted < MAX_INSTANT
+                and isinstance(outcome, str) and outcome in QUOTA_REFRESH_OUTCOMES):
+            out["refresh"] = {"requested_at": requested, "attempted_at": attempted,
+                              "outcome": outcome}
     return out
 
 
