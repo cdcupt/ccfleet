@@ -43,7 +43,15 @@ from . import (
     wallet_routes,
 )
 from . import slots as slotstates
-from .bilingual import CURRENT_PAGES, _slot_search_query, localized_url, project_html, route_target
+from .bilingual import (
+    ADMIN_PAGES,
+    CURRENT_PAGES,
+    _slot_search_query,
+    admin_form,
+    localized_url,
+    project_html,
+    route_target,
+)
 from .bilingual import SCRIPT_CSP as LANGUAGE_LINKS_CSP
 from .config import Config, _authority_matches
 from .desired import desired_state, machine_hostname
@@ -51,6 +59,7 @@ from .heartbeat import HeartbeatError, validate_heartbeat
 from .monitor import Monitor
 from .passwords import verify_password
 from .render import (
+    ADMIN_QUOTA_POLL_CSP,
     CONSOLE_PATH,
     LOCAL_TIMES_CSP,
     PANEL_ACTION_CSP,
@@ -78,7 +87,7 @@ HTML_HEADERS = {
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
                                 f"img-src data:; script-src {LOCAL_TIMES_CSP} "
                                 f"{LANGUAGE_LINKS_CSP} {usersite.QUOTA_POLL_CSP} "
-                                f"{PANEL_ACTION_CSP}; "
+                                f"{PANEL_ACTION_CSP} {ADMIN_QUOTA_POLL_CSP}; "
                                 "connect-src 'self'"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
@@ -428,7 +437,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(404, {"error": "not found"})
                 return None
             self._page_target, self._page_language, self._localized_page = routed
-            if self._localized_page and not self._product_site():
+            if (self._localized_page and not self._product_site()
+                    and not (self._admin_site() and (
+                        urllib.parse.urlsplit(self._page_target).path.rstrip("/") in ADMIN_PAGES
+                        or admin_form(urllib.parse.urlsplit(self._page_target).path)
+                        or urllib.parse.urlsplit(self._page_target).path in {
+                            "/auth/google/start", "/auth/signout"}))):
                 self._json(404, {"error": "not found"})
                 return None
             # Keep the existing canonical request semantics. Only an explicit
@@ -450,11 +464,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                        "/docs/library/docs/public-gateway.html",
                        "/docs/library/docs/devin.html",
                        "/docs/library/docs/platform-comparison.html"}
-            return (path in current or customer_docs.page_for(path) is not None
+            return (path.rstrip("/") in ADMIN_PAGES or admin_form(path)
+                    or path in current or customer_docs.page_for(path) is not None
                     or (self.command == "POST" and path.startswith("/account/")))
 
         def _page_location(self, location: str) -> str:
-            if getattr(self, "_localized_page", False) and self._product_site():
+            if getattr(self, "_localized_page", False):
                 return localized_url(location, self._page_language,
                                      canonical_target=self._page_target,
                                      public_origin=ctx.cfg.public_url)
@@ -462,7 +477,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _legacy_language_redirect(self) -> bool:
             """Old bookmarked language queries now select a distinct UI page."""
-            if ctx.cfg.broker_only or not self._product_site() or not self._html_page_route():
+            if ctx.cfg.broker_only or not self._html_page_route():
                 return False
             parts = urllib.parse.urlsplit(self._page_target)
             original = urllib.parse.urlsplit(self.path)
@@ -504,7 +519,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         def _send(self, status: int, body: bytes, headers: dict[str, str]) -> None:
             if (headers.get("Content-Type", "").startswith("text/html")
-                    and self._product_site() and self._html_page_route()):
+                    and self._html_page_route()):
                 body = project_html(body.decode("utf-8"),
                                     language=getattr(self, "_page_language", "en"),
                                     target=getattr(self, "_page_target", self.path),
@@ -807,10 +822,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if query.get("error"):
                 # The person pressed cancel on Google's consent screen.
                 return_page = route_target(flow["next_url"])
-                cancelled = (localized_url("/?signin=cancelled", return_page[1],
+                cancel_home = (CONSOLE_PATH if not self._product_site() else "/")
+                cancel_home += "?signin=cancelled"
+                cancelled = (localized_url(cancel_home, return_page[1],
                                             public_origin=ctx.cfg.public_url)
                              if return_page is not None and return_page[2]
-                             else "/?signin=cancelled")
+                             else cancel_home)
                 self._redirect_with_cookies(cancelled,
                                             [self._clear_flow_cookie()])
                 return
@@ -1778,7 +1795,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         self._json(404, {"error": "not found"})
                     elif (self.headers.get("X-Fleet-Partial") == "1"
                           and parts[1] == "slot" and parts[3] == "quota"):
-                        self._json(200, {"location": f"{CONSOLE_PATH}#{anchor}"})
+                        self._json(200, {"location": self._page_location(
+                            f"{CONSOLE_PATH}#{anchor}")})
                     else:
                         self._redirect(f"{CONSOLE_PATH}#{anchor}")
                 else:

@@ -17,6 +17,16 @@ CURRENT_PAGES = frozenset({
     '/docs/library/docs/devin.html',
     '/docs/library/docs/platform-comparison.html',
 })
+ADMIN_PAGES = frozenset({'/admin', '/auth/basic'})
+ADMIN_ACTIONS = {
+    'node': frozenset({'enable', 'disable', 'rc-on', 'rc-off', 'pin', 'login-start',
+                       'token-start', 'login-code', 'login-cancel', 'token-show',
+                       'token-done', 'rotate-token', 'remove'}),
+    'machine': frozenset({'offer', 'offer-clear', 'capacity', 'slot-add', 'reserve', 'unreserve'}),
+    'slot': frozenset({'reclaim', 'quota', 'remove'}),
+    'account': frozenset({'allowance', 'payment', 'credit'}),
+    'payment': frozenset({'void'}),
+}
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
 POST_PAGES = frozenset({'/account/claim', '/account/outage-emails', '/auth/signout',
@@ -39,7 +49,8 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/docs/library/docs/index.html': '文档',
              '/docs/library/docs/public-gateway.html': 'HTTPS 接入指南',
              '/docs/library/docs/devin.html': '为什么评估 Devin',
-             '/docs/library/docs/platform-comparison.html': 'CC Fleet 与 CC Host 对比',
+             '/docs/library/docs/platform-comparison.html': 'CC Fleet 架构与验证',
+             '/admin': 'Fleet 管理后台', '/auth/basic': '管理员登录',
              '/account/gateway/create': '连接密钥'}
 
 
@@ -55,18 +66,31 @@ def label(en_text: str, zh_text: str, *, inline: bool = False) -> str:
 
 
 def _page(path: str) -> bool:
-    return path in CURRENT_PAGES or (path.rstrip('/') in CURRENT_PAGES and path != '//')
+    return path in CURRENT_PAGES | ADMIN_PAGES or (
+        path.rstrip('/') in CURRENT_PAGES | ADMIN_PAGES and path != '//')
+
+
+def admin_form(path: str) -> bool:
+    """Only authored operator actions acquire localized UI aliases."""
+    if path == '/actions/node/add':
+        return True
+    match = re.fullmatch(r'/actions/([a-z]+)/([A-Za-z0-9_.:@-]+)/([a-z-]+)', path)
+    if not match or match[2] in {'.', '..'}:
+        return False
+    kind, target, action = match.groups()
+    return (kind in ADMIN_ACTIONS and action in ADMIN_ACTIONS[kind] or
+            kind == 'price' and target == 'slot' and action in {'set', 'clear'})
 
 
 def _form(path: str) -> bool:
-    if path in POST_PAGES:
+    if path in POST_PAGES or admin_form(path):
         return True
     match = re.fullmatch(r'/account/slots/([A-Za-z0-9_.:-]+)/([a-z-]+)', path)
     return bool(match and match[1] not in {'.', '..'} and match[2] in SLOT_ACTIONS)
 
 
 def route_target(target: str, method: str = 'GET'):
-    """Canonicalize only explicit, literal UI aliases, never model/API/admin paths."""
+    """Canonicalize only explicit, literal UI aliases, never model or API paths."""
     try:
         parts = urlsplit(target)
     except (TypeError, ValueError):
@@ -214,15 +238,29 @@ class _Projection(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self._start(tag, attrs, True)
 
+    def _ui_url(self, url):
+        """Use bare English UI paths for navigation, forms and timed refreshes."""
+        value = localized_url(url, self.language, self.target, self.public_origin)
+        if self.language == 'en':
+            parts = urlsplit(value)
+            origin = urlsplit(self.public_origin)
+            same_site = (not parts.scheme and not parts.netloc or
+                         bool(origin.netloc) and parts.scheme == origin.scheme
+                         and parts.netloc.lower() == origin.netloc.lower())
+            if same_site and (parts.path == '/en' or parts.path.startswith('/en/')):
+                value = urlunsplit((parts.scheme, parts.netloc, parts.path[3:] or '/',
+                                    parts.query, parts.fragment))
+        return value
+
     def _start(self, tag, attrs, closed):
         attrs = dict(attrs)
         classes = set((attrs.get('class') or '').split())
-        hidden = self.suppressed or ('copy-zh' in classes if self.language == 'en'
-                                     else 'copy-en' in classes)
+        hidden = (self.suppressed or bool(self.frames and self.frames[-1][2] is not None)
+                  or ('copy-zh' in classes if self.language == 'en' else 'copy-en' in classes))
         hidden = hidden or bool(classes & {'reference-catalog', 'earlier-reference',
                                            'host-history-note'})
         override = None
-        if tag == 'option' and 'data-copy-' + self.language in attrs:
+        if 'data-copy-' + self.language in attrs:
             override = attrs['data-copy-' + self.language]
         if tag == 'title' and self.language == 'zh':
             path = urlsplit(self.target).path.rstrip('/') or '/'
@@ -243,7 +281,7 @@ class _Projection(HTMLParser):
                 path = urlsplit(self.target).path
                 # The top-up chooser is also a safe GET page. Switching its
                 # language must not send the customer to advanced connections.
-                switch_target = ('/account#gateway' if _form(path)
+                switch_target = ('/admin' if admin_form(path) else '/account#gateway' if _form(path)
                                  and path not in {'/account/topup', '/account/subscribe'}
                                  else self.target)
                 switch_parts = urlsplit(switch_target)
@@ -260,22 +298,14 @@ class _Projection(HTMLParser):
                     attrs['aria-current'] = 'page'
                 else:
                     attrs.pop('aria-current', None)
+            elif tag == 'meta' and (attrs.get('http-equiv') or '').lower() == 'refresh':
+                delay, separator, destination = (attrs.get('content') or '').partition(';url=')
+                if separator:
+                    attrs['content'] = delay + separator + self._ui_url(destination)
             else:
                 for attribute in ('href', 'action'):
                     if attribute in attrs:
-                        value = localized_url(attrs[attribute], self.language,
-                                              self.target, self.public_origin)
-                        if self.language == 'en':
-                            parts = urlsplit(value)
-                            origin = urlsplit(self.public_origin)
-                            same_site = (not parts.scheme and not parts.netloc or
-                                         bool(origin.netloc) and parts.scheme == origin.scheme
-                                         and parts.netloc.lower() == origin.netloc.lower())
-                            if same_site and (parts.path == '/en' or parts.path.startswith('/en/')):
-                                value = urlunsplit((parts.scheme, parts.netloc,
-                                                    parts.path[3:] or '/',
-                                                    parts.query, parts.fragment))
-                        attrs[attribute] = value
+                        attrs[attribute] = self._ui_url(attrs[attribute])
             for attribute in ('placeholder', 'aria-label', 'title', 'data-label'):
                 name = ('label' if attribute == 'data-label' else attribute)
                 source = 'data-' + name + '-' + self.language

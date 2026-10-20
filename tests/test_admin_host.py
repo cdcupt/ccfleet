@@ -228,7 +228,7 @@ def test_the_console_door_offers_google_not_a_password_prompt(split):
     door = browser(ADMIN).call("GET", "/admin")
     assert door.status == 401
     assert door.getheader("WWW-Authenticate") is None, "the browser would ask for a password"
-    assert 'href="/auth/google/start?next=/admin"' in door.body
+    assert 'href="/auth/google/start?next=%2Fen%2Fadmin"' in door.body
     assert 'href="/auth/basic"' in door.body
 
 

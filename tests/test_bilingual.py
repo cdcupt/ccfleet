@@ -4,6 +4,8 @@ import base64
 import hashlib
 import re
 
+import pytest
+
 from ccfleetd import bilingual
 from ccfleetd.api import HTML_HEADERS
 
@@ -60,10 +62,24 @@ def test_options_attributes_and_language_links_do_not_echo_request_parameters():
     assert 'href="/en/account"' in html and 'href="/zh/account"' in html
 
 
-def test_localization_never_creates_api_admin_or_foreign_aliases():
-    for target in ['/zh/v1/messages', '/en/api/nodes', '/zh/admin',
+def test_localization_never_creates_api_or_foreign_aliases():
+    for target in ['/zh/v1/messages', '/en/api/nodes',
                    '/zh/docs/library/../README.html', '/zh/docs%2fguide']:
         assert bilingual.route_target(target) is None
-    for url in ['https://accounts.google.com/auth?secret=x', '/v1/messages', '/admin',
+    for url in ['https://accounts.google.com/auth?secret=x', '/v1/messages',
                 '/auth/google/callback?code=FAKE']:
         assert bilingual.localized_url(url, 'zh', public_origin='https://fleet.example') == url
+
+
+@pytest.mark.parametrize("language,prefix", [("en", ""), ("zh", "/zh")])
+@pytest.mark.parametrize("path", ["/account", "/admin"])
+def test_meta_refresh_follows_navigation_language_policy_but_switch_links_stay_explicit(
+        language, prefix, path):
+    source = ('<meta http-equiv="refresh" content="4;url=' + path + '">'
+              '<a href="' + path + '">Continue</a><form action="/auth/signout"></form>'
+              + bilingual.CONTROLS)
+    result = bilingual.project_html(source, language, path)
+    assert f'content="4;url={prefix}{path}"' in result
+    assert f'href="{prefix}{path}"' in result
+    assert f'action="{prefix}/auth/signout"' in result
+    assert f'href="/en{path}" data-language-link="en"' in result

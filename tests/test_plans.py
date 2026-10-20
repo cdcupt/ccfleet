@@ -11,6 +11,7 @@ import pytest
 
 from ccfleetd import plans, slots
 from ccfleetd.heartbeat import validate_heartbeat
+from tests.test_html_document_preservation import Document
 
 from .test_console_slots import (
     console,  # noqa: F401  (the fixture, by name)
@@ -112,7 +113,7 @@ def test_the_accounts_card_says_each_persons_plans(console):  # noqa: F811
     store.insert_heartbeat("erik-1", time.time(), {
         "node_id": "erik-1", "credentials": {"subscription_type": "pro"}})
     page = call("GET", "/admin").body
-    accounts = accounts_card(page)
+    accounts = Document(accounts_card(page)).text
     assert "2 slots (Max 20x, Pro) · " in accounts and "Team" not in accounts
 
 
@@ -126,7 +127,7 @@ def test_signed_out_slots_do_not_show_cached_plans_in_console_cards(console, cre
                         "plan": "default_claude_max_20x"}})
     page = call("GET", "/admin").body
     assert "Max 20x" not in slots_card(page)
-    accounts = accounts_card(page)
+    accounts = Document(accounts_card(page)).text
     assert "Max 20x" not in accounts and "1 slot · " in accounts
 
 
@@ -134,7 +135,7 @@ def test_somebody_with_no_plan_says_none(console):  # noqa: F811
     store, call = console
     holder(store, email="bea@example.com")
     page = call("GET", "/admin").body
-    accounts = accounts_card(page)
+    accounts = Document(accounts_card(page)).text
     assert "0 slots · " in accounts and "()" not in accounts
 
 

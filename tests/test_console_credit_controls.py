@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from ccfleetd import consoleslots, wallet_routes, wallet_ui
+from ccfleetd import bilingual, consoleslots, wallet_routes, wallet_ui
 from ccfleetd.store import Store
 from tests.test_account_setup_flow import Flow
 from tests.test_console_slots import accounts_card
@@ -57,9 +57,9 @@ def test_admin_credit_fragment_is_english_and_preserves_all_form_fields(web, mon
     monkeypatch.setattr(wallet_routes, "nonce", lambda: nonce)
     expected = Flow(wallet_ui.admin_credit_grant_form(
         account_id="alice", csrf=csrf, idempotency_key=nonce))
-    actual = Flow(consoleslots._accounts_card(web.store,
+    actual = Flow(bilingual.project_html(consoleslots._accounts_card(web.store,
         {"alice": web.store.get_account("alice")}, csrf, 1_700_000_000, {},
-        wallet_enabled=True, credit_actor=True))
+        wallet_enabled=True, credit_actor=True), "en", "/admin"))
     [form] = actual.find("form", action="/actions/account/alice/credit")
     [original] = expected.find("form", action="/actions/account/alice/credit")
     assert form.attrs == original.attrs
