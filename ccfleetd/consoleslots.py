@@ -438,7 +438,8 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
     manage = (identity + _slot_actions(slot, look.csrf) + _offer_part(node, look.csrf)
               + _keep_part(node, look.csrf, keeper=keeper if free_pool else "")
               + (_advanced_part(machine, look.csrf) if crowded else ""))
-    return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage)
+    return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage,
+                row_key=slot["id"])
 
 
 def _own_row(slot: Mapping[str, Any], machine: _Machine,
@@ -458,7 +459,8 @@ def _own_row(slot: Mapping[str, Any], machine: _Machine,
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     manage = _part("Their own machine", "", OWN_NOTE.format(node=escape(node["id"])))
-    return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage)
+    return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage,
+                row_key=slot["id"])
 
 
 def _empty_row(machine: _Machine, look: _Look) -> str:
@@ -471,16 +473,20 @@ def _empty_row(machine: _Machine, look: _Look) -> str:
              f'<div class="c-flags">{" ".join(machine.pills)}</div>')
     manage = (_advanced_part(machine, look.csrf) + _offer_part(node, look.csrf)
               + (_keep_part(node, look.csrf) if node.get("reserved_for") else ""))
-    return _row(node["id"], "", node["id"], cells, list(machine.notes), manage, opened=True)
+    return _row(node["id"], "", node["id"], cells, list(machine.notes), manage, opened=True,
+                row_key="empty-" + node["id"])
 
 
 def _row(machine_id: str, state: str, shown: str, cells: str, notes: list[str], manage: str,
-         *, opened: bool = False) -> str:
+         *, opened: bool = False, row_key: str = "") -> str:
     """A row: its cells, a line for each thing it has more to say about, and
     its actions folded under Manage — a details element, so no script."""
-    said = f'<ul class="slot-notes">{"".join(notes)}</ul>' if notes else ""
+    key = escape(row_key or machine_id)
+    said = (f'<ul class="slot-notes" id="admin-notes-{key}" data-fleet-readonly>'
+            + "".join(notes) + '</ul>')
     return (f'<div class="slotrow" data-machine="{escape(machine_id)}" '
-            f'data-state="{escape(state)}"><div class="slotline">{cells}</div>{said}'
+            f'data-state="{escape(state)}"><div class="slotline" '
+            f'id="admin-line-{key}" data-fleet-readonly>{cells}</div>{said}'
             f'<details class="manage"{" open" if opened else ""}><summary>Manage'
             f'<span class="vh"> {escape(shown)}</span> '
             '<span class="caret" aria-hidden="true">&#9662;</span></summary>'

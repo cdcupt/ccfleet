@@ -368,7 +368,8 @@ def test_the_page_stops_reloading_while_it_is_asking_you_to_type(cfg):
              "rc_expected": False, "last_upgrade": None, "open_alerts": [],
              "usage": {}, "quota": {}}]
     idle = render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins={})
-    assert 'http-equiv="refresh"' in idle, "normally it keeps itself current"
+    assert 'http-equiv="refresh"' not in idle, "routine status checks preserve open forms"
+    assert 'data-fleet-status="admin"' in idle
 
     waiting = render_dashboard(rows, [], NOW, cfg, csrf="TOK", logins={
         "att3": {"state": "url_ready", "kind": "token",
@@ -404,8 +405,8 @@ def test_the_page_keeps_up_while_a_sign_in_is_moving(cfg):
     # Always to the console's own address: never "" (the address the page was
     # opened at, which after an action ends in #<card>) and never a fragment.
     idle = page({})
-    assert refresh_of(idle) == (IDLE_REFRESH_S, CONSOLE_PATH)
-    assert "Refreshing itself every minute" in idle
+    assert refresh_of(idle) is None
+    assert "Status updates keep your open forms" in idle
 
     for state in ("requested", "code_sent"):
         active = page({"att3": {"state": state, "kind": "token"}})
@@ -428,8 +429,8 @@ def test_what_the_page_says_it_is_doing_is_not_read_back_out_of_its_markup(cfg, 
     path = f"/ops-{render.ACTIVE_REFRESH_S}"
     monkeypatch.setattr(render, "CONSOLE_PATH", path)
     idle = render_dashboard([], [], NOW, cfg, csrf="TOK", logins={})
-    assert refresh_of(idle) == (render.IDLE_REFRESH_S, path), "the target is the console's"
-    assert "Refreshing itself every minute" in idle
+    assert refresh_of(idle) is None
+    assert "Status updates keep your open forms" in idle
     assert "Keeping up with a sign-in" not in idle
 
 

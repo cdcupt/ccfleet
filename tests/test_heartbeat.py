@@ -6,6 +6,40 @@ import pytest
 from ccfleetd.heartbeat import HeartbeatError, validate_heartbeat
 
 
+def test_quota_refresh_ack_preserves_old_measurement_and_first_failure():
+    refresh = {"requested_at": 2000.0, "attempted_at": 2007.0,
+               "outcome": "native_rate_limited"}
+    quota = {"session": {"used_pct": 14}, "checked_at": 1000.0, "refresh": refresh}
+    result = validate_heartbeat({"node_id": "n", "ts": 2010.0, "quota": quota}, "n")
+    assert result["quota"]["session"]["used_pct"] == 14
+    assert result["quota"]["checked_at"] == 1000.0
+    assert result["quota"]["refresh"] == refresh
+    first = validate_heartbeat({"node_id": "n", "ts": 2010.0,
+                                "quota": {"refresh": refresh}}, "n")
+    assert first["quota"] == {"refresh": refresh}
+    [slot] = _machine([{"unix_user": "slot01", "present": True, "quota": quota}])["slots"]
+    assert slot["quota"]["refresh"] == refresh
+    assert slot["quota"]["checked_at"] == 1000.0
+
+
+@pytest.mark.parametrize("change", [
+    {"raw_pane": "PRIVATE_TOKEN"}, {"outcome": "PRIVATE_TOKEN"},
+    {"requested_at": True}, {"attempted_at": True}, {"requested_at": float("nan")},
+    {"attempted_at": float("inf")}, {"attempted_at": 10 ** 500},
+    {"requested_at": -1}, {"attempted_at": 1999}, {"attempted_at": 1e11},
+    {"requested_at": "2000"},
+])
+def test_quota_refresh_rejects_private_or_invalid_metadata(change):
+    refresh = {"requested_at": 2000.0, "attempted_at": 2007.0,
+               "outcome": "native_rate_limited", **change}
+    result = validate_heartbeat({"node_id": "n", "ts": 2010.0,
+        "quota": {"session": {"used_pct": 14}, "checked_at": 1000,
+                  "refresh": refresh}}, "n")
+    assert "refresh" not in result["quota"]
+    assert result["quota"]["checked_at"] == 1000
+    assert "PRIVATE" not in json.dumps(result)
+
+
 def test_rejects_non_object_and_wrong_node():
     with pytest.raises(HeartbeatError):
         validate_heartbeat([], "node-a")

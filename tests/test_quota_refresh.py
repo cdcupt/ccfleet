@@ -170,8 +170,9 @@ def test_the_holders_page_offers_a_refresh_and_then_says_it_is_reading(site):  #
     reply = erik.press(f"/account/slots/{slot['id']}/quota")
     assert "note=reading" in urllib.parse.unquote(reply.getheader("Location"))
     page = erik.page()
-    assert "reading them again now" in page and f'/{slot["id"]}/quota"' not in page
-    assert 'content="4;' in page, "the page comes back soon for the new numbers"
+    assert "A new quota reading was requested" in page and f'/{slot["id"]}/quota"' not in page
+    assert 'http-equiv="refresh"' not in page, "quota polling preserves open forms"
+    assert 'data-quota-slot=' in page
 
 
 def test_a_slot_not_read_yet_can_ask_for_its_first_reading(site):  # noqa: F811
@@ -182,7 +183,8 @@ def test_a_slot_not_read_yet_can_ask_for_its_first_reading(site):  # noqa: F811
     report(store, "m1", [{"unix_user": slot["unix_user"], "present": True,
                           "credentials": {"logged_in": True}}])
     page = erik.page()
-    assert "No reading of your limits yet." in page
+    assert "Current quota is unavailable" in page
+    assert "This does not mean quota remains" in page
     assert f'action="/account/slots/{slot["id"]}/quota"' in page
 
 

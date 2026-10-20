@@ -7,10 +7,10 @@ from the node's own heartbeat. Nothing on that card can wipe it.
 
 from __future__ import annotations
 
-import re
 import time
 
 from ccfleetd import slots
+from tests.test_html_document_preservation import Document
 from tests.test_usersite import report, site  # noqa: F401  (the fixture, by name)
 
 
@@ -24,7 +24,10 @@ def one_slot_machine(store, node):
 
 def card(page, slot_id):
     start = page.index(f'id="slot-{slot_id}"')
-    return page[start:page.index("</div>", page.index("<h2>", start))]
+    source = page[start:page.index("</div>", page.index("<h2>", start))]
+    headings = Document(source).headings
+    assert len(headings) == 1 and headings[0][0] == "h2"
+    return headings[0][1]
 
 
 def whole_card(page, slot_id):
@@ -41,9 +44,8 @@ def test_a_claimed_slot_is_shown_by_its_holders_name(site):  # noqa: F811
     erik = sign_in(quota=1)
     assert erik.press("/account/claim").status == 303
     title = card(erik.page(), "pool-1")
-    assert "<h2>erik-1 " in title, "the name every paired client shows the holder"
-    shown = re.sub(r"<[^>]+>", " ", title[title.index(">") + 1:])   # past the card's own tag
-    assert "pool-1" not in shown, "and nothing of the machine it is on (Erik, 2026-09-24)"
+    assert title.startswith("erik-1 "), "the name every paired client shows the holder"
+    assert "pool-1" not in title, "and nothing of the machine it is on (Erik, 2026-09-24)"
 
 
 def test_the_machine_is_not_named_twice(site):  # noqa: F811
@@ -60,7 +62,8 @@ def test_the_machine_is_not_named_twice(site):  # noqa: F811
         store._conn.execute("UPDATE slots SET name = NULL")
         store._conn.commit()
     title = card(erik.page(), "erik-2")
-    assert "<h2>erik-2 " in title and "on erik-2" not in title
+    assert title.startswith("erik-2 ") and title.count("erik-2") == 1
+    assert "on erik-2" not in title
 
 
 # -- an owner's own node, counted as their slot ------------------------------------------
@@ -87,7 +90,8 @@ def test_an_owners_node_is_their_slot_on_their_page(site):  # noqa: F811
     owner_said(store, logged_in=True)
     page = erik.page()
     body = whole_card(page, "erik-1")
-    assert "<h2>erik-1 " in body and "In use" in body
+    title = card(page, "erik-1")
+    assert title.startswith("erik-1 ") and "In use" in title
     assert "your own machine" in body
     assert "Max plan" in body and "Remote Control" not in body
     assert "This week" in body, "the account's usage, from the node's own report"
