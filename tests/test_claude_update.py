@@ -57,7 +57,7 @@ def text(fragment):
 
 
 def cc_row(page):
-    start = page.find('<div class="row-line cc">')
+    start = page.find('<div class="row-line cc"')
     if start < 0:
         return ""
     end = page.find('<div class="row-line', start + 1)
@@ -68,7 +68,8 @@ def assert_version_button(row, slot_id, action, english, chinese, cls, csrf):
     """A translated label remains one submit control in the same protected POST."""
     target = f"/account/slots/{slot_id}/{action}"
     form = re.search(r'<form class="inline" method="post" action="'
-                     + re.escape(target) + r'">(.*?)</form>', row, flags=re.S)
+                     + re.escape(target) + r'" data-fleet-action="version">(.*?)</form>',
+                     row, flags=re.S)
     assert form is not None, f"missing POST form for {target}"
     expected = (f'<button class="{cls}" type="submit">'
                 + project_html(label(english, chinese, inline=True), 'en') + '</button>')
@@ -472,7 +473,8 @@ def test_a_newer_release_is_offered_with_one_press(site):  # noqa: F811
     page = erik.page()
     assert text(cc_row(page)).startswith("Claude CodeUpdating to 2.1.281…")
     assert "<button" not in cc_row(page), "nothing to press while it happens"
-    assert refresh_of(page)[0] == usersite.ACTIVE_REFRESH_S, "and the page comes back soon"
+    assert refresh_of(page) is None, "version status must not erase open setup forms"
+    assert 'data-fleet-status="account"' in page
 
 
 def test_on_latest_and_current_it_says_so_with_a_way_back(site):  # noqa: F811

@@ -482,8 +482,8 @@ def test_a_note_is_chosen_by_code_never_written_by_the_link(site):
     evil = erik.call("GET", "/account?note=" + urllib.parse.quote(
         "<script>alert(1)</script>Your account is locked, call +1-555"))
     assert "alert(1)" not in evil.body and "locked" not in evil.body
-    # Only the three authored scripts are present; CSP allows their explicit hashes.
-    assert evil.body.count("<script") == 3
+    # Only the four authored scripts are present; CSP allows their explicit hashes.
+    assert evil.body.count("<script") == 4
     assert usersite.QUOTA_POLL_TAG in evil.body
     assert LOCAL_TIMES_TAG in evil.body and LANGUAGE_TAG in evil.body
     known = erik.call("GET", "/account?note=released")

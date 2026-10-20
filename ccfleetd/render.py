@@ -33,6 +33,100 @@ LOCAL_TIMES_TAG = f"<script>{LOCAL_TIMES_JS}</script>"
 LOCAL_TIMES_CSP = ("'sha256-" + base64.b64encode(
     hashlib.sha256(LOCAL_TIMES_JS.encode("utf-8")).digest()).decode("ascii") + "'")
 
+# Only explicitly opted-in, routine controls use this enhancement. A POST gets
+# one closed redirect envelope; it is never retried or followed automatically.
+PANEL_ACTION_JS = r'''(function(){
+var busy=new Set();
+function plain(path){return path.replace(/^\/(?:en|zh)(?=\/)/,'');}
+function allowed(kind,path){path=plain(path);return (
+kind==='emails'&&path==='/account/outage-emails'||
+kind==='quota'&&/^\/account\/slots\/[^/]+\/quota$/.test(path)||
+kind==='rename'&&/^\/account\/slots\/[^/]+\/rename$/.test(path)||
+kind==='version'&&/^\/account\/slots\/[^/]+\/(?:update|stable)$/.test(path)||
+kind==='admin-quota'&&/^\/actions\/slot\/[^/]+\/quota$/.test(path));}
+function same(value){var url=new URL(value,location.href);
+if(url.origin!==location.origin)throw Error('origin');return url;}
+function safe(node){return node&&!node.querySelector(
+'input:not([type="hidden"]),textarea,select,[contenteditable]');}
+function replace(old,fresh){if(!safe(old)||!safe(fresh))throw Error('editable');
+old.replaceChildren(...Array.from(fresh.childNodes).map(function(n){
+return document.importNode(n,true);}));}
+function message(node,text){var status=node.querySelector('[data-fleet-feedback]');
+if(!status){status=document.createElement('span');status.dataset.fleetFeedback='';
+status.className='small muted';status.setAttribute('role','status');
+status.setAttribute('aria-live','polite');node.appendChild(status);}status.textContent=text;}
+function words(en,zh){return document.documentElement.lang.toLowerCase().startsWith('zh')?zh:en;}
+async function request(url,options){var controller=new AbortController();
+var timer=setTimeout(function(){controller.abort();},10000);
+try{var r=await fetch(url,Object.assign({credentials:'same-origin',cache:'no-store',
+redirect:'error',signal:controller.signal},options));
+if(!r.ok)throw Error(r.status===403?'forbidden':'response');
+var text=await r.text();if(text.length>2097152)throw Error('size');
+return {text:text,type:r.headers.get('Content-Type')||''};
+}finally{clearTimeout(timer);}}
+async function page(url){var r=await request(url,{});
+return new DOMParser().parseFromString(r.text,'text/html');}
+function refresh(current,fresh){Array.from(current.querySelectorAll('[data-fleet-readonly]'))
+.slice(0,256).forEach(function(n){var next=fresh.getElementById(n.id);
+if(next)replace(n,next);});}
+function update(form,kind,fresh){var card=form.closest('.slot');
+var next=card&&fresh.getElementById(card.id);
+if(kind==='emails'){replace(document.getElementById('outage-emails'),
+fresh.getElementById('outage-emails'));}
+else if(kind==='admin-quota'){var area=form.closest('[data-fleet-quota]');
+if(!area)throw Error('target');replace(area,fresh.getElementById(area.id));}
+else if(kind==='rename'){if(!next)throw Error('target');
+replace(card.querySelector('.slot-display-name'),next.querySelector('.slot-display-name'));
+var input=form.querySelector('input[name="name"]'),other=next.querySelector('input[name="name"]');
+if(input&&other)input.placeholder=other.placeholder;}
+else{if(!next)throw Error('target');var selector=kind==='quota'?'.usage-bars':'.row-line.cc';
+replace(card.querySelector(selector),next.querySelector(selector));}
+document.dispatchEvent(new Event('ccfleet:quota'));}
+document.addEventListener('submit',async function(event){var form=event.target;
+if(!form||!form.dataset||!form.dataset.fleetAction)return;
+var kind=form.dataset.fleetAction,url;
+try{url=same(form.action);if(form.method.toLowerCase()!=='post'||!allowed(kind,url.pathname))return;}
+catch(e){return;}event.preventDefault();if(busy.has(url.pathname))return;
+busy.add(url.pathname);var buttons=Array.from(form.querySelectorAll(
+'button[type="submit"],input[type="submit"]'));
+var previous=buttons.map(function(b){return b.disabled;}),sent=false;
+try{var body=new URLSearchParams(new FormData(form));
+if(body.toString().length>8192)throw Error('size');
+buttons.forEach(function(b){b.disabled=true;});message(form,words('Saving…','正在保存…'));
+sent=true;var r=await request(url.href,{method:'POST',body:body,
+headers:{'X-Fleet-Partial':'1','Accept':'application/json'}});
+if(!r.type.startsWith('application/json'))throw Error('format');
+var result=JSON.parse(r.text);if(!result||typeof result!=='object'||Array.isArray(result)||
+Object.keys(result).length!==1||typeof result.location!=='string'||
+result.location.length>1024)throw Error('format');
+var target=same(result.location),expected=kind==='admin-quota'?'/admin':'/account';
+if(plain(target.pathname)!==expected)throw Error('destination');
+var fresh=await page(target.pathname+target.search);update(form,kind,fresh);
+var banner=fresh.querySelector('.note-banner');
+message(form,banner?banner.textContent:words('Saved. Status updated.','已保存，状态已更新。'));
+}catch(error){message(form,error.message==='forbidden'?
+words('This request was refused. Check your sign-in or permissions.',
+'请求被拒绝，请检查登录状态或权限。'):
+sent?words('Result not confirmed. Check status before trying again; no request was repeated.',
+'尚未确认结果。请先查看状态再重试；本页没有重复提交请求。'):
+words('Could not submit this form. Your inputs are kept.','无法提交，已保留输入内容。'));
+}finally{buttons.forEach(function(b,i){b.disabled=previous[i];});busy.delete(url.pathname);}});
+document.addEventListener('click',async function(event){
+var link=event.target.closest&&event.target.closest('a[data-fleet-status]');
+if(!link)return;var kind=link.dataset.fleetStatus,url;
+try{url=same(link.href);if(!['account','admin'].includes(kind)||plain(url.pathname)!=='/'+kind)return;}
+catch(e){return;}event.preventDefault();if(busy.has('status'))return;busy.add('status');
+try{message(link,words('Checking…','正在检查…'));var fresh=await page(url.pathname);
+refresh(document,fresh);message(link,words('Status updated.','状态已更新。'));
+document.dispatchEvent(new Event('ccfleet:quota'));
+}catch(e){message(link,words('Could not check status. Your inputs are kept.',
+'无法查看状态，已保留输入内容。'));}
+finally{busy.delete('status');}});
+})();'''
+PANEL_ACTION_CSP = "'sha256-" + base64.b64encode(
+    hashlib.sha256(PANEL_ACTION_JS.encode()).digest()).decode() + "'"
+PANEL_ACTION_TAG = '<script>' + PANEL_ACTION_JS + '</script>'
+
 # How often the page comes back for more. Fast enough while a sign-in is moving
 # that a step finishing on the node shows up almost at once; slow the rest of
 # the time, because nothing else here changes minute to minute.
@@ -1353,11 +1447,37 @@ def _meter(used: Any, label: str, resets: Any, read_at: Any = None,
 #: How long a usage read asked for is said to be under way; a slot tries it
 #: once, within a minute or two, so a request this old has had its answer.
 QUOTA_READ_WAIT_S = 5 * 60
+QUOTA_READ_FAILURES = frozenset({
+    "native_refreshed", "native_refresh_not_due", "native_auth_rejected",
+    "native_login_expired", "native_network_error", "native_rate_limited",
+    "native_timeout", "native_launch_failed", "native_probe_busy",
+    "native_refresh_unconfirmed", "native_auth_source", "native_extensions",
+})
 
 
-def quota_reading(wanted_at: Any, checked_at: Any, now: float) -> bool:
+def quota_refresh_completed(wanted_at: Any, refresh: Any, now: float) -> bool:
+    """Only a matching closed, completed acknowledgement can end a pending read."""
+    if (not isinstance(refresh, Mapping)
+            or set(refresh) != {"requested_at", "attempted_at", "outcome"}
+            or type(wanted_at) not in (int, float) or not math.isfinite(wanted_at)):
+        return False
+    requested, attempted = refresh.get("requested_at"), refresh.get("attempted_at")
+    return (type(requested) in (int, float) and type(attempted) in (int, float)
+            and math.isfinite(requested) and math.isfinite(attempted)
+            and requested == wanted_at and 0 < requested <= attempted <= now + 60
+            and type(refresh.get("outcome")) is str
+            and refresh["outcome"] in QUOTA_READ_FAILURES | {"quota_read"})
+
+
+def quota_refresh_failed(wanted_at: Any, refresh: Any, now: float) -> bool:
+    return (quota_refresh_completed(wanted_at, refresh, now)
+            and refresh["outcome"] != "quota_read")
+
+
+def quota_reading(wanted_at: Any, checked_at: Any, now: float, refresh: Any = None) -> bool:
     """Whether a read asked for from a page is still to be answered."""
-    if (type(wanted_at) not in (int, float) or not math.isfinite(wanted_at)
+    if (quota_refresh_completed(wanted_at, refresh, now)
+            or type(wanted_at) not in (int, float) or not math.isfinite(wanted_at)
             or not 0 <= now - wanted_at < QUOTA_READ_WAIT_S):
         return False
     read = (checked_at if type(checked_at) in (int, float)
@@ -1370,9 +1490,11 @@ def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) 
     slot_id = row.get("slot_id")
     if not csrf or not slot_id:
         return ""
-    if quota_reading(row.get("quota_wanted_at"), checked, now):
+    if quota_reading(row.get("quota_wanted_at"), checked, now,
+                     (row.get("quota") or {}).get("refresh")):
         return '<p class="muted small">reading now&hellip;</p>'
-    return (f'<form class="inline" method="post" action="/actions/slot/{escape(slot_id)}/quota">'
+    return (f'<form class="inline" method="post" action="/actions/slot/{escape(slot_id)}/quota" '
+            'data-fleet-action="admin-quota">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
             '<button type="submit">Refresh</button></form>')
 
@@ -1389,8 +1511,10 @@ def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
     session, week = quota.get("session") or {}, quota.get("week") or {}
     checked = quota.get("checked_at")
     refresh = _quota_refresh(row, checked, now, csrf)
+    region = (f'<div id="admin-quota-{escape(row["slot_id"])}" data-fleet-quota '
+              'data-fleet-readonly>' if row.get("slot_id") else '<div>')
     if not session and not week:
-        return '<p class="muted small">No window reading yet.</p>' + refresh
+        return region + '<p class="muted small">No window reading yet.</p>' + refresh + '</div>'
     bars = ('<div class="usage-nums muted">Claude account &middot; every device</div>'
             + _meter(session.get("used_pct"), "5-hour session", session.get("resets"),
                      checked, now, session.get("resets_at"))
@@ -1398,7 +1522,7 @@ def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
                      week.get("resets_at")))
     if isinstance(checked, (int, float)) and not isinstance(checked, bool):
         bars += f'<p class="muted small">read {escape(_age(now, checked))} ago</p>'
-    return bars + refresh
+    return region + bars + refresh + '</div>'
 
 
 def _usage_html(rows: list[Mapping[str, Any]], now: float, csrf: str = "") -> str:
@@ -1550,14 +1674,14 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
     elif states & {"requested", "code_sent"}:
         every, cadence = ACTIVE_REFRESH_S, "keeping up with a sign-in"
     else:
-        every, cadence = IDLE_REFRESH_S, "refreshing itself every minute"
+        every, cadence = IDLE_REFRESH_S, "status updates keep your open forms"
     # Always to the console's own address, never the one the page was opened at.
     # After an action that address ends in #<card>, and a refresh naming no
     # address on a page whose address has a fragment is a fragment navigation:
     # the browser scrolls and reloads nothing, so the page never refreshed after
     # a press at all. The target never carries a fragment either, for the same
     # reason: from /admin#x a refresh to /admin#x would stick the same way.
-    auto_refresh = ("" if every is None else
+    auto_refresh = ("" if every is None or every == IDLE_REFRESH_S else
                     f'<meta http-equiv="refresh" content="{every};url={CONSOLE_PATH}">')
     whoami = ""
     if who is not None:
@@ -1567,7 +1691,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         '<div class="wrap"><table><thead><tr><th>Status</th><th>Node</th><th>Last seen</th>'
         '<th>Claude Code</th><th>Egress IP</th><th>Disk</th><th>Load</th><th>Claude sign-in</th>'
         '<th>Remote Control</th></tr></thead>'
-        f'<tbody>{body_rows}</tbody></table></div>'
+        f'<tbody id="admin-machine-readings" data-fleet-readonly>{body_rows}</tbody></table></div>'
         + _usage_html(rows, now, csrf if is_admin else ''))
     if is_admin:
         diagnostics = ('<details class="admin-advanced"><summary>Diagnostics &amp; usage</summary>'
@@ -1589,9 +1713,11 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         '<header class="mast"><div>'
         f'<h1>{heading}</h1><p class="sub">{introduction}</p>'
         f'<p class="sub small">{cadence.capitalize()}{whoami}</p></div>'
-        + _strip_html(counts) +
+        + '<div id="admin-health-counts" data-fleet-readonly>' + _strip_html(counts) + '</div>' +
         "</header>" + extra
-        + f'<h2>Open alerts</h2><div class="card">{alert_items}</div>'
+        + '<p><a href="/admin" data-fleet-status="admin">Refresh status</a></p>'
+        + '<h2>Open alerts</h2><div class="card" id="admin-alerts" data-fleet-readonly>'
+        + alert_items + '</div>'
         # Management is the operator's. An owner sees their nodes and nothing to
         # press, which is why they get no CSRF token either: there is no form.
         # The sign-in card belongs to whoever owns the node, admin or not: needing
@@ -1600,5 +1726,5 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         + (_signin_html(rows, csrf, logins or {}) if csrf else "")
         + (_token_html(rows, csrf, logins or {}, now) if csrf else "")
         + management
-        + "</div>" + LOCAL_TIMES_TAG + "</body></html>"
+        + "</div>" + LOCAL_TIMES_TAG + PANEL_ACTION_TAG + "</body></html>"
     )

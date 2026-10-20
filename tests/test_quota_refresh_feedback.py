@@ -49,6 +49,43 @@ def test_missing_five_hour_window_remains_visible_as_unknown():
     assert "does not mean quota remains" in text and "8%" in text
 
 
+@pytest.mark.parametrize("outcome", sorted(render.QUOTA_READ_FAILURES))
+def test_matching_completed_failure_stops_waiting_without_inventing_quota(outcome):
+    wanted = NOW - 30
+    ack = {"requested_at": wanted, "attempted_at": NOW - 5, "outcome": outcome}
+    assert render.quota_reading(wanted, NOW - 7127, NOW, ack) is False
+    source = usersite._quota_refresh({"id": "slot-test", "quota_wanted_at": wanted},
+        {"quota": {"checked_at": NOW - 7127, "refresh": ack}}, "csrf", NOW)
+    assert "No new quota reading was received" in source and "100%" not in source
+    assert "data-quota-slot" not in source and 'data-fleet-action="quota"' in source
+    # An old failed acknowledgement must not override a later successful reading.
+    recovered = usersite._quota_refresh({"id": "slot-test", "quota_wanted_at": wanted},
+        {"quota": {"checked_at": NOW - 2, "refresh": ack}}, "csrf", NOW)
+    assert "No new quota reading was received" not in recovered
+
+
+@pytest.mark.parametrize("changes", [
+    {"requested_at": NOW - 31}, {"requested_at": True}, {"attempted_at": NOW - 31},
+    {"attempted_at": NOW + 61}, {"attempted_at": float("nan")},
+    {"outcome": "PRIVATE_RAW_ERROR"}, {"extra": "PRIVATE_RAW_ERROR"},
+])
+def test_unknown_unmatched_or_invalid_acknowledgement_does_not_end_pending_read(changes):
+    wanted = NOW - 30
+    ack = {"requested_at": wanted, "attempted_at": NOW - 5,
+           "outcome": "native_timeout", **changes}
+    assert render.quota_reading(wanted, NOW - 7127, NOW, ack) is True
+
+
+def test_completed_native_cache_answer_ends_wait_without_restamping_old_reading():
+    wanted = NOW - 30
+    ack = {"requested_at": wanted, "attempted_at": NOW - 5, "outcome": "quota_read"}
+    assert render.quota_reading(wanted, NOW - 90, NOW, ack) is False
+    source = usersite._quota_refresh({"id": "slot-test", "quota_wanted_at": wanted},
+        {"quota": {"checked_at": NOW - 90, "refresh": ack}}, "csrf", NOW)
+    assert "latest available native reading" in source and "read 1m ago" in source
+    assert "data-quota-slot" not in source and "No new quota reading" not in source
+
+
 def test_poll_script_has_only_exact_hash_and_same_origin_connect_permission():
     digest = base64.b64encode(hashlib.sha256(usersite.QUOTA_POLL_JS.encode()).digest()).decode()
     assert usersite.QUOTA_POLL_CSP == "'sha256-" + digest + "'"
@@ -70,7 +107,8 @@ links.push(...values.filter(v=>typeof v==='object'));},
  closest(selector){if(selector!=='.usage-bars')throw Error('outside');return current;}};
 const context={Date:{now:()=>now},AbortController,Promise,Array,Error,
  location:{pathname:'/zh/account'},
- document:{documentElement:{lang:p.language},createElement:t=>({tagName:t}),querySelectorAll(s){
+ document:{documentElement:{lang:p.language},addEventListener(){},
+ createElement:t=>({tagName:t,dataset:{}}),querySelectorAll(s){
  if(s!=='[data-quota-slot]')throw Error('outside');return active?[n]:[];},importNode:x=>x},
  setTimeout(f,ms){const id=++next;jobs.push({id,at:now+ms,f});return id;},
  clearTimeout(id){jobs=jobs.filter(j=>j.id!==id);},
@@ -115,4 +153,5 @@ def test_real_poll_script_is_bounded_get_only_and_replaces_only_quota_area(mode)
     else:
         assert "暂未收到新的额度读数" in found["text"]
         assert found["links"] == [{"tagName": "a", "href": "/zh/account",
-                                   "textContent": "查看状态（重新载入页面）"}]
+                                   "dataset": {"fleetStatus": "account"},
+                                   "textContent": "查看状态"}]

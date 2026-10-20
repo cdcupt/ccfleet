@@ -78,6 +78,7 @@ from .render import (
     LOCAL_TIMES_TAG,
     LOGIN_WORDS,
     MARK,
+    PANEL_ACTION_TAG,
     _age,
     _human_tokens,
     _meter,
@@ -86,6 +87,8 @@ from .render import (
     console_href,
     product_href,
     quota_reading,
+    quota_refresh_completed,
+    quota_refresh_failed,
     user_menu,
 )
 from .store import (
@@ -103,17 +106,17 @@ from .usage import REFERENCE_MODEL, REFERENCE_RATES
 # Read only this signed-in account's rendered quota area; never replace its
 # connection instructions, inputs or disclosures. One five-minute bounded run.
 QUOTA_POLL_JS = r'''(function(){
-var attempts=0,deadline=Date.now()+300000;
+var attempts=0,deadline=0,running=false;
 function pending(){return Array.from(document.querySelectorAll('[data-quota-slot]'));}
 function stop(nodes){nodes.forEach(function(n){n.removeAttribute('data-quota-slot');
 var zh=document.documentElement.lang.toLowerCase().startsWith('zh');
 n.textContent=zh?
 '暂未收到新的额度读数。请稍后重试；旧读数不代表还有剩余额度。':
 'No new quota reading arrived. Try again later; old readings do not confirm remaining quota.';
-var link=document.createElement('a');link.href=location.pathname;
-link.textContent=zh?'查看状态（重新载入页面）':'Check status (reload page)';n.append(' ',link);});}
-function poll(){var nodes=pending();if(!nodes.length)return;
-if(++attempts>30||Date.now()>=deadline){stop(nodes);return;}
+var link=document.createElement('a');link.href=location.pathname;link.dataset.fleetStatus='account';
+link.textContent=zh?'查看状态':'Check status';n.append(' ',link);});}
+function poll(){var nodes=pending();if(!nodes.length){running=false;return;}
+if(++attempts>30||Date.now()>=deadline){stop(nodes);running=false;return;}
 var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},8000);
 fetch(location.pathname,{credentials:'same-origin',cache:'no-store',redirect:'error',
 signal:controller.signal}).then(function(r){if(!r.ok)throw Error('status');return r.text();})
@@ -124,8 +127,10 @@ var fresh=card&&card.querySelector('.usage-bars'),current=n.closest('.usage-bars
 if(!fresh||!current)throw Error('missing');current.replaceChildren(
 ...Array.from(fresh.childNodes).map(function(x){return document.importNode(x,true);}));});
 }).catch(function(){stop(pending());}).finally(function(){clearTimeout(timer);
-if(pending().length)setTimeout(poll,10000);});}
-if(pending().length)setTimeout(poll,10000);
+if(pending().length)setTimeout(poll,10000);else running=false;});}
+function start(){if(!running&&pending().length){running=true;attempts=0;
+deadline=Date.now()+300000;setTimeout(poll,10000);}}
+document.addEventListener('ccfleet:quota',start);start();
 })();'''
 QUOTA_POLL_CSP = "'sha256-" + base64.b64encode(
     hashlib.sha256(QUOTA_POLL_JS.encode()).digest()).decode() + "'"
@@ -166,7 +171,7 @@ NOTES = {
     "name-bad": ("warn", "A name is 2 to 30 letters, digits and inner hyphens, and not "
                          "pool- or slot- followed by a number."),
     "name-taken": ("warn", "That name is taken. Pick another."),
-    "reading": ("ok", "Reading your usage now. It shows here within a minute or two."),
+    "reading": ("ok", "A new quota reading was requested. This panel checks for the result."),
     "emails-on": ("ok", "Outage emails on: we email you when your slot's machine has been "
                         "down for five minutes, and again when it is back."),
     "emails-off": ("ok", "Outage emails off."),
@@ -202,7 +207,7 @@ NOTES_ZH = {
         '名称需为 2–30 个英文字母、数字或中间连字符，'
         '且不能使用 pool-数字 或 slot-数字。'
     ),
-    "name-taken": "名称已被使用，请换一个。", "reading": "正在读取用量，一两分钟内会显示。",
+    "name-taken": "名称已被使用，请换一个。", "reading": "已请求新的额度读数，此面板会检查结果。",
     "emails-on": (
         '已开启故障邮件：机器离线五分钟后通知，'
         '恢复时再次通知。'
@@ -922,7 +927,8 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             + '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">' + label("Source code", "源代码", inline=True)
             + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG
-            + (QUOTA_POLL_TAG if title == "your slots" else "") + '</body></html>')
+            + (QUOTA_POLL_TAG + PANEL_ACTION_TAG if title == "your slots" else "")
+            + '</body></html>')
 
 
 _HERE = ' class="here"'
@@ -1266,12 +1272,14 @@ FORM_ZH = {
 }
 
 
-def _form(action: str, csrf: str, words: str, inner: str = "", cls: str = "") -> str:
+def _form(action: str, csrf: str, words: str, inner: str = "", cls: str = "", *,
+          partial: str = "") -> str:
     zh = FORM_ZH.get(words)
     if words.startswith("Update to ") and zh is None:
         zh = "更新到 " + words[len("Update to "): ]
     button = label(words, zh, inline=True) if zh is not None else escape(words)
-    return (f'<form class="inline" method="post" action="{escape(action)}">'
+    opt_in = f' data-fleet-action="{escape(partial)}"' if partial else ""
+    return (f'<form class="inline" method="post" action="{escape(action)}"{opt_in}>'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
             f'<button class="{cls}" type="submit">{button}</button></form>')
 
@@ -1440,7 +1448,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         '<h1>' + label('Your slots', '我的槽位', inline=True) + '</h1>'
         '<p class="sub">' + label('Choose a slot. Connect your computer. Start coding.',
                                   '选一个槽位，连接电脑，开始写代码。', inline=True)
-        + ' <a href="/account">' + label('Refresh status', '刷新状态', inline=True)
+        + ' <a href="/account" data-fleet-status="account">'
+        + label('Refresh status', '刷新状态', inline=True)
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account", monthly=_monthly_management(store, cfg, account)) + banner
@@ -1482,11 +1491,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             '服务器不保存它。'
         ),
     ]) + '</details></section>'
-    updating = any(u.get("state") == "pending" for u in updates.values())
     # A quota request must not repeatedly erase open instructions or forms.
     # Native reads run independently; the user can check their status explicitly.
     return _shell("your slots", body,
-                  _refresh(held, logins, updating, idle_refresh=False),
+                  _refresh(held, logins, idle_refresh=False),
                   viewer=viewer_for(account, session_id, cfg, store), width="wide",
                   extra_css=wallet_ui.CSS if wallet_routes.enabled(cfg) else "")
 
@@ -2755,13 +2763,16 @@ def _slot_card(
     parts = [
         f'<div class="card slot" id="slot-{escape(slot["id"])}" '
         f'data-state="{escape(str(slot["state"]))}"{kind}><div class="slot-head">'
-        f'<h2>{escape(name)} <span class="pill {tone}">'
+        f'<h2><span class="slot-display-name" id="slot-{escape(slot["id"])}-name" '
+        f'data-fleet-readonly>{escape(name)}</span> '
+        f'<span id="slot-{escape(slot["id"])}-state" data-fleet-readonly>'
+        f'<span class="pill {tone}">'
         + label(
             title,
             title_zh,
             inline=True,
         )
-        + f"</span>{mine}</h2></div><div class=\"slot-body\">",
+        + f"</span></span>{mine}</h2></div><div class=\"slot-body\">",
     ]
     technical = ['<p class="slot-meta">'
         + bi(
@@ -2842,6 +2853,7 @@ def _slot_card(
                 fresh=fresh_observation(
                     report.get("credentials"), heard, now, cfg.heartbeat_max_age_s, listening
                 ),
+                slot_id=slot["id"],
             )
         ]
         if not own:
@@ -3346,7 +3358,8 @@ def _quota_meter(used: Any, en: str, zh: str, reset: Any, read: Any, now: float,
     )
 
 
-def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True) -> str:
+def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True,
+            slot_id: Optional[str] = None) -> str:
     """The bound account and observed usage, with the same readiness conditions."""
     if not fresh:
         return _notice(
@@ -3586,7 +3599,9 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             + refresh
         )
     halves = [
-        f'<div class="usage-{name}">{html}</div>'
+        f'<div class="usage-{name}"'
+        + (f' id="slot-{escape(slot_id)}-quota" data-fleet-readonly'
+           if name == "bars" and slot_id else "") + f'>{html}</div>'
         for name, html in (("bars", bars), ("trend", spent))
         if html
     ]
@@ -3779,16 +3794,19 @@ def _claude_row(slot: Mapping[str, Any], node: Mapping[str, Any], report: Mappin
     line = bi(_claude_line(said), _claude_line_zh(said), inline=True)
     if kind in ("available", "failed"):
         update_words = f"Update to {latest}" if latest else "Update to the latest release"
-        buttons.append(_form(f"{base}/update", csrf, update_words, cls="primary"))
+        buttons.append(_form(f"{base}/update", csrf, update_words, cls="primary",
+                             partial="version"))
         if channel != "latest":
             note = '<p class="cc-note">' + label(
                 UPDATE_NOTE, (
                     '改用最新版通道，以后会自动保持该通道的最新版本。'
                 ), inline=True) + '</p>'
     if channel == "latest" and kind not in ("held", "updating"):
-        buttons.append(_form(f"{base}/stable", csrf, "Back to Stable", cls="quiet"))
+        buttons.append(_form(f"{base}/stable", csrf, "Back to Stable", cls="quiet",
+                             partial="version"))
     tone = " bad-text" if kind == "failed" else ""
-    return ('<div class="row-line cc"><div class="row-name">Claude Code</div>'
+    return (f'<div class="row-line cc" id="slot-{escape(slot["id"])}-version" '
+            'data-fleet-readonly><div class="row-name">Claude Code</div>'
             f'<div class="actions"><span class="cc-say{tone}">{line}</span>'
             f'{" ".join(buttons)}</div>{note}</div>')
 
@@ -3894,10 +3912,11 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
                    now: float) -> str:
     """Read account quota now, keeping the same protected action."""
     read = (report.get("quota") or {}).get("checked_at")
+    acknowledgement = (report.get("quota") or {}).get("refresh")
     known = isinstance(read, (int, float)) and not isinstance(read, bool)
     when = f"read {_age(now, read)} ago · " if known else ""
     when_zh = f"最近读取：{_age(now, read)} 前 · " if known else ""
-    if quota_reading(slot.get("quota_wanted_at"), read, now):
+    if quota_reading(slot.get("quota_wanted_at"), read, now, acknowledgement):
         return '<p class="small muted" data-quota-slot="' + escape(slot['id']) + '">' + label(
             when + "A new quota reading was requested. It may take a few minutes. "
             "Only this quota panel checks for updates; your open forms are kept.",
@@ -3905,16 +3924,28 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
             "仅此额度面板检查更新，你打开的表单会保留。",
             inline=True) + '</p>'
     wanted = instant(slot.get("quota_wanted_at"))
-    timed_out = wanted is not None and wanted <= now - 5 * 60 and (not known or wanted > read)
+    completed = quota_refresh_completed(slot.get("quota_wanted_at"), acknowledgement, now)
+    completed_failure = ((not known or wanted is not None and wanted > read)
+                         and quota_refresh_failed(slot.get("quota_wanted_at"),
+                                                   acknowledgement, now))
+    timed_out = (not completed and wanted is not None and wanted <= now - 5 * 60
+                 and (not known or wanted > read))
     failed = (_notice(
         "No new quota reading was received for your request. The machine may be busy "
         "or unable to read Claude's usage. Missing data does not mean quota remains.",
         "本次请求未收到新的额度读数，机器可能繁忙或无法读取 Claude 用量。"
         "没有读数不代表还有剩余额度。",
-        "small lapsed") if timed_out else "")
-    return (failed + '<div class="refresh"><span class="small muted">'
+        "small lapsed") if timed_out or completed_failure else "")
+    latest = (_notice(
+        "Claude returned its latest available native reading. Its actual reading time "
+        "is shown below; it can be earlier than this request.",
+        "Claude 返回了原版客户端最新可用的读数。下方保留真实读取时间，可能早于本次请求。",
+        "small muted") if completed and not completed_failure and known
+        and wanted is not None and read < wanted else "")
+    return (failed + latest + '<div class="refresh"><span class="small muted">'
             + label(when + "every five minutes", when_zh + "每五分钟读取一次", inline=True)
-            + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh")
+            + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh",
+                               partial="quota")
             + '</div>')
 
 
@@ -3927,7 +3958,7 @@ def _outage_emails(account: Mapping[str, Any], csrf: str) -> str:
             "minutes, and again when it is back.")
     button = _form("/account/outage-emails", csrf, "Turn off" if on else "Turn on",
                    f'<input type="hidden" name="on" value="{"0" if on else "1"}">',
-                   "" if on else "primary")
+                   "" if on else "primary", partial="emails")
     copy = _blocks((
         '<div><h2>Outage emails</h2>'
         f"<p>{escape(said)}</p>"
@@ -3962,7 +3993,7 @@ def _rename(slot: Mapping[str, Any], csrf: str) -> str:
                         'aria-label="A new name for this slot" '
                         'data-aria-label-en="A new name for this slot" '
                         'data-aria-label-zh="槽位的新名称">'
-                    ))
+                    ), partial="rename")
             + '<p class="small muted">' + label(
                 (
                     'This also becomes the machine hostname. '

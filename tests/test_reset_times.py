@@ -120,8 +120,9 @@ def test_only_authored_time_and_language_scripts_are_allowed_by_hash():
     policy = HTML_HEADERS["Content-Security-Policy"]
     assert "default-src 'none'" in policy
     script = re.search(r"script-src ([^;]*)", policy).group(1).split()
+    from ccfleetd.render import PANEL_ACTION_CSP
     from ccfleetd.usersite import QUOTA_POLL_CSP
-    assert script == [LOCAL_TIMES_CSP, BILINGUAL_CSP, QUOTA_POLL_CSP]
+    assert script == [LOCAL_TIMES_CSP, BILINGUAL_CSP, QUOTA_POLL_CSP, PANEL_ACTION_CSP]
     assert "connect-src 'self'" in policy
     # The tab's icon is a data: image, and images may be nothing else.
     assert re.search(r"img-src ([^;]*)", policy).group(1).split() == ["data:"]
@@ -157,4 +158,4 @@ def test_the_console_carries_the_script_that_says_them():
     from ccfleetd.config import Config
     from ccfleetd.render import render_dashboard
     page = render_dashboard([], [], 3_000_000.0, Config(admin_token="x" * 32))
-    assert page.count("<script") == 1 and LOCAL_TIMES_TAG in page
+    assert page.count("<script") == 2 and LOCAL_TIMES_TAG in page

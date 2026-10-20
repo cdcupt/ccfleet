@@ -53,6 +53,7 @@ from .passwords import verify_password
 from .render import (
     CONSOLE_PATH,
     LOCAL_TIMES_CSP,
+    PANEL_ACTION_CSP,
     build_rows,
     render_add_result,
     render_dashboard,
@@ -76,10 +77,17 @@ HTML_HEADERS = {
     # the current anchor in language links are allowed by their exact hashes.
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
                                 f"img-src data:; script-src {LOCAL_TIMES_CSP} "
-                                f"{LANGUAGE_LINKS_CSP} {usersite.QUOTA_POLL_CSP}; "
+                                f"{LANGUAGE_LINKS_CSP} {usersite.QUOTA_POLL_CSP} "
+                                f"{PANEL_ACTION_CSP}; "
                                 "connect-src 'self'"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
+
+
+def partial_account_action(path: str) -> bool:
+    """Presentation opt-in only; authorization still runs before every action."""
+    return path == "/account/outage-emails" or bool(re.fullmatch(
+        r"/account/slots/[^/]{1,128}/(?:quota|rename|update|stable)", path))
 
 
 def access_log_route(target: Any) -> str:
@@ -901,7 +909,11 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
                                        session_id)
             if outcome.location:
-                self._redirect(outcome.location)
+                if (self.headers.get("X-Fleet-Partial") == "1"
+                        and partial_account_action(path)):
+                    self._json(200, {"location": self._page_location(outcome.location)})
+                else:
+                    self._redirect(outcome.location)
             else:
                 self._send(outcome.status, outcome.body.encode("utf-8"),
                            {**HTML_HEADERS, "Cache-Control": "no-store"})
@@ -1764,6 +1776,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                               form, time.time(), by=who.label)
                     if anchor is None:
                         self._json(404, {"error": "not found"})
+                    elif (self.headers.get("X-Fleet-Partial") == "1"
+                          and parts[1] == "slot" and parts[3] == "quota"):
+                        self._json(200, {"location": f"{CONSOLE_PATH}#{anchor}"})
                     else:
                         self._redirect(f"{CONSOLE_PATH}#{anchor}")
                 else:
