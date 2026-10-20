@@ -117,12 +117,13 @@ def test_headers_and_scope_copy_distinguish_the_priceable_cohort_and_broader_det
 
 
 @pytest.mark.parametrize("model", [None, "other", "claude-haiku-5-5"])
-def test_legacy_unknown_or_unpriced_tier_has_no_primary_token_or_money_value(model):
+def test_legacy_unknown_or_unpriced_tier_shows_recorded_tokens_without_money_or_rank(model):
     data = measure(fleet_of([reading(model=model, native=False)]))
     shown = show(data)
     assert "$" not in shown.main()
-    assert "330" not in shown.main()
-    assert "—" in shown.main() and "330" in shown.details()
+    assert "330" in shown.main() and "Recorded · unpriced" in shown.main()
+    assert "Not ranked yet" in shown.main() and "Pricing unavailable" in shown.main()
+    assert "—" not in shown.main() and "330" in shown.details()
     assert data["priced_tokens"] is None and data["estimated_usd"] is None
 
 
@@ -141,13 +142,14 @@ def test_positive_samples_with_measured_zero_keep_zero_tokens_and_zero_estimate(
     ("priced_tokens", {"total_tokens": "4592926", "output_tokens": 24874}),
     ("estimated_usd", None), ("estimated_usd", float("nan")), ("estimated_usd", -1),
 ])
-def test_corrupt_or_missing_matching_scope_never_borrows_legacy_tokens(field, value):
+def test_missing_matching_scope_shows_recorded_tokens_without_using_them_for_an_estimate(field, value):
     data = snapshot()
     data["entries"][0][field] = value
     main = show(data).main()
     assert "$2.50" not in main and "4.59M" not in main and "24.87K" not in main
-    assert "2.15B" not in main and "8.02M" not in main
-    assert "—" in main
+    assert "2.15B" in main and "Recorded · unpriced" in main
+    assert "8.02M" not in main and "priced tokens" not in main
+    assert "Pricing unavailable" in main and "Not ranked yet" in main and "—" not in main
 
 
 def test_partial_model_cache_coverage_is_not_filled_from_broader_known_cache_totals():
