@@ -1,7 +1,7 @@
-"""Public masked-handle ranking of observed tokens and API-equivalent estimates.
+"""Public masked-handle ranking using a common API reference for observed tokens.
 
 Legacy token totals remain useful. Model labels/costs require new matched model
-observations: never distribute historical tokens across an inferred model mix.
+observations: a common reference conversion does not infer historical models.
 """
 from __future__ import annotations
 
@@ -26,6 +26,13 @@ PRICING = {"date": model_usage.PRICING_DATE, "url": model_usage.PRICING_URL,
            "models_url": model_usage.MODELS_URL, "basis": "standard_global_api_equivalent",
            "cache_write_ttl_assumption": "5m", "haiku_5_5_tier": "unpriced",
            "historical_model_backfill": False, "subscription_charges": False}
+REFERENCE_MODEL = "claude-opus-5-5"
+REFERENCE_RATES = {"input_tokens": 4.0, "output_tokens": 20.0,
+                   "cache_creation_input_tokens": 5.0, "cache_read_input_tokens": 0.20}
+REFERENCE_PRICING = {"model": REFERENCE_MODEL, "date": "2026-10-20",
+                     "url": model_usage.PRICING_URL, "models_url": model_usage.MODELS_URL,
+                     "rates_usd_per_million": REFERENCE_RATES,
+                     "cache_write_ttl_assumption": "5m", "basis": "common_reference_conversion"}
 
 
 def _empty(start):
@@ -34,8 +41,12 @@ def _empty(start):
             "unpriced_samples": 0, "tokens": None, "token_state": "unknown",
             "priced_tokens": None, "priced_token_state": "unknown",
             "unpriced_tokens": None, "unpriced_token_state": "unknown",
+            "reference_tokens": None, "reference_estimated_usd": None,
+            "reference_cost_state": "unknown", "reference_model": REFERENCE_MODEL,
             "estimated_usd": None, "cost_state": "unknown", "entries": [],
-            "omitted_entries": 0, "pricing": dict(PRICING)}
+            "omitted_entries": 0, "pricing": dict(PRICING),
+            "reference_pricing": {**REFERENCE_PRICING,
+                                  "rates_usd_per_million": dict(REFERENCE_RATES)}}
 
 
 def _sum(values):
@@ -154,6 +165,11 @@ def _entry(data, handle=None):
     tokens, token_state = _tokens(data, data["usage_samples"])
     if data["usage_samples"] < data["usage_eligible_messages"] and token_state == "complete":
         token_state = "partial"
+    reference = (math.fsum(tokens[field] * rate for field, rate in REFERENCE_RATES.items()
+                           if tokens[field] is not None) / 1_000_000
+                 if tokens is not None else None)
+    if reference is not None and not math.isfinite(reference):
+        raise ValueError("invalid common API reference estimate")
     priced_tokens, priced_state, unpriced_tokens, unpriced_state = _token_partition(
         data, priced, token_state)
     estimate = math.fsum(row["estimated_usd"] for row in priced) if priced else None
@@ -165,6 +181,9 @@ def _entry(data, handle=None):
             "tokens": tokens, "token_state": token_state,
             "priced_tokens": priced_tokens, "priced_token_state": priced_state,
             "unpriced_tokens": unpriced_tokens, "unpriced_token_state": unpriced_state,
+            "reference_tokens": dict(tokens) if tokens is not None else None,
+            "reference_estimated_usd": reference, "reference_cost_state": token_state,
+            "reference_model": REFERENCE_MODEL,
             "estimated_usd": estimate,
             "cost_state": ("complete" if complete else "partial") if estimate is not None
                           else "unknown", "models": models}
@@ -205,19 +224,21 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         for key in (*COUNTERS, "unpriced_samples", "tokens", "token_state",
                     "priced_tokens", "priced_token_state", "unpriced_tokens",
                     "unpriced_token_state",
+                    "reference_tokens", "reference_estimated_usd", "reference_cost_state",
+                    "reference_model",
                     "estimated_usd", "cost_state"):
             result[key] = totals[key]
         entries = [{**_entry(value, accounts.get(holder)),
                     "member_code": _member_code(holder, getattr(cfg, "cookie_secret", None))}
                    for holder, value in groups.items()
                    if value["usage_eligible_messages"] or value["usage_samples"]]
-        entries.sort(key=lambda row: (row["estimated_usd"] is None,
-                                     -(row["estimated_usd"] or 0),
+        entries.sort(key=lambda row: (row["reference_estimated_usd"] is None,
+                                     -(row["reference_estimated_usd"] or 0),
                                      -((row["tokens"] or {}).get("total_tokens") or 0),
                                      row["masked_handle"] or ""))
         previous, rank = None, None
         for index, entry in enumerate(entries, 1):
-            cost = entry["estimated_usd"]
+            cost = entry["reference_estimated_usd"]
             if cost is not None:
                 if previous != cost:
                     rank = index

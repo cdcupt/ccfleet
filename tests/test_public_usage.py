@@ -94,7 +94,7 @@ def test_legacy_tokens_remain_measured_without_inferred_model_cost_or_name():
     fleet = fleet_of([reading(model=None)], handles={"holder-0": "alice"})
     result = measure(fleet)
     entry = result["entries"][0]
-    assert entry["masked_handle"] == "a***e" and entry["rank"] is None
+    assert entry["masked_handle"] == "a***e" and entry["rank"] == 1
     assert result["tokens"] == {"input_tokens": 100, "output_tokens": 200,
                                 "cache_read_input_tokens": 10,
                                 "cache_creation_input_tokens": 20, "total_tokens": 330}
@@ -122,7 +122,7 @@ def test_unknown_or_context_tier_model_is_unpriced_not_zero(model):
     result = measure(fleet_of([reading(model=model)]))
     assert result["tokens"]["total_tokens"] == 330
     assert result["cost_state"] == "unknown" and result["estimated_usd"] is None
-    assert result["entries"][0]["rank"] is None
+    assert result["entries"][0]["rank"] == 1
     assert result["entries"][0]["models"][0]["estimated_usd"] is None
 
 
@@ -215,13 +215,15 @@ def test_usage_and_native_rate_require_fresh_current_holder_identity(change):
     assert rate(fleet)["state"] == "no_data"
 
 
-def test_ranking_is_cost_descending_unknown_last_and_ties_share_rank():
+def test_ranking_uses_common_reference_even_without_model_identity_and_ties_share_rank():
     readings = [reading(output=value, model=model) for value, model in
                 [(200, MODEL), (9999, "other"), (400, MODEL), (400, MODEL)]]
     result = measure(fleet_of(readings))
     rows = result["entries"]
-    assert [row["rank"] for row in rows] == [1, 1, 3, None]
-    assert rows[0]["estimated_usd"] == rows[1]["estimated_usd"] > rows[2]["estimated_usd"]
+    assert [row["rank"] for row in rows] == [1, 2, 2, 4]
+    assert rows[0]["estimated_usd"] is None
+    assert rows[1]["reference_estimated_usd"] == rows[2]["reference_estimated_usd"]
+    assert rows[0]["reference_estimated_usd"] > rows[1]["reference_estimated_usd"]
 
 
 def test_top_list_is_bounded_with_explicit_omission_and_global_totals():
@@ -244,7 +246,9 @@ def test_public_dto_has_no_raw_identity_or_private_payload_and_does_not_mutate()
                           "unpriced_samples", "tokens",
                           "priced_tokens", "priced_token_state", "unpriced_tokens",
                           "unpriced_token_state",
-                          "token_state", "estimated_usd", "cost_state", "models"}
+                          "token_state", "estimated_usd", "cost_state", "models",
+                          "reference_tokens", "reference_estimated_usd", "reference_cost_state",
+                          "reference_model"}
 
 
 @pytest.mark.parametrize("method", ["list_slots", "latest_heartbeats", "list_nodes"])

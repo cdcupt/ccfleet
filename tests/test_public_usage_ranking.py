@@ -11,6 +11,16 @@ from tests.test_customer_docs import ADMIN, _serve
 from tests.test_html_document_preservation import Document
 
 
+def reference(entry):
+    tokens = entry["tokens"]
+    entry.update(reference_tokens=deepcopy(tokens), reference_model="claude-opus-5-5",
+                 reference_cost_state=entry["token_state"],
+                 reference_estimated_usd=(tokens["input_tokens"] * 4
+                     + tokens["output_tokens"] * 20 + tokens["cache_read_input_tokens"] * .2
+                     + tokens["cache_creation_input_tokens"] * 5) / 1_000_000)
+    return entry
+
+
 def ranking():
     tokens = {"input_tokens": 1000, "output_tokens": 200,
               "cache_read_input_tokens": 30, "cache_creation_input_tokens": 4,
@@ -30,10 +40,13 @@ def ranking():
                "cost_state": "unknown", "priced_samples": 0, "models": [],
                "priced_tokens": None, "priced_token_state": "unknown",
                "unpriced_tokens": tokens, "unpriced_token_state": "partial"}
-    return {"state": "partial", "entries": [entry, unknown], "usage_samples": 8,
+    unknown["rank"] = 1
+    return {"state": "partial", "entries": [reference(entry), reference(unknown)], "usage_samples": 8,
             "usage_eligible_messages": 10, "priced_samples": 4, "omitted_entries": 0,
             "pricing": {"date": "2026-10-14", "url": PRICING_URL,
-                        "models_url": MODELS_URL}}
+                        "models_url": MODELS_URL},
+            "reference_pricing": {"date": "2026-10-20", "url": PRICING_URL,
+                                  "models_url": MODELS_URL}}
 
 
 def shown(report, language="en"):
@@ -52,12 +65,12 @@ def test_known_estimate_mask_model_subtotals_and_coverage_are_visible_on_homepag
     assert "Claude Fable 5.1" in text and "Claude Mythos 5.1" in text
     assert "Input 1K" in text and "Output 200" in text
     assert "Cache read 30" in text and "Cache write 4" in text
-    assert "Model price known: 4 of 4" in text
+    assert "Reported-model price matched: 4 of 4" in text
     assert "Cache field coverage: read 1/2 · write 2/2" in text
-    assert "Unknown values are not ranked" in text
+    assert "No measurement means no numeric rank" in text
     assert "not a Claude Pro/Max bill" in text
-    assert "Haiku 5.5 remains unpriced" in text
-    assert "5-minute cache writes" in text
+    assert "Haiku 5.5 has no reported-model estimate" in text
+    assert "cache write $5 (5 minutes)" in text
     assert "not anonymity" in text
     assert f'href="{PRICING_URL}"' in page and f'href="{MODELS_URL}"' in page
     assert page.index('id="usage-ranking"') < page.index("Read next")
@@ -88,6 +101,7 @@ def test_renderer_has_no_identity_or_raw_report_fallback_and_only_exact_pricing_
     entry["models"][0].update(label='PRIVATE_MODEL_LABEL', raw_model='PRIVATE_MODEL')
     report["pricing"].update(url=PRICING_URL + '?email=PRIVATE_EMAIL',
                              models_url='https://platform.claude.com/PRIVATE_ACCOUNT')
+    report["reference_pricing"] = report["pricing"]
     before = deepcopy(report)
     page = shown(report)
     assert 'PRIVATE_' not in page and '1792000123' not in page
@@ -132,7 +146,7 @@ def test_chinese_is_complete_and_the_homepage_has_separate_language_views():
     assert 'class="copy-en"' not in chinese and "Measured usage ranking" not in chinese
     text = Document(chinese).text
     for phrase in ("观测用量排行", "模型明细", "已计价 Token", "API 估值", "部分覆盖",
-                   "模型价格已知", "缓存字段覆盖：读取 1／2 · 写入 2／2", "这不等于匿名",
+                   "上报模型计价已匹配", "缓存字段覆盖：读取 1／2 · 写入 2／2", "这不等于匿名",
                    "不是 Claude Pro/Max 账单", "提示长度计价档位"):
         assert phrase in text
     assert 'data-language-link="both"' not in english + chinese
@@ -160,7 +174,7 @@ def test_invalid_token_counts_stay_unknown_and_never_enter_tooltips(value):
     assert 'title=' not in source and 'aria-label=' not in source
 
 
-def test_legacy_total_is_never_the_denominator_of_a_small_new_api_estimate():
+def test_common_reference_and_actual_model_estimate_keep_distinct_matching_scopes():
     observed = {"input_tokens": 3_912_469, "output_tokens": 8_721_456,
                 "cache_read_input_tokens": 2_062_021_318,
                 "cache_creation_input_tokens": 72_399_275, "total_tokens": 2_147_054_518}
@@ -173,19 +187,18 @@ def test_legacy_total_is_never_the_denominator_of_a_small_new_api_estimate():
              "unpriced_token_state": "complete", "estimated_usd": 1.0181286,
              "cost_state": "partial", "usage_samples": 6118, "usage_eligible_messages": 6118,
              "priced_samples": 11, "models": []}
+    reference(entry)
     source = shown({**ranking(), "entries": [entry]})
     cell = re.search(r'<td class="usage-estimate">(.*?)</td>', source, flags=re.S)[1]
-    assert "$1.02" in cell and "Partial" in Document(cell).text
-    assert "for 1.2M priced tokens" in Document(cell).text
-    assert 'title="1,200,803 tokens"' in cell
-    assert "2.15B" not in cell and "2,147,054,518" not in cell
+    assert "$1.02" not in cell and "Opus 5.5 reference" in Document(cell).text
     visible = Document(source).text
-    assert "2.15B" in visible and "Unpriced 2.15B" in visible and "Output 8.72M" in visible
+    assert "2.15B" in visible and "Without matched model price 2.15B" in visible and "Output 8.72M" in visible
+    assert "$1.02" in visible and "for 1.2M priced tokens" in visible
     main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', source, flags=re.S)[1]
-    assert "1.2M" in main and "Output" not in Document(main).text
+    assert "2.15B" in main and "Output" not in Document(main).text
     assert "replies in priced scope" not in Document(main).text
-    assert "2.15B" not in main and "8.72M" not in main and "Unpriced" not in main
-    assert "Model price known: 11 of 6,118" in visible
+    assert "1.2M" not in main and "8.72M" not in main and "Unpriced" not in main
+    assert "Reported-model price matched: 11 of 6,118" in visible
     assert 'title="2,145,853,715 tokens"' in source
     assert "not generated or unique text" in visible
 
@@ -208,24 +221,26 @@ def test_exact_user_model_counters_and_cost_share_the_primary_29_reply_cohort():
              "unpriced_tokens": unpriced, "unpriced_token_state": "complete",
              "estimated_usd": 2.499097, "cost_state": "partial", "models": [model],
              "priced_samples": 29, "usage_samples": 6136, "usage_eligible_messages": 6136}
+    reference(entry)
     for language in ("en", "zh"):
         source = shown({**ranking(), "entries": [entry]}, language)
         main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', source, flags=re.S)[1]
         details = re.search(r'<tr class="usage-ranking-detail">(.*?)</tr>', source, flags=re.S)[1]
         text = Document(main).text
-        assert "4.59M" in text and "$2.50" in text
+        assert "2.15B" in text and "$2.50" not in text
+        assert "4.59M" in Document(details).text and "$2.50" in Document(details).text
         assert "24.87K" not in text
         assert "Output" not in text and "replies in priced scope" not in text
         assert "输出" not in text and "个回复" not in text
         assert "24.87K" in Document(details).text
         replies = "29 replies" if language == "en" else "29 个回复"
         assert replies in Document(details).text
-        assert "2.15B" not in main and "2,150,446,641" not in main and "2,145,853,715" not in main
+        assert "2.15B" in main and "2,150,446,641" in main and "2,145,853,715" not in main
         assert "2.15B" in Document(details).text
         for field in ("input_tokens", "output_tokens", "cache_read_input_tokens",
                       "cache_creation_input_tokens"):
             assert f'title="{priced[field]:,}' in details
-        assert 'title="4,592,926' in main
+        assert 'title="2,150,446,641' in main
         assert 'title="2,150,446,641' in details and 'title="2,145,853,715' in details
 
 
@@ -235,20 +250,20 @@ def test_unpriced_user_shows_recorded_usage_and_status_instead_of_an_empty_row()
     main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', shown(report), flags=re.S)[1]
     assert "1.23K" in main and "$0.00" not in main
     assert "Output" not in Document(main).text
-    assert "Not ranked yet" in Document(main).text
-    assert "Recorded · unpriced" in Document(main).text
-    assert "Pricing unavailable" in Document(main).text
+    assert "Not ranked yet" not in Document(main).text
+    assert "Recorded tokens" in Document(main).text
+    assert "Opus 5.5 reference" in Document(main).text
     assert "Member ••01" in Document(main).text
     assert "—" not in Document(main).text
 
 
-def test_matching_priced_scope_is_required_to_publish_any_main_estimate():
+def test_matching_reference_scope_is_required_to_publish_any_main_estimate():
     report = ranking()
     report["entries"] = [report["entries"][0]]
     for scope in (None, {}, {"total_tokens": True}, {"total_tokens": -1}, {"total_tokens": "1234"}):
-        report["entries"][0]["priced_tokens"] = scope
+        report["entries"][0]["reference_tokens"] = scope
         cell = re.search(r'<td class="usage-estimate">(.*?)</td>', shown(report), flags=re.S)[1]
-        assert "$1.00" not in cell and "Pricing unavailable" in Document(cell).text
+        assert "$1.00" not in cell and "Reference unavailable" in Document(cell).text
         assert "priced tokens" not in Document(cell).text
 
 
@@ -256,9 +271,12 @@ def test_live_shaped_legacy_user_is_visible_with_masked_member_code_in_both_lang
     report = ranking()
     entry = report["entries"][1]
     entry.update(member_code="28456317", usage_samples=27, usage_eligible_messages=27)
-    entry["tokens"] = {**entry["tokens"], "total_tokens": 10_948_800}
+    entry["tokens"] = {"input_tokens": 1000, "output_tokens": 200,
+                       "cache_creation_input_tokens": 4,
+                       "cache_read_input_tokens": 10_947_596, "total_tokens": 10_948_800}
     entry["unpriced_tokens"] = entry["tokens"]
-    for language, status in (("en", "Not ranked yet"), ("zh", "暂未排名")):
+    reference(entry)
+    for language, status in (("en", "Opus 5.5 reference"), ("zh", "Opus 5.5 参考折算")):
         main = re.findall(r'<tr class="usage-ranking-row">(.*?)</tr>',
                           shown(report, language), flags=re.S)[1]
         text = Document(main).text

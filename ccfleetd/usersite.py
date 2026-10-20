@@ -97,6 +97,7 @@ from .store import (
     StoreError,
     SubscriptionReleaseBlocked,
 )
+from .usage import REFERENCE_MODEL, REFERENCE_RATES
 
 # What a page may say after an action. Chosen by a fixed code, never text taken
 # from the request: a message a link could write is a message a stranger could
@@ -946,13 +947,43 @@ def _public_usage_badge(reading: Mapping[str, Any]) -> str:
             if reading.get("cost_state") == "partial" else '')
 
 
+def _public_usage_reference(reading: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """A common conversion must cover exactly the displayed observed categories."""
+    tokens = reading.get("reference_tokens")
+    if (reading.get("reference_model") != REFERENCE_MODEL or not isinstance(tokens, Mapping)
+            or tokens != reading.get("tokens")
+            or not all(field in tokens for field in REFERENCE_RATES)
+            or _public_usage_count(tokens.get("total_tokens")) is None
+            or not _public_usage_count(reading.get("usage_samples"))
+            or reading.get("reference_cost_state") != reading.get("token_state")):
+        return None
+    for field in REFERENCE_RATES:
+        count = tokens.get(field)
+        if count is None and field in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            continue
+        if _public_usage_count(count) is None:
+            return None
+    if tokens["total_tokens"] != sum(tokens[field] or 0 for field in REFERENCE_RATES):
+        return None
+    quote = {"estimated_usd": reading.get("reference_estimated_usd"),
+             "cost_state": reading.get("reference_cost_state")}
+    if (not _public_usage_price_known(quote)
+            or quote["cost_state"] == "complete"
+            and any(tokens[field] is None for field in REFERENCE_RATES)):
+        return None
+    expected = math.fsum((tokens[field] or 0) * rate
+                         for field, rate in REFERENCE_RATES.items()) / 1_000_000
+    return (quote if math.isclose(quote["estimated_usd"], expected,
+                                  rel_tol=1e-12, abs_tol=1e-12) else None)
+
+
 def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
     measured = _public_usage_number(reading.get("usage_samples"))
     eligible = _public_usage_number(reading.get("usage_eligible_messages"))
     priced = _public_usage_number(reading.get("priced_samples"))
     return label(f"Measured: {measured} of {eligible} replies · "
-                 f"Model price known: {priced} of {measured}",
-                 f"已观测回复：{measured}／{eligible} · 模型价格已知：{priced}／{measured}",
+                 f"Reported-model price matched: {priced} of {measured}",
+                 f"已观测回复：{measured}／{eligible} · 上报模型计价已匹配：{priced}／{measured}",
                  inline=True)
 
 
@@ -993,14 +1024,24 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                             f"读取 {read_text}／{sample_text} · "
                             f"写入 {write_text}／{sample_text}", inline=True)
                     + '</small></div>')
-    detail = ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
+    priced = reading.get("priced_tokens")
+    priced = priced if isinstance(priced, Mapping) else {}
+    matched = (_public_usage_price_known(reading)
+               and _public_usage_count(priced.get("total_tokens")) is not None)
+    detail = ('<p><strong>' + label("Reported-model API estimate: ", "上报模型 API 估值：",
+                                   inline=True) + '</strong>' + _public_usage_value(reading)
+              + _public_usage_badge(reading) + ' · ' + label("for ", "对应 ", inline=True)
+              + _public_usage_token(priced.get("total_tokens"))
+              + label(" priced tokens", " 已计价 Token", inline=True) + '</p>' if matched else '')
+    detail += ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
               + '</p><div class="usage-models">' + ''.join(priced_rows) + '</div>'
               if priced_rows else '<p>' + label(
-                  "No priced model observations yet; older aggregate tokens have no matched "
-                  "model price.",
-                  "暂无可计价的模型观测；旧汇总 Token 没有匹配的模型价格。", inline=True) + '</p>')
-    outside = ('<p>' + label("Unpriced model observations (outside ranking)",
-                            "未计价模型观测（不参与排行）", inline=True)
+                  "Reported-model pricing has no matched observations yet. The ranking still "
+                  "converts recorded tokens at the common Opus 5.5 reference rates.",
+                  "上报模型计价暂无匹配观测；排行仍按统一的 Opus 5.5 参考价格折算已记录 Token。",
+                  inline=True) + '</p>')
+    outside = ('<p>' + label("Model observations without an reported-model price",
+                            "暂无上报模型价格的观测", inline=True)
                + '</p><div class="usage-models">' + ''.join(unpriced_rows) + '</div>'
                if unpriced_rows else '')
     totals = reading.get("tokens")
@@ -1014,15 +1055,18 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                            ("cache_read_input_tokens", "Cache read", "缓存读取"),
                            ("cache_creation_input_tokens", "Cache write", "缓存写入")))
     aggregate = '<div class="usage-model"><span class="usage-model-name">' + label(
-        "Broader reported usage (includes older/unpriced)",
-        "更广的上报范围（含旧数据／未计价用量）",
+        "Recorded usage used for the common reference",
+        "统一参考折算使用的已记录用量",
         inline=True)
     aggregate += '</span><p>' + label("Reported total ", "上报总量 ", inline=True)
     aggregate += _public_usage_token(totals.get("total_tokens")) + ' · ' + label(
-        "Unpriced ", "未计价 ", inline=True) + _public_usage_token(unpriced.get("total_tokens"))
+        "Without matched model price ", "未匹配上报模型价格 ", inline=True)
+    aggregate += _public_usage_token(unpriced.get("total_tokens"))
     aggregate += '</p><small>' + label(
-        "Separate scope from the ranking tokens and API estimate.",
-        "此范围与排行 Token 及 API 估值不同。", inline=True) + '</small>'
+        "The ranking converts these recorded categories at one reference price. Reported-model "
+        "estimates above cover only matched model observations.",
+        "排行按同一参考价格折算这些已记录分类；上方上报模型估值只覆盖已匹配的模型观测。",
+        inline=True) + '</small>'
     aggregate += '<dl class="usage-token-grid">' + reported + '</dl></div>'
     return ('<details class="usage-model-detail"><summary>'
             + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
@@ -1034,29 +1078,37 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
     source = '<details class="usage-method"><summary>' + label(
         "Method, coverage & prices", "统计范围与价格", inline=True) + '</summary>'
     source += '<p>' + _public_usage_coverage(report) + '</p><p>' + label(
-        "Tokens are reported input, output and cache-read/write subtotals. Missing coverage is "
-        "unknown, not zero. Model details and estimates use new model-aware observations; "
-        "older aggregate tokens can remain unpriced. Unknown values are not ranked. "
-        "Names use partly masked nicknames or a masked member code; this is not anonymity.",
-        "Token 是已报告的输入、输出和缓存读取／写入小计。缺失的覆盖表示未知，不是零。模型明细"
-        "与估值使用新的带模型信息观测；旧汇总 Token 可能仍未计价。未知估值不参与排名。名称"
-        "使用部分遮盖的昵称或用户编号，这不等于匿名。", inline=True) + '</p><p>' + label(
-        "API value is an estimate, not a Claude Pro/Max bill, amount paid or quota balance. "
-        "Pricing assumes standard global API rates and 5-minute cache writes; actual cache "
-        "TTL, context and service tiers can change API pricing. Haiku 5.5 remains unpriced "
-        "because its per-request prompt tier is absent. Estimates follow reported model "
-        "labels; these statistics retain no raw replies, so older model/fallback attribution "
-        "cannot be verified or reliably repriced from these aggregates alone. "
-        "No older model detail is backfilled. "
-        "Reading this page makes no model call. ",
-        "API 等价值是估算，不是 Claude Pro/Max 账单、实际付款或剩余额度。估值假设采用标准全球 "
-        "API 价格及 5 分钟缓存写入价格；实际缓存有效期、上下文和服务档位可能影响 API 价格。"
-        "汇总里没有 Haiku 5.5 每次请求对应的提示长度计价档位，因此不对它估值。不补填旧模型"
-        "明细。估值依据上报的模型标签；统计不保留原始回复，因此不能仅凭旧汇总核验当时的"
-        "模型或回退路线，也不能可靠地重新计价。阅读本页不会调用模型。", inline=True)
+        "Think of one price list applied to everyone's recorded tokens. The ranking uses "
+        "Opus 5.5 standard global API rates per million tokens: input $4, output $20, "
+        "cache write $5 (5 minutes), cache read $0.20. Each category is counted once. "
+        "This common conversion also works when the original model is missing; it does not "
+        "claim that Opus served those replies. Missing replies or cache fields make the "
+        "observed subtotal partial; missing counts are not filled with zero. No measurement "
+        "means no numeric rank. Names use partly masked nicknames or a masked member code; "
+        "this is not anonymity.",
+        "可以理解为：给每个人已记录的 Token 套用同一张价目表。排行统一采用 Opus 5.5 标准全球 "
+        "API 参考价格，每百万 Token：输入 $4、输出 $20、缓存写入 $5（5 分钟）、缓存读取 "
+        "$0.20，每类只计一次。即使缺少原模型信息，也能统一折算；这不代表这些回复由 Opus "
+        "生成。缺少回复或缓存字段时，显示已观测到的部分小计，不把缺失数量补成零。没有用量"
+        "观测时不显示数字排名。名称使用部分遮盖的昵称或用户编号，这不等于匿名。",
+        inline=True) + '</p><p>' + label(
+        "The reference value is not a Claude Pro/Max bill, an amount paid, a quota balance, "
+        "unlimited usage or guaranteed savings. Reported-model API estimates stay in the "
+        "details and use only matched model observations. Model-specific estimates use the "
+        "model names reported by the agent. "
+        "Haiku 5.5 has no reported-model "
+        "estimate because its per-request prompt tier is absent. Actual cache TTL, context "
+        "and service tiers can change API pricing. These statistics retain no raw replies "
+        "and do not reconstruct older model identities. Reading this page makes no model call. ",
+        "参考折算值不是 Claude Pro/Max 账单、实际付款、剩余额度、无限用量，也不保证节省了这些"
+        "费用。按上报模型计价的 API 估值保留在明细中，只使用已匹配模型的观测；模型名称由代理"
+        "上报。由于缺少每次请求的"
+        "提示长度计价档位，Haiku 5.5 暂无上报模型估值。实际缓存有效期、上下文和服务档位"
+        "可能影响 API 价格。统计不保留原始回复，也不重建旧模型身份。阅读本页不会调用模型。",
+        inline=True)
     source += '<a href="/privacy">' + label("Public ranking privacy", "公开排行隐私说明",
                                           inline=True) + '</a>.</p>'
-    pricing_ = report.get("pricing")
+    pricing_ = report.get("reference_pricing")
     if isinstance(pricing_, Mapping):
         reference_day = pricing_.get("date")
         if (isinstance(reference_day, str)
@@ -1075,7 +1127,7 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
 
 
 def public_usage_panel(ranking: Any) -> str:
-    """Pair estimates only with their matching tokens; never price the legacy total."""
+    """Pair a common reference value with its full matching observed token scope."""
     report = ranking if isinstance(ranking, Mapping) else {}
     entries = report.get("entries") if report.get("state") in ("partial", "ready") else []
     rows = []
@@ -1091,32 +1143,30 @@ def public_usage_panel(ranking: Any) -> str:
                   and re.fullmatch(r"[a-z0-9-]{0,2}\*{1,32}[a-z0-9-]{0,2}", handle)
                   else member)
         rank = _public_usage_count(entry.get("rank"))
-        priced = entry.get("priced_tokens")
-        priced = priced if isinstance(priced, Mapping) else {}
-        known = (_public_usage_price_known(entry)
-                 and _public_usage_count(priced.get("total_tokens")) is not None)
+        reference = _public_usage_reference(entry)
+        known = reference is not None
         rank_text = (str(rank) if known and rank is not None and 1 <= rank <= 50
                      else label("Not ranked yet", "暂未排名", inline=True))
-        value = (_public_usage_value(entry) if known else label(
-            "Pricing unavailable", "暂无计价信息", inline=True))
         recorded = entry.get("tokens")
         recorded = recorded if isinstance(recorded, Mapping) else {}
         recorded_known = _public_usage_count(recorded.get("total_tokens")) is not None
+        value = (_public_usage_value(reference) if known else
+                 label("Reference unavailable", "暂无参考折算", inline=True) if recorded_known else
+                 label("No measurement yet", "暂无观测", inline=True))
         if known:
-            scope = (label("for ", "对应 ", inline=True)
-                     + _public_usage_token(priced.get("total_tokens"))
-                     + label(" priced tokens", " 已计价 Token", inline=True))
-            token_scope = label("Priced tokens", "已计价 Token", inline=True)
+            scope = label("Opus 5.5 reference · same rates for everyone",
+                          "Opus 5.5 参考折算 · 所有人采用同一价格", inline=True)
+            token_scope = label("Recorded tokens", "已记录 Token", inline=True)
         elif recorded_known:
-            scope = label("Recorded usage is shown; model pricing is unavailable.",
-                          "已展示实际用量，暂缺模型计价信息。", inline=True)
-            token_scope = label("Recorded · unpriced", "已记录 · 未计价", inline=True)
+            scope = label("A matching reference conversion is not available yet.",
+                          "暂缺与这些用量匹配的参考折算。", inline=True)
+            token_scope = label("Recorded tokens", "已记录 Token", inline=True)
         else:
             scope = label("No token measurement is available yet.",
                           "暂缺 Token 用量观测。", inline=True)
             token_scope = label("No measurement yet", "暂无观测", inline=True)
-        badge = _public_usage_badge(entry) if known else ''
-        total = priced.get("total_tokens") if known else recorded.get("total_tokens")
+        badge = _public_usage_badge(reference) if known else ''
+        total = recorded.get("total_tokens")
         amount = (_public_usage_token(total) if _public_usage_count(total) is not None else
                   label("Usage unavailable", "暂无用量信息", inline=True))
         rows.append('<tr class="usage-ranking-row"><td class="usage-rank">' + rank_text
@@ -1134,14 +1184,14 @@ def public_usage_panel(ranking: Any) -> str:
               'aria-labelledby="usage-ranking-title"><h2 id="usage-ranking-title">')
     source += label("Measured usage ranking", "观测用量排行", inline=True) + '</h2>'
     source += '<p class="usage-ranking-lead">' + label(
-        "Last 7 UTC days · ranked by estimated API value",
-        "最近 7 个 UTC 日期 · 按估算 API 等价值排名",
+        "Last 7 UTC days · ranked by one common Opus 5.5 API reference",
+        "最近 7 个 UTC 日期 · 统一按 Opus 5.5 API 参考折算排名",
         inline=True) + '</p><p class="usage-scope">' + label(
-        "Each row represents a user with recorded activity. Estimates rank priced usage; "
-        "users without model pricing still show their recorded tokens, without a rank. "
-        "Each dollar estimate names the tokens it covers.",
-        "每一行都来自有实际活动的用户。已计价用量参与排名；暂缺模型价格的用户仍展示已记录 "
-        "Token，并标为暂未排名。每项美元估值都注明对应的 Token 数量。",
+        "Each row is a real user with recorded activity. We apply the same reference prices "
+        "to everyone's recorded input, output and cache tokens, even when the original model "
+        "was not recorded. Dollar values cover the tokens shown in the same row.",
+        "每一行都来自有实际活动的真实用户。我们用同一参考价格折算每个人已记录的输入、输出"
+        "和缓存 Token，即使没有记录原模型，也能参与排行。美元折算值对应同一行展示的用量。",
         inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
@@ -1152,7 +1202,7 @@ def public_usage_panel(ranking: Any) -> str:
                'aria-labelledby="usage-ranking-title" tabindex="0"><table><thead><tr>'
                + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>' for en, zh in (
                    ("Rank", "排名"), ("User", "用户"), ("Tokens", "Token 用量"),
-                   ("API estimate · USD", "API 估值 · 美元")))
+                   ("Opus 5.5 equivalent · USD", "Opus 5.5 折算 · 美元")))
                + '</tr></thead><tbody>' + (''.join(rows) if rows else empty)
                + '</tbody></table></div><p class="usage-units">' + label(
                    "K = thousand · M = million · B = billion. Exact counts on hover.",
@@ -1544,7 +1594,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-19"
+PRIVACY_UPDATED = "2026-10-20"
 
 
 def _span(seconds: int) -> str:
@@ -2109,7 +2159,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             (
                 'The <a href="/#usage-ranking">homepage ranking</a> is visible to everyone. '
                 "It publishes each contributing user's measured token totals, a compact "
-                "model breakdown and an estimated standard API-equivalent USD value over "
+                "model breakdown and a common Opus 5.5 API-equivalent USD value over "
                 "seven UTC calendar days. Names use a partly masked user-chosen nickname "
                 "when available; missing or fully masked short nicknames use a masked member "
                 "code. The code is a purpose-specific pseudonym; "
@@ -2119,7 +2169,8 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "someone. The ranking can include one contributing user.",
                 '<a href="/#usage-ranking">首页用量排行</a>对所有人公开，展示每位参与用户在七个 '
                 "UTC "
-                "日期内观测到的 Token 总量、简要模型明细，以及按标准 API 价格估算的美元价值。"
+                "日期内观测到的 Token 总量、简要模型明细，以及统一按 Opus 5.5 API 参考价格折算的"
+                "美元价值。"
                 "名称优先使用部分遮盖的自选昵称；较短且已完全遮盖的昵称或未设置昵称的用户，"
                 "显示遮盖的用户编号。编号是仅用于此排行的化名，网站签名密钥轮换后会变化。"
                 "公开名称绝不展示完整邮箱或账号 ID。遮盖不等于匿名：昵称或活动模式"
@@ -2127,42 +2178,45 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             ),
             (
                 "The ranking uses validated usage totals from current, fresh, account-bound "
-                "slot reports. Existing aggregate tokens can be shown without model prices; "
-                "model details and cost estimates use only new model-aware observations. "
+                "slot reports. All measured token categories use the same reference rates, "
+                "including existing aggregates without a known model. This conversion does "
+                "not identify the model that served a reply. Reported-model details and their "
+                "separate estimates use only matched model observations. Model names are reported "
+                "by the agent. "
                 "Eligible native, bridge and gateway "
                 "model calls are counted at the node once. It is not a complete record of "
                 "all Claude activity. Missing, partial, oversized or older observations "
                 "are not reconstructed or treated as zero. Measurement and pricing "
-                "coverage are shown, and unknown or unpriced usage stays unknown. No "
+                "coverage are shown. Missing reported-model prices stay unknown. No "
                 "prompts, response content, raw errors, hostnames, IP addresses, login "
                 "accounts or individual request timestamps appear in the ranking.",
-                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。已有汇总 Token 可以"
-                "在没有模型价格时展示；模型明细和估值只使用新的带模型信息观测。符合条件的"
+                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。所有已观测 Token "
+                "分类均采用同一参考价格，包括缺少模型信息的已有汇总；折算不代表确定了生成回复"
+                "的模型。上报模型明细与单独估值只使用已匹配的模型观测，模型名称由代理上报。符合条件的"
                 "原生、桥接和网关模型调用在节点上只计一次，不代表全部 Claude 活动的完整记录。"
                 "缺失、不完整、过大或较旧的观测不重建，也不当作零。页面注明观测与计价覆盖范围；"
-                "未知或无法计价的用量仍表示未知。排行不展示提示词、回复内容、原始错误、主机名、"
+                "缺失的上报模型价格仍表示未知。排行不展示提示词、回复内容、原始错误、主机名、"
                 "IP 地址、登录账号或单条请求时间戳。",
             ),
             (
-                "API-equivalent value is an estimate using the listed standard model "
-                "prices and cache-pricing assumptions. It is not a Claude Pro/Max "
-                "subscription bill, an amount paid, a quota balance or a promise of "
-                "savings. Partial pricing covers only observations with enough known "
-                "model and cache information; it does not assign $0 to the rest. The "
-                "primary ranking token total and estimate use the "
-                "same priceable cohort; broader reported totals and older/unpriced usage "
-                "appear only in expanded details under a separate scope. Output and reply "
-                "counts remain in the detailed breakdowns. "
+                "The ranking uses Opus 5.5 standard global reference rates per million "
+                "tokens: input $4, output $20, five-minute cache writes $5 and cache reads "
+                "$0.20. It is not a Claude Pro/Max subscription bill, an amount paid, a "
+                "quota balance, unlimited usage or a promise of savings. The primary token "
+                "total and reference value cover the same measured categories. Missing "
+                "replies or cache fields make the subtotal partial, never fabricated zero. "
+                "Reported-model estimates appear separately in expanded details and cover "
+                "only their matching priced tokens. Output and reply counts remain in the "
+                "detailed breakdowns. "
                 "Processed totals include cached context counted again per request; "
-                "they are not generated or unique text. Estimates follow reported model "
-                "labels, and these aggregates alone cannot reliably reprice older usage.",
-                "API 等价值按页面列出的标准模型价格与缓存计价假设估算，不是 Claude Pro/Max "
-                "订阅账单、实际付款、剩余额度，也不保证节省了这些费用。部分估值只覆盖模型与缓存"
-                "信息足够明确的观测，其余部分不按 $0 计算。排行主表的 Token 总量与估值使用同一"
-                "可计价批次；更广的上报总量及旧数据／未计价用量只在展开明细中以不同范围展示。"
+                "they are not generated or unique text. No older model identity is inferred.",
+                "排行统一采用 Opus 5.5 标准全球参考价格，每百万 Token：输入 $4、输出 $20、"
+                "五分钟缓存写入 $5、缓存读取 $0.20。这不是 Claude Pro/Max 订阅账单、实际付款、"
+                "剩余额度、无限用量，也不保证节省了这些费用。排行主表的 Token 总量与参考折算值"
+                "覆盖相同的已观测分类；缺少回复或缓存字段时，标注部分小计，不伪造为零。实际"
+                "模型估值在展开明细中单独展示，只覆盖对应的已计价 Token。"
                 "输出与回复数量保留在明细中。处理总量包含每次请求重复计数的"
-                "缓存上下文，不等于生成或独有的文本。估值依据上报的模型标签，不能仅凭旧汇总"
-                "可靠地重新计价。",
+                "缓存上下文，不等于生成或独有的文本。不推断旧模型身份。",
             ),
         ],
     )

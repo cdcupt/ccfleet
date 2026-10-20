@@ -86,7 +86,7 @@ def test_new_model_coverage_never_assigns_legacy_tokens_or_prices_to_the_observe
     assert row["usage_samples"] == 3 and row["model_samples"] == row["priced_samples"] == 1
     assert row["unpriced_samples"] == 2 and row["cost_state"] == "partial"
     legacy = public(PublicFleet([reading(3, labeled=False)]))["entries"][0]
-    assert legacy["estimated_usd"] is None and legacy["rank"] is None
+    assert legacy["estimated_usd"] is None and legacy["rank"] is not None
     assert legacy["models"] == [] and legacy["unpriced_samples"] == 3
 
 
@@ -95,7 +95,7 @@ def test_unlabeled_response_keeps_observed_usage_but_never_a_fake_zero_cost():
     raw["model_usage"]["models"][0]["model"] = "other"
     row = public(PublicFleet([raw]))["entries"][0]
     assert row["tokens"]["total_tokens"] == 370
-    assert row["estimated_usd"] is None and row["rank"] is None
+    assert row["estimated_usd"] is None and row["rank"] == 1
     assert row["cost_state"] == "unknown" and row["unpriced_samples"] == 1
 
 
