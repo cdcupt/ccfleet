@@ -237,12 +237,12 @@ def test_public_dto_has_no_raw_identity_or_private_payload_and_does_not_mutate()
     before = copy.deepcopy((fleet.slots, fleet.beats))
     result = measure(fleet)
     raw = json.dumps(result, allow_nan=False)
-    for secret in (SECRET, BOUND, "holder-", "node-", "slot-id-", "alice", "email", "bound_fp",
+    for secret in (SECRET, BOUND, "holder-", "node-", "slot-id-", "alice", "bound_fp",
                    "observed_at", "account_switched_at", "unix_user", "access_host"):
         assert secret not in raw
     assert (fleet.slots, fleet.beats) == before
     entry = result["entries"][0]
-    assert set(entry) == {"rank", "masked_handle", "member_code", *usage.COUNTERS,
+    assert set(entry) == {"rank", "masked_handle", "masked_email", "member_code", *usage.COUNTERS,
                           "unpriced_samples", "tokens",
                           "priced_tokens", "priced_token_state", "unpriced_tokens",
                           "unpriced_token_state",

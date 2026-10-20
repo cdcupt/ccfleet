@@ -7,7 +7,7 @@ every action checks the slot's holder again rather than trusting the page it
 came from.
 
 The public homepage ranking renders a separate allowlisted numeric summary with
-partly masked chosen nicknames. It never reads another account's private page.
+masked email fragments or chosen nicknames. It never reads another account's private page.
 
 Signing in to *us* is Google's (see oauth.py and sessions.py). Signing in to
 *Claude* happens on the slot, through Claude Code's own login: this page
@@ -1084,13 +1084,16 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
         "This common conversion also works when the original model is missing; it does not "
         "claim that Opus served those replies. Missing replies or cache fields make the "
         "observed subtotal partial; missing counts are not filled with zero. No measurement "
-        "means no numeric rank. Names use partly masked nicknames or a masked member code; "
-        "this is not anonymity.",
+        "means no numeric rank. Names prefer a masked email local-part fragment, such as "
+        "cd•••pt, without its domain; unsafe or short addresses use a partly masked nickname "
+        "or member code. These fragments are public; this is not anonymity.",
         "可以理解为：给每个人已记录的 Token 套用同一张价目表。排行统一采用 Opus 5.5 标准全球 "
         "API 参考价格，每百万 Token：输入 $4、输出 $20、缓存写入 $5（5 分钟）、缓存读取 "
         "$0.20，每类只计一次。即使缺少原模型信息，也能统一折算；这不代表这些回复由 Opus "
         "生成。缺少回复或缓存字段时，显示已观测到的部分小计，不把缺失数量补成零。没有用量"
-        "观测时不显示数字排名。名称使用部分遮盖的昵称或用户编号，这不等于匿名。",
+        "观测时不显示数字排名。名称优先展示邮箱用户名的局部遮盖片段，例如 cd•••pt，"
+        "不展示邮箱域名；不适合安全遮盖的短邮箱等情况使用遮盖昵称或用户编号。"
+        "这些片段会公开，这不等于匿名。",
         inline=True) + '</p><p>' + label(
         "The reference value is not a Claude Pro/Max bill, an amount paid, a quota balance, "
         "unlimited usage or guaranteed savings. Reported-model API estimates stay in the "
@@ -1135,6 +1138,7 @@ def public_usage_panel(ranking: Any) -> str:
         if not isinstance(entry, Mapping):
             continue
         handle = entry.get("masked_handle")
+        email = entry.get("masked_email")
         code = entry.get("member_code")
         code = code if isinstance(code, str) and re.fullmatch(r"[0-9]{8}", code) else None
         member = label("Member ", "用户 ", inline=True) + "••" + (code or f"{position:02d}")
@@ -1142,6 +1146,10 @@ def public_usage_panel(ranking: Any) -> str:
                   and handle.strip("*")
                   and re.fullmatch(r"[a-z0-9-]{0,2}\*{1,32}[a-z0-9-]{0,2}", handle)
                   else member)
+        if (type(email) is str and re.fullmatch(
+                r"(?:[A-Za-z0-9._%+-]{2}•••[A-Za-z0-9._%+-]{2}|"
+                r"[A-Za-z0-9._%+-]•••[A-Za-z0-9._%+-])", email)):
+            masked = escape(email)
         rank = _public_usage_count(entry.get("rank"))
         reference = _public_usage_reference(entry)
         known = reference is not None
@@ -2160,20 +2168,22 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 'The <a href="/#usage-ranking">homepage ranking</a> is visible to everyone. '
                 "It publishes each contributing user's measured token totals, a compact "
                 "model breakdown and a common Opus 5.5 API-equivalent USD value over "
-                "seven UTC calendar days. Names use a partly masked user-chosen nickname "
-                "when available; missing or fully masked short nicknames use a masked member "
-                "code. The code is a purpose-specific pseudonym; "
+                "seven UTC calendar days. Names prefer a public masked fragment of the email "
+                "local part, for example cd•••pt. Email domains and complete local parts are "
+                "not included. Unsupported or short addresses fall back to a partly masked "
+                "nickname or member code. The code is a purpose-specific pseudonym; "
                 "rotating the website's signing secret changes it. Full email addresses and "
                 "account IDs are never published as names. "
-                "Masking is not anonymity: a nickname or activity pattern may still identify "
-                "someone. The ranking can include one contributing user.",
+                "Masking is not anonymity: email fragments, a nickname or activity pattern "
+                "may still identify someone. The ranking can include one contributing user.",
                 '<a href="/#usage-ranking">首页用量排行</a>对所有人公开，展示每位参与用户在七个 '
                 "UTC "
                 "日期内观测到的 Token 总量、简要模型明细，以及统一按 Opus 5.5 API 参考价格折算的"
                 "美元价值。"
-                "名称优先使用部分遮盖的自选昵称；较短且已完全遮盖的昵称或未设置昵称的用户，"
-                "显示遮盖的用户编号。编号是仅用于此排行的化名，网站签名密钥轮换后会变化。"
-                "公开名称绝不展示完整邮箱或账号 ID。遮盖不等于匿名：昵称或活动模式"
+                "名称优先公开邮箱用户名的局部遮盖片段，例如 cd•••pt；不展示域名或完整用户名。"
+                "短邮箱或不适合安全遮盖的地址，使用遮盖昵称或用户编号。"
+                "编号是仅用于此排行的化名，网站签名密钥轮换后会变化。"
+                "公开名称绝不展示完整邮箱或账号 ID。遮盖不等于匿名：邮箱片段、昵称或活动模式"
                 "仍可能让人识别出某位用户。排行可以包含仅一位参与用户。",
             ),
             (
