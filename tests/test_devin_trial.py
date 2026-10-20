@@ -39,7 +39,16 @@ def started(ledger, lease, account=ALICE, seconds=10, request=b"{}"):
 
 
 def finished(ledger, lease, step, account=ALICE):
-    assert ledger.finish_step(account, lease, step, cleanup_confirmed=True).code == "step_finished"
+    assert (
+        ledger.finish_step(
+            account,
+            lease,
+            step,
+            cleanup_confirmed=True,
+            usage=trial.VerifiedUsage(0, complete=True),
+        ).code
+        == "step_finished"
+    )
 
 
 def test_default_instance_cannot_admit_or_run_even_with_an_existing_lease(scene):
@@ -51,12 +60,19 @@ def test_default_instance_cannot_admit_or_run_even_with_an_existing_lease(scene)
     assert disabled.close(ALICE, lease, cleanup_confirmed=True).code == "trial_closed"
 
 
-@pytest.mark.parametrize("account", [
-    None, "alice", {"account_id": "alice", "email_verified": True},
-    trial.VerifiedAccount("alice"), trial.VerifiedAccount("alice", email_verified=1),
-    trial.VerifiedAccount("alice@example.com", email_verified=True),
-    trial.VerifiedAccount("", email_verified=True), trial.VerifiedAccount("x" * 129, True),
-])
+@pytest.mark.parametrize(
+    "account",
+    [
+        None,
+        "alice",
+        {"account_id": "alice", "email_verified": True},
+        trial.VerifiedAccount("alice"),
+        trial.VerifiedAccount("alice", email_verified=1),
+        trial.VerifiedAccount("alice@example.com", email_verified=True),
+        trial.VerifiedAccount("", email_verified=True),
+        trial.VerifiedAccount("x" * 129, True),
+    ],
+)
 def test_only_explicit_server_verified_account_identity_is_admitted(scene, account):
     ledger, connection, _ = scene
     assert ledger.admit(account).code == "verified_account_required"
@@ -73,7 +89,9 @@ def test_secret_is_hashed_no_conversation_is_stored_and_history_namespace_is_uni
     payload = b"private fake prompt never stored"
     step = started(ledger, first, request=payload)
     assert step.history_namespace == first.history_namespace
-    assert payload.decode() not in repr(connection.execute("SELECT * FROM devin_trial_sessions").fetchall())
+    assert payload.decode() not in repr(
+        connection.execute("SELECT * FROM devin_trial_sessions").fetchall()
+    )
     finished(ledger, first, step)
     ledger.close(ALICE, first, cleanup_confirmed=True)
     second = admitted(ledger, BOB)
@@ -91,14 +109,14 @@ def test_busy_rejects_instantly_without_burning_other_accounts_attempt(scene):
     assert ledger.admit(BOB).code == "admitted"
 
 
-def test_one_attempt_remains_used_after_cancel_close_and_reopen(scene):
+def test_closed_account_can_return_without_erasing_its_daily_history(scene):
     ledger, connection, now = scene
     lease = admitted(ledger)
     assert ledger.cancel(ALICE, lease).code == "trial_cancelled"
     assert ledger.start_step(ALICE, lease, request=b"{}").code == "trial_closed"
     assert ledger.close(ALICE, lease, cleanup_confirmed=True).code == "trial_closed"
     reopened = trial.TrialLedger(connection, enabled=True, clock=lambda: now[0])
-    assert reopened.admit(ALICE).code == "trial_already_used"
+    assert reopened.admit(ALICE).code == "admitted"
 
 
 @pytest.mark.parametrize("seconds", [0, -1, 601, True, 1.5, "600"])
@@ -107,13 +125,13 @@ def test_ten_minute_lease_is_a_hard_admission_limit(scene, seconds):
     assert ledger.admit(ALICE, lease_seconds=seconds).code == "invalid_lease_seconds"
 
 
-def test_unused_lease_expires_at_exact_deadline_and_is_still_a_consumed_trial(scene):
+def test_unused_lease_expiry_allows_same_day_return_with_bounded_admissions(scene):
     ledger, _, now = scene
     lease = admitted(ledger)
     assert lease.expires_at == now[0] + 600
     now[0] = lease.expires_at
     assert ledger.start_step(ALICE, lease, request=b"{}").code == "trial_closed"
-    assert ledger.admit(ALICE).code == "trial_already_used"
+    assert ledger.allowance(ALICE).reported_tokens == 0
     assert ledger.admit(BOB).code == "admitted"
 
 
@@ -144,7 +162,9 @@ def test_total_runtime_is_reserved_before_execution_and_never_refunded(scene):
     for _ in range(2):
         step = started(ledger, lease, seconds=60)
         finished(ledger, lease, step)
-    assert connection.execute("SELECT reserved_seconds FROM devin_trial_sessions").fetchone()[0] == 120
+    assert (
+        connection.execute("SELECT reserved_seconds FROM devin_trial_sessions").fetchone()[0] == 120
+    )
     assert ledger.start_step(ALICE, lease, request=b"{}", seconds=1).code == "trial_limit_reached"
     assert ledger.admit(BOB).code == "trial_busy", "final history cleanup still required"
     ledger.close(ALICE, lease, cleanup_confirmed=True)
@@ -157,7 +177,10 @@ def test_partial_remaining_runtime_can_only_be_reserved_within_the_budget(scene)
     for seconds in (60, 40):
         step = started(ledger, lease, seconds=seconds)
         finished(ledger, lease, step)
-    assert ledger.start_step(ALICE, lease, request=b"{}", seconds=21).code == "runtime_reservation_limit"
+    assert (
+        ledger.start_step(ALICE, lease, request=b"{}", seconds=21).code
+        == "runtime_reservation_limit"
+    )
     started(ledger, lease, seconds=20)
 
 
@@ -177,7 +200,10 @@ def test_only_one_step_can_be_in_flight_and_old_receipt_cannot_finish_a_new_step
     assert ledger.start_step(ALICE, lease, request=b"{}").code == "step_busy"
     finished(ledger, lease, first)
     second = started(ledger, lease)
-    assert ledger.finish_step(ALICE, lease, first, cleanup_confirmed=True).code == "invalid_step_receipt"
+    assert (
+        ledger.finish_step(ALICE, lease, first, cleanup_confirmed=True).code
+        == "invalid_step_receipt"
+    )
     assert ledger.authorize_step(ALICE, lease, second)
 
 
@@ -240,7 +266,7 @@ def test_cancellation_revokes_an_active_permit_permanently_but_allows_cleanup(sc
     assert ledger.start_step(ALICE, lease, request=b"{}").code == "trial_closed"
     assert ledger.admit(BOB).code == "trial_busy"
     ledger.close(ALICE, lease, cleanup_confirmed=True)
-    assert ledger.admit(ALICE).code == "trial_already_used"
+    assert ledger.allowance(ALICE).reported_tokens == 0
     assert ledger.admit(BOB).code == "admitted"
 
 
@@ -249,7 +275,10 @@ def test_failed_worker_cleanup_pauses_all_future_admissions_even_after_reopen(sc
     ledger, connection, now = scene
     lease = admitted(ledger)
     step = started(ledger, lease)
-    assert ledger.finish_step(ALICE, lease, step, cleanup_confirmed=cleanup).code == "cleanup_unconfirmed"
+    assert (
+        ledger.finish_step(ALICE, lease, step, cleanup_confirmed=cleanup).code
+        == "cleanup_unconfirmed"
+    )
     assert not ledger.authorize_step(ALICE, lease, step)
     finished(ledger, lease, step)
     ledger.close(ALICE, lease, cleanup_confirmed=True)
@@ -286,24 +315,36 @@ def test_foreign_account_and_forged_lease_cannot_spend_cancel_or_close(scene):
     assert not ledger.authorize_step(BOB, lease, step)
     assert ledger.cancel(BOB, lease).code == "invalid_trial_lease"
     assert ledger.close(BOB, lease, cleanup_confirmed=True).code == "invalid_trial_lease"
-    for forged in (dataclasses.replace(lease, secret="a" * 64),
-                   dataclasses.replace(lease, history_namespace="trial-foreign"),
-                   dataclasses.replace(lease, expires_at=lease.expires_at + 600)):
+    for forged in (
+        dataclasses.replace(lease, secret="a" * 64),
+        dataclasses.replace(lease, history_namespace="trial-foreign"),
+        dataclasses.replace(lease, expires_at=lease.expires_at + 600),
+    ):
         assert ledger.cancel(ALICE, forged).code == "invalid_trial_lease"
     assert ledger.authorize_step(ALICE, lease, step)
 
 
-@pytest.mark.parametrize("replacement", [
-    {"trial_id": "a" * 64}, {"step_id": "b" * 64}, {"history_namespace": "trial-foreign"},
-    {"deadline": 1_900_000_000.0}, {"reserved_seconds": 60}, {"reserved_seconds": True},
-])
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        {"trial_id": "a" * 64},
+        {"step_id": "b" * 64},
+        {"history_namespace": "trial-foreign"},
+        {"deadline": 1_900_000_000.0},
+        {"reserved_seconds": 60},
+        {"reserved_seconds": True},
+    ],
+)
 def test_forged_permit_cannot_authorize_or_submit_a_cleanup_receipt(scene, replacement):
     ledger, _, _ = scene
     lease = admitted(ledger)
     step = started(ledger, lease)
     forged = dataclasses.replace(step, **replacement)
     assert not ledger.authorize_step(ALICE, lease, forged)
-    assert ledger.finish_step(ALICE, lease, forged, cleanup_confirmed=True).code == "invalid_step_receipt"
+    assert (
+        ledger.finish_step(ALICE, lease, forged, cleanup_confirmed=True).code
+        == "invalid_step_receipt"
+    )
     assert ledger.authorize_step(ALICE, lease, step)
 
 
@@ -330,7 +371,9 @@ def test_existing_product_database_is_refused_without_adding_trial_tables():
     connection.execute("CREATE TABLE customer_balances (amount INTEGER)")
     with pytest.raises(trial.TrialError, match="dedicated_trial_database_required"):
         trial.TrialLedger(connection)
-    assert connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [("customer_balances",)]
+    assert connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [
+        ("customer_balances",)
+    ]
     connection.close()
 
 

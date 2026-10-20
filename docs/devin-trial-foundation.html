@@ -1,26 +1,29 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>One short Devin trial — offline foundation</title>
-<style>body{font:17px/1.6 system-ui,sans-serif;color:#162033;background:#f6f8fc;margin:0}main{max-width:800px;margin:auto;padding:32px 20px}h1,h2{line-height:1.2}.notice{padding:20px;border:2px solid #6d28d9;border-radius:14px;background:#fff}table{border-collapse:collapse;width:100%;background:#fff}th,td{text-align:left;padding:12px;border-bottom:1px solid #dbe3ef;vertical-align:top}th{width:35%}code{overflow-wrap:anywhere}a{color:#5b21b6}small{color:#475569}</style></head>
-<body><main><p><a href="devin.html">Devin guide</a> · Engineering preparation · October 20, 2026</p>
-<h1>One account. One short trial.</h1>
-<p class="notice"><strong>This is an offline foundation, not an available offer.</strong> No website button, CLI command, live API route or provider adapter opens access. The existing private own-account pilot is unchanged.</p>
-<p>Think of this as a ticket desk with its door still locked. It can record who has used one ticket, stop duplicate visits and reserve a short turn. It cannot run Devin or share anyone’s Devin account.</p>
-<h2>The proposed trial limits</h2>
-<table><tbody><tr><th>Who gets a ticket?</th><td>A verified Fleet account gets one lifetime attempt. This means one per Fleet account, not proof that a person has only one account.</td></tr>
-<tr><th>How long?</th><td>The ticket expires after at most 10 minutes. Agent work can reserve at most 120 seconds in total, with at most 60 seconds for one step. Unused reserved time is not refunded.</td></tr>
-<tr><th>How much work?</th><td>At most five agent steps. Each incoming request is limited to 64 KiB. This is a byte limit, not a token allowance.</td></tr>
-<tr><th>Can everyone enter?</th><td>Only one trial can be open globally. When busy, the desk refuses the next request immediately; it does not create a waiting queue or consume that person’s attempt.</td></tr>
-<tr><th>Can I stop?</th><td>Cancellation immediately revokes the ticket. It cannot be reopened. A future worker must keep checking the ticket and stop its actual process.</td></tr>
-<tr><th>Does each visitor get fresh history?</th><td>Every trial gets a new random history namespace. A future adapter must create a fresh native session in that namespace and prove worker and history cleanup before admitting another visitor.</td></tr>
-<tr><th>What if cleanup fails?</th><td>All future admissions pause. An expired running step or missing history cleanup also pauses admissions. A later cleanup receipt does not automatically remove that pause.</td></tr></tbody></table>
-<h2>What the code does today</h2>
-<p><code>ccfleetd/devin_trial.py</code> stores only local reservation records in a dedicated SQLite ledger. It defaults to disabled and rejects a database that contains other product tables. SQLite transactions and a uniqueness constraint guard simultaneous admissions. The ledger keeps a hash of the trial secret and stores no prompts, replies or provider credentials.</p>
-<p>The caller must obtain the account identity and verified status from Fleet’s trusted sign-in checks. A visitor cannot establish that status by submitting a field. Cleanup receipts also require a trusted future supervisor; they are not visitor assertions.</p>
-<h2>What still keeps the door locked</h2>
-<ol><li><strong>Appropriate provider access rights.</strong> Pro and Max are individual plans. Public access and resale are not enabled. See <a href="https://docs.devin.ai/admin/billing/self-serve">Devin’s plan rules</a> and <a href="https://cognition.com/legal/acceptable-use-policy">Cognition’s policy</a>.</li>
-<li><strong>A real isolated worker.</strong> It must enforce deadlines, keep rechecking revocation, use a new native session and history per trial, terminate owned processes and attest cleanup. This foundation does none of those provider actions.</li>
-<li><strong>A verified spending boundary.</strong> Request, step and time limits are not hard dollar caps. Native <code>max_tokens</code> context is not an enforced spending cap.</li>
-<li><strong>Authenticated product integration and release checks.</strong> There is no trial route, visitor key issuance, public button or live configuration switch in this change. The offline tests cannot prove live provider behavior.</li></ol>
-<p><small>No purchase, provider message, model request, account change or deployment is needed to test this foundation.</small></p>
-</main></body></html>
+<title>Daily Devin allowance — offline foundation</title>
+<style>body{max-width:900px;margin:40px auto;padding:0 20px;font:17px/1.65 system-ui;color:#172033}h1,h2{line-height:1.2}aside{padding:18px;background:#fff4d5;border-radius:12px}table{border-collapse:collapse;width:100%}td,th{padding:12px;text-align:left;border-bottom:1px solid #d9dfeb}code{overflow-wrap:anywhere}.zh{color:#3c4862}</style></head><body>
+<h1>One verified account. A new allowance each UTC day.</h1>
+<p class="zh" lang="zh-Hans">每个已验证的 CC Fleet 账号，每天有自己的额度。每天按 UTC 零点重新计算。</p>
+<aside><strong>Technical foundation only — disabled, no public trial.</strong> This draft adds an offline ledger, not a website button, CLI route, shared credential or running Devin worker. Provider access arrangements remain required before offering shared access. No provider contact or live request is performed by this code.</aside>
+<h2>Think of a meter checked before and after a turn</h2>
+<p>Before one turn starts, the ledger reserves the smaller of the user's remaining daily allowance and the shared daily allowance. Only one user can be active on this ledger at a time. After the worker finishes and cleanup is confirmed, a trusted supervisor supplies the complete measured token total. The ledger counts that total and makes any unused reservation available again.</p>
+<p><strong>An ongoing turn can go over the allowance.</strong> The current native bridge validates <code>max_tokens</code> but does not forward it as an enforced generation limit. Native usage is collected after the turn. This is a <strong>daily reported-token admission budget</strong>, not a hard token stop, dollar cap or guarantee about the Devin subscription quota. An overshoot is charged in full and blocks new work when the user or shared allowance is exhausted.</p>
+<p class="zh" lang="zh-Hans">这是“开始前预留、结束后按可信用量记账”的每日准入额度，不是生成到某个 token 就能强制停止。一次任务可能超额；超出的实际用量也会完整记账。用量缺失不能当成零。</p>
+<h2>Offline defaults</h2><table>
+<tr><th>Control</th><th>What the draft enforces</th></tr>
+<tr><td>Daily reported tokens</td><td>100,000 per verified Fleet account; 1,000,000 across the dedicated ledger. These are configurable offline defaults, not an available product or the provider's quota.</td></tr>
+<tr><td>Daily reset</td><td>00:00 UTC. The allowance DTO shows the day, reset timestamp, reported usage, reservations and remaining user/shared tokens. Previous days remain recorded. Reopening the DB does not refill the same day or change its configured limits.</td></tr>
+<tr><td>Concurrency</td><td>One open/closing lease globally and per account. A step reserves the whole remaining allowance before any future provider call; concurrent requests cannot reserve it twice. Busy requests are refused, with no queue.</td></tr>
+<tr><td>Request and time limits</td><td>64 KiB per request, at most 5 steps per lease, 60 reserved seconds per step, 120 per account/day, and 1,200 globally/day. At most 20 step requests and 5 leases per account/day; 100 steps and 50 leases globally/day. Time/request reservations are not refunded.</td></tr>
+<tr><td>Lease and history</td><td>A ticket lasts at most 10 minutes and never crosses UTC midnight. Each lease has a new random history namespace. The future worker must isolate and clean both worker state and history.</td></tr>
+<tr><td>Unknown usage or cleanup</td><td>Only a complete <code>VerifiedUsage</code> from the trusted future supervisor plus confirmed cleanup can settle tokens. Missing/partial usage, unconfirmed cleanup, an overdue worker or a regressed clock retains denial and latches a ledger pause. Day rollover does not erase uncertainty or unpause the ledger. An explicitly measured zero is accepted; a missing count is never invented as zero.</td></tr>
+</table>
+<p>Other request/time/lease limits can deny a new task while a token balance remains. The DTO's enabled/paused fields and admission decision must also be respected. A permit reserves admission only; it is never a Fleet/provider API key or proof that an upstream hard limit exists.</p>
+<h2>What is implemented</h2>
+<p><code>ccfleetd/devin_trial.py</code> is not imported by production Store migrations or routes. It rejects product databases and the earlier one-time draft schema. It uses a separate fresh SQLite ledger, immediate transactions, unique active-session indexes, hashed lease secrets and durable UTC-day counters. It stores no prompts, replies, provider credentials or account subjects. The constructor defaults to disabled; enabling an in-memory instance does not execute an agent.</p>
+<h2>Before any public access</h2><ol>
+<li><strong>Provider arrangement.</strong> Establish permitted access before using the operator's account for other users. This draft enables no access and performs no outreach.</li>
+<li><strong>A trusted isolated worker and usage adapter.</strong> Use a fresh session/history, recheck revocation, enforce the separate request/time deadlines, terminate owned processes safely and attest cleanup. Match complete final measured usage to the correct turn; missing native records cannot be converted to zero. Do not deserialize <code>VerifiedAccount</code> or <code>VerifiedUsage</code> from visitor JSON.</li>
+<li><strong>Authenticated product integration and release verification.</strong> There is no public route, button, visitor key issuance or live switch here. Offline tests do not prove provider behavior, account-sharing permission or a native hard token cap.</li></ol>
+<p>Checked against the current <a href="https://docs.devin.ai/cli/reference/commands">official Devin CLI Commands &amp; Flags</a> and <a href="https://docs.devin.ai/cli/models">model documentation</a> on 2026-10-20. This foundation relies on no unconfirmed provider budget flag.</p>
+</body></html>
