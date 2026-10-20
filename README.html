@@ -24,12 +24,25 @@ footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-si
 @media(max-width:760px){.shell{padding:20px 16px 42px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}.doc-nav>.language-control{margin-inline-start:0}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
 </style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="docs/index.html">HTML library</a><a href="README.html">CC Fleet overview</a><a href="https://ccfleet.io/docs/guide">Current user guide</a></nav><p class="eyebrow">CC Fleet reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#customer-setup-and-migration">Customer setup and migration</a></li><li class="level-2"><a href="#native-local-files-sessions-and-settings">Native local files, sessions and settings</a></li><li class="level-2"><a href="#new-domain">New address, same account</a></li><li class="level-2"><a href="#diagnostics-signed-updates-and-background-work">Diagnostics, signed updates and background work</a></li><li class="level-2"><a href="#privacy-and-routing-scope">Privacy and routing scope</a></li><li class="level-2"><a href="#remote-terminal-compatibility">Remote-terminal compatibility</a></li><li class="level-2"><a href="#what-runs-where">What runs where</a></li><li class="level-2"><a href="#server-quickstart">Server quickstart</a></li><li class="level-2"><a href="#lifecycle-rules">Lifecycle rules</a></li><li class="level-2"><a href="#security-and-privacy-boundary">Security and privacy boundary</a></li><li class="level-2"><a href="#operations">Operations</a></li><li class="level-2"><a href="#development">Development</a></li><li class="level-2"><a href="#license">License</a></li></ol></nav></details></aside><main><h1 id="cc-fleet">CC Fleet</h1>
-<p class="notice"><strong>Alpha — Early Access.</strong> CC Fleet is still being tested and
+<p class="notice"><span class="copy-en" lang="en"><strong>Alpha — Early Access.</strong> CC Fleet is still being tested and
 has not launched commercially. The operator has personally used one residential slot with
 encouraging results; reliability across providers, configurations and multiple users remains
-unverified. Introductory Alpha prices may change for future billing periods. Customers receive
-an updated quote before renewal if pricing changes; an already agreed period keeps its
-agreed price. There are no automatic charges or renewals.</p>
+unverified. Introductory Alpha prices may change for new purchases or Fleet-credit renewals.
+Customers confirm the current quote; an already agreed period keeps its agreed price.
+An existing monthly card plan keeps its confirmed rate when the machine's offer changes.</span>
+<span class="copy-zh" lang="zh-Hans"><strong>Alpha — 早期体验。</strong>CC Fleet 仍在测试，尚未正式商业发布。
+运营者亲自试用一个住宅槽位的结果较好，但不同服务商、配置和多用户场景的可靠性仍未验证。
+初期价格以后可能随新购买或余额续费调整；用户先确认当前报价，已经约定的服务期保留原约定价格。
+主机报价变化，不会改变已有银行卡月付计划确认的价格。</span></p>
+<p class="copy-en" lang="en">Fleet credit buys one calendar UTC month; each renewal needs another
+confirmation. Optional <strong>Pay monthly</strong> card plans start only after explicit agreement and
+the first Stripe payment, then renew independently until canceled. Existing slots, balances and
+prepaid time are not enrolled or converted automatically. Your own Claude or Devin subscription,
+or Anthropic API usage, is paid separately.</p>
+<p class="copy-zh" lang="zh-Hans">Fleet 余额一次只购买按 UTC 计算的一个日历月，每次续费都需另外确认。
+可选的<strong>按月付款</strong>银行卡计划，只有用户明确同意并在 Stripe 完成首笔付款后才会开通，
+各槽位独立续费，直到取消。已有槽位、余额和预付费时间不会自动加入或转换。
+用户自己的 Claude 或 Devin 订阅，以及 Anthropic API 用量，均需另行付费。</p>
 <p>CC Fleet pairs each user with a dedicated VPS and dedicated exit IP, and that user's own Claude
 accounts. <strong>One holder, one slot, one bound Claude account:</strong> no credential pool
 or shared inference account. A gateway connection can explicitly select several
@@ -397,10 +410,19 @@ $10.83 + $2 = $12.83; $22.28 + $2.23 = $24.51; $27.44 + $2.74 = $30.18.
 The $2 fee applies through $20 of resource cost. The public breakdown shows VPS cost,
 separately recorded exit-IP cost, service fee and total; a bundled hosting-and-IP cost is shown
 as a bundle without an invented split. A normalization rounding line explains any cent-level
-difference between individually displayed components and the rounded combined resource cost.
-Your Claude subscription or Anthropic API usage is billed separately. Customers choose their
-displayed machine before claiming; payment remains a manually agreed operator record, never
-an automatic charge or renewal. Approved proxy
+difference between individually displayed components and the rounded combined resource cost.</p>
+<p class="copy-en" lang="en">Open <strong>Available slots</strong>, choose a machine and review its price.
+A Fleet-credit purchase pays once for one calendar UTC month; the customer confirms each renewal.
+The optional <strong>Pay monthly</strong> card plan requires explicit agreement and the first Stripe
+payment. Each slot renews independently at its confirmed rate until canceled; a changed machine
+offer does not reprice an existing plan. Existing holders are not enrolled automatically.
+Your own Claude or Devin subscription, or Anthropic API usage, remains separate.</p>
+<p class="copy-zh" lang="zh-Hans">打开<strong>可用槽位</strong>，选择主机并核对价格。
+Fleet 余额一次只支付按 UTC 计算的一个日历月，每次续费都需用户确认。
+可选的<strong>按月付款</strong>银行卡计划，需用户明确同意并在 Stripe 完成首笔付款。
+每个槽位按确认的价格独立续费，直到取消；修改主机报价不会给已有计划改价，也不会自动为已有持有者开通月付。
+用户自己的 Claude 或 Devin 订阅，以及 Anthropic API 用量，仍需另付。</p>
+<p>Approved proxy
 nodes use a protected local CONNECT service and verified provider TLS; proxy credentials stay
 in root-only configuration. See the <a href="docs/runbooks.html#slot-providers-pricing-and-egress">provider, pricing and egress runbook</a>.</p>
 <p>Retired or disabled machines are omitted from the public rental inventory and normal
