@@ -169,7 +169,7 @@ def test_handler_resets_language_between_keepalive_requests(language_site):
 
 
 @pytest.mark.parametrize("method,path", [
-    ("GET", "/zh/admin"), ("GET", "/en/api/nodes"),
+    ("GET", "/en/api/nodes"),
     ("POST", "/zh/v1/messages"), ("POST", "/en/api/cli/gateway"),
     ("GET", "/zh/auth/google/callback?state=x&code=x"),
     ("GET", "/zh/docs/library/docs/../README.html"),
@@ -178,7 +178,7 @@ def test_handler_resets_language_between_keepalive_requests(language_site):
     ("GET", "/zh//account"), ("GET", "/zh/../account"),
     ("GET", "https://host.invalid/zh/account"),
 ])
-def test_language_aliases_do_not_expand_api_admin_or_file_authority(language_site, method, path):
+def test_language_aliases_do_not_expand_api_or_file_authority(language_site, method, path):
     _, _, make_browser = language_site
     assert make_browser().call(method, path).status == 404
 

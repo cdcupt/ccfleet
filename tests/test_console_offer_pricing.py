@@ -1,6 +1,7 @@
 """Operator catalogue: current machine prices and safe retirement visibility."""
 from __future__ import annotations
 
+import re
 import time
 
 import pytest
@@ -170,8 +171,8 @@ def test_offer_editor_groups_invoice_fields_without_changing_action_scope(consol
     assert 'action="/actions/machine/m1/offer-clear"' in panel
     assert '<div class="offer-fields">' in panel
     assert panel.count('<fieldset>') == panel.count('</fieldset>') == 3
-    for legend in ("Providers and IP type", "Hosting cost", "IP cost"):
-        assert f"<legend>{legend}</legend>" in panel
+    legends = {text(item) for item in re.findall(r"<legend[^>]*>(.*?)</legend>", panel, re.S)}
+    assert legends == {"Providers and IP type", "Hosting cost", "IP cost"}
     for name in ("host_brand", "ip_brand", "ip_type", "hosting_cost", "hosting_currency",
                  "hosting_period", "ip_cost", "ip_currency", "ip_period"):
         assert f'name="{name}"' in panel

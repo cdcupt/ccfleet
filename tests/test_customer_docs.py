@@ -397,11 +397,18 @@ def test_only_an_operator_is_offered_the_console(account):
 def test_the_front_pages_own_links_are_escaped():
     """The console's address comes from configuration and the canonical from
     the caller; neither is trusted to be free of markup."""
-    viewer = _viewer({"role": "admin"}, slots_href='/account?a="><zz>',
-                     console_href='https://adm.example.com/admin?b="><zz>&c')
+    from tests.test_account_setup_flow import Flow
+
+    slots_url = '/account?a="><zz>'
+    console_url = 'https://adm.example.com/admin?b="><zz>&c'
+    viewer = _viewer({"role": "admin"}, slots_href=slots_url, console_href=console_url)
     shown = customer_docs.overview(Config(), viewer=viewer)
-    assert 'href="/account?a=&quot;&gt;&lt;zz&gt;">Your slots</a>' in shown
-    assert 'href="https://adm.example.com/admin?b=&quot;&gt;&lt;zz&gt;&amp;c">Console</a>' in shown
+    assert 'href="/account?a=&quot;&gt;&lt;zz&gt;"' in shown
+    assert 'href="https://adm.example.com/admin?b=&quot;&gt;&lt;zz&gt;&amp;c"' in shown
+    page = Flow(shown)
+    assert any(link.text.startswith("Your slots") for link in page.find("a", href=slots_url))
+    assert any(link.text.startswith("Console") for link in page.find("a", href=console_url))
+    assert not page.find("zz")
     assert "<zz>" not in shown
     framed = usersite._shell("t", "", canonical='/"><zz>')
     assert '<link rel="canonical" href="/&quot;&gt;&lt;zz&gt;">' in framed

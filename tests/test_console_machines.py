@@ -155,7 +155,7 @@ def row_of(page, name):
 
 
 def card(page, anchor):
-    start = page.index(f'id="{anchor}"' if anchor != "usage" else "Usage and quota</h2>")
+    start = page.index(f'id="{anchor}"')
     end = page.find("<h2", start + 1)
     return page[start:end if end > 0 else len(page)]
 
@@ -429,11 +429,10 @@ def test_usage_shows_a_slots_use_under_its_name(console):
     store, call = console
     fleet(store, time.time())
     part = card(call("GET", "/admin").body, "usage")
-    assert "erik-2" in part and "39.5k" in part and "tokens run on this slot" in part
+    assert "erik-2" in part and "39.5k" in part and "transcript tokens on this slot" in part
     assert "25%" in part, "the slot's weekly window"
-    # The customer's slot has used nothing yet: named, by its own name, as quiet.
-    assert re.search(r"No usage reported yet from .*ysflowerdog-1", part, re.S)
-    assert "pool-1" not in re.search(r"No usage reported yet from .*?</p>", part, re.S).group(0)
+    # A held slot with missing readings stays visible and says unknown, not zero.
+    assert "ysflowerdog-1" in part and "Current quota is unavailable" in part
 
 
 def test_a_slots_use_is_under_the_slots_name(cfg):
@@ -445,8 +444,8 @@ def test_a_slots_use_is_under_the_slots_name(cfg):
     latest = {"pool-9": {"ts": now - 5, "payload": {"mode": slots.MACHINE_MODE, "slots": [
         {"unix_user": "slot01", "usage": {"total_tokens": 1200, "by_day": []}}]}}}
     page = render_dashboard(build_rows(nodes, latest, [], now, slots=one), [], now, cfg)
-    usage = page[page.index("Usage and quota</h2>"):]
-    assert 'usage-name">ana-1<div' in usage
+    usage = page[page.index('id="usage"'):]
+    assert '<h3 class="usage-slot-title">ana-1</h3>' in usage
     document = Document(usage)
     assert "ana-1" in document.text
     assert "pool-9" not in document.text and "erik" not in document.text
