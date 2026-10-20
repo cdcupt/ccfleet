@@ -1113,19 +1113,29 @@ class QuotaTmux:
         self.claude_ok = claude_ok
         self.sent = []
         self.killed = 0
+        self.input = ""
+        self.entered = False
 
     def __call__(self, argv, **kwargs):
         def done(code=0, out=""):
             return subprocess.CompletedProcess(argv, code, stdout=out, stderr="")
         if "new-session" in argv:
+            self.input = ""
+            self.entered = False
             return done(0 if self.claude_ok else 1)
         if "kill-session" in argv:
             self.killed += 1
             return done()
         if "send-keys" in argv:
             self.sent.append(argv[-1])
+            if argv[-1] == "/usage":
+                self.input = "/usage"
+            elif argv[-1] == "Enter" and self.input == "/usage":
+                self.entered = True
             return done()
         if "capture-pane" in argv:
+            if self.input and not self.entered:
+                return done(0, "❯ " + self.input)
             return done(0, self.panes.pop(0) if self.panes else "")
         return done()
 
@@ -1145,7 +1155,7 @@ def test_read_quota_answers_the_trust_prompt_and_carries_on(monkeypatch):
     """A fresh working directory asks before anything else can happen."""
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
-    tmux = QuotaTmux(["Do you trust this folder?", "❯ ready", USAGE_PANE])
+    tmux = QuotaTmux(["Do you trust this folder?", "❯ ", USAGE_PANE])
     assert agent.read_quota(tmux)["session"]["used_pct"] == 3
     assert tmux.sent[:2] == ["Down", "Enter"], "answers the prompt before asking anything"
     assert "/usage" in tmux.sent
@@ -1221,7 +1231,7 @@ def test_read_quota_waits_for_both_windows_before_settling(monkeypatch):
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
     partial = "Current session\n 3% used\nResets 7:50pm (UTC)\n"
-    tmux = QuotaTmux(["❯ ready", partial, partial, USAGE_PANE])
+    tmux = QuotaTmux(["❯ ", partial, partial, USAGE_PANE])
     got = agent.read_quota(tmux)
     assert got is not None and "session" in got and "week" in got
     assert got["week"]["used_pct"] == 15
@@ -1234,7 +1244,7 @@ def test_read_quota_settles_for_a_partial_screen_at_the_deadline(monkeypatch):
     clock = iter([0.0] + [float(i) for i in range(1, 400)])
     monkeypatch.setattr(agent.time, "time", lambda: next(clock))
     partial = "Current session\n 3% used\nResets 7:50pm (UTC)\n"
-    tmux = QuotaTmux(["❯ ready"] + [partial] * 200)
+    tmux = QuotaTmux(["❯ "] + [partial] * 200)
     got = agent.read_quota(tmux)
     assert got == {"session": {"used_pct": 3, "resets": "7:50pm (UTC)"}}
 
@@ -1288,7 +1298,7 @@ def test_read_quota_only_ever_trusts_its_own_probe_directory(monkeypatch, tmp_pa
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
     monkeypatch.setattr(agent.Path, "home", staticmethod(lambda: tmp_path))
-    tmux = RecordingTmux(["❯ ready", USAGE_PANE])
+    tmux = RecordingTmux(["❯ ", USAGE_PANE])
     assert agent.read_quota(tmux) is not None
     assert len(tmux.opened) == 1
     argv = tmux.opened[0]
@@ -1381,7 +1391,7 @@ def test_a_refused_probe_directory_skips_the_read_and_says_why(monkeypatch, tmp_
 def test_read_quota_refuses_rather_than_trusting_an_unknown_directory(monkeypatch):
     monkeypatch.setattr(agent, "find_claude", lambda: "/usr/bin/claude")
     monkeypatch.setattr(agent, "_quota_home", lambda: None)
-    tmux = QuotaTmux(["❯ ready", USAGE_PANE])
+    tmux = QuotaTmux(["❯ ", USAGE_PANE])
     assert agent.read_quota(tmux) is None
     assert tmux.sent == [], "nothing is typed into a session that was never opened"
 

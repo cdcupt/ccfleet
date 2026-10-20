@@ -114,10 +114,116 @@ QUOTA_SCREEN = ("Current session\n100% used\nResets 4pm (UTC)\n"
                 "Current week (all models)\n42% used\nResets Friday (UTC)\n")
 
 
+def entry_runner(monkeypatch, *, prompt="❯", echo_after=6, failure=None):
+    """Native startup drops early input; rendering typed text takes another turn."""
+    clock = [NOW]
+    monkeypatch.setattr(agent.time, "time", lambda: clock[0])
+    monkeypatch.setattr(agent.time, "sleep", lambda wait: clock.__setitem__(0, clock[0] + wait))
+    monkeypatch.setattr(agent, "find_claude", lambda: "/synthetic/claude")
+    state = {"typed_at": None, "rendered": False, "submitted": False, "calls": []}
+
+    def synthetic(argv, **kwargs):
+        now = clock[0]
+        state["calls"].append((now, argv, kwargs["timeout"]))
+        pane, code = "", 0
+        if "capture-pane" in argv:
+            if failure == "capture_timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            if failure == "capture":
+                code = 1
+            elif now >= NOW + 9:
+                if state["submitted"]:
+                    pane = QUOTA_SCREEN
+                elif (state["typed_at"] is not None and echo_after is not None
+                      and now >= state["typed_at"] + echo_after):
+                    pane = prompt + " /usage"
+                    state["rendered"] = True
+                else:
+                    pane = prompt + " "
+            elif now >= NOW + 6:
+                pane = "Starting Claude Code…"
+        if "send-keys" in argv:
+            key = argv[-1]
+            if failure == key + "_timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            if failure == key:
+                code = 1
+            elif key == "/usage" and now >= NOW + 9:
+                state["typed_at"] = now
+            elif key == "Enter" and state["rendered"]:
+                state["submitted"] = True
+        return subprocess.CompletedProcess(argv, code, stdout=pane, stderr="PRIVATE_SYNTHETIC")
+
+    return synthetic, state
+
+
+@pytest.mark.parametrize("prompt", ["❯", ">"])
+def test_quota_waits_for_startup_and_rendered_command_before_one_enter(slot, monkeypatch, prompt):
+    synthetic, state = entry_runner(monkeypatch, prompt=prompt)
+    observed = {}
+    result = agent.read_quota(synthetic, timeout=35, probe_result=observed)
+    assert result is not None and result["week"]["used_pct"] == 42
+    keys = [(at, argv[-1]) for at, argv, _ in state["calls"] if "send-keys" in argv]
+    assert keys == [(NOW + 9, "/usage"), (NOW + 15, "Enter")]
+    assert observed["usage_observed_at"] == NOW + 18
+    assert state["calls"][-1][1][5] == "kill-session"
+
+
+@pytest.mark.parametrize("pane", ["", "Starting Claude Code…", "Welcome",
+    "❯ 1. Connect\n  2. Exit", "> [1] Choose an option", "❯ unexpected existing input",
+    "❯ \n  1."])
+def test_unknown_or_numbered_screens_receive_no_command_keys(slot, monkeypatch, pane):
+    synthetic, calls = pane_runner(monkeypatch, [pane] * 20)
+    observed = {}
+    assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
+    assert observed["outcome"] == "native_timeout"
+    assert not any("send-keys" in argv for argv in calls)
+    assert agent.time.time() == NOW + 35
+    assert calls[-1][5] == "kill-session"
+
+
+@pytest.mark.parametrize("echo", ["❯ /usageful", "❯ /usage extra", "text contains /usage",
+    "❯ /usage\n  1. Confirm\n  2. Exit"])
+def test_enter_requires_exact_usage_input_without_a_numbered_menu(slot, monkeypatch, echo):
+    synthetic, calls = pane_runner(monkeypatch, ["❯ "] + [echo] * 20)
+    observed = {}
+    assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
+    assert observed["outcome"] == "native_timeout"
+    assert [argv[-1] for argv in calls if "send-keys" in argv] == ["/usage"]
+    assert calls[-1][5] == "kill-session"
+
+
+@pytest.mark.parametrize("timeout,echo_after", [(35, None), (12, 6)])
+def test_no_rendered_command_never_sends_enter_or_replays_text(
+        slot, monkeypatch, timeout, echo_after):
+    synthetic, state = entry_runner(monkeypatch, echo_after=echo_after)
+    observed = {}
+    assert agent.read_quota(synthetic, timeout=timeout, probe_result=observed) is None
+    assert [argv[-1] for _, argv, _ in state["calls"] if "send-keys" in argv] == ["/usage"]
+    assert agent.time.time() == NOW + timeout and observed["outcome"] == "native_timeout"
+    assert state["calls"][-1][1][5] == "kill-session"
+    assert state["calls"][-1][2] == 5.0
+
+
+@pytest.mark.parametrize("failure", ["/usage", "Enter", "capture",
+                                     "/usage_timeout", "Enter_timeout", "capture_timeout"])
+def test_failed_entry_commands_do_not_retry_and_always_clean_up(slot, monkeypatch, failure):
+    synthetic, state = entry_runner(monkeypatch, failure=failure)
+    observed = {}
+    assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
+    keys = [argv[-1] for _, argv, _ in state["calls"] if "send-keys" in argv]
+    stage = failure.removesuffix("_timeout")
+    expected = [] if stage == "capture" else ["/usage"] if stage == "/usage" else ["/usage", "Enter"]
+    assert keys == expected and state["submitted"] is False
+    assert agent.time.time() <= NOW + 35
+    assert state["calls"][-1][1][5] == "kill-session" and state["calls"][-1][2] == 5.0
+    assert all(timeout <= 15.0 for _, _, timeout in state["calls"])
+
+
 @pytest.mark.parametrize("prelaunch_seconds", [0, 100])
 def test_quota_probe_gets_its_budget_after_stale_caller_and_prelaunch_checks(
         slot, monkeypatch, prelaunch_seconds):
-    synthetic, calls = pane_runner(monkeypatch, ["Welcome", QUOTA_SCREEN])
+    synthetic, calls = pane_runner(monkeypatch, ["❯ ", "❯ /usage", QUOTA_SCREEN])
     observed = {}
 
     def before_start():
@@ -128,7 +234,7 @@ def test_quota_probe_gets_its_budget_after_stale_caller_and_prelaunch_checks(
                               probe_result=observed, before_start=before_start)
     assert result is not None, "earlier collection time must not exhaust a new probe's budget"
     assert result["session"]["used_pct"] == 100 and result["week"]["used_pct"] == 42
-    assert observed["usage_observed_at"] == NOW + prelaunch_seconds + 6
+    assert observed["usage_observed_at"] == NOW + prelaunch_seconds + 9
     assert "checked_at" not in result, "the caller still controls its existing reading timestamp"
     assert sum("new-session" in call for call in calls) == 1
     assert sum("/usage" in call for call in calls) == 1
@@ -153,7 +259,7 @@ def test_quota_probe_deadline_and_command_cleanup_bounds_ignore_caller_time(
     assert agent.time.time() == NOW + budget
     assert observed["outcome"] == "native_timeout" and observed["probe_started"] is True
     assert sum("new-session" in call for call in calls) == 1
-    assert sum("/usage" in call for call in calls) == 1
+    assert sum("/usage" in call for call in calls) == 0
     assert all(0.1 <= limit <= min(15, NOW + budget - started)
                for started, limit in commands[:-1])
     assert commands[-1] == (NOW + budget, 5.0)
@@ -162,7 +268,7 @@ def test_quota_probe_deadline_and_command_cleanup_bounds_ignore_caller_time(
 
 def test_initial_rate_limit_still_reads_usage_once_and_ignores_old_banner(slot, monkeypatch):
     banner = "API Error: 429 Rate limited\nRetry-After: 90\n"
-    synthetic, calls = pane_runner(monkeypatch, [banner, banner + QUOTA_SCREEN])
+    synthetic, calls = pane_runner(monkeypatch, [banner + "❯ ", "❯ /usage", banner + QUOTA_SCREEN])
     observed = {}
     result = agent.read_quota(synthetic, timeout=35, probe_result=observed)
     assert result["session"]["used_pct"] == 100 and result["week"]["used_pct"] == 42
@@ -175,7 +281,8 @@ def test_initial_rate_limit_still_reads_usage_once_and_ignores_old_banner(slot, 
 
 
 def test_persistent_rate_limit_waits_bounded_without_resending_usage(slot, monkeypatch):
-    synthetic, calls = pane_runner(monkeypatch, ["API Error: 429 Rate limited"] * 20)
+    synthetic, calls = pane_runner(monkeypatch,
+        ["API Error: 429 Rate limited\n❯ ", "❯ /usage"] + ["API Error: 429 Rate limited"] * 20)
     observed = {}
     assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
     assert observed["outcome"] == "native_rate_limited"
@@ -185,7 +292,7 @@ def test_persistent_rate_limit_waits_bounded_without_resending_usage(slot, monke
 
 
 def test_rate_limit_does_not_bypass_later_terminal_auth_rejection(slot, monkeypatch):
-    synthetic, calls = pane_runner(monkeypatch, ["API Error: 429 Rate limited",
+    synthetic, calls = pane_runner(monkeypatch, ["API Error: 429 Rate limited\n❯ ", "❯ /usage",
         "Login expired · Please run /login\n" + QUOTA_SCREEN])
     observed = {}
     assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
