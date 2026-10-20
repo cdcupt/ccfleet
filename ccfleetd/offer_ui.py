@@ -171,9 +171,11 @@ def details(node: Mapping[str, Any]) -> str:
     return '<div class="slot-offer">' + ''.join(
         '<div><b>' + title + '</b>' + value + '</div>' for title, value in cells) + '</div>' \
         + '<p class="offer-note">' + label(
-            "An already agreed billing period keeps its agreed price. If the price changes, "
-            "you will receive an updated quote before renewal.",
-            "已经约定的账期继续按原价执行。如价格变更，续费前会提供新报价。", inline=True) + '</p>'
+            "An already agreed billing period keeps its agreed price. For a Fleet-credit "
+            "renewal, you will receive an updated quote before renewal. An existing monthly "
+            "card plan keeps its confirmed rate when the machine's offer changes.",
+            "已经约定的账期继续按原价执行。余额续费前会提供新报价；已有银行卡月付计划保持确认的价格，"
+            "主机报价变化不会给已有计划改价。", inline=True) + '</p>'
 
 
 def compact(node: Mapping[str, Any]) -> str:
@@ -413,19 +415,29 @@ def _pricing_policy() -> str:
          "Bundled supplier costs are shown without an invented split.",
          "ISP、住宅与机房表示网络类型，并非质量排名，也不保证 Claude 兼容性。每位客户使用独立 "
          "VPS 和独立出口 IP。所有类型采用同一定价公式。供应商打包成本按记录展示，不虚构拆分。"),
-        ("Available means unallocated, not a promise of eligibility. Sign in to choose an "
-         "available priced slot within your allowance. Payment is agreed directly "
-         "with the operator; this site does not charge or renew automatically.",
-         "可领取表示槽位尚未分配，不保证你有领取权限。登录后可在额度内选择可领取的已定价"
-         "槽位。付款直接与运营者约定，本站不会自动扣款或续费。"),
+        ("Available means unallocated, not a promise of eligibility. Sign in, choose a priced "
+         "slot and review the payment choices shown for your account. Card top-ups add Fleet "
+         "credit. A credit purchase buys one calendar UTC month. It does not charge or renew "
+         "automatically; you confirm each purchase and renewal. Optional Pay monthly card "
+         "plans start only after explicit agreement and the first Stripe payment, then renew "
+         "independently until canceled. Existing slots, balances and prepaid time are not "
+         "enrolled or converted automatically.",
+         "可领取表示槽位尚未分配，不保证账号符合领取条件。请先登录选择有报价的槽位，"
+         "核对显示给你的付款方式。银行卡充值用于增加 Fleet 余额；余额购买一次只支付按 UTC "
+         "计算的一个日历月，购买与续费都需另外确认，不会自动扣款或续费。可选的按月付款"
+         "银行卡计划，只有你明确同意并在 Stripe 完成首笔付款后才会开通，各槽位独立续费，"
+         "直到取消。已有槽位、余额和预付费时间不会自动加入或转换。"),
         ("Alpha is still being tested. The operator has had encouraging results with one "
          "residential slot; reliability across providers, configurations and multiple users "
-         "is still being evaluated. Alpha pricing is introductory and may change for future "
-         "billing periods. If pricing changes, you will receive an updated quote before "
-         "renewal; an already agreed billing period retains its agreed price.",
+         "is still being evaluated. Alpha pricing is introductory and may change for new "
+         "purchases or Fleet-credit renewals. For a credit renewal, you will receive an "
+         "updated quote before renewal; an already agreed billing period retains its agreed "
+         "price. Existing monthly card plans keep their confirmed rate when a machine's "
+         "offer changes.",
          "Alpha 仍在测试中。运营者自用一个住宅槽位的结果令人鼓舞，但不同服务商、配置及多用户"
-         "情况下的可靠性仍在评估。Alpha 价格为入门阶段定价，未来账期可能调整；如有变更，"
-         "续费前会提供新报价，已经约定的账期继续按原价执行。"),
+         "情况下的可靠性仍在评估。Alpha 价格为初期定价，新购买或余额续费的报价以后可能调整；"
+         "余额续费前会提供新报价，已经约定的账期继续按原价执行。已有银行卡月付计划保持确认"
+         "的价格，主机报价变化不会给已有计划改价。"),
     )
     return ('<details class="offer-policy"><summary>'
             + label("Alpha pricing & service limits", "Alpha 定价与服务说明", inline=True)
