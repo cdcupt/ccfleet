@@ -79,6 +79,173 @@ EXCLUDED_RULES = ("no_heartbeat", "credentials_missing", "token_stale", "token_e
                   "account_changed", "remote_control_down", "egress_changed",
                   "version_mismatch")
 
+UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class HealthCheck:
+    """A bounded, machine-only diagnosis; never a claim that inference works."""
+
+    level: str
+    reasons: tuple[str, ...]
+    observed_at: Optional[float] = None
+    metrics: tuple[tuple[str, float], ...] = ()
+
+
+def _health_number(value: Any, maximum: float = 100) -> Optional[float]:
+    if type(value) not in (int, float):
+        return None
+    try:
+        return float(value) if 0 <= value <= maximum and math.isfinite(value) else None
+    except (OverflowError, ValueError):
+        return None
+
+
+def _health_time(value: Any, now: float) -> Optional[float]:
+    measured = _health_number(value, 253402300799)
+    return measured if measured is not None and 0 < measured <= now + 5 else None
+
+
+def platform_check(report: Optional[Mapping[str, Any]], now: float) -> HealthCheck:
+    """Read the existing kernel observer, with independent freshness validation."""
+    if not isinstance(report, Mapping):
+        return HealthCheck(UNKNOWN, ("platform_missing",))
+    observed = _health_time(report.get("observed_at"), now)
+    if observed is None or now - observed > 60 or report.get("state") not in ("ready", "partial"):
+        return HealthCheck(UNKNOWN, ("platform_stale" if observed else "platform_missing",),
+                           observed)
+    values = []
+    for group, key, name in (("host", "cpu_pct", "cpu"), ("host", "memory_pct", "memory"),
+                             ("host", "io_wait_pct", "io_wait"), ("host", "steal_pct", "steal"),
+                             ("storage", "used_pct", "disk"),
+                             ("service", "cpu_budget_pct", "service_cpu"),
+                             ("service", "memory_pct", "service_memory")):
+        section = report.get(group)
+        value = _health_number(section.get(key), 1_000_000 if group == "service" else 100) \
+            if isinstance(section, Mapping) else None
+        if value is not None:
+            values.append((name, value))
+    limits = {"disk": 85, "io_wait": 20, "steal": 10}
+    reasons = tuple(name + "_pressure" for name, value in values
+                    if value >= limits.get(name, 90))
+    if any(name == "disk" and value >= 95 for name, value in values):
+        return HealthCheck(RED, ("disk_critical", *(r for r in reasons if r != "disk_pressure")),
+                           observed, tuple(values))
+    level = YELLOW if reasons else GREEN if len(values) == 7 else UNKNOWN
+    return HealthCheck(level, reasons or (("resources_normal",) if level == GREEN
+                                         else ("metrics_missing",)), observed, tuple(values))
+
+
+def machine_check(latest: Optional[Mapping[str, Any]], alerts: Sequence[Mapping[str, Any]],
+                  shared: bool, now: float) -> HealthCheck:
+    """Heartbeat is transport evidence, not a resource or provider success test."""
+    heard = _health_time((latest or {}).get("ts"), now)
+    if heard is None:
+        return HealthCheck(UNKNOWN, ("heartbeat_missing",))
+    late, down = thresholds(shared)
+    if now - heard >= late:
+        return HealthCheck(RED if now - heard >= down else YELLOW,
+                           ("heartbeat_down" if now - heard >= down else "heartbeat_late",), heard)
+    payload = (latest or {}).get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    values = []
+    for section, name in (("disk", "disk"), ("mem", "memory")):
+        raw = payload.get(section)
+        value = _health_number(raw.get("used_pct")) if isinstance(raw, Mapping) else None
+        if value is not None:
+            values.append((name, value))
+    reasons = []
+    level = GREEN
+    for alert in alerts:
+        rule = str(alert.get("rule", "")).split(":", 1)[0]
+        problem = rule_state(rule, str(alert.get("level", "")))
+        if problem is not None:
+            reasons.append("disk_critical" if rule == "disk_high" and problem == RED else rule)
+            if problem == RED:
+                level = RED
+            elif level == GREEN:
+                level = YELLOW
+    for name, value in values:
+        if value >= (85 if name == "disk" else 90):
+            reasons.append(name + "_pressure")
+            if level == GREEN:
+                level = YELLOW
+        if name == "disk" and value >= 95:
+            reasons.append("disk_critical")
+            level = RED
+    if not reasons and len(values) != 2:
+        level, reasons = UNKNOWN, ["metrics_missing"]
+    return HealthCheck(level, tuple(dict.fromkeys(reasons)) or ("resources_normal",),
+                       heard, tuple(values))
+
+
+HEALTH_WORDS = {GREEN: ("Reported checks look normal", "已上报的检查正常"),
+                YELLOW: ("Needs attention", "需要留意"), RED: ("Problem detected", "发现异常"),
+                UNKNOWN: ("Not enough data", "数据不足")}
+HEALTH_REASONS = {
+    "platform_missing": ("No platform resource sample is available.", "尚无平台资源采样。"),
+    "platform_stale": ("The platform sample is old; current resource health is unknown.",
+                       "平台采样已过期，当前资源状态未知。"),
+    "metrics_missing": ("Some resource checks are missing; a heartbeat alone is not a health test.",
+                        "部分资源检查缺失；收到心跳不等于通过健康检查。"),
+    "heartbeat_missing": ("No machine report is available. "
+                          "Machine, agent or network may be unavailable.",
+                          "尚无主机上报，可能是主机、采集程序或网络不可用。"),
+    "heartbeat_late": ("The machine report is late. Check the machine-to-Fleet connection.",
+                       "主机上报延迟，请检查主机到 Fleet 的连接。"),
+    "heartbeat_down": ("The machine stopped reporting. This does not identify a provider outage.",
+                       "主机已停止上报，但这还不能确定是云服务商故障。"),
+    "resources_normal": ("The measured resources show no pressure. Model requests are not tested.",
+                         "已测资源未见压力；没有因此测试模型请求。"),
+    "disk_pressure": ("Storage is running low.", "磁盘可用空间偏少。"),
+    "disk_critical": ("Storage is critically full; writes may fail.",
+                      "磁盘空间严重不足，写入可能失败。"),
+    "memory_pressure": ("Memory use is high; this may contribute to slow replies.",
+                        "内存占用偏高，可能影响响应速度。"),
+    "cpu_pressure": ("Platform CPU use is high.", "平台 CPU 占用偏高。"),
+    "io_wait_pressure": ("The platform is waiting on storage I/O.",
+                         "平台等待磁盘 I/O 的时间偏多。"),
+    "steal_pressure": ("The VPS is waiting for CPU from its host; check provider capacity.",
+                       "VPS 等待宿主机提供 CPU 的时间偏多，请检查服务商资源容量。"),
+    "service_cpu_pressure": ("Fleet is close to its CPU budget.", "Fleet 接近自身 CPU 配额。"),
+    "service_memory_pressure": ("Fleet is close to its memory budget.", "Fleet 接近自身内存配额。"),
+    "disk_high": ("The machine reports a storage warning.", "主机报告磁盘告警。"),
+    "claude_missing": ("The machine cannot find its Claude Code installation.",
+                       "主机未找到 Claude Code。"),
+    "slot_missing": ("A held slot's runtime environment is missing.",
+                     "正在使用的槽位运行环境缺失。"),
+    "slot_wipe_failed": ("An unused slot needs cleanup.", "未使用的槽位需要清理。"),
+    "slot_occupied": ("An unused slot is not ready to be assigned.", "未使用的槽位尚不能分配。"),
+    "slot_provision_failed": ("Slot setup needs operator attention.", "槽位设置需要运营方处理。"),
+}
+
+
+def health_html(check: HealthCheck, now: float) -> str:
+    """Fixed explanatory copy and sanitized numbers, safe for public or owned views."""
+    from .bilingual import label
+
+    level = check.level if check.level in HEALTH_WORDS else UNKNOWN
+    metrics = []
+    for name, value in check.metrics:
+        names_ = {"cpu": ("CPU", "CPU"), "memory": ("Memory", "内存"),
+                  "disk": ("Storage", "磁盘"), "service_cpu": ("Fleet CPU", "Fleet CPU"),
+                  "io_wait": ("I/O wait", "I/O 等待"), "steal": ("CPU steal", "宿主机 CPU 等待"),
+                  "service_memory": ("Fleet memory", "Fleet 内存")}
+        number = _health_number(value, 1_000_000)
+        if name in names_ and number is not None:
+            en, zh = names_[name]
+            metrics.append(label(f"{en} {number:.1f}%", f"{zh} {number:.1f}%", inline=True))
+    reasons = ' '.join(label(*HEALTH_REASONS[code], inline=True)
+                       for code in check.reasons if code in HEALTH_REASONS)
+    stamp = _health_time(check.observed_at, now)
+    observed = ('<span class="health-observed">' + label("Last report: ", "最近上报：", inline=True)
+                + since_html(stamp, now) + '</span>') if stamp is not None else ''
+    return ('<div class="health-check" data-health="' + level + '"><strong>'
+            '<span class="st-dot ' + level + '" aria-hidden="true"></span> '
+            + label(*HEALTH_WORDS[level], inline=True) + '</strong><p>' + reasons + '</p>'
+            + ('<p class="health-metrics">' + ' · '.join(metrics) + '</p>' if metrics else '')
+            + observed + '</div>')
+
 #: The site's own component, beside one "node:<id>" per machine; the prefix
 #: keeps a machine that happens to be called "site" apart from it. The
 #: machines are also counted as one group, in the state the group is in that
@@ -389,6 +556,12 @@ flex:none}
 .st-dot.red{background:var(--bad)}
 .machine-line{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin:0 0 12px;
 font-size:14px}
+.health-check{border-left:3px solid var(--off);padding:8px 12px;margin:10px 0;
+font-size:13px;overflow-wrap:anywhere}
+.health-check[data-health=green]{border-color:var(--ok)}
+.health-check[data-health=yellow]{border-color:var(--warn)}
+.health-check[data-health=red]{border-color:var(--bad)}
+.health-check p{margin:5px 0}.health-observed{color:var(--muted);font-size:12px}
 """
 LINE_WORDS = {GREEN: "operational", YELLOW: "degraded", RED: "down"}
 

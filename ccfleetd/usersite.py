@@ -1406,6 +1406,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     lines = {s["id"]: _machine_line(status.machine_state(
         latest.get(s["node_id"]), store.open_alerts(s["node_id"]),
         s.get("kind") != slotstates.OWNER_SLOT, now, listening(s["node_id"])), now)
+        + '<div id="machine-health-' + escape(s["id"]) + '" data-fleet-readonly>'
+        + status.health_html(status.machine_check(latest.get(s["node_id"]),
+            store.open_alerts(s["node_id"]), s.get("kind") != slotstates.OWNER_SLOT, now), now)
+        + '</div>'
         for s in held}
     since = store.listening_since()
     silent = {a["node_id"] for a in store.open_alerts() if a["rule"] == "no_heartbeat"}

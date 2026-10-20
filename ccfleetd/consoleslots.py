@@ -30,6 +30,7 @@ from . import (
     payments,
     plans,
     pricing,
+    status,
     wallet,
     wallet_routes,
     wallet_ui,
@@ -332,6 +333,7 @@ class _Look:
     listening: Optional[float] = None
     #: Read-only provider state checked for the actual holder, never the admin viewer.
     devin_states: Optional[Mapping[tuple[str, Optional[str], Optional[str]], str]] = None
+    health: Optional[Mapping[str, status.HealthCheck]] = None
 
 
 @dataclass(frozen=True)
@@ -359,9 +361,15 @@ def _slots_card(store: Store, accounts: Mapping[str, Mapping[str, Any]], csrf: s
                 if state in {"ready", "verification_required"}:
                     identity = (slot["id"], slot.get("held_by"), slot.get("gateway_claim_id"))
                     provider_states[identity] = state
-    look = _Look(accounts, store.open_alerts(), store.get_channel_versions(), csrf, now,
-                 store.listening_since(), provider_states)
     latest = store.latest_heartbeats()
+    alerts = store.open_alerts()
+    slot_rows = store.list_slots()
+    shared = {row["node_id"] for row in slot_rows if row.get("kind") == slotstates.MACHINE_SLOT}
+    checks = {node["id"]: status.machine_check(latest.get(node["id"]),
+        [alert for alert in alerts if alert["node_id"] == node["id"]], node["id"] in shared, now)
+        for node in store.list_nodes()}
+    look = _Look(accounts, alerts, store.get_channel_versions(), csrf, now,
+                 store.listening_since(), provider_states, checks)
     rows = "".join(_machine_rows(store, node, (latest.get(node["id"]) or {}).get("payload") or {},
                                  look)
                    for node in store.list_nodes())
@@ -438,6 +446,10 @@ def _slot_row(slot: Mapping[str, Any], machine: _Machine, report: Mapping[str, A
     manage = (identity + _slot_actions(slot, look.csrf) + _offer_part(node, look.csrf)
               + _keep_part(node, look.csrf, keeper=keeper if free_pool else "")
               + (_advanced_part(machine, look.csrf) if crowded else ""))
+    if look.health and node["id"] in look.health:
+        notes.append('<li id="admin-machine-health-' + escape(slot["id"])
+                     + '" data-fleet-readonly>'
+                     + status.health_html(look.health[node["id"]], look.now) + '</li>')
     return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage,
                 row_key=slot["id"])
 
@@ -459,6 +471,10 @@ def _own_row(slot: Mapping[str, Any], machine: _Machine,
                    _claude_cell(slot, node, report, said), _held_for(slot, look.now),
                    pills + list(machine.pills))
     manage = _part("Their own machine", "", OWN_NOTE.format(node=escape(node["id"])))
+    if look.health and node["id"] in look.health:
+        notes.append('<li id="admin-machine-health-' + escape(slot["id"])
+                     + '" data-fleet-readonly>'
+                     + status.health_html(look.health[node["id"]], look.now) + '</li>')
     return _row(node["id"], slot["state"], shown, cells, notes + list(machine.notes), manage,
                 row_key=slot["id"])
 
