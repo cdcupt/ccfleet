@@ -114,6 +114,52 @@ QUOTA_SCREEN = ("Current session\n100% used\nResets 4pm (UTC)\n"
                 "Current week (all models)\n42% used\nResets Friday (UTC)\n")
 
 
+@pytest.mark.parametrize("prelaunch_seconds", [0, 100])
+def test_quota_probe_gets_its_budget_after_stale_caller_and_prelaunch_checks(
+        slot, monkeypatch, prelaunch_seconds):
+    synthetic, calls = pane_runner(monkeypatch, ["Welcome", QUOTA_SCREEN])
+    observed = {}
+
+    def before_start():
+        agent.time.sleep(prelaunch_seconds)
+        return True
+
+    result = agent.read_quota(synthetic, NOW - 600, timeout=35,
+                              probe_result=observed, before_start=before_start)
+    assert result is not None, "earlier collection time must not exhaust a new probe's budget"
+    assert result["session"]["used_pct"] == 100 and result["week"]["used_pct"] == 42
+    assert observed["usage_observed_at"] == NOW + prelaunch_seconds + 6
+    assert "checked_at" not in result, "the caller still controls its existing reading timestamp"
+    assert sum("new-session" in call for call in calls) == 1
+    assert sum("/usage" in call for call in calls) == 1
+    assert calls[-1][5] == "kill-session"
+
+
+@pytest.mark.parametrize("caller_offset", [-600, 600])
+@pytest.mark.parametrize("timeout", [7, 35, 500])
+def test_quota_probe_deadline_and_command_cleanup_bounds_ignore_caller_time(
+        slot, monkeypatch, caller_offset, timeout):
+    synthetic, calls = pane_runner(monkeypatch, [])
+    commands = []
+
+    def bounded(argv, **kwargs):
+        commands.append((agent.time.time(), kwargs["timeout"]))
+        return synthetic(argv, **kwargs)
+
+    observed = {}
+    assert agent.read_quota(bounded, NOW + caller_offset, timeout=timeout,
+                            probe_result=observed) is None
+    budget = min(timeout, agent.QUOTA_TIMEOUT_S)
+    assert agent.time.time() == NOW + budget
+    assert observed["outcome"] == "native_timeout" and observed["probe_started"] is True
+    assert sum("new-session" in call for call in calls) == 1
+    assert sum("/usage" in call for call in calls) == 1
+    assert all(0.1 <= limit <= min(15, NOW + budget - started)
+               for started, limit in commands[:-1])
+    assert commands[-1] == (NOW + budget, 5.0)
+    assert calls[-1][5] == "kill-session", "cleanup retains its separate five-second allowance"
+
+
 def test_initial_rate_limit_still_reads_usage_once_and_ignores_old_banner(slot, monkeypatch):
     banner = "API Error: 429 Rate limited\nRetry-After: 90\n"
     synthetic, calls = pane_runner(monkeypatch, [banner, banner + QUOTA_SCREEN])
