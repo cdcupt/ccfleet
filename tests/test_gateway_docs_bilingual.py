@@ -202,16 +202,18 @@ def test_public_usage_ranking_explains_masking_coverage_and_api_equivalent_estim
     source = GUIDE.read_text()
     english = Document(bilingual.project_html(source, "en", TARGET)).text
     chinese = Document(bilingual.project_html(source, "zh", TARGET)).text
-    for phrase in ("Public measured usage ranking", "Unknown estimates are unranked",
-                   "unpriced usage is not $0", "valid existing aggregate tokens",
-                   "new model-aware observations", "never an email or account ID",
-                   "Masking is not anonymity", "five-minute cache-write price",
+    for phrase in ("Public measured usage ranking", "common Opus 5.5 API reference",
+                   "missing counts are not filled with zero", "valid existing aggregate tokens",
+                   "matching priced tokens from model-aware observations", "Full emails and account IDs are never published",
+                   "masked member code", "Each dollar value covers the full measured token count",
+                   "Masking is not anonymity", "five-minute cache writes $5",
                    "not a Claude Pro/Max bill", "native, bridge and gateway model calls",
                    "no HTTPS migration or model call is needed"):
         assert phrase.lower() in english.lower()
-    for phrase in ("公开的观测用量排行", "未知估值不参与排名", "无法计价的用量不按 $0",
-                   "已有经验证的汇总 Token", "新的带模型信息观测", "绝不以邮箱或账号 ID",
-                   "遮盖不等于匿名", "五分钟缓存写入价格", "不是 Claude Pro/Max 账单",
+    for phrase in ("公开的观测用量排行", "统一按 Opus 5.5 API 参考价格折算排名", "不把缺失数量补成零",
+                   "已有经验证的汇总 Token", "带模型信息观测中匹配的已计价 Token", "绝不展示完整邮箱或账号 ID",
+                   "遮盖的用户编号", "没有观测时不显示数字排名",
+                   "遮盖不等于匿名", "五分钟缓存写入 $5", "不是 Claude Pro/Max 账单",
                    "原生、桥接与网关模型调用", "不需要迁移到 HTTPS"):
         assert phrase in chinese
 

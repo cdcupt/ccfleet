@@ -442,6 +442,38 @@ permission; that approval is pending and no Devin package is for sale.
 Recheck <a href="https://docs.devin.ai/admin/billing/self-serve">official plan details</a>
 and <a href="https://cognition.com/legal/acceptable-use-policy">usage restrictions</a>
 before commercial activation.</p>
+<h2 id="native-metadata-maintenance">Upgrade native metadata without changing account ownership</h2>
+<p>Use three separate steps. First install only the allowlisted failure-code
+diagnostics in <code>machine.py</code> and <code>devin_provision.py</code>. These
+files do not change the registered adapter or collector fingerprint. Keep the
+existing native profile, credentials, proxy rules, claims, grants and expected
+server runtime unchanged. Wait for a natural idle machine lock; do not stop a
+user session or retry an uncertain install.</p>
+<p>The smaller performance update changes only <code>devin_account.py</code>. It
+removes a duplicate full config validation after the immediate caller has
+already validated it. The public model-digest method still validates, and every
+authorization callback still validates. The adapter SHA, native version and
+model-map digest stay unchanged. The collector SHA does change: register its
+exact reviewed SHA in a new root source profile and update that profile's exact
+registration digest. Preserve all identity, claim, model, containment, native
+executable and credential fields. Expired or mismatched cached proof and grants
+must remain denied until the ordinary collector obtains fresh evidence; never
+edit an old observation or bypass revocation to keep the slot green.</p>
+<p>Changing <code>devin_native.py</code> also changes the adapter revision. That
+is a separate coordinated runtime upgrade: template and metadata adapter pins,
+source-profile pins, root registration and every active server runtime
+expectation must agree. The store legitimately increments binding/key
+generations when this public runtime changes. An unchanged-runtime deployment
+guard cannot authorize it. Preserve the original closed financial/authority
+baseline and complete lineage; require an explicit old-to-new runtime transition
+record and checks for the same independently verified account and claim. Do not
+create a new baseline or replay an old grant. Acquire fresh metadata naturally
+and use the normal reconciler to issue current per-key grants.</p>
+<p>No step logs credentials, provider text, account subjects or prompts. Retain
+only reviewed static failure codes and private source/install evidence. A code
+or fixture result is not proof that a live metadata timeout is fixed. Compare
+real timing only after the guarded install and observe normal metadata cycles;
+no inference, new login, new provider account or forced session is required.</p>
 <h2 id="usd-slot-service-credit">USD slot service credit</h2>
 <p><code>CCFLEET_USD_SLOT_CREDIT_ENABLED</code> defaults to off. Enable this mode only after its server release and database-clone checks have passed. It changes new customer acquisition from a slot-count allowance to a confirmed monthly purchase using internal USD service credit. It does not convert old manual payments, charge existing holders, or turn a provider subscription into a shared plan.</p>
 <ol><li>Sign in to the admin console with a real administrator account. A configured admin token has no named database actor and cannot issue credit.</li>

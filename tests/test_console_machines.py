@@ -26,6 +26,7 @@ from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
 from ccfleetd.render import SHARED_ELSEWHERE, build_rows, render_dashboard
 from ccfleetd.store import Store
+from tests.test_html_document_preservation import Document
 
 ADMIN_TOKEN = "admin-token-long-enough-to-pass"
 
@@ -446,7 +447,16 @@ def test_a_slots_use_is_under_the_slots_name(cfg):
     page = render_dashboard(build_rows(nodes, latest, [], now, slots=one), [], now, cfg)
     usage = page[page.index("Usage and quota</h2>"):]
     assert 'usage-name">ana-1<div' in usage
-    assert "pool-9" not in usage and "erik" not in usage
+    document = Document(usage)
+    assert "ana-1" in document.text
+    assert "pool-9" not in document.text and "erik" not in document.text
+    attributes = [(tag, name, value) for tag, attrs in document.tags
+                  for name, value in attrs.items() if value is not None]
+    assert not any("erik" in value for _, _, value in attributes)
+    assert [(tag, name, value) for tag, name, value in attributes if "pool-9" in value] == [
+        ('div', 'id', 'admin-quota-pool-9')]
+    assert any(tag == 'div' and attrs.get('id') == 'admin-quota-pool-9'
+               and 'data-fleet-readonly' in attrs for tag, attrs in document.tags)
 
 
 def one_machine(cfg, slot_rows, now=3_000_000.0):

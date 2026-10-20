@@ -164,7 +164,7 @@ def test_rendered_partial_estimate_names_the_matching_priced_tokens_and_separate
     english = Parsed(project_html(raw, "en", "/")).text()
     chinese = Parsed(project_html(raw, "zh", "/")).text()
     assert "$1.02" in english and "1.2M" in english
-    assert "priced tokens" in english and "Unpriced" in english
+    assert "priced tokens" in english and "Without matched model price" in english
     assert "2.15B" in english and "for all" not in english
     assert "$1.02" in chinese and "1.2M" in chinese and "2.15B" in chinese
     assert result == before
@@ -174,10 +174,10 @@ def test_money_is_unknown_when_matching_token_scope_is_missing_or_invalid():
     result = measure(fleet_of([exact_subset()]))
     for value in (None, {}, {"total_tokens": True}, {"total_tokens": "1200803"}):
         changed = copy.deepcopy(result)
-        changed["entries"][0]["priced_tokens"] = value
+        changed["entries"][0]["reference_tokens"] = value
         parsed = Parsed(project_html(usersite.public_usage_panel(changed), "en", "/"))
         # Model details may independently retain a valid scoped estimate.
-        assert "$1.02" not in parsed.estimate_text()
+        assert "$" not in parsed.estimate_text()
 
 
 def test_untrusted_public_fields_cannot_inject_html_or_become_full_identity_labels():

@@ -94,7 +94,7 @@ def test_legacy_tokens_remain_measured_without_inferred_model_cost_or_name():
     fleet = fleet_of([reading(model=None)], handles={"holder-0": "alice"})
     result = measure(fleet)
     entry = result["entries"][0]
-    assert entry["masked_handle"] == "a***e" and entry["rank"] is None
+    assert entry["masked_handle"] == "a***e" and entry["rank"] == 1
     assert result["tokens"] == {"input_tokens": 100, "output_tokens": 200,
                                 "cache_read_input_tokens": 10,
                                 "cache_creation_input_tokens": 20, "total_tokens": 330}
@@ -122,7 +122,7 @@ def test_unknown_or_context_tier_model_is_unpriced_not_zero(model):
     result = measure(fleet_of([reading(model=model)]))
     assert result["tokens"]["total_tokens"] == 330
     assert result["cost_state"] == "unknown" and result["estimated_usd"] is None
-    assert result["entries"][0]["rank"] is None
+    assert result["entries"][0]["rank"] == 1
     assert result["entries"][0]["models"][0]["estimated_usd"] is None
 
 
@@ -215,13 +215,15 @@ def test_usage_and_native_rate_require_fresh_current_holder_identity(change):
     assert rate(fleet)["state"] == "no_data"
 
 
-def test_ranking_is_cost_descending_unknown_last_and_ties_share_rank():
+def test_ranking_uses_common_reference_even_without_model_identity_and_ties_share_rank():
     readings = [reading(output=value, model=model) for value, model in
                 [(200, MODEL), (9999, "other"), (400, MODEL), (400, MODEL)]]
     result = measure(fleet_of(readings))
     rows = result["entries"]
-    assert [row["rank"] for row in rows] == [1, 1, 3, None]
-    assert rows[0]["estimated_usd"] == rows[1]["estimated_usd"] > rows[2]["estimated_usd"]
+    assert [row["rank"] for row in rows] == [1, 2, 2, 4]
+    assert rows[0]["estimated_usd"] is None
+    assert rows[1]["reference_estimated_usd"] == rows[2]["reference_estimated_usd"]
+    assert rows[0]["reference_estimated_usd"] > rows[1]["reference_estimated_usd"]
 
 
 def test_top_list_is_bounded_with_explicit_omission_and_global_totals():
@@ -235,15 +237,18 @@ def test_public_dto_has_no_raw_identity_or_private_payload_and_does_not_mutate()
     before = copy.deepcopy((fleet.slots, fleet.beats))
     result = measure(fleet)
     raw = json.dumps(result, allow_nan=False)
-    for secret in (SECRET, BOUND, "holder-", "node-", "slot-id-", "alice", "email", "bound_fp",
+    for secret in (SECRET, BOUND, "holder-", "node-", "slot-id-", "alice", "bound_fp",
                    "observed_at", "account_switched_at", "unix_user", "access_host"):
         assert secret not in raw
     assert (fleet.slots, fleet.beats) == before
     entry = result["entries"][0]
-    assert set(entry) == {"rank", "masked_handle", *usage.COUNTERS, "unpriced_samples", "tokens",
+    assert set(entry) == {"rank", "masked_handle", "masked_email", "member_code", *usage.COUNTERS,
+                          "unpriced_samples", "tokens",
                           "priced_tokens", "priced_token_state", "unpriced_tokens",
                           "unpriced_token_state",
-                          "token_state", "estimated_usd", "cost_state", "models"}
+                          "token_state", "estimated_usd", "cost_state", "models",
+                          "reference_tokens", "reference_estimated_usd", "reference_cost_state",
+                          "reference_model"}
 
 
 @pytest.mark.parametrize("method", ["list_slots", "latest_heartbeats", "list_nodes"])
@@ -263,6 +268,32 @@ def test_account_lookup_failure_preserves_measurements_with_generic_handle():
     fleet.list_accounts = broken
     result = measure(fleet)
     assert result["state"] == "ready" and result["entries"][0]["masked_handle"] is None
+
+
+def test_public_member_codes_are_stable_purpose_specific_and_independent_of_email():
+    fleet = fleet_of([reading(), reading()], holders=["holder-a", "holder-b"])
+    cfg = Config(heartbeat_max_age_s=300, cookie_secret="PRIVATE_SIGNING_SECRET")
+    first = usage.public_summary(fleet, cfg, NOW)
+    codes = [entry["member_code"] for entry in first["entries"]]
+    assert len(set(codes)) == 2
+    assert all(isinstance(code, str) and len(code) == 8 and code.isascii()
+               and code.isdigit() for code in codes)
+    assert [entry["member_code"] for entry in usage.public_summary(fleet, cfg, NOW)["entries"]] == codes
+    changed = usage.public_summary(fleet, Config(heartbeat_max_age_s=300,
+                                  cookie_secret="DIFFERENT_SIGNING_SECRET"), NOW)
+    assert [entry["member_code"] for entry in changed["entries"]] != codes
+    raw = json.dumps(first)
+    assert "PRIVATE_SIGNING_SECRET" not in raw and SECRET not in raw and "holder-" not in raw
+    fleet.list_accounts = lambda: []
+    assert [entry["member_code"] for entry in usage.public_summary(fleet, cfg, NOW)["entries"]] == codes
+
+
+def test_missing_public_member_secret_does_not_hash_private_ids_with_a_public_salt():
+    assert _first_member_code(Config()) is None
+
+
+def _first_member_code(cfg):
+    return usage.public_summary(fleet_of([reading()]), cfg, NOW)["entries"][0]["member_code"]
 
 
 @pytest.mark.parametrize("now", [True, -1, float("nan"), float("inf")])

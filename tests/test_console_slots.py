@@ -1005,7 +1005,7 @@ def test_a_row_with_nothing_wrong_has_no_pills(console):
     machine_said(store, {"unix_user": "slot01", "claude": {"version": "2.1.278"}},
                  hostname="ana-1", reboot_required=False)
     row = row_of(slots_card(call("GET", "/admin").body), "m1")
-    assert '<div class="c-flags"></div>' in row and "slot-notes" not in row
+    assert '<div class="c-flags"></div>' in row and '<li>' not in row
 
 
 def test_each_machine_problem_is_a_pill_on_that_machines_row_only(console):

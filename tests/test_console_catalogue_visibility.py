@@ -13,6 +13,7 @@ from ccfleetd.render import build_rows, render_dashboard
 from ccfleetd.store import Store
 
 from .test_api import basic, call
+from .test_html_document_preservation import Document
 
 NOW = 2_000_000
 
@@ -46,7 +47,13 @@ def test_console_hides_retired_rows_controls_alerts_and_flow_cadence(cfg):
         assert 'retired-empty' not in page and 'retired-vm' not in page
         assert 'obsolete machine issue' not in page
         assert 'offline-live' in page and 'active machine needs attention' in page
-        assert 'Refreshing itself every minute' in page
+        document = Document(page)
+        assert 'Status updates keep your open forms' in document.text
+        assert any(tag == 'a' and attrs.get('href') == '/admin'
+                   and attrs.get('data-fleet-status') == 'admin'
+                   for tag, attrs in document.tags)
+        assert not any(attrs.get('http-equiv', '').lower() == 'refresh'
+                       for attrs in document.meta)
         assert store.list_nodes() == before
         assert store.get_slot('retired-vm')['state'] == slots.FREE
 

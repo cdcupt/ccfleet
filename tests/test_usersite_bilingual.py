@@ -112,7 +112,7 @@ def test_privacy_scopes_performance_aggregates_separately_from_the_public_usage_
         'homepage ranking',
         'visible to everyone',
         'Masking is not anonymity',
-        'estimated standard API-equivalent USD value',
+        'common Opus 5.5 API-equivalent USD value',
         'not a Claude Pro/Max subscription bill',
         'prompts, credentials or response contents',
         'Status describes machine health only',
@@ -129,7 +129,7 @@ def test_privacy_scopes_performance_aggregates_separately_from_the_public_usage_
         '首页用量排行',
         '对所有人公开',
         '遮盖不等于匿名',
-        '按标准 API 价格估算的美元价值',
+        '统一按 Opus 5.5 API 参考价格折算的美元价值',
         '不是 Claude Pro/Max 订阅账单',
         '也不公开名称、邮箱、提示词、凭据或回复内容',
         '状态只表示主机健康',
@@ -191,7 +191,9 @@ def test_stable_slot_with_new_release_renders_update_controls_without_label_shad
     assert 'Update to 2.1.284' in page.copy('en')
     assert '更新到 2.1.284' in page.copy('zh')
     assert 'keeps itself current' in page.copy('en') and '自动保持' in page.copy('zh')
-    assert page.forms == [{'class': 'inline', 'method': 'post', 'action': '/account/slots/slot-01/update'}]
+    assert page.forms == [{'class': 'inline', 'method': 'post',
+                           'action': '/account/slots/slot-01/update',
+                           'data-fleet-action': 'version'}]
     assert page.inputs == [{'type': 'hidden', 'name': 'csrf', 'value': CSRF}]
 
 

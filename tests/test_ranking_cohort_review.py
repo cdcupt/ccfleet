@@ -1,4 +1,4 @@
-"""Independent checks that the headline tokens and estimate share one cohort."""
+"""Independent checks of common-reference and reported-model token cohorts."""
 
 import copy
 from html.parser import HTMLParser
@@ -89,40 +89,43 @@ def test_latest_matched_fields_sum_and_estimate_are_exact_without_repricing_lega
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
-def test_main_row_contains_matching_total_and_cost_without_output_or_reply_sublines(language):
+def test_main_row_contains_full_matching_reference_scope_and_details_keep_actual_model_scope(language):
     data = snapshot()
     before = copy.deepcopy(data)
     shown = show(data, language)
-    assert "4.59M" in shown.main() and "$2.50" in shown.main()
+    assert "2.15B" in shown.main() and "$596.27" in shown.main()
+    assert "4.59M" not in shown.main() and "$2.50" not in shown.main()
     assert "24.87K" not in shown.main() and "29" not in shown.main()
     assert "Output" not in shown.main() and "输出" not in shown.main()
     assert "replies in priced scope" not in shown.main() and "个回复" not in shown.main()
-    for broader in ("2.15B", "8.02M", "6,136", "6,107", "8,024,874"):
+    for broader in ("8.02M", "6,136", "6,107", "8,024,874"):
         assert broader not in shown.main()
-    exact = "4,592,926"
+    exact = "2,150,446,641"
     assert any(exact in attrs.get("aria-label", "") for attrs in shown.main_attrs)
     assert "2.15B" in shown.details() and "8.02M" in shown.details()
+    assert "4.59M" in shown.details() and "$2.50" in shown.details()
     assert "24.87K" in shown.details() and "29" in shown.details()
     assert data == before
 
 
-def test_headers_and_scope_copy_distinguish_the_priceable_cohort_and_broader_details():
+def test_headers_and_scope_copy_distinguish_the_reference_and_actual_model_details():
     english = show(snapshot())
     chinese = show(snapshot(), "zh")
-    assert "Priced tokens" in english.shown(english.words)
+    assert "Recorded tokens" in english.shown(english.words)
     assert "已计价 Token" in chinese.shown(chinese.words)
-    assert "Broader reported usage" in english.details()
-    assert "older" in english.details() or "unpriced" in english.details()
-    assert "2.15B" not in english.main()
+    assert "Recorded usage used for the common reference" in english.details()
+    assert "Reported-model API estimate" in english.details()
+    assert "2.15B" in english.main()
 
 
 @pytest.mark.parametrize("model", [None, "other", "claude-haiku-5-5"])
-def test_legacy_unknown_or_unpriced_tier_has_no_primary_token_or_money_value(model):
+def test_legacy_unknown_or_unpriced_tier_uses_reference_without_inventing_actual_model_price(model):
     data = measure(fleet_of([reading(model=model, native=False)]))
     shown = show(data)
-    assert "$" not in shown.main()
-    assert "330" not in shown.main()
-    assert "—" in shown.main() and "330" in shown.details()
+    assert "<$0.01" in shown.main()
+    assert "330" in shown.main() and "Recorded tokens" in shown.main()
+    assert "Not ranked yet" not in shown.main() and "Opus 5.5 reference" in shown.main()
+    assert "—" not in shown.main() and "330" in shown.details()
     assert data["priced_tokens"] is None and data["estimated_usd"] is None
 
 
@@ -141,13 +144,14 @@ def test_positive_samples_with_measured_zero_keep_zero_tokens_and_zero_estimate(
     ("priced_tokens", {"total_tokens": "4592926", "output_tokens": 24874}),
     ("estimated_usd", None), ("estimated_usd", float("nan")), ("estimated_usd", -1),
 ])
-def test_corrupt_or_missing_matching_scope_never_borrows_legacy_tokens(field, value):
+def test_missing_actual_model_scope_cannot_change_common_reference_or_its_matching_tokens(field, value):
     data = snapshot()
     data["entries"][0][field] = value
     main = show(data).main()
     assert "$2.50" not in main and "4.59M" not in main and "24.87K" not in main
-    assert "2.15B" not in main and "8.02M" not in main
-    assert "—" in main
+    assert "2.15B" in main and "Recorded tokens" in main and "$596.27" in main
+    assert "8.02M" not in main and "priced tokens" not in main
+    assert "Opus 5.5 reference" in main and "Not ranked yet" not in main and "—" not in main
 
 
 def test_partial_model_cache_coverage_is_not_filled_from_broader_known_cache_totals():
@@ -160,7 +164,8 @@ def test_partial_model_cache_coverage_is_not_filled_from_broader_known_cache_tot
     assert data["tokens"]["total_tokens"] == 330
     assert data["priced_token_state"] == data["cost_state"] == "partial"
     main = show(data).main()
-    assert "300" in main and "330" not in main and "Partial" in main
+    assert "330" in main and "Partial" not in main
+    assert data["reference_cost_state"] == "complete"
 
 
 @pytest.mark.parametrize("value", [None, True, "24874"])
@@ -180,4 +185,4 @@ def test_priceable_reply_count_is_absent_from_main_and_kept_in_details(value):
     main = shown.main()
     assert "replies in priced scope" not in main
     assert "6,136" not in main and "6,107" not in main and "0 replies" not in main
-    assert "6,136" in shown.details() and "Model price known: —" in shown.details()
+    assert "6,136" in shown.details() and "Reported-model price matched: —" in shown.details()

@@ -7,7 +7,7 @@ every action checks the slot's holder again rather than trusting the page it
 came from.
 
 The public homepage ranking renders a separate allowlisted numeric summary with
-partly masked chosen nicknames. It never reads another account's private page.
+masked email fragments or chosen nicknames. It never reads another account's private page.
 
 Signing in to *us* is Google's (see oauth.py and sessions.py). Signing in to
 *Claude* happens on the slot, through Claude Code's own login: this page
@@ -17,6 +17,7 @@ machine, in that slot's home. Nothing here ever holds it.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import math
@@ -77,6 +78,7 @@ from .render import (
     LOCAL_TIMES_TAG,
     LOGIN_WORDS,
     MARK,
+    PANEL_ACTION_TAG,
     _age,
     _human_tokens,
     _meter,
@@ -85,6 +87,8 @@ from .render import (
     console_href,
     product_href,
     quota_reading,
+    quota_refresh_completed,
+    quota_refresh_failed,
     user_menu,
 )
 from .store import (
@@ -97,6 +101,40 @@ from .store import (
     StoreError,
     SubscriptionReleaseBlocked,
 )
+from .usage import REFERENCE_MODEL, REFERENCE_RATES
+
+# Read only this signed-in account's rendered quota area; never replace its
+# connection instructions, inputs or disclosures. One five-minute bounded run.
+QUOTA_POLL_JS = r'''(function(){
+var attempts=0,deadline=0,running=false;
+function pending(){return Array.from(document.querySelectorAll('[data-quota-slot]'));}
+function stop(nodes){nodes.forEach(function(n){n.removeAttribute('data-quota-slot');
+var zh=document.documentElement.lang.toLowerCase().startsWith('zh');
+n.textContent=zh?
+'暂未收到新的额度读数。请稍后重试；旧读数不代表还有剩余额度。':
+'No new quota reading arrived. Try again later; old readings do not confirm remaining quota.';
+var link=document.createElement('a');link.href=location.pathname;link.dataset.fleetStatus='account';
+link.textContent=zh?'查看状态':'Check status';n.append(' ',link);});}
+function poll(){var nodes=pending();if(!nodes.length){running=false;return;}
+if(++attempts>30||Date.now()>=deadline){stop(nodes);running=false;return;}
+var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},8000);
+fetch(location.pathname,{credentials:'same-origin',cache:'no-store',redirect:'error',
+signal:controller.signal}).then(function(r){if(!r.ok)throw Error('status');return r.text();})
+.then(function(text){if(text.length>2097152)throw Error('size');
+var page=new DOMParser().parseFromString(text,'text/html');
+nodes.forEach(function(n){var card=page.getElementById('slot-'+n.dataset.quotaSlot);
+var fresh=card&&card.querySelector('.usage-bars'),current=n.closest('.usage-bars');
+if(!fresh||!current)throw Error('missing');current.replaceChildren(
+...Array.from(fresh.childNodes).map(function(x){return document.importNode(x,true);}));});
+}).catch(function(){stop(pending());}).finally(function(){clearTimeout(timer);
+if(pending().length)setTimeout(poll,10000);else running=false;});}
+function start(){if(!running&&pending().length){running=true;attempts=0;
+deadline=Date.now()+300000;setTimeout(poll,10000);}}
+document.addEventListener('ccfleet:quota',start);start();
+})();'''
+QUOTA_POLL_CSP = "'sha256-" + base64.b64encode(
+    hashlib.sha256(QUOTA_POLL_JS.encode()).digest()).decode() + "'"
+QUOTA_POLL_TAG = '<script>' + QUOTA_POLL_JS + '</script>'
 
 # What a page may say after an action. Chosen by a fixed code, never text taken
 # from the request: a message a link could write is a message a stranger could
@@ -133,7 +171,7 @@ NOTES = {
     "name-bad": ("warn", "A name is 2 to 30 letters, digits and inner hyphens, and not "
                          "pool- or slot- followed by a number."),
     "name-taken": ("warn", "That name is taken. Pick another."),
-    "reading": ("ok", "Reading your usage now. It shows here within a minute or two."),
+    "reading": ("ok", "A new quota reading was requested. This panel checks for the result."),
     "emails-on": ("ok", "Outage emails on: we email you when your slot's machine has been "
                         "down for five minutes, and again when it is back."),
     "emails-off": ("ok", "Outage emails off."),
@@ -169,7 +207,7 @@ NOTES_ZH = {
         '名称需为 2–30 个英文字母、数字或中间连字符，'
         '且不能使用 pool-数字 或 slot-数字。'
     ),
-    "name-taken": "名称已被使用，请换一个。", "reading": "正在读取用量，一两分钟内会显示。",
+    "name-taken": "名称已被使用，请换一个。", "reading": "已请求新的额度读数，此面板会检查结果。",
     "emails-on": (
         '已开启故障邮件：机器离线五分钟后通知，'
         '恢复时再次通知。'
@@ -607,7 +645,7 @@ border-bottom:1px solid var(--rule-soft);font-variant-numeric:tabular-nums}
 letter-spacing:.04em;white-space:nowrap}
 .usage-ranking tbody th{background:none;text-transform:none}
 .usage-ranking .usage-ranking-row th,.usage-ranking .usage-ranking-row td{border-bottom:0}
-.usage-ranking .usage-rank{width:28px;color:var(--muted);font-size:12px}
+.usage-ranking .usage-rank{width:72px;color:var(--muted);font-size:12px}
 .usage-ranking .usage-user{min-width:72px;padding-top:18px}
 .usage-ranking .usage-observed{min-width:115px}
 .usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:19px;font-weight:700;
@@ -888,7 +926,9 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
                                            ("/status", "Status", "服务状态")))
             + '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">' + label("Source code", "源代码", inline=True)
-            + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG + '</body></html>')
+            + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG
+            + (QUOTA_POLL_TAG + PANEL_ACTION_TAG if title == "your slots" else "")
+            + '</body></html>')
 
 
 _HERE = ' class="here"'
@@ -946,13 +986,43 @@ def _public_usage_badge(reading: Mapping[str, Any]) -> str:
             if reading.get("cost_state") == "partial" else '')
 
 
+def _public_usage_reference(reading: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """A common conversion must cover exactly the displayed observed categories."""
+    tokens = reading.get("reference_tokens")
+    if (reading.get("reference_model") != REFERENCE_MODEL or not isinstance(tokens, Mapping)
+            or tokens != reading.get("tokens")
+            or not all(field in tokens for field in REFERENCE_RATES)
+            or _public_usage_count(tokens.get("total_tokens")) is None
+            or not _public_usage_count(reading.get("usage_samples"))
+            or reading.get("reference_cost_state") != reading.get("token_state")):
+        return None
+    for field in REFERENCE_RATES:
+        count = tokens.get(field)
+        if count is None and field in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            continue
+        if _public_usage_count(count) is None:
+            return None
+    if tokens["total_tokens"] != sum(tokens[field] or 0 for field in REFERENCE_RATES):
+        return None
+    quote = {"estimated_usd": reading.get("reference_estimated_usd"),
+             "cost_state": reading.get("reference_cost_state")}
+    if (not _public_usage_price_known(quote)
+            or quote["cost_state"] == "complete"
+            and any(tokens[field] is None for field in REFERENCE_RATES)):
+        return None
+    expected = math.fsum((tokens[field] or 0) * rate
+                         for field, rate in REFERENCE_RATES.items()) / 1_000_000
+    return (quote if math.isclose(quote["estimated_usd"], expected,
+                                  rel_tol=1e-12, abs_tol=1e-12) else None)
+
+
 def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
     measured = _public_usage_number(reading.get("usage_samples"))
     eligible = _public_usage_number(reading.get("usage_eligible_messages"))
     priced = _public_usage_number(reading.get("priced_samples"))
     return label(f"Measured: {measured} of {eligible} replies · "
-                 f"Model price known: {priced} of {measured}",
-                 f"已观测回复：{measured}／{eligible} · 模型价格已知：{priced}／{measured}",
+                 f"Reported-model price matched: {priced} of {measured}",
+                 f"已观测回复：{measured}／{eligible} · 上报模型计价已匹配：{priced}／{measured}",
                  inline=True)
 
 
@@ -993,14 +1063,24 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                             f"读取 {read_text}／{sample_text} · "
                             f"写入 {write_text}／{sample_text}", inline=True)
                     + '</small></div>')
-    detail = ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
+    priced = reading.get("priced_tokens")
+    priced = priced if isinstance(priced, Mapping) else {}
+    matched = (_public_usage_price_known(reading)
+               and _public_usage_count(priced.get("total_tokens")) is not None)
+    detail = ('<p><strong>' + label("Reported-model API estimate: ", "上报模型 API 估值：",
+                                   inline=True) + '</strong>' + _public_usage_value(reading)
+              + _public_usage_badge(reading) + ' · ' + label("for ", "对应 ", inline=True)
+              + _public_usage_token(priced.get("total_tokens"))
+              + label(" priced tokens", " 已计价 Token", inline=True) + '</p>' if matched else '')
+    detail += ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
               + '</p><div class="usage-models">' + ''.join(priced_rows) + '</div>'
               if priced_rows else '<p>' + label(
-                  "No priced model observations yet; older aggregate tokens have no matched "
-                  "model price.",
-                  "暂无可计价的模型观测；旧汇总 Token 没有匹配的模型价格。", inline=True) + '</p>')
-    outside = ('<p>' + label("Unpriced model observations (outside ranking)",
-                            "未计价模型观测（不参与排行）", inline=True)
+                  "Reported-model pricing has no matched observations yet. The ranking still "
+                  "converts recorded tokens at the common Opus 5.5 reference rates.",
+                  "上报模型计价暂无匹配观测；排行仍按统一的 Opus 5.5 参考价格折算已记录 Token。",
+                  inline=True) + '</p>')
+    outside = ('<p>' + label("Model observations without an reported-model price",
+                            "暂无上报模型价格的观测", inline=True)
                + '</p><div class="usage-models">' + ''.join(unpriced_rows) + '</div>'
                if unpriced_rows else '')
     totals = reading.get("tokens")
@@ -1014,15 +1094,18 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                            ("cache_read_input_tokens", "Cache read", "缓存读取"),
                            ("cache_creation_input_tokens", "Cache write", "缓存写入")))
     aggregate = '<div class="usage-model"><span class="usage-model-name">' + label(
-        "Broader reported usage (includes older/unpriced)",
-        "更广的上报范围（含旧数据／未计价用量）",
+        "Recorded usage used for the common reference",
+        "统一参考折算使用的已记录用量",
         inline=True)
     aggregate += '</span><p>' + label("Reported total ", "上报总量 ", inline=True)
     aggregate += _public_usage_token(totals.get("total_tokens")) + ' · ' + label(
-        "Unpriced ", "未计价 ", inline=True) + _public_usage_token(unpriced.get("total_tokens"))
+        "Without matched model price ", "未匹配上报模型价格 ", inline=True)
+    aggregate += _public_usage_token(unpriced.get("total_tokens"))
     aggregate += '</p><small>' + label(
-        "Separate scope from the ranking tokens and API estimate.",
-        "此范围与排行 Token 及 API 估值不同。", inline=True) + '</small>'
+        "The ranking converts these recorded categories at one reference price. Reported-model "
+        "estimates above cover only matched model observations.",
+        "排行按同一参考价格折算这些已记录分类；上方上报模型估值只覆盖已匹配的模型观测。",
+        inline=True) + '</small>'
     aggregate += '<dl class="usage-token-grid">' + reported + '</dl></div>'
     return ('<details class="usage-model-detail"><summary>'
             + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
@@ -1034,29 +1117,40 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
     source = '<details class="usage-method"><summary>' + label(
         "Method, coverage & prices", "统计范围与价格", inline=True) + '</summary>'
     source += '<p>' + _public_usage_coverage(report) + '</p><p>' + label(
-        "Tokens are reported input, output and cache-read/write subtotals. Missing coverage is "
-        "unknown, not zero. Model details and estimates use new model-aware observations; "
-        "older aggregate tokens can remain unpriced. Unknown values are not ranked. "
-        "Nicknames are partly masked, which is not anonymity.",
-        "Token 是已报告的输入、输出和缓存读取／写入小计。缺失的覆盖表示未知，不是零。模型明细"
-        "与估值使用新的带模型信息观测；旧汇总 Token 可能仍未计价。未知估值不参与排名。昵称"
-        "部分遮盖，这不等于匿名。", inline=True) + '</p><p>' + label(
-        "API value is an estimate, not a Claude Pro/Max bill, amount paid or quota balance. "
-        "Pricing assumes standard global API rates and 5-minute cache writes; actual cache "
-        "TTL, context and service tiers can change API pricing. Haiku 5.5 remains unpriced "
-        "because its per-request prompt tier is absent. Estimates follow reported model "
-        "labels; these statistics retain no raw replies, so older model/fallback attribution "
-        "cannot be verified or reliably repriced from these aggregates alone. "
-        "No older model detail is backfilled. "
-        "Reading this page makes no model call. ",
-        "API 等价值是估算，不是 Claude Pro/Max 账单、实际付款或剩余额度。估值假设采用标准全球 "
-        "API 价格及 5 分钟缓存写入价格；实际缓存有效期、上下文和服务档位可能影响 API 价格。"
-        "汇总里没有 Haiku 5.5 每次请求对应的提示长度计价档位，因此不对它估值。不补填旧模型"
-        "明细。估值依据上报的模型标签；统计不保留原始回复，因此不能仅凭旧汇总核验当时的"
-        "模型或回退路线，也不能可靠地重新计价。阅读本页不会调用模型。", inline=True)
+        "Think of one price list applied to everyone's recorded tokens. The ranking uses "
+        "Opus 5.5 standard global API rates per million tokens: input $4, output $20, "
+        "cache write $5 (5 minutes), cache read $0.20. Each category is counted once. "
+        "This common conversion also works when the original model is missing; it does not "
+        "claim that Opus served those replies. Missing replies or cache fields make the "
+        "observed subtotal partial; missing counts are not filled with zero. No measurement "
+        "means no numeric rank. Names prefer a masked email local-part fragment, such as "
+        "cd•••pt, without its domain; unsafe or short addresses use a partly masked nickname "
+        "or member code. These fragments are public; this is not anonymity.",
+        "可以理解为：给每个人已记录的 Token 套用同一张价目表。排行统一采用 Opus 5.5 标准全球 "
+        "API 参考价格，每百万 Token：输入 $4、输出 $20、缓存写入 $5（5 分钟）、缓存读取 "
+        "$0.20，每类只计一次。即使缺少原模型信息，也能统一折算；这不代表这些回复由 Opus "
+        "生成。缺少回复或缓存字段时，显示已观测到的部分小计，不把缺失数量补成零。没有用量"
+        "观测时不显示数字排名。名称优先展示邮箱用户名的局部遮盖片段，例如 cd•••pt，"
+        "不展示邮箱域名；不适合安全遮盖的短邮箱等情况使用遮盖昵称或用户编号。"
+        "这些片段会公开，这不等于匿名。",
+        inline=True) + '</p><p>' + label(
+        "The reference value is not a Claude Pro/Max bill, an amount paid, a quota balance, "
+        "unlimited usage or guaranteed savings. Reported-model API estimates stay in the "
+        "details and use only matched model observations. Model-specific estimates use the "
+        "model names reported by the agent. "
+        "Haiku 5.5 has no reported-model "
+        "estimate because its per-request prompt tier is absent. Actual cache TTL, context "
+        "and service tiers can change API pricing. These statistics retain no raw replies "
+        "and do not reconstruct older model identities. Reading this page makes no model call. ",
+        "参考折算值不是 Claude Pro/Max 账单、实际付款、剩余额度、无限用量，也不保证节省了这些"
+        "费用。按上报模型计价的 API 估值保留在明细中，只使用已匹配模型的观测；模型名称由代理"
+        "上报。由于缺少每次请求的"
+        "提示长度计价档位，Haiku 5.5 暂无上报模型估值。实际缓存有效期、上下文和服务档位"
+        "可能影响 API 价格。统计不保留原始回复，也不重建旧模型身份。阅读本页不会调用模型。",
+        inline=True)
     source += '<a href="/privacy">' + label("Public ranking privacy", "公开排行隐私说明",
                                           inline=True) + '</a>.</p>'
-    pricing_ = report.get("pricing")
+    pricing_ = report.get("reference_pricing")
     if isinstance(pricing_, Mapping):
         reference_day = pricing_.get("date")
         if (isinstance(reference_day, str)
@@ -1075,34 +1169,57 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
 
 
 def public_usage_panel(ranking: Any) -> str:
-    """Pair estimates only with their matching tokens; never price the legacy total."""
+    """Pair a common reference value with its full matching observed token scope."""
     report = ranking if isinstance(ranking, Mapping) else {}
     entries = report.get("entries") if report.get("state") in ("partial", "ready") else []
     rows = []
-    for entry in entries[:50] if isinstance(entries, list) else []:
+    for position, entry in enumerate(entries[:50] if isinstance(entries, list) else [], 1):
         if not isinstance(entry, Mapping):
             continue
         handle = entry.get("masked_handle")
+        email = entry.get("masked_email")
+        code = entry.get("member_code")
+        code = code if isinstance(code, str) and re.fullmatch(r"[0-9]{8}", code) else None
+        member = label("Member ", "用户 ", inline=True) + "••" + (code or f"{position:02d}")
         masked = (escape(handle) if isinstance(handle, str) and len(handle) <= 40
+                  and handle.strip("*")
                   and re.fullmatch(r"[a-z0-9-]{0,2}\*{1,32}[a-z0-9-]{0,2}", handle)
-                  else label("User", "用户", inline=True))
+                  else member)
+        if (type(email) is str and re.fullmatch(
+                r"(?:[A-Za-z0-9._%+-]{2}•••[A-Za-z0-9._%+-]{2}|"
+                r"[A-Za-z0-9._%+-]•••[A-Za-z0-9._%+-])", email)):
+            masked = escape(email)
         rank = _public_usage_count(entry.get("rank"))
-        rank_text = str(rank) if rank is not None and 1 <= rank <= 50 else "—"
-        priced = entry.get("priced_tokens")
-        priced = priced if isinstance(priced, Mapping) else {}
-        known = (_public_usage_price_known(entry)
-                 and _public_usage_count(priced.get("total_tokens")) is not None)
-        value = _public_usage_value(entry) if known else label("—", "—", inline=True)
-        scope = (label("for ", "对应 ", inline=True)
-                 + _public_usage_token(priced.get("total_tokens"))
-                 + label(" priced tokens", " 已计价 Token", inline=True) if known else label(
-                     "Estimate unavailable", "暂无可用估值", inline=True))
-        badge = _public_usage_badge(entry) if known else ''
+        reference = _public_usage_reference(entry)
+        known = reference is not None
+        rank_text = (str(rank) if known and rank is not None and 1 <= rank <= 50
+                     else label("Not ranked yet", "暂未排名", inline=True))
+        recorded = entry.get("tokens")
+        recorded = recorded if isinstance(recorded, Mapping) else {}
+        recorded_known = _public_usage_count(recorded.get("total_tokens")) is not None
+        value = (_public_usage_value(reference) if known else
+                 label("Reference unavailable", "暂无参考折算", inline=True) if recorded_known else
+                 label("No measurement yet", "暂无观测", inline=True))
+        if known:
+            scope = label("Opus 5.5 reference · same rates for everyone",
+                          "Opus 5.5 参考折算 · 所有人采用同一价格", inline=True)
+            token_scope = label("Recorded tokens", "已记录 Token", inline=True)
+        elif recorded_known:
+            scope = label("A matching reference conversion is not available yet.",
+                          "暂缺与这些用量匹配的参考折算。", inline=True)
+            token_scope = label("Recorded tokens", "已记录 Token", inline=True)
+        else:
+            scope = label("No token measurement is available yet.",
+                          "暂缺 Token 用量观测。", inline=True)
+            token_scope = label("No measurement yet", "暂无观测", inline=True)
+        badge = _public_usage_badge(reference) if known else ''
+        total = recorded.get("total_tokens")
+        amount = (_public_usage_token(total) if _public_usage_count(total) is not None else
+                  label("Usage unavailable", "暂无用量信息", inline=True))
         rows.append('<tr class="usage-ranking-row"><td class="usage-rank">' + rank_text
                     + '</td><th class="usage-user" scope="row">' + masked
                     + '</th><td class="usage-observed"><strong>'
-                    + _public_usage_token(priced.get("total_tokens") if known else None)
-                    + '</strong></td>'
+                    + amount + '</strong><small>' + token_scope + '</small></td>'
                     '<td class="usage-estimate"><div class="usage-estimate-value">'
                     + value + badge + '</div><small class="usage-estimate-scope">' + scope
                     + '</small></td></tr><tr class="usage-ranking-detail"><td colspan="4">'
@@ -1114,12 +1231,14 @@ def public_usage_panel(ranking: Any) -> str:
               'aria-labelledby="usage-ranking-title"><h2 id="usage-ranking-title">')
     source += label("Measured usage ranking", "观测用量排行", inline=True) + '</h2>'
     source += '<p class="usage-ranking-lead">' + label(
-        "Last 7 UTC days · ranked by estimated API value",
-        "最近 7 个 UTC 日期 · 按估算 API 等价值排名",
+        "Last 7 UTC days · ranked by one common Opus 5.5 API reference",
+        "最近 7 个 UTC 日期 · 统一按 Opus 5.5 API 参考折算排名",
         inline=True) + '</p><p class="usage-scope">' + label(
-        "Ranking token totals and costs use the same priceable scope; older/unpriced "
-        "reported usage is in details.",
-        "排行 Token 总量与估值使用同一计价范围；旧数据／未计价上报用量在明细中。",
+        "Each row is a real user with recorded activity. We apply the same reference prices "
+        "to everyone's recorded input, output and cache tokens, even when the original model "
+        "was not recorded. Dollar values cover the tokens shown in the same row.",
+        "每一行都来自有实际活动的真实用户。我们用同一参考价格折算每个人已记录的输入、输出"
+        "和缓存 Token，即使没有记录原模型，也能参与排行。美元折算值对应同一行展示的用量。",
         inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
@@ -1129,8 +1248,8 @@ def public_usage_panel(ranking: Any) -> str:
     source += ('<div class="usage-ranking-sheet" role="region" '
                'aria-labelledby="usage-ranking-title" tabindex="0"><table><thead><tr>'
                + ''.join('<th scope="col">' + label(en, zh, inline=True) + '</th>' for en, zh in (
-                   ("Rank", "排名"), ("User", "用户"), ("Priced tokens", "已计价 Token"),
-                   ("API estimate · USD", "API 估值 · 美元")))
+                   ("Rank", "排名"), ("User", "用户"), ("Tokens", "Token 用量"),
+                   ("Opus 5.5 equivalent · USD", "Opus 5.5 折算 · 美元")))
                + '</tr></thead><tbody>' + (''.join(rows) if rows else empty)
                + '</tbody></table></div><p class="usage-units">' + label(
                    "K = thousand · M = million · B = billion. Exact counts on hover.",
@@ -1153,12 +1272,14 @@ FORM_ZH = {
 }
 
 
-def _form(action: str, csrf: str, words: str, inner: str = "", cls: str = "") -> str:
+def _form(action: str, csrf: str, words: str, inner: str = "", cls: str = "", *,
+          partial: str = "") -> str:
     zh = FORM_ZH.get(words)
     if words.startswith("Update to ") and zh is None:
         zh = "更新到 " + words[len("Update to "): ]
     button = label(words, zh, inline=True) if zh is not None else escape(words)
-    return (f'<form class="inline" method="post" action="{escape(action)}">'
+    opt_in = f' data-fleet-action="{escape(partial)}"' if partial else ""
+    return (f'<form class="inline" method="post" action="{escape(action)}"{opt_in}>'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">{inner}'
             f'<button class="{cls}" type="submit">{button}</button></form>')
 
@@ -1327,7 +1448,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         '<h1>' + label('Your slots', '我的槽位', inline=True) + '</h1>'
         '<p class="sub">' + label('Choose a slot. Connect your computer. Start coding.',
                                   '选一个槽位，连接电脑，开始写代码。', inline=True)
-        + ' <a href="/account">' + label('Refresh status', '刷新状态', inline=True)
+        + ' <a href="/account" data-fleet-status="account">'
+        + label('Refresh status', '刷新状态', inline=True)
         + '</a></p></div><a class="btn quiet" href="/docs/guide">'
         + label('Setup help', '设置帮助', inline=True) + '</a></div>'
         + _account_nav("/account", monthly=_monthly_management(store, cfg, account)) + banner
@@ -1369,13 +1491,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             '服务器不保存它。'
         ),
     ]) + '</details></section>'
-    updating = any(u.get("state") == "pending" for u in updates.values())
-    # A usage read under way: come back soon, so the new numbers show.
-    reading = any(quota_reading(s.get("quota_wanted_at"),
-                                (_report_for(s, latest.get(s["node_id"])).get("quota") or {})
-                                .get("checked_at"), now) for s in held)
+    # A quota request must not repeatedly erase open instructions or forms.
+    # Native reads run independently; the user can check their status explicitly.
     return _shell("your slots", body,
-                  _refresh(held, logins, updating or reading, idle_refresh=False),
+                  _refresh(held, logins, idle_refresh=False),
                   viewer=viewer_for(account, session_id, cfg, store), width="wide",
                   extra_css=wallet_ui.CSS if wallet_routes.enabled(cfg) else "")
 
@@ -1522,7 +1641,7 @@ def _signed_out(cfg: Config) -> str:
 
 
 #: When the privacy page last changed in substance. Change it with the words.
-PRIVACY_UPDATED = "2026-10-19"
+PRIVACY_UPDATED = "2026-10-20"
 
 
 def _span(seconds: int) -> str:
@@ -2087,58 +2206,66 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             (
                 'The <a href="/#usage-ranking">homepage ranking</a> is visible to everyone. '
                 "It publishes each contributing user's measured token totals, a compact "
-                "model breakdown and an estimated standard API-equivalent USD value over "
-                "seven UTC calendar days. Only a partly masked nickname chosen by the user "
-                "is shown; short nicknames are fully masked. Users without a chosen nickname "
-                "receive a generic label. An email address or account ID is never used as "
-                "the public name. "
-                "Masking is not anonymity: a nickname or activity pattern may still identify "
-                "someone. The ranking can include one contributing user.",
+                "model breakdown and a common Opus 5.5 API-equivalent USD value over "
+                "seven UTC calendar days. Names prefer a public masked fragment of the email "
+                "local part, for example cd•••pt. Email domains and complete local parts are "
+                "not included. Unsupported or short addresses fall back to a partly masked "
+                "nickname or member code. The code is a purpose-specific pseudonym; "
+                "rotating the website's signing secret changes it. Full email addresses and "
+                "account IDs are never published as names. "
+                "Masking is not anonymity: email fragments, a nickname or activity pattern "
+                "may still identify someone. The ranking can include one contributing user.",
                 '<a href="/#usage-ranking">首页用量排行</a>对所有人公开，展示每位参与用户在七个 '
                 "UTC "
-                "日期内观测到的 Token 总量、简要模型明细，以及按标准 API 价格估算的美元价值。"
-                "名称只使用用户自己选择的昵称，并遮盖其中一部分；较短的昵称全部遮盖，未设置昵称"
-                "时显示通用标签。公开名称绝不使用邮箱或账号 ID。遮盖不等于匿名：昵称或活动模式"
+                "日期内观测到的 Token 总量、简要模型明细，以及统一按 Opus 5.5 API 参考价格折算的"
+                "美元价值。"
+                "名称优先公开邮箱用户名的局部遮盖片段，例如 cd•••pt；不展示域名或完整用户名。"
+                "短邮箱或不适合安全遮盖的地址，使用遮盖昵称或用户编号。"
+                "编号是仅用于此排行的化名，网站签名密钥轮换后会变化。"
+                "公开名称绝不展示完整邮箱或账号 ID。遮盖不等于匿名：邮箱片段、昵称或活动模式"
                 "仍可能让人识别出某位用户。排行可以包含仅一位参与用户。",
             ),
             (
                 "The ranking uses validated usage totals from current, fresh, account-bound "
-                "slot reports. Existing aggregate tokens can be shown without model prices; "
-                "model details and cost estimates use only new model-aware observations. "
+                "slot reports. All measured token categories use the same reference rates, "
+                "including existing aggregates without a known model. This conversion does "
+                "not identify the model that served a reply. Reported-model details and their "
+                "separate estimates use only matched model observations. Model names are reported "
+                "by the agent. "
                 "Eligible native, bridge and gateway "
                 "model calls are counted at the node once. It is not a complete record of "
                 "all Claude activity. Missing, partial, oversized or older observations "
                 "are not reconstructed or treated as zero. Measurement and pricing "
-                "coverage are shown, and unknown or unpriced usage stays unknown. No "
+                "coverage are shown. Missing reported-model prices stay unknown. No "
                 "prompts, response content, raw errors, hostnames, IP addresses, login "
                 "accounts or individual request timestamps appear in the ranking.",
-                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。已有汇总 Token 可以"
-                "在没有模型价格时展示；模型明细和估值只使用新的带模型信息观测。符合条件的"
+                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。所有已观测 Token "
+                "分类均采用同一参考价格，包括缺少模型信息的已有汇总；折算不代表确定了生成回复"
+                "的模型。上报模型明细与单独估值只使用已匹配的模型观测，模型名称由代理上报。符合条件的"
                 "原生、桥接和网关模型调用在节点上只计一次，不代表全部 Claude 活动的完整记录。"
                 "缺失、不完整、过大或较旧的观测不重建，也不当作零。页面注明观测与计价覆盖范围；"
-                "未知或无法计价的用量仍表示未知。排行不展示提示词、回复内容、原始错误、主机名、"
+                "缺失的上报模型价格仍表示未知。排行不展示提示词、回复内容、原始错误、主机名、"
                 "IP 地址、登录账号或单条请求时间戳。",
             ),
             (
-                "API-equivalent value is an estimate using the listed standard model "
-                "prices and cache-pricing assumptions. It is not a Claude Pro/Max "
-                "subscription bill, an amount paid, a quota balance or a promise of "
-                "savings. Partial pricing covers only observations with enough known "
-                "model and cache information; it does not assign $0 to the rest. The "
-                "primary ranking token total and estimate use the "
-                "same priceable cohort; broader reported totals and older/unpriced usage "
-                "appear only in expanded details under a separate scope. Output and reply "
-                "counts remain in the detailed breakdowns. "
+                "The ranking uses Opus 5.5 standard global reference rates per million "
+                "tokens: input $4, output $20, five-minute cache writes $5 and cache reads "
+                "$0.20. It is not a Claude Pro/Max subscription bill, an amount paid, a "
+                "quota balance, unlimited usage or a promise of savings. The primary token "
+                "total and reference value cover the same measured categories. Missing "
+                "replies or cache fields make the subtotal partial, never fabricated zero. "
+                "Reported-model estimates appear separately in expanded details and cover "
+                "only their matching priced tokens. Output and reply counts remain in the "
+                "detailed breakdowns. "
                 "Processed totals include cached context counted again per request; "
-                "they are not generated or unique text. Estimates follow reported model "
-                "labels, and these aggregates alone cannot reliably reprice older usage.",
-                "API 等价值按页面列出的标准模型价格与缓存计价假设估算，不是 Claude Pro/Max "
-                "订阅账单、实际付款、剩余额度，也不保证节省了这些费用。部分估值只覆盖模型与缓存"
-                "信息足够明确的观测，其余部分不按 $0 计算。排行主表的 Token 总量与估值使用同一"
-                "可计价批次；更广的上报总量及旧数据／未计价用量只在展开明细中以不同范围展示。"
+                "they are not generated or unique text. No older model identity is inferred.",
+                "排行统一采用 Opus 5.5 标准全球参考价格，每百万 Token：输入 $4、输出 $20、"
+                "五分钟缓存写入 $5、缓存读取 $0.20。这不是 Claude Pro/Max 订阅账单、实际付款、"
+                "剩余额度、无限用量，也不保证节省了这些费用。排行主表的 Token 总量与参考折算值"
+                "覆盖相同的已观测分类；缺少回复或缓存字段时，标注部分小计，不伪造为零。实际"
+                "模型估值在展开明细中单独展示，只覆盖对应的已计价 Token。"
                 "输出与回复数量保留在明细中。处理总量包含每次请求重复计数的"
-                "缓存上下文，不等于生成或独有的文本。估值依据上报的模型标签，不能仅凭旧汇总"
-                "可靠地重新计价。",
+                "缓存上下文，不等于生成或独有的文本。不推断旧模型身份。",
             ),
         ],
     )
@@ -2636,13 +2763,16 @@ def _slot_card(
     parts = [
         f'<div class="card slot" id="slot-{escape(slot["id"])}" '
         f'data-state="{escape(str(slot["state"]))}"{kind}><div class="slot-head">'
-        f'<h2>{escape(name)} <span class="pill {tone}">'
+        f'<h2><span class="slot-display-name" id="slot-{escape(slot["id"])}-name" '
+        f'data-fleet-readonly>{escape(name)}</span> '
+        f'<span id="slot-{escape(slot["id"])}-state" data-fleet-readonly>'
+        f'<span class="pill {tone}">'
         + label(
             title,
             title_zh,
             inline=True,
         )
-        + f"</span>{mine}</h2></div><div class=\"slot-body\">",
+        + f"</span></span>{mine}</h2></div><div class=\"slot-body\">",
     ]
     technical = ['<p class="slot-meta">'
         + bi(
@@ -2723,6 +2853,7 @@ def _slot_card(
                 fresh=fresh_observation(
                     report.get("credentials"), heard, now, cfg.heartbeat_max_age_s, listening
                 ),
+                slot_id=slot["id"],
             )
         ]
         if not own:
@@ -3213,6 +3344,11 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
 def _quota_meter(used: Any, en: str, zh: str, reset: Any, read: Any, now: float, exact: Any) -> str:
     """Keep native quota/reset calculations; translate only their authored labels."""
     source = _meter(used, en, reset, read, now, exact)
+    if not source:
+        return '<div class="meter"><div class="meter-head"><span>' + label(
+            en, zh, inline=True) + '</span></div>' + _notice(
+                "Current quota is unavailable. This does not mean quota remains.",
+                "当前额度未知，不代表还有剩余额度。", "small muted") + '</div>'
     source = source.replace(
         f"<span>{escape(en)}</span>", "<span>" + label(en, zh, inline=True) + "</span>"
     )
@@ -3222,7 +3358,8 @@ def _quota_meter(used: Any, en: str, zh: str, reset: Any, read: Any, now: float,
     )
 
 
-def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True) -> str:
+def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True,
+            slot_id: Optional[str] = None) -> str:
     """The bound account and observed usage, with the same readiness conditions."""
     if not fresh:
         return _notice(
@@ -3384,6 +3521,7 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     read = quota.get("checked_at")
+    quota_age = now - read if type(read) in (int, float) else None
     bars = _quota_meter(
         session.get("used_pct"),
         "5-hour session",
@@ -3436,8 +3574,8 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
         bars = (
             '<div class="usage-nums muted">'
             + label(
-                ("your Claude account · every device"),
-                ("Claude 账号用量 · 所有设备合计"),
+                ("last reported Claude account usage · every device"),
+                ("上次上报的 Claude 账号用量 · 所有设备合计"),
                 inline=True,
             )
             + "</div>"
@@ -3449,13 +3587,21 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             )
             + refresh
         )
+        if quota_age is None or quota_age > 10 * 60 or quota_age < 0:
+            bars = _notice(
+                "<strong>Historical reading · current quota unknown.</strong> "
+                "A signed-in account can still have reached its limit.",
+                "<strong>历史读数 · 当前额度未知。</strong>账号已登录也可能已达到用量限制。",
+                "small lapsed") + bars
     elif refresh:
         bars = (
             _notice(("No reading of your limits yet."), "尚未读取用量限制。", "small muted")
             + refresh
         )
     halves = [
-        f'<div class="usage-{name}">{html}</div>'
+        f'<div class="usage-{name}"'
+        + (f' id="slot-{escape(slot_id)}-quota" data-fleet-readonly'
+           if name == "bars" and slot_id else "") + f'>{html}</div>'
         for name, html in (("bars", bars), ("trend", spent))
         if html
     ]
@@ -3648,16 +3794,19 @@ def _claude_row(slot: Mapping[str, Any], node: Mapping[str, Any], report: Mappin
     line = bi(_claude_line(said), _claude_line_zh(said), inline=True)
     if kind in ("available", "failed"):
         update_words = f"Update to {latest}" if latest else "Update to the latest release"
-        buttons.append(_form(f"{base}/update", csrf, update_words, cls="primary"))
+        buttons.append(_form(f"{base}/update", csrf, update_words, cls="primary",
+                             partial="version"))
         if channel != "latest":
             note = '<p class="cc-note">' + label(
                 UPDATE_NOTE, (
                     '改用最新版通道，以后会自动保持该通道的最新版本。'
                 ), inline=True) + '</p>'
     if channel == "latest" and kind not in ("held", "updating"):
-        buttons.append(_form(f"{base}/stable", csrf, "Back to Stable", cls="quiet"))
+        buttons.append(_form(f"{base}/stable", csrf, "Back to Stable", cls="quiet",
+                             partial="version"))
     tone = " bad-text" if kind == "failed" else ""
-    return ('<div class="row-line cc"><div class="row-name">Claude Code</div>'
+    return (f'<div class="row-line cc" id="slot-{escape(slot["id"])}-version" '
+            'data-fleet-readonly><div class="row-name">Claude Code</div>'
             f'<div class="actions"><span class="cc-say{tone}">{line}</span>'
             f'{" ".join(buttons)}</div>{note}</div>')
 
@@ -3763,15 +3912,40 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
                    now: float) -> str:
     """Read account quota now, keeping the same protected action."""
     read = (report.get("quota") or {}).get("checked_at")
+    acknowledgement = (report.get("quota") or {}).get("refresh")
     known = isinstance(read, (int, float)) and not isinstance(read, bool)
     when = f"read {_age(now, read)} ago · " if known else ""
     when_zh = f"最近读取：{_age(now, read)} 前 · " if known else ""
-    if quota_reading(slot.get("quota_wanted_at"), read, now):
-        return '<p class="small muted">' + label(
-            when + "reading them again now…", when_zh + "正在重新读取…", inline=True) + '</p>'
-    return ('<div class="refresh"><span class="small muted">'
+    if quota_reading(slot.get("quota_wanted_at"), read, now, acknowledgement):
+        return '<p class="small muted" data-quota-slot="' + escape(slot['id']) + '">' + label(
+            when + "A new quota reading was requested. It may take a few minutes. "
+            "Only this quota panel checks for updates; your open forms are kept.",
+            when_zh + "已请求新的额度读数，可能需要几分钟。"
+            "仅此额度面板检查更新，你打开的表单会保留。",
+            inline=True) + '</p>'
+    wanted = instant(slot.get("quota_wanted_at"))
+    completed = quota_refresh_completed(slot.get("quota_wanted_at"), acknowledgement, now)
+    completed_failure = ((not known or wanted is not None and wanted > read)
+                         and quota_refresh_failed(slot.get("quota_wanted_at"),
+                                                   acknowledgement, now))
+    timed_out = (not completed and wanted is not None and wanted <= now - 5 * 60
+                 and (not known or wanted > read))
+    failed = (_notice(
+        "No new quota reading was received for your request. The machine may be busy "
+        "or unable to read Claude's usage. Missing data does not mean quota remains.",
+        "本次请求未收到新的额度读数，机器可能繁忙或无法读取 Claude 用量。"
+        "没有读数不代表还有剩余额度。",
+        "small lapsed") if timed_out or completed_failure else "")
+    latest = (_notice(
+        "Claude returned its latest available native reading. Its actual reading time "
+        "is shown below; it can be earlier than this request.",
+        "Claude 返回了原版客户端最新可用的读数。下方保留真实读取时间，可能早于本次请求。",
+        "small muted") if completed and not completed_failure and known
+        and wanted is not None and read < wanted else "")
+    return (failed + latest + '<div class="refresh"><span class="small muted">'
             + label(when + "every five minutes", when_zh + "每五分钟读取一次", inline=True)
-            + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh")
+            + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh",
+                               partial="quota")
             + '</div>')
 
 
@@ -3784,7 +3958,7 @@ def _outage_emails(account: Mapping[str, Any], csrf: str) -> str:
             "minutes, and again when it is back.")
     button = _form("/account/outage-emails", csrf, "Turn off" if on else "Turn on",
                    f'<input type="hidden" name="on" value="{"0" if on else "1"}">',
-                   "" if on else "primary")
+                   "" if on else "primary", partial="emails")
     copy = _blocks((
         '<div><h2>Outage emails</h2>'
         f"<p>{escape(said)}</p>"
@@ -3819,7 +3993,7 @@ def _rename(slot: Mapping[str, Any], csrf: str) -> str:
                         'aria-label="A new name for this slot" '
                         'data-aria-label-en="A new name for this slot" '
                         'data-aria-label-zh="槽位的新名称">'
-                    ))
+                    ), partial="rename")
             + '<p class="small muted">' + label(
                 (
                     'This also becomes the machine hostname. '

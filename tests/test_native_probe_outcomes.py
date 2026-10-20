@@ -110,6 +110,44 @@ def test_terminal_result_survives_cleanup_timeout(slot, monkeypatch):
     assert not any("send-keys" in call for call in calls)
 
 
+QUOTA_SCREEN = ("Current session\n100% used\nResets 4pm (UTC)\n"
+                "Current week (all models)\n42% used\nResets Friday (UTC)\n")
+
+
+def test_initial_rate_limit_still_reads_usage_once_and_ignores_old_banner(slot, monkeypatch):
+    banner = "API Error: 429 Rate limited\nRetry-After: 90\n"
+    synthetic, calls = pane_runner(monkeypatch, [banner, banner + QUOTA_SCREEN])
+    observed = {}
+    result = agent.read_quota(synthetic, timeout=35, probe_result=observed)
+    assert result["session"]["used_pct"] == 100 and result["week"]["used_pct"] == 42
+    assert observed["usage_parser"] is True
+    assert sum("/usage" in call for call in calls) == 1
+    assert calls[-1][5] == "kill-session"
+    assert not any("/login" in call for call in calls)
+    assert not any(value in call for call in calls if "new-session" in call
+                   for value in ("-p", "--print"))
+
+
+def test_persistent_rate_limit_waits_bounded_without_resending_usage(slot, monkeypatch):
+    synthetic, calls = pane_runner(monkeypatch, ["API Error: 429 Rate limited"] * 20)
+    observed = {}
+    assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
+    assert observed["outcome"] == "native_rate_limited"
+    assert sum("/usage" in call for call in calls) == 1
+    assert sum("capture-pane" in call for call in calls) <= 12
+    assert calls[-1][5] == "kill-session"
+
+
+def test_rate_limit_does_not_bypass_later_terminal_auth_rejection(slot, monkeypatch):
+    synthetic, calls = pane_runner(monkeypatch, ["API Error: 429 Rate limited",
+        "Login expired · Please run /login\n" + QUOTA_SCREEN])
+    observed = {}
+    assert agent.read_quota(synthetic, timeout=35, probe_result=observed) is None
+    assert observed["outcome"] == "native_login_expired"
+    assert sum("/usage" in call for call in calls) == 1
+    assert calls[-1][5] == "kill-session"
+
+
 def test_quota_contention_does_not_count_launch_or_failure(slot, monkeypatch):
     probe, _ = agent.quota_probe_dir()
     descriptor = agent._native_probe_lock(probe)
