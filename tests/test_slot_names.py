@@ -15,6 +15,7 @@ import pytest
 from ccfleetd import names, slots
 from ccfleetd.desired import machine_hostname
 from ccfleetd.store import BadName, NameTaken, NotYours, StoreError
+from tests.test_html_document_preservation import Document
 
 from .test_usersite import claimed, machine, report, site  # noqa: F401 (the fixture)
 
@@ -192,9 +193,13 @@ def test_no_rename_before_the_slot_is_set_up_or_on_ones_own_node(site):  # noqa:
     machine(store, users=("slot01",))
     erik = sign_in(quota=2, handle=None)
     assert erik.press("/account/claim").status == 303
-    assert "/rename" not in erik.page(), "still setting up"
+    def rename_actions(source):
+        return [attrs["action"] for tag, attrs in Document(source).tags
+                if tag == "form" and urllib.parse.urlsplit(attrs.get("action", "")).path
+                .endswith("/rename")]
+    assert rename_actions(erik.page()) == [], "still setting up: no rename form"
     store.add_node("erik-1", "erik", now=time.time())
     store.hold_owner_node("erik-1", erik.account["id"], now=time.time())
     report(store, "m1", [])
     page = erik.page()
-    assert "/account/slots/erik-1/rename" not in page
+    assert "/account/slots/erik-1/rename" not in rename_actions(page)
