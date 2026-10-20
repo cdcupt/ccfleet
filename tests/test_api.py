@@ -618,10 +618,9 @@ def test_an_action_returns_you_to_the_card_you_used(server, cfg):
     assert press("pin", "&version=2.1.278") == (303, "/admin#manage")
 
 
-def test_after_an_action_the_console_really_comes_back(server, cfg):
-    """An action lands on /admin#<card>. A refresh naming no address there is a
-    fragment navigation — the browser scrolls and loads nothing — so after any
-    press the console stopped keeping itself current until reloaded by hand."""
+def test_after_an_action_the_console_preserves_forms_until_explicit_status_refresh(server, cfg):
+    """Plain form navigation keeps its card anchor; idle status updates are
+    explicitly scoped so they cannot reload and discard another open form."""
     srv, store = server
     store.add_node("node-a", "erik")
     admin = basic(cfg.admin_token)
@@ -629,7 +628,8 @@ def test_after_an_action_the_console_really_comes_back(server, cfg):
     assert status == 303 and "#" in at, "an action lands on its own card"
     status, page, _ = call(srv, "GET", urllib.parse.urldefrag(at)[0], headers=admin)
     assert status == 200
-    assert next_load(at, page.decode()) == "/admin"
+    assert next_load(at, page.decode()) is None
+    assert '<a href="/admin" data-fleet-status="admin">Refresh status</a>' in page.decode()
 
 
 # -- slot model v2: a machine answers to its slot's name ---------------------------------

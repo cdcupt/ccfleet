@@ -191,7 +191,9 @@ def test_stable_slot_with_new_release_renders_update_controls_without_label_shad
     assert 'Update to 2.1.284' in page.copy('en')
     assert '更新到 2.1.284' in page.copy('zh')
     assert 'keeps itself current' in page.copy('en') and '自动保持' in page.copy('zh')
-    assert page.forms == [{'class': 'inline', 'method': 'post', 'action': '/account/slots/slot-01/update'}]
+    assert page.forms == [{'class': 'inline', 'method': 'post',
+                           'action': '/account/slots/slot-01/update',
+                           'data-fleet-action': 'version'}]
     assert page.inputs == [{'type': 'hidden', 'name': 'csrf', 'value': CSRF}]
 
 
