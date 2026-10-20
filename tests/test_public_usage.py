@@ -240,7 +240,8 @@ def test_public_dto_has_no_raw_identity_or_private_payload_and_does_not_mutate()
         assert secret not in raw
     assert (fleet.slots, fleet.beats) == before
     entry = result["entries"][0]
-    assert set(entry) == {"rank", "masked_handle", *usage.COUNTERS, "unpriced_samples", "tokens",
+    assert set(entry) == {"rank", "masked_handle", "member_code", *usage.COUNTERS,
+                          "unpriced_samples", "tokens",
                           "priced_tokens", "priced_token_state", "unpriced_tokens",
                           "unpriced_token_state",
                           "token_state", "estimated_usd", "cost_state", "models"}
@@ -263,6 +264,32 @@ def test_account_lookup_failure_preserves_measurements_with_generic_handle():
     fleet.list_accounts = broken
     result = measure(fleet)
     assert result["state"] == "ready" and result["entries"][0]["masked_handle"] is None
+
+
+def test_public_member_codes_are_stable_purpose_specific_and_independent_of_email():
+    fleet = fleet_of([reading(), reading()], holders=["holder-a", "holder-b"])
+    cfg = Config(heartbeat_max_age_s=300, cookie_secret="PRIVATE_SIGNING_SECRET")
+    first = usage.public_summary(fleet, cfg, NOW)
+    codes = [entry["member_code"] for entry in first["entries"]]
+    assert len(set(codes)) == 2
+    assert all(isinstance(code, str) and len(code) == 8 and code.isascii()
+               and code.isdigit() for code in codes)
+    assert [entry["member_code"] for entry in usage.public_summary(fleet, cfg, NOW)["entries"]] == codes
+    changed = usage.public_summary(fleet, Config(heartbeat_max_age_s=300,
+                                  cookie_secret="DIFFERENT_SIGNING_SECRET"), NOW)
+    assert [entry["member_code"] for entry in changed["entries"]] != codes
+    raw = json.dumps(first)
+    assert "PRIVATE_SIGNING_SECRET" not in raw and SECRET not in raw and "holder-" not in raw
+    fleet.list_accounts = lambda: []
+    assert [entry["member_code"] for entry in usage.public_summary(fleet, cfg, NOW)["entries"]] == codes
+
+
+def test_missing_public_member_secret_does_not_hash_private_ids_with_a_public_salt():
+    assert _first_member_code(Config()) is None
+
+
+def _first_member_code(cfg):
+    return usage.public_summary(fleet_of([reading()]), cfg, NOW)["entries"][0]["member_code"]
 
 
 @pytest.mark.parametrize("now", [True, -1, float("nan"), float("inf")])

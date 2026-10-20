@@ -229,13 +229,17 @@ def test_exact_user_model_counters_and_cost_share_the_primary_29_reply_cohort():
         assert 'title="2,150,446,641' in details and 'title="2,145,853,715' in details
 
 
-def test_no_priced_data_keeps_primary_tokens_and_cost_unknown_not_zero():
+def test_unpriced_user_shows_recorded_usage_and_status_instead_of_an_empty_row():
     report = ranking()
     report["entries"] = [report["entries"][1]]
     main = re.search(r'<tr class="usage-ranking-row">(.*?)</tr>', shown(report), flags=re.S)[1]
-    assert "1.23K" not in main and "$0.00" not in main
+    assert "1.23K" in main and "$0.00" not in main
     assert "Output" not in Document(main).text
-    assert "Estimate unavailable" in Document(main).text
+    assert "Not ranked yet" in Document(main).text
+    assert "Recorded · unpriced" in Document(main).text
+    assert "Pricing unavailable" in Document(main).text
+    assert "Member ••01" in Document(main).text
+    assert "—" not in Document(main).text
 
 
 def test_matching_priced_scope_is_required_to_publish_any_main_estimate():
@@ -244,8 +248,44 @@ def test_matching_priced_scope_is_required_to_publish_any_main_estimate():
     for scope in (None, {}, {"total_tokens": True}, {"total_tokens": -1}, {"total_tokens": "1234"}):
         report["entries"][0]["priced_tokens"] = scope
         cell = re.search(r'<td class="usage-estimate">(.*?)</td>', shown(report), flags=re.S)[1]
-        assert "$1.00" not in cell and "Estimate unavailable" in Document(cell).text
+        assert "$1.00" not in cell and "Pricing unavailable" in Document(cell).text
         assert "priced tokens" not in Document(cell).text
+
+
+def test_live_shaped_legacy_user_is_visible_with_masked_member_code_in_both_languages():
+    report = ranking()
+    entry = report["entries"][1]
+    entry.update(member_code="28456317", usage_samples=27, usage_eligible_messages=27)
+    entry["tokens"] = {**entry["tokens"], "total_tokens": 10_948_800}
+    entry["unpriced_tokens"] = entry["tokens"]
+    for language, status in (("en", "Not ranked yet"), ("zh", "暂未排名")):
+        main = re.findall(r'<tr class="usage-ranking-row">(.*?)</tr>',
+                          shown(report, language), flags=re.S)[1]
+        text = Document(main).text
+        assert "••28456317" in text and "10.95M" in text and status in text
+        suffix = "tokens" if language == "en" else "Token"
+        assert f'title="10,948,800 {suffix}"' in main
+        assert "—" not in text and "$0.00" not in text
+
+
+@pytest.mark.parametrize("code", [None, True, 12345678, "<script>PRIVATE</script>",
+                                "PRIVATE@example.com", "12345678\n", "１２３４５６７８"])
+def test_untrusted_member_codes_never_become_public_identity(code):
+    report = ranking()
+    report["entries"][1].update(member_code=code)
+    main = re.findall(r'<tr class="usage-ranking-row">(.*?)</tr>', shown(report), flags=re.S)[1]
+    assert "Member ••02" in Document(main).text and "PRIVATE" not in main
+
+
+def test_missing_token_measurement_stays_unavailable_and_does_not_invent_zero():
+    report = ranking()
+    entry = report["entries"][1]
+    entry["tokens"] = None
+    main = re.findall(r'<tr class="usage-ranking-row">(.*?)</tr>', shown(report), flags=re.S)[1]
+    assert "Usage unavailable" in Document(main).text and "—" not in Document(main).text
+    assert "No measurement yet" in Document(main).text and "Recorded · unpriced" not in main
+    assert "Recorded usage is shown" not in main
+    assert 'title="0 tokens"' not in main and "$0.00" not in main
 
 
 def test_http_home_aliases_alone_receive_ranking_and_non_home_pages_do_not(monkeypatch):
