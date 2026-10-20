@@ -130,8 +130,8 @@ def test_subject_fingerprint_uses_global_user_and_trusted_origin_only():
     (status() + b"\x1b[0m", "native_status_controls"),
     (status() + b"\t", "native_status_controls"),
     (b"\n" * 129, "native_status_line_bound"),
-    (status() + b"User ID: another_subject\n", "native_status_unknown_or_duplicate_label"),
-    (status() + b"New field: unexpected\n", "native_status_unknown_or_duplicate_label"),
+    (status() + b"User ID: another_subject\n", "native_status_duplicate_label"),
+    (status() + b"New field: unexpected\n", "native_status_unknown_label"),
     (status() + b"unstructured value\n", "native_status_unknown_line"),
     (status(**{"User ID": "private@example.test"}), "native_status_subject_invalid"),
     (status(**{"API server": "https://other.example.test"}), "native_status_origin_mismatch"),
@@ -339,7 +339,7 @@ def test_runtime_profile_mismatch_rejects_before_credential_read(scenario, field
 
 @pytest.mark.parametrize("case,reason", [
     ("catalog", "native_model_catalog_unverified"),
-    ("nonzero", "native_metadata_rejected"),
+    ("nonzero", "native_auth_status_rejected"),
     ("mutation", "native_account_changed_during_verification"),
     ("revocation", "metadata_authorization_revoked"),
     ("bound", "native_metadata_output_bound"),
@@ -361,6 +361,41 @@ def test_failure_never_produces_account_or_private_attestation(scenario, case, r
     assert result.cleanup_confirmed and not list(scenario.state.iterdir())
     if case in {"nonzero", "revocation", "bound"}:
         assert len(scenario.calls) == 1
+
+
+@pytest.mark.parametrize("phase,reason", [
+    (0, "native_auth_status_rejected"), (1, "native_models_list_rejected"),
+])
+@pytest.mark.parametrize("exit_code", [1, 42, -15])
+def test_metadata_rejection_names_only_the_failed_command(scenario, phase, reason, exit_code):
+    before = scenario.credentials.read_bytes()
+
+    def popen(*args, **kwargs):
+        if len(scenario.calls) == phase:
+            scenario.flags["returncode"] = exit_code
+        return scenario.popen(*args, **kwargs)
+
+    result = scenario.run(popen_factory=popen)
+    assert result.reason == reason and len(scenario.calls) == phase + 1
+    assert not result.report["identity_verified"] and result.report["account_fp"] is None
+    assert result.credential_sha256 is None and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir()) and scenario.credentials.read_bytes() == before
+    assert str(exit_code) not in result.reason
+    assert SECRET.decode() not in result.reason and SUBJECT not in result.reason
+
+
+@pytest.mark.parametrize("extra,reason", [
+    (b"private-label@example.test: private-value\n", "native_status_unknown_label"),
+    (b"User ID: private-subject\n", "native_status_duplicate_label"),
+])
+def test_status_shape_failure_keeps_identity_closed_and_private(scenario, extra, reason):
+    scenario.outputs[0] += extra
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == reason and len(scenario.calls) == 2
+    assert not result.report["identity_verified"] and result.report["account_fp"] is None
+    assert result.credential_sha256 is None and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+    assert "private" not in result.reason and SUBJECT not in result.reason
 
 
 def test_failed_cleanup_retains_quarantined_private_directory_and_no_identity(scenario):

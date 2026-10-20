@@ -147,8 +147,10 @@ def parse_auth_status(raw, *, expected_api_origin):
             label, value = line, ""
         else:
             raise AccountError("native_status_unknown_line")
-        if label not in _LABELS or label in seen:
-            raise AccountError("native_status_unknown_or_duplicate_label")
+        if label not in _LABELS:
+            raise AccountError("native_status_unknown_label")
+        if label in seen:
+            raise AccountError("native_status_duplicate_label")
         seen.add(label)
         if label == "User ID":
             if not _SUBJECT.fullmatch(value):
@@ -491,8 +493,10 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
             except native.egress.EgressError:
                 raise AccountError("native_egress_unavailable") from None
             outputs = []
-            for arguments, limit in ((["auth", "status"], MAX_STATUS_BYTES),
-                                     (["models", "list", "--format", "json"], 2 * 1024 * 1024)):
+            for arguments, limit, rejected in (
+                    (["auth", "status"], MAX_STATUS_BYTES, "native_auth_status_rejected"),
+                    (["models", "list", "--format", "json"], 2 * 1024 * 1024,
+                     "native_models_list_rejected")):
                 if not permitted():
                     raise AccountError("metadata_authorization_revoked")
                 process = popen_factory([data["files"]["executable"]["path"], *arguments],
@@ -504,7 +508,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                 if not cleanup:
                     raise AccountError("native_metadata_cleanup_unconfirmed")
                 if process.returncode != 0:
-                    raise AccountError("native_metadata_rejected")
+                    raise AccountError(rejected)
                 process = None
                 outputs.append(raw)
             subject = parse_auth_status(outputs[0], expected_api_origin=source["api_origin"])
