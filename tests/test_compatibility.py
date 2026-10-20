@@ -66,10 +66,17 @@ def slot(tmp_path, monkeypatch):
         elif argv[0] == "tmux":
             if "new-session" in argv:
                 options["captures"] = 0
+                options["input"] = ""
+                options["entered"] = False
+            elif "send-keys" in argv:
+                if argv[-1] == "/usage":
+                    options["input"] = "/usage"
+                elif argv[-1] == "Enter" and options.get("input") == "/usage":
+                    options["entered"] = True
             elif "capture-pane" in argv:
                 options["captures"] += 1
-                if options["captures"] == 1:
-                    output = "ready"
+                if not options["entered"]:
+                    output = "❯ " + options["input"]
                 else:
                     output = options["usage"]
                     if options["callback"]:

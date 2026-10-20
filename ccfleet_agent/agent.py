@@ -1069,6 +1069,18 @@ def read_quota(runner: Runner = subprocess.run,
         os.close(lock)
 
 
+def _quota_prompt_input(pane: str) -> Optional[str]:
+    """Recognize native input, excluding numbered selection menus."""
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", pane[:NATIVE_PANE_LIMIT])
+    if re.search(r"(?m)^\s*(?:[❯>]\s*)?(?:\d+[.)]|\[\d+\])(?:\s|$)", text):
+        return None
+    for line in reversed(text.splitlines()):
+        prompt = re.fullmatch(r"\s*[❯>]\s*(.*?)\s*", line)
+        if prompt:
+            return prompt[1]
+    return None
+
+
 def _read_quota_locked(path: str, probe: str, runner: Runner,
                        now: Optional[float], timeout: float,
                        observation: Optional[dict[str, Any]] = None,
@@ -1103,7 +1115,7 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
     if time.time() >= deadline:
         return None
     result: Optional[dict[str, Any]] = None
-    asked = False
+    typed = submitted = False
     try:
         # A timeout or nonzero client result does not prove the tmux server
         # rejected creation. Always clean up after even an ambiguous launch.
@@ -1138,27 +1150,38 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
                 command("send-keys", "-t", QUOTA_SESSION, "Down")
                 command("send-keys", "-t", QUOTA_SESSION, "Enter")
                 continue
-            if not asked:
-                # Deliberately not keyed to a banner string: the welcome text
-                # changes between releases, and an earlier version of this waited
-                # for one that had scrolled away. The trust prompt being gone is
-                # the only signal that means anything stable.
-                command("send-keys", "-t", QUOTA_SESSION, "/usage")
-                command("send-keys", "-t", QUOTA_SESSION, "Enter")
-                asked = True
+            prompt = _quota_prompt_input(pane)
+            if not typed:
+                # Startup can remain blank after tmux launches. Wait for an
+                # empty native input (or its known placeholder) before typing.
+                ready = prompt == "" or (prompt is not None and re.fullmatch(
+                    r'Try "[^"\r\n]{1,160}"', prompt))
+                if not ready:
+                    continue
+                if command("send-keys", "-t", QUOTA_SESSION, "/usage") is None:
+                    return None
+                typed = True
                 continue
-            if asked:
-                found = parse_quota(pane)
-                if found:
-                    observation.update(usage_parser=True, usage_observed_at=time.time())
-                # A pane captured mid-draw can hold the session block with the
-                # weekly one still to come. Taking that would cache a half
-                # answer for the next half hour, so keep the best seen and wait
-                # for both; settle for a partial one only when time runs out.
-                if len(found) > len(result or {}):
-                    result = found
-                if "session" in found and "week" in found:
-                    break
+            if not submitted:
+                # A successful send does not mean the TUI consumed the text.
+                # Confirm the exact command on a later capture, then Enter once.
+                if prompt != "/usage":
+                    continue
+                if command("send-keys", "-t", QUOTA_SESSION, "Enter") is None:
+                    return None
+                submitted = True
+                continue
+            found = parse_quota(pane)
+            if found:
+                observation.update(usage_parser=True, usage_observed_at=time.time())
+            # A pane captured mid-draw can hold the session block with the
+            # weekly one still to come. Taking that would cache a half
+            # answer for the next half hour, so keep the best seen and wait
+            # for both; settle for a partial one only when time runs out.
+            if len(found) > len(result or {}):
+                result = found
+            if "session" in found and "week" in found:
+                break
         if result is None and observation.get("outcome") == "native_refresh_unconfirmed":
             observation["outcome"] = "native_timeout"
     finally:
