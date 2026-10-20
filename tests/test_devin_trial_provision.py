@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +28,44 @@ def write(path, value, mode=0o600):
 def scene(tmp_path, monkeypatch):
     monkeypatch.setattr(t, "ROOT_UID", os.geteuid())
     monkeypatch.setattr(t.provision, "ROOT_UID", os.geteuid())
+    # The fixture is a synthetic protected root. Linux's /tmp is correctly
+    # world writable, whereas macOS's per-user temp ancestry is private. Skip
+    # only ancestors ABOVE this fixture, retaining real no-follow/owner/mode
+    # checks for every directory the refresher actually operates inside it.
+    original_directory = t.provision._directory
+
+    def fixture_directory(path):
+        path = Path(path)
+        try:
+            parts = path.relative_to(tmp_path).parts
+        except ValueError:
+            return original_directory(path)
+        fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o022
+            ):
+                raise t.provision.ProvisionError("unsafe fixture directory")
+            for part in parts:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+                info = os.fstat(fd)
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o022
+                ):
+                    raise t.provision.ProvisionError("unsafe fixture directory")
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    monkeypatch.setattr(t.provision, "_directory", fixture_directory)
     for name, filename in (
         ("REGISTRATION", "provision.json"),
         ("POLICY", "worker.json"),
