@@ -88,6 +88,23 @@ def test_native_http_enriches_only_server_copy_and_preserves_context(native_http
     assert c.store.get_slot("s1")["state"] == slots.CLAIMED
 
 
+@pytest.mark.parametrize("provider", ["devin", "anthropic"])
+def test_stock_placeholder_annotation_is_native_only(native_http, provider):
+    from tests.test_stock_native_request import stock_body
+
+    c = native_http
+    if provider == "anthropic":
+        c.store.move_slot("s1", slots.ACTIVE)
+        c.key = c.store.create_gateway_key("a1", "Anthropic endpoint", ["s1"], now=c.now)
+    body = stock_body()
+    status, _, _ = request(c, body)
+    assert status == 200
+    forwarded = c.pool.requests[0]["body"]
+    assert ("defer_loading" in forwarded["tools"][0]) is (provider == "anthropic")
+    assert forwarded["messages"] == body["messages"]
+    assert forwarded["tools"][1] == body["tools"][1]
+
+
 def test_native_status_is_model_free_private_and_cache_bound_to_key_generation(native_http):
     c = native_http
     assert c.gateway.status(c.key)["ready"]

@@ -234,7 +234,9 @@ def health_html(check: HealthCheck, now: float) -> str:
         number = _health_number(value, 1_000_000)
         if name in names_ and number is not None:
             en, zh = names_[name]
-            metrics.append(label(f"{en} {number:.1f}%", f"{zh} {number:.1f}%", inline=True))
+            metrics.append('<span class="health-metric">'
+                           + label(f"{en} {number:.1f}%", f"{zh} {number:.1f}%", inline=True)
+                           + '</span>')
     reasons = ' '.join(label(*HEALTH_REASONS[code], inline=True)
                        for code in check.reasons if code in HEALTH_REASONS)
     stamp = _health_time(check.observed_at, now)
@@ -243,7 +245,7 @@ def health_html(check: HealthCheck, now: float) -> str:
     return ('<div class="health-check" data-health="' + level + '"><strong>'
             '<span class="st-dot ' + level + '" aria-hidden="true"></span> '
             + label(*HEALTH_WORDS[level], inline=True) + '</strong><p>' + reasons + '</p>'
-            + ('<p class="health-metrics">' + ' · '.join(metrics) + '</p>' if metrics else '')
+            + ('<div class="health-metrics">' + ''.join(metrics) + '</div>' if metrics else '')
             + observed + '</div>')
 
 #: The site's own component, beside one "node:<id>" per machine; the prefix
@@ -562,6 +564,9 @@ font-size:13px;overflow-wrap:anywhere}
 .health-check[data-health=yellow]{border-color:var(--warn)}
 .health-check[data-health=red]{border-color:var(--bad)}
 .health-check p{margin:5px 0}.health-observed{color:var(--muted);font-size:12px}
+.health-check .health-metrics{display:grid;
+grid-template-columns:repeat(auto-fit,minmax(min(100%,140px),1fr));gap:4px 12px;margin:8px 0}
+.health-check .health-metric{min-width:0;font-variant-numeric:tabular-nums}
 """
 LINE_WORDS = {GREEN: "operational", YELLOW: "degraded", RED: "down"}
 

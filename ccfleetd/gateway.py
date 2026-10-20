@@ -426,6 +426,8 @@ class GatewayRuntime:
                 model_key = hashlib.sha256(model.encode()).hexdigest()
                 for field in wire.IDENTITY_FIELDS:
                     value.pop(field, None)
+                if key.get("provider") == gateway_providers.DEVIN:
+                    value = gateway_providers.native_client_request(value)
                 body = json.dumps(value, ensure_ascii=False, separators=(",", ":"),
                                   allow_nan=False).encode()
                 if len(body) > self.cfg.gateway_max_body_bytes:
