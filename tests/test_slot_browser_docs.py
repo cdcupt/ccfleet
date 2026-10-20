@@ -34,7 +34,8 @@ def test_guide_explains_signed_in_machine_browsing_without_changing_billing(lang
 def test_related_references_link_to_the_authenticated_slot_browser(relative):
     page = Document((Path(__file__).parents[1] / relative).read_text())
     assert "/account/available" in page.links or "/account/available" in page.codes
-    for phrase in ("Browse available slots", "Your slots", "20 machines", "Alpha"):
+    browser_label = "Available slots" if relative == "docs/runbooks.html" else "Browse available slots"
+    for phrase in (browser_label, "Your slots", "20 machines", "Alpha"):
         assert phrase in page.text
     assert not page.duplicate_ids
 
