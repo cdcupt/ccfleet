@@ -10,6 +10,7 @@ import pytest
 
 from ccfleetd import stripe_checkout as base
 from ccfleetd import stripe_subscriptions as recurring
+from tests.test_stripe_billing import NOW, signed
 
 
 class Reply:
@@ -324,6 +325,81 @@ def test_foreign_wallet_review_has_no_subscription_and_is_ignored(flow):
     assert client.review_subscription("charge.refunded", {"id": "ch_Wallet"}) is None
     assert all(method == "GET" for method, _, _, _ in calls)
     assert not any("/subscriptions/" in path for _, path, _, _ in calls)
+
+
+@pytest.mark.parametrize("kind", ["charge.dispute.created", "charge.dispute.closed"])
+@pytest.mark.parametrize("through_charge", [False, True])
+@pytest.mark.parametrize("allocated", [False, True])
+def test_signed_du_dispute_resolves_only_verified_invoice_allocation(
+    flow, kind, through_charge, allocated
+):
+    client, _, responses, calls = flow
+    dispute = {
+        "id": "du_SYNTHETIC",
+        "object": "dispute",
+        "livemode": False,
+        "charge": "ch_Own",
+        "payment_intent": None if through_charge else "pi_Own",
+        "reason": "fraudulent",
+        "status": "needs_response",
+    }
+    responses["/v1/disputes/du_SYNTHETIC"] = dispute
+    responses["/v1/charges/ch_Own"] = {
+        "id": "ch_Own",
+        "object": "charge",
+        "livemode": False,
+        "payment_intent": "pi_Own",
+    }
+    path = (
+        "/v1/invoice_payments?payment%5Btype%5D=payment_intent"
+        "&payment%5Bpayment_intent%5D=pi_Own"
+    )
+    responses[path] = {
+        "object": "list",
+        "has_more": False,
+        "data": [
+            {
+                "object": "invoice_payment",
+                "livemode": False,
+                "invoice": "in_Own",
+                "payment": {"type": "payment_intent", "payment_intent": "pi_Own"},
+            }
+        ] if allocated else [],
+    }
+    body, signature = signed(client, dispute, kind=kind, identity="evt_dispute")
+    event = base.verify_webhook(
+        body, signature, client.settings.webhook_secret, mode="test",
+        expected_account_id=client.settings.expected_account_id, now=NOW,
+    )
+    assert client.review_subscription(event["type"], event["data"]["object"]) == (
+        "sub_Own" if allocated else None
+    )
+    assert ("GET", "/v1/disputes/du_SYNTHETIC", None) in [call[:3] for call in calls]
+    assert any(call[1] == "/v1/charges/ch_Own" for call in calls) is through_charge
+    assert any(call[1] == "/v1/invoices/in_Own" for call in calls) is allocated
+    assert all(method == "GET" for method, _, _, _ in calls)
+
+
+@pytest.mark.parametrize("identity", ["dp_SYNTHETIC", "du_", "du_SYNTHETIC/other", "du_SYNTHETIC?expand=x"])
+def test_invalid_dispute_ids_and_paths_never_reach_dispute_transport(flow, identity):
+    client, _, _, calls = flow
+    with pytest.raises(base.StripeCheckoutError):
+        client.review_subscription("charge.dispute.created", {"id": identity})
+    assert all(path == "/v1/account" for _, path, _, _ in calls)
+    calls.clear()
+    with pytest.raises(base.StripeCheckoutError):
+        client._request("/v1/disputes/" + identity)
+    assert calls == []
+
+
+def test_dispute_response_identity_mismatch_never_traverses_payment_graph(flow):
+    client, _, responses, calls = flow
+    responses["/v1/disputes/du_SYNTHETIC"] = {
+        "object": "dispute", "id": "du_OTHER", "payment_intent": "pi_Own",
+    }
+    with pytest.raises(base.StripeCheckoutError):
+        client.review_subscription("charge.dispute.created", {"id": "du_SYNTHETIC"})
+    assert [path for _, path, _, _ in calls] == ["/v1/account", "/v1/disputes/du_SYNTHETIC"]
 
 
 def test_cancellation_only_stops_future_renewal_and_rechecks_actual_state(flow):

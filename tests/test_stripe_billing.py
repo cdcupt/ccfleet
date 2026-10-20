@@ -309,6 +309,21 @@ def test_expanded_payment_identity_and_missing_unrelated_legacy_identity(billing
                   kind="charge.refunded", identity="evt_legacy") == "ignored"
 
 
+@pytest.mark.parametrize("kind", ["charge.dispute.created", "charge.dispute.closed"])
+def test_signed_du_dispute_keeps_wallet_hold_idempotent_without_adding_credit(billing, kind):
+    start(billing)
+    billing.client.references["pi_synthetic"] = reference(billing)
+    value = {"id": "du_SYNTHETIC", "object": "dispute", "livemode": False,
+             "charge": "ch_SYNTHETIC", "payment_intent": "pi_synthetic",
+             "reason": "fraudulent", "status": "needs_response"}
+    assert handle(billing, value, kind=kind, identity="evt_dispute") == "held"
+    before = snapshot(billing.store)
+    assert billing.store.wallet_balance("alice") == 0
+    assert billing.store.wallet_spending_blocked("alice")
+    assert handle(billing, value, kind=kind, identity="evt_dispute") == "held"
+    assert snapshot(billing.store) == before
+
+
 def test_wrong_review_object_or_missing_own_payment_identity_fails_safely(billing):
     start(billing)
     for value in ({"object": "wrong", "payment_intent": "pi_synthetic"},
