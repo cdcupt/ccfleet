@@ -147,6 +147,26 @@ def test_complete_turn_counts_all_cache_usage_and_never_changes_product_store(tr
         assert b"PRIVATE" not in raw and token.encode() not in raw
 
 
+def test_stock_inert_placeholder_reaches_worker_without_annotation(trial):
+    from tests.test_stock_native_request import stock_body
+
+    captured = []
+
+    class Capture(FakeWorker):
+        def perform(self, raw, authorized):
+            captured.append(json.loads(raw))
+            return super().perform(raw, authorized)
+
+    trial.runtime.transport = Capture
+    token = trial.runtime.create_key(trial.alice)
+    original = stock_body()
+    trial.runtime.turn(token, json.dumps(original).encode())
+    assert original["tools"][0]["defer_loading"] is True
+    assert "defer_loading" not in captured[0]["tools"][0]
+    assert captured[0]["tools"][1] == original["tools"][1]
+    assert captured[0]["messages"] == original["messages"]
+
+
 def test_key_lasts_across_midnight_replacement_and_revoke_are_own_scoped(trial):
     t = trial
     a, b = t.runtime.create_key(t.alice), t.runtime.create_key(t.bob)

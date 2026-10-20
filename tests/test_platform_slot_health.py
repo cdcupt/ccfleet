@@ -29,6 +29,27 @@ def test_complete_fresh_platform_checks_are_green_but_never_a_model_test():
     assert 'Model requests are not tested' in text
 
 
+@pytest.mark.parametrize('language,memory,observed', [
+    ('en', 'Memory 37.5%', 'Last report:'), ('zh', '内存 37.5%', '最近上报：'),
+])
+def test_health_metrics_are_compact_cells_without_standalone_separators(language, memory, observed):
+    check = status.platform_check(ready_report(), NOW)
+    html = project_html(status.health_html(check, NOW), language, '/status')
+    assert '<div class="health-metrics">' in html
+    assert html.count('class="health-metric"') == len(check.metrics) == 7
+    assert ' · ' not in html and '<p class="health-metrics">' not in html
+    assert memory in shown(html) and observed in shown(html)
+    assert 'data-health="green"' in html and 'class="st-dot green"' in html
+    assert status.since_html(check.observed_at, NOW) in html
+    assert '.health-check .health-metrics{display:grid;' in status.LINE_CSS
+    assert 'minmax(min(100%,140px),1fr)' in status.LINE_CSS
+
+
+def test_missing_metrics_do_not_leave_an_empty_grid():
+    html = status.health_html(status.platform_check(None, NOW), NOW)
+    assert 'health-metrics' not in html and 'health-metric' not in html
+
+
 @pytest.mark.parametrize('raw', [None, {}, {'state': 'ready'}, {'state': 'unavailable'}])
 def test_missing_platform_is_unknown(raw):
     assert status.platform_check(raw, NOW).level == status.UNKNOWN

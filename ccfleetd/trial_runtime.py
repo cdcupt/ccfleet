@@ -18,6 +18,7 @@ from ccfleet_agent import devin_native, devin_relay
 
 from . import devin_trial as ledger
 from .config import ConfigError
+from .gateway_providers import native_client_request
 from .trial_access import AccessKeys
 from .trial_worker_transport import MODEL, TrialAttempt, protected_json
 
@@ -176,6 +177,7 @@ class TrialRuntime:
             raise TrialUnavailable("trial_context_too_large", 413)
         try:
             body = devin_native.mcp._decode(raw)
+            body = native_client_request(body)
             clean = devin_native.validate_native_request(body, request_models=[MODEL], effort="max")
         except (ValueError, TypeError, RecursionError):
             raise TrialUnavailable("trial_requires_supported_opus_5_5_request", 400) from None

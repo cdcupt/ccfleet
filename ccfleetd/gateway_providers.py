@@ -41,6 +41,34 @@ REPORT_FIELDS = frozenset({
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _CLAIM = re.compile(r"[0-9a-f]{32}\Z")
 _VERSION = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}\Z")
+_PLACEHOLDER_NAME = "DeferredToolPlaceholder"
+_PLACEHOLDER_DESCRIPTION = (
+    "Reserved placeholder that keeps deferred tool loading active; never call this tool."
+)
+
+
+def native_client_request(body: Any) -> Any:
+    """Remove one known inert CLI annotation before the pinned native contract.
+
+    The reserved empty placeholder remains declared and cannot execute a real
+    action. Real tools, history and all generation controls remain unchanged;
+    unknown declarations still fail the existing native validator.
+    """
+    if not isinstance(body, dict) or not isinstance(body.get("tools"), list):
+        return body
+    changed = False
+    declarations = []
+    for tool in body["tools"]:
+        if (isinstance(tool, dict) and tool.get("name") == _PLACEHOLDER_NAME
+                and tool.get("description") == _PLACEHOLDER_DESCRIPTION
+                and tool.get("input_schema") == {"type": "object", "properties": {}}
+                and tool.get("defer_loading") is True
+                and not tool.keys() - {"name", "description", "input_schema",
+                                       "cache_control", "defer_loading"}):
+            tool = {name: value for name, value in tool.items() if name != "defer_loading"}
+            changed = True
+        declarations.append(tool)
+    return {**body, "tools": declarations} if changed else body
 
 
 def normalize_provider(value: Any) -> Optional[str]:
