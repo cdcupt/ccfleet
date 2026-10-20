@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One short Devin trial — offline foundation</title>
+<style>body{font:17px/1.6 system-ui,sans-serif;color:#162033;background:#f6f8fc;margin:0}main{max-width:800px;margin:auto;padding:32px 20px}h1,h2{line-height:1.2}.notice{padding:20px;border:2px solid #6d28d9;border-radius:14px;background:#fff}table{border-collapse:collapse;width:100%;background:#fff}th,td{text-align:left;padding:12px;border-bottom:1px solid #dbe3ef;vertical-align:top}th{width:35%}code{overflow-wrap:anywhere}a{color:#5b21b6}small{color:#475569}</style></head>
+<body><main><p><a href="devin.html">Devin guide</a> · Engineering preparation · October 20, 2026</p>
+<h1>One account. One short trial.</h1>
+<p class="notice"><strong>This is an offline foundation, not an available offer.</strong> No website button, CLI command, live API route or provider adapter opens access. The existing private own-account pilot is unchanged.</p>
+<p>Think of this as a ticket desk with its door still locked. It can record who has used one ticket, stop duplicate visits and reserve a short turn. It cannot run Devin or share anyone’s Devin account.</p>
+<h2>The proposed trial limits</h2>
+<table><tbody><tr><th>Who gets a ticket?</th><td>A verified Fleet account gets one lifetime attempt. This means one per Fleet account, not proof that a person has only one account.</td></tr>
+<tr><th>How long?</th><td>The ticket expires after at most 10 minutes. Agent work can reserve at most 120 seconds in total, with at most 60 seconds for one step. Unused reserved time is not refunded.</td></tr>
+<tr><th>How much work?</th><td>At most five agent steps. Each incoming request is limited to 64 KiB. This is a byte limit, not a token allowance.</td></tr>
+<tr><th>Can everyone enter?</th><td>Only one trial can be open globally. When busy, the desk refuses the next request immediately; it does not create a waiting queue or consume that person’s attempt.</td></tr>
+<tr><th>Can I stop?</th><td>Cancellation immediately revokes the ticket. It cannot be reopened. A future worker must keep checking the ticket and stop its actual process.</td></tr>
+<tr><th>Does each visitor get fresh history?</th><td>Every trial gets a new random history namespace. A future adapter must create a fresh native session in that namespace and prove worker and history cleanup before admitting another visitor.</td></tr>
+<tr><th>What if cleanup fails?</th><td>All future admissions pause. An expired running step or missing history cleanup also pauses admissions. A later cleanup receipt does not automatically remove that pause.</td></tr></tbody></table>
+<h2>What the code does today</h2>
+<p><code>ccfleetd/devin_trial.py</code> stores only local reservation records in a dedicated SQLite ledger. It defaults to disabled and rejects a database that contains other product tables. SQLite transactions and a uniqueness constraint guard simultaneous admissions. The ledger keeps a hash of the trial secret and stores no prompts, replies or provider credentials.</p>
+<p>The caller must obtain the account identity and verified status from Fleet’s trusted sign-in checks. A visitor cannot establish that status by submitting a field. Cleanup receipts also require a trusted future supervisor; they are not visitor assertions.</p>
+<h2>What still keeps the door locked</h2>
+<ol><li><strong>Appropriate provider access rights.</strong> Pro and Max are individual plans. Public access and resale are not enabled. See <a href="https://docs.devin.ai/admin/billing/self-serve">Devin’s plan rules</a> and <a href="https://cognition.com/legal/acceptable-use-policy">Cognition’s policy</a>.</li>
+<li><strong>A real isolated worker.</strong> It must enforce deadlines, keep rechecking revocation, use a new native session and history per trial, terminate owned processes and attest cleanup. This foundation does none of those provider actions.</li>
+<li><strong>A verified spending boundary.</strong> Request, step and time limits are not hard dollar caps. Native <code>max_tokens</code> context is not an enforced spending cap.</li>
+<li><strong>Authenticated product integration and release checks.</strong> There is no trial route, visitor key issuance, public button or live configuration switch in this change. The offline tests cannot prove live provider behavior.</li></ol>
+<p><small>No purchase, provider message, model request, account change or deployment is needed to test this foundation.</small></p>
+</main></body></html>
