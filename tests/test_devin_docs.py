@@ -102,7 +102,9 @@ def test_devin_guide_discloses_cost_and_commercial_limits_with_official_sources(
     for phrase in ("US$20/month", "USD per month",
                    "Extra usage can cost more", "a lower price does not guarantee more work",
                    "written reseller or partner permission",
-                   "policy prohibits resale and account sharing", "no operator account pool",
+                   "policy prohibits resale and account sharing",
+                   "The paid private-slot service uses each owner's own account on one node",
+                   "The separate limited trial does not establish account-sharing or reseller permission",
                    "Reseller permission has not been obtained", "no Devin package is for sale"):
         assert phrase in page.text
     assert {
