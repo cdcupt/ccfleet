@@ -120,7 +120,9 @@ def test_only_authored_time_and_language_scripts_are_allowed_by_hash():
     policy = HTML_HEADERS["Content-Security-Policy"]
     assert "default-src 'none'" in policy
     script = re.search(r"script-src ([^;]*)", policy).group(1).split()
-    assert script == [LOCAL_TIMES_CSP, BILINGUAL_CSP], "no unsafe-inline or remote source"
+    from ccfleetd.usersite import QUOTA_POLL_CSP
+    assert script == [LOCAL_TIMES_CSP, BILINGUAL_CSP, QUOTA_POLL_CSP]
+    assert "connect-src 'self'" in policy
     # The tab's icon is a data: image, and images may be nothing else.
     assert re.search(r"img-src ([^;]*)", policy).group(1).split() == ["data:"]
     assert LOCAL_TIMES_TAG == f"<script>{LOCAL_TIMES_JS}</script>"

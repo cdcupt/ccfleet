@@ -17,6 +17,7 @@ machine, in that slot's home. Nothing here ever holds it.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import math
@@ -98,6 +99,37 @@ from .store import (
     SubscriptionReleaseBlocked,
 )
 from .usage import REFERENCE_MODEL, REFERENCE_RATES
+
+# Read only this signed-in account's rendered quota area; never replace its
+# connection instructions, inputs or disclosures. One five-minute bounded run.
+QUOTA_POLL_JS = r'''(function(){
+var attempts=0,deadline=Date.now()+300000;
+function pending(){return Array.from(document.querySelectorAll('[data-quota-slot]'));}
+function stop(nodes){nodes.forEach(function(n){n.removeAttribute('data-quota-slot');
+var zh=document.documentElement.lang.toLowerCase().startsWith('zh');
+n.textContent=zh?
+'暂未收到新的额度读数。请稍后重试；旧读数不代表还有剩余额度。':
+'No new quota reading arrived. Try again later; old readings do not confirm remaining quota.';
+var link=document.createElement('a');link.href=location.pathname;
+link.textContent=zh?'查看状态（重新载入页面）':'Check status (reload page)';n.append(' ',link);});}
+function poll(){var nodes=pending();if(!nodes.length)return;
+if(++attempts>30||Date.now()>=deadline){stop(nodes);return;}
+var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},8000);
+fetch(location.pathname,{credentials:'same-origin',cache:'no-store',redirect:'error',
+signal:controller.signal}).then(function(r){if(!r.ok)throw Error('status');return r.text();})
+.then(function(text){if(text.length>2097152)throw Error('size');
+var page=new DOMParser().parseFromString(text,'text/html');
+nodes.forEach(function(n){var card=page.getElementById('slot-'+n.dataset.quotaSlot);
+var fresh=card&&card.querySelector('.usage-bars'),current=n.closest('.usage-bars');
+if(!fresh||!current)throw Error('missing');current.replaceChildren(
+...Array.from(fresh.childNodes).map(function(x){return document.importNode(x,true);}));});
+}).catch(function(){stop(pending());}).finally(function(){clearTimeout(timer);
+if(pending().length)setTimeout(poll,10000);});}
+if(pending().length)setTimeout(poll,10000);
+})();'''
+QUOTA_POLL_CSP = "'sha256-" + base64.b64encode(
+    hashlib.sha256(QUOTA_POLL_JS.encode()).digest()).decode() + "'"
+QUOTA_POLL_TAG = '<script>' + QUOTA_POLL_JS + '</script>'
 
 # What a page may say after an action. Chosen by a fixed code, never text taken
 # from the request: a message a link could write is a message a stranger could
@@ -889,7 +921,8 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
                                            ("/status", "Status", "服务状态")))
             + '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">' + label("Source code", "源代码", inline=True)
-            + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG + '</body></html>')
+            + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG
+            + (QUOTA_POLL_TAG if title == "your slots" else "") + '</body></html>')
 
 
 _HERE = ' class="here"'
@@ -1450,12 +1483,10 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         ),
     ]) + '</details></section>'
     updating = any(u.get("state") == "pending" for u in updates.values())
-    # A usage read under way: come back soon, so the new numbers show.
-    reading = any(quota_reading(s.get("quota_wanted_at"),
-                                (_report_for(s, latest.get(s["node_id"])).get("quota") or {})
-                                .get("checked_at"), now) for s in held)
+    # A quota request must not repeatedly erase open instructions or forms.
+    # Native reads run independently; the user can check their status explicitly.
     return _shell("your slots", body,
-                  _refresh(held, logins, updating or reading, idle_refresh=False),
+                  _refresh(held, logins, updating, idle_refresh=False),
                   viewer=viewer_for(account, session_id, cfg, store), width="wide",
                   extra_css=wallet_ui.CSS if wallet_routes.enabled(cfg) else "")
 
@@ -3301,6 +3332,11 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
 def _quota_meter(used: Any, en: str, zh: str, reset: Any, read: Any, now: float, exact: Any) -> str:
     """Keep native quota/reset calculations; translate only their authored labels."""
     source = _meter(used, en, reset, read, now, exact)
+    if not source:
+        return '<div class="meter"><div class="meter-head"><span>' + label(
+            en, zh, inline=True) + '</span></div>' + _notice(
+                "Current quota is unavailable. This does not mean quota remains.",
+                "当前额度未知，不代表还有剩余额度。", "small muted") + '</div>'
     source = source.replace(
         f"<span>{escape(en)}</span>", "<span>" + label(en, zh, inline=True) + "</span>"
     )
@@ -3472,6 +3508,7 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
     quota = report.get("quota") or {}
     session, week = quota.get("session") or {}, quota.get("week") or {}
     read = quota.get("checked_at")
+    quota_age = now - read if type(read) in (int, float) else None
     bars = _quota_meter(
         session.get("used_pct"),
         "5-hour session",
@@ -3524,8 +3561,8 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
         bars = (
             '<div class="usage-nums muted">'
             + label(
-                ("your Claude account · every device"),
-                ("Claude 账号用量 · 所有设备合计"),
+                ("last reported Claude account usage · every device"),
+                ("上次上报的 Claude 账号用量 · 所有设备合计"),
                 inline=True,
             )
             + "</div>"
@@ -3537,6 +3574,12 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             )
             + refresh
         )
+        if quota_age is None or quota_age > 10 * 60 or quota_age < 0:
+            bars = _notice(
+                "<strong>Historical reading · current quota unknown.</strong> "
+                "A signed-in account can still have reached its limit.",
+                "<strong>历史读数 · 当前额度未知。</strong>账号已登录也可能已达到用量限制。",
+                "small lapsed") + bars
     elif refresh:
         bars = (
             _notice(("No reading of your limits yet."), "尚未读取用量限制。", "small muted")
@@ -3855,9 +3898,21 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
     when = f"read {_age(now, read)} ago · " if known else ""
     when_zh = f"最近读取：{_age(now, read)} 前 · " if known else ""
     if quota_reading(slot.get("quota_wanted_at"), read, now):
-        return '<p class="small muted">' + label(
-            when + "reading them again now…", when_zh + "正在重新读取…", inline=True) + '</p>'
-    return ('<div class="refresh"><span class="small muted">'
+        return '<p class="small muted" data-quota-slot="' + escape(slot['id']) + '">' + label(
+            when + "A new quota reading was requested. It may take a few minutes. "
+            "Only this quota panel checks for updates; your open forms are kept.",
+            when_zh + "已请求新的额度读数，可能需要几分钟。"
+            "仅此额度面板检查更新，你打开的表单会保留。",
+            inline=True) + '</p>'
+    wanted = instant(slot.get("quota_wanted_at"))
+    timed_out = wanted is not None and wanted <= now - 5 * 60 and (not known or wanted > read)
+    failed = (_notice(
+        "No new quota reading was received for your request. The machine may be busy "
+        "or unable to read Claude's usage. Missing data does not mean quota remains.",
+        "本次请求未收到新的额度读数，机器可能繁忙或无法读取 Claude 用量。"
+        "没有读数不代表还有剩余额度。",
+        "small lapsed") if timed_out else "")
+    return (failed + '<div class="refresh"><span class="small muted">'
             + label(when + "every five minutes", when_zh + "每五分钟读取一次", inline=True)
             + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh")
             + '</div>')

@@ -76,7 +76,8 @@ HTML_HEADERS = {
     # the current anchor in language links are allowed by their exact hashes.
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
                                 f"img-src data:; script-src {LOCAL_TIMES_CSP} "
-                                f"{LANGUAGE_LINKS_CSP}"),
+                                f"{LANGUAGE_LINKS_CSP} {usersite.QUOTA_POLL_CSP}; "
+                                "connect-src 'self'"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 from collections.abc import Mapping, Sequence
 from html import escape
 from shlex import quote as shq
@@ -1356,10 +1357,12 @@ QUOTA_READ_WAIT_S = 5 * 60
 
 def quota_reading(wanted_at: Any, checked_at: Any, now: float) -> bool:
     """Whether a read asked for from a page is still to be answered."""
-    if not isinstance(wanted_at, (int, float)):
+    if (type(wanted_at) not in (int, float) or not math.isfinite(wanted_at)
+            or not 0 <= now - wanted_at < QUOTA_READ_WAIT_S):
         return False
-    read = checked_at if isinstance(checked_at, (int, float)) else 0
-    return wanted_at > read and now - wanted_at < QUOTA_READ_WAIT_S
+    read = (checked_at if type(checked_at) in (int, float)
+            and math.isfinite(checked_at) else 0)
+    return wanted_at > read
 
 
 def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) -> str:
