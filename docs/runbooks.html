@@ -446,7 +446,7 @@ before commercial activation.</p>
 <p><code>CCFLEET_USD_SLOT_CREDIT_ENABLED</code> defaults to off. Enable this mode only after its server release and database-clone checks have passed. It changes new customer acquisition from a slot-count allowance to a confirmed monthly purchase using internal USD service credit. It does not convert old manual payments, charge existing holders, or turn a provider subscription into a shared plan.</p>
 <ol><li>Sign in to the admin console with a real administrator account. A configured admin token has no named database actor and cannot issue credit.</li>
 <li>Open Accounts, select the exact customer, enter a USD amount and a one-line reason, and confirm the grant. The immutable ledger records the actual administrator. Retrying the same request cannot add the grant twice.</li>
-<li>The customer opens Your slots, checks the balance, chooses a machine in Browse available slots and reviews its current monthly price. A purchase checks funds, current quote, reservation and machine readiness in one transaction. A changed quote requires a fresh confirmation.</li>
+<li>The customer opens Your slots, checks the balance, chooses a machine in Available slots and reviews its current monthly price. A purchase checks funds, current quote, reservation and machine readiness in one transaction. A changed quote requires a fresh confirmation.</li>
 <li>The purchase pays for one calendar UTC month starting at purchase. Renewal requires the same current claim and another explicit confirmation; it extends the paid end or starts from the present if already expired. No automatic debit or reload runs.</li></ol>
 <p>After a paid claim expires, new Fleet access is paused until renewal; requests admitted earlier continue under the existing identity and revocation checks. Expiry never releases or wipes a slot. Existing claims without a wallet purchase remain grandfathered. Node SSH authorization refresh is heartbeat-driven; do not describe this as instantaneous removal of every previously published direct-SSH key.</p>
 <p>After a slot has a purchase or renewal record, its internal node and slot IDs cannot be renamed or deleted. The billing history keeps those original identifiers. Customer-facing display names can still change; disable or retire a machine instead of removing its identity record.</p>
@@ -495,14 +495,28 @@ When the provider bundles hosting and exit IP, show the recorded bundled cost wi
 a split. A normalization rounding line explains any difference between rounded components and
 the rounded combined resource cost. Raw invoice documents and FX evidence remain private.
 The console lists each machine's procurement costs and resulting quote instead of one global
-price. A legacy global selling price alone must not be published as an Alpha quote. Your Claude
-subscription or Anthropic API usage is billed separately. Payment remains manually agreed;
-there are no automatic charges or renewals.</p>
-<p><strong>Alpha — Early Access.</strong> The service is still being tested and has not launched
+price. A legacy global selling price alone must not be published as an Alpha quote.</p>
+<div class="bi"><div class="copy-en" lang="en"><p>Customers choose how to pay for a Fleet slot.
+A Fleet-credit purchase pays once for one calendar UTC month; each renewal needs another confirmation.
+The optional <strong>Pay monthly</strong> card plan starts only after explicit agreement and the first
+Stripe payment. Each slot has its own plan and renews independently until canceled. Existing slots,
+balances and prepaid time are not enrolled or converted automatically. Your own Claude or Devin
+subscription, or Anthropic API usage, is paid separately.</p></div>
+<div class="copy-zh" lang="zh-Hans"><p>用户自行选择 Fleet 槽位的付费方式。
+使用 Fleet 余额时，一次只购买按 UTC 计算的一个日历月，每次续费都需另外确认。
+可选的<strong>按月付款</strong>银行卡计划，只有用户明确同意并在 Stripe 完成首笔付款后才会开通。
+每个槽位独立续费，直到取消；已有槽位、余额和预付费时间不会自动加入或转换。
+用户自己的 Claude 或 Devin 订阅，以及 Anthropic API 用量，均需另行付费。</p></div></div>
+<div class="bi"><div class="copy-en" lang="en"><p><strong>Alpha — Early Access.</strong> The service is still being tested and has not launched
 commercially. The operator's personal trial of one residential slot is encouraging, but reliability
 across providers, configurations and multiple users remains unverified. Alpha pricing is introductory
-and may change for future billing periods. Give the customer an updated quote before renewal
-if pricing changes; retain the agreed price for an already agreed billing period.</p>
+and may change for new purchases or Fleet-credit renewals. Show the current quote before the customer
+confirms each purchase or credit renewal; retain the agreed price for an already agreed billing period.
+An existing monthly card plan keeps its confirmed rate when the machine's displayed price changes.</p></div>
+<div class="copy-zh" lang="zh-Hans"><p><strong>Alpha — 早期体验。</strong>服务仍在测试，尚未正式商业发布。
+运营者亲自试用一个住宅槽位的结果较好，但不同服务商、配置和多用户场景的可靠性仍未验证。
+Alpha 为初期价格，新购买或余额续费的报价以后可能调整。每次购买或余额续费都应先展示当前报价，
+由用户确认；已经约定的服务期保留原约定价格。主机页面的价格变化，不会改变已有银行卡月付计划确认的价格。</p></div></div>
 <pre><code>ccfleetd node offer set &lt;node&gt; --host-brand &lt;hosting-brand&gt; --ip-brand &lt;exit-brand&gt; --ip-type isp \
   --hosting-cost &lt;actual-amount&gt; --hosting-currency USD --hosting-period month \
   --ip-cost &lt;actual-amount&gt; --ip-currency USD --ip-period month
@@ -514,12 +528,18 @@ network types, availability and Alpha quotes, with host/IP-provider or public Ma
 provider/type filters and 20-machine pages. Purple Residential, blue ISP and gray Datacenter badges retain text
 labels and identify network types without ranking quality or promising Claude compatibility.
 Public browsing does not reserve a slot or grant claim permission.</p>
-<p>The signed-in <code>/account</code> page contains held slots, controls and usage.
-Its <strong>Browse available slots</strong> link opens <code>/account/available</code> for
+<div class="bi"><div class="copy-en" lang="en"><p>The signed-in <code>/account</code> page contains held slots, controls and usage.
+Its <strong>Available slots</strong> link opens <code>/account/available</code> for
 unallocated priced inventory. Customers can search host/IP-provider brands or public Machine N
 labels, filter provider and ISP/Residential/Datacenter network type, and browse pages of up to 20 machines.
-Claiming the selected machine returns to Your slots. Search and filters do not change allowances,
-reservations, payment records or the existing claim eligibility checks.</p>
+Review the selected machine's quote, then choose Fleet credit or <strong>Pay monthly</strong> when offered.
+After the purchase is confirmed, return to Your slots. Search and filters do not change allowances,
+reservations, payment records or the existing claim eligibility checks.</p></div>
+<div class="copy-zh" lang="zh-Hans"><p>登录后的 <code>/account</code> 页面显示已有槽位、操作和用量。
+点击<strong>可用槽位</strong>可打开 <code>/account/available</code>，查看尚未分配且已有报价的主机。
+用户可搜索主机或 IP 服务商品牌、公开的主机编号，按服务商及 ISP、住宅或机房网络类型筛选，每页最多 20 台。
+先核对所选主机的报价，再选择 Fleet 余额或提供的<strong>按月付款</strong>；购买确认后返回“我的槽位”。
+搜索与筛选不会改变领取权限、预留、付款记录或现有领取条件。</p></div></div>
 <p>Once any machine has a configured offer, customers choose a specific public machine and
 its displayed price before claiming. Retired or disabled machines are removed from the
 public rental inventory and normal console catalogue; do not delete their database rows to
@@ -529,8 +549,15 @@ Unconfigured or unpriced machines cannot be auto-claimed;
 configure every intended rental. Existing allowance, reservation, recent-heartbeat and confirmed
 empty-slot checks still apply. The original claim flow remains only as compatibility behavior for
 installations with no configured offers; it does not establish a recorded-cost Alpha quote.
-Changing a rate does not alter existing payments, paid-through dates, allowances or account
-bindings. Agree any new paid period and quote directly with the customer before renewal.</p>
+Changing a displayed rate does not alter existing payments, paid-through dates, allowances or account
+bindings.</p>
+<div class="bi"><div class="copy-en" lang="en"><p>For Fleet credit, the customer reviews the current quote
+and confirms each new one-month purchase or renewal. For an existing monthly card plan, Stripe renews
+that slot independently at its confirmed rate until canceled; changing the machine's offer does not
+reprice that plan. Do not enroll existing holders automatically. Provider subscriptions remain separate.</p></div>
+<div class="copy-zh" lang="zh-Hans"><p>使用 Fleet 余额时，用户每次购买或续费一个月都先核对当前报价，再确认付款。
+已有银行卡月付计划由 Stripe 按确认的价格为对应槽位独立续费，直到取消；修改主机报价不会给已有计划改价。
+不得自动为已有持有者开通月付，服务商订阅仍需另付。</p></div></div>
 <p>For an approved ISP-proxy node, install the reviewed opt-in node egress module and service.
 Opted-in proxy nodes require the canonical <code>/etc/ccfleet</code> configuration directory;
 custom <code>CCFLEET_ETC_DIR</code> deployments are refused before setup changes.
