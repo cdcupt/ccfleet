@@ -1087,7 +1087,9 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
             raise
 
     runner = observed_runner
-    deadline = (time.time() if now is None else now) + min(timeout, QUOTA_TIMEOUT_S)
+    # ``now`` can be the caller's earlier collection timestamp. Give this
+    # locked probe its own budget after the prelaunch checks have completed.
+    deadline = time.time() + min(timeout, QUOTA_TIMEOUT_S)
 
     def left() -> float:
         return max(0.1, min(15.0, deadline - time.time()))
