@@ -1,4 +1,4 @@
-"""Public masked-handle ranking using a common API reference for observed tokens.
+"""Public masked-identity ranking using a common API reference for observed tokens.
 
 Legacy token totals remain useful. Model labels/costs require new matched model
 observations: a common reference conversion does not infer historical models.
@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import math
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -60,6 +61,30 @@ def _masked_handle(value):
     if not names.valid_handle(value):
         return None
     return value[0] + "***" + value[-1] if len(value) >= 4 else "***"
+
+
+def _masked_email(value):
+    """Only a bounded, unquoted ASCII address can yield a public local-part fragment.
+
+    Domains and complete local parts never leave this boundary. Unsupported,
+    ambiguous or short addresses fall back to the existing nickname/member code.
+    """
+    if type(value) is not str or not 6 <= len(value) <= 254 or not value.isascii():
+        return None
+    if value.count("@") != 1:
+        return None
+    local, domain = value.split("@")
+    if (not 4 <= len(local) <= 64
+            or re.fullmatch(r"[A-Za-z0-9._%+-]+", local) is None
+            or local.startswith(".") or local.endswith(".") or ".." in local):
+        return None
+    parts = domain.split(".")
+    if (len(parts) < 2 or re.fullmatch(r"[A-Za-z]{2,63}", parts[-1]) is None
+            or any(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", part)
+                   is None for part in parts)):
+        return None
+    edge = 2 if len(local) >= 6 else 1
+    return local[:edge] + "•••" + local[-edge:]
 
 
 def _member_code(holder, secret):
@@ -205,7 +230,9 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
                  and type(node.get("enabled")) in (int, bool) and node["enabled"] == 1}
         latest = store.latest_heartbeats()
         try:
-            accounts = {row["id"]: row.get("handle") for row in store.list_accounts()
+            accounts = {row["id"]: {"masked_handle": _masked_handle(row.get("handle")),
+                                     "masked_email": _masked_email(row.get("email"))}
+                        for row in store.list_accounts()
                         if isinstance(row, Mapping) and isinstance(row.get("id"), str)}
         except Exception:
             accounts = {}
@@ -228,7 +255,7 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
                     "reference_model",
                     "estimated_usd", "cost_state"):
             result[key] = totals[key]
-        entries = [{**_entry(value, accounts.get(holder)),
+        entries = [{**_entry(value), **accounts.get(holder, {"masked_email": None}),
                     "member_code": _member_code(holder, getattr(cfg, "cookie_secret", None))}
                    for holder, value in groups.items()
                    if value["usage_eligible_messages"] or value["usage_samples"]]
