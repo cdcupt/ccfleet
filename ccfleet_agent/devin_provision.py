@@ -34,10 +34,38 @@ MAX_KEYS = 20
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _USER = re.compile(r"[a-z][a-z0-9_-]{1,31}\Z")
+# Closed collector codes only. Never treat exception text or native output as a
+# diagnostic: even a syntactically plausible unknown string can contain a secret.
+COLLECTOR_FAILURE_REASONS = frozenset({
+    "account_profile_or_authorization_changed", "invalid_metadata_factory",
+    "invalid_native_api_origin", "invalid_source_profile", "invalid_source_profile_origin",
+    "metadata_authorization_or_timeout", "metadata_authorization_revoked",
+    "metadata_execution_disabled", "metadata_registration_rejected",
+    "native_account_changed_during_verification", "native_credential_api_origin",
+    "native_credential_endpoints", "native_credential_format", "native_credential_size",
+    "native_credential_unavailable", "native_egress_unavailable",
+    "native_metadata_cleanup_unconfirmed", "native_metadata_output_bound",
+    "native_metadata_rejected", "native_metadata_stale", "native_metadata_timeout",
+    "native_metadata_unverified", "native_model_catalog_unverified", "native_status_controls",
+    "native_status_encoding", "native_status_line_bound", "native_status_origin_mismatch",
+    "native_status_size", "native_status_subject_invalid", "native_status_subject_unverified",
+    "native_status_unknown_line", "native_status_unknown_or_duplicate_label",
+    "native_subject_source_unverified", "source_profile_changed",
+})
 
 
 class ProvisionError(ValueError):
-    pass
+    def __init__(self, message, *, collector_reason=None):
+        super().__init__(message)
+        self.collector_reason = (collector_reason if type(collector_reason) is str
+                                 and collector_reason in COLLECTOR_FAILURE_REASONS else None)
+
+
+def metadata_failure_reason(error):
+    """Revalidate the private code at the log boundary; never stringify an error."""
+    reason = getattr(error, "collector_reason", None) if type(error) is ProvisionError else None
+    return (reason if type(reason) is str and reason in COLLECTOR_FAILURE_REASONS
+            else "unavailable")
 
 
 def _encode(value):
@@ -276,7 +304,9 @@ def collect(directory, account, control, *, spawn, lookup, groups_of, now, colle
         cleanup = isinstance(value, dict) and value.get("cleanup_confirmed") is True
         if (code != 0 or not cleanup or value.get("credential_sha256") != credential_sha
                 or hashlib.sha256(_credential(account)).hexdigest() != credential_sha):
-            raise ProvisionError("native_metadata_child_unverified")
+            raise ProvisionError("native_metadata_child_unverified",
+                                 collector_reason=value.get("reason")
+                                 if isinstance(value, dict) else None)
         # Re-read root registration after the child, before returning evidence.
         _profile(directory, account.pw_name, control)
     finally:
