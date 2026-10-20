@@ -125,7 +125,7 @@ class Client(base.Client):
                 r"|checkout/sessions/cs_(test|live)_[A-Za-z0-9_]+(?:/line_items)?"
                 r"|billing_portal/configurations/bpc_[A-Za-z0-9_]+"
                 r"|payment_intents/pi_[A-Za-z0-9_]+|charges/ch_[A-Za-z0-9_]+"
-                r"|refunds/re_[A-Za-z0-9_]+|disputes/dp_[A-Za-z0-9_]+)",
+                r"|refunds/re_[A-Za-z0-9_]+|disputes/du_[A-Za-z0-9_]+)",
                 path,
             )
             is not None
@@ -703,7 +703,7 @@ class Client(base.Client):
     def review_subscription(self, event_type: str, data: dict[str, Any]) -> Optional[str]:
         self.validate_account()
         if event_type.startswith("charge.dispute."):
-            identity = _provider_id(data.get("id"), "dp_")
+            identity = _provider_id(data.get("id"), "du_")
             value = self._request("/v1/disputes/" + identity)
             _require(
                 value.get("object") == "dispute" and value.get("id") == identity,
