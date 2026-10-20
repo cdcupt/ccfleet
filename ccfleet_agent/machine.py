@@ -1035,7 +1035,10 @@ def native_provider_observations(cfg, state, system, *, fast):
         reports[user] = devin_provision.public_report(value)
     except ImportError:
         return reports, observations
-    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
+        if not fast:
+            log.warning("native metadata collection failed reason=%s",
+                        devin_provision.metadata_failure_reason(error))
         try:
             control = devin_provision.clean_control(control)
             reports[user] = {"claim_id": control["claim"]["claim_id"],
