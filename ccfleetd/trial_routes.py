@@ -583,6 +583,8 @@ def handle(runtime, handler):
             return
         handler._trial_busy = error.code in {"trial_busy", "trial_request_rate_limit"}
         messages = {
+            "trial_worker_unavailable": "The trial worker is temporarily unavailable. "
+            "No model request was sent. Wait a moment and try again.",
             "trial_busy": "The trial worker is busy. Wait a few seconds and submit again.",
             "trial_request_rate_limit": "Too many trial requests. Wait a few seconds.",
             "daily_limit_reached": "Your daily trial allowance or turn/time limit is used. "
