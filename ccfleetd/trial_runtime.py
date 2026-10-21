@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import sqlite3
 import stat
@@ -20,8 +21,11 @@ from . import devin_trial as ledger
 from . import native_preflight
 from .config import ConfigError
 from .gateway_providers import native_client_request
+from .gateway_transport import GatewayTransportError
 from .trial_access import AccessKeys
 from .trial_worker_transport import MODEL, TrialAttempt, protected_json
+
+log = logging.getLogger(__name__)
 
 
 class TrialUnavailable(ValueError):
@@ -229,6 +233,18 @@ class TrialRuntime:
                     self.readiness_lock.release()
             if isinstance(error, (TrialUnavailable, ledger.TrialError)):
                 raise
+            status = error.status if isinstance(error, GatewayTransportError) else None
+            reason = {
+                403: "authorization_changed",
+                429: "worker_busy",
+                503: "worker_not_ready",
+                504: "readiness_timeout",
+            }.get(status, "transport_or_policy_failed")
+            # Only fixed phase reasons, never exception text, keys or request
+            # values. Readiness has not written a model request frame.
+            log.warning("Devin trial readiness failed: reason=%s", reason)
+            if status == 429:
+                raise TrialUnavailable("trial_busy", 429) from None
             raise TrialUnavailable("trial_worker_unavailable") from None
         cleanup, usage, result = False, None, None
         try:

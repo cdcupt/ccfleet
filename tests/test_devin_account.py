@@ -123,6 +123,50 @@ def test_subject_fingerprint_uses_global_user_and_trusted_origin_only():
     assert SUBJECT not in repr(parsed)
 
 
+@pytest.mark.parametrize("optional_fields", [
+    {"Default model": "claude-opus-5-5-max"},
+    {"Disabled tools": "tool-one, tool-two"},
+    {"Primary org": "private-org-display"},
+    {"Default model": "claude-opus-5-5-max", "Disabled tools": "tool-one, tool-two",
+     "Primary org": "private-org-display"},
+])
+def test_pinned_native_optional_display_labels_do_not_change_verified_subject(optional_fields):
+    # The pinned 3000.11.92 auth-status formatter includes these optional
+    # account/team fields. Their display values never establish identity.
+    expected = account.parse_auth_status(status(), expected_api_origin=ORIGIN)
+    actual = account.parse_auth_status(status(**optional_fields), expected_api_origin=ORIGIN)
+    changed = account.parse_auth_status(
+        status(**dict.fromkeys(optional_fields, "different display value")),
+        expected_api_origin=ORIGIN,
+    )
+    assert actual == changed == expected
+    assert actual.fingerprint() == expected.fingerprint()
+
+
+@pytest.mark.parametrize("label", ["Default model", "Disabled tools", "Primary org"])
+def test_optional_native_display_labels_remain_exact_and_unique(label):
+    raw = status(**{label: "display value"})
+    with pytest.raises(account.AccountError, match="native_status_duplicate_label"):
+        account.parse_auth_status(raw + (label + ": second value\n").encode(),
+                                  expected_api_origin=ORIGIN)
+    for near_spelling in (label.lower(), label + "s", label.replace(" ", "_")):
+        with pytest.raises(account.AccountError, match="native_status_unknown_label"):
+            account.parse_auth_status(status(**{near_spelling: "display value"}),
+                                      expected_api_origin=ORIGIN)
+
+
+@pytest.mark.parametrize("identity_field", ["User ID", "API server"])
+def test_optional_display_fields_never_relax_required_identity_labels(identity_field):
+    raw = status(**{"Default model": "optional", "Disabled tools": "none", "Primary org": "org"})
+    prefix = (identity_field + ":").encode()
+    missing = b"\n".join(line for line in raw.splitlines() if not line.startswith(prefix)) + b"\n"
+    with pytest.raises(account.AccountError, match="native_status_subject_unverified"):
+        account.parse_auth_status(missing, expected_api_origin=ORIGIN)
+    with pytest.raises(account.AccountError, match="native_status_duplicate_label"):
+        account.parse_auth_status(raw + (identity_field + ": duplicate\n").encode(),
+                                  expected_api_origin=ORIGIN)
+
+
 @pytest.mark.parametrize("raw,reason", [
     (b"", "native_status_size"),
     (b"x" * (account.MAX_STATUS_BYTES + 1), "native_status_size"),
