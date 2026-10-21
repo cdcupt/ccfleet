@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import select
@@ -19,13 +20,14 @@ from typing import Any
 from ccfleet_agent import inference_client as wire
 from ccfleet_agent import local_relay
 
-from . import gateway_providers, throughput, wallet_access
+from . import gateway_providers, native_preflight, throughput, wallet_access
 from .gateway_transport import NATIVE_MESSAGE_PATHS, GatewayTransportError, transport_attempt
 
 PATHS = wire.PATHS
 RETRY_STATUSES = frozenset({401, 403, 409, 429, 502, 503, 504, 529})
 MAX_CACHE = 4096
 AFFINITY_TTL = 24 * 3600
+log = logging.getLogger(__name__)
 
 
 def check_json_complexity(raw: bytes) -> None:
@@ -55,13 +57,15 @@ def check_json_complexity(raw: bytes) -> None:
             raise ValueError("JSON contains too many structured values")
 
 
-def model_error(handler, status: int, message: str) -> None:
+def model_error(handler, status: int, message: str, *, code: str = "") -> None:
     handler.close_connection = True
     category = {400: "invalid_request_error", 401: "authentication_error",
                 403: "permission_error", 413: "request_too_large",
                 429: "rate_limit_error"}.get(status, "api_error")
-    raw = json.dumps({"type": "error", "error": {
-        "type": category, "message": message}}, separators=(",", ":")).encode()
+    error = {"type": category, "message": message}
+    if code:
+        error["code"] = code
+    raw = json.dumps({"type": "error", "error": error}, separators=(",", ":")).encode()
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Cache-Control", "no-store")
@@ -478,6 +482,12 @@ class GatewayRuntime:
                     model_error(handler, 403, "Endpoint authorization changed.")
                     return
                 continue
+            try:
+                body = native_preflight.gateway_request(body, target)
+            except native_preflight.RequestRejected as error:
+                log.info("Devin request rejected before execution: code=%s", error.code)
+                model_error(handler, error.status, error.message, code=error.code)
+                return
             try:
                 attempt = self.transport_factory(self._transport_target(key, target), self.cfg)
             except (GatewayTransportError, ValueError, KeyError, TypeError):

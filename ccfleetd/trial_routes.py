@@ -6,6 +6,7 @@ import contextlib
 import datetime as dt
 import html
 import json
+import logging
 import shlex
 import socket
 import threading
@@ -20,6 +21,7 @@ from .trial_worker_transport import MODEL
 
 PAGE = "/account/devin-trial"
 API = "/trial/v1/messages"
+log = logging.getLogger(__name__)
 
 
 def entry(cfg):
@@ -93,13 +95,19 @@ def privacy():
         "and usage collection, its history and artifacts are removed. Trial accounting keeps "
         "account IDs, hashed keys and usage totals, not prompts or replies. Administrators "
         "technically control the worker. Do not send secrets. Your local Claude Code history "
-        "remains on your computer.</p>",
+        "remains on your computer.</p><p>Fleet receives the original request. Before forwarding "
+        "to Devin, the bridge omits known private assistant reasoning and signatures while "
+        "keeping visible text, local tool history and turn order. A bridge note replaces a "
+        "private-only assistant turn. Reasoning continuity is lost and answers may change.</p>",
         "<p><b>可选 Devin 试用：</b>限额试用使用 Fleet 管理的服务账号；付费私人槽位仍使用你自己的"
         "服务登录。本地 Claude Code 会将当前请求及其中包含的对话、工具历史发送给 Fleet 和 Devin。"
         "每轮使用全新的工作目录；确认进程清理并记录用量后，删除该轮历史及产物。"
         "试用计量仅保存 Fleet 账号 ID、密钥哈希及用量，不保存提示词或回复。"
         "管理员在技术上控制工作机器。"
-        "请勿发送秘密信息；本地 Claude Code 历史仍保存在你的电脑上。</p>",
+        "请勿发送秘密信息；本地 Claude Code 历史仍保存在你的电脑上。</p>"
+        "<p>Fleet 会收到原始请求；转发给 Devin 前，桥接会省略已知格式的助手私有思考及签名，"
+        "保留可见文本、本地工具历史和轮次顺序。只有私有思考的助手轮次会替换为明确的桥接说明。"
+        "思考过程无法延续，回答可能因此改变。</p>",
     )
 
 
@@ -321,6 +329,12 @@ def handle(runtime, handler):
         handler.connection.settimeout(10)
         handler.wfile.write(raw)
     except TrialUnavailable as error:
+        if error.request_error is not None:
+            request_error = error.request_error
+            log.info("Devin request rejected before execution: code=%s", request_error.code)
+            gateway.model_error(handler, request_error.status, request_error.message,
+                                code=request_error.code)
+            return
         handler._trial_busy = error.code in {"trial_busy", "trial_request_rate_limit"}
         messages = {
             "trial_busy": "The trial worker is busy. Wait a few seconds and submit again.",

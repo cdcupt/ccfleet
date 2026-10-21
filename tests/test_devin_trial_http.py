@@ -171,6 +171,26 @@ def test_trial_model_rejects_foreign_auth_or_browser_framing_before_worker(http,
     assert http.runtime.allowance(http.alice)["remaining_requests"] == 20
 
 
+def test_trial_unsupported_history_has_static_actionable_code_before_admission(http, caplog):
+    key = token(http)
+    before = http.runtime.allowance(http.alice)
+    http.runtime.transport = lambda *a, **k: pytest.fail("trial transport before rejection")
+    raw = body(messages=[{"role": "user", "content": [
+        {"type": "thinking", "thinking": "PRIVATE_HISTORY", "signature": "PRIVATE_SIGNATURE"}
+    ]}])
+    with caplog.at_level("INFO"):
+        status, headers, response = call(http.server, "POST", "/trial/v1/messages", raw, {
+            "Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    error = json.loads(response)["error"]
+    assert status == 400 and error["code"] == "unsupported_content"
+    assert b"PRIVATE" not in response and b"reasoning shapes" in response
+    assert headers["x-should-retry"] == "false"
+    assert http.runtime.allowance(http.alice) == before
+    assert [r.getMessage() for r in caplog.records if r.name == "ccfleetd.trial_routes"] == [
+        "Devin request rejected before execution: code=unsupported_content"]
+    assert "PRIVATE" not in caplog.text and key not in caplog.text
+
+
 def test_trial_token_cannot_use_paid_slot_gateway_and_owner_key_cannot_use_trial(http):
     key = token(http)
     assert (
