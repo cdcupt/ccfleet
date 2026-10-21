@@ -45,12 +45,19 @@ else:
 
 MAX_STATUS_BYTES = 64 * 1024
 MAX_STATUS_LINES = 128
-# One shared budget covers setup and both model-free metadata commands. The
-# parent also allows imports, final pin validation, and child-group cleanup.
+# One shared budget covers setup, both fixed metadata commands, and the one
+# known status retry. The parent also covers imports, final pins, and cleanup.
 METADATA_ACQUISITION_TIMEOUT_S = 60
 METADATA_CHILD_TIMEOUT_S = 90
 METADATA_TERMINATE_GRACE_S = 0.05
 METADATA_PROCESS_EXIT_TIMEOUT_S = 2
+# Pinned native 3000.11.92 emits this failed identity-lookup marker. It is
+# never a valid identity field; only another complete fresh acquisition may
+# recover from it, once, within the original collection deadline.
+_RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC = (
+    "native_status_unknown_label_sha256_"
+    "1624168fbf676128b34e6f7bd2292e480f0d7ccfad73ad5da789a57233c86ecf"
+)
 _SUBJECT = re.compile(r"[A-Za-z0-9_-]{8,128}\Z")
 _HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z")
 _LABELS = frozenset({"Credentials", "File", "API server", "Devin webapp", "Devin API", "User",
@@ -582,19 +589,20 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
             credential = _credential(original_path)
             validate_native_credentials(credential, expected_api_origin=source["api_origin"])
             credential_sha = hashlib.sha256(credential).hexdigest()
-            home = _fresh_home(state, credential)
-            environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
-                "TERM": "dumb", "NO_COLOR": "1", "XDG_CONFIG_HOME": str(home / ".config"),
-                "XDG_DATA_HOME": str(home / ".local/share"), "XDG_CACHE_HOME": str(home / ".cache")}
-            try:
-                environment.update(native.egress.protected_native_environment())
-            except native.egress.EgressError:
-                raise AccountError("native_egress_unavailable") from None
-            outputs = []
-            for arguments, limit, rejected in (
-                    (["auth", "status"], MAX_STATUS_BYTES, "native_auth_status_rejected"),
-                    (["models", "list", "--format", "json"], 2 * 1024 * 1024,
-                     "native_models_list_rejected")):
+
+            def fresh_environment():
+                environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+                    "TERM": "dumb", "NO_COLOR": "1", "XDG_CONFIG_HOME": str(home / ".config"),
+                    "XDG_DATA_HOME": str(home / ".local/share"),
+                    "XDG_CACHE_HOME": str(home / ".cache")}
+                try:
+                    environment.update(native.egress.protected_native_environment())
+                except native.egress.EgressError:
+                    raise AccountError("native_egress_unavailable") from None
+                return environment
+
+            def metadata(arguments, limit, rejected):
+                nonlocal process, cleanup
                 if not permitted():
                     raise AccountError("metadata_authorization_revoked")
                 if clock() >= deadline:
@@ -610,12 +618,43 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                 if not cleanup:
                     raise AccountError("native_metadata_cleanup_unconfirmed")
                 exit_code = process.returncode
-                process = None
+                process = None  # Confirmed cleanup reaped it; never signal this PID again.
                 if exit_code != 0:
                     raise AccountError(rejected)
-                outputs.append(raw)
-            subject = parse_auth_status(outputs[0], expected_api_origin=source["api_origin"])
-            _models_present(outputs[1], data["model_uid"])
+                return raw
+
+            home = _fresh_home(state, credential)
+            environment = fresh_environment()
+            for attempt in range(2):
+                raw = metadata(["auth", "status"], MAX_STATUS_BYTES, "native_auth_status_rejected")
+                try:
+                    subject = parse_auth_status(raw, expected_api_origin=source["api_origin"])
+                except AccountError as error:
+                    if (attempt != 0 or error.code != "native_status_unknown_label"
+                            or error.diagnostic_code != _RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC):
+                        raise
+                else:
+                    break
+                # Discard the failed response and all native cache/state.
+                # Recheck authority and the original credential before a
+                # second isolated status command; no prior GOOD is reused.
+                raw = None
+                validate()
+                if hashlib.sha256(_credential(original_path)).hexdigest() != credential_sha:
+                    raise AccountError("native_account_changed_during_verification")
+                if clock() >= deadline:
+                    raise AccountError("native_metadata_timeout")
+                try:
+                    shutil.rmtree(home)
+                except OSError:
+                    cleanup = False
+                    raise AccountError("native_metadata_cleanup_unconfirmed") from None
+                home = None
+                home = _fresh_home(state, credential)
+                environment = fresh_environment()
+            catalog = metadata(["models", "list", "--format", "json"], 2 * 1024 * 1024,
+                               "native_models_list_rejected")
+            _models_present(catalog, data["model_uid"])
             validate()
             if hashlib.sha256(_credential(original_path)).hexdigest() != credential_sha:
                 raise AccountError("native_account_changed_during_verification")

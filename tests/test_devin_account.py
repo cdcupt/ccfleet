@@ -338,6 +338,128 @@ def test_metadata_commands_share_sixty_seconds_and_two_twenty_second_reads_pass(
     assert not list(scenario.state.iterdir())
 
 
+def lookup_unavailable_status():
+    return ("Logged in (via Devin).\nCredentials:\nAPI server: " + ORIGIN
+            + "\nUser / team info: synthetic lookup failure\n").encode()
+
+
+def test_known_lookup_marker_remains_invalid_but_one_fresh_retry_can_verify(scenario):
+    marker = b"User / team info: synthetic lookup failure\n"
+    first = status(**{"User ID": "another_synthetic_subject"}) + marker
+    first += b"Unexpected trailing field: private-first-value\n"
+    with pytest.raises(account.AccountError) as rejected:
+        account.parse_auth_status(first, expected_api_origin=ORIGIN)
+    assert rejected.value.diagnostic_code == account._RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC
+
+    catalog = scenario.outputs[1]
+    scenario.outputs[:] = [first, status(), catalog]
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "verified" and result.report["identity_verified"]
+    assert result.report["account_fp"] == account.parse_auth_status(
+        status(), expected_api_origin=ORIGIN).fingerprint()
+    assert [call[0][1:] for call in scenario.calls] == [
+        ["auth", "status"], ["auth", "status"], ["models", "list", "--format", "json"]]
+    homes = [Path(call[1]["env"]["HOME"]) for call in scenario.calls]
+    assert homes[0] != homes[1] == homes[2]
+    assert len(scenario.stopped) == 3 and not list(scenario.state.iterdir())
+
+
+def test_repeated_lookup_failure_stops_after_two_status_commands_without_models(scenario):
+    scenario.outputs[:] = [lookup_unavailable_status(), lookup_unavailable_status(), status()]
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == account._RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC
+    assert [call[0][1:] for call in scenario.calls] == [["auth", "status"]] * 2
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.stopped) == 2 and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("first,reason", [
+    (status(**{"API server": "https://other.example.test"}), "native_status_origin_mismatch"),
+    (status() + b"User ID: duplicate_subject\n", "native_status_duplicate_label_user_id"),
+    (status(**{"User ID": "private@example.test"}), "native_status_subject_invalid"),
+    (status() + b"Other field: private\n", "native_status_unknown_label_sha256_"
+     + hashlib.sha256(b"Other field").hexdigest()),
+])
+def test_identity_or_unknown_shape_failure_before_marker_never_retries(scenario, first, reason):
+    scenario.outputs[0] = first + b"User / team info: synthetic lookup failure\n"
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == reason and len(scenario.calls) == 1
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert result.cleanup_confirmed and not list(scenario.state.iterdir())
+
+
+def test_lookup_marker_from_nonzero_command_is_not_retryable(scenario):
+    scenario.outputs[0] = lookup_unavailable_status()
+    scenario.flags["returncode"] = 1
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_auth_status_rejected" and len(scenario.calls) == 1
+    assert len(scenario.stopped) == 1  # Confirmed cleanup is never repeated on a reaped PID.
+    assert not result.report["identity_verified"] and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+def test_lookup_retry_never_resets_the_shared_deadline(scenario, monkeypatch):
+    catalog = scenario.outputs[1]
+    scenario.outputs[:] = [lookup_unavailable_status(), status(), catalog]
+    now, deadlines = [0.0], []
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        now[0] += 20
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0])
+    assert deadlines == [60, 60, 60] and now[0] == 60
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.stopped) == 3 and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("change", ["credential", "pins", "revoke", "cancel"])
+def test_lookup_retry_rechecks_original_credential_pins_and_authorization(
+        scenario, monkeypatch, change):
+    scenario.outputs[0] = lookup_unavailable_status()
+    cancelled = threading.Event()
+    stop = account._stop_group
+
+    def changed(process):
+        clean = stop(process)
+        if change == "credential":
+            scenario.credentials.write_bytes(b"changed-synthetic-credential")
+        elif change == "pins":
+            scenario.source["native_sha256"] = "f" * 64
+        elif change == "revoke":
+            scenario.flags["authorized"] = False
+        else:
+            cancelled.set()
+        return clean
+
+    monkeypatch.setattr(account, "_stop_group", changed)
+    result = scenario.run(popen_factory=scenario.popen, cancel_event=cancelled)
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.calls) == 1 and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("cleanup", ["process", "artifacts"])
+def test_lookup_retry_requires_confirmed_process_and_artifact_cleanup(
+        scenario, monkeypatch, cleanup):
+    scenario.outputs[0] = lookup_unavailable_status()
+    if cleanup == "process":
+        scenario.flags["cleanup"] = False
+    else:
+        def refuse_removal(path):
+            raise OSError("synthetic artifact removal failure")
+        monkeypatch.setattr(account.shutil, "rmtree", refuse_removal)
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_metadata_cleanup_unconfirmed"
+    assert not result.report["identity_verified"] and not result.cleanup_confirmed
+    assert len(scenario.calls) == 1 and len(list(scenario.state.iterdir())) == 1
+
+
 @pytest.mark.parametrize("cleanup", [False, True])
 def test_metadata_exhausted_shared_budget_cleans_or_retains_quarantine(
         scenario, monkeypatch, cleanup):
@@ -520,7 +642,7 @@ def test_metadata_rejection_names_only_the_failed_command(scenario, phase, reaso
 def test_status_shape_failure_keeps_identity_closed_and_private(scenario, extra, reason):
     scenario.outputs[0] += extra
     result = scenario.run(popen_factory=scenario.popen)
-    assert result.reason == reason and len(scenario.calls) == 2
+    assert result.reason == reason and len(scenario.calls) == 1
     assert not result.report["identity_verified"] and result.report["account_fp"] is None
     assert result.credential_sha256 is None and result.cleanup_confirmed
     assert not list(scenario.state.iterdir())
