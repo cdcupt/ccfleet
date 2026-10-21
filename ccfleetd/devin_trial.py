@@ -23,14 +23,15 @@ from typing import Callable, Optional
 
 MAX_LEASE_S = 600
 MAX_STEPS = 5
-MAX_RUNTIME_S = 120
-MAX_STEP_S = 60
+MAX_RUNTIME_S = 180
+MAX_STEP_S = 160
 MAX_REQUEST_BYTES = 192 * 1024
 TURN_RESERVATION_TOKENS = 20_000
 DAILY_REQUESTS = 20
 GLOBAL_DAILY_REQUESTS = 20
-DAILY_RUNTIME_S = 20 * MAX_STEP_S
-GLOBAL_DAILY_RUNTIME_S = 20 * MAX_STEP_S
+# A longer individual turn does not increase either daily runtime allowance.
+DAILY_RUNTIME_S = 1200
+GLOBAL_DAILY_RUNTIME_S = 1200
 DAILY_LEASES = 20
 GLOBAL_DAILY_LEASES = 20
 DEFAULT_DAILY_TOKENS = 100_000
@@ -59,6 +60,31 @@ _COLUMNS = (
     "utc_day",
     "active_tokens",
 )
+_SESSION_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS devin_trial_sessions (
+        trial_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, secret_hash TEXT NOT NULL,
+        history_namespace TEXT NOT NULL UNIQUE, expires_at REAL NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('open','closing','closed')),
+        steps INTEGER NOT NULL CHECK(steps BETWEEN 0 AND 5),
+        reserved_seconds INTEGER NOT NULL CHECK(reserved_seconds BETWEEN 0 AND 180),
+        active_step TEXT, step_deadline REAL,
+        active_seconds INTEGER CHECK(active_seconds BETWEEN 1 AND 160),
+        utc_day INTEGER NOT NULL, active_tokens INTEGER CHECK(active_tokens>0))
+"""
+_LEGACY_SESSION_SCHEMA = _SESSION_SCHEMA.replace(
+    "reserved_seconds BETWEEN 0 AND 180", "reserved_seconds BETWEEN 0 AND 120"
+).replace("active_seconds BETWEEN 1 AND 160", "active_seconds BETWEEN 1 AND 60")
+_SESSION_INDEXES = {
+    "devin_trial_one_active": """CREATE UNIQUE INDEX IF NOT EXISTS devin_trial_one_active
+        ON devin_trial_sessions ((1)) WHERE state IN ('open','closing')""",
+    "devin_trial_one_account_active": """CREATE UNIQUE INDEX IF NOT EXISTS
+        devin_trial_one_account_active ON devin_trial_sessions(account_id)
+        WHERE state IN ('open','closing')""",
+}
+
+
+def _normalized_sql(value):
+    return " ".join(value.split()).replace(" IF NOT EXISTS ", " ").rstrip(";")
 
 
 class TrialError(ValueError):
@@ -204,23 +230,10 @@ class TrialLedger:
                 requests INTEGER NOT NULL CHECK(requests>=0),
                 runtime_seconds INTEGER NOT NULL CHECK(runtime_seconds>=0),
                 leases INTEGER NOT NULL CHECK(leases>=0));
-            CREATE TABLE IF NOT EXISTS devin_trial_sessions (
-                trial_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, secret_hash TEXT NOT NULL,
-                history_namespace TEXT NOT NULL UNIQUE, expires_at REAL NOT NULL,
-                state TEXT NOT NULL CHECK(state IN ('open','closing','closed')),
-                steps INTEGER NOT NULL CHECK(steps BETWEEN 0 AND 5),
-                reserved_seconds INTEGER NOT NULL CHECK(reserved_seconds BETWEEN 0 AND 120),
-                active_step TEXT, step_deadline REAL,
-                active_seconds INTEGER CHECK(active_seconds BETWEEN 1 AND 60),
-                utc_day INTEGER NOT NULL, active_tokens INTEGER CHECK(active_tokens>0));
             CREATE TABLE IF NOT EXISTS devin_trial_unmeasured (
                 step_id TEXT PRIMARY KEY, trial_id TEXT NOT NULL, account_id TEXT NOT NULL,
                 utc_day INTEGER NOT NULL, held_tokens INTEGER NOT NULL CHECK(held_tokens>0),
                 known_tokens INTEGER NOT NULL CHECK(known_tokens>=0), settled_at REAL NOT NULL);
-            CREATE UNIQUE INDEX IF NOT EXISTS devin_trial_one_active
-                ON devin_trial_sessions ((1)) WHERE state IN ('open','closing');
-            CREATE UNIQUE INDEX IF NOT EXISTS devin_trial_one_account_active
-                ON devin_trial_sessions(account_id) WHERE state IN ('open','closing');
         """
         with self._transaction():
             tables = {
@@ -238,9 +251,13 @@ class TrialLedger:
                     raise TrialError("dedicated_trial_database_required") from None
                 if prior is None or prior[0] != limits:
                     raise TrialError("trial_limits_changed")
+                self._migrate_session_limits()
             for statement in schema.split(";"):
                 if statement.strip():
                     connection.execute(statement)
+            connection.execute(_SESSION_SCHEMA)
+            for statement in _SESSION_INDEXES.values():
+                connection.execute(statement)
             connection.execute(
                 "INSERT OR IGNORE INTO devin_trial_control VALUES(1,0,'',0,?)", (limits,)
             )
@@ -252,6 +269,46 @@ class TrialLedger:
                 != limits
             ):
                 raise TrialError("trial_limits_changed")
+
+    def _migrate_session_limits(self):
+        """Widen only the known time constraints; never rewrite incident state.
+
+        This runs inside the constructor's write transaction. An existing
+        deadline/reservation retains its original duration; only later turns
+        can use the new bounds. The daily limits record remains unchanged.
+        """
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='devin_trial_sessions'"
+        ).fetchone()
+        actual = _normalized_sql(row[0]) if row and isinstance(row[0], str) else None
+        if actual == _normalized_sql(_SESSION_SCHEMA):
+            return
+        if actual != _normalized_sql(_LEGACY_SESSION_SCHEMA):
+            raise TrialError("trial_schema_changed")
+        indexes = dict(self.connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='index' "
+            "AND tbl_name='devin_trial_sessions' AND sql IS NOT NULL"
+        ))
+        if (
+            {name: _normalized_sql(sql) for name, sql in indexes.items()}
+            != {name: _normalized_sql(sql) for name, sql in _SESSION_INDEXES.items()}
+            or self.connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1"
+            ).fetchone()
+            or any(self.connection.execute(f"PRAGMA foreign_key_list({name})").fetchone()
+                   for name in _TABLES)
+        ):
+            raise TrialError("trial_schema_changed")
+        self.connection.execute(
+            "ALTER TABLE devin_trial_sessions RENAME TO devin_trial_sessions_previous"
+        )
+        self.connection.execute(_SESSION_SCHEMA)
+        columns = ",".join(("trial_id", "account_id", *_COLUMNS[1:]))
+        self.connection.execute(
+            f"INSERT INTO devin_trial_sessions({columns}) "
+            f"SELECT {columns} FROM devin_trial_sessions_previous"
+        )
+        self.connection.execute("DROP TABLE devin_trial_sessions_previous")
 
     @contextlib.contextmanager
     def _transaction(self):

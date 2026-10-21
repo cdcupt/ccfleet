@@ -18,9 +18,9 @@ from .gateway_transport import GatewayTransportError, SSHAttempt
 MAX_RESULT = 2 * 1024 * 1024
 MODEL = "claude-opus-5-5"
 # Readiness performs no model work. After admission, leave time for bounded
-# SSH teardown (two seconds) and ledger settlement before the 60-second permit.
+# SSH teardown (two seconds) and ledger settlement before the 160-second permit.
 READINESS_SECONDS = 10
-TURN_SECONDS = 55
+TURN_SECONDS = 155
 
 
 class _Reader:

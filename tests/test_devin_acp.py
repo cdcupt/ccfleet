@@ -80,6 +80,19 @@ for raw in sys.stdin.buffer:
             os.write(1,(json.dumps(reply)+'\n'+json.dumps(update)+'\n').encode())
         else:answer(i,{'sessionId':'session_fake'})
     elif method=='session/prompt':
+        if mode.startswith('stream-'):
+            _,kind,count=mode.split('-')
+            for n in range(int(count)):
+                if kind in ('thought','mixed'):
+                    send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
+                        'update':{'sessionUpdate':'agent_thought_chunk',
+                            'content':{'type':'text','text':'PRIVATE_SYNTHETIC'}}}})
+                if kind!='thought':
+                    send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
+                        'update':{'sessionUpdate':'agent_message_chunk',
+                            'content':{'type':'text','text':'日本語'}}}})
+            answer(i,{'stopReason':'end_turn'})
+            continue
         if mode in ('prefix-owned','prefix-foreign'):
             send({'jsonrpc':'2.0','method':'_cognition.ai/newNotice','params':{
                 'sessionId':'session_fake' if mode=='prefix-owned' else 'foreign'}})
@@ -103,7 +116,8 @@ def fake(tmp_path):
                    "verified_models": {"claude-opus-5-5-max"}, "timeout_s": 1.5,
                    "env": {"ACP_FAKE_MODE": mode, "ACP_FAKE_RECORD": str(record)}}
         options.update(changes)
-        return ACPController(str(executable), **options)
+        controller_type = options.pop('_controller_type', ACPController)
+        return controller_type(str(executable), **options)
 
     return make, record, executable
 

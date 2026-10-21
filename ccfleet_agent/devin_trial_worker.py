@@ -38,6 +38,93 @@ native = relay.native
 POLICY = Path("/etc/ccfleet/devin-trial/worker.json")
 MODEL = "claude-opus-5-5"
 MAX_BODY = 192 * 1024
+DIAGNOSTIC = ".trial-diagnostic.json"
+_USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
+_SAFE_NATIVE_ERRORS = native._SAFE_ACP | frozenset({
+    "authorization_revoked", "authorization_revoked_or_cancelled", "cancelled",
+    "empty_native_completion", "mcp_call_binding_changed", "mcp_handshake_timeout",
+    "mcp_lifecycle_changed", "mcp_lifecycle_partial_timeout", "mcp_process_changed",
+    "mcp_process_guard", "mcp_tool_identity_guard", "native_busy",
+    "native_cleanup_unconfirmed", "native_completion_not_end_turn", "native_egress_unavailable",
+    "native_model_mismatch", "native_model_state_mismatch", "native_prompt_failed",
+    "native_session_changed", "native_session_guard", "native_step_failed",
+    "native_step_incomplete", "native_text_limit", "policy_guard_failed",
+    "request_already_reserved", "result_persistence_failed", "state_lock_guard",
+    "unexpected_project_configuration", "unsupported_native_content", "unsupported_native_update",
+})
+
+
+def _diagnostic(state, *, phase, result=None, metering="unconfirmed", message_valid=False):
+    """Replace one private bounded summary; never persist model text or identities.
+
+    This is diagnostic evidence, not a usage receipt or authority to replay or
+    settle a turn. Failure to record it must not hide an otherwise valid receipt.
+    The shared turn lock serializes replacements.
+    """
+    if state is None:
+        return False
+    result = result if isinstance(result, dict) else {}
+    accounting = result.get("accounting")
+    accounting = accounting if isinstance(accounting, dict) else {}
+    usage = accounting.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    code = result.get("error_code")
+    summary = {
+        "version": 1, "observed_at": time.time(), "phase": phase,
+        "native_error": code if isinstance(code, str) and code in _SAFE_NATIVE_ERRORS
+        else ("other_native_failure" if code is not None else None),
+        "native_cleanup_confirmed": result.get("native_cleanup_confirmed") is True,
+        "message_valid": message_valid is True, "metering": metering,
+        "served_model_verified": accounting.get("served_model_verified") is True,
+        "model_mismatch_detected": accounting.get("model_mismatch_detected") is True,
+        "provider_generation_proof": (
+            type(accounting.get("unique_finalized_provider_ids")) is int
+            and 1 <= accounting["unique_finalized_provider_ids"] <= 512
+        ),
+        "usage_fields": {
+            key: "valid" if type(usage.get(key)) is int and 0 <= usage[key] <= 10**12
+            else ("missing" if usage.get(key) is None else "invalid")
+            for key in _USAGE_FIELDS
+        },
+    }
+    directory, descriptor, temporary = None, None, None
+    try:
+        directory = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            return False
+        try:
+            info = os.stat(DIAGNOSTIC, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                return False
+        temporary = ".trial-diagnostic-" + os.urandom(16).hex()
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                             | os.O_CLOEXEC, 0o600, dir_fd=directory)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(native._encode(summary))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, DIAGNOSTIC, src_dir_fd=directory, dst_dir_fd=directory)
+        temporary = None
+        os.fsync(directory)
+        return True
+    except OSError:
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+        if directory is not None:
+            os.close(directory)
 
 
 def policy():
@@ -135,9 +222,9 @@ def policy():
         return current
 
     initial = grant()
-    # A full admitted turn has a sixty-second lease. Do not begin from a grant
+    # A full admitted turn has a 180-second lease. Do not begin from a grant
     # already near its 300-second freshness boundary.
-    if time.time() - initial["observed_at"] > 240:
+    if time.time() - initial["observed_at"] > 120:
         raise native.NativeError("trial_grant_needs_refresh")
     config = native.NativeConfig.load(value["config_path"], expected_sha256=value["config_sha256"])
     data = config.data
@@ -148,7 +235,7 @@ def policy():
         or binding.key_id != "trial-worker"
         or data["request_models"] != [MODEL]
         or data["thought_level"] != "max"
-        or data["timeout_s"] > 40
+        or data["timeout_s"] > 120
         or data["enabled"] is not True
     ):
         raise native.NativeError("trial_virtual_policy_required")
@@ -283,7 +370,9 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
     runner = native.run_step if runner is None else runner
     cancelled = threading.Event() if cancelled is None else cancelled
     reader, writer = relay._Input(input_, cancelled), relay._Output(output)
-    root, clean, lock = None, False, None
+    root, clean, lock, shared_state = None, False, None, None
+    result, metering, message = None, "unconfirmed", None
+    attempted = False
     try:
         source, settings, policy_sha = loader()
         first = reader.frame()
@@ -377,6 +466,8 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
             except Exception:
                 return False
 
+        _diagnostic(shared_state, phase="started")
+        attempted = True
         result = runner(
             config,
             binding,
@@ -419,6 +510,8 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
             error = None
         except (relay.WireError, ValueError, TypeError):
             pass
+        _diagnostic(shared_state, phase="result_received", result=result,
+                    metering=metering, message_valid=error is None)
         if clean:
             shutil.rmtree(root)
             root = None
@@ -443,6 +536,9 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
         return 0
     except Exception:
         # No provider text, paths, subjects, credentials or request content.
+        if attempted:
+            _diagnostic(shared_state, phase="worker_failed", result=result,
+                        metering=metering, message_valid=message is not None)
         writer.response(503, "application/json", [relay._json({"error": "trial_worker_failed"})])
         return 2
     finally:

@@ -216,11 +216,11 @@ class TrialRuntime:
                     raise TrialUnavailable("trial_busy", 429)
                 prepare(lambda: self._identity_active(key, who))
             with self._ledger() as book:
-                decision = book.admit(who, lease_seconds=120)
+                decision = book.admit(who, lease_seconds=180)
                 if decision.lease is None:
                     raise TrialUnavailable(decision.code, 429)
                 lease = decision.lease
-                decision = book.start_step(who, lease, request=forwarded, seconds=60)
+                decision = book.start_step(who, lease, request=forwarded, seconds=ledger.MAX_STEP_S)
                 if decision.step is None:
                     book.close(who, lease, cleanup_confirmed=True)
                     raise TrialUnavailable(decision.code, 429)

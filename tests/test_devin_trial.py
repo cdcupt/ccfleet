@@ -149,8 +149,8 @@ def test_exact_request_byte_limit_is_accepted(scene):
     started(ledger, lease, request=b"a" * trial.MAX_REQUEST_BYTES)
 
 
-@pytest.mark.parametrize("seconds", [0, -1, 61, True, 1.5, "60"])
-def test_step_cannot_reserve_more_than_one_minute(scene, seconds):
+@pytest.mark.parametrize("seconds", [0, -1, 161, True, 1.5, "160"])
+def test_step_cannot_reserve_more_than_the_bounded_turn(scene, seconds):
     ledger, _, _ = scene
     lease = admitted(ledger)
     assert ledger.start_step(ALICE, lease, request=b"{}", seconds=seconds).code == "step_time_limit"
@@ -159,11 +159,11 @@ def test_step_cannot_reserve_more_than_one_minute(scene, seconds):
 def test_total_runtime_is_reserved_before_execution_and_never_refunded(scene):
     ledger, connection, _ = scene
     lease = admitted(ledger)
-    for _ in range(2):
-        step = started(ledger, lease, seconds=60)
+    for seconds in (160, 20):
+        step = started(ledger, lease, seconds=seconds)
         finished(ledger, lease, step)
     assert (
-        connection.execute("SELECT reserved_seconds FROM devin_trial_sessions").fetchone()[0] == 120
+        connection.execute("SELECT reserved_seconds FROM devin_trial_sessions").fetchone()[0] == 180
     )
     assert ledger.start_step(ALICE, lease, request=b"{}", seconds=1).code == "trial_limit_reached"
     assert ledger.admit(BOB).code == "trial_busy", "final history cleanup still required"
@@ -174,7 +174,7 @@ def test_total_runtime_is_reserved_before_execution_and_never_refunded(scene):
 def test_partial_remaining_runtime_can_only_be_reserved_within_the_budget(scene):
     ledger, _, _ = scene
     lease = admitted(ledger)
-    for seconds in (60, 40):
+    for seconds in (100, 60):
         step = started(ledger, lease, seconds=seconds)
         finished(ledger, lease, step)
     assert (
@@ -426,3 +426,181 @@ def test_two_independent_connections_cannot_admit_two_simultaneous_visitors(tmp_
     with ThreadPoolExecutor(max_workers=2) as workers:
         outcomes = list(workers.map(contender, (ALICE, BOB)))
     assert sorted(outcomes) == ["admitted", "trial_busy"]
+
+
+def test_longer_turns_keep_both_daily_runtime_allowances_at1200_seconds(scene):
+    ledger, connection, _ = scene
+    assert trial.DAILY_RUNTIME_S == trial.GLOBAL_DAILY_RUNTIME_S == 1200
+    for _ in range(7):
+        lease = admitted(ledger)
+        step = started(ledger, lease, seconds=160)
+        finished(ledger, lease, step)
+        ledger.close(ALICE, lease, cleanup_confirmed=True)
+    lease = admitted(ledger)
+    assert ledger.start_step(ALICE, lease, request=b"{}", seconds=160).code == (
+        "runtime_reservation_limit"
+    )
+    ledger.close(ALICE, lease, cleanup_confirmed=True)
+    # Another account cannot spend the shared last80s as a full160s turn.
+    lease = admitted(ledger, BOB)
+    assert ledger.start_step(BOB, lease, request=b"{}", seconds=160).code == (
+        "runtime_reservation_limit"
+    )
+    step = started(ledger, lease, BOB, seconds=80)
+    finished(ledger, lease, step, BOB)
+    assert connection.execute(
+        "SELECT runtime_seconds FROM devin_trial_global_days"
+    ).fetchone() == (1200,)
+
+
+def test_160_second_permit_expires_without_extending_or_discarding_the_unknown_hold(scene):
+    ledger, connection, now = scene
+    lease = admitted(ledger, lease_seconds=180)
+    step = started(ledger, lease, seconds=160)
+    now[0] += 159.99
+    assert ledger.authorize_step(ALICE, lease, step)
+    now[0] = step.deadline
+    assert not ledger.authorize_step(ALICE, lease, step)
+    assert connection.execute(
+        "SELECT state,active_seconds,active_tokens,step_deadline FROM devin_trial_sessions"
+    ).fetchone() == ("closing", 160, 20000, step.deadline)
+    assert connection.execute(
+        "SELECT paused,reason FROM devin_trial_control"
+    ).fetchone() == (1, "expired_worker_or_history_cleanup_required")
+    assert ledger.admit(BOB).code == "trial_paused"
+
+
+# Exact deployed predecessor, independently recorded rather than derived from
+# the new constants. Migration must recognize these constraints without
+# rewriting an old deadline, hold, pause or measured usage.
+LEGACY_SESSIONS = """
+    CREATE TABLE devin_trial_sessions (
+        trial_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, secret_hash TEXT NOT NULL,
+        history_namespace TEXT NOT NULL UNIQUE, expires_at REAL NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('open','closing','closed')),
+        steps INTEGER NOT NULL CHECK(steps BETWEEN 0 AND 5),
+        reserved_seconds INTEGER NOT NULL CHECK(reserved_seconds BETWEEN 0 AND 120),
+        active_step TEXT, step_deadline REAL,
+        active_seconds INTEGER CHECK(active_seconds BETWEEN 1 AND 60),
+        utc_day INTEGER NOT NULL, active_tokens INTEGER CHECK(active_tokens>0))
+"""
+
+
+def legacy_database(connection, state="closing"):
+    now = 1_800_000_000.0
+    ledger = trial.TrialLedger(connection, enabled=True, clock=lambda: now)
+    lease = admitted(ledger)
+    step = started(ledger, lease, seconds=60)
+    assert ledger.finish_step(ALICE, lease, step, cleanup_confirmed=True,
+        usage=trial.VerifiedCacheReadUnmeasured(86780, True)).code == "step_finished_unmeasured"
+    lease = admitted(ledger, BOB)
+    step = started(ledger, lease, BOB, seconds=60)
+    assert ledger.finish_step(BOB, lease, step, cleanup_confirmed=True,
+        usage=trial.VerifiedUsage(314, True)).code == "step_finished"
+    ledger.close(BOB, lease, cleanup_confirmed=True)
+    lease = admitted(ledger)
+    step = started(ledger, lease, seconds=60)
+    if state == "closing":
+        ledger.finish_step(ALICE, lease, step, cleanup_confirmed=True)
+        assert connection.execute(
+            "SELECT active_tokens FROM devin_trial_sessions WHERE trial_id=?", (lease.trial_id,)
+        ).fetchone() == (13220,)
+    elif state == "closed":
+        finished(ledger, lease, step)
+        ledger.close(ALICE, lease, cleanup_confirmed=True)
+    connection.execute("ALTER TABLE devin_trial_sessions RENAME TO fixture_new_sessions")
+    connection.execute(LEGACY_SESSIONS)
+    connection.execute("INSERT INTO devin_trial_sessions SELECT * FROM fixture_new_sessions")
+    connection.execute("DROP TABLE fixture_new_sessions")
+    connection.execute("CREATE UNIQUE INDEX devin_trial_one_active "
+        "ON devin_trial_sessions ((1)) WHERE state IN ('open','closing')")
+    connection.execute("CREATE UNIQUE INDEX devin_trial_one_account_active "
+        "ON devin_trial_sessions(account_id) WHERE state IN ('open','closing')")
+    connection.commit()
+    return lease, step
+
+
+def database_snapshot(connection):
+    return {name: connection.execute(f"SELECT * FROM {name} ORDER BY 1").fetchall()
+            for name in trial._TABLES}
+
+
+@pytest.mark.parametrize("state", ["open", "closing", "closed"])
+def test_legacy_time_constraint_migration_preserves_every_row_and_is_idempotent(state):
+    connection = sqlite3.connect(":memory:")
+    lease, step = legacy_database(connection, state)
+    before = database_snapshot(connection)
+    trial.TrialLedger(connection, enabled=True)
+    assert database_snapshot(connection) == before
+    schema = list(connection.execute("SELECT * FROM sqlite_master ORDER BY name"))
+    version = connection.execute("PRAGMA schema_version").fetchone()
+    trial.TrialLedger(connection, enabled=True)
+    assert database_snapshot(connection) == before
+    assert list(connection.execute("SELECT * FROM sqlite_master ORDER BY name")) == schema
+    assert connection.execute("PRAGMA schema_version").fetchone() == version
+    assert connection.execute(
+        "SELECT active_seconds,step_deadline FROM devin_trial_sessions WHERE trial_id=?",
+        (lease.trial_id,),
+    ).fetchone() == ((None, None) if state == "closed" else (60, step.deadline))
+    # New constraints are wider, but remain explicit hard SQLite bounds.
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("UPDATE devin_trial_sessions SET active_seconds=161")
+    connection.rollback()
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute("UPDATE devin_trial_sessions SET reserved_seconds=181")
+    connection.rollback()
+    if state == "closed":
+        ledger = trial.TrialLedger(connection, enabled=True, clock=lambda: 1_800_000_000.0)
+        started(ledger, admitted(ledger), seconds=160)
+    else:
+        assert database_snapshot(connection) == before
+    connection.close()
+
+
+@pytest.mark.parametrize("change", ["index", "trigger", "view", "constraint"])
+def test_migration_refuses_unknown_schema_without_altering_incident_or_schema(change):
+    connection = sqlite3.connect(":memory:")
+    legacy_database(connection)
+    if change == "index":
+        connection.execute("CREATE INDEX unexpected ON devin_trial_sessions(account_id)")
+    elif change == "trigger":
+        connection.execute("CREATE TRIGGER unexpected AFTER INSERT ON devin_trial_unmeasured "
+            "BEGIN SELECT 1; END")
+    elif change == "view":
+        connection.execute("CREATE VIEW unexpected AS SELECT trial_id FROM devin_trial_sessions")
+    else:
+        connection.execute("ALTER TABLE devin_trial_sessions RENAME TO fixture_old_sessions")
+        connection.execute(LEGACY_SESSIONS.replace("BETWEEN 0 AND 120", "BETWEEN 0 AND 121"))
+        connection.execute("INSERT INTO devin_trial_sessions SELECT * FROM fixture_old_sessions")
+        connection.execute("DROP TABLE fixture_old_sessions")
+    connection.commit()
+    before = database_snapshot(connection)
+    schema = list(connection.execute("SELECT * FROM sqlite_master ORDER BY name"))
+    with pytest.raises(trial.TrialError, match="trial_schema_changed"):
+        trial.TrialLedger(connection, enabled=True)
+    assert database_snapshot(connection) == before
+    assert list(connection.execute("SELECT * FROM sqlite_master ORDER BY name")) == schema
+    assert not connection.in_transaction
+    connection.close()
+
+
+def test_failed_migration_copy_rolls_back_ddl_and_all_incident_rows():
+    class FailingCopy(sqlite3.Connection):
+        blocked = False
+
+        def execute(self, sql, *args):
+            if self.blocked and sql.startswith("INSERT INTO devin_trial_sessions("):
+                raise sqlite3.OperationalError("synthetic interrupted copy")
+            return super().execute(sql, *args)
+
+    connection = sqlite3.connect(":memory:", factory=FailingCopy)
+    legacy_database(connection)
+    before = database_snapshot(connection)
+    schema = list(connection.execute("SELECT * FROM sqlite_master ORDER BY name"))
+    connection.blocked = True
+    with pytest.raises(sqlite3.OperationalError, match="synthetic interrupted copy"):
+        trial.TrialLedger(connection, enabled=True)
+    assert database_snapshot(connection) == before
+    assert list(connection.execute("SELECT * FROM sqlite_master ORDER BY name")) == schema
+    assert not connection.in_transaction
+    connection.close()

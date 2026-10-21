@@ -533,8 +533,12 @@ def test_slow_model_free_readiness_gets_fresh_execution_permit(trial):
             with trial.runtime._ledger() as book:
                 assert book.connection.execute(
                     "SELECT step_deadline FROM devin_trial_sessions WHERE state='open'"
-                ).fetchone()[0] == trial.now[0] + 60
-            trial.now[0] += 50
+                ).fetchone()[0] == trial.now[0] + 160
+                assert book.connection.execute(
+                    "SELECT expires_at FROM devin_trial_sessions WHERE state='open'"
+                ).fetchone()[0] == trial.now[0] + 180
+            # A full120s generation plus setup/cleanup remains authorized.
+            trial.now[0] += 154
             return super().perform(raw, authorized)
 
     trial.runtime.transport = Worker

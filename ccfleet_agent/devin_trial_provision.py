@@ -226,12 +226,17 @@ def trial_template(policy, source_template, trial):
         and config.get("thought_level") == "max"
         and type(config.get("timeout_s")) in (int, float)
         and math.isfinite(config["timeout_s"])
-        and 1 <= config["timeout_s"] <= 40
+        and 1 <= config["timeout_s"] <= 120
         and config.get("model_uid") == source_template["model_uid"]
         and config.get("verified_models") == source_template["verified_models"]
-        and config["files"]["adapter"]["sha256"] == policy["source_runtime"]["adapter_revision"]
         and config["files"]["executable"] == source_template["files"]["executable"]
     )
+    # Source evidence attests the current provider account, catalogue and ELF;
+    # it need not share this independently installed trial adapter. Bind the
+    # trial's root manifest to this exact module instead of changing the paid
+    # source runtime (which would invalidate unrelated endpoint generations).
+    native._pinned(config["files"]["adapter"], expected=Path(native.__file__).resolve(),
+                   uid=ROOT_UID)
     home, state = Path(config["home"]), Path(config["state_dir"])
     for path in (home, state, home / ".local/share/devin"):
         fd = owned_directory(path, trial.pw_uid)

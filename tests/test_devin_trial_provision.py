@@ -66,6 +66,15 @@ def scene(tmp_path, monkeypatch):
             raise
 
     monkeypatch.setattr(t.provision, "_directory", fixture_directory)
+
+    def fixture_ancestry(path):
+        descriptor = fixture_directory(Path(path).parent)
+        os.close(descriptor)
+
+    monkeypatch.setattr(t.native, "_root_ancestry", fixture_ancestry)
+    adapter = tmp_path / "trial-agent" / "devin_native.py"
+    adapter_sha = write(adapter, b"synthetic separately installed trial adapter", 0o644)
+    monkeypatch.setattr(t.native, "__file__", str(adapter))
     for name, filename in (
         ("REGISTRATION", "provision.json"),
         ("POLICY", "worker.json"),
@@ -157,7 +166,7 @@ def scene(tmp_path, monkeypatch):
             "provider": "devin",
         },
         "files": {
-            "adapter": {"sha256": "b" * 64},
+            "adapter": {"path": str(adapter), "sha256": adapter_sha},
             "executable": source_template["files"]["executable"],
         },
     }
@@ -260,6 +269,44 @@ def test_good_refresh_copies_only_credential_and_preserves_original_native_times
     assert json.loads(t.GRANT.read_bytes()) == grant
     assert b"OPAQUE" not in t.GRANT.read_bytes() and "owner-a" not in json.dumps(result)
     assert t.REGISTRATION.read_bytes() == t.provision._encode(s.reg)
+
+
+def test_separate_trial_adapter_preserves_all_source_runtime_and_identity_evidence(scene):
+    before = Path(scene.reg["state_path"]).read_bytes()
+    assert scene.template["files"]["adapter"]["sha256"] != scene.runtime["adapter_revision"]
+    assert scene.run()["outcome"] == "refreshed"
+    grant = json.loads(t.GRANT.read_bytes())
+    assert grant["source_runtime"] == scene.runtime
+    assert grant["source_claim"] == scene.claim
+    assert grant["source_profile_sha256"] == scene.policy["source_profile_sha256"]
+    assert grant["account_fp"] == scene.observation["report"]["account_fp"]
+    assert Path(scene.reg["state_path"]).read_bytes() == before
+
+
+@pytest.mark.parametrize("change", ["path", "hash", "symlink", "writable", "hardlink"])
+def test_trial_adapter_requires_exact_installed_protected_source(scene, change):
+    template = copy.deepcopy(scene.template)
+    record = template["files"]["adapter"]
+    if change == "path":
+        other = scene.adapter.with_name("other.py")
+        other.write_bytes(scene.adapter.read_bytes())
+        record["path"] = str(other)
+    elif change == "hash":
+        record["sha256"] = "0" * 64
+    elif change == "symlink":
+        other = scene.adapter.with_name("symlink.py")
+        other.symlink_to(scene.adapter)
+        record["path"] = str(other)
+    elif change == "writable":
+        scene.adapter.chmod(0o666)
+    else:
+        os.link(scene.adapter, scene.adapter.with_name("hardlink.py"))
+    policy = dict(scene.policy, config_sha256=write(t.TEMPLATE, template, 0o640))
+    reg = dict(scene.reg, worker_policy_sha256=write(t.POLICY, policy, 0o640))
+    write(t.REGISTRATION, reg)
+    assert scene.run()["outcome"] == "revoked"
+    assert not t.GRANT.exists()
+    assert scene.owner_credential.read_bytes() == b"OPAQUE_SOURCE_TOKEN"
 
 
 def test_unchanged_credential_renewal_keeps_grant_visible_and_never_blocks_ready_worker(
@@ -571,7 +618,7 @@ def test_trial_template_cannot_become_the_source_owner_or_change_runtime(scene, 
     elif change == "binding":
         template["binding"]["owner_id"] = "owner-a"
     elif change == "timeout":
-        template["timeout_s"] = 41
+        template["timeout_s"] = 121
     else:
         template["version"] = True
     policy = dict(scene.policy, config_sha256=write(t.TEMPLATE, template, 0o640))
