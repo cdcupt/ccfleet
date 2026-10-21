@@ -3,6 +3,7 @@ import base64
 import re
 import threading
 from copy import deepcopy
+from html.parser import HTMLParser
 
 import pytest
 
@@ -11,6 +12,7 @@ from ccfleetd import api, bilingual, traffic, traffic_ui
 from ccfleetd.config import Config
 from ccfleetd.store import Store
 from tests.test_html_document_preservation import Document
+from tests.test_panel_actions import run_js
 from tests.test_usersite import Browser, claimed, machine, serving
 
 
@@ -32,6 +34,55 @@ def measured():
                     "tokens": {"input_tokens": 12000, "output_tokens": 24000,
                                "cache_read_input_tokens": None, "cache_creation_input_tokens": 0},
                     "token_state": "partial"}}
+
+
+class ReadonlyRegions(HTMLParser):
+    def __init__(self, source):
+        super().__init__()
+        self.stack, self.ids = [], []
+        self.feed(source)
+
+    def handle_starttag(self, tag, attrs):
+        fields = dict(attrs)
+        readonly = "data-fleet-readonly" in fields
+        if readonly:
+            assert not any(active for _, active in self.stack), "nested refresh region"
+            assert fields.get("id") and fields["id"] not in self.ids
+            self.ids.append(fields["id"])
+        if tag not in {"br", "hr", "img", "input", "meta", "link"}:
+            self.stack.append((tag, readonly))
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                break
+
+
+@pytest.mark.parametrize("owner", [False, True])
+def test_status_refresh_updates_real_traffic_regions_without_replacing_disclosures_or_forms(owner):
+    if owner:
+        source = traffic_ui.slot_panel(measured(), slot_id="canonical-slot-id")
+        expected = ["slot-traffic-canonical-slot-id"]
+    else:
+        source = traffic_ui.controller_panel({}, [
+            ("canonical-slot-id", "First displayed name", measured()),
+            ("second-slot-id", "Another slot", measured())])
+        expected = ["traffic-controller-host", "traffic-controller-service", "traffic-fleet-api",
+                    "slot-traffic-canonical-slot-id", "slot-traffic-second-slot-id"]
+        renamed = traffic_ui.controller_panel({}, [
+            ("second-slot-id", "Renamed", measured()),
+            ("canonical-slot-id", "Also renamed", measured())])
+        assert set(ReadonlyRegions(renamed).ids) == set(expected)
+    regions = ReadonlyRegions(source)
+    assert regions.ids == expected
+    result = run_js("status-traffic", traffic_ids=regions.ids)
+    assert [call["method"] for call in result["calls"]] == ["GET"]
+    assert result["updates"] == ["readonly", *expected]
+    assert result["traffic"] == [{"id": identifier,
+        "content": ["fresh " + identifier + " 1.2 MB"]} for identifier in expected]
+    assert result["details"]["open"] is True and result["scrollY"] == 777
+    assert result["input"]["value"] == "KEEP PRIVATE INPUT"
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
@@ -94,6 +145,7 @@ def test_customer_route_reads_only_held_slots_and_never_exposes_controller_traff
         page = browser.page()
         assert calls == [own["id"]]
         assert visible in page and hidden not in page
+        assert f'id="slot-traffic-{own["id"]}" data-fleet-readonly' in page
         assert 'slot-traffic' in page
         assert 'id="private-traffic"' not in page and "Controller host (DMIT)" not in page
     calls.clear()
@@ -132,6 +184,8 @@ def test_admin_requires_authorization_then_sees_each_slot_and_cached_network(sit
     assert reply.status == 200 and calls == ["controller"]
     assert {state for _, state, _ in seen} == {"claimed", "free"}
     assert all(node == "m1" and unheld for node, _, unheld in seen)
+    for slot in store.list_slots(node_id="m1"):
+        assert f'id="slot-traffic-{slot["id"]}" data-fleet-readonly' in reply.body
     assert 'id="private-traffic"' in reply.body and "控制器宿主机（DMIT）" in reply.body
     assert re.search(r'href="[^"]*#private-traffic"', reply.body)
     assert "网络与 API 流量" in reply.body

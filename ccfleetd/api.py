@@ -1991,7 +1991,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                        if ctx.traffic_observer is not None else None)
             summary = traffic.controller_summary(ctx.store, ctx.cfg, now, network_report=network)
             enabled = {node["id"] for node in ctx.store.list_nodes() if node.get("enabled")}
-            readings = [(slot.get("name") or slot["id"],
+            readings = [(slot["id"], slot.get("name") or slot["id"],
                          traffic.slot_summary(ctx.store, ctx.cfg, slot, now, include_unheld=True))
                         for slot in ctx.store.list_slots()
                         if slot.get("node_id") in enabled and slot.get("state") in (

@@ -48,14 +48,19 @@ def _metric(en, zh, value):
             + '</dt><dd>' + value + '</dd></div>')
 
 
-def network_panel(reading, *, title, attribution="machine"):
+def _region(identifier):
+    return (' id="' + escape(identifier, quote=True) + '" data-fleet-readonly'
+            if isinstance(identifier, str) and identifier else '')
+
+
+def network_panel(reading, *, title, attribution="machine", region_id=None):
     reading = reading if isinstance(reading, Mapping) else {}
     state = reading.get("state")
     state = state if isinstance(state, str) else "unavailable"
     valid = (state == "ready" and all(network.counter(reading.get(key)) for key in
              ("received_bytes", "sent_bytes")) and network.number(reading.get("coverage_s"))
              and reading["coverage_s"] > 0)
-    source = '<section class="traffic-panel"><h3>' + title + '</h3>'
+    source = '<section class="traffic-panel"' + _region(region_id) + '><h3>' + title + '</h3>'
     if attribution == "shared_machine":
         scope = label("Shared machine NIC traffic · includes other slots and system activity; "
                       "not traffic attributable to your slot.",
@@ -105,9 +110,9 @@ def network_panel(reading, *, title, attribution="machine"):
         inline=True) + '</p></section>'
 
 
-def api_panel(reading, *, fleet=False, reporting=None, eligible=None):
+def api_panel(reading, *, fleet=False, reporting=None, eligible=None, region_id=None):
     reading = reading if isinstance(reading, Mapping) else {}
-    source = '<section class="traffic-panel"><h3>' + label(
+    source = '<section class="traffic-panel"' + _region(region_id) + '><h3>' + label(
         "Model API usage", "模型 API 用量", inline=True) + '</h3><p class="traffic-meta">'
     source += label("Last 7 UTC dates · current bound slot relay observations. "
                     "Includes direct local and gateway API use; not account-wide quota.",
@@ -160,9 +165,11 @@ def api_panel(reading, *, fleet=False, reporting=None, eligible=None):
         inline=True) + '</p></section>'
 
 
-def slot_panel(summary):
+def slot_panel(summary, *, slot_id=None):
     summary = summary if isinstance(summary, Mapping) else {}
-    return ('<div class="traffic-grid">' + network_panel(summary.get("network"),
+    region_id = "slot-traffic-" + slot_id if isinstance(slot_id, str) and slot_id else None
+    return ('<div class="traffic-grid"' + _region(region_id) + '>'
+            + network_panel(summary.get("network"),
             title=label("Slot machine network", "槽位机器网络", inline=True),
             attribution=summary.get("network_attribution"))
             + api_panel(summary.get("api")) + '</div>')
@@ -173,15 +180,17 @@ def controller_panel(summary, slot_readings=()):
     source = '<section id="private-traffic"><h2>' + label(
         "Network & API traffic", "网络与 API 流量", inline=True) + '</h2><div class="traffic-grid">'
     source += network_panel(summary.get("host"), title=label(
-        "Controller host (DMIT)", "控制器宿主机（DMIT）", inline=True))
+        "Controller host (DMIT)", "控制器宿主机（DMIT）", inline=True),
+        region_id="traffic-controller-host")
     source += network_panel(summary.get("service"), title=label(
-        "CC Fleet service container", "CC Fleet 服务容器", inline=True), attribution="service")
+        "CC Fleet service container", "CC Fleet 服务容器", inline=True), attribution="service",
+        region_id="traffic-controller-service")
     source += '</div><p class="traffic-meta">' + label(
         "Host and container show different network views; do not add them together.",
         "宿主机与容器是不同网络视角，请勿相加。", inline=True) + '</p>'
     source += api_panel(summary.get("api"), fleet=True, reporting=summary.get("reporting_slots"),
-                        eligible=summary.get("eligible_slots"))
-    for name, reading in slot_readings:
+                        eligible=summary.get("eligible_slots"), region_id="traffic-fleet-api")
+    for slot_id, name, reading in slot_readings:
         source += '<details class="traffic-panel"><summary>' + escape(str(name)) + '</summary>'
-        source += slot_panel(reading) + '</details>'
+        source += slot_panel(reading, slot_id=slot_id) + '</details>'
     return source + '</section>'

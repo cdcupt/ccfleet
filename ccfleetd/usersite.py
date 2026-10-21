@@ -1546,7 +1546,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
                                recurring=s["id"] in recurring_slots,
                                traffic_html=traffic_ui.slot_panel(traffic.slot_summary(
-                                   store, cfg, s, now)),
+                                   store, cfg, s, now), slot_id=s["id"]),
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
