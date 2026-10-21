@@ -121,9 +121,10 @@ def test_only_authored_time_and_language_scripts_are_allowed_by_hash():
     assert "default-src 'none'" in policy
     script = re.search(r"script-src ([^;]*)", policy).group(1).split()
     from ccfleetd.render import ADMIN_QUOTA_POLL_CSP, PANEL_ACTION_CSP
+    from ccfleetd.trial_routes import COPY_COMMAND_CSP
     from ccfleetd.usersite import QUOTA_POLL_CSP
     assert script == [LOCAL_TIMES_CSP, BILINGUAL_CSP, QUOTA_POLL_CSP, PANEL_ACTION_CSP,
-                      ADMIN_QUOTA_POLL_CSP]
+                      ADMIN_QUOTA_POLL_CSP, COPY_COMMAND_CSP]
     assert "connect-src 'self'" in policy
     # The tab's icon is a data: image, and images may be nothing else.
     assert re.search(r"img-src ([^;]*)", policy).group(1).split() == ["data:"]
