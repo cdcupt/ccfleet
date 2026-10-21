@@ -283,7 +283,7 @@ def test_the_dashboard_shell_is_themed_and_bounded(cfg):
     # Every colour goes through a token, so dark mode is not an afterthought.
     assert "prefers-color-scheme:dark" in html and 'data-theme="light"' in html
     assert "#eef0f3" not in html, "no hard-coded greys left over from the old sheet"
-    assert 'class="page"' in html and "max-width:1200px" in html
+    assert 'class="page"' in html and "max-width:1240px" in html
     assert 'rel="icon"' in html
     assert "Nothing open" in html, "an empty alert list should say so in words"
 
