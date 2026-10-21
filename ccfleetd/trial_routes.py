@@ -399,8 +399,10 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
     body += bi(
         "<p>One active turn globally. If busy, wait a few seconds and submit again; "
         "no idle session holds the worker. At most 20 turns and 20 reserved runtime minutes "
-        "per person and globally per UTC day; each native turn has at most 40 seconds of "
-        "generation. Keep requests short (192 KiB including tools/history). Before each turn "
+        "per person and globally per UTC day; each native turn has at most 120 seconds of "
+        "generation and reserves 160 seconds of runtime. Reserved runtime can reach the daily "
+        "time limit before the request cap. Keep requests short (192 KiB including "
+        "tools/history). Before each turn "
         "we reserve up to 20,000 remaining allowance units. Complete input, output, cache-read "
         "and cache-creation usage settles the actual total, including overshoot.</p>"
         "<p>If Devin omits only the cache-read meter after a verified, fully cleaned-up reply, "
@@ -410,7 +412,8 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         "this is admission accounting, not a precise generation, vendor quota "
         "or USD hard cap.</p>",
         "<p>全局同时仅处理一轮；忙碌时请稍等再提交，空闲会话不会占用工作进程。"
-        "每人及全局每日均最多 20 轮、预留 20 分钟运行时间；每轮原生生成最多 40 秒。"
+        "每人及全局每日均最多 20 轮、预留 20 分钟运行时间；每轮原生生成最多 120 秒，"
+        "预留 160 秒运行时间。预留运行时间可能先达到每日上限。"
         "请求（含工具及历史）最多 192 KiB。每轮先预留最多 20,000 剩余额度单位，"
         "完整的输入、输出、缓存读取及创建用量按实际总数结算，超额也完整计算。</p>"
         "<p>若已验证模型且整轮清理完成，但 Devin 只缺少缓存读取计量，则整笔预留额度保留至 UTC "
@@ -473,7 +476,7 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         + f"{allowance['reported_tokens']:,}" + "</dd></div><div><dt>"
         + label("Held for accounting", "计量预留", inline=True) + "</dt><dd>"
         + f"{allowance['reserved_tokens']:,}" + "</dd></div><div><dt>"
-        + label("Your turns left", "今日剩余轮数", inline=True) + "</dt><dd>"
+        + label("Request cap remaining", "剩余请求上限", inline=True) + "</dt><dd>"
         + str(allowance["remaining_requests"]) + '</dd></div></dl><p class="trial-reset">'
         + label("Resets every day at 00:00 UTC.", "每天 UTC 00:00 重置。", inline=True)
         + "<br>" + label("All users share 1,000,000 units per day.",
@@ -481,9 +484,9 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         + '</p></section><div class="trial-side-note"><strong>'
         + label("Keep your first task small", "先从小任务开始", inline=True)
         + "</strong><p>" + label(
-            "Each reply has up to 40 seconds to generate. Keep conversations short; "
+            "Each reply has up to 2 minutes to generate. Keep conversations short; "
             "long histories and large tool lists may not fit.",
-            "每轮最多生成 40 秒。请保持对话简短；过长的历史或过大的工具列表可能超出限制。",
+            "每轮最多生成 2 分钟。请保持对话简短；过长的历史或过大的工具列表可能超出限制。",
             inline=True,
         ) + "</p></div></aside>"
     )

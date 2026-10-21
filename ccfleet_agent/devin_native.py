@@ -381,7 +381,7 @@ class NativeConfig:
                 or type(value["execution_uid"]) is not int or value["execution_uid"] <= 0
                 or value["execution_uid"] != os.geteuid()
                 or type(value["timeout_s"]) not in (int, float)
-                or not 1 <= value["timeout_s"] <= 60):
+                or not 1 <= value["timeout_s"] <= 120):
             raise NativeError("invalid_native_policy")
         OwnershipBinding.from_dict(value["binding"])
         for field in ("verified_models", "model_state_values", "request_models"):
@@ -485,24 +485,10 @@ def _selected_model(session, notifications, config):
 
 
 class _Controller(acp.ACPController):
-    def _handle(self, value, deadline):
-        previous = len(self._notifications)
-        super()._handle(value, deadline)
-        if value.get("method") != "session/update" or "id" in value:
+    def _queue_notification(self, params, *, provisional=False):
+        if not provisional and self._bounded_text_notification(params):
             return
-        params = value["params"]
-        update = params["update"]
-        if update.get("sessionUpdate") == "agent_thought_chunk":
-            content = update.get("content")
-            if (params.keys() - {"sessionId", "update", "_meta"}
-                    or update.keys() - {"sessionUpdate", "content", "_meta"}
-                    or not isinstance(content, dict) or set(content) != {"type", "text"}
-                    or content.get("type") != "text" or not isinstance(content.get("text"), str)
-                    or params["sessionId"] not in self._sessions
-                    or len(self._notifications) != previous + 1
-                    or self._notifications[-1] is not params):
-                raise acp.ACPError("unsupported bound thought observation")
-            self._notifications.pop()
+        super()._queue_notification(params, provisional=provisional)
 
 
 def _identity(process, native_pid):

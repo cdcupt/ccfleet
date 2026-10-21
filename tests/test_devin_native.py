@@ -510,9 +510,16 @@ def test_native_policy_requires_root_pinned_egress_module(policy):
         policy.load()
 
 
+def test_native_policy_accepts_bounded_120_second_generation_without_launch(policy):
+    policy.value["timeout_s"] = 120
+    config = policy.load()
+    assert config.data["timeout_s"] == 120
+    assert config.status(binding())["model_requests"] == 0
+
+
 @pytest.mark.parametrize("change", [
     {"enabled": 1}, {"execution_uid": 0}, {"request_models": "opus"},
-    {"verified_models": ["other"]}, {"thought_level": "unknown"}, {"timeout_s": 61},
+    {"verified_models": ["other"]}, {"thought_level": "unknown"}, {"timeout_s": 121},
     {"version": True}, {"extra": "unsupported"}])
 def test_malformed_policy_has_no_authority(policy, change):
     policy.value.update(change)

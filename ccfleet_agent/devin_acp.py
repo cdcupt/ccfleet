@@ -38,6 +38,9 @@ MAX_NOTIFICATIONS = 128
 MAX_RPC_MESSAGES = 2048
 MAX_PROMPT_BYTES = 64 * 1024
 MAX_PROMPT_LIMIT = 256 * 1024
+MAX_TEXT_FRAGMENTS = 1024
+MAX_TEXT_FRAGMENT_BYTES = 64 * 1024
+MAX_TEXT_BYTES = 1024 * 1024
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}\Z")
 _ID = re.compile(r"[A-Za-z0-9_.:/-]{1,200}\Z")
 
@@ -217,6 +220,7 @@ class ACPController:
         self._notifications: list[dict[str, Any]] = []
         self._provisional_notifications: list[dict[str, Any]] = []
         self._provisional_session_id: Optional[str] = None
+        self._text_fragments = self._text_bytes = 0
         self.rejected_methods: list[str] = []
         self._initialized = self._closed = False
         self._call_lock = threading.Lock()
@@ -316,9 +320,6 @@ class ACPController:
             if (not isinstance(session_id, str) or not _ID.fullmatch(session_id)
                     or not isinstance(params.get("update"), dict)):
                 raise ACPError("notification does not belong to an active session")
-            if (len(self._notifications) + len(self._provisional_notifications)
-                    >= self.max_notifications):
-                raise ACPError("ACP notification queue exceeds bound", "limit_exceeded")
             if session_id not in self._sessions:
                 if self._pending_method != "session/new" or self._response is not None:
                     raise ACPError("notification does not belong to an active session")
@@ -326,9 +327,9 @@ class ACPController:
                         and self._provisional_session_id != session_id):
                     raise ACPError("multiple provisional ACP session IDs")
                 self._provisional_session_id = session_id
-                self._provisional_notifications.append(params)
+                self._queue_notification(params, provisional=True)
                 return
-            self._notifications.append(params)
+            self._queue_notification(params)
             return
         if (set(value) - {"jsonrpc", "id", "result", "error"}
                 or ("result" in value) == ("error" in value)):
@@ -353,6 +354,76 @@ class ACPController:
             self._provisional_session_id = None
         self._answered.add(rpc_id)
         self._response = value
+
+    def _queue_notification(self, params: dict[str, Any], *, provisional: bool = False) -> None:
+        """Keep the default opaque queue bound after session ownership checks.
+
+        A reviewed subclass may use _bounded_text_notification for owned plain
+        text only. Requests, unknown sessions and provisional notifications
+        still pass the original protocol guards before reaching this hook.
+        """
+        if (len(self._notifications) + len(self._provisional_notifications)
+                >= self.max_notifications):
+            raise ACPError("ACP notification queue exceeds bound", "limit_exceeded")
+        queue = self._provisional_notifications if provisional else self._notifications
+        queue.append(params)
+
+    def _bounded_text_notification(self, params: dict[str, Any]) -> bool:
+        """Project one owned text/thought frame without buffering every chunk.
+
+        Opt-in helper for a text-result consumer, never a general notification
+        allowlist. Original visible fragments count before coalescing; private
+        thoughts are validated and discarded under the unchanged raw RPC count
+        bound. Both kinds share the UTF-8 byte bound. Opaque _meta is not result text,
+        model proof, tool activity or token accounting and is not retained.
+        Other update kinds return False and keep the original queue semantics.
+        """
+        update = params.get("update", {})
+        kind = update.get("sessionUpdate")
+        if kind not in ("agent_message_chunk", "agent_thought_chunk"):
+            return False
+        content = update.get("content")
+        if (params.keys() - {"sessionId", "update", "_meta"}
+                or update.keys() - {"sessionUpdate", "content", "_meta"}
+                or not isinstance(params.get("sessionId"), str)
+                or params["sessionId"] not in self._sessions
+                or not isinstance(content, dict) or set(content) != {"type", "text"}
+                or content.get("type") != "text" or not isinstance(content.get("text"), str)):
+            raise ACPError("unsupported bound text observation")
+        text = content["text"]
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeError as exc:
+            raise ACPError("invalid ACP text Unicode") from exc
+        if any((ord(char) < 32 and char not in "\t\r\n") or ord(char) == 127 for char in text):
+            raise ACPError("invalid ACP text control character")
+        if (size > MAX_TEXT_FRAGMENT_BYTES
+                or (kind == "agent_message_chunk" and self._text_fragments >= MAX_TEXT_FRAGMENTS)
+                or self._text_bytes + size > MAX_TEXT_BYTES):
+            raise ACPError("ACP text observation exceeds bound", "limit_exceeded")
+        self._text_bytes += size
+        if kind == "agent_thought_chunk":
+            return True
+        self._text_fragments += 1
+        if self._notifications:
+            previous = self._notifications[-1]
+            prior_update = previous.get("update", {})
+            prior_content = prior_update.get("content", {})
+            if (previous.get("sessionId") == params["sessionId"]
+                    and prior_update.get("sessionUpdate") == "agent_message_chunk"
+                    and set(previous) == {"sessionId", "update"}
+                    and set(prior_update) == {"sessionUpdate", "content"}
+                    and isinstance(prior_content, dict)
+                    and set(prior_content) == {"type", "text"}
+                    and prior_content.get("type") == "text"
+                    and isinstance(prior_content.get("text"), str)
+                    and len(prior_content["text"].encode("utf-8")) + size
+                    <= MAX_TEXT_FRAGMENT_BYTES):
+                prior_content["text"] += text
+                return True
+        ACPController._queue_notification(self, {"sessionId": params["sessionId"], "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}})
+        return True
 
     def _read(self, deadline: float) -> None:
         remaining = deadline - time.monotonic()
@@ -397,6 +468,8 @@ class ACPController:
             self._next_id += 1
             self._pending, self._response = self._next_id, None
             self._pending_method = method
+            if method == "session/prompt":
+                self._text_fragments = self._text_bytes = 0
             deadline = time.monotonic() + self.timeout_s
             self._write({"jsonrpc": "2.0", "id": self._pending,
                          "method": method, "params": params}, deadline)

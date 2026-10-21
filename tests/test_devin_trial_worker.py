@@ -148,6 +148,75 @@ def test_worker_default_does_no_policy_or_native_io(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["execute"] is False
 
 
+@pytest.mark.parametrize("code", ["timeout", "native_step_incomplete", "PRIVATE FAILURE"])
+def test_failed_result_keeps_only_static_private_diagnostic_after_history_cleanup(scene, code):
+    source, settings, sha, _, state, _ = scene
+
+    def run(config, *args, **kwargs):
+        record = result(config)
+        record.update(error_code=code, content=[], stop_reason=None)
+        record["accounting"]["usage"]["cache_creation_tokens"] = None
+        record["private_extra"] = "PRIVATE PROMPT HISTORY ID CREDENTIAL"
+        return record
+
+    out = io.BytesIO()
+    assert worker.serve(frames(body()), out, loader=lambda: (source, settings, sha), runner=run) == 0
+    receipt = unpack(out.getvalue())[-1][1]
+    assert receipt["cleanup_confirmed"] and receipt["metering"] == "unconfirmed"
+    assert not list(state.glob("trial-*"))
+    path = state / worker.DIAGNOSTIC
+    raw = path.read_bytes()
+    diagnostic = json.loads(raw)
+    assert diagnostic["native_error"] == (
+        code if code != "PRIVATE FAILURE" else "other_native_failure"
+    )
+    assert diagnostic["phase"] == "result_received"
+    assert diagnostic["native_cleanup_confirmed"] and not diagnostic["message_valid"]
+    assert diagnostic["usage_fields"]["cache_creation_tokens"] == "missing"
+    assert b"PRIVATE" not in raw and len(raw) < 2048
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_diagnostic_is_bounded_replacement_and_never_follows_links(scene):
+    *_, state, paths = scene
+    assert worker._diagnostic(state, phase="started")
+    assert worker._diagnostic(state, phase="worker_failed")
+    assert set(state.iterdir()) == {state / worker.DIAGNOSTIC}
+    path = state / worker.DIAGNOSTIC
+    path.unlink()
+    path.symlink_to(paths[0])
+    assert not worker._diagnostic(state, phase="started")
+    assert paths[0].read_bytes() == b"fixture secret"
+
+
+def test_diagnostic_failure_does_not_hide_valid_accounting_or_repeat_model(scene, monkeypatch):
+    source, settings, sha, _, _, _ = scene
+    calls = []
+    monkeypatch.setattr(worker, "_diagnostic", lambda *a, **kw: False)
+
+    def run(config, *a, **kw):
+        calls.append(1)
+        return result(config)
+
+    out = io.BytesIO()
+    assert worker.serve(frames(body()), out, loader=lambda: (source, settings, sha), runner=run) == 0
+    receipt = unpack(out.getvalue())[-1][1]
+    assert receipt["metering"] == "complete" and receipt["cleanup_confirmed"]
+    assert trial_runtime.TrialRuntime._receipt(receipt)[1].reported_tokens == 16
+    assert calls == [1]
+
+
+def test_readiness_failure_preserves_last_model_diagnostic(scene):
+    source, settings, sha, _, state, _ = scene
+    assert worker._diagnostic(state, phase="result_received", result={"error_code": "timeout"})
+    before = (state / worker.DIAGNOSTIC).read_bytes()
+    (state / "trial-quarantined").mkdir(mode=0o700)
+    out = io.BytesIO()
+    assert worker.serve(frames(body()), out, loader=lambda: (source, settings, sha),
+                        runner=lambda *a, **kw: pytest.fail("must not generate")) == 2
+    assert (state / worker.DIAGNOSTIC).read_bytes() == before
+
+
 def test_actual_framed_turn_is_credential_only_and_deletes_all_artifacts_before_reply(scene):
     source, settings, sha, home, state, paths = scene
     calls, homes = [], []
@@ -187,7 +256,7 @@ def test_actual_framed_turn_is_credential_only_and_deletes_all_artifacts_before_
     assert (
         home / ".local/share/devin/cli/sessions.db"
     ).read_bytes() == b"OTHER_USER_PRIVATE_HISTORY"
-    assert list(state.iterdir()) == [state / ".trial.lock"]
+    assert set(state.iterdir()) == {state / ".trial.lock", state / worker.DIAGNOSTIC}
     assert paths[0].read_bytes() == b"fixture secret"
 
 
@@ -466,7 +535,7 @@ def test_partial_native_generation_records_never_become_complete_usage(scene, fi
     )
     record = unpack(out.getvalue())[-1][1]
     assert record["usage"] is None and record["cleanup_confirmed"] is True
-    assert list(state.iterdir()) == [state / ".trial.lock"]
+    assert set(state.iterdir()) == {state / ".trial.lock", state / worker.DIAGNOSTIC}
 
 
 def test_successful_native_cleanup_but_artifact_delete_failure_never_releases(scene, monkeypatch):
@@ -573,6 +642,17 @@ def test_stable_policy_survives_verified_credential_renewal_but_old_turn_revokes
     assert "credential_sha256" not in policy  # No controller repin for normal renewals.
 
 
+@pytest.mark.parametrize("age,accepted", [(120, True), (121, False)])
+def test_new_turn_grant_has_margin_for_entire_180_second_lease(policy_scene, age, accepted):
+    _, grant, _ = policy_scene
+    grant["observed_at"] = 1100.0 - age
+    if accepted:
+        worker.policy()
+    else:
+        with pytest.raises(worker.native.NativeError, match="trial_grant_needs_refresh"):
+            worker.policy()
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -636,7 +716,7 @@ def test_actual_worker_cache_read_only_missing_has_explicit_partial_state_after_
     assert value["metering"] == "cache_read_unmeasured" and value["cleanup_confirmed"]
     assert "cache_read_input_tokens" not in value["message"]["usage"]
     assert value["usage"]["cache_read_tokens"] is None
-    assert list(state.iterdir()) == [state / ".trial.lock"]
+    assert set(state.iterdir()) == {state / ".trial.lock", state / worker.DIAGNOSTIC}
     clean, usage = trial_runtime.TrialRuntime._receipt(value)
     assert clean and type(usage).__name__ == "VerifiedCacheReadUnmeasured"
 
