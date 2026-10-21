@@ -319,6 +319,89 @@ def test_verified_report_uses_live_metadata_and_private_change_guard(scenario, m
     assert result.report["identity_verified"] is True
 
 
+def test_metadata_commands_share_sixty_seconds_and_two_twenty_second_reads_pass(
+        scenario, monkeypatch):
+    now, deadlines = [0.0], []
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        now[0] += 20
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0])
+    assert result.reason == "verified" and result.report["identity_verified"]
+    assert deadlines == [60, 60] and now[0] == 40
+    assert len(scenario.calls) == len(scenario.stopped) == 2
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("cleanup", [False, True])
+def test_metadata_exhausted_shared_budget_cleans_or_retains_quarantine(
+        scenario, monkeypatch, cleanup):
+    now, deadlines = [0.0], []
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        now[0] += 30
+        # Only the final cleanup is uncertain in the quarantine case.
+        if len(deadlines) == 2:
+            scenario.flags["cleanup"] = cleanup
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0])
+    assert deadlines == [60, 60] and len(scenario.calls) == len(scenario.stopped) == 2
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert result.cleanup_confirmed is cleanup
+    assert result.reason == ("metadata_authorization_or_timeout" if cleanup
+                             else "native_metadata_cleanup_unconfirmed")
+    assert len(list(scenario.state.iterdir())) == (0 if cleanup else 1)
+
+
+def test_metadata_setup_time_counts_against_shared_budget_before_launch(scenario, monkeypatch):
+    now = [0.0]
+    fresh_home = account._fresh_home
+
+    def slow_setup(*args):
+        home = fresh_home(*args)
+        now[0] = 60
+        return home
+
+    monkeypatch.setattr(account, "_fresh_home", slow_setup)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0])
+    assert result.reason == "native_metadata_timeout" and result.cleanup_confirmed
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert not scenario.calls and not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("change", ["revoke", "cancel"])
+def test_extended_metadata_budget_still_checks_revocation_and_cancellation(
+        scenario, monkeypatch, change):
+    now, reads = [0.0], []
+    cancelled = threading.Event()
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        now[0] += 20
+        reads.append(process)
+        if len(reads) == 2:
+            if change == "revoke":
+                scenario.flags["authorized"] = False
+            else:
+                cancelled.set()
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0],
+                          cancel_event=cancelled)
+    assert now[0] == 40 and len(scenario.calls) == len(scenario.stopped) == 2
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert result.cleanup_confirmed and not list(scenario.state.iterdir())
+
+
 def test_metadata_verifier_uses_same_protected_proxy_for_both_commands(
         scenario, protected, monkeypatch):
     expected = native.egress.native_environment()
@@ -429,8 +512,9 @@ def test_metadata_rejection_names_only_the_failed_command(scenario, phase, reaso
 
 
 @pytest.mark.parametrize("extra,reason", [
-    (b"private-label@example.test: private-value\n", "native_status_unknown_label"),
-    (b"User ID: private-subject\n", "native_status_duplicate_label"),
+    (b"private-label@example.test: private-value\n", "native_status_unknown_label_sha256_"
+     + hashlib.sha256(b"private-label@example.test").hexdigest()),
+    (b"User ID: private-subject\n", "native_status_duplicate_label_user_id"),
 ])
 def test_status_shape_failure_keeps_identity_closed_and_private(scenario, extra, reason):
     scenario.outputs[0] += extra
@@ -440,6 +524,63 @@ def test_status_shape_failure_keeps_identity_closed_and_private(scenario, extra,
     assert result.credential_sha256 is None and result.cleanup_confirmed
     assert not list(scenario.state.iterdir())
     assert "private" not in result.reason and SUBJECT not in result.reason
+
+
+def test_unknown_label_diagnostic_hashes_only_the_label_and_keeps_error_static():
+    label = "private-label@example.test"
+    diagnostics = []
+    for value in ("private-value-one", "private-value-two"):
+        with pytest.raises(account.AccountError) as captured:
+            account.parse_auth_status(status() + f"{label}: {value}\n".encode(),
+                                      expected_api_origin=ORIGIN)
+        error = captured.value
+        assert error.code == str(error) == "native_status_unknown_label"
+        assert label not in repr(vars(error)) and value not in repr(vars(error))
+        diagnostics.append(error.diagnostic_code)
+    assert diagnostics == ["native_status_unknown_label_sha256_"
+                           + hashlib.sha256(label.encode()).hexdigest()] * 2
+
+
+@pytest.mark.parametrize("label,suffix", [
+    ("User ID", "user_id"), ("API server", "api_server"), ("Default model", "default_model"),
+])
+def test_duplicate_known_label_diagnostic_is_a_closed_enum(label, suffix):
+    first_value = ORIGIN if label == "API server" else "private-value"
+    with pytest.raises(account.AccountError) as captured:
+        account.parse_auth_status(status(**{label: first_value})
+                                  + f"{label}: private-second-value\n".encode(),
+                                  expected_api_origin=ORIGIN)
+    error = captured.value
+    assert error.code == str(error) == "native_status_duplicate_label"
+    assert error.diagnostic_code == "native_status_duplicate_label_" + suffix
+    assert "private" not in repr(vars(error))
+
+
+@pytest.mark.parametrize("diagnostic", [
+    None, True, 12, b"native_status_duplicate_label_user_id", "private@example.test",
+    "native_status_unknown_label_sha256_" + "a" * 63,
+    "native_status_unknown_label_sha256_" + "A" * 64,
+    "native_status_unknown_label_sha256_" + "a" * 64 + "\n",
+    "native_status_duplicate_label_private_secret",
+])
+def test_account_error_sanitizes_optional_diagnostic_at_construction(diagnostic):
+    error = account.AccountError("native_status_unknown_label", diagnostic_code=diagnostic)
+    assert error.diagnostic_code is None
+    assert error.code == str(error) == "native_status_unknown_label"
+
+
+def test_collector_revalidates_diagnostic_before_emission(scenario, monkeypatch):
+    error = account.AccountError("native_status_unknown_label")
+    error.diagnostic_code = "private-native-output@example.test"
+
+    def reject(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(account, "_capture", reject)
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_status_unknown_label"
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert result.cleanup_confirmed and not list(scenario.state.iterdir())
 
 
 def test_failed_cleanup_retains_quarantined_private_directory_and_no_identity(scenario):

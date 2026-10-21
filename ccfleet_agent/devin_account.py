@@ -45,6 +45,12 @@ else:
 
 MAX_STATUS_BYTES = 64 * 1024
 MAX_STATUS_LINES = 128
+# One shared budget covers setup and both model-free metadata commands. The
+# parent also allows imports, final pin validation, and child-group cleanup.
+METADATA_ACQUISITION_TIMEOUT_S = 60
+METADATA_CHILD_TIMEOUT_S = 90
+METADATA_TERMINATE_GRACE_S = 0.05
+METADATA_PROCESS_EXIT_TIMEOUT_S = 2
 _SUBJECT = re.compile(r"[A-Za-z0-9_-]{8,128}\Z")
 _HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z")
 _LABELS = frozenset({"Credentials", "File", "API server", "Devin webapp", "Devin API", "User",
@@ -65,14 +71,33 @@ _CREDENTIAL_ENDPOINTS = {"api_server_url": "https://server.codeium.com",
                          "devin_api_url": "https://api.devin.ai"}
 _CREDENTIAL_KEYS = frozenset({"windsurf_api_key", *_CREDENTIAL_ENDPOINTS})
 _CREDENTIAL_LINE = re.compile(r'([a-z_]+)[ \t]*=[ \t]*"([^"\\]*)"\Z')
+_UNKNOWN_LABEL_DIAGNOSTIC = re.compile(r"native_status_unknown_label_sha256_[0-9a-f]{64}\Z")
+_DUPLICATE_LABEL_DIAGNOSTICS = {
+    label: "native_status_duplicate_label_" + label.lower().replace(" ", "_")
+    for label in _LABELS
+}
+_DUPLICATE_LABEL_DIAGNOSTIC_CODES = frozenset(_DUPLICATE_LABEL_DIAGNOSTICS.values())
+
+
+def safe_status_diagnostic(value, *, code=None):
+    """A label hash or closed known-label enum; never arbitrary native text."""
+    if type(value) is not str:
+        return None
+    if code in {None, "native_status_unknown_label"} and _UNKNOWN_LABEL_DIAGNOSTIC.fullmatch(value):
+        return value
+    if (code in {None, "native_status_duplicate_label"}
+            and value in _DUPLICATE_LABEL_DIAGNOSTIC_CODES):
+        return value
+    return None
 
 
 class AccountError(ValueError):
     """Static reason codes only; no status, subject, credential or filesystem text."""
 
-    def __init__(self, code):
+    def __init__(self, code, *, diagnostic_code=None):
         super().__init__(code)
         self.code = code
+        self.diagnostic_code = safe_status_diagnostic(diagnostic_code, code=code)
 
 
 def canonical_origin(value):
@@ -148,9 +173,12 @@ def parse_auth_status(raw, *, expected_api_origin):
         else:
             raise AccountError("native_status_unknown_line")
         if label not in _LABELS:
-            raise AccountError("native_status_unknown_label")
+            raise AccountError("native_status_unknown_label", diagnostic_code=(
+                "native_status_unknown_label_sha256_" + hashlib.sha256(label.encode()).hexdigest()
+            ))
         if label in seen:
-            raise AccountError("native_status_duplicate_label")
+            raise AccountError("native_status_duplicate_label",
+                               diagnostic_code=_DUPLICATE_LABEL_DIAGNOSTICS[label])
         seen.add(label)
         if label == "User ID":
             if not _SUBJECT.fullmatch(value):
@@ -348,7 +376,7 @@ def _stop_group(process):
             if os.getpgid(process.pid) != process.pid:
                 return False
             os.killpg(process.pid, signal.SIGTERM)
-            time.sleep(0.05)
+            time.sleep(METADATA_TERMINATE_GRACE_S)
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -356,7 +384,7 @@ def _stop_group(process):
         except (OSError, ValueError):
             return False
         try:
-            process.wait(timeout=2)
+            process.wait(timeout=METADATA_PROCESS_EXIT_TIMEOUT_S)
         except (OSError, subprocess.TimeoutExpired):
             return False
         return process.returncode is not None
@@ -472,6 +500,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
         return source, original_home, state, data
 
     started_at = clock()
+    deadline = started_at + METADATA_ACQUISITION_TIMEOUT_S
     try:
         source, original_home, state, data = validate()
         capabilities = dict(source["capabilities"])
@@ -499,10 +528,12 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                      "native_models_list_rejected")):
                 if not permitted():
                     raise AccountError("metadata_authorization_revoked")
+                if clock() >= deadline:
+                    raise AccountError("native_metadata_timeout")
                 process = popen_factory([data["files"]["executable"]["path"], *arguments],
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     cwd=str(home), env=environment, start_new_session=True, bufsize=0)
-                raw = _capture(process, maximum=limit, deadline=started_at + 30,
+                raw = _capture(process, maximum=limit, deadline=deadline,
                                permitted=permitted, cancelled=cancelled, clock=clock)
                 cleanup = _stop_group(process)
                 if not cleanup:
@@ -520,7 +551,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                 raise AccountError("native_metadata_stale")
             account, reason = subject.fingerprint(), "verified"
     except AccountError as error:
-        reason = error.code
+        reason = safe_status_diagnostic(error.diagnostic_code, code=error.code) or error.code
     except (OSError, ValueError, TypeError, KeyError):
         reason = "native_metadata_unverified"
     finally:
