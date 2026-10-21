@@ -49,8 +49,8 @@ _SUBJECT = re.compile(r"[A-Za-z0-9_-]{8,128}\Z")
 _HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z")
 _LABELS = frozenset({"Credentials", "File", "API server", "Devin webapp", "Devin API", "User",
     "Name", "Email", "User ID", "Account", "Tier", "Plan", "Team ID", "Team membership",
-    "Enterprise", "Telemetry", "Team settings", "Allowed models", "MCP servers", "Sandbox",
-    "Fetched at"})
+    "Enterprise", "Primary org", "Telemetry", "Team settings", "Allowed models", "Default model",
+    "MCP servers", "Sandbox", "Disabled tools", "Fetched at"})
 _SECTIONS = frozenset({"Credentials", "User", "Account", "Team settings"})
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _VERSION = re.compile(r"[0-9]{1,6}(?:\.[0-9]{1,6}){2}\Z")

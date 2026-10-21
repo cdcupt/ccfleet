@@ -567,6 +567,42 @@ def test_failed_readiness_never_reserves_or_pauses_execution(trial):
         ).fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("status,reason,code,http_status", [
+    (429, "worker_busy", "trial_busy", 429),
+    (503, "worker_not_ready", "trial_worker_unavailable", 503),
+    (504, "readiness_timeout", "trial_worker_unavailable", 503),
+    (403, "authorization_changed", "trial_worker_unavailable", 503),
+    (502, "transport_or_policy_failed", "trial_worker_unavailable", 503),
+])
+def test_readiness_reason_is_static_and_busy_never_spends_allowance(
+    trial, caplog, status, reason, code, http_status
+):
+    from ccfleetd.gateway_transport import GatewayTransportError
+
+    workers = []
+
+    class Worker(FakeWorker):
+        def prepare(self, authorized):
+            workers.append(self)
+            assert authorized()
+            raise GatewayTransportError("PRIVATE_REQUEST_TOKEN_PROVIDER_TEXT", status=status)
+
+        def perform(self, raw, authorized):
+            pytest.fail("rejected readiness sent a model frame")
+
+    trial.runtime.transport = Worker
+    key = trial.runtime.create_key(trial.alice)
+    before = trial.runtime.allowance(trial.alice)
+    with pytest.raises(trial_runtime.TrialUnavailable) as error:
+        trial.runtime.turn(key, body())
+    assert (error.value.code, error.value.status) == (code, http_status)
+    assert trial.runtime.allowance(trial.alice) == before
+    assert workers[0].closed and not trial.runtime.readiness_lock.locked()
+    assert [row.getMessage() for row in caplog.records if row.name == "ccfleetd.trial_runtime"] == [
+        "Devin trial readiness failed: reason=" + reason]
+    assert "PRIVATE" not in caplog.text and key not in caplog.text
+
+
 def test_pause_during_readiness_closes_connection_before_any_admission(trial):
     workers = []
 

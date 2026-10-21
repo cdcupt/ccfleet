@@ -289,6 +289,39 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
         first = reader.frame()
         if first != {"version": 2, "operation": "status"}:
             raise native.NativeError("trial_status_required")
+        # Readiness promises that this same connection owns the worker. Take
+        # the shared maintenance/turn lock before acknowledging it, so a
+        # refresh cannot win the lock between status and the request frame.
+        _, shared_state = source.validate()
+        lock = os.open(
+            shared_state / ".trial.lock",
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            0o600,
+        )
+        info = os.fstat(lock)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_nlink != 1
+        ):
+            raise native.NativeError("trial_lock_guard")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # No request frame has been read or model work started. The
+            # controller can report busy without reserving an execution turn.
+            writer.response(
+                429, "application/json", [relay._json({"error": "trial_worker_busy"})]
+            )
+            return 2
+        if list(shared_state.glob("trial-*")):
+            raise native.NativeError("trial_cleanup_review_required")
+        # A refresh may have completed after the first loader but before this
+        # lock. Recheck the current grant and credential before claiming ready.
+        source, settings, reloaded_sha = loader()
+        if reloaded_sha != policy_sha:
+            raise native.NativeError("trial_policy_changed")
         writer.response(
             200,
             "application/json",
@@ -325,29 +358,11 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
             request_models=[MODEL],
             effort="max",
         )
-        _, shared_state = source.validate()
-        lock = os.open(
-            shared_state / ".trial.lock",
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-            0o600,
-        )
-        info = os.fstat(lock)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o600
-            or info.st_nlink != 1
-        ):
-            raise native.NativeError("trial_lock_guard")
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # No old uncertain turn may share this Unix principal with a new one.
-        if list(shared_state.glob("trial-*")):
-            raise native.NativeError("trial_cleanup_review_required")
         source, settings, reloaded_sha = loader()
         if reloaded_sha != policy_sha:
             raise native.NativeError("trial_policy_changed")
-        # Root may have renewed the credential after readiness but before this
-        # lock; reload its verified grant inside the lock before copying.
+        # BAD source evidence still revokes while the worker is locked. Reload
+        # its verified grant after the request frame and before copying.
         config, root = fresh_config(source, settings, policy_sha)
         binding = native.OwnershipBinding.from_dict(source.data["binding"])
 

@@ -117,8 +117,11 @@ def scene(tmp_path, monkeypatch):
     }
     profile = {"source_profile_sha256": "f" * 64, "template_sha256": "1" * 64}
     source_calls = []
+    protected_credential = t.provision._credential
 
     def read_credential(actual):
+        if actual is trial:
+            return protected_credential(actual)
         assert actual is source
         source_calls.append("credential-read")
         return owner_credential.read_bytes()
@@ -257,6 +260,178 @@ def test_good_refresh_copies_only_credential_and_preserves_original_native_times
     assert json.loads(t.GRANT.read_bytes()) == grant
     assert b"OPAQUE" not in t.GRANT.read_bytes() and "owner-a" not in json.dumps(result)
     assert t.REGISTRATION.read_bytes() == t.provision._encode(s.reg)
+
+
+def test_unchanged_credential_renewal_keeps_grant_visible_and_never_blocks_ready_worker(
+    scene, monkeypatch
+):
+    s = scene
+    assert s.run()["credential_copy_attempted"]
+    previous = json.loads(t.GRANT.read_bytes())
+    credential = s.home / ".local/share/devin/credentials.toml"
+    identity = credential.stat().st_ino, credential.stat().st_mtime_ns
+    machine = copy.deepcopy(s.machine)
+    observation = machine["devin_observations"][s.source.pw_name]
+    observation["checked_at"] = observation["report"]["observed_at"] = 1010
+    write(Path(s.reg["state_path"]), machine)
+    replace, flock = t.provision._replace, fcntl.flock
+    interleavings = []
+
+    def publish_while_worker_is_ready(base, name, raw, gid):
+        # A worker already read the prior grant during status. At the exact
+        # publication boundary it must still read that valid grant and acquire
+        # its real request lock. No model/provider work occurs in this test.
+        assert name == t.GRANT.name and json.loads(t.GRANT.read_bytes()) == previous
+        descriptor = os.open(s.state / ".trial.lock", os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            interleavings.append("ready worker acquired request lock")
+        finally:
+            os.close(descriptor)
+        replace(base, name, raw, gid)
+
+    monkeypatch.setattr(t, "revoke", lambda: pytest.fail("healthy renewal revoked grant"))
+    monkeypatch.setattr(t, "copy_credential", lambda *_: pytest.fail("unchanged credential copied"))
+    monkeypatch.setattr(t.fcntl, "flock", lambda *_: pytest.fail("healthy renewal took worker lock"))
+    monkeypatch.setattr(t.provision, "_replace", publish_while_worker_is_ready)
+    assert s.run() == {
+        "outcome": "refreshed", "credential_copy_attempted": False, "provider_calls": 0}
+    assert interleavings == ["ready worker acquired request lock"]
+    assert json.loads(t.GRANT.read_bytes())["observed_at"] == 1010 != 1020
+    assert (credential.stat().st_ino, credential.stat().st_mtime_ns) == identity
+
+
+def test_existing_active_worker_artifacts_keep_good_grant_but_bad_source_still_revokes(scene):
+    s = scene
+    s.run()
+    previous = t.GRANT.read_bytes()
+    descriptor = os.open(s.state / ".trial.lock", os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        (s.state / "trial-active").mkdir()
+        # The periodic 30-second refresh can run during a legitimate 40-second
+        # generation. Its original grant must remain valid for that whole turn.
+        started_at, generation_seconds = 1020, 40
+        assert s.run(now=lambda: started_at + 30) == {
+            "outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
+        assert t.GRANT.read_bytes() == previous
+        assert started_at + generation_seconds - json.loads(previous)["observed_at"] <= 300
+        write(Path(s.reg["state_path"]), dict(s.machine, devin_observations={}))
+        assert s.run()["outcome"] == "revoked" and not t.GRANT.exists()
+    finally:
+        os.close(descriptor)
+
+
+def test_unchanged_credential_does_not_renew_an_idle_quarantined_worker(scene):
+    scene.run()
+    (scene.state / "trial-unconfirmed").mkdir()
+    assert scene.run() == {
+        "outcome": "revoked", "credential_copy_attempted": False, "provider_calls": 0}
+    assert not t.GRANT.exists()
+
+
+def test_worker_starting_during_root_rechecks_keeps_its_grant_without_renewal(scene, monkeypatch):
+    s = scene
+    s.run()
+    previous = t.GRANT.read_bytes()
+    original = t.root_json
+    reads, descriptors = [], []
+
+    def read_and_start_worker(path, *args, **kwargs):
+        if path == Path(s.reg["state_path"]):
+            reads.append(path)
+            if len(reads) == 2:
+                descriptor = os.open(s.state / ".trial.lock", os.O_RDWR | os.O_NOFOLLOW)
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                descriptors.append(descriptor)
+                (s.state / "trial-active").mkdir()
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(t, "root_json", read_and_start_worker)
+    monkeypatch.setattr(t, "revoke", lambda: pytest.fail("active worker grant revoked"))
+    try:
+        assert s.run() == {
+            "outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
+        assert len(descriptors) == 1 and t.GRANT.read_bytes() == previous
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+@pytest.mark.parametrize("change", ["state", "policy", "source-credential", "trial-credential"])
+def test_unchanged_credential_renewal_rechecks_all_current_authority(scene, monkeypatch, change):
+    s = scene
+    s.run()
+    original = t.current_grant_matches
+
+    def matching_then_change(*args, **kwargs):
+        result = original(*args, **kwargs)
+        assert result
+        if change == "state":
+            write(Path(s.reg["state_path"]), dict(s.machine, devin_observations={}))
+        elif change == "policy":
+            write(t.POLICY, dict(s.policy, enabled=False), 0o640)
+        elif change == "source-credential":
+            s.owner_credential.write_bytes(b"CHANGED_SOURCE_TOKEN")
+        else:
+            (s.home / ".local/share/devin/credentials.toml").write_bytes(b"CHANGED_TRIAL_TOKEN")
+        return result
+
+    monkeypatch.setattr(t, "current_grant_matches", matching_then_change)
+    assert s.run() == {
+        "outcome": "revoked", "credential_copy_attempted": False, "provider_calls": 0}
+    assert not t.GRANT.exists()
+
+
+@pytest.mark.parametrize("change", [
+    "account", "claim", "runtime", "config", "stale", "future", "version-type", "enabled-type",
+    "unknown-field",
+])
+def test_only_a_matching_valid_grant_can_remain_visible_during_renewal(scene, monkeypatch, change):
+    s = scene
+    s.run()
+    grant = json.loads(t.GRANT.read_bytes())
+    if change == "account":
+        grant["account_fp"] = "2" * 64
+    elif change == "claim":
+        grant["source_claim"]["claim_generation"] += 1
+    elif change == "runtime":
+        grant["source_runtime"]["adapter_revision"] = "2" * 64
+    elif change == "config":
+        grant["config_sha256"] = "2" * 64
+    elif change == "version-type":
+        grant["version"] = True
+    elif change == "enabled-type":
+        grant["enabled"] = 1
+    elif change == "unknown-field":
+        grant["new_authority"] = True
+    else:
+        grant["observed_at"] = 700 if change == "stale" else 1021
+    write(t.GRANT, grant, 0o640)
+    original = t.copy_credential
+
+    def copy_after_revoke(*args):
+        assert not t.GRANT.exists()
+        original(*args)
+
+    monkeypatch.setattr(t, "copy_credential", copy_after_revoke)
+    assert s.run()["credential_copy_attempted"]
+    assert json.loads(t.GRANT.read_bytes())["observed_at"] == 1000
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "public-mode"])
+def test_unchanged_credential_requires_a_protected_actual_file(scene, unsafe):
+    s = scene
+    s.run()
+    credential = s.home / ".local/share/devin/credentials.toml"
+    if unsafe == "symlink":
+        credential.unlink()
+        credential.symlink_to(s.owner_credential)
+    else:
+        credential.chmod(0o644)
+    assert s.run() == {
+        "outcome": "revoked", "credential_copy_attempted": False, "provider_calls": 0}
+    assert not t.GRANT.exists() and s.owner_credential.read_bytes() == b"OPAQUE_SOURCE_TOKEN"
 
 
 def test_active_source_state_matches_machine_native_observation_contract(scene):

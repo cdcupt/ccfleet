@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import io
 import json
@@ -315,26 +316,131 @@ response({"reply":"clean"})
 
 
 def test_actual_shared_worker_lock_excludes_second_worker_before_fresh_copy(scene):
-    import fcntl
-
     source, settings, sha, _, state, _ = scene
     lock = os.open(state / ".trial.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         out = io.BytesIO()
+        incoming = frames(body())
+        status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
         assert (
             worker.serve(
-                frames(body()),
+                incoming,
                 out,
                 loader=lambda: (source, settings, sha),
                 runner=lambda *a, **kw: pytest.fail("busy worker must not launch"),
             )
             == 2
         )
-        assert unpack(out.getvalue())[-1][0]["status"] == 503
+        [response] = unpack(out.getvalue())
+        assert response[0]["status"] == 429
+        assert response[1] == {"error": "trial_worker_busy"}
+        assert incoming.tell() == status_end, "busy readiness consumed a request frame"
         assert not list(state.glob("trial-*"))
     finally:
         os.close(lock)
+
+
+def test_ready_connection_keeps_shared_lock_between_status_and_request(scene):
+    source, settings, sha, _, state, _ = scene
+    raw = frames(body()).getvalue()
+    status_end = 4 + struct.unpack("!I", raw[:4])[0]
+    out, events = io.BytesIO(), []
+
+    def contender():
+        descriptor = os.open(state / ".trial.lock", os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(descriptor)
+
+    class InterleavedInput(io.BytesIO):
+        def read(self, size):
+            if self.tell() == status_end and not events:
+                [ready] = unpack(out.getvalue())
+                assert ready[0]["status"] == 200 and ready[1]["ready"] is True
+                # Model-free refresh uses this same flock. It must observe a
+                # busy worker after readiness, rather than steal admission.
+                contender()
+                events.append("refresh-skipped-busy")
+            return super().read(size)
+
+    def run(config, *args, **kwargs):
+        assert events == ["refresh-skipped-busy"]
+        contender()
+        return result(config)
+
+    assert worker.serve(
+        InterleavedInput(raw), out, loader=lambda: (source, settings, sha), runner=run
+    ) == 0
+    assert unpack(out.getvalue())[-1][1]["cleanup_confirmed"] is True
+    descriptor = os.open(state / ".trial.lock", os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+def test_status_only_connection_releases_worker_without_fresh_home_or_model(scene):
+    source, settings, sha, _, state, _ = scene
+    raw = frames(body()).getvalue()
+    status_end = 4 + struct.unpack("!I", raw[:4])[0]
+    out = io.BytesIO()
+    assert worker.serve(
+        io.BytesIO(raw[:status_end]), out, loader=lambda: (source, settings, sha),
+        runner=lambda *args, **kwargs: pytest.fail("status-only connection ran a model"),
+    ) == 0
+    [ready] = unpack(out.getvalue())
+    assert ready[1]["ready"] is True and not list(state.glob("trial-*"))
+    descriptor = os.open(state / ".trial.lock", os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+def test_authority_is_reloaded_under_lock_before_readiness(scene):
+    source, settings, sha, _, state, _ = scene
+    calls = []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 2:
+            raise worker.native.NativeError("PRIVATE revoked source grant")
+        return source, settings, sha
+
+    incoming, out = frames(body()), io.BytesIO()
+    status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
+    assert worker.serve(
+        incoming, out, loader=load,
+        runner=lambda *args, **kwargs: pytest.fail("revoked readiness ran a model"),
+    ) == 2
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503 and b"PRIVATE" not in out.getvalue()
+    assert incoming.tell() == status_end and not list(state.glob("trial-*"))
+
+
+def test_bad_grant_after_readiness_still_prevents_native_execution(scene):
+    source, settings, sha, _, state, _ = scene
+    raw = frames(body()).getvalue()
+    status_end = 4 + struct.unpack("!I", raw[:4])[0]
+    changed = []
+
+    class RevokeAfterReady(io.BytesIO):
+        def read(self, size):
+            if self.tell() == status_end and not changed:
+                settings["_refresh"] = lambda: False
+                changed.append(True)
+            return super().read(size)
+
+    out = io.BytesIO()
+    assert worker.serve(
+        RevokeAfterReady(raw), out, loader=lambda: (source, settings, sha),
+        runner=lambda *args, **kwargs: pytest.fail("BAD grant ran a model"),
+    ) == 2
+    assert [entry[0]["status"] for entry in unpack(out.getvalue())] == [200, 503]
+    assert changed and not list(state.glob("trial-*"))
 
 
 @pytest.mark.parametrize(
@@ -541,16 +647,20 @@ def test_quarantined_old_turn_prevents_new_native_even_with_unlocked_worker(scen
     quarantined.mkdir(mode=0o700)
     (quarantined / "private-result").write_bytes(b"PRIVATE UNKNOWN HISTORY")
     out = io.BytesIO()
+    incoming = frames(body())
+    status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
     assert (
         worker.serve(
-            frames(body()),
+            incoming,
             out,
             loader=lambda: (source, settings, sha),
             runner=lambda *a, **kw: pytest.fail("quarantined trial UID cannot execute"),
         )
         == 2
     )
-    assert unpack(out.getvalue())[-1][0]["status"] == 503
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503
+    assert incoming.tell() == status_end, "quarantined worker consumed a request frame"
     assert (quarantined / "private-result").read_bytes() == b"PRIVATE UNKNOWN HISTORY"
     assert b"PRIVATE" not in out.getvalue()
 
@@ -573,4 +683,4 @@ def test_worker_reloads_same_policy_new_good_credential_under_lock_before_turn(s
 
     out = io.BytesIO()
     assert worker.serve(frames(body()), out, loader=load, runner=run) == 0
-    assert len(calls) == 2 and unpack(out.getvalue())[-1][1]["cleanup_confirmed"]
+    assert len(calls) == 3 and unpack(out.getvalue())[-1][1]["cleanup_confirmed"]

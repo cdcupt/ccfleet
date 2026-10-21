@@ -290,6 +290,31 @@ def copy_credential(trial, raw):
         os.close(base)
 
 
+def current_grant_matches(expected, *, now):
+    """Only an exact, still-valid grant can stay visible during renewal."""
+    try:
+        current, _ = root_json(GRANT, 8192)
+        observed_at = current.get("observed_at")
+        return (
+            type(observed_at) in (int, float)
+            and math.isfinite(observed_at)
+            and 0 <= now - observed_at <= 300
+            and provision._encode(current)
+            == provision._encode({**expected, "observed_at": observed_at})
+        )
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        return False
+
+
+def publish_grant(grant, trial):
+    base = provision._directory(GRANT.parent)
+    try:
+        provision._replace(base, GRANT.name, provision._encode(grant), trial.pw_gid)
+        os.fsync(base)
+    finally:
+        os.close(base)
+
+
 def refresh(*, now=time.time, monotonic=time.monotonic, lookup=pwd.getpwnam, groups_of=group_names):
     """One bounded reconciliation. BAD evidence revokes before any worker lock."""
     need(os.geteuid() == ROOT_UID)
@@ -312,6 +337,46 @@ def refresh(*, now=time.time, monotonic=time.monotonic, lookup=pwd.getpwnam, gro
         bounded()
         state_path = trial_template(policy, source_template, trial)
         state_fd = owned_directory(state_path, trial.pw_uid)
+        grant = {
+            "version": 1,
+            "enabled": True,
+            "config_sha256": policy["config_sha256"],
+            "credential_sha256": observed["credential_sha256"],
+            "observed_at": observed["checked_at"],
+            "account_fp": policy["expected_account_fp"],
+            "source_claim": policy["source_claim"],
+            "source_profile_sha256": policy["source_profile_sha256"],
+            "source_runtime": policy["source_runtime"],
+        }
+
+        def confirm():
+            # Every path uses current source authority again before publication;
+            # a previous GOOD grant never substitutes for fresh native evidence.
+            need(
+                root_json(REGISTRATION, 8192, private=True)[1] == reg_raw
+                and root_json(POLICY, 8192)[1] == policy_raw
+            )
+            current, _ = root_json(Path(reg["state_path"]), 4 * 1024 * 1024, private=True)
+            repeated, _, current_credential = source_proof(reg, policy, source, current, now=now())
+            need(repeated == observed and current_credential == credential)
+            need(trial_template(policy, source_template, trial) == state_path)
+            need(provision._credential(trial) == credential)
+            bounded()
+
+        try:
+            unchanged = provision._credential(trial) == credential
+        except FileNotFoundError:
+            unchanged = False
+        if (unchanged and current_grant_matches(grant, now=now())
+                and not pending_artifacts(state_fd)):
+            confirm()
+            # A legitimate worker may have started while root rechecked the
+            # source. Leave its grant alone; do not mistake active artifacts for
+            # an idle quarantine or block its request on the refresher's lock.
+            if pending_artifacts(state_fd):
+                return {"outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
+            publish_grant(grant, trial)
+            return {"outcome": "refreshed", "credential_copy_attempted": False, "provider_calls": 0}
         try:
             lock = os.open(
                 ".trial.lock",
@@ -345,35 +410,13 @@ def refresh(*, now=time.time, monotonic=time.monotonic, lookup=pwd.getpwnam, gro
         copy_attempted = True
         copy_credential(trial, credential)
         bounded()
-        # Re-read every root decision after the copy. A concurrent BAD report,
-        # credential/account switch, opt-out or profile change cannot mint GOOD.
-        need(
-            root_json(REGISTRATION, 8192, private=True)[1] == reg_raw
-            and root_json(POLICY, 8192)[1] == policy_raw
-        )
-        current, _ = root_json(Path(reg["state_path"]), 4 * 1024 * 1024, private=True)
-        repeated, _, current_credential = source_proof(reg, policy, source, current, now=now())
-        need(repeated == observed and current_credential == credential)
-        need(trial_template(policy, source_template, trial) == state_path)
-        bounded()
-        grant = {
-            "version": 1,
-            "enabled": True,
-            "config_sha256": policy["config_sha256"],
-            "credential_sha256": observed["credential_sha256"],
-            "observed_at": observed["checked_at"],
-            "account_fp": policy["expected_account_fp"],
-            "source_claim": policy["source_claim"],
-            "source_profile_sha256": policy["source_profile_sha256"],
-            "source_runtime": policy["source_runtime"],
+        confirm()
+        publish_grant(grant, trial)
+        return {
+            "outcome": "refreshed",
+            "credential_copy_attempted": copy_attempted,
+            "provider_calls": 0,
         }
-        base = provision._directory(GRANT.parent)
-        try:
-            provision._replace(base, GRANT.name, provision._encode(grant), trial.pw_gid)
-            os.fsync(base)
-        finally:
-            os.close(base)
-        return {"outcome": "refreshed", "credential_copy_attempted": True, "provider_calls": 0}
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         revoke()
         return {
