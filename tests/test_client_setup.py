@@ -188,6 +188,33 @@ def test_explicit_paired_slot_becomes_default_only_after_readiness(client, monke
     assert config["projects"]["saved"]["id"] == "private-project-history"
 
 
+def test_setup_paired_claude_slot_checks_that_slot_instead_of_other_devin_key(client, monkeypatch):
+    one, two = device(client, "one"), device(client, "two")
+    save(client, one, two, active="two")
+    forbid_pairing(client, monkeypatch)
+    secret = "ccf_api_" + "x" * 43
+    client["save_gateway"]({"version": 1, "device_id": "two",
+                            "base_url": "https://fleet.invalid", "secret": secret,
+                            "key_id": "gsynthetic", "slot_ids": ["slot-two"],
+                            "mode": "sticky", "provider": "devin"})
+    checked, urls = [], []
+    def api(url, token, *a, **kw):
+        urls.append(url)
+        assert token == secret and kw["method"] == "GET"
+        return {"ready": True, "provider": "devin",
+                "key": {"id": "gsynthetic", "slot_ids": ["slot-two"], "mode": "sticky"},
+                "slots": [{"id": "slot-two", "name": "slot-two", "ready": True}]}
+    scope = client["cmd_setup"].__globals__
+    monkeypatch.setitem(scope, "api_json", api)
+    monkeypatch.setitem(scope, "check_inference",
+                        lambda selected, **kw: checked.append(selected["slot_id"]))
+    assert client["main"](["setup", "--slot", "slot-one"]) == 0
+    assert checked == ["slot-one"] and all("?slot=" not in url for url in urls)
+    assert client["load_config"]()["active"] == "one"
+    # The saved Devin key remains usable for its original slot.
+    assert client["load_gateway"]()["provider"] == "devin"
+
+
 @pytest.mark.parametrize("bad", ["missing_key", "missing_pin", "incomplete", "unknown_slot"])
 def test_invalid_existing_pairing_is_not_replaced(client, monkeypatch, bad):
     saved = device(client)

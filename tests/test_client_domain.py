@@ -241,7 +241,7 @@ def test_native_model_environment_gets_canonical_base_and_same_auth(cli, bare):
 
 
 def test_fresh_defaults_and_version_are_new_without_loading_or_network(cli):
-    assert cli["DEFAULT_SERVER"] == NEW and cli["CLIENT_VERSION"] == "0.2.7"
+    assert cli["DEFAULT_SERVER"] == NEW and cli["CLIENT_VERSION"] == "0.2.8"
     assert cli["parser"]().parse_args(["login"]).server == NEW
     assert cli["parser"]().parse_args(["setup"]).server == NEW
     assert not cli["config_path"]().exists()

@@ -237,8 +237,8 @@ def test_full_shell_commands_survive_as_literal_escaped_code(relative, commands)
     ("gateway/README.html", 2, "05a5875a4103537bf322ea6a96eaf76efd2d1b47bdaa9da8d1ec89921a9feb69"),
     ("docs/compliance.html", 1, "2ded188e10c277d7ba59ba03370ff9b307bcae82bf0704dba331489a5a70208d"),
     ("docs/design.html", 4, "7f419e01e1cc8c555781096ad52e2c6b3cdb122d828a16e0801be29e047efb2b"),
-    # 2026-10-12: provider-neutral broker role in the explicit bridge diagram.
-    ("docs/local-relay.html", 11, "487a6d771723fee88a70869ca19d06ddf63317b68112d31781e7c1c9af62a0cb"),
+    # 2026-10-21: add the update/list/use/local example; all 11 earlier blocks are unchanged.
+    ("docs/local-relay.html", 12, "4da6ea1d7f2b8b96d53bfbb25f838984d8abbda8ffc30c9f67ef2e537806d7aa"),
     ("docs/project-workspaces.html", 3, "4ffcd619921bc03a4b1a8e660378d00f67b01746ceb7b34ee10553917c4538e0"),
     ("docs/tunnel.html", 8, "d5068c44dd70fc6f7dc50e6ffd9d8abae4f0fb160ab3917aedd732558743e492"),
 ])

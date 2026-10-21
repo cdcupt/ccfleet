@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.7"
+CLIENT_VERSION = "0.2.8"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -630,6 +630,151 @@ def choose_device(config: dict[str, Any], wanted: str = "") -> dict[str, Any]:
     return device
 
 
+def local_slot_choice(config: dict[str, Any], wanted: str = "") -> str:
+    """A new explicit local choice is independent of the website's endpoint pool."""
+    if wanted:
+        return wanted
+    choice = config.get("local_slot_choice")
+    if choice is None:
+        return ""
+    if (not isinstance(choice, dict) or set(choice) != {"device_id", "slot_id", "slot_name"}
+            or any(not isinstance(choice.get(name), str) or not choice[name]
+                   for name in ("device_id", "slot_id", "slot_name"))
+            or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", choice["slot_id"])
+            or len(choice["slot_name"]) > 200
+            or any(ord(char) < 32 or ord(char) == 127 for char in choice["slot_name"])):
+        raise CliError("saved local slot choice is invalid; run ccfleet use SLOT")
+    device = config["devices"].get(choice["device_id"])
+    if not isinstance(device, dict):
+        raise CliError("the selected local slot's authorization is no longer paired; "
+                       "run ccfleet use SLOT")
+    return choice["slot_id"]
+
+
+def remember_local_slot(config: dict[str, Any], device: dict[str, Any], *,
+                        slot_id: str = "", slot_name: str = "") -> None:
+    config["active"] = device["device_id"]
+    config["local_slot_choice"] = {"device_id": device["device_id"],
+                                   "slot_id": slot_id or device["slot_id"],
+                                   "slot_name": slot_name or device["slot_name"]}
+
+
+def paired_slot_device(config: dict[str, Any], slot_id: str) -> Optional[dict[str, Any]]:
+    """An endpoint slot ID cannot borrow a retired pairing's matching display name."""
+    matches = [device for device in config["devices"].values()
+               if isinstance(device, dict) and device.get("slot_id") == slot_id]
+    if len(matches) > 1:
+        raise CliError("that slot has ambiguous saved pairings; check Connected devices")
+    return matches[0] if matches else None
+
+
+def local_paired_device(config: dict[str, Any], wanted: str = "") -> dict[str, Any]:
+    selected = local_slot_choice(config, wanted)
+    if not wanted and "local_slot_choice" in config:
+        device = paired_slot_device(config, selected)
+        if device is None:
+            raise CliError("the selected gateway slot has no paired Claude bridge")
+        anchor = config["devices"][config["local_slot_choice"]["device_id"]]
+        if _gateway_url(device.get("server")) != _gateway_url(anchor.get("server")):
+            raise CliError("the saved local slot belongs to a different endpoint; "
+                           "run ccfleet use SLOT to choose again")
+        return device
+    return choose_device(config, selected)
+
+
+def local_route(config: dict[str, Any], wanted: str = "", transport: str = "auto", *,
+                require_ready: bool = True, check_bridge: bool = True,
+                canonical: bool = False) -> dict[str, Any]:
+    """Choose a route before sending; errors never trigger a transport fallback."""
+    selected = local_slot_choice(config, wanted)
+    canonical = canonical or bool(not wanted and "local_slot_choice" in config)
+    saved = load_gateway() if transport != "bridge" else None
+    if saved:
+        device = choose_device(config, saved["device_id"])
+    elif canonical:
+        device = paired_slot_device(config, selected)
+        if device is None:
+            raise CliError("the selected slot needs its existing HTTPS gateway; "
+                           "it has no paired Claude bridge")
+    else:
+        device = choose_device(config, selected)
+    if not wanted and "local_slot_choice" in config:
+        anchor = config["devices"][config["local_slot_choice"]["device_id"]]
+        if _gateway_url(device.get("server")) != _gateway_url(anchor.get("server")):
+            raise CliError("the saved local slot belongs to a different endpoint; "
+                           "run ccfleet use SLOT to choose again")
+    profile = gateway_for_launch(config, device, transport)
+    pinned = ""
+    migration = device
+    answer: dict[str, Any] = {}
+    name = device.get("slot_name") or device["slot_id"]
+    if profile is not None and selected:
+        # Fresh endpoint names take precedence over a retired pairing's old name.
+        answer = check_gateway(profile, require_ready=False)
+        rows = answer.get("slots", [])
+        matches = [row for row in rows if row.get("id") == selected]
+        if not matches and not canonical:
+            matches = [row for row in rows if row.get("name") == selected]
+        if len(matches) > 1:
+            raise CliError("that slot name is ambiguous; use its current slot ID")
+        paired = None
+        if matches:
+            pinned = matches[0]["id"]
+            name = matches[0].get("name") or pinned
+            paired = paired_slot_device(config, pinned)
+            migration = paired
+        else:
+            try:
+                paired = (paired_slot_device(config, selected) if canonical
+                          else choose_device(config, selected))
+                if paired is None:
+                    raise CliError("slot is not paired")
+            except CliError:
+                raise CliError("choose one of your endpoint's selected slots or an already "
+                               "paired slot by its current name or ID") from None
+            pinned = paired["slot_id"]
+            name = paired.get("slot_name") or pinned
+        if paired is not None:
+            if _gateway_url(paired.get("server")) != profile["base_url"]:
+                raise CliError("this slot belongs to a different endpoint")
+            migration = paired
+        if pinned not in profile["slot_ids"]:
+            if not isinstance(answer.get("key"), dict):
+                raise CliError("the gateway did not confirm its current slot selection; "
+                               "no bridge route was started")
+            if transport == "gateway":
+                raise CliError("this slot is not selected for your gateway endpoint; "
+                               "choose --transport auto for its paired Claude bridge")
+            # This is an initial, authorized route choice, not recovery from an error.
+            # A paired bridge always uses Claude; it cannot stand in for a Devin key.
+            device, profile, pinned = paired, None, ""
+    if profile is not None:
+        answer = check_gateway(profile, pinned, require_ready=require_ready)
+        if pinned and pinned not in profile["slot_ids"]:
+            raise CliError("this slot is not selected for your gateway endpoint")
+        if not pinned:
+            rows = answer.get("slots", [])
+            if len(profile["slot_ids"]) == 1:
+                identifier = profile["slot_ids"][0]
+                name = next((row.get("name") or identifier for row in rows
+                             if row.get("id") == identifier), identifier)
+            else:
+                name = "configured slot pool"
+    elif check_bridge:
+        check_inference(device)
+    return {"device": device, "gateway": profile, "slot_id": pinned,
+            "migration_device": migration, "slot_name": name, "answer": answer,
+            "provider": profile.get("provider", "anthropic") if profile else "anthropic",
+            "transport": "gateway" if profile else "bridge"}
+
+
+def print_local_route(route: dict[str, Any]) -> None:
+    provider = "Devin" if route["provider"] == "devin" else "Claude / Anthropic"
+    transport = "HTTPS gateway" if route["gateway"] is not None else "paired slot bridge"
+    print(f"Selected route: {route['slot_name']} · {provider} · {transport}.",
+          file=sys.stderr, flush=True)
+
+
 def frame(payload: bytes, opcode: int = 2) -> bytes:
     mask = os.urandom(4)
     body = bytearray(payload)
@@ -1092,40 +1237,22 @@ def _local_options(values: dict[str, Any]) -> argparse.Namespace:
 
 def gateway_diagnostic_context(slot: str = "") -> Optional[dict[str, Any]]:
     """Return closed, aggregate facts only; never provider/key/device secrets or paths."""
-    profile = load_gateway()
-    if profile is None:
+    if load_gateway() is None:
         return None
     config = load_config()
-    device = choose_device(config, profile["device_id"])
-    profile = gateway_for_launch(config, device, "gateway")
-    answer = api_json(profile["base_url"] + "/api/gateway/status", profile["secret"], method="GET")
-    current = answer.get("key")
-    if isinstance(current, dict):
-        if current.get("id") != profile["key_id"]:
-            raise CliError("gateway returned a different endpoint identity")
-        profile = _gateway_profile({**profile, "slot_ids": current.get("slot_ids"),
-                                    "mode": current.get("mode")})
-    entries = answer.get("slots")
-    if not isinstance(entries, list):
-        entries = []
-    eligible = sum(1 for entry in entries if isinstance(entry, dict)
-                   and (entry.get("ready") is True or entry.get("eligible") is True))
-    if slot:
-        matches = [entry.get("id") for entry in entries if isinstance(entry, dict)
-                   and slot in (entry.get("id"), entry.get("name"))
-                   and entry.get("id") in profile["slot_ids"]]
-        if len(matches) != 1:
-            selected = choose_device(config, slot)["slot_id"]
-            if selected not in profile["slot_ids"]:
-                raise CliError("slot is not selected for this endpoint")
-        else:
-            selected = matches[0]
-        answer = api_json(profile["base_url"] + "/api/gateway/status?slot="
-                          + urllib.parse.quote(selected, safe=""), profile["secret"], method="GET")
-        eligible = 1 if answer.get("ready") is True else 0
+    route = local_route(config, slot, require_ready=False, check_bridge=False)
+    profile = route["gateway"]
+    if profile is None:
+        return None
+    answer = route["answer"]
+    entries = answer.get("slots", [])
+    eligible = sum(1 for entry in entries if entry.get("ready") is True
+                   or entry.get("eligible") is True)
     return {"transport": "gateway", "ready": answer.get("ready") is True,
-            "routing": profile["mode"], "selected_count": 1 if slot else len(profile["slot_ids"]),
+            "routing": profile["mode"],
+            "selected_count": 1 if route["slot_id"] else len(profile["slot_ids"]),
             "eligible_count": eligible}
+
 
 def experience_callbacks() -> dict[str, Any]:
     def launch_local(values: dict[str, Any]) -> int:
@@ -1139,7 +1266,7 @@ def experience_callbacks() -> dict[str, Any]:
         vars(args).update(values)
         return cmd_attach(args)
 
-    return {"load_config": load_config, "choose_device": choose_device,
+    return {"load_config": load_config, "choose_device": local_paired_device,
             "find_local_claude": find_local_claude, "check_managed_route": check_managed_route,
             "check_inference": check_inference, "device_context": device_context,
             "gateway_context": gateway_diagnostic_context,
@@ -1461,25 +1588,23 @@ def cmd_setup(args: argparse.Namespace) -> int:
                                        slots=[device["slot_id"]], routing="sticky",
                                        name=args.name or "This computer"))
         gateway = load_gateway()
-    if gateway is not None:
-        gateway = gateway_for_launch(load_config(), device, "gateway")
-        if newly_paired and not enrolled_gateway:
-            wait_for_gateway_setup(gateway)
-        elif not enrolled_gateway:
-            check_gateway(gateway)
-    else:
-        wait_for_setup(device, newly_paired=newly_paired)
+    route = local_route(load_config(), device["slot_id"] if args.slot else "",
+                        check_bridge=False, canonical=bool(args.slot))
+    if route["gateway"] is None:
+        wait_for_setup(route["device"], newly_paired=newly_paired)
+    print_local_route(route)
     print("[4/5] Checking previous connections before migration...", file=sys.stderr, flush=True)
-    retire_live_grants(device, yes=getattr(args, "yes", False))
-    if args.slot and config.get("active") != device["device_id"]:
+    if route["migration_device"] is not None:
+        retire_live_grants(route["migration_device"], yes=getattr(args, "yes", False))
+    if args.slot:
         # Persist an explicitly selected default only after it has passed checks.
         config = load_config()
         if device["device_id"] not in config["devices"]:
             raise CliError("pairing changed during setup; rerun setup")
-        config["active"] = device["device_id"]
+        remember_local_slot(config, device)
         save_config(config)
     print("[5/5] Setup complete.", file=sys.stderr, flush=True)
-    print(f"Ready: {device['slot_name']}. Pairing and Claude model route verified.\n"
+    print(f"Ready: {route['slot_name']}. Pairing and selected model route verified.\n"
           "No project was uploaded and no Claude session was started.")
     return 0
 
@@ -2392,49 +2517,21 @@ def cmd_local(args: argparse.Namespace) -> int:
     check_managed_route()
     config = load_config()
     transport_mode = getattr(args, "transport", "auto")
-    saved_gateway = load_gateway() if transport_mode != "bridge" else None
-    device = choose_device(config, saved_gateway["device_id"] if saved_gateway else args.slot)
-    gateway = gateway_for_launch(config, device, transport_mode)
-    gateway_slot = ""
-    migration_device = device
-    if gateway is not None:
-        if getattr(args, "reuse_transport", False):
+    selected_slot = args.slot
+    background_job = getattr(args, "_background_job", False)
+    if background_job:
+        selected_slot = choose_device(config, args.slot)["slot_id"]
+        if transport_mode == "auto" and load_gateway() is not None:
+            # A supervised job cannot change transports after its admission check.
+            transport_mode = "gateway"
+    if getattr(args, "reuse_transport", False) and transport_mode != "bridge":
+        if load_gateway() is not None:
             raise CliError("--reuse-transport is only for --transport bridge")
-        print("Checking your direct HTTPS gateway...", file=sys.stderr, flush=True)
-        if args.slot:
-            # A display name can be reused after a slot is retired. Resolve it
-            # against this key's current server selection before saved pairings.
-            answer = check_gateway(gateway, require_ready=False)
-            current_slots = [slot for slot in answer.get("slots", [])
-                             if isinstance(slot, dict) and slot.get("id") in gateway["slot_ids"]]
-            matches = [slot["id"] for slot in current_slots if args.slot == slot["id"]]
-            if not matches:
-                matches = [slot["id"] for slot in current_slots if args.slot == slot.get("name")]
-            if len(matches) > 1:
-                raise CliError("that slot name is ambiguous; use its current slot ID")
-            selected_device = None
-            if matches:
-                gateway_slot = matches[0]
-                with contextlib.suppress(CliError):
-                    selected_device = choose_device(config, gateway_slot)
-            else:
-                try:
-                    selected_device = choose_device(config, args.slot)
-                except CliError:
-                    raise CliError("choose one of your endpoint's selected slots "
-                                   "by its current name or ID") from None
-                gateway_slot = selected_device["slot_id"]
-            if selected_device is not None:
-                if _gateway_url(selected_device.get("server")) != gateway["base_url"]:
-                    raise CliError("this slot belongs to a different endpoint")
-                migration_device = selected_device
-        check_gateway(gateway, gateway_slot)
-        if gateway_slot and gateway_slot not in gateway["slot_ids"]:
-            raise CliError("this slot is not selected for your gateway endpoint; "
-                           "update the endpoint or use --transport bridge")
-    else:
-        print("Checking the assigned slot's model relay...", file=sys.stderr, flush=True)
-        check_inference(device)
+    print("Checking the selected model route...", file=sys.stderr, flush=True)
+    route = local_route(config, selected_slot, transport_mode, canonical=background_job)
+    device, gateway = route["device"], route["gateway"]
+    gateway_slot, migration_device = route["slot_id"], route["migration_device"]
+    print_local_route(route)
     if args.check:
         print("Ready: original local Claude Code and selected model route.\n"
               "No project was scanned and no model request or Claude session was started.")
@@ -2448,7 +2545,8 @@ def cmd_local(args: argparse.Namespace) -> int:
         for name, value in client_experience().Preferences(home()).get(project).items():
             if getattr(args, name) is None:
                 setattr(args, name, value)
-    retire_live_grants(migration_device, yes=args.yes)
+    if migration_device is not None:
+        retire_live_grants(migration_device, yes=args.yes)
     helper = inference_client() if gateway is None else None
     transport = None
 
@@ -2533,27 +2631,36 @@ def cmd_local(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     config = load_config()
+    selected = local_slot_choice(config)
     if getattr(args, "remote", False):
         device = choose_device(config, getattr(args, "slot", ""))
         for slot in own_gateway_slots(device):
-            active = "*" if slot["id"] == device["slot_id"] else " "
+            active = "*" if slot["id"] == (selected or device["slot_id"]) else " "
             print(f"{active} {slot['name']} ({slot['id']})")
         return 0
     if not config["devices"]:
         print("No slots connected. Run ccfleet login.")
         return 0
     for device_id, device in config["devices"].items():
-        active = "*" if device_id == config.get("active") else " "
+        active = "*" if (device["slot_id"] == selected if selected
+                          else device_id == config.get("active")) else " "
         print(f"{active} {device['slot_name']} ({device['slot_id']})")
+    if selected and not any(device.get("slot_id") == selected
+                            for device in config["devices"].values()):
+        print(f"* {config['local_slot_choice']['slot_name']} ({selected})")
     return 0
 
 
 def cmd_use(args: argparse.Namespace) -> int:
     config = load_config()
-    device = choose_device(config, args.slot)
-    config["active"] = device["device_id"]
+    route = local_route(config, args.slot, require_ready=False, check_bridge=False)
+    device = route["migration_device"] or route["device"]
+    remember_local_slot(config, device,
+                        slot_id=route["slot_id"] or route["device"]["slot_id"],
+                        slot_name=route["slot_name"])
     save_config(config)
-    print(f"Using {device['slot_name']}.")
+    print(f"Using {route['slot_name']} for local Claude Code.")
+    print_local_route(route)
     return 0
 
 
@@ -2594,6 +2701,9 @@ def cmd_logout(args: argparse.Namespace) -> int:
             raise CliError(f"could not remove local {key}: {exc}") from exc
     config["devices"].pop(device["device_id"], None)
     config["active"] = next(iter(config["devices"]), "")
+    if (isinstance(config.get("local_slot_choice"), dict)
+            and config["local_slot_choice"].get("device_id") == device["device_id"]):
+        config.pop("local_slot_choice")
     save_config(config)
     print(f"Disconnected {device['slot_name']} from this computer.")
     return 0
@@ -2664,7 +2774,12 @@ def _prepare_local_job(args: argparse.Namespace, prompt: str
     max_jobs = getattr(args, "max_jobs", 4)
     if type(max_jobs) is not int or not 1 <= max_jobs <= helper.MAX_CONCURRENT:
         raise CliError("invalid maximum concurrent job count")
-    device = choose_device(load_config(), args.slot)
+    config = load_config()
+    try:
+        device = local_paired_device(config, args.slot)
+    except CliError:
+        raise CliError("background jobs need an already paired slot; "
+                       "use an interactive local session for an unpaired gateway slot") from None
     values["extra_args"] = extra
     spec = {"device_id": device["device_id"], "slot_id": device["slot_id"],
             "project": str(project), "prompt": prompt, "options": values}
@@ -2899,9 +3014,9 @@ def parser() -> argparse.ArgumentParser:
                            "Resume picker: ccfleet local --resume | "
                            "Check setup: ccfleet local --check")
     local.add_argument("--slot", default="",
-                       help="pin one selected slot by id or name, without account switching")
+                       help="choose one gateway or paired slot by its current id or name")
     local.add_argument("--transport", choices=("auto", "gateway", "bridge"), default="auto",
-                       help="configured HTTPS gateway, or explicit legacy SSH bridge")
+                       help="auto chooses the selected slot's existing gateway or Claude bridge")
     local.add_argument("--project", default=".", help="local project directory (default: current)")
     local.add_argument("--remote-project", default="", metavar="ID",
                        help=argparse.SUPPRESS)
@@ -3036,8 +3151,7 @@ def parser() -> argparse.ArgumentParser:
                              help="list saved pairings, or current owned slots with --remote")
     listing.add_argument("--remote", action="store_true", help="fetch your current owned slots")
     listing.add_argument("--slot", default="", help="saved pairing used to authorize --remote")
-    use = sub.add_parser("use", help="choose the default saved pairing; "
-                                    "HTTPS slot selection is unchanged")
+    use = sub.add_parser("use", help="choose the default local slot without changing website keys")
     use.add_argument("slot")
     logout = sub.add_parser("logout", help="revoke this computer and remove its local key")
     logout.add_argument("--slot", default="", help="slot id or name")
