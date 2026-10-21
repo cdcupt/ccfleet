@@ -131,6 +131,26 @@ def test_twenty_captured_function_tool_names_need_no_builtin_name_translation():
     ] == CAPTURED_NAMES
 
 
+@pytest.mark.parametrize("count", [128, 129, 160, bridge.MAX_TOOLS])
+def test_large_mcp_catalog_preserves_all_declarations_within_existing_bounds(count):
+    tools = [{"name": f"mcp__synthetic__Tool{index}", "description": "Synthetic local tool.",
+              "input_schema": {"type": "object", "properties": {}}} for index in range(count)]
+    catalog = bridge.ToolCatalog(tools)
+    assert catalog.tools_list() == {"tools": [
+        {"name": tool["name"], "description": tool["description"],
+         "inputSchema": tool["input_schema"]} for tool in tools]}
+    tool = bridge.ToolHandoff(catalog, **IDENTITY).begin(
+        request(params={"name": tools[-1]["name"], "arguments": {}}),
+        **IDENTITY, remaining_seconds=2)
+    assert tool.as_tool_use()["name"] == tools[-1]["name"]
+
+
+def test_catalog_count_has_a_finite_bound_before_schema_work():
+    with pytest.raises(bridge.ToolBridgeError) as error:
+        bridge.ToolCatalog([{}] * (bridge.MAX_TOOLS + 1))
+    assert error.value.code == "invalid_catalog_count"
+
+
 @pytest.mark.parametrize(
     "tools",
     [

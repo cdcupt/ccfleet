@@ -8,6 +8,8 @@ import io
 import json
 import os
 import struct
+import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,6 +17,7 @@ import pytest
 
 from ccfleet_agent import devin_trial_worker as worker
 from ccfleetd import trial_runtime
+from ccfleetd.gateway_transport import GatewayTransportError
 from ccfleetd.trial_worker_transport import TrialAttempt
 from tests.test_devin_trial_runtime import MODEL, body
 
@@ -253,6 +256,62 @@ def test_transport_fixed_command_pinned_policy_and_no_owner_context():
         "policy_sha256": "a" * 64,
     }
     assert "binding" not in repr(attempt._request_fields({}, b"{}", "/v1/messages"))
+
+
+@pytest.mark.parametrize("still_authorized", [False, True])
+def test_prepared_transport_sends_only_after_fresh_authorization_on_same_connection(
+    tmp_path, monkeypatch, still_authorized
+):
+    # A local framing peer exercises the actual pipe reader/writer lifecycle;
+    # only the fixed SSH command is replaced, with no network or model calls.
+    marker = tmp_path / "request-received"
+    script = r'''
+import json,pathlib,struct,sys
+source,target=sys.stdin.buffer,sys.stdout.buffer
+def frame():
+    size=struct.unpack("!I",source.read(4))[0]
+    return json.loads(source.read(size))
+def send(value):
+    raw=json.dumps(value).encode()
+    target.write(struct.pack("!I",len(raw))+raw)
+def response(value):
+    send({"version":2,"status":200,"headers":{},"retryable":False})
+    send(value)
+    target.write(struct.pack("!I",0));target.flush()
+assert frame()=={"version":2,"operation":"status"}
+response(json.loads(sys.argv[1]))
+request=frame()
+assert request["operation"]=="request"
+assert source.read(request["body_size"])==b"{}"
+pathlib.Path(sys.argv[2]).write_text("received")
+response({"reply":"clean"})
+'''
+    attempt = TrialAttempt({"policy_sha256": "a" * 64}, object())
+    commands = []
+
+    def command():
+        commands.append(1)
+        return [sys.executable, "-c", script, json.dumps(attempt._ready_body()), str(marker)]
+
+    monkeypatch.setattr(attempt, "_command", command)
+    try:
+        attempt.prepare(lambda: True)
+        process = attempt.process
+        assert attempt.ready and not attempt.model_started and not marker.exists()
+        # The execution phase must replace both the readiness timer and its
+        # callback; a revoked caller must never write the request frame.
+        process.stdout.deadline = time.monotonic() - 1
+        process.stdout.authorized = lambda: False
+        if still_authorized:
+            assert attempt.perform(b"{}", lambda: True) == {"reply": "clean"}
+            assert marker.read_text() == "received"
+        else:
+            with pytest.raises(GatewayTransportError, match="authorization changed"):
+                attempt.perform(b"{}", lambda: False)
+            assert not attempt.model_started and not marker.exists()
+        assert attempt.process is process and len(commands) == 1
+    finally:
+        attempt.close()
 
 
 def test_actual_shared_worker_lock_excludes_second_worker_before_fresh_copy(scene):

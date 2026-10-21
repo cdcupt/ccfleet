@@ -281,8 +281,11 @@ class TrialLedger:
             self.connection.commit()
 
     def _pause(self, reason):
+        # Keep the original incident cause. Repeated allowance/authorization
+        # polls of an unresolved expired session must not replace it with a
+        # later deadline symptom and hide what needs operator review.
         self.connection.execute(
-            "UPDATE devin_trial_control SET paused=1,reason=? WHERE id=1", (reason,)
+            "UPDATE devin_trial_control SET paused=1,reason=? WHERE id=1 AND paused=0", (reason,)
         )
 
     def _tick(self):

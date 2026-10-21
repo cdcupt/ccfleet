@@ -50,9 +50,21 @@ _ERRORS = {
     "unsupported_tool_declaration": "This Devin route supports plain declared local tools. "
         "Deferred, server-side or other extended tool declarations are unsupported. "
         "Disable unsupported tools or select Claude; tools were not removed.",
-    "invalid_tool_catalog": "This Devin route requires 1–128 local tools with unique names "
+    "invalid_tool_catalog": "This Devin route requires 1–512 local tools with unique names "
         "of at most 64 supported characters and object input schemas. "
         "Reduce or repair the tool catalog, or select Claude.",
+    "tool_catalog_count_limit": "This Devin route supports at most 512 local tools. "
+        "Disable some MCP servers or tools and start a new conversation, or select Claude.",
+    "tool_catalog_name_invalid": "A local tool name is invalid. Names must contain 1–64 "
+        "letters, digits, underscores or hyphens. Repair or disable the tool, or select Claude.",
+    "tool_catalog_name_duplicate": "Two local tools have the same name. Rename or disable "
+        "one of them and start a new conversation, or select Claude.",
+    "tool_catalog_schema_invalid": "A local tool has an unsupported input schema. "
+        "Its input_schema must declare type object. Repair or disable the tool, or select Claude.",
+    "tool_catalog_description_invalid": "A local tool description must be text of at most "
+        "64 KiB. Repair or disable the tool, or select Claude.",
+    "tool_catalog_complexity_limit": "The local tool catalog exceeds the JSON size or "
+        "complexity limit. Disable some MCP servers or simplify tool schemas, or select Claude.",
     "unsupported_cache_metadata": "This Devin route supports ephemeral cache metadata "
         "with a 5m or 1h TTL only.",
     "invalid_messages_body": "This Devin route requires valid bounded Messages JSON. "
@@ -63,6 +75,33 @@ _ERRORS = {
         "of formatted context including tools and history. Compact the conversation, "
         "reduce tools, or start a new session; context was not removed.",
 }
+
+_CATALOG_ERRORS = {
+    "invalid_catalog_count": "tool_catalog_count_limit",
+    "invalid_catalog_name": "tool_catalog_name_invalid",
+    "duplicate_catalog_name": "tool_catalog_name_duplicate",
+    "invalid_catalog_schema": "tool_catalog_schema_invalid",
+    "invalid_catalog_description": "tool_catalog_description_invalid",
+    "limit_exceeded": "tool_catalog_complexity_limit",
+}
+
+
+def _catalog_error(body):
+    """Explain a native catalog rejection with static codes, never request values.
+
+    Older pinned adapters deliberately mask the bridge's precise reason. Reuse
+    the same pure catalog validation after that rejection; this does not change
+    native admission or require changing the adapter's reviewed identity.
+    """
+    try:
+        declarations = [{key: tool[key] for key in ("name", "description", "input_schema")}
+                        for tool in body["tools"]]
+        native.tools.ToolCatalog(declarations)
+    except native.tools.ToolBridgeError as error:
+        return _CATALOG_ERRORS.get(error.code, "invalid_tool_catalog")
+    except (KeyError, TypeError):
+        pass
+    return "invalid_tool_catalog"
 
 
 class RequestRejected(ValueError):
@@ -85,6 +124,8 @@ def validate(body, *, request_models, effort):
         return clean
     except native.NativeError as error:
         code = error.code
+        if code == "invalid_tool_catalog":
+            code = _catalog_error(body)
         if code in {"body_limit", "invalid_bounded_json"}:
             code = "invalid_messages_body"
         if (code == "unsupported_native_request" and isinstance(body, dict)

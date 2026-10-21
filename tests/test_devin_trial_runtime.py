@@ -226,6 +226,48 @@ def test_key_lasts_across_midnight_replacement_and_revoke_are_own_scoped(trial):
     assert t.runtime.keys.resolve(b) is None
 
 
+def test_paused_trial_allows_key_setup_without_changing_pause_or_admitting_work(trial):
+    original = trial.runtime.create_key(trial.alice)
+    with trial.runtime._ledger() as book:
+        book.pause()
+        before = list(book.connection.iterdump())
+    trial.runtime.transport = lambda *a, **k: pytest.fail("paused trial started a worker")
+
+    replacement = trial.runtime.create_key(trial.alice)
+    other = trial.runtime.create_key(trial.bob)
+    assert trial.runtime.keys.resolve(original) is None
+    assert trial.runtime.keys.resolve(replacement)
+    assert trial.runtime.keys.resolve(other)
+    with trial.runtime._ledger() as book:
+        assert list(book.connection.iterdump()) == before
+    for token in (replacement, other):
+        with pytest.raises(trial_runtime.TrialUnavailable, match="trial_paused"):
+            trial.runtime.turn(token, body())
+    assert trial.runtime.allowance(trial.alice)["paused"] is True
+
+
+def test_replacement_after_unconfirmed_turn_preserves_reservation_and_execution_pause(trial):
+    class Worker(FakeWorker):
+        def perform(self, raw, authorized):
+            self.model_started = True
+            raise OSError("worker result unavailable after send")
+
+    trial.runtime.transport = Worker
+    original = trial.runtime.create_key(trial.alice)
+    with pytest.raises(trial_runtime.TrialUnavailable, match="trial_result_unconfirmed"):
+        trial.runtime.turn(original, body())
+    before = trial.runtime.allowance(trial.alice)
+    assert before["paused"] is True and before["reserved_tokens"] == 20000
+
+    replacement = trial.runtime.create_key(trial.alice)
+    assert trial.runtime.keys.resolve(original) is None
+    assert trial.runtime.keys.resolve(replacement)
+    assert trial.runtime.allowance(trial.alice) == before
+    trial.runtime.transport = lambda *a, **k: pytest.fail("paused trial started a worker")
+    with pytest.raises(trial_runtime.TrialUnavailable, match="trial_paused"):
+        trial.runtime.turn(replacement, body())
+
+
 @pytest.mark.parametrize("bad", [None, "cct_fake", "owner_key", "cct_" + "0" * 64])
 def test_trial_key_scope_never_resolves_normal_owner_or_foreign_key(trial, bad):
     with pytest.raises(trial_runtime.TrialUnavailable) as error:
@@ -473,6 +515,105 @@ def test_proven_presend_failure_does_not_burn_model_turn_time_or_daily_lease_bud
             ).fetchone()[0]
             == 25
         )
+
+
+def test_slow_model_free_readiness_gets_fresh_execution_permit(trial):
+    class Worker(FakeWorker):
+        def prepare(self, authorized):
+            assert authorized()
+            # Even a delayed connection has no execution to expire or reserve.
+            trial.now[0] += 70
+            with trial.runtime._ledger() as book:
+                assert book.connection.execute(
+                    "SELECT COUNT(*) FROM devin_trial_sessions"
+                ).fetchone()[0] == 0
+
+        def perform(self, raw, authorized):
+            assert authorized()
+            with trial.runtime._ledger() as book:
+                assert book.connection.execute(
+                    "SELECT step_deadline FROM devin_trial_sessions WHERE state='open'"
+                ).fetchone()[0] == trial.now[0] + 60
+            trial.now[0] += 50
+            return super().perform(raw, authorized)
+
+    trial.runtime.transport = Worker
+    token = trial.runtime.create_key(trial.alice)
+    trial.runtime.turn(token, body())
+    value = trial.runtime.allowance(trial.alice)
+    assert not value["paused"] and value["reported_tokens"] == 19
+
+
+def test_failed_readiness_never_reserves_or_pauses_execution(trial):
+    class Worker(FakeWorker):
+        def prepare(self, authorized):
+            assert authorized()
+            trial.now[0] += 70
+            raise OSError("readiness failed before request frame")
+
+        def perform(self, raw, authorized):
+            pytest.fail("failed readiness sent a model request")
+
+    trial.runtime.transport = Worker
+    token = trial.runtime.create_key(trial.alice)
+    with pytest.raises(trial_runtime.TrialUnavailable, match="trial_worker_unavailable"):
+        trial.runtime.turn(token, body())
+    value = trial.runtime.allowance(trial.alice)
+    assert not value["paused"] and value["remaining_requests"] == 20
+    assert value["reserved_tokens"] == 0
+    with trial.runtime._ledger() as book:
+        assert book.connection.execute(
+            "SELECT COUNT(*) FROM devin_trial_sessions"
+        ).fetchone()[0] == 0
+
+
+def test_pause_during_readiness_closes_connection_before_any_admission(trial):
+    workers = []
+
+    class Worker(FakeWorker):
+        def prepare(self, authorized):
+            workers.append(self)
+            with trial.runtime._ledger() as book:
+                book.pause()
+
+        def perform(self, raw, authorized):
+            pytest.fail("operator pause during readiness sent a model request")
+
+    trial.runtime.transport = Worker
+    token = trial.runtime.create_key(trial.alice)
+    with pytest.raises(trial_runtime.TrialUnavailable, match="trial_paused"):
+        trial.runtime.turn(token, body())
+    assert workers[0].closed
+    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == 20
+
+
+def test_only_one_readiness_or_turn_can_hold_the_worker_connection(trial):
+    entered, release = threading.Event(), threading.Event()
+    preparations, replies = [], []
+
+    class Worker(FakeWorker):
+        def prepare(self, authorized):
+            preparations.append(self)
+            entered.set()
+            assert release.wait(3)
+
+    trial.runtime.transport = Worker
+    alice = trial.runtime.create_key(trial.alice)
+    bob = trial.runtime.create_key(trial.bob)
+    thread = threading.Thread(target=lambda: replies.append(trial.runtime.turn(alice, body())))
+    thread.start()
+    try:
+        assert entered.wait(3)
+        with pytest.raises(trial_runtime.TrialUnavailable, match="trial_busy"):
+            trial.runtime.turn(bob, body())
+        assert len(preparations) == 1
+        assert trial.runtime.allowance(trial.bob)["remaining_requests"] == 20
+    finally:
+        release.set()
+        thread.join(3)
+    assert len(replies) == 1
+    trial.runtime.turn(bob, body())  # The connection guard releases after settlement.
+    assert len(preparations) == 2
 
 
 def test_api_bucket_is_per_account_persistent_across_key_rotation_and_precedes_json(trial):

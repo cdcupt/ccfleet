@@ -84,6 +84,7 @@ class TrialRuntime:
     def __init__(self, cfg, store, *, transport=TrialAttempt, clock=time.time):
         self.cfg, self.store, self.clock, self.transport = cfg, store, clock, transport
         self.lock = threading.RLock()
+        self.readiness_lock = threading.Lock()
         self.directory = Path(cfg.devin_trial_directory)
         info = self.directory.lstat()
         if (
@@ -149,21 +150,28 @@ class TrialRuntime:
             raise TrialUnavailable("trial_request_rate_limit", 429)
 
     def create_key(self, account):
-        who = principal(account)
-        with self._ledger() as book:
-            if book.allowance(who).paused:
-                raise TrialUnavailable("trial_processing_required")
-        return self.keys.create(who)
+        # A key only identifies its owner; creating one never admits a model
+        # turn. Keep setup/replacement available during operator review while
+        # turn() continues to enforce the ledger's global execution pause.
+        return self.keys.create(principal(account))
 
     def revoke(self, account):
         self.keys.revoke(principal(account).account_id)
 
-    def _active(self, key, who, lease, step):
+    def _identity_active(self, key, who):
         try:
             account = self.store.get_account(key["account_id"])
             if principal(account) != who or not self.keys.active(key):
                 return False
             if protected_json(self.cfg.devin_trial_worker_file)[1] != self.worker_sha:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _active(self, key, who, lease, step):
+        try:
+            if not self._identity_active(key, who):
                 return False
             with self._ledger() as book:
                 return book.authorize_step(who, lease, step)
@@ -186,19 +194,42 @@ class TrialRuntime:
         except (ValueError, TypeError, RecursionError):
             raise TrialUnavailable("trial_requires_supported_opus_5_5_request", 400) from None
         forwarded = devin_native._encode(clean)
+        # Reject an existing safety pause before contacting the worker. SSH
+        # readiness itself is model-free and must not consume the execution
+        # permit while the remote connection/policy is still being checked.
         with self._ledger() as book:
-            decision = book.admit(who, lease_seconds=120)
-            if decision.lease is None:
-                raise TrialUnavailable(decision.code, 429)
-            lease = decision.lease
-            decision = book.start_step(who, lease, request=forwarded, seconds=60)
-            if decision.step is None:
-                book.close(who, lease, cleanup_confirmed=True)
-                raise TrialUnavailable(decision.code, 429)
-            step = decision.step
+            if book.allowance(who).paused:
+                raise TrialUnavailable("trial_paused", 429)
         attempt = self.transport(
             self.target, SimpleNamespace(gateway_ssh_key_path=self.cfg.devin_trial_ssh_key_file)
         )
+        readiness_locked = False
+        try:
+            prepare = getattr(attempt, "prepare", None)
+            if prepare is not None:
+                readiness_locked = self.readiness_lock.acquire(blocking=False)
+                if not readiness_locked:
+                    raise TrialUnavailable("trial_busy", 429)
+                prepare(lambda: self._identity_active(key, who))
+            with self._ledger() as book:
+                decision = book.admit(who, lease_seconds=120)
+                if decision.lease is None:
+                    raise TrialUnavailable(decision.code, 429)
+                lease = decision.lease
+                decision = book.start_step(who, lease, request=forwarded, seconds=60)
+                if decision.step is None:
+                    book.close(who, lease, cleanup_confirmed=True)
+                    raise TrialUnavailable(decision.code, 429)
+                step = decision.step
+        except Exception as error:
+            try:
+                attempt.close()
+            finally:
+                if readiness_locked:
+                    self.readiness_lock.release()
+            if isinstance(error, (TrialUnavailable, ledger.TrialError)):
+                raise
+            raise TrialUnavailable("trial_worker_unavailable") from None
         cleanup, usage, result = False, None, None
         try:
             result = attempt.perform(forwarded, lambda: self._active(key, who, lease, step))
@@ -215,23 +246,27 @@ class TrialRuntime:
             if not attempt.model_started:
                 cleanup, usage = True, ledger.VerifiedUsage(0, True)
         finally:
-            attempt.close()
-            with self._ledger() as book:
-                if attempt.model_started is False and cleanup is True:
-                    settled = book.finish_unsent(
-                        who, lease, step, model_started=False, cleanup_confirmed=True
-                    )
-                else:
-                    settled = book.finish_step(
-                        who, lease, step, cleanup_confirmed=cleanup, usage=usage
-                    )
-                if settled.code in {
-                    "step_finished",
-                    "step_finished_over_allowance",
-                    "step_finished_unmeasured",
-                    "step_not_sent",
-                }:
-                    book.close(who, lease, cleanup_confirmed=True)
+            try:
+                attempt.close()
+                with self._ledger() as book:
+                    if attempt.model_started is False and cleanup is True:
+                        settled = book.finish_unsent(
+                            who, lease, step, model_started=False, cleanup_confirmed=True
+                        )
+                    else:
+                        settled = book.finish_step(
+                            who, lease, step, cleanup_confirmed=cleanup, usage=usage
+                        )
+                    if settled.code in {
+                        "step_finished",
+                        "step_finished_over_allowance",
+                        "step_finished_unmeasured",
+                        "step_not_sent",
+                    }:
+                        book.close(who, lease, cleanup_confirmed=True)
+            finally:
+                if readiness_locked:
+                    self.readiness_lock.release()
         if result is None or usage is None or not cleanup:
             raise TrialUnavailable("trial_result_unconfirmed_do_not_retry")
         if result["error"] is not None:

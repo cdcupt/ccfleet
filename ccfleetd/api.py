@@ -91,7 +91,8 @@ HTML_HEADERS = {
     "Content-Security-Policy": ("default-src 'none'; style-src 'unsafe-inline'; "
                                 f"img-src data:; script-src {LOCAL_TIMES_CSP} "
                                 f"{LANGUAGE_LINKS_CSP} {usersite.QUOTA_POLL_CSP} "
-                                f"{PANEL_ACTION_CSP} {ADMIN_QUOTA_POLL_CSP}; "
+                                f"{PANEL_ACTION_CSP} {ADMIN_QUOTA_POLL_CSP} "
+                                f"{trial_routes.COPY_COMMAND_CSP}; "
                                 "connect-src 'self'"),
 }
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
@@ -1583,8 +1584,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         ctx.trial.revoke(account)
                 except Exception:
                     failed = True
-                status_code, body = trial_routes.page(ctx.trial, ctx.cfg, account, session_id,
-                                                      token=token, failed=failed)
+                status_code, body = trial_routes.page(
+                    ctx.trial, ctx.cfg, account, session_id, token=token, failed=failed,
+                    revoked=path.endswith("/revoke") and not failed,
+                )
                 self._send(status_code, body.encode(), HTML_HEADERS)
                 return
             if path == "/api/payments/stripe/subscriptions/webhook":

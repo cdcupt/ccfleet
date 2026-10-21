@@ -86,6 +86,23 @@ def test_handshake_lists_exact_frozen_catalog_before_session_binding(private):
     assert any(e["reason"] == "tools_list_responded" and e["ready"] for e in entries)
 
 
+def test_catalog_over_128_tools_survives_real_mcp_discovery_and_last_tool_handoff(private):
+    path, config, write, _, serve, _ = private
+    config["tools"] = [
+        {"name": f"mcp__synthetic__Tool{index}", "description": "Synthetic local tool.",
+         "input_schema": {"type": "object", "properties": {}}} for index in range(160)]
+    catalog = ToolCatalog(config["tools"])
+    write("config.json", config)
+    write("session.json", {"binding": config["binding"], "server_id": config["server_id"],
+          "session_id": "native-owned", "schema_digest": catalog.schema_digest})
+    last_name = config["tools"][-1]["name"]
+    code, replies = serve(initialize(), INITIALIZED, LIST, call(last_name, {"value": "local"}))
+    assert code == 1 and replies[1]["result"] == catalog.tools_list()
+    receipt = json.loads((path / "call.json").read_text())
+    assert receipt["frontend_tool_use"]["name"] == last_name
+    assert receipt["frontend_tool_use"]["input"] == {"value": "local"}
+
+
 @pytest.mark.parametrize("name,arguments", [
     ("Read", {"file_path": "/caller/only", "offset": 1}),
     ("Edit", {"file_path": "/caller/file", "old_string": "OLD\n日本語", "new_string": "NEW\n"}),
