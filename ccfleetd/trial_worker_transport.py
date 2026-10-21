@@ -17,6 +17,10 @@ from .gateway_transport import GatewayTransportError, SSHAttempt
 
 MAX_RESULT = 2 * 1024 * 1024
 MODEL = "claude-opus-5-5"
+# Readiness performs no model work. After admission, leave time for bounded
+# SSH teardown (two seconds) and ledger settlement before the 60-second permit.
+READINESS_SECONDS = 10
+TURN_SECONDS = 55
 
 
 class _Reader:
@@ -53,12 +57,28 @@ class TrialAttempt(SSHAttempt):
         process.stdout = _Reader(process.stdout, self._deadline, self._authorized)
         return process
 
+    def prepare(self, authorized):
+        self._deadline = time.monotonic() + READINESS_SECONDS
+        self._authorized = authorized
+        try:
+            self.start({}, b"", before_model_send=lambda: False)
+        except GatewayTransportError:
+            if not self.ready:
+                raise
+        # Keep this same SSH connection open. The worker waits for its request
+        # frame; no body or model request has been sent during readiness.
+
     def perform(self, body, authorized):
         # Wrap the actual child stdout at creation, so readiness, response and
         # terminal framing all share one wall deadline and revocation poll.
-        self._deadline = time.monotonic() + 65
+        self._deadline = time.monotonic() + TURN_SECONDS
         self._authorized = authorized
-        self.start({}, body, before_model_send=authorized)
+        if self.ready:
+            self.process.stdout.deadline = self._deadline
+            self.process.stdout.authorized = authorized
+            self._send_request({}, body, before_model_send=authorized)
+        else:
+            self.start({}, body, before_model_send=authorized)
         metadata = self.metadata()
         if metadata["status"] != 200:
             raise GatewayTransportError("trial worker rejected", status=503)
@@ -67,7 +87,7 @@ class TrialAttempt(SSHAttempt):
             raw.extend(part)
             if len(raw) > MAX_RESULT:
                 raise GatewayTransportError("trial worker result bound", status=502)
-        self.finish()
+        self.finish(timeout=max(0, min(1, self._deadline - time.monotonic())))
         return json.loads(bytes(raw))
 
 

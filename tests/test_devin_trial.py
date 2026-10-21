@@ -295,6 +295,20 @@ def test_failed_trial_cleanup_pauses_and_repeated_closed_receipt_never_reopens_s
     assert ledger.close(ALICE, lease, cleanup_confirmed=False).code == "trial_closed"
 
 
+def test_later_expiry_and_operator_pause_preserve_first_unconfirmed_cleanup_reason(scene):
+    ledger, connection, now = scene
+    lease = admitted(ledger)
+    step = started(ledger, lease)
+    ledger.finish_step(ALICE, lease, step, cleanup_confirmed=False)
+    now[0] = lease.expires_at + 86400
+    assert ledger.allowance(BOB).paused
+    ledger.pause()
+    assert connection.execute(
+        "SELECT paused,reason FROM devin_trial_control WHERE id=1"
+    ).fetchone() == (1, "worker_cleanup_unconfirmed")
+    assert ledger.admit(BOB).code == "trial_paused"
+
+
 def test_operator_pause_revokes_active_work_and_cannot_prevent_cancellation(scene):
     ledger, _, _ = scene
     lease = admitted(ledger)

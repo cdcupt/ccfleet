@@ -54,6 +54,44 @@ def test_preflight_preserves_all_visible_context_and_controls_without_mutating_i
     assert clean == {key: value for key, value in before.items() if key != "metadata"}
 
 
+@pytest.mark.parametrize("count", [129, 160, native.tools.MAX_TOOLS])
+def test_stock_client_with_many_local_mcp_tools_passes_without_removing_tools(count):
+    body = clean_body()
+    body["tools"] = [
+        {"name": f"mcp__synthetic__Tool{index}", "description": "Synthetic local tool.",
+         "input_schema": {"type": "object", "properties": {}}} for index in range(count)]
+    before = copy.deepcopy(body)
+    assert native_preflight.validate(body, request_models=["claude-opus-5-5"], effort="max") == before
+    assert body == before
+
+
+@pytest.mark.parametrize("change,code", [
+    ({"name": "PRIVATE_BAD_NAME" * 5}, "tool_catalog_name_invalid"),
+    ({"input_schema": {}}, "tool_catalog_schema_invalid"),
+    ({"input_schema": {"type": "array"}}, "tool_catalog_schema_invalid"),
+    ({"description": 7}, "tool_catalog_description_invalid"),
+])
+def test_catalog_rejection_has_precise_static_reason_without_tool_values(change, code):
+    body = clean_body()
+    body["tools"][0].update(change)
+    with pytest.raises(native_preflight.RequestRejected) as error:
+        native_preflight.validate(body, request_models=["claude-opus-5-5"], effort="max")
+    assert error.value.code == code and "PRIVATE" not in error.value.message
+
+
+@pytest.mark.parametrize("count,code", [
+    (2, "tool_catalog_name_duplicate"),
+    (native.tools.MAX_TOOLS + 1, "tool_catalog_count_limit"),
+])
+def test_catalog_count_and_duplicates_have_distinct_repair_instructions(count, code):
+    body = clean_body()
+    body["tools"] = [copy.deepcopy(body["tools"][0]) for _ in range(count)]
+    with pytest.raises(native_preflight.RequestRejected) as error:
+        native_preflight.validate(body, request_models=["claude-opus-5-5"], effort="max")
+    assert error.value.code == code
+    assert ("512" if count > 512 else "same name") in error.value.message
+
+
 @pytest.mark.parametrize("role", [[], {}])
 def test_malformed_field_types_become_static_errors(role):
     body = clean_body()

@@ -162,30 +162,33 @@ class SSHAttempt:
             if not self._validate_ready(wire._json(bytes(raw))):
                 raise ValueError("invalid readiness")
             self.ready = True
-            if not before_model_send():
-                raise GatewayTransportError("request authorization changed", status=403)
-            # No automatic replay is safe after this point, even if a pipe write
-            # only partially completes or the peer vanishes before metadata.
-            self.model_started = True
-
-            def write_request() -> None:
-                try:
-                    self.process.stdin.write(wire.preamble(
-                        self._request_fields(headers, body, path)))
-                    self.process.stdin.write(body)
-                    self.process.stdin.flush()
-                except (OSError, ValueError) as exc:
-                    self.write_error = exc
-                    self.close()
-
-            self.writer = threading.Thread(target=write_request, daemon=True)
-            self.writer.start()
+            self._send_request(headers, body, path=path, before_model_send=before_model_send)
         except GatewayTransportError as exc:
             if not self.model_started and exc.status == 502:
                 exc.retryable = True
             raise
         except (OSError, ValueError, EOFError, KeyError, TypeError) as exc:
             raise GatewayTransportError(retryable=not self.model_started) from exc
+
+    def _send_request(self, headers, body, *, path="/v1/messages", before_model_send):
+        if not before_model_send():
+            raise GatewayTransportError("request authorization changed", status=403)
+        # No automatic replay is safe after this point, even if a pipe write
+        # only partially completes or the peer vanishes before metadata.
+        self.model_started = True
+
+        def write_request() -> None:
+            try:
+                self.process.stdin.write(wire.preamble(
+                    self._request_fields(headers, body, path)))
+                self.process.stdin.write(body)
+                self.process.stdin.flush()
+            except (OSError, ValueError) as exc:
+                self.write_error = exc
+                self.close()
+
+        self.writer = threading.Thread(target=write_request, daemon=True)
+        self.writer.start()
 
     def metadata(self) -> dict[str, Any]:
         return response_metadata(self.process.stdout)
@@ -210,9 +213,9 @@ class SSHAttempt:
         except (OSError, EOFError, ValueError) as exc:
             raise GatewayTransportError(retryable=not self.model_started) from exc
 
-    def finish(self, status: int = 200) -> None:
+    def finish(self, status: int = 200, *, timeout: float = 5) -> None:
         try:
-            code = self.process.wait(timeout=5)
+            code = self.process.wait(timeout=timeout)
             if code != 0 and not (code == 2 and status >= 400):
                 raise ValueError("unexpected relay exit")
             if self.process.stdout.read(1):

@@ -42,7 +42,9 @@ VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'l
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
              '/account/available': '可用槽位',
              '/account/purchase': '确认购买槽位', '/account/renew': '续费槽位',
-             '/account/devin-trial': 'Devin 试用', '/account/topup': '充值',
+             '/account/devin-trial': 'Devin 试用',
+             '/account/devin-trial/create': 'Devin 试用',
+             '/account/devin-trial/revoke': 'Devin 试用', '/account/topup': '充值',
              '/account/subscribe': '确认月租',
              '/account/subscriptions': '月租管理',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
@@ -281,11 +283,16 @@ class _Projection(HTMLParser):
             if 'data-language-link' in attrs:
                 choice = attrs['data-language-link']
                 path = urlsplit(self.target).path
-                # The top-up chooser is also a safe GET page. Switching its
-                # language must not send the customer to advanced connections.
-                switch_target = ('/admin' if admin_form(path) else '/account#gateway' if _form(path)
-                                 and path not in {'/account/topup', '/account/subscribe'}
-                                 else self.target)
+                # A form result must return to its safe read page without
+                # replaying the action or carrying one-time credentials.
+                if admin_form(path):
+                    switch_target = '/admin'
+                elif path in {'/account/devin-trial/create', '/account/devin-trial/revoke'}:
+                    switch_target = '/account/devin-trial'
+                elif _form(path) and path not in {'/account/topup', '/account/subscribe'}:
+                    switch_target = '/account#gateway'
+                else:
+                    switch_target = self.target
                 switch_parts = urlsplit(switch_target)
                 search = ''
                 if switch_parts.path in {'/slots', '/account/available'}:

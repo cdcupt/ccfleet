@@ -232,6 +232,33 @@ def test_trial_revocation_is_csrf_owner_scoped_and_stops_local_key(http):
     )
 
 
+@pytest.mark.parametrize("language,other", [("en", "zh"), ("zh", "en")])
+@pytest.mark.parametrize("action", ["create", "revoke"])
+def test_trial_result_language_switch_stays_on_trial_without_replaying_action(http, language, other, action):
+    status, _, raw = form(http, suffix=action, language=language)
+    assert status == 200
+    link = re.search(r'<a[^>]*href="([^"]+)"[^>]*data-language-link="' + other + '"', raw.decode())
+    assert link and html.unescape(link[1]) == f"/{other}/account/devin-trial"
+    issued = set(re.findall(rb"cct_[0-9a-f]{64}", raw))
+    status, headers, switched = call(http.server, "GET", link[1], headers={"Cookie": http.cookie})
+    assert status == 200 and headers["Cache-Control"] == "no-store"
+    assert b"cct_" not in switched
+    assert all(http.runtime.keys.resolve(key.decode()) is not None for key in issued)
+
+
+def test_paused_trial_key_creation_is_explicit_and_does_not_resume_model_work(http):
+    with http.runtime._ledger() as ledger:
+        ledger.pause()
+    status, _, raw = form(http)
+    assert status == 200 and b"cct_" in raw
+    assert b"key" in raw.lower() and b"paused" in raw.lower()
+    assert http.runtime.allowance(http.alice)["paused"] is True
+    key = next(iter(set(re.findall(rb"cct_[0-9a-f]{64}", raw)))).decode()
+    status, _, raw = call(http.server, "POST", "/trial/v1/messages", body(),
+                          {"x-api-key": key, "Content-Type": "application/json"})
+    assert status == 429 and b"paused" in raw
+
+
 @pytest.mark.parametrize(
     "language,visible,other",
     [

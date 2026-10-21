@@ -62,6 +62,21 @@ def test_options_attributes_and_language_links_do_not_echo_request_parameters():
     assert 'href="/en/account"' in html and 'href="/zh/account"' in html
 
 
+@pytest.mark.parametrize("language", ["en", "zh"])
+@pytest.mark.parametrize("action", ["create", "revoke"])
+def test_trial_result_language_links_return_to_trial_without_replaying_action(language, action):
+    target = f"/account/devin-trial/{action}?csrf=PRIVATE_CSRF&token=PRIVATE_KEY"
+    source = '<title>Devin trial · CC Fleet</title>' + bilingual.CONTROLS
+    result = bilingual.project_html(source, language, target)
+    for choice in ("en", "zh"):
+        assert (f'href="/{choice}/account/devin-trial" '
+                f'data-language-link="{choice}"') in result
+    assert 'href="/account#gateway"' not in result
+    assert 'PRIVATE_' not in result and f'/devin-trial/{action}' not in result
+    if language == "zh":
+        assert '<title>Devin 试用 · CC Fleet</title>' in result
+
+
 def test_localization_never_creates_api_or_foreign_aliases():
     for target in ['/zh/v1/messages', '/en/api/nodes',
                    '/zh/docs/library/../README.html', '/zh/docs%2fguide']:

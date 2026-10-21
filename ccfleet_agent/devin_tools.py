@@ -27,7 +27,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
-MAX_TOOLS = 128
+# A stock client can declare over 128 tools when local MCP servers are enabled.
+# Keep a finite count in addition to the JSON and native-context byte bounds.
+MAX_TOOLS = 512
 MAX_DESCRIPTION_BYTES = 64 * 1024
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_JSON_TEXT_BYTES = 1024 * 1024
@@ -152,7 +154,7 @@ class ToolCatalog:
 
     def __init__(self, tools: list[dict[str, Any]]):
         if not isinstance(tools, list) or not 1 <= len(tools) <= MAX_TOOLS:
-            raise ToolBridgeError("invalid declared tool count", "invalid_catalog")
+            raise ToolBridgeError("invalid declared tool count", "invalid_catalog_count")
         # Bound every supplied field before copying, even fields rejected below.
         _snapshot(tools)
         names, mapped = set(), []
@@ -162,13 +164,18 @@ class ToolCatalog:
                     "only declared function tools are supported", "invalid_catalog"
                 )
             name = tool["name"]
-            if not isinstance(name, str) or not _NAME.fullmatch(name) or name in names:
-                raise ToolBridgeError("invalid or duplicate declared tool name", "invalid_catalog")
-            _text_size(tool["description"], MAX_DESCRIPTION_BYTES, "tool description")
+            if not isinstance(name, str) or not _NAME.fullmatch(name):
+                raise ToolBridgeError("invalid declared tool name", "invalid_catalog_name")
+            if name in names:
+                raise ToolBridgeError("duplicate declared tool name", "duplicate_catalog_name")
+            try:
+                _text_size(tool["description"], MAX_DESCRIPTION_BYTES, "tool description")
+            except ToolBridgeError as error:
+                raise ToolBridgeError(str(error), "invalid_catalog_description") from None
             schema = tool["input_schema"]
             if not isinstance(schema, dict) or schema.get("type") != "object":
                 raise ToolBridgeError(
-                    "tool input schema must describe an object", "invalid_catalog"
+                    "tool input schema must describe an object", "invalid_catalog_schema"
                 )
             names.add(name)
             mapped.append({"name": name, "description": tool["description"], "inputSchema": schema})
