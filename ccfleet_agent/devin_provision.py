@@ -10,11 +10,13 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import logging
 import math
 import os
 import re
 import stat
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -31,6 +33,8 @@ devin_native = devin_account.native
 ROOT_UID = 0
 DEFAULT_DIRECTORY = Path("/etc/ccfleet/devin")
 MAX_KEYS = 20
+_RETRY_MINIMUM_SECONDS = devin_account.METADATA_ACQUISITION_TIMEOUT_S + 10
+log = logging.getLogger(__name__)
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _USER = re.compile(r"[a-z][a-z0-9_-]{1,31}\Z")
@@ -64,10 +68,13 @@ def _safe_collector_reason(value):
 
 
 class ProvisionError(ValueError):
-    def __init__(self, message, *, collector_reason=None):
+    def __init__(self, message, *, collector_reason=None, _retryable_metadata=False,
+                 _retry_authority=None):
         super().__init__(message)
         self.collector_reason = (collector_reason
                                  if _safe_collector_reason(collector_reason) else None)
+        self._retryable_metadata = _retryable_metadata is True
+        self._retry_authority = _retry_authority if self._retryable_metadata else None
 
 
 def metadata_failure_reason(error):
@@ -258,8 +265,64 @@ def _credential(account):
         os.close(base)
 
 
-def collect(directory, account, control, *, spawn, lookup, groups_of, now, collector_path=None):
-    """One explicit metadata-only child; private return value must never be posted."""
+def _collection_authority(directory, account, control):
+    control = clean_control(control)
+    _, profile, _, _, _ = _profile(directory, account.pw_name, control)
+    return (_encode(control), _encode(profile), hashlib.sha256(_credential(account)).hexdigest())
+
+
+def _remaining_timeout(deadline, monotonic, minimum):
+    remaining = deadline - monotonic()
+    if remaining <= 0 or remaining < minimum:
+        raise ProvisionError("native_metadata_child_unverified", collector_reason=(
+            "native_models_list_rejected" if minimum else "native_metadata_timeout"))
+    return remaining
+
+
+def _retryable_catalogue_failure(code, value, control, now):
+    if (type(code) is not int or code != 1 or not isinstance(value, dict)
+            or set(value) != {"report", "credential_sha256", "checked_at", "reason",
+                              "cleanup_confirmed"}
+            or value["reason"] != "native_models_list_rejected"
+            or value["cleanup_confirmed"] is not True or value["credential_sha256"] is not None):
+        return False
+    report = value["report"]
+    return (isinstance(report, dict) and set(report) == {"account_fp", "identity_verified",
+            "bridge_contract", "capabilities", "native_version", "adapter_revision",
+            "model_map_digest", "observed_at"}
+            and report["account_fp"] is None and report["identity_verified"] is False
+            and type(value["checked_at"]) in (int, float)
+            and 0 <= value["checked_at"] <= 10**11 and math.isfinite(value["checked_at"])
+            and type(report["observed_at"]) in (int, float)
+            and report["observed_at"] == value["checked_at"]
+            and type(now) in (int, float) and 0 <= now - value["checked_at"] <= 240
+            and all(report[k] == v for k, v in control["runtime"].items())
+            and isinstance(report["capabilities"], dict)
+            and set(report["capabilities"]) == devin_account.CAPABILITIES
+            and all(item is True for item in report["capabilities"].values()))
+
+
+def collect(directory, account, control, *, spawn, lookup, groups_of, now, collector_path=None,
+            monotonic=time.monotonic):
+    """Fresh isolated verification, with one narrowly bounded catalogue retry."""
+    deadline = monotonic() + devin_account.METADATA_CHILD_TIMEOUT_S
+    options = dict(spawn=spawn, lookup=lookup, groups_of=groups_of, now=now,
+                   collector_path=collector_path, deadline=deadline, monotonic=monotonic)
+    try:
+        return _collect_once(directory, account, control, minimum_timeout=0, expected=None,
+                             **options)
+    except ProvisionError as error:
+        expected = error._retry_authority
+        if (not error._retryable_metadata or expected is None
+                or deadline - monotonic() < _RETRY_MINIMUM_SECONDS):
+            raise
+    return _collect_once(directory, account, control, minimum_timeout=_RETRY_MINIMUM_SECONDS,
+                         expected=expected, **options)
+
+
+def _collect_once(directory, account, control, *, spawn, lookup, groups_of, now, collector_path,
+                  deadline, monotonic, expected, minimum_timeout):
+    original_control = control
     control = clean_control(control)
     base, profile, template, metadata, binding = _profile(directory, account.pw_name, control)
     if (template["execution_uid"] != account.pw_uid or template["home"] != account.pw_dir
@@ -285,6 +348,13 @@ def collect(directory, account, control, *, spawn, lookup, groups_of, now, colle
     # principal. Interactive slot processes cannot replace its stdout or HOME.
     raw = _credential(account)
     credential_sha = hashlib.sha256(raw).hexdigest()
+    authority = (_encode(control), _encode(profile), credential_sha)
+    if expected is None:
+        expected = authority
+    elif authority != expected:
+        raise ProvisionError("native_metadata_authority_changed",
+                             collector_reason="account_profile_or_authorization_changed")
+    _remaining_timeout(deadline, monotonic, minimum_timeout)
     snapshot = _owned_directory(Path(verifier.pw_dir) / ".local/share/devin", verifier.pw_uid)
     fd = None
     cleanup = False
@@ -301,9 +371,16 @@ def collect(directory, account, control, *, spawn, lookup, groups_of, now, colle
         os.fsync(fd)
         os.close(fd)
         fd = None
+        try:
+            timeout = _remaining_timeout(deadline, monotonic, minimum_timeout)
+        except ProvisionError:
+            cleanup = True  # This exclusive snapshot has not been given to any child.
+            raise
+        if minimum_timeout:
+            log.info("native metadata catalogue verification retry")
         code, output = spawn(["/usr/bin/python3", "-I", str(path), "--collect-profile"],
             input_text=_encode(request).decode(), limit=16*1024,
-            timeout=devin_account.METADATA_CHILD_TIMEOUT_S,
+            timeout=timeout,
             user=verifier.pw_uid, group=verifier.pw_gid, extra_groups=[], cwd="/",
             env={"HOME": verifier.pw_dir, "USER": verifier.pw_name, "LOGNAME": verifier.pw_name,
                  "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"})
@@ -311,11 +388,17 @@ def collect(directory, account, control, *, spawn, lookup, groups_of, now, colle
             raise ProvisionError("native_metadata_child_failed")
         value = devin_native.mcp._decode(output.encode())
         cleanup = isinstance(value, dict) and value.get("cleanup_confirmed") is True
+        if _collection_authority(directory, account, original_control) != expected:
+            raise ProvisionError("native_metadata_authority_changed",
+                                 collector_reason="account_profile_or_authorization_changed")
         if (code != 0 or not cleanup or value.get("credential_sha256") != credential_sha
                 or hashlib.sha256(_credential(account)).hexdigest() != credential_sha):
+            retryable = _retryable_catalogue_failure(code, value, control,
+                now=now() if callable(now) else now)
             raise ProvisionError("native_metadata_child_unverified",
                                  collector_reason=value.get("reason")
-                                 if isinstance(value, dict) else None)
+                                 if isinstance(value, dict) else None,
+                                 _retryable_metadata=retryable, _retry_authority=expected)
         # Re-read root registration after the child, before returning evidence.
         _profile(directory, account.pw_name, control)
     finally:
@@ -324,10 +407,12 @@ def collect(directory, account, control, *, spawn, lookup, groups_of, now, colle
         if cleanup:
             os.unlink("credentials.toml", dir_fd=snapshot)
         os.close(snapshot)
-    return clean_observation({**value, "claim": control["claim"],
+    observed = clean_observation({**value, "claim": control["claim"],
         "config_sha256": profile["template_sha256"],
         "source_profile_sha256": profile["source_profile_sha256"]}, control,
         now=now() if callable(now) else now)
+    _remaining_timeout(deadline, monotonic, 0)
+    return observed
 
 
 def clean_observation(value, control, *, now):
