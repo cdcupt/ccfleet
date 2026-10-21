@@ -79,6 +79,26 @@ existing pairing. Setup does not automatically revoke an Anthropic credential.
 Revoke an old setup-token yourself only if it is no longer used anywhere else.
 Install-only (omit <code>--setup</code>), manual <code>ccfleet login</code>, and legacy <code>--migrate</code> remain
 compatibility options, not extra steps in the normal setup flow.</p>
+<h3 id="choosing-a-slot">Choose which slot to use</h3>
+<p>Update once, then choose a slot. Think of <code>use</code> as choosing the door
+your next request walks through:</p>
+<pre><code class="language-bash">ccfleet update
+ccfleet list --remote
+ccfleet use erik-1
+ccfleet local
+</code></pre>
+<p><code>ccfleet use erik-1</code> remembers that choice for future local launches.
+Choose <code>erik-2</code> instead to use its configured Devin connection. Your actual
+slot names appear in the list. Before starting Claude, Fleet prints the selected
+slot, provider and connection type. A one-time <code>ccfleet local --slot NAME</code>
+overrides the saved choice for that launch.</p>
+<p>Choosing a slot does not change its website settings or log you into a different
+provider. If the chosen paired Claude slot is outside your saved HTTPS endpoint,
+the automatic connection uses that slot's Claude bridge after checking the endpoint's
+current selection. A failed authorization or an unavailable selected route stops the
+launch. <code>--transport gateway</code> always requires the chosen slot to be included
+in that endpoint. Without an explicit local choice, the website's endpoint pool
+continues to control routing.</p>
 <h2 id="migrating-from-live-folders-or-snapshots">Migrating from live folders or snapshots</h2>
 <p>The previous release ran Claude on the slot with a background live mount of local
 files. That is no longer the primary workflow. Closing its terminal did <strong>not</strong>

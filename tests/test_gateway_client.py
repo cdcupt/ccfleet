@@ -373,3 +373,187 @@ def test_gateway_launch_describes_fixed_account_and_pool_mode(client, monkeypatc
     profile(client, mode="priority")
     assert invoke(client) == 0
     assert "priority order for each request" in capsys.readouterr().err
+
+
+def selected_devin_status(client, monkeypatch, *, ready=True):
+    """An existing Devin key belongs to slot two, not the paired Claude slot one."""
+    profile(client, slot_ids=["slot-two"], provider="devin")
+    return status(client, monkeypatch, ready=ready, provider="devin",
+                  key={"id": "gsynthetic", "slot_ids": ["slot-two"], "mode": "sticky",
+                       "provider": "devin"},
+                  slots=[{"id": "slot-two", "name": "two", "ready": ready}])
+
+
+def test_use_paired_claude_slot_overrides_saved_devin_route(client, monkeypatch, capsys):
+    rpc = selected_devin_status(client, monkeypatch)
+    checked = []
+    monkeypatch.setitem(client.scope, "check_inference",
+                        lambda device, **kw: checked.append(device["slot_id"]))
+    before_key = (client.loaded["home"]() / "gateway.json").read_bytes()
+    assert client.loaded["main"](["use", "one"]) == 0
+    assert invoke(client, "--check") == 0
+    assert checked == ["slot-one"] and not client.calls
+    assert all(url.endswith("/api/gateway/status") for url, *_ in rpc)
+    assert (client.loaded["home"]() / "gateway.json").read_bytes() == before_key
+    output = capsys.readouterr()
+    assert "one" in output.err and "Anthropic" in output.err and "bridge" in output.err
+    assert SECRET not in output.out + output.err
+
+
+def test_forced_gateway_never_substitutes_unselected_paired_slot(client, monkeypatch):
+    rpc = selected_devin_status(client, monkeypatch)
+    assert client.loaded["main"](["use", "one"]) == 0
+    assert invoke(client, "--check", "--transport", "gateway") == 2
+    assert not client.calls
+    assert all("?slot=" not in url for url, *_ in rpc)
+
+
+def test_use_current_unpaired_gateway_slot_persists_canonical_selection(client, monkeypatch, capsys):
+    rpc = selected_devin_status(client, monkeypatch)
+    assert client.loaded["main"](["use", "two"]) == 0
+    assert invoke(client) == 0
+    assert rpc[-1][0].endswith("?slot=slot-two")
+    assert client.calls[0][3]["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "X-CCFleet-Slot: slot-two"
+    assert client.loaded["load_config"]()["devices"] == {"device": client.device}
+    output = capsys.readouterr()
+    assert "Devin" in output.err and "two" in output.err and "HTTPS" in output.err
+    assert client.loaded["main"](["list"]) == 0
+    listing = capsys.readouterr().out
+    assert "* two (slot-two)" in listing and "* one" not in listing
+
+
+def test_use_gateway_current_name_cannot_resurrect_retired_pairing(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    config = client.loaded["load_config"]()
+    config["devices"]["retired-device"] = {
+        **client.device, "device_id": "retired-device", "slot_id": "retired-slot", "slot_name": "two"}
+    client.loaded["save_config"](config)
+    assert client.loaded["main"](["use", "two"]) == 0
+    assert invoke(client) == 0
+    assert client.calls[0][3]["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "X-CCFleet-Slot: slot-two"
+    assert client.loaded["load_config"]()["devices"]["retired-device"]["slot_id"] == "retired-slot"
+
+
+@pytest.mark.parametrize("failure", [401, 403, 429, 500, "bad-slots", "not-ready"])
+def test_explicit_choice_never_switches_route_after_gateway_failure(client, monkeypatch, failure):
+    selected_devin_status(client, monkeypatch)
+    assert client.loaded["main"](["use", "two"]) == 0
+    def api(*a, **kw):
+        if isinstance(failure, int):
+            raise client.loaded["CliError"]("synthetic denied", status=failure)
+        return {"ready": failure != "not-ready", "provider": "devin",
+                "key": {"id": "gsynthetic", "slot_ids": ["slot-two"], "mode": "sticky"},
+                "slots": [{"id": "outside-key" if failure == "bad-slots" else "slot-two",
+                           "name": "two"}]}
+    monkeypatch.setitem(client.scope, "api_json", api)
+    assert invoke(client, "--check") == 2
+    assert not client.calls
+
+
+def test_use_does_not_change_selection_when_fresh_metadata_is_denied(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    before = client.loaded["config_path"]().read_bytes()
+    def denied(*a, **kw):
+        raise client.loaded["CliError"]("synthetic denied", status=403)
+    monkeypatch.setitem(client.scope, "api_json", denied)
+    assert client.loaded["main"](["use", "one"]) == 2
+    assert client.loaded["config_path"]().read_bytes() == before
+
+
+def test_diagnostics_do_not_report_old_devin_gateway_for_selected_claude_slot(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    assert client.loaded["main"](["use", "one"]) == 0
+    # None delegates to the selected pairing's normal bridge diagnostics.
+    assert client.loaded["gateway_diagnostic_context"]() is None
+
+
+def test_unpaired_install_without_gateway_keeps_normal_pairing_diagnostics(client):
+    client.loaded["save_config"]({"devices": {}, "active": ""})
+    assert client.loaded["gateway_diagnostic_context"]() is None
+
+
+def test_selected_claude_launch_uses_only_its_bridge_and_keeps_history(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    checked, commands, lifecycle = [], [], []
+    monkeypatch.setitem(client.scope, "check_inference",
+                        lambda device, **kw: checked.append(device["slot_id"]))
+    monkeypatch.setitem(client.scope, "inference_command",
+                        lambda device: ["synthetic-relay", device["slot_id"]])
+    class Bridge:
+        base_url = "http://127.0.0.1:19001"
+        secret = "synthetic-local-bridge-secret"
+        def __init__(self, command, environment):
+            commands.append(command())
+        def start(self):
+            lifecycle.append("start")
+        def close(self):
+            lifecycle.append("close")
+    monkeypatch.setitem(client.scope, "inference_client", lambda: SimpleNamespace(Bridge=Bridge))
+    assert client.loaded["main"](["use", "one"]) == 0
+    assert invoke(client, "--continue") == 0
+    assert checked == ["slot-one"] and commands == [["synthetic-relay", "slot-one"]]
+    command, kwargs, path, settings, _ = client.calls[0]
+    assert "--continue" in command and "CLAUDE_CONFIG_DIR" not in kwargs["env"]
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == Bridge.base_url
+    assert settings["env"]["ANTHROPIC_AUTH_TOKEN"] == Bridge.secret
+    assert lifecycle == ["start", "close"] and not path.exists()
+
+
+def test_selected_unpaired_devin_slot_cannot_use_auth_pairings_claude_bridge(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    assert client.loaded["main"](["use", "two"]) == 0
+    assert invoke(client, "--check", "--transport", "bridge") == 2
+    assert not client.calls
+
+
+def test_incomplete_endpoint_metadata_cannot_authorize_bridge_selection(client, monkeypatch):
+    profile(client, slot_ids=["slot-two"], provider="devin")
+    status(client, monkeypatch, slots=[{"id": "slot-two", "name": "two"}])
+    assert invoke(client, "--slot", "one", "--check") == 2
+    assert not client.calls
+
+
+def test_unpaired_gateway_choice_does_not_cleanup_auth_pairings_other_slot(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    cleanup = []
+    monkeypatch.setitem(client.scope, "retire_live_grants",
+                        lambda device, **kw: cleanup.append(device["slot_id"]))
+    assert client.loaded["main"](["use", "two"]) == 0
+    assert invoke(client) == 0
+    assert cleanup == []
+
+
+def test_canonical_gateway_id_cannot_borrow_retired_display_names_credentials(client, monkeypatch):
+    selected_devin_status(client, monkeypatch)
+    config = client.loaded["load_config"]()
+    config["devices"]["retired-device"] = {
+        **client.device, "device_id": "retired-device", "slot_id": "retired-slot",
+        "slot_name": "slot-two"}
+    client.loaded["save_config"](config)
+    cleanup = []
+    monkeypatch.setitem(client.scope, "retire_live_grants",
+                        lambda device, **kw: cleanup.append(device["slot_id"]))
+    assert client.loaded["main"](["use", "two"]) == 0
+    assert invoke(client) == 0
+    assert cleanup == []
+    assert invoke(client, "--check", "--transport", "bridge") == 2
+
+
+@pytest.mark.parametrize("gateway_exists", [True, False])
+def test_saved_choice_cannot_move_to_another_endpoint_with_same_slot_id(client, monkeypatch,
+                                                                     gateway_exists):
+    selected_devin_status(client, monkeypatch)
+    assert client.loaded["main"](["use", "two"]) == 0
+    config = client.loaded["load_config"]()
+    config["devices"]["other-endpoint-device"] = {
+        **client.device, "device_id": "other-endpoint-device", "slot_id": "slot-two",
+        "slot_name": "different-slot", "server": "https://other-fleet.invalid"}
+    client.loaded["save_config"](config)
+    if gateway_exists:
+        profile(client, device_id="other-endpoint-device", base_url="https://other-fleet.invalid",
+                slot_ids=["slot-two"], provider="devin")
+    else:
+        (client.loaded["home"]() / "gateway.json").unlink()
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: pytest.fail("wrong endpoint contacted"))
+    assert invoke(client, "--check") == 2
+    assert not client.calls
