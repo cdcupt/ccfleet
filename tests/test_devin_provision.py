@@ -92,7 +92,8 @@ def profile(tmp_path, monkeypatch):
         groups_of=lambda account: set(), source=source, source_path=source_path)
     c.collect = lambda **changes: p.collect(c.directory, c.account, c.control,
         spawn=changes.get("spawn", c.spawn), lookup=changes.get("lookup", c.lookup),
-        groups_of=changes.get("groups_of", c.groups_of), now=c.now)
+        groups_of=changes.get("groups_of", c.groups_of), now=c.now,
+        monotonic=changes.get("monotonic", lambda: 0.0))
     return c
 
 
@@ -117,6 +118,231 @@ def test_metadata_parent_budget_leaves_margin_for_validation_and_cleanup(profile
     cleanup_for_both_commands = 2 * (devin_account.METADATA_TERMINATE_GRACE_S
                                     + devin_account.METADATA_PROCESS_EXIT_TIMEOUT_S)
     assert timeout - devin_account.METADATA_ACQUISITION_TIMEOUT_S > cleanup_for_both_commands
+
+
+def catalogue_rejection(profile):
+    value = json.loads(json.dumps(profile.output))
+    value.update(reason="native_models_list_rejected", credential_sha256=None)
+    value["report"].update(identity_verified=False, account_fp=None)
+    return value
+
+
+@pytest.mark.parametrize("elapsed,attempts", [(19, 2), (20, 2), (21, 1)])
+def test_early_clean_catalogue_rejection_gets_only_one_full_fresh_child_retry(
+        profile, caplog, elapsed, attempts):
+    now = [0.0]
+    failed = catalogue_rejection(profile)
+
+    def spawn(argv, **kwargs):
+        result = profile.spawn(argv, **kwargs)
+        assert (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+        if len(profile.calls) == 1:
+            now[0] = elapsed
+            return 1, json.dumps(failed)
+        return result
+
+    with caplog.at_level("INFO", logger=p.log.name):
+        if attempts == 2:
+            assert profile.collect(spawn=spawn, monotonic=lambda: now[0])["reason"] == "verified"
+        else:
+            with pytest.raises(p.ProvisionError) as captured:
+                profile.collect(spawn=spawn, monotonic=lambda: now[0])
+            assert p.metadata_failure_reason(captured.value) == "native_models_list_rejected"
+    assert len(profile.calls) == attempts
+    assert profile.calls[0][1]["timeout"] == 90
+    if attempts == 2:
+        assert profile.calls[1][1]["timeout"] == 90 - elapsed
+        assert profile.calls[0][0] == profile.calls[1][0]
+        assert profile.calls[0][1]["input_text"] == profile.calls[1][1]["input_text"]
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+    assert [record.message for record in caplog.records] == (
+        ["native metadata catalogue verification retry"] if attempts == 2 else [])
+
+
+def test_catalogue_retry_cannot_accept_good_after_original_parent_deadline(profile):
+    now = [0.0]
+
+    def spawn(argv, **kwargs):
+        result = profile.spawn(argv, **kwargs)
+        if len(profile.calls) == 1:
+            now[0] = 19
+            return 1, json.dumps(catalogue_rejection(profile))
+        assert kwargs["timeout"] == 71
+        now[0] = 91
+        return result
+
+    with pytest.raises(p.ProvisionError) as captured:
+        profile.collect(spawn=spawn, monotonic=lambda: now[0])
+    assert p.metadata_failure_reason(captured.value) == "native_metadata_timeout"
+    assert len(profile.calls) == 2
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+def test_final_observation_validation_cannot_publish_after_parent_deadline(profile, monkeypatch):
+    now = [0.0]
+    validate = p.clean_observation
+
+    def slow_validation(*args, **kwargs):
+        observed = validate(*args, **kwargs)
+        now[0] = 91
+        return observed
+
+    monkeypatch.setattr(p, "clean_observation", slow_validation)
+    with pytest.raises(p.ProvisionError) as captured:
+        profile.collect(monotonic=lambda: now[0])
+    assert p.metadata_failure_reason(captured.value) == "native_metadata_timeout"
+    assert len(profile.calls) == 1
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+def test_second_catalogue_failure_is_bad_without_a_third_child(profile):
+    def spawn(argv, **kwargs):
+        profile.spawn(argv, **kwargs)
+        return 1, json.dumps(catalogue_rejection(profile))
+
+    with pytest.raises(p.ProvisionError) as captured:
+        profile.collect(spawn=spawn)
+    assert p.metadata_failure_reason(captured.value) == "native_models_list_rejected"
+    assert len(profile.calls) == 2
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+@pytest.mark.parametrize("code,reason,cleanup,schema", [
+    (1, "native_auth_status_rejected", True, "valid"),
+    (1, "native_model_catalog_unverified", True, "valid"),
+    (1, "metadata_authorization_revoked", True, "valid"),
+    (1, "native_status_subject_invalid", True, "valid"),
+    (1, "native_status_unknown_label_sha256_" + "a" * 64, True, "valid"),
+    (1, "native_models_list_rejected", False, "valid"),
+    (2, "native_models_list_rejected", True, "valid"),
+    (-15, "native_models_list_rejected", True, "valid"),
+    (True, "native_models_list_rejected", True, "valid"),
+    (None, "native_models_list_rejected", True, "valid"),
+    (1, "native_models_list_rejected", True, "missing-report"),
+    (1, "native_models_list_rejected", True, "extra-field"),
+    (1, "native_models_list_rejected", True, "negative-time"),
+    (1, "native_models_list_rejected", True, "future-time"),
+    (1, "native_models_list_rejected", True, "stale-time"),
+    (1, "native_models_list_rejected", True, "bool-observed"),
+])
+def test_only_exact_clean_code_one_catalogue_failure_is_retryable(
+        profile, code, reason, cleanup, schema):
+    failed = catalogue_rejection(profile)
+    failed.update(reason=reason, cleanup_confirmed=cleanup)
+    if schema == "missing-report":
+        failed["report"] = None
+    if schema == "extra-field":
+        failed["unexpected"] = "private-output"
+    if schema in {"negative-time", "future-time", "stale-time"}:
+        timestamp = {"negative-time": -1, "future-time": profile.now + 1,
+                     "stale-time": profile.now - 241}[schema]
+        failed["checked_at"] = failed["report"]["observed_at"] = timestamp
+    if schema == "bool-observed":
+        profile.now = failed["checked_at"] = 1
+        failed["report"]["observed_at"] = True
+
+    def spawn(argv, **kwargs):
+        profile.spawn(argv, **kwargs)
+        return code, json.dumps(failed)
+
+    with pytest.raises(p.ProvisionError):
+        profile.collect(spawn=spawn)
+    assert len(profile.calls) == 1
+    snapshot = Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml"
+    assert snapshot.exists() is (not cleanup)
+
+
+@pytest.mark.parametrize("change", ["credential", "profile", "source-pin", "control",
+                                    "verifier-uid", "group"])
+def test_catalogue_retry_revalidates_original_source_and_complete_verifier_setup(profile, change):
+    def spawn(argv, **kwargs):
+        profile.spawn(argv, **kwargs)
+        if change == "credential":
+            write(Path(profile.account.pw_dir) / ".local/share/devin/credentials.toml", b"changed")
+        elif change == "profile":
+            write(profile.base / "profile.json", {**profile.registration, "enabled": False})
+        elif change == "source-pin":
+            changed = write(profile.source_path, {**profile.source, "proof_sha256": "e" * 64})
+            write(profile.base / "profile.json", {**profile.registration,
+                                                 "source_profile_sha256": changed})
+        elif change == "control":
+            profile.control["keys"] = []
+        return 1, json.dumps(catalogue_rejection(profile))
+
+    def lookup(name):
+        verifier = profile.lookup(name)
+        if profile.calls and change == "verifier-uid":
+            fields = list(verifier)
+            fields[2] += 1
+            return pwd.struct_passwd(fields)
+        return verifier
+
+    def groups(account):
+        return {"sudo"} if profile.calls and change == "group" else set()
+
+    with pytest.raises((p.ProvisionError, ValueError)):
+        profile.collect(spawn=spawn, lookup=lookup, groups_of=groups)
+    assert len(profile.calls) == 1
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+@pytest.mark.parametrize("case", ["source-uid", "source-home", "verifier-group", "verifier-home"])
+def test_original_identity_refusal_still_precedes_source_credential_read(profile, monkeypatch, case):
+    if case in {"source-uid", "source-home"}:
+        profile.template["execution_uid" if case == "source-uid" else "home"] = (
+            profile.account.pw_uid + 1 if case == "source-uid" else "/unexpected-home")
+        changed = write(profile.base / "template.json", profile.template)
+        write(profile.base / "profile.json", {**profile.registration, "template_sha256": changed})
+
+    def lookup(name):
+        verifier = profile.lookup(name)
+        if case == "verifier-home":
+            fields = list(verifier)
+            fields[5] = "/unexpected-verifier-home"
+            return pwd.struct_passwd(fields)
+        return verifier
+
+    monkeypatch.setattr(p, "_credential", lambda *_: pytest.fail("refused identity read credential"))
+    with pytest.raises(p.ProvisionError):
+        profile.collect(lookup=lookup, groups_of=lambda _: {"sudo"} if case == "verifier-group"
+                        else set())
+    assert not profile.calls
+
+
+def test_budget_drop_during_second_snapshot_copy_prevents_spawn_and_removes_unlaunched_snapshot(
+        profile, monkeypatch):
+    now, copies = [0.0], []
+
+    def sync(fd):
+        copies.append(fd)
+        if len(copies) == 2:
+            now[0] = 21
+
+    def spawn(argv, **kwargs):
+        profile.spawn(argv, **kwargs)
+        now[0] = 19
+        return 1, json.dumps(catalogue_rejection(profile))
+
+    monkeypatch.setattr(p.os, "fsync", sync)
+    with pytest.raises(p.ProvisionError) as captured:
+        profile.collect(spawn=spawn, monotonic=lambda: now[0])
+    assert len(profile.calls) == 1 and len(copies) == 2
+    assert p.metadata_failure_reason(captured.value) == "native_models_list_rejected"
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+@pytest.mark.parametrize("failure", ["exception", "missing-result"])
+def test_uncertain_spawn_or_missing_result_is_not_retried_and_keeps_quarantine(profile, failure):
+    def spawn(argv, **kwargs):
+        profile.spawn(argv, **kwargs)
+        if failure == "exception":
+            raise OSError("synthetic uncertain spawn")
+        return None, None
+
+    with pytest.raises((p.ProvisionError, OSError)):
+        profile.collect(spawn=spawn)
+    assert len(profile.calls) == 1
+    assert (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
 
 
 @pytest.mark.parametrize("reason", [
