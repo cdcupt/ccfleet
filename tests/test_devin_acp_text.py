@@ -37,6 +37,7 @@ def owned(fake):
 
 @pytest.mark.parametrize("mode,fragments", [
     ("stream-text-129", 129), ("stream-text-1024", 1024), ("stream-mixed-512", 512),
+    ("stream-mixed-513", 513), ("stream-private-1025", 1),
 ])
 def test_text_and_private_thought_streams_cross_original_queue_bound(fake, mode, fragments):
     make, record, _ = fake
@@ -58,8 +59,8 @@ def test_private_thoughts_do_not_need_a_queue_slot_when_controls_fill_queue(owne
     assert len(owned.drain_notifications()) == acp.MAX_NOTIFICATIONS
 
 
-@pytest.mark.parametrize("mode", ["stream-text-1025", "stream-thought-1025", "stream-mixed-513"])
-def test_original_fragments_are_bounded_before_coalescing_or_discard(fake, mode):
+@pytest.mark.parametrize("mode", ["stream-text-1025", "stream-thought-2049"])
+def test_visible_fragments_and_raw_observations_stay_bounded(fake, mode):
     make, _, _ = fake
     with make(mode, allow_model_requests=True, _controller_type=TextController) as controller:
         session = controller.new_session()["sessionId"]
@@ -67,6 +68,17 @@ def test_original_fragments_are_bounded_before_coalescing_or_discard(fake, mode)
             controller.prompt(session, "Synthetic")
         assert error.value.code == "limit_exceeded"
         assert controller._process.returncode is not None
+
+
+def test_discarded_private_fragments_keep_the_original_raw_rpc_count_bound(owned):
+    for _ in range(acp.MAX_RPC_MESSAGES):
+        handle(owned, notice("agent_thought_chunk", "x"))
+    assert owned._text_fragments == 0
+    assert owned._messages == acp.MAX_RPC_MESSAGES
+    assert owned.drain_notifications() == []
+    with pytest.raises(acp.ACPError) as error:
+        handle(owned, notice("agent_thought_chunk", "x"))
+    assert error.value.code == "limit_exceeded"
 
 
 def test_utf8_byte_limits_and_64k_coalesced_blocks(owned):

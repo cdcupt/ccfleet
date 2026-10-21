@@ -206,11 +206,42 @@ def test_second_turn_uncertainty_stays_fail_closed_without_replay(full_path, fai
 
 
 def parser(tmp_path):
-    controller = REAL_CONTROLLER(sys.executable, model="native-max", cwd=str(tmp_path),
-        allowed_executables=[sys.executable], verified_models=["native-max"],
+    # Parser-only tests must not depend on the CI interpreter's installation
+    # permissions. This owned executable is allowlisted but never launched.
+    executable = tmp_path / "not-invoked-acp"
+    executable.write_text("#!/bin/sh\nexit 99\n")
+    executable.chmod(0o700)
+    controller = REAL_CONTROLLER(str(executable), model="native-max", cwd=str(tmp_path),
+        allowed_executables=[str(executable)], verified_models=["native-max"],
         allow_model_requests=True, env={})
     controller._sessions.add("synthetic-owned")
     return controller
+
+
+def test_parser_fixture_does_not_depend_on_interpreter_permissions(tmp_path, monkeypatch):
+    interpreter = tmp_path / "unsafe-host-python"
+    interpreter.write_text("not invoked")
+    interpreter.chmod(0o777)
+    monkeypatch.setattr(sys, "executable", str(interpreter))
+    monkeypatch.setattr(native.acp.subprocess, "Popen",
+        lambda *args, **kwargs: pytest.fail("parser fixture must never launch a child"))
+    controller = parser(tmp_path)
+    assert controller.executable == str(tmp_path / "not-invoked-acp")
+    assert Path(controller.executable).stat().st_mode & 0o777 == 0o700
+    assert controller.pid is None
+    controller.close()
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o702])
+def test_real_parser_constructor_still_refuses_unsafe_executables(tmp_path, mode):
+    executable = tmp_path / "unsafe-acp"
+    executable.write_text("not invoked")
+    executable.chmod(mode)
+    with pytest.raises(native.acp.ACPError, match="not allowed") as error:
+        REAL_CONTROLLER(str(executable), model="native-max", cwd=str(tmp_path),
+            allowed_executables=[str(executable)], verified_models=["native-max"],
+            allow_model_requests=True, env={})
+    assert error.value.code == "invalid_config"
 
 
 def notification(kind, text="synthetic", session="synthetic-owned"):

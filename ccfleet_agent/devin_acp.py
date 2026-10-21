@@ -372,8 +372,9 @@ class ACPController:
         """Project one owned text/thought frame without buffering every chunk.
 
         Opt-in helper for a text-result consumer, never a general notification
-        allowlist. Every original fragment counts before coalescing; private
-        thoughts are validated and discarded. Opaque _meta is not result text,
+        allowlist. Original visible fragments count before coalescing; private
+        thoughts are validated and discarded under the unchanged raw RPC count
+        bound. Both kinds share the UTF-8 byte bound. Opaque _meta is not result text,
         model proof, tool activity or token accounting and is not retained.
         Other update kinds return False and keep the original queue semantics.
         """
@@ -396,13 +397,14 @@ class ACPController:
             raise ACPError("invalid ACP text Unicode") from exc
         if any((ord(char) < 32 and char not in "\t\r\n") or ord(char) == 127 for char in text):
             raise ACPError("invalid ACP text control character")
-        if (size > MAX_TEXT_FRAGMENT_BYTES or self._text_fragments >= MAX_TEXT_FRAGMENTS
+        if (size > MAX_TEXT_FRAGMENT_BYTES
+                or (kind == "agent_message_chunk" and self._text_fragments >= MAX_TEXT_FRAGMENTS)
                 or self._text_bytes + size > MAX_TEXT_BYTES):
             raise ACPError("ACP text observation exceeds bound", "limit_exceeded")
-        self._text_fragments += 1
         self._text_bytes += size
         if kind == "agent_thought_chunk":
             return True
+        self._text_fragments += 1
         if self._notifications:
             previous = self._notifications[-1]
             prior_update = previous.get("update", {})

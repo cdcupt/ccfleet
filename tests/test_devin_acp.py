@@ -83,14 +83,18 @@ for raw in sys.stdin.buffer:
         if mode.startswith('stream-'):
             _,kind,count=mode.split('-')
             for n in range(int(count)):
-                if kind in ('thought','mixed'):
+                if kind in ('thought','mixed','private'):
                     send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
                         'update':{'sessionUpdate':'agent_thought_chunk',
                             'content':{'type':'text','text':'PRIVATE_SYNTHETIC'}}}})
-                if kind!='thought':
+                if kind in ('text','mixed'):
                     send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
                         'update':{'sessionUpdate':'agent_message_chunk',
                             'content':{'type':'text','text':'日本語'}}}})
+            if kind=='private':
+                send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'session_fake',
+                    'update':{'sessionUpdate':'agent_message_chunk',
+                        'content':{'type':'text','text':'日本語'}}}})
             answer(i,{'stopReason':'end_turn'})
             continue
         if mode in ('prefix-owned','prefix-foreign'):
