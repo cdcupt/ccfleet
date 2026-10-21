@@ -34,8 +34,8 @@ MAX_KEYS = 20
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _USER = re.compile(r"[a-z][a-z0-9_-]{1,31}\Z")
-# Closed collector codes only. Never treat exception text or native output as a
-# diagnostic: even a syntactically plausible unknown string can contain a secret.
+# Closed codes, known-label enums or exact label hashes only. Never treat
+# exception text or native output as a diagnostic: plausible strings can leak secrets.
 # Retain old combined codes for installed collectors while newer collectors
 # identify the failing metadata command or label shape without copying output.
 COLLECTOR_FAILURE_REASONS = frozenset({
@@ -58,18 +58,22 @@ COLLECTOR_FAILURE_REASONS = frozenset({
 })
 
 
+def _safe_collector_reason(value):
+    return (type(value) is str and (value in COLLECTOR_FAILURE_REASONS
+            or devin_account.safe_status_diagnostic(value) is not None))
+
+
 class ProvisionError(ValueError):
     def __init__(self, message, *, collector_reason=None):
         super().__init__(message)
-        self.collector_reason = (collector_reason if type(collector_reason) is str
-                                 and collector_reason in COLLECTOR_FAILURE_REASONS else None)
+        self.collector_reason = (collector_reason
+                                 if _safe_collector_reason(collector_reason) else None)
 
 
 def metadata_failure_reason(error):
     """Revalidate the private code at the log boundary; never stringify an error."""
     reason = getattr(error, "collector_reason", None) if type(error) is ProvisionError else None
-    return (reason if type(reason) is str and reason in COLLECTOR_FAILURE_REASONS
-            else "unavailable")
+    return reason if _safe_collector_reason(reason) else "unavailable"
 
 
 def _encode(value):
@@ -298,7 +302,8 @@ def collect(directory, account, control, *, spawn, lookup, groups_of, now, colle
         os.close(fd)
         fd = None
         code, output = spawn(["/usr/bin/python3", "-I", str(path), "--collect-profile"],
-            input_text=_encode(request).decode(), limit=16*1024, timeout=40,
+            input_text=_encode(request).decode(), limit=16*1024,
+            timeout=devin_account.METADATA_CHILD_TIMEOUT_S,
             user=verifier.pw_uid, group=verifier.pw_gid, extra_groups=[], cwd="/",
             env={"HOME": verifier.pw_dir, "USER": verifier.pw_name, "LOGNAME": verifier.pw_name,
                  "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"})

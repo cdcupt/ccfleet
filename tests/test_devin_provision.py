@@ -110,6 +110,51 @@ def test_dedicated_verifier_snapshot_and_original_guard_are_private(profile):
     assert "credential_sha256" not in json.dumps(public) and "config_sha256" not in json.dumps(public)
 
 
+def test_metadata_parent_budget_leaves_margin_for_validation_and_cleanup(profile):
+    profile.collect()
+    timeout = profile.calls[0][1]["timeout"]
+    assert timeout == devin_account.METADATA_CHILD_TIMEOUT_S == 90
+    cleanup_for_both_commands = 2 * (devin_account.METADATA_TERMINATE_GRACE_S
+                                    + devin_account.METADATA_PROCESS_EXIT_TIMEOUT_S)
+    assert timeout - devin_account.METADATA_ACQUISITION_TIMEOUT_S > cleanup_for_both_commands
+
+
+@pytest.mark.parametrize("reason", [
+    "native_status_unknown_label_sha256_" + "a" * 64,
+    "native_status_duplicate_label_user_id", "native_status_duplicate_label_primary_org",
+    "native_auth_status_rejected", "native_models_list_rejected",
+])
+def test_safe_child_failure_diagnostics_reach_the_log_boundary(profile, reason):
+    profile.output.update(reason=reason, report=None, credential_sha256=None)
+
+    def failed_child(argv, **kwargs):
+        _, output = profile.spawn(argv, **kwargs)
+        return 1, output
+
+    with pytest.raises(p.ProvisionError) as captured:
+        profile.collect(spawn=failed_child)
+    assert p.metadata_failure_reason(captured.value) == reason
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+@pytest.mark.parametrize("reason", [
+    None, True, False, 42, [], {}, b"native_status_duplicate_label_user_id",
+    "private-native-output@example.test", "native_status_duplicate_label_private_secret",
+    "native_status_duplicate_label_User_ID", "native_status_duplicate_label_user_id\n",
+    "native_status_unknown_label_sha256_" + "a" * 63,
+    "native_status_unknown_label_sha256_" + "a" * 65,
+    "native_status_unknown_label_sha256_" + "A" * 64,
+    "native_status_unknown_label_sha256_" + "a" * 64 + "\n",
+    "native_status_unknown_label_sha256_" + "a" * 64 + "private-output",
+])
+def test_parent_rejects_unbounded_or_forged_failure_diagnostic(reason):
+    error = p.ProvisionError("private native text", collector_reason=reason)
+    assert error.collector_reason is None and p.metadata_failure_reason(error) == "unavailable"
+    # The log boundary independently rejects mutation after construction.
+    error.collector_reason = reason
+    assert p.metadata_failure_reason(error) == "unavailable"
+
+
 def test_freshness_uses_clock_after_metadata_child_completion(profile):
     c = profile
     c.output["checked_at"] = c.output["report"]["observed_at"] = 1010
