@@ -369,24 +369,91 @@ def _fresh_home(state, credential):
         raise
 
 
+def _in_memory_process(process):
+    return isinstance(process.stdout, io.BytesIO) and isinstance(process.stderr, io.BytesIO)
+
+
+def _completion_supported():
+    return (sys.platform.startswith("linux")
+            and all(hasattr(os, name) for name in (
+                "waitid", "WNOWAIT", "WNOHANG", "P_PID", "WEXITED", "CLD_EXITED",
+                "CLD_KILLED", "CLD_DUMPED"))
+            and signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL)
+
+
+def _completion_status(process):
+    """Observe our unreaped child; a missing child must never justify a PGID kill."""
+    if (not _completion_supported() or type(process.pid) is not int or process.pid <= 0):
+        raise AccountError("native_metadata_cleanup_unconfirmed")
+    try:
+        result = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except InterruptedError:
+        raise
+    except (OSError, ValueError):
+        raise AccountError("native_metadata_cleanup_unconfirmed") from None
+    if result is not None and (
+            result.si_pid != process.pid
+            or result.si_code not in {os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED}):
+        raise AccountError("native_metadata_cleanup_unconfirmed")
+    return result
+
+
+def _wait_for_completion(process, *, deadline, permitted, cancelled, clock):
+    """Pipe EOF is not process completion. Keep the leader unreaped for cleanup."""
+    while True:
+        if cancelled.is_set() or permitted() is not True:
+            raise AccountError("metadata_authorization_revoked")
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise AccountError("native_metadata_timeout")
+        # Explicit in-memory test peers have no OS child; their injected
+        # cleanup supplies the exit code, as it does for the capture path.
+        if _in_memory_process(process):
+            return
+        try:
+            if _completion_status(process) is not None:
+                return
+        except InterruptedError:
+            continue
+        cancelled.wait(min(0.01, remaining))
+
+
 def _stop_group(process):
     """Keep the leader unreaped until its owned group has been terminated."""
+    observed = None
     try:
         try:
+            if not _in_memory_process(process):
+                # A concurrent reaper or SIGCHLD policy can release the PID.
+                # Never signal a group after losing ownership of its leader.
+                observed = _completion_status(process)
             if os.getpgid(process.pid) != process.pid:
                 return False
             os.killpg(process.pid, signal.SIGTERM)
             time.sleep(METADATA_TERMINATE_GRACE_S)
+            if not _in_memory_process(process):
+                observed = _completion_status(process) or observed
+                if os.getpgid(process.pid) != process.pid:
+                    return False
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
-            pass
-        except (OSError, ValueError):
+            if not _in_memory_process(process):
+                try:
+                    _completion_status(process)
+                except (OSError, AccountError):
+                    return False
+        except (OSError, ValueError, AccountError):
             return False
         try:
             process.wait(timeout=METADATA_PROCESS_EXIT_TIMEOUT_S)
         except (OSError, subprocess.TimeoutExpired):
             return False
+        if observed is not None:
+            expected = (observed.si_status if observed.si_code == os.CLD_EXITED
+                        else -observed.si_status)
+            if process.returncode != expected:
+                return False
         return process.returncode is not None
     finally:
         for stream in (process.stdout, process.stderr):
@@ -396,7 +463,7 @@ def _stop_group(process):
 
 def _capture(process, *, maximum, deadline, permitted, cancelled, clock):
     """Bound stdout/stderr; only explicit in-memory fake streams skip selectors."""
-    if isinstance(process.stdout, io.BytesIO) and isinstance(process.stderr, io.BytesIO):
+    if _in_memory_process(process):
         if cancelled.is_set() or permitted() is not True or clock() >= deadline:
             raise AccountError("metadata_authorization_or_timeout")
         raw, error = process.stdout.read(maximum + 1), process.stderr.read(maximum + 1)
@@ -509,6 +576,8 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
         if popen_factory is not None:
             if not callable(popen_factory):
                 raise AccountError("invalid_metadata_factory")
+            if popen_factory is subprocess.Popen and not _completion_supported():
+                raise AccountError("native_metadata_unverified")
             original_path = original_home / ".local/share/devin/credentials.toml"
             credential = _credential(original_path)
             validate_native_credentials(credential, expected_api_origin=source["api_origin"])
@@ -535,12 +604,15 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                     cwd=str(home), env=environment, start_new_session=True, bufsize=0)
                 raw = _capture(process, maximum=limit, deadline=deadline,
                                permitted=permitted, cancelled=cancelled, clock=clock)
+                _wait_for_completion(process, deadline=deadline, permitted=permitted,
+                                     cancelled=cancelled, clock=clock)
                 cleanup = _stop_group(process)
                 if not cleanup:
                     raise AccountError("native_metadata_cleanup_unconfirmed")
-                if process.returncode != 0:
-                    raise AccountError(rejected)
+                exit_code = process.returncode
                 process = None
+                if exit_code != 0:
+                    raise AccountError(rejected)
                 outputs.append(raw)
             subject = parse_auth_status(outputs[0], expected_api_origin=source["api_origin"])
             _models_present(outputs[1], data["model_uid"])
