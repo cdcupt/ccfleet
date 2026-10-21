@@ -167,6 +167,48 @@ def test_stock_inert_placeholder_reaches_worker_without_annotation(trial):
     assert captured[0]["messages"] == original["messages"]
 
 
+def test_canonical_context_expansion_rejects_before_any_trial_admission(trial):
+    # Scientific JSON floats can expand when the native context is encoded,
+    # despite the raw request staying below the trial's 192 KiB wire bound.
+    raw = body(tools=[{"name": "Read", "description": "Synthetic", "input_schema": {
+        "type": "object", "enum": ["SYNTHETIC_FLOATS"]}}])
+    raw = raw.replace(b'"SYNTHETIC_FLOATS"', b",".join([b"1e15"] * 16000))
+    assert len(raw) < devin_trial.MAX_REQUEST_BYTES
+    token = trial.runtime.create_key(trial.alice)
+    before = trial.runtime.allowance(trial.alice)
+    trial.runtime.transport = lambda *a, **k: pytest.fail("trial transport before rejection")
+    with pytest.raises(trial_runtime.TrialUnavailable) as error:
+        trial.runtime.turn(token, raw)
+    assert error.value.code == "native_context_limit" and error.value.status == 400
+    assert error.value.request_error.message.startswith("prompt is too long:")
+    assert trial.runtime.allowance(trial.alice) == before
+    with trial.runtime._ledger() as book:
+        assert book.connection.execute("SELECT COUNT(*) FROM devin_trial_sessions").fetchone()[0] == 0
+
+
+def test_trial_projects_only_private_assistant_history_before_worker(trial):
+    captured = []
+
+    class Capture(FakeWorker):
+        def perform(self, raw, authorized):
+            captured.append(json.loads(raw))
+            return super().perform(raw, authorized)
+
+    trial.runtime.transport = Capture
+    key = trial.runtime.create_key(trial.alice)
+    visible = {"type": "text", "text": "Visible assistant history"}
+    trial.runtime.turn(key, body(messages=[
+        {"role": "user", "content": "Visible user task"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "PRIVATE_REASONING", "signature": "PRIVATE_SIGNATURE"},
+            visible,
+        ]},
+        {"role": "user", "content": "Continue"},
+    ]))
+    assert captured[0]["messages"][1]["content"] == [visible]
+    assert "PRIVATE_REASONING" not in json.dumps(captured) and "PRIVATE_SIGNATURE" not in json.dumps(captured)
+
+
 def test_key_lasts_across_midnight_replacement_and_revoke_are_own_scoped(trial):
     t = trial
     a, b = t.runtime.create_key(t.alice), t.runtime.create_key(t.bob)

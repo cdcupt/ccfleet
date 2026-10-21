@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ccfleetd import gateway_transport, slots, throughput
+from ccfleetd import gateway_transport, native_preflight, slots, throughput
 from ccfleetd.api import Context, build_server
 from ccfleetd.gateway import GatewayRuntime
 from ccfleetd.gateway_transport import GatewayTransportError, NativeSSHAttempt, SSHAttempt
@@ -103,6 +103,131 @@ def test_stock_placeholder_annotation_is_native_only(native_http, provider):
     assert ("defer_loading" in forwarded["tools"][0]) is (provider == "anthropic")
     assert forwarded["messages"] == body["messages"]
     assert forwarded["tools"][1] == body["tools"][1]
+
+
+@pytest.fixture
+def reviewed_native_http(native_http):
+    c = native_http
+    runtime = native_preflight._REVIEWED_RUNTIME
+    c.cfg = replace(c.cfg, gateway_devin_native_version=runtime["native_version"],
+                    gateway_devin_adapter_revision=runtime["adapter_revision"],
+                    gateway_devin_model_map_digest=runtime["model_map_digest"])
+    c.gateway.cfg = c.cfg
+    c.runtime = dict(runtime)
+    bind(c, generation=1, **runtime)
+    c.key = native_key(c)
+    return c
+
+
+@pytest.mark.parametrize("change,code", [
+    ({"model": "PRIVATE_UNSUPPORTED_MODEL"}, "unsupported_model"),
+    ({"output_config": {"effort": "high"}}, "unsupported_output_control"),
+    ({"thinking": {"type": "enabled", "budget_tokens": 32000}}, "unsupported_thinking_control"),
+    ({"temperature": 1}, "unsupported_native_request"),
+    ({"context_management": {"edits": [{"type": "unknown"}]}}, "unsupported_context_control"),
+    ({"messages": [{"role": "assistant", "content": [{"type": "thinking",
+        "thinking": "PRIVATE_THINKING", "signature": "PRIVATE_SIGNATURE", "extra": True}]}]},
+     "unsupported_content"),
+    ({"messages": [{"role": "user", "content": [{"type": "tool_result",
+        "tool_use_id": "toolu_synthetic", "content": [{"type": "tool_reference",
+        "tool_name": "PRIVATE_TOOL"}]}]}]}, "unsupported_content"),
+    ({"messages": [{"role": [], "content": "PRIVATE_PROMPT"}]}, "invalid_messages_body"),
+    ({"tools": [{"name": "Read", "description": "PRIVATE_TOOL", "defer_loading": True,
+        "input_schema": {"type": "object"}}]}, "unsupported_tool_declaration"),
+])
+def test_reviewed_native_rejection_is_actionable_before_transport(
+        reviewed_native_http, change, code, caplog):
+    from tests.test_stock_native_request import stock_body
+
+    c = reviewed_native_http
+    body = {**stock_body(), **change}
+    before = copy.deepcopy(body)
+    with caplog.at_level("INFO"):
+        status, raw, headers = request(c, body)
+    error = json.loads(raw)["error"]
+    assert status == 400 and error["type"] == "invalid_request_error" and error["code"] == code
+    assert headers["x-should-retry"] == "false" and b"PRIVATE" not in raw
+    assert body == before and c.pool.attempts == [] and c.gateway.active == 0
+    assert [r.getMessage() for r in caplog.records if r.name == "ccfleetd.gateway"] == [
+        "Devin request rejected before execution: code=" + code]
+    assert "PRIVATE" not in caplog.text
+
+
+def test_reviewed_context_limit_keeps_claude_recovery_signal_without_dispatch(reviewed_native_http):
+    from ccfleet_agent import devin_native as native
+    from ccfleetd.gateway_providers import native_client_request
+    from tests.test_stock_native_request import stock_body
+
+    c = reviewed_native_http
+    body = stock_body()
+    size = len(native.native_context(native_client_request(body)).encode())
+    body["messages"][0]["content"] += "x" * (native.MAX_PROMPT - size + 1)
+    status, raw, headers = request(c, body)
+    error = json.loads(raw)["error"]
+    assert status == 400 and error["type"] == "invalid_request_error"
+    assert error["code"] == "native_context_limit" and error["message"].startswith("prompt is too long:")
+    assert headers["x-should-retry"] == "false" and c.pool.attempts == []
+
+
+@pytest.mark.parametrize("model", ["opus", "claude-opus-5-5"])
+def test_reviewed_supported_request_still_dispatches_unchanged(reviewed_native_http, model):
+    from ccfleetd.gateway_providers import native_client_request
+    from tests.test_stock_native_request import stock_body
+
+    c = reviewed_native_http
+    body = {**stock_body(), "model": model}
+    assert request(c, body)[0] == 200
+    assert c.pool.requests[0]["body"] == native_client_request(body)
+
+
+def test_unknown_native_profile_still_uses_existing_node_validation(native_http, monkeypatch):
+    from tests.test_stock_native_request import stock_body
+
+    c = native_http
+    monkeypatch.setattr(native_preflight.native, "validate_native_request",
+                        lambda *a, **k: pytest.fail("unknown profile preflight"))
+    assert request(c, {**stock_body(), "temperature": 1})[0] == 200
+    assert len(c.pool.attempts) == 1
+
+
+def test_reviewed_thinking_history_forwards_visible_read_continuation(reviewed_native_http):
+    from tests.test_stock_native_request import stock_body
+
+    c = reviewed_native_http
+    body = stock_body()
+    visible = {"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {"path": "visible"}}
+    result = {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_read", "content": "Visible local result"}
+    ]}
+    body["messages"] += [
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "PRIVATE_REASONING", "signature": "PRIVATE_SIGNATURE"},
+            visible,
+        ]}, result,
+    ]
+    before = copy.deepcopy(body)
+    assert request(c, body)[0] == 200 and body == before
+    forwarded = c.pool.requests[0]["body"]
+    assert forwarded["messages"] == [body["messages"][0],
+                                       {"role": "assistant", "content": [visible]}, result]
+    assert "PRIVATE" not in json.dumps(forwarded)
+
+
+@pytest.mark.parametrize("provider", ["devin", "anthropic"])
+def test_private_history_is_unchanged_for_unknown_profile_or_anthropic(native_http, provider):
+    from tests.test_stock_native_request import stock_body
+
+    c = native_http
+    if provider == "anthropic":
+        c.store.move_slot("s1", slots.ACTIVE)
+        c.key = c.store.create_gateway_key("a1", "Anthropic endpoint", ["s1"], now=c.now)
+    body = stock_body()
+    history = {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Synthetic private reasoning", "signature": "Synthetic"}
+    ]}
+    body["messages"].append(history)
+    assert request(c, body)[0] == 200
+    assert c.pool.requests[0]["body"]["messages"] == body["messages"]
 
 
 def test_native_status_is_model_free_private_and_cache_bound_to_key_generation(native_http):
