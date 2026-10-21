@@ -33,6 +33,8 @@ def test_public_model_map_digest_keeps_its_validation_contract(scenario, monkeyp
 
 def test_actual_collector_entrypoint_still_validates_on_every_authorization(scenario, monkeypatch):
     validations = []
+    authorizations = []
+    collect = account.collect_readiness
 
     def validate(self):
         validations.append(self)
@@ -42,8 +44,21 @@ def test_actual_collector_entrypoint_still_validates_on_every_authorization(scen
         scenario.config.validate()
         return scenario.config
 
+    def collect_with_observed_authorization(*args, **options):
+        authorize = options["authorize"]
+
+        def authorized(binding):
+            before = len(validations)
+            allowed = authorize(binding)
+            assert validations[before:] == [scenario.config]
+            authorizations.append(binding)
+            return allowed
+
+        return collect(*args, **{**options, "authorize": authorized})
+
     monkeypatch.setattr(native.NativeConfig, "validate", validate)
     monkeypatch.setattr(native.NativeConfig, "load", classmethod(load_config))
+    monkeypatch.setattr(account, "collect_readiness", collect_with_observed_authorization)
     monkeypatch.setattr(account.SubjectSourceProfile, "load", classmethod(
         lambda cls, path, **kwargs: scenario.profile))
     output = io.StringIO()
@@ -51,7 +66,7 @@ def test_actual_collector_entrypoint_still_validates_on_every_authorization(scen
         registration(scenario)).encode()), stdout=output, popen_factory=scenario.popen) == 0
     value = json.loads(output.getvalue())
     assert value["reason"] == "verified" and value["cleanup_confirmed"]
-    assert len(validations) == 9  # Load + two direct validations + six authorizations.
+    assert authorizations and all(binding == scenario.binding for binding in authorizations)
     assert len(scenario.calls) == 2
 
 

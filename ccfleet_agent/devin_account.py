@@ -45,12 +45,19 @@ else:
 
 MAX_STATUS_BYTES = 64 * 1024
 MAX_STATUS_LINES = 128
-# One shared budget covers setup and both model-free metadata commands. The
-# parent also allows imports, final pin validation, and child-group cleanup.
+# One shared budget covers setup, both fixed metadata commands, and the one
+# known status retry. The parent also covers imports, final pins, and cleanup.
 METADATA_ACQUISITION_TIMEOUT_S = 60
 METADATA_CHILD_TIMEOUT_S = 90
 METADATA_TERMINATE_GRACE_S = 0.05
 METADATA_PROCESS_EXIT_TIMEOUT_S = 2
+# Pinned native 3000.11.92 emits this failed identity-lookup marker. It is
+# never a valid identity field; only another complete fresh acquisition may
+# recover from it, once, within the original collection deadline.
+_RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC = (
+    "native_status_unknown_label_sha256_"
+    "1624168fbf676128b34e6f7bd2292e480f0d7ccfad73ad5da789a57233c86ecf"
+)
 _SUBJECT = re.compile(r"[A-Za-z0-9_-]{8,128}\Z")
 _HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}\Z")
 _LABELS = frozenset({"Credentials", "File", "API server", "Devin webapp", "Devin API", "User",
@@ -369,24 +376,91 @@ def _fresh_home(state, credential):
         raise
 
 
+def _in_memory_process(process):
+    return isinstance(process.stdout, io.BytesIO) and isinstance(process.stderr, io.BytesIO)
+
+
+def _completion_supported():
+    return (sys.platform.startswith("linux")
+            and all(hasattr(os, name) for name in (
+                "waitid", "WNOWAIT", "WNOHANG", "P_PID", "WEXITED", "CLD_EXITED",
+                "CLD_KILLED", "CLD_DUMPED"))
+            and signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL)
+
+
+def _completion_status(process):
+    """Observe our unreaped child; a missing child must never justify a PGID kill."""
+    if (not _completion_supported() or type(process.pid) is not int or process.pid <= 0):
+        raise AccountError("native_metadata_cleanup_unconfirmed")
+    try:
+        result = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except InterruptedError:
+        raise
+    except (OSError, ValueError):
+        raise AccountError("native_metadata_cleanup_unconfirmed") from None
+    if result is not None and (
+            result.si_pid != process.pid
+            or result.si_code not in {os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED}):
+        raise AccountError("native_metadata_cleanup_unconfirmed")
+    return result
+
+
+def _wait_for_completion(process, *, deadline, permitted, cancelled, clock):
+    """Pipe EOF is not process completion. Keep the leader unreaped for cleanup."""
+    while True:
+        if cancelled.is_set() or permitted() is not True:
+            raise AccountError("metadata_authorization_revoked")
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise AccountError("native_metadata_timeout")
+        # Explicit in-memory test peers have no OS child; their injected
+        # cleanup supplies the exit code, as it does for the capture path.
+        if _in_memory_process(process):
+            return
+        try:
+            if _completion_status(process) is not None:
+                return
+        except InterruptedError:
+            continue
+        cancelled.wait(min(0.01, remaining))
+
+
 def _stop_group(process):
     """Keep the leader unreaped until its owned group has been terminated."""
+    observed = None
     try:
         try:
+            if not _in_memory_process(process):
+                # A concurrent reaper or SIGCHLD policy can release the PID.
+                # Never signal a group after losing ownership of its leader.
+                observed = _completion_status(process)
             if os.getpgid(process.pid) != process.pid:
                 return False
             os.killpg(process.pid, signal.SIGTERM)
             time.sleep(METADATA_TERMINATE_GRACE_S)
+            if not _in_memory_process(process):
+                observed = _completion_status(process) or observed
+                if os.getpgid(process.pid) != process.pid:
+                    return False
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
-            pass
-        except (OSError, ValueError):
+            if not _in_memory_process(process):
+                try:
+                    _completion_status(process)
+                except (OSError, AccountError):
+                    return False
+        except (OSError, ValueError, AccountError):
             return False
         try:
             process.wait(timeout=METADATA_PROCESS_EXIT_TIMEOUT_S)
         except (OSError, subprocess.TimeoutExpired):
             return False
+        if observed is not None:
+            expected = (observed.si_status if observed.si_code == os.CLD_EXITED
+                        else -observed.si_status)
+            if process.returncode != expected:
+                return False
         return process.returncode is not None
     finally:
         for stream in (process.stdout, process.stderr):
@@ -396,7 +470,7 @@ def _stop_group(process):
 
 def _capture(process, *, maximum, deadline, permitted, cancelled, clock):
     """Bound stdout/stderr; only explicit in-memory fake streams skip selectors."""
-    if isinstance(process.stdout, io.BytesIO) and isinstance(process.stderr, io.BytesIO):
+    if _in_memory_process(process):
         if cancelled.is_set() or permitted() is not True or clock() >= deadline:
             raise AccountError("metadata_authorization_or_timeout")
         raw, error = process.stdout.read(maximum + 1), process.stderr.read(maximum + 1)
@@ -509,23 +583,26 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
         if popen_factory is not None:
             if not callable(popen_factory):
                 raise AccountError("invalid_metadata_factory")
+            if popen_factory is subprocess.Popen and not _completion_supported():
+                raise AccountError("native_metadata_unverified")
             original_path = original_home / ".local/share/devin/credentials.toml"
             credential = _credential(original_path)
             validate_native_credentials(credential, expected_api_origin=source["api_origin"])
             credential_sha = hashlib.sha256(credential).hexdigest()
-            home = _fresh_home(state, credential)
-            environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
-                "TERM": "dumb", "NO_COLOR": "1", "XDG_CONFIG_HOME": str(home / ".config"),
-                "XDG_DATA_HOME": str(home / ".local/share"), "XDG_CACHE_HOME": str(home / ".cache")}
-            try:
-                environment.update(native.egress.protected_native_environment())
-            except native.egress.EgressError:
-                raise AccountError("native_egress_unavailable") from None
-            outputs = []
-            for arguments, limit, rejected in (
-                    (["auth", "status"], MAX_STATUS_BYTES, "native_auth_status_rejected"),
-                    (["models", "list", "--format", "json"], 2 * 1024 * 1024,
-                     "native_models_list_rejected")):
+
+            def fresh_environment():
+                environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+                    "TERM": "dumb", "NO_COLOR": "1", "XDG_CONFIG_HOME": str(home / ".config"),
+                    "XDG_DATA_HOME": str(home / ".local/share"),
+                    "XDG_CACHE_HOME": str(home / ".cache")}
+                try:
+                    environment.update(native.egress.protected_native_environment())
+                except native.egress.EgressError:
+                    raise AccountError("native_egress_unavailable") from None
+                return environment
+
+            def metadata(arguments, limit, rejected):
+                nonlocal process, cleanup
                 if not permitted():
                     raise AccountError("metadata_authorization_revoked")
                 if clock() >= deadline:
@@ -535,15 +612,49 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
                     cwd=str(home), env=environment, start_new_session=True, bufsize=0)
                 raw = _capture(process, maximum=limit, deadline=deadline,
                                permitted=permitted, cancelled=cancelled, clock=clock)
+                _wait_for_completion(process, deadline=deadline, permitted=permitted,
+                                     cancelled=cancelled, clock=clock)
                 cleanup = _stop_group(process)
                 if not cleanup:
                     raise AccountError("native_metadata_cleanup_unconfirmed")
-                if process.returncode != 0:
+                exit_code = process.returncode
+                process = None  # Confirmed cleanup reaped it; never signal this PID again.
+                if exit_code != 0:
                     raise AccountError(rejected)
-                process = None
-                outputs.append(raw)
-            subject = parse_auth_status(outputs[0], expected_api_origin=source["api_origin"])
-            _models_present(outputs[1], data["model_uid"])
+                return raw
+
+            home = _fresh_home(state, credential)
+            environment = fresh_environment()
+            for attempt in range(2):
+                raw = metadata(["auth", "status"], MAX_STATUS_BYTES, "native_auth_status_rejected")
+                try:
+                    subject = parse_auth_status(raw, expected_api_origin=source["api_origin"])
+                except AccountError as error:
+                    if (attempt != 0 or error.code != "native_status_unknown_label"
+                            or error.diagnostic_code != _RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC):
+                        raise
+                else:
+                    break
+                # Discard the failed response and all native cache/state.
+                # Recheck authority and the original credential before a
+                # second isolated status command; no prior GOOD is reused.
+                raw = None
+                validate()
+                if hashlib.sha256(_credential(original_path)).hexdigest() != credential_sha:
+                    raise AccountError("native_account_changed_during_verification")
+                if clock() >= deadline:
+                    raise AccountError("native_metadata_timeout")
+                try:
+                    shutil.rmtree(home)
+                except OSError:
+                    cleanup = False
+                    raise AccountError("native_metadata_cleanup_unconfirmed") from None
+                home = None
+                home = _fresh_home(state, credential)
+                environment = fresh_environment()
+            catalog = metadata(["models", "list", "--format", "json"], 2 * 1024 * 1024,
+                               "native_models_list_rejected")
+            _models_present(catalog, data["model_uid"])
             validate()
             if hashlib.sha256(_credential(original_path)).hexdigest() != credential_sha:
                 raise AccountError("native_account_changed_during_verification")

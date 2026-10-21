@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import types
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -337,6 +338,128 @@ def test_metadata_commands_share_sixty_seconds_and_two_twenty_second_reads_pass(
     assert not list(scenario.state.iterdir())
 
 
+def lookup_unavailable_status():
+    return ("Logged in (via Devin).\nCredentials:\nAPI server: " + ORIGIN
+            + "\nUser / team info: synthetic lookup failure\n").encode()
+
+
+def test_known_lookup_marker_remains_invalid_but_one_fresh_retry_can_verify(scenario):
+    marker = b"User / team info: synthetic lookup failure\n"
+    first = status(**{"User ID": "another_synthetic_subject"}) + marker
+    first += b"Unexpected trailing field: private-first-value\n"
+    with pytest.raises(account.AccountError) as rejected:
+        account.parse_auth_status(first, expected_api_origin=ORIGIN)
+    assert rejected.value.diagnostic_code == account._RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC
+
+    catalog = scenario.outputs[1]
+    scenario.outputs[:] = [first, status(), catalog]
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "verified" and result.report["identity_verified"]
+    assert result.report["account_fp"] == account.parse_auth_status(
+        status(), expected_api_origin=ORIGIN).fingerprint()
+    assert [call[0][1:] for call in scenario.calls] == [
+        ["auth", "status"], ["auth", "status"], ["models", "list", "--format", "json"]]
+    homes = [Path(call[1]["env"]["HOME"]) for call in scenario.calls]
+    assert homes[0] != homes[1] == homes[2]
+    assert len(scenario.stopped) == 3 and not list(scenario.state.iterdir())
+
+
+def test_repeated_lookup_failure_stops_after_two_status_commands_without_models(scenario):
+    scenario.outputs[:] = [lookup_unavailable_status(), lookup_unavailable_status(), status()]
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == account._RETRYABLE_AUTH_LOOKUP_DIAGNOSTIC
+    assert [call[0][1:] for call in scenario.calls] == [["auth", "status"]] * 2
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.stopped) == 2 and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("first,reason", [
+    (status(**{"API server": "https://other.example.test"}), "native_status_origin_mismatch"),
+    (status() + b"User ID: duplicate_subject\n", "native_status_duplicate_label_user_id"),
+    (status(**{"User ID": "private@example.test"}), "native_status_subject_invalid"),
+    (status() + b"Other field: private\n", "native_status_unknown_label_sha256_"
+     + hashlib.sha256(b"Other field").hexdigest()),
+])
+def test_identity_or_unknown_shape_failure_before_marker_never_retries(scenario, first, reason):
+    scenario.outputs[0] = first + b"User / team info: synthetic lookup failure\n"
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == reason and len(scenario.calls) == 1
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert result.cleanup_confirmed and not list(scenario.state.iterdir())
+
+
+def test_lookup_marker_from_nonzero_command_is_not_retryable(scenario):
+    scenario.outputs[0] = lookup_unavailable_status()
+    scenario.flags["returncode"] = 1
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_auth_status_rejected" and len(scenario.calls) == 1
+    assert len(scenario.stopped) == 1  # Confirmed cleanup is never repeated on a reaped PID.
+    assert not result.report["identity_verified"] and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+def test_lookup_retry_never_resets_the_shared_deadline(scenario, monkeypatch):
+    catalog = scenario.outputs[1]
+    scenario.outputs[:] = [lookup_unavailable_status(), status(), catalog]
+    now, deadlines = [0.0], []
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        now[0] += 20
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0])
+    assert deadlines == [60, 60, 60] and now[0] == 60
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.stopped) == 3 and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("change", ["credential", "pins", "revoke", "cancel"])
+def test_lookup_retry_rechecks_original_credential_pins_and_authorization(
+        scenario, monkeypatch, change):
+    scenario.outputs[0] = lookup_unavailable_status()
+    cancelled = threading.Event()
+    stop = account._stop_group
+
+    def changed(process):
+        clean = stop(process)
+        if change == "credential":
+            scenario.credentials.write_bytes(b"changed-synthetic-credential")
+        elif change == "pins":
+            scenario.source["native_sha256"] = "f" * 64
+        elif change == "revoke":
+            scenario.flags["authorized"] = False
+        else:
+            cancelled.set()
+        return clean
+
+    monkeypatch.setattr(account, "_stop_group", changed)
+    result = scenario.run(popen_factory=scenario.popen, cancel_event=cancelled)
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.calls) == 1 and result.cleanup_confirmed
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("cleanup", ["process", "artifacts"])
+def test_lookup_retry_requires_confirmed_process_and_artifact_cleanup(
+        scenario, monkeypatch, cleanup):
+    scenario.outputs[0] = lookup_unavailable_status()
+    if cleanup == "process":
+        scenario.flags["cleanup"] = False
+    else:
+        def refuse_removal(path):
+            raise OSError("synthetic artifact removal failure")
+        monkeypatch.setattr(account.shutil, "rmtree", refuse_removal)
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_metadata_cleanup_unconfirmed"
+    assert not result.report["identity_verified"] and not result.cleanup_confirmed
+    assert len(scenario.calls) == 1 and len(list(scenario.state.iterdir())) == 1
+
+
 @pytest.mark.parametrize("cleanup", [False, True])
 def test_metadata_exhausted_shared_budget_cleans_or_retains_quarantine(
         scenario, monkeypatch, cleanup):
@@ -519,7 +642,7 @@ def test_metadata_rejection_names_only_the_failed_command(scenario, phase, reaso
 def test_status_shape_failure_keeps_identity_closed_and_private(scenario, extra, reason):
     scenario.outputs[0] += extra
     result = scenario.run(popen_factory=scenario.popen)
-    assert result.reason == reason and len(scenario.calls) == 2
+    assert result.reason == reason and len(scenario.calls) == 1
     assert not result.report["identity_verified"] and result.report["account_fp"] is None
     assert result.credential_sha256 is None and result.cleanup_confirmed
     assert not list(scenario.state.iterdir())
@@ -638,6 +761,222 @@ def test_real_pipe_capture_is_bounded_without_launching_process():
                     os.close(descriptor)
                 except OSError:
                     pass
+
+
+@pytest.fixture
+def completion_peer(monkeypatch):
+    """Exercise OS-child guards on every host without launching a process."""
+    events = []
+    process = types.SimpleNamespace(pid=777, returncode=None,
+        stdout=types.SimpleNamespace(close=lambda: events.append("stdout_closed")),
+        stderr=types.SimpleNamespace(close=lambda: events.append("stderr_closed")))
+    monkeypatch.setattr(account.sys, "platform", "linux")
+    monkeypatch.setattr(account.signal, "getsignal", lambda _: account.signal.SIG_DFL)
+    for index, name in enumerate(("P_PID", "WEXITED", "WNOHANG", "WNOWAIT", "CLD_EXITED",
+                                  "CLD_KILLED", "CLD_DUMPED"), 1):
+        monkeypatch.setattr(os, name, getattr(os, name, index), raising=False)
+    status = types.SimpleNamespace(si_pid=process.pid, si_code=os.CLD_EXITED, si_status=0)
+
+    def observe(kind, pid, flags):
+        assert kind == os.P_PID and pid == process.pid
+        assert flags == os.WEXITED | os.WNOHANG | os.WNOWAIT
+        events.append("observe_without_reaping")
+        return status
+
+    def reap(**kwargs):
+        events.append("reap")
+        process.returncode = 0
+
+    process.wait = reap
+    monkeypatch.setattr(os, "waitid", observe, raising=False)
+    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: events.append(sig))
+    monkeypatch.setattr(account.time, "sleep", lambda _: None)
+    return types.SimpleNamespace(**locals())
+
+
+def test_completion_wait_observes_natural_exit_before_owned_group_signals_and_reaping(completion_peer):
+    s = completion_peer
+    account._wait_for_completion(s.process, deadline=1, permitted=lambda: True,
+                                cancelled=threading.Event(), clock=lambda: 0)
+    assert s.events == ["observe_without_reaping"] and s.process.returncode is None
+    assert account._stop_group(s.process)
+    assert s.events == ["observe_without_reaping", "observe_without_reaping",
+                        account.signal.SIGTERM, "observe_without_reaping", account.signal.SIGKILL, "reap",
+                        "stdout_closed", "stderr_closed"]
+
+
+def test_interrupted_completion_observation_rechecks_authorization(completion_peer, monkeypatch):
+    s = completion_peer
+    authorized = [True]
+
+    def interrupted(*args):
+        authorized[0] = False
+        raise InterruptedError
+
+    monkeypatch.setattr(os, "waitid", interrupted)
+    with pytest.raises(account.AccountError, match="metadata_authorization_revoked"):
+        account._wait_for_completion(s.process, deadline=1, permitted=lambda: authorized[0],
+                                    cancelled=threading.Event(), clock=lambda: 0)
+    assert not s.events and s.process.returncode is None
+
+
+@pytest.mark.parametrize("failure", ["lost", "foreign-result", "unsupported", "sigchld-reaper"])
+def test_completion_ownership_failure_never_signals_or_reaps_numeric_pid(
+    completion_peer, monkeypatch, failure
+):
+    s = completion_peer
+    if failure == "lost":
+        monkeypatch.setattr(os, "waitid", lambda *_: (_ for _ in ()).throw(ChildProcessError()))
+    elif failure == "foreign-result":
+        s.status.si_pid += 1
+    elif failure == "unsupported":
+        monkeypatch.setattr(account.sys, "platform", "unsupported")
+    else:
+        monkeypatch.setattr(account.signal, "getsignal", lambda _: account.signal.SIG_IGN)
+    monkeypatch.setattr(os, "getpgid", lambda *_: pytest.fail("lost child PGID queried"))
+    with pytest.raises(account.AccountError, match="native_metadata_cleanup_unconfirmed"):
+        account._wait_for_completion(s.process, deadline=1, permitted=lambda: True,
+                                    cancelled=threading.Event(), clock=lambda: 0)
+    assert not account._stop_group(s.process)
+    assert s.events[-2:] == ["stdout_closed", "stderr_closed"]
+    assert all(event in {"observe_without_reaping", "stdout_closed", "stderr_closed"}
+               for event in s.events)
+    assert s.process.returncode is None
+
+
+def test_lost_ownership_during_termination_grace_prevents_second_signal(completion_peer, monkeypatch):
+    s = completion_peer
+    calls = []
+
+    def lose_after_term(*args):
+        calls.append(args)
+        if len(calls) == 2:
+            raise ChildProcessError
+        return s.status
+
+    monkeypatch.setattr(os, "waitid", lose_after_term)
+    assert not account._stop_group(s.process)
+    assert s.events == [account.signal.SIGTERM, "stdout_closed", "stderr_closed"]
+    assert s.process.returncode is None
+
+
+def test_reap_result_must_match_observed_natural_exit(completion_peer):
+    s = completion_peer
+    s.status.si_status = 7  # A later reaper must not turn this into apparent exit0.
+    assert not account._stop_group(s.process)
+    assert s.process.returncode == 0 and s.events[-2:] == ["stdout_closed", "stderr_closed"]
+
+
+def test_unsupported_native_completion_refuses_before_credentials_or_spawn(scenario, monkeypatch):
+    monkeypatch.setattr(account, "_completion_supported", lambda: False)
+    monkeypatch.setattr(account, "_credential", lambda *_: pytest.fail("unsupported read credentials"))
+    monkeypatch.setattr(account.subprocess, "Popen", lambda *_a, **_k: pytest.fail("unsupported spawned"))
+    result = scenario.run(popen_factory=account.subprocess.Popen)
+    assert result.reason == "native_metadata_unverified" and result.cleanup_confirmed
+    assert not result.report["identity_verified"] and not scenario.calls
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("change", ["deadline", "cancel", "revoke"])
+def test_waiting_for_completion_never_mints_good_after_shared_deadline_or_revocation(
+    scenario, monkeypatch, change
+):
+    now = [0]
+    cancelled = threading.Event()
+    original = account._wait_for_completion
+
+    def wait_then_change(process, **kwargs):
+        assert kwargs["deadline"] == 60
+        if change == "deadline":
+            now[0] = 60
+        elif change == "cancel":
+            cancelled.set()
+        else:
+            scenario.flags["authorized"] = False
+        return original(process, **kwargs)
+
+    monkeypatch.setattr(account, "_wait_for_completion", wait_then_change)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0], cancel_event=cancelled)
+    assert result.reason == ("native_metadata_timeout" if change == "deadline"
+                             else "metadata_authorization_revoked")
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.calls) == len(scenario.stopped) == 1
+    assert result.cleanup_confirmed and not list(scenario.state.iterdir())
+
+
+def test_nonzero_natural_exit_is_rejected_without_cleaning_an_already_reaped_leader(scenario):
+    scenario.flags["returncode"] = -15
+    result = scenario.run(popen_factory=scenario.popen)
+    assert result.reason == "native_auth_status_rejected"
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.calls) == len(scenario.stopped) == 1
+    assert result.cleanup_confirmed and not list(scenario.state.iterdir())
+
+
+@pytest.mark.skipif(not account._completion_supported(), reason="Linux waitid/WNOWAIT required")
+def test_real_complete_catalogue_before_zero_exit_keeps_descendant_cleanup():
+    script = r'''
+import json,os,signal,subprocess,sys,time
+child=subprocess.Popen([sys.executable,'-I','-B','-c',
+    'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)'],
+    stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+raw=json.dumps({'families':[{'variants':[{'model_uid':'synthetic-model'}]}],
+                'synthetic_child_pid':child.pid}).encode()
+os.write(1,raw);os.close(1);os.close(2);time.sleep(0.1)
+'''
+    process = subprocess.Popen([sys.executable, "-I", "-B", "-c", script],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True, bufsize=0)
+    stopped = False
+    try:
+        deadline = time.monotonic() + 3
+        raw = account._capture(process, maximum=4096, deadline=deadline, permitted=lambda: True,
+                               cancelled=threading.Event(), clock=time.monotonic)
+        account._models_present(raw, "synthetic-model")
+        account._wait_for_completion(process, deadline=deadline, permitted=lambda: True,
+                                     cancelled=threading.Event(), clock=time.monotonic)
+        assert process.returncode is None  # WNOWAIT kept the owned leader unreaped.
+        assert account._stop_group(process)
+        stopped = True
+        assert process.returncode == 0
+        descendant = Path(f"/proc/{json.loads(raw)['synthetic_child_pid']}/stat")
+        limit = time.monotonic() + 2
+        while descendant.exists() and time.monotonic() < limit:
+            try:
+                state = descendant.read_text().rsplit(") ", 1)[1].split()[0]
+            except (FileNotFoundError, ProcessLookupError):
+                break
+            if state in {"Z", "X"}:
+                break
+            time.sleep(0.01)
+        else:
+            assert not descendant.exists(), "owned synthetic descendant is still running"
+    finally:
+        if not stopped:
+            account._stop_group(process)
+
+
+@pytest.mark.parametrize("change", ["deadline", "cancel"])
+@pytest.mark.skipif(not account._completion_supported(), reason="Linux waitid/WNOWAIT required")
+def test_real_closed_pipes_but_running_leader_times_out_or_cancels_and_is_cleaned(change):
+    script = "import os,time;os.write(1,b'{}');os.close(1);os.close(2);time.sleep(30)"
+    process = subprocess.Popen([sys.executable, "-I", "-B", "-c", script],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True, bufsize=0)
+    cancelled = threading.Event()
+    try:
+        account._capture(process, maximum=10, deadline=time.monotonic() + 3,
+                         permitted=lambda: True, cancelled=cancelled, clock=time.monotonic)
+        if change == "cancel":
+            cancelled.set()
+        with pytest.raises(account.AccountError, match=("native_metadata_timeout"
+                           if change == "deadline" else "metadata_authorization_revoked")):
+            account._wait_for_completion(process, deadline=time.monotonic() + 0.05,
+                permitted=lambda: True, cancelled=cancelled, clock=time.monotonic)
+    finally:
+        assert account._stop_group(process)
+    assert process.returncode != 0
 
 
 def test_group_cleanup_signals_before_reaping_and_closes_private_output(monkeypatch):
