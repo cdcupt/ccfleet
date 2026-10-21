@@ -261,6 +261,7 @@ def test_it_installs_the_agent_the_scripts_and_the_timer(tmp_path, sandbox):
     for rel in ("ccfleet_agent/__init__.py", "ccfleet_agent/agent.py",
                 "ccfleet_agent/machine.py", "ccfleet_agent/local_relay.py",
                 "ccfleet_agent/model_usage.py", "ccfleet_agent/relay_metrics.py",
+                "ccfleet_agent/network_traffic.py",
                 "ccfleet_agent/inference_policy.py",
                 "ccfleet_agent/egress.py",
                 "ccfleet_agent/compatibility.py", "ccfleet_agent/inference_client.py",

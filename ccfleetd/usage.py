@@ -23,6 +23,8 @@ TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens",
                 "cache_creation_input_tokens")
 COUNTERS = ("usage_eligible_messages", "usage_samples", "model_eligible_messages",
             "model_samples", "priced_samples", "cache_read_samples", "cache_creation_samples")
+MODEL_COVERAGE_FIELDS = ("identified_model_samples", "unknown_model_samples",
+                         "unrecorded_model_samples")
 PRICING = {"date": model_usage.PRICING_DATE, "url": model_usage.PRICING_URL,
            "models_url": model_usage.MODELS_URL, "basis": "standard_global_api_equivalent",
            "cache_write_ttl_assumption": "5m", "haiku_5_5_tier": "unpriced",
@@ -39,6 +41,7 @@ REFERENCE_PRICING = {"model": REFERENCE_MODEL, "date": "2026-10-20",
 def _empty(start):
     return {"state": "no_data", "window_days": WINDOW_DAYS, "window_start_day": start,
             "eligible_slots": 0, "reporting_slots": 0, **dict.fromkeys(COUNTERS, 0),
+            **dict.fromkeys(MODEL_COVERAGE_FIELDS, 0), "model_state": "unknown",
             "unpriced_samples": 0, "tokens": None, "token_state": "unknown",
             "priced_tokens": None, "priced_token_state": "unknown",
             "unpriced_tokens": None, "unpriced_token_state": "unknown",
@@ -182,6 +185,12 @@ def _token_partition(data, priced, token_state):
 
 def _entry(data, handle=None):
     models = [_model_row(key, row) for key, row in sorted(data["models"].items())]
+    identified = _sum(row["samples"] for row in models if row["model"] != "other")
+    unknown = _sum((data["model_samples"], -identified))
+    unrecorded = _sum((data["usage_samples"], -data["model_samples"]))
+    model_state = ("unknown" if not identified else "complete"
+                   if identified == data["usage_samples"] == data["usage_eligible_messages"]
+                   else "partial")
     priced = [row for row in models if row["estimated_usd"] is not None]
     priced_samples = _sum(row["samples"] for row in priced)
     values = {key: data[key] for key in COUNTERS}
@@ -203,6 +212,8 @@ def _entry(data, handle=None):
                 and data["model_samples"] == data["model_eligible_messages"]
                 and all(row["cost_state"] == "complete" for row in priced))
     return {"rank": None, "masked_handle": _masked_handle(handle), **values,
+            "identified_model_samples": identified, "unknown_model_samples": unknown,
+            "unrecorded_model_samples": unrecorded, "model_state": model_state,
             "tokens": tokens, "token_state": token_state,
             "priced_tokens": priced_tokens, "priced_token_state": priced_state,
             "unpriced_tokens": unpriced_tokens, "unpriced_token_state": unpriced_state,
@@ -248,7 +259,8 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
             _add(group, report)
             _add(all_data, report)
         totals = _entry(all_data)
-        for key in (*COUNTERS, "unpriced_samples", "tokens", "token_state",
+        for key in (*COUNTERS, *MODEL_COVERAGE_FIELDS, "model_state",
+                    "unpriced_samples", "tokens", "token_state",
                     "priced_tokens", "priced_token_state", "unpriced_tokens",
                     "unpriced_token_state",
                     "reference_tokens", "reference_estimated_usd", "reference_cost_state",

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh CC Fleet host network snapshot every 15 seconds
+
+[Timer]
+OnBootSec=10s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=ccfleet-network-traffic.service
+
+[Install]
+WantedBy=timers.target

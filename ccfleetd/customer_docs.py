@@ -27,13 +27,13 @@ DOCS_UPDATED = "2026-10-20"
 
 DOCS_CSS = """
 /* A docs page's title block. */
-.dochead{margin:4px 0 26px}
+.dochead{margin:4px 0 32px}
 .dochead .lead{margin-bottom:0}
 .lead{font-size:18px;line-height:1.6;margin:14px 0 26px;max-width:64ch}
 
 /* The landing page: what it is and a way in, then what you get, then how to buy. */
-.hero{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:48px;
-align-items:center;padding:18px 0 8px}
+.hero{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:64px;
+align-items:center;padding:28px 0 16px}
 .eyebrow{display:inline-flex;font-size:13px;font-weight:650;color:var(--acc);
 background:var(--acc-soft);border:1px solid var(--acc-line);border-radius:999px;
 padding:4px 12px;margin:0 0 18px}
@@ -43,8 +43,8 @@ padding:4px 12px;margin:0 0 18px}
 .hero-top .eyebrow{margin:0}
 .st-pill{font-size:13px;padding:4px 12px 4px 10px;text-decoration:none;white-space:nowrap}
 .st-pill:hover{border-color:currentColor}
-.hero h1{font-size:clamp(34px,4.6vw,54px);line-height:1.05;letter-spacing:-.034em;
-font-weight:780}
+.hero h1{font-size:clamp(36px,4.7vw,58px);line-height:1.08;letter-spacing:-.045em;
+font-weight:760}
 .hero .lead{font-size:18.5px;margin:20px 0 28px}
 .cta-row{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 14px}
 .hero-demo{margin:0}
@@ -60,13 +60,13 @@ padding:16px 20px;border-bottom:1px solid var(--rule-soft)}
 .demo-usage{padding:14px 16px 12px;border-radius:12px;background:var(--inset);
 border:1px solid var(--rule-soft)}
 .hero-demo figcaption{font-size:13px;color:var(--muted);margin:12px 4px 0;text-align:center}
-.band{margin:56px 0 0}
+.band{margin:64px 0 0}
 .band>h2{font-size:26px;letter-spacing:-.024em;margin:0 0 8px}
 .band-lead{font-size:16px;color:var(--muted);margin:0 0 22px;max-width:64ch}
-.features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
 .feature{background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
-padding:20px;box-shadow:var(--shadow)}
-.feature h3{margin:14px 0 6px}
+padding:24px;box-shadow:var(--shadow)}
+.feature h3{margin:18px 0 8px;font-size:17px}
 .feature p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.55}
 svg.icon{display:block;width:42px;height:42px;padding:9px;border-radius:12px;
 background:var(--acc-soft);color:var(--acc);fill:none;stroke:currentColor;stroke-width:1.7;
@@ -106,7 +106,7 @@ font-size:.88em;font-weight:600;line-height:1.55;background:var(--panel);
 box-shadow:0 1px 0 var(--rule);white-space:nowrap}
 
 /* Document pages: each section a card, the text at a readable width. */
-.doc .card,.how .card{padding:6px 24px 20px}
+.doc .card,.how .card{padding:8px 28px 24px}
 .doc .card>h2:first-child,.how .card>h2:first-child{margin-top:20px}
 .card h3{margin:16px 0 6px}
 .card[id]{scroll-margin-top:110px}
@@ -130,18 +130,27 @@ border-radius:var(--radius);background:var(--acc-soft)}
 .technical-overview p{margin:0;max-width:66ch;color:var(--muted);font-size:14.5px}
 .technical-overview .technical-links{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px}
 .technical-overview .technical-links a{font-weight:600;font-size:14px}
-.routing-details{overflow:hidden}
-.doc .routing-details,.how .routing-details{padding:0}
-.routing-details>summary{cursor:pointer;list-style:none;display:flex;align-items:center;
-gap:16px;padding:20px 24px;font-weight:650;font-size:16px;line-height:1.5}
-.routing-details>summary::-webkit-details-marker{display:none}
-.routing-details>summary::after{content:'+';margin-left:auto;flex:none;color:var(--acc);
-font:500 24px/1 var(--mono)}
-.routing-details[open]>summary::after{content:'−'}
-.routing-details>summary:hover{background:var(--inset)}
-.routing-details>summary:focus-visible{outline:3px solid var(--acc);outline-offset:-4px}
-.routing-details[open]>summary{border-bottom:1px solid var(--rule)}
-.routing-details .routing-guide{padding:4px 24px 22px;min-width:0}
+.doc-disclosure{overflow:hidden;border:1px solid var(--rule);border-radius:12px;
+background:var(--panel);margin:18px 0;min-width:0}
+.doc .doc-disclosure,.how .doc-disclosure{padding:0}
+.doc-disclosure>summary{cursor:pointer;list-style:none;display:flex;align-items:center;
+gap:16px;padding:20px 24px;font-weight:650;font-size:15px;line-height:1.6;color:var(--ink)}
+.doc-disclosure>summary::-webkit-details-marker{display:none}
+.doc-disclosure>summary::marker{content:''}
+.doc-disclosure>summary::after{content:'+';margin-left:auto;flex:none;color:var(--acc);
+font:400 22px/1 var(--mono)}
+.doc-disclosure[open]>summary::after{content:'−'}
+.doc-disclosure>summary:hover{background:var(--inset)}
+.doc-disclosure>summary:focus-visible{outline:3px solid var(--acc);outline-offset:-4px}
+.doc-disclosure[open]>summary{border-bottom:1px solid var(--rule-soft);background:var(--inset)}
+.doc-disclosure>.disclosure-body,.doc-disclosure>.routing-guide{
+padding:4px 24px 24px;min-width:0}
+.doc-disclosure .disclosure-body p{max-width:76ch;line-height:1.75}
+.doc-disclosure .disclosure-body h2{font-size:20px;margin:24px 0 12px}
+.doc-disclosure .disclosure-body h3{font-size:16px;margin:24px 0 8px}
+.how-text>.doc-disclosure{margin:0}
+#rental-pricing>.doc-disclosure{margin:20px 0 0;box-shadow:none}
+.routing-details .routing-guide{padding-top:4px}
 .routing-details .routing-guide h2{font-size:20px;margin:20px 0 10px}
 .routing-details .connection-choices{grid-template-columns:minmax(0,1fr);gap:10px}
 .routing-details .connection-choice{padding:12px 16px}
@@ -149,10 +158,10 @@ font:500 24px/1 var(--mono)}
 .routing-details .connection-choice p{margin:6px 0;font-size:14px}
 
 /* How it works: the picture beside the words, where there is room for both. */
-.how{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:18px;
+.how{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:24px;
 align-items:start}
 .how .diagram{position:sticky;top:88px;margin:0}
-.how-text .card+.card{margin-top:14px}
+.how-text .card+.card{margin-top:20px}
 .diag{display:block;width:100%;max-width:420px;height:auto;margin:14px auto 10px}
 .diag .box{fill:var(--panel);stroke:var(--rule);stroke-width:1.5}
 .diag .you{stroke:var(--acc);stroke-width:2}
@@ -169,8 +178,10 @@ align-items:start}
 .how{grid-template-columns:minmax(0,1fr)}.how .diagram{position:static}}
 @media (max-width:640px){.features,.two,.next{grid-template-columns:minmax(0,1fr)}
 .technical-overview{grid-template-columns:minmax(0,1fr);gap:16px;padding:20px}
-.routing-details>summary{padding:18px 20px}
-.routing-details .routing-guide{padding:2px 20px 18px}
+.doc-disclosure>summary{padding:17px 18px;font-size:14px}
+.doc-disclosure>.disclosure-body,.doc-disclosure>.routing-guide{padding:2px 18px 20px}
+.doc .card,.how .card{padding-left:20px;padding-right:20px}
+.doc .doc-disclosure,.how .doc-disclosure{padding:0}
 .connection-choices{grid-template-columns:minmax(0,1fr)}
 .band{margin-top:40px}.band>h2{font-size:22px}
 .steps>li{padding:16px 16px 14px 58px}
@@ -1007,7 +1018,7 @@ def _model_connections(cfg: Config, *, framed: bool = True) -> str:
 def _advanced_model_connections(cfg: Config) -> str:
     """One accessible disclosure, with no nested card or cramped three-column copy."""
     return (
-        '<details class="card routing-details"><summary>'
+        '<details class="card routing-details doc-disclosure"><summary>'
         + label('Advanced Anthropic account routing', 'Anthropic 账号路由进阶说明', inline=True)
         + '</summary>' + _model_connections(cfg, framed=False) + '</details>'
     )
@@ -1949,9 +1960,9 @@ def how_it_works(
             '<p>Devin 可能在槽位保存选定的上下文、回复和工具交接记录，并一直保留到槽位被清理。'
             '它们与本机 Claude Code 历史分开。<a href="/privacy">查看隐私详情</a>。</p>',
         )
-        + '</div><details class="card"><summary>' + label(
+        + '</div><details class="card doc-disclosure"><summary>' + label(
             'Updates, outages and returning a slot', '更新、故障与归还', inline=True
-        ) + '</summary>'
+        ) + '</summary><div class="disclosure-body">'
         + bi("<h2>Updates, outages and returning a slot</h2>", "<h2>更新、故障与归还</h2>")
         + bi(
             "<p>Local Claude updates separately from the slot and the Fleet client. "
@@ -1997,7 +2008,7 @@ def how_it_works(
             "中的进程，删除 Linux 用户与所有槽位文件；只有机器确认删除完成，槽位才会再次开"
             "放领取。本地文件和历史不会因此删除。</p>",
         )
-        + "</details></div></div>"
+        + "</div></details></div></div>"
     )
     body += '<div class="card" id="rental-pricing">' + bi(
         '<h2>Slot providers, IP types and rates</h2>',
@@ -2009,9 +2020,11 @@ def how_it_works(
         '<p>每月总费用是 Fleet 槽位价格，加你自己的服务商订阅，以及额外用量或税费。'
         '<a href="/slots">查看槽位价格</a> · '
         '<a href="/docs/library/docs/devin.html#prices">比较 Claude 与 Devin 套餐</a>。</p>',
-    ) + '<details><summary>' + label(
+    ) + '<details class="doc-disclosure"><summary>' + label(
         'Slot types and price breakdown', '网络类型与费用明细', inline=True
-    ) + '</summary>' + _public_slot_catalogue(wallet_enabled) + _rental_pricing_details(
+    ) + '</summary><div class="disclosure-body">' + _public_slot_catalogue(
+        wallet_enabled
+    ) + _rental_pricing_details(
         wallet_enabled
     ) + bi(
         '<p>An ISP slot can use a '
@@ -2019,7 +2032,7 @@ def how_it_works(
         'tunnel. Your account page shows the same labels before you choose a slot.</p>',
         '<p>ISP 槽位可以使用独立获准的出口代理，'
         '与上游的 HTTPS 仍通过隧道保持加密。账号页在选择槽位前展示相同的信息。</p>',
-    ) + '</details></div>'
+    ) + '</div></details></div>'
     body += _subscription_rental_details(cfg)
     if getattr(cfg, "devin_trial_enabled", False) and not getattr(cfg, "broker_only", False):
         from . import trial_routes

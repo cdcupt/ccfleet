@@ -68,13 +68,15 @@ const details={open:true},window={scrollY:777};
 function area(id,editable=false){return {id,feedback:null,childNodes:['synthetic child'],
  querySelector(selector){if(selector==='[data-fleet-feedback]')return this.feedback;
  return editable?{}:null;},
- replaceChildren(...children){updates.push(id);},
+ replaceChildren(...children){updates.push(id);this.childNodes=children;},
  appendChild(node){this.feedback=node;},
  setAttribute(){}};}
 const oldName=area('name'),newName=area('new-name'),oldQuota=area('quota');
 const oldVersion=area('version'),newQuota=area('new-quota'),newVersion=area('new-version');
 const oldEmails=area('outage-emails'),newEmails=area('new-emails');
 const readonly=area('readonly',p.mode==='status-editable');
+const trafficRegions=(p.traffic_ids||[]).map(id=>{const node=area(id);
+node.childNodes=['old '+id+' Unknown'];return node;});
 const kind=p.kind||'quota',action=p.action||'/zh/account/slots/synthetic/quota';
 const form={dataset:p.mode==='no-optin'?{}:{fleetAction:kind},
  action:new URL(action,'https://fleet.test').href,method:'post',feedback:null,
@@ -90,7 +92,9 @@ const nextCard={querySelector(selector){return selector==='.usage-bars'?newQuota
  selector==='.row-line.cc'?newVersion:selector==='.slot-display-name'?newName:
  selector==='input[name="name"]'?{placeholder:'new-placeholder'}:null;}};
 const fresh={getElementById(id){return id===card.id?nextCard:
- id==='outage-emails'?newEmails:id==='quota'?newQuota:id==='readonly'?area('new-readonly'):null;},
+ id==='outage-emails'?newEmails:id==='quota'?newQuota:id==='readonly'?area('new-readonly'):
+ trafficRegions.some(n=>n.id===id)?Object.assign(area(id),{
+ childNodes:['fresh '+id+' 1.2 MB']}):null;},
  querySelector:()=>({textContent:'Saved synthetic action.'})};
 const link=area('status-link');link.href='https://fleet.test/zh/account';
 link.dataset={fleetStatus:'account'};link.closest=()=>link;
@@ -101,7 +105,7 @@ const context={URL,URLSearchParams,Set,Array,Object,JSON,Error,Promise,AbortCont
  document:{documentElement:{lang:'en'},addEventListener(name,fn){listeners[name]=fn;},
  dispatchEvent(){},importNode:n=>n,createElement:()=>({dataset:{},setAttribute(){}}),
  getElementById:id=>id==='outage-emails'?oldEmails:null,
- querySelectorAll:()=>[readonly]},
+ querySelectorAll:()=>[readonly,...trafficRegions]},
  setTimeout(fn){const id=++serial;timers.set(id,fn);return id;},
  clearTimeout:id=>timers.delete(id),
  DOMParser:class{parseFromString(){return fresh;}},
@@ -128,17 +132,19 @@ if(p.mode==='body-hangs'){await new Promise(setImmediate);for(const fn of timers
 await first;
 for(const node of [form,link])if(node.feedback)messages.push(node.feedback.textContent);
 console.log(JSON.stringify({calls,prevented,messages,updates,input,details,scrollY:window.scrollY,
- disabled:button.disabled,timers:timers.size}));
+ disabled:button.disabled,timers:timers.size,
+ traffic:trafficRegions.map(n=>({id:n.id,content:n.childNodes}))}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
 
 
-def run_js(mode, *, kind="quota", action="/zh/account/slots/synthetic/quota"):
+def run_js(mode, *, kind="quota", action="/zh/account/slots/synthetic/quota", traffic_ids=()):
     executable = shutil.which("node")
     if executable is None:
         pytest.skip("Node is required for pure JS fakes")
     result = subprocess.run([executable, "-e", HARNESS], input=json.dumps({
-        "script": render.PANEL_ACTION_JS, "mode": mode, "kind": kind, "action": action}),
+        "script": render.PANEL_ACTION_JS, "mode": mode, "kind": kind, "action": action,
+        "traffic_ids": traffic_ids}),
         text=True, capture_output=True, check=True, timeout=5)
     return json.loads(result.stdout)
 

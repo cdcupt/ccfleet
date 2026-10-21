@@ -1,0 +1,7 @@
+# Optional primary-only host counter snapshot. Install the root-owned numeric-only
+# collector and timer first. This narrow directory contains no credentials.
+# Docker's own /proc/net/dev is the service namespace, not whole-host transfer.
+services:
+  ccfleetd:
+    volumes:
+      - /var/lib/ccfleet-network:/run/ccfleet-network:ro

@@ -116,6 +116,10 @@ def section(store: Store, csrf: str, now: float, *, cfg: Optional[Config] = None
         '<span><strong data-copy-zh=\"月租价格\">Monthly prices</strong>'
         '<small data-copy-zh=\"查看价格与供应商成本\">Review '
             'prices and supplier costs</small></span></a>'
+        '<a href="#private-traffic"><span class="admin-task-icon" aria-hidden="true">⇅</span>'
+        '<span><strong data-copy-zh="网络与 API 流量">Network &amp; API traffic</strong>'
+        '<small data-copy-zh="查看主机与槽位的实测用量">Measured '
+            'host and slot usage</small></span></a>'
         '</nav>')
     result = navigation + body + price
     return result + ('<style>' + wallet_ui.CSS + '</style>'

@@ -69,7 +69,7 @@ jobs:
           done
           # tmux, ssh, sh and mkdir are referenced by absolute path and must be
           # present on the runner; fail loudly rather than silently skipping.
-          for c in /usr/bin/tmux /usr/bin/ssh /bin/sh /bin/mkdir; do
+          for c in /usr/bin/tmux /usr/bin/ssh /bin/sh /bin/mkdir /usr/bin/python3; do
             [ -x "$c" ] || { echo "runner is missing $c, which the units require"; exit 1; }
           done
       - name: systemd units must parse
@@ -90,7 +90,7 @@ jobs:
           # ordering deps, a typo is not swallowed. Add to it deliberately.
           expected='Unit (network-online|default|timers)\.target not found'
           fail=0
-          for u in node/systemd/*.service node/systemd/*.timer; do
+          for u in node/systemd/*.service node/systemd/*.timer deploy/ccfleet-network-traffic.service deploy/ccfleet-network-traffic.timer; do
             out=$(systemd-analyze verify "$u" 2>&1 | grep -Ev "$expected" || true)
             if [ -n "$out" ]; then echo "FAIL $u"; echo "$out"; fail=1; else echo "ok   $u"; fi
           done
