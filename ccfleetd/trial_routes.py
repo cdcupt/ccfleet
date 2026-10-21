@@ -400,7 +400,7 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         "<p>One active turn globally. If busy, wait a few seconds and submit again; "
         "no idle session holds the worker. At most 20 turns and 20 reserved runtime minutes "
         "per person and globally per UTC day; each native turn has at most 120 seconds of "
-        "generation and reserves 160 seconds of runtime. Longer turns can reach the daily "
+        "generation and reserves 160 seconds of runtime. Reserved runtime can reach the daily "
         "time limit before the request cap. Keep requests short (192 KiB including "
         "tools/history). Before each turn "
         "we reserve up to 20,000 remaining allowance units. Complete input, output, cache-read "
@@ -413,7 +413,7 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         "or USD hard cap.</p>",
         "<p>全局同时仅处理一轮；忙碌时请稍等再提交，空闲会话不会占用工作进程。"
         "每人及全局每日均最多 20 轮、预留 20 分钟运行时间；每轮原生生成最多 120 秒，"
-        "预留 160 秒运行时间。较长的任务可能先达到每日运行时间上限。"
+        "预留 160 秒运行时间。预留运行时间可能先达到每日上限。"
         "请求（含工具及历史）最多 192 KiB。每轮先预留最多 20,000 剩余额度单位，"
         "完整的输入、输出、缓存读取及创建用量按实际总数结算，超额也完整计算。</p>"
         "<p>若已验证模型且整轮清理完成，但 Devin 只缺少缓存读取计量，则整笔预留额度保留至 UTC "

@@ -126,7 +126,7 @@ def test_allowance_meter_displays_remaining_units_and_holds_separately(context):
     assert "Reported usage" in markup and "Held for accounting" in markup
     assert "Request cap remaining" in markup and ">18</dd>" in markup
     assert "Each reply has up to 2 minutes to generate." in markup
-    assert "Longer turns can reach the daily time limit" in markup
+    assert "Reserved runtime can reach the daily time limit" in markup
     assert "All users share 1,000,000 units per day." in markup
 
 
