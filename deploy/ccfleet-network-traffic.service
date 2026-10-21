@@ -1,0 +1,21 @@
+[Unit]
+Description=CC Fleet numeric-only host network snapshot
+
+[Service]
+Type=oneshot
+User=root
+Group=999
+StateDirectory=ccfleet-network
+StateDirectoryMode=0750
+UMask=0027
+ExecStart=/usr/bin/python3 -I -B /usr/local/lib/ccfleet/ccfleet_agent/network_traffic.py --write-host-snapshot
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/ccfleet-network
+TimeoutStartSec=10

@@ -97,3 +97,21 @@ def test_current_customer_documents_hide_competitor_names_and_identifying_urls()
              (ROOT / "docs/index.html").read_text()]
     for source in pages:
         assert not re.search(r"CC\s*Host|cchost[.]ai", source, re.I)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_every_how_it_works_disclosure_has_a_shared_summary_and_padded_body(language):
+    """All three sections retain the same layout boundary in either language."""
+    source = bilingual.project_html(customer_docs.how_it_works(Config()), language,
+                                    "/docs/how-it-works")
+    elements = Placement(source).elements
+    disclosures = [attrs for tag, attrs, _ in elements
+                   if tag == "details" and "doc-disclosure" in attrs.get("class", "").split()]
+    assert len(disclosures) == 3
+    for attrs in disclosures:
+        children = [(tag, child) for tag, child, parents in elements
+                    if parents and parents[-1] == ("details", attrs)]
+        assert sum(tag == "summary" for tag, _ in children) == 1
+        assert any(tag == "div" and (
+            "disclosure-body" in child.get("class", "").split()
+            or "routing-guide" in child.get("class", "").split()) for tag, child in children)

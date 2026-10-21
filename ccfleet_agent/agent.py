@@ -405,8 +405,12 @@ def system_info() -> dict[str, Any]:
         load = {"1": round(load1, 2), "5": round(load5, 2), "15": round(load15, 2)}
     except (OSError, AttributeError):
         load = {"1": None, "5": None, "15": None}
-    return {"hostname": socket.gethostname()[:100], "uptime_s": uptime, "load": load,
-            "mem": {"used_pct": _meminfo_used_pct()}, "reboot_required": reboot_required()}
+    result = {"hostname": socket.gethostname()[:100], "uptime_s": uptime, "load": load,
+              "mem": {"used_pct": _meminfo_used_pct()}, "reboot_required": reboot_required()}
+    network = network_summary()
+    if network is not None:
+        result["network"] = network
+    return result
 
 
 def disk_info(path: Path) -> dict[str, Any]:
@@ -480,6 +484,26 @@ def build_payload(cfg: AgentConfig, runner: Runner = subprocess.run,
     if isinstance(upgrade, Mapping):
         payload["reconcile"] = {"upgrade": dict(upgrade)}
     return payload
+
+
+def network_summary() -> Optional[dict[str, Any]]:
+    """Optional read-only Linux NIC metrics; absence never changes node operation."""
+    try:
+        from . import network_traffic
+    except ImportError:
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "ccfleet_network_traffic", Path(__file__).with_name("network_traffic.py"))
+            if spec is None or spec.loader is None:
+                return None
+            network_traffic = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(network_traffic)
+        except (ImportError, OSError, ValueError):
+            return None
+    try:
+        return network_traffic.collect()
+    except Exception:
+        return None
 
 
 # -- transport -------------------------------------------------------------------

@@ -212,6 +212,7 @@ fetch ccfleet_agent/inference_policy.py "$LIB_DIR/ccfleet_agent/inference_policy
 fetch ccfleet_agent/egress.py "$LIB_DIR/ccfleet_agent/egress.py" 644
 fetch ccfleet_agent/model_usage.py "$LIB_DIR/ccfleet_agent/model_usage.py" 644
 fetch ccfleet_agent/relay_metrics.py "$LIB_DIR/ccfleet_agent/relay_metrics.py" 644
+fetch ccfleet_agent/network_traffic.py "$LIB_DIR/ccfleet_agent/network_traffic.py" 644
 fetch ccfleet_agent/inference_client.py "$LIB_DIR/ccfleet_agent/inference_client.py" 644
 fetch ccfleet_agent/compatibility.py "$LIB_DIR/ccfleet_agent/compatibility.py" 644
 fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644

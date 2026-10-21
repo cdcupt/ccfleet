@@ -37,6 +37,8 @@ from . import (
     stripe_routes,
     subscription_config,
     subscription_routes,
+    traffic,
+    traffic_ui,
     trial_routes,
     trial_runtime,
     usage,
@@ -217,6 +219,7 @@ class Context:
         self.machine_health = (machine_health.Observer()
                                if cfg.public_machine_metrics_enabled and not cfg.broker_only
                                else None)
+        self.traffic_observer = None if cfg.broker_only else traffic.Observer()
 
 
 @dataclass(frozen=True)
@@ -1980,7 +1983,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                                                 credit_actor=bool(
                                                                     self._database_admin_actor()))
                                            if who.is_admin else ""),
-                                    corner=self._console_corner())
+                                    corner=self._console_corner(),
+                                    traffic_html=(self._admin_traffic(now) if who.is_admin else ""))
+
+        def _admin_traffic(self, now: float) -> str:
+            network = (ctx.traffic_observer.snapshot(now)
+                       if ctx.traffic_observer is not None else None)
+            summary = traffic.controller_summary(ctx.store, ctx.cfg, now, network_report=network)
+            enabled = {node["id"] for node in ctx.store.list_nodes() if node.get("enabled")}
+            readings = [(slot.get("name") or slot["id"],
+                         traffic.slot_summary(ctx.store, ctx.cfg, slot, now, include_unheld=True))
+                        for slot in ctx.store.list_slots()
+                        if slot.get("node_id") in enabled and slot.get("state") in (
+                            slotstates.FREE, slotstates.CLAIMING, slotstates.CLAIMED,
+                            slotstates.ACTIVE)]
+            return traffic_ui.controller_panel(summary, readings)
 
     return FleetHandler
 
@@ -2037,6 +2054,11 @@ def serve(ctx: Context) -> None:
         metrics_worker = threading.Thread(target=ctx.machine_health.run, args=(stop,),
                                           name="ccfleet-machine-metrics", daemon=True)
         metrics_worker.start()
+    traffic_worker = None
+    if ctx.traffic_observer is not None:
+        traffic_worker = threading.Thread(target=ctx.traffic_observer.run, args=(stop,),
+                                          name="ccfleet-private-traffic", daemon=True)
+        traffic_worker.start()
 
     def _shutdown(_signum: int, _frame: Any) -> None:
         stop.set()
@@ -2053,3 +2075,5 @@ def serve(ctx: Context) -> None:
         server.server_close()
         if metrics_worker is not None:
             metrics_worker.join(timeout=2)
+        if traffic_worker is not None:
+            traffic_worker.join(timeout=2)

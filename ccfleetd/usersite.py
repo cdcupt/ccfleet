@@ -46,6 +46,8 @@ from . import (
     plans,
     resets,
     status,
+    traffic,
+    traffic_ui,
     wallet,
     wallet_access,
     wallet_routes,
@@ -504,22 +506,22 @@ body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
 .site main [id]{scroll-margin-top:144px}
 @media(max-width:760px){.site main [id]{scroll-margin-top:164px}}
 .site main{flex:1 0 auto;width:100%}
-.site .page{max-width:1120px;padding-block:34px 64px}
+.site .page{max-width:1200px;padding-block:44px 80px}
 .site .page.narrow{max-width:880px}
 .site .page.doc{max-width:840px}
 
 /* The bar's links to the pages anybody can read. */
-.doc-nav{display:flex;align-items:center;gap:2px;font-size:14px;min-width:0;
+.doc-nav{display:flex;align-items:center;gap:3px;font-size:13px;min-width:0;
 overflow-x:auto;scrollbar-width:none}
 .doc-nav::-webkit-scrollbar{display:none}
-.doc-nav a{color:var(--muted);text-decoration:none;padding:7px 11px;border-radius:9px;
+.doc-nav a{color:var(--muted);text-decoration:none;padding:8px 9px;border-radius:8px;
 white-space:nowrap;font-weight:560}
 .doc-nav a:hover{color:var(--ink);background:var(--inset)}
 .doc-nav a.here{color:var(--acc);background:var(--acc-soft)}
 
 /* The footer: the same ways out, from every page. */
 .sitefoot{border-top:1px solid var(--rule);background:var(--panel)}
-.sitefoot-in{max-width:1120px;margin:0 auto;padding:26px 20px 34px;display:flex;
+.sitefoot-in{max-width:1200px;margin:0 auto;padding:32px 28px 40px;display:flex;
 flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:14px 40px;
 font-size:13.5px;color:var(--muted)}
 .sitefoot-identity{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
@@ -531,7 +533,7 @@ font-size:13.5px;color:var(--muted)}
 .sitefoot nav a:hover{color:var(--ink)}
 
 /* A page's title, and the line under it. */
-.pagehead{margin:0 0 22px}
+.pagehead{margin:0 0 30px}
 .pagehead .sub{margin-top:8px;font-size:15px}
 .note-banner{border:1px solid var(--rule);border-radius:12px;padding:12px 16px;
 margin:0 0 18px;font-weight:550;background:var(--panel)}
@@ -539,7 +541,7 @@ margin:0 0 18px;font-weight:550;background:var(--panel)}
 .note-banner.warn{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
 .lapsed{color:var(--warn);font-weight:650}
 .switched{color:var(--ok);font-weight:650}
-.card+.card{margin-top:14px}
+.card+.card{margin-top:20px}
 .card ul{margin:10px 0;padding-left:20px}.card li{margin:7px 0;line-height:1.55}
 .card li::marker{color:var(--acc)}
 
@@ -618,8 +620,8 @@ border-radius:12px;background:var(--panel)}
 .site li>.bi-inline>.copy-en,.site li>.bi-inline>.copy-zh{display:block}
 .site p>.bi-inline>.copy-zh::before,.site li>.bi-inline>.copy-zh::before{content:none!important}
 .site p>.bi-inline>.copy-en+.copy-zh,.site li>.bi-inline>.copy-en+.copy-zh{margin-top:7px}
-.site .page.doc{max-width:900px}
-.site .page.doc .card{padding:24px 28px}
+.site .page.doc{max-width:940px}
+.site .page.doc .card{padding:28px 32px}
 .site .page.doc .card p{line-height:1.75;overflow-wrap:anywhere}
 .site .page.doc .card li{margin:14px 0;line-height:1.7}
 .site .allowance h2{font-size:13px;letter-spacing:0;text-transform:none}
@@ -632,21 +634,21 @@ border-radius:12px;background:var(--panel)}
 border:1px solid var(--rule-soft);border-radius:12px}
 .site .relay-usage>summary{font-weight:650;cursor:pointer}
 .site .relay-usage p{line-height:1.65}
-.site .usage-ranking{margin-top:44px;padding:24px}
-.usage-ranking h2{margin:0;font-size:23px;letter-spacing:-.02em}
+.site .usage-ranking{margin-top:64px;padding:28px}
+.usage-ranking h2{margin:0;font-size:26px;letter-spacing:-.03em}
 .usage-ranking p{font-size:13px;line-height:1.65;color:var(--muted);margin:10px 0}
 .usage-ranking .usage-ranking-lead{margin:6px 0 0}
 .usage-ranking-sheet{max-width:100%;overflow-x:auto;border:1px solid var(--rule-soft);
 border-radius:14px;margin:18px 0 12px}
 .usage-ranking table{width:100%;min-width:440px;border-collapse:collapse;font-size:14px}
-.usage-ranking th,.usage-ranking td{padding:15px 16px;text-align:left;vertical-align:top;
+.usage-ranking th,.usage-ranking td{padding:18px 20px;text-align:left;vertical-align:top;
 border-bottom:1px solid var(--rule-soft);font-variant-numeric:tabular-nums}
 .usage-ranking thead th{background:var(--inset);font-size:11px;color:var(--muted);
 letter-spacing:.04em;white-space:nowrap}
 .usage-ranking tbody th{background:none;text-transform:none}
 .usage-ranking .usage-ranking-row th,.usage-ranking .usage-ranking-row td{border-bottom:0}
 .usage-ranking .usage-rank{width:72px;color:var(--muted);font-size:12px}
-.usage-ranking .usage-user{min-width:72px;padding-top:18px}
+.usage-ranking .usage-user{min-width:140px;padding-top:20px;font-weight:650}
 .usage-ranking .usage-observed{min-width:115px}
 .usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:19px;font-weight:700;
 line-height:1.3;color:var(--ink);white-space:nowrap}
@@ -656,44 +658,88 @@ color:var(--muted)}
 .usage-estimate-value{display:flex;align-items:center;gap:8px}
 .usage-ranking .usage-badge{display:inline-flex;font-size:10px;font-weight:650;line-height:1.4;
 padding:2px 6px;border-radius:999px;color:var(--acc);background:var(--acc-soft)}
-.usage-ranking .usage-ranking-detail>td{padding:0 16px 12px}
+.usage-ranking .usage-ranking-detail>td{padding:0 20px 18px}
 .usage-ranking details{text-transform:none;font-weight:400}
-.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12px;line-height:1.6}
+.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12px;line-height:1.7;
+padding-block:5px}
+.usage-ranking .usage-reported-models{display:block;
+margin-top:9px;color:var(--ink);font-size:11px;font-weight:500;line-height:1.6;
+white-space:normal;overflow-wrap:anywhere;max-width:26ch}
+.usage-ranking .usage-model-coverage{display:block;max-width:30ch;white-space:normal;
+font-weight:400;color:var(--muted);font-size:11px;line-height:1.6;margin-top:5px}
 .usage-ranking .usage-models{display:grid;gap:10px;margin:12px 0 0}
-.usage-model{padding:14px 16px;border:1px solid var(--rule-soft);border-radius:10px;
-background:var(--inset)}
-.usage-model-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px}
+.usage-model{padding:16px 18px;border:1px solid var(--rule-soft);border-radius:10px;
+background:var(--inset);white-space:normal;min-width:0}
+.usage-model-head{display:flex;flex-wrap:wrap;justify-content:space-between;
+align-items:baseline;gap:6px 16px}
 .usage-model-name{font-size:13px;font-weight:650;overflow-wrap:anywhere}
 .usage-model-value{font-size:14px;font-weight:650;white-space:nowrap}
 .usage-token-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0}
 .usage-token-grid dt{font-size:10.5px;color:var(--muted);text-transform:none;letter-spacing:0}
 .usage-token-grid dd{margin:3px 0 0;font-size:14px;color:var(--ink);font-weight:600}
-.usage-ranking .usage-method{border-top:1px solid var(--rule-soft);padding-top:10px;margin-top:12px}
+.usage-ranking .usage-method{border-top:1px solid var(--rule-soft);padding-top:14px;margin-top:18px}
 .usage-ranking .usage-units{font-size:11px;margin:0}
 .usage-ranking .usage-scope{color:var(--ink);font-size:12px}
 .usage-ranking .usage-token{font-variant-numeric:tabular-nums}
 .usage-ranking .usage-ranking-empty{padding:20px;color:var(--muted)}
-@media(max-width:640px){.site .usage-ranking{padding:18px 14px}
+@media(max-width:640px){.site .usage-ranking{padding:22px 16px;margin-top:44px}
 .usage-ranking th,.usage-ranking td{padding:13px 10px}
 .usage-ranking .usage-ranking-detail>td{padding:0 10px 10px}
-.usage-ranking h2{font-size:21px}.usage-model{padding:12px}
+.usage-ranking h2{font-size:23px}.usage-model{padding:14px}
 .usage-token-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:17px}}
 .site .row-line.release{border-top:1px solid var(--rule-soft);margin-top:8px;padding-block:20px}
 .site .row-line.release .check{line-height:1.65}
 .site .row-line.release button{white-space:normal}
 .site input[type=text],.site input[type=email]{min-width:0;max-width:100%}
+
+/* All secondary panels share comfortable summary targets; compact data details
+   retain their own layout and the account menu remains a separate popover. */
+.site main details>summary{cursor:pointer;overflow-wrap:anywhere}
+.site main details>summary:focus-visible{outline:3px solid var(--acc);outline-offset:3px}
+.site .account-advanced,.site .relay-usage{border-color:var(--rule);border-radius:14px}
+.site .account-advanced>summary{list-style:none;display:flex;align-items:center;
+gap:16px;font-size:14px;padding:18px 22px;color:var(--ink)}
+.site .account-advanced>summary::-webkit-details-marker{display:none}
+.site .account-advanced>summary::marker{content:""}
+.site .account-advanced>summary::after{content:"+";margin-left:auto;color:var(--acc);
+font:400 21px/1 var(--mono)}
+.site .account-advanced[open]>summary::after{content:"−"}
+.site .account-advanced[open]>summary{border-bottom:1px solid var(--rule-soft)}
+.site .st-performance,.site .st-machines,.site .st-diagnosis{padding:26px 28px}
+.site .st-performance h2,.site .st-machines>h2{font-size:22px;letter-spacing:-.02em}
+.site .st-perf-metric{padding:18px;border-radius:12px;background:var(--bg)}
+.site .st-perf-metric dd{font-size:30px;letter-spacing:-.035em}
+.site .st-health-item{padding:18px;background:var(--bg);border-radius:12px}
+.site .st-perf-help>summary,.site .offer-policy>summary{padding:12px 0;font-size:14px}
+.site .offer-table{font-size:13.5px}
+.site .offer-table th,.site .offer-table td{padding:16px}
+.site .offer-table thead th{font-size:12px;letter-spacing:0}
+.site .offer-example{padding:24px;border-radius:14px}
+.site .offer-example h3{font-size:18px;letter-spacing:-.02em}
+.site .slot-filters{padding:18px;background:var(--inset);border:1px solid var(--rule-soft);
+border-radius:12px;gap:14px}
+.site .offer-breakdown{line-height:1.7}
+.site .offer-breakdown>summary{padding-block:4px}
+.site .page.doc details:not(.doc-disclosure){margin:18px 0;padding:12px 18px;
+border:1px solid var(--rule);border-radius:12px;background:var(--inset)}
+.site .page.doc details:not(.doc-disclosure)>summary{padding:6px 0;font-size:14px;
+font-weight:600;color:var(--ink)}
+.site .wallet-ui,.site .subscription-ui{padding:26px;border-color:var(--rule);
+border-radius:16px;box-shadow:var(--shadow)}
+.site .wallet-ui p,.site .subscription-ui p{font-size:14px;line-height:1.75}
+.site .wallet-ui h2,.site .subscription-ui h2{font-size:21px;letter-spacing:-.02em}
 @media(max-width:760px){.site .topbar-end{margin-left:auto;gap:8px}
 .site .page.doc .card{padding:20px 18px}
-.site .doc-nav{flex-wrap:wrap;overflow:visible;margin:0;gap:3px}
-.site .doc-nav a{padding:6px 8px;white-space:normal}
+.site .doc-nav{flex-wrap:nowrap;overflow-x:auto;margin:0;gap:3px}
+.site .doc-nav a{padding:8px 10px;white-space:nowrap}
 .site .row-line{gap:8px;min-width:0}.site .actions{min-width:0;max-width:100%;flex-wrap:wrap}
 .site .row-line form.inline{max-width:100%;flex-wrap:wrap}
 .site .row-line form.inline input{flex:1 1 170px}
 .site .row-line .actions .cc-say{max-width:100%}}
 
 /* The doors: signing in, the console's, and a page that is not there. */
-.door{max-width:520px;margin:24px auto 0;padding:28px 30px 24px}
+.door{max-width:520px;margin:32px auto 0;padding:34px 36px 30px}
 .door .mark{width:44px;height:44px}
 .door h1{margin:18px 0 10px}
 .door .btn.big{width:100%;margin:8px 0 4px}
@@ -707,15 +753,19 @@ pre.token{white-space:pre-wrap;word-break:break-all;font-size:14px;user-select:a
 .topbar-in{padding:10px 16px;gap:6px 12px}
 .doc-nav{order:3;flex:1 0 100%;margin:0 -8px}
 .doc-nav a{padding:6px 8px;font-size:13.5px}
-.site .topbar .doc-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
-text-align:center}
+.site .topbar .doc-nav{display:flex;flex-wrap:nowrap;overflow-x:auto;text-align:left;
+padding-top:4px;border-top:1px solid var(--rule-soft)}
 .site .page{padding-block:24px 48px;padding-left:16px;padding-right:16px}
 .card.slot{scroll-margin-top:124px}
 .slot-head,.slot-body{padding-left:16px;padding-right:16px}
 .usage{grid-template-columns:minmax(0,1fr);padding:14px}
 .ways{grid-template-columns:minmax(0,1fr)}
 .door{padding:22px 20px 20px}
-.sitefoot-in{padding-left:16px;padding-right:16px}}
+.sitefoot-in{padding-left:16px;padding-right:16px}
+.site .st-performance,.site .st-machines,.site .st-diagnosis{padding:22px 18px}
+.site .st-perf-metric{padding:15px}.site .st-perf-metric dd{font-size:27px}
+.site .slot-filters{padding:14px}
+.site .wallet-ui,.site .subscription-ui{padding:22px 18px}}
 """ + status.LINE_CSS + """
 .account-nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 20px}
 .account-nav [aria-current=page]{background:var(--acc-soft);color:var(--acc);
@@ -805,7 +855,7 @@ font-weight:400;line-height:1}
 padding:0;border:0;border-top:1px solid var(--rule-soft)}
 .account-dashboard .slot-disclosure>summary,.account-dashboard .provider-other>summary{
 display:flex;align-items:center;justify-content:space-between;gap:12px;list-style:none;
-padding:14px 0;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted)}
+padding:17px 0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)}
 .account-dashboard .slot-disclosure>summary::-webkit-details-marker,
 .account-dashboard .provider-other>summary::-webkit-details-marker{display:none}
 .account-dashboard .slot-disclosure>summary::marker,
@@ -817,6 +867,12 @@ padding:14px 0;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted)}
 .account-dashboard .slot-disclosure[open]>summary::after,
 .account-dashboard .provider-other[open]>summary::after{content:"−"}
 .account-dashboard .disclosure-body{padding:0 0 12px;min-width:0}
+.account-dashboard .slot-traffic .disclosure-body>.traffic-grid{
+grid-template-columns:minmax(0,1fr)}
+.account-dashboard .traffic-panel{padding:16px;border-color:var(--rule-soft);border-radius:12px}
+.account-dashboard .traffic-panel h3,.account-dashboard .traffic-panel h4{font-size:16px}
+.account-dashboard .traffic-metric{padding:12px}
+.account-dashboard .traffic-metric dd{font-size:20px}
 .account-dashboard .slot-return>summary{font-size:11px}
 .account-dashboard .slot-return>summary:hover{color:var(--bad)}
 .account-dashboard .slot-return[open]>summary{color:var(--bad)}
@@ -831,8 +887,8 @@ min-width:0;max-width:100%}
 .account-dashboard .usage{grid-template-columns:minmax(0,1fr);padding:12px}
 .account-dashboard .account-advanced{margin:20px 0 0;border:1px solid var(--rule-soft);
 border-radius:12px;background:var(--panel);min-width:0}
-.account-dashboard .account-advanced>summary{padding:16px 20px;cursor:pointer;
-font-size:13px;font-weight:600;color:var(--muted)}
+.account-dashboard .account-advanced>summary{padding:18px 20px;cursor:pointer;
+font-size:14px;font-weight:600;color:var(--ink)}
 .account-dashboard .account-advanced[open]>summary{color:var(--ink)}
 .account-dashboard .account-advanced>p,
 .account-dashboard .account-advanced>div:not(.gateway-advanced-body){
@@ -1026,6 +1082,46 @@ def _public_usage_coverage(reading: Mapping[str, Any]) -> str:
                  inline=True)
 
 
+def _public_usage_model_summary(reading: Mapping[str, Any]) -> str:
+    """Expose only observed catalogue labels, never infer a model from the reference."""
+    models = reading.get("models")
+    names, unknown = [], False
+    for model in models[:16] if isinstance(models, list) else []:
+        if not isinstance(model, Mapping) or not _public_usage_count(model.get("samples")):
+            continue
+        key = model.get("model")
+        if not isinstance(key, str) or key not in LABELS:
+            continue
+        if key == "other":
+            unknown = True
+        elif key not in names:
+            names.append(key)
+    if names:
+        return label("Reported model: ", "上报模型：", inline=True) + escape(
+            ", ".join(LABELS[key] for key in names))
+    return label("Model not identified", "模型未识别", inline=True) if unknown else label(
+        "Model not recorded", "未记录模型", inline=True)
+
+
+def _public_usage_model_coverage(reading: Mapping[str, Any]) -> str:
+    measured = _public_usage_count(reading.get("usage_samples"))
+    identified, unknown, unrecorded = (_public_usage_count(reading.get(field)) for field in
+                                      ("identified_model_samples", "unknown_model_samples",
+                                       "unrecorded_model_samples"))
+    if (None in (measured, identified, unknown, unrecorded)
+            or identified + unknown + unrecorded != measured):
+        return label("Model coverage unavailable.", "暂无模型覆盖信息。", inline=True)
+    text = label(f"Identified models: {identified:,} of {measured:,} measured replies.",
+                 f"已识别模型：{identified:,}／{measured:,} 个已观测回复。", inline=True)
+    if unrecorded:
+        text += " " + label(f"{unrecorded:,} replies have no recorded model.",
+                            f"{unrecorded:,} 个回复未记录模型。", inline=True)
+    if unknown:
+        text += " " + label(f"{unknown:,} replies have an unrecognized or ambiguous model.",
+                            f"{unknown:,} 个回复的模型未识别或存在歧义。", inline=True)
+    return text
+
+
 def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
     priced_rows, unpriced_rows = [], []
     for model in models[:16] if isinstance(models, list) else []:
@@ -1079,7 +1175,7 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                   "converts recorded tokens at the common Opus 5.5 reference rates.",
                   "上报模型计价暂无匹配观测；排行仍按统一的 Opus 5.5 参考价格折算已记录 Token。",
                   inline=True) + '</p>')
-    outside = ('<p>' + label("Model observations without an reported-model price",
+    outside = ('<p>' + label("Model observations without a reported-model price",
                             "暂无上报模型价格的观测", inline=True)
                + '</p><div class="usage-models">' + ''.join(unpriced_rows) + '</div>'
                if unpriced_rows else '')
@@ -1109,7 +1205,8 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
     aggregate += '<dl class="usage-token-grid">' + reported + '</dl></div>'
     return ('<details class="usage-model-detail"><summary>'
             + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
-            + detail + aggregate + outside + '<p>' + _public_usage_coverage(reading)
+            + '<p class="usage-model-coverage">' + _public_usage_model_coverage(reading)
+            + '</p>' + detail + aggregate + outside + '<p>' + _public_usage_coverage(reading)
             + '</p></details>')
 
 
@@ -1218,7 +1315,9 @@ def public_usage_panel(ranking: Any) -> str:
                   label("Usage unavailable", "暂无用量信息", inline=True))
         rows.append('<tr class="usage-ranking-row"><td class="usage-rank">' + rank_text
                     + '</td><th class="usage-user" scope="row">' + masked
-                    + '</th><td class="usage-observed"><strong>'
+                    + '<small class="usage-reported-models">'
+                    + _public_usage_model_summary(entry)
+                    + '</small></th><td class="usage-observed"><strong>'
                     + amount + '</strong><small>' + token_scope + '</small></td>'
                     '<td class="usage-estimate"><div class="usage-estimate-value">'
                     + value + badge + '</div><small class="usage-estimate-scope">' + scope
@@ -1446,6 +1545,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                authorizer=authorizer,
                                payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
                                recurring=s["id"] in recurring_slots,
+                               traffic_html=traffic_ui.slot_panel(traffic.slot_summary(
+                                   store, cfg, s, now)),
                                listening=None if s["node_id"] in silent else since)
                     for s in held)
     body = (
@@ -2698,6 +2799,7 @@ def _slot_card(
     payment_end: Optional[float] = None,
     paid_access: bool = True,
     recurring: bool = False,
+    traffic_html: str = "",
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
@@ -2797,6 +2899,9 @@ def _slot_card(
     # Its machine's state, as the status page says it (status.slot_line).
     if machine_line:
         parts.append(machine_line)
+    if traffic_html:
+        parts.append(_slot_disclosure('Network & API traffic', '网络与 API 流量', traffic_html,
+                                      'slot-traffic'))
     public_number = status.public_machine_number(node)
     if public_number is not None:
         public_label = label(f"Public status: Machine {public_number}",

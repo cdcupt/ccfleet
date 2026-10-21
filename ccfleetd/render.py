@@ -210,9 +210,9 @@ CSS = """
    colours, each meaning one thing: green running, amber waiting on you, red
    trouble, grey off. */
 :root{color-scheme:light;
---bg:#f5f6fa;--panel:#fff;--inset:#f0f2f8;--ink:#0c111c;--muted:#596277;
---rule:#dce0ea;--rule-soft:#e9ecf3;
---acc:#4338ca;--acc-strong:#3730a3;--acc-soft:#eef0ff;--acc-line:#c9cdf8;--on-acc:#fff;
+--bg:#f7f8fb;--panel:#fff;--inset:#f3f5f9;--ink:#182238;--muted:#59677c;
+--rule:#dce3ed;--rule-soft:#e9edf4;
+--acc:#5143ce;--acc-strong:#3f32ad;--acc-soft:#f0eeff;--acc-line:#d7d1fb;--on-acc:#fff;
 --ok:#0b7a3b;--ok-bg:#e2f4e9;--ok-line:#a8dbbd;
 --warn:#98580a;--warn-bg:#fcf0da;--warn-line:#f0cf95;
 --bad:#b42318;--bad-bg:#fde7e4;--bad-line:#f4b8b0;
@@ -221,14 +221,14 @@ CSS = """
    and the same in both themes because the initial on them does not change. */
 --av0:#4338ca;--av1:#3730a3;--av2:#5b21b6;--av3:#6d28d9;--av4:#1d4ed8;--av5:#1e40af;
 --av-ink:#fff;
---shadow:0 1px 2px rgba(12,17,28,.05),0 8px 24px -14px rgba(12,17,28,.16);
---radius:14px;
+--shadow:0 2px 4px -2px rgba(24,34,56,.06),0 12px 28px -22px rgba(24,34,56,.18);
+--radius:16px;
 --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
---bg:#0a0d14;--panel:#111621;--inset:#171d2a;--ink:#eceff6;--muted:#9aa3b6;
---rule:#262d3c;--rule-soft:#1c2230;
---acc:#a9b3ff;--acc-strong:#c6cdff;--acc-soft:#1b1e40;--acc-line:#3b4180;--on-acc:#0a0d14;
+--bg:#0d111b;--panel:#141b28;--inset:#1b2433;--ink:#edf1f9;--muted:#a4b0c4;
+--rule:#303b4e;--rule-soft:#253044;
+--acc:#b7b0ff;--acc-strong:#d0cbff;--acc-soft:#282342;--acc-line:#514775;--on-acc:#141021;
 --ok:#4ade80;--ok-bg:#0d2919;--ok-line:#1f5a36;
 --warn:#f4b04c;--warn-bg:#2c200b;--warn-line:#5c4417;
 --bad:#ff8a80;--bad-bg:#36130f;--bad-line:#6e2a22;
@@ -236,14 +236,16 @@ CSS = """
 --shadow:0 1px 2px rgba(0,0,0,.5)}}
 
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scroll-padding-top:112px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 var(--sans);
 -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-.page{max-width:1200px;margin:0 auto;padding-block:28px 48px;padding-left:20px;
-padding-right:20px}
+.page{max-width:1240px;margin:0 auto;padding-block:36px 64px;padding-left:28px;
+padding-right:28px;min-width:0}
 a{color:var(--acc);text-decoration-thickness:1px;text-underline-offset:3px}
 a:hover{color:var(--acc-strong)}
-:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+:focus-visible{outline:3px solid var(--acc);outline-offset:3px}
+::selection{background:var(--acc-soft);color:var(--ink)}
+img,svg{max-width:100%}
 code,.mono,td.num,.v{font-family:var(--mono);font-variant-numeric:tabular-nums}
 /* A code chip never breaks across lines: half a command on each line reads as
    two commands. */
@@ -252,9 +254,9 @@ border-radius:6px;padding:.08em .4em;white-space:nowrap;
 -webkit-box-decoration-break:clone;box-decoration-break:clone}
 code.code-wrap{white-space:normal;overflow-wrap:anywhere}
 pre code{font-size:inherit;background:none;border:0;padding:0;white-space:inherit}
-h1{font-size:30px;line-height:1.15;letter-spacing:-.024em;margin:0;font-weight:720;
+h1{font-size:34px;line-height:1.16;letter-spacing:-.035em;margin:0;font-weight:740;
 text-wrap:balance}
-h2{font-size:19px;line-height:1.3;letter-spacing:-.012em;margin:30px 0 10px;
+h2{font-size:21px;line-height:1.35;letter-spacing:-.022em;margin:32px 0 12px;
 font-weight:680;text-wrap:balance}
 h3{font-size:16px;line-height:1.35;letter-spacing:-.006em;margin:18px 0 6px;font-weight:650}
 .sub{color:var(--muted);font-size:14px;margin:6px 0 0}
@@ -277,9 +279,9 @@ padding:3px 9px}
 /* The bar on top of every page: the mark, where you are, and who you are. */
 .topbar{background:var(--panel);border-bottom:1px solid var(--rule);position:sticky;top:0;
 z-index:10}
-.topbar-in{max-width:1120px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;
-gap:8px 22px;flex-wrap:wrap}
-.console .topbar-in{max-width:1200px;gap:8px 12px}
+.topbar-in{max-width:1240px;margin:0 auto;padding:15px 28px;display:flex;align-items:center;
+gap:10px 20px;flex-wrap:wrap}
+.console .topbar-in{max-width:1240px;gap:10px 16px}
 .topbar .brand{font-size:18px}
 .topbar-end{margin-left:auto;display:flex;align-items:center;gap:10px}
 .topbar-end .btn,.topbar-end button{padding:7px 13px}
@@ -326,14 +328,14 @@ font-weight:450;color:var(--bad)}
 background:var(--bad-bg);color:var(--bad)}
 
 /* Console masthead: what this is, then the fleet in one glance. */
-.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;
-flex-wrap:wrap;margin:0 0 20px}
+.mast{display:flex;align-items:flex-end;justify-content:space-between;gap:20px 28px;
+flex-wrap:wrap;margin:0 0 28px}
 h1.brand{font-size:24px}
 h1.brand .mark{width:32px;height:32px}
 .strip{display:grid;grid-template-columns:repeat(4,minmax(76px,1fr));gap:8px;
 width:100%;max-width:440px}
 .tile{background:var(--panel);border:1px solid var(--rule);border-radius:12px;
-padding:9px 12px 8px;box-shadow:var(--shadow)}
+padding:12px 14px 11px;box-shadow:var(--shadow)}
 .tile b{display:block;font-family:var(--mono);font-size:22px;line-height:1.15;
 font-weight:650;font-variant-numeric:tabular-nums}
 .tile span{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
@@ -345,15 +347,15 @@ font-weight:600}
 .tile.critical b{color:var(--bad)}
 .tile.zero b{color:var(--muted);font-weight:400}
 
-/* The console is dense on purpose: section titles are labels, not headlines. */
-.console h2{font-size:12px;line-height:1.4;letter-spacing:.08em;text-transform:uppercase;
-color:var(--muted);margin:30px 0 10px;font-weight:680}
+/* Operational sections retain a clear hierarchy above their dense data. */
+.console h2{font-size:16px;line-height:1.4;letter-spacing:-.01em;
+color:var(--ink);margin:30px 0 12px;font-weight:680}
 .console .card h2{margin:16px 0 10px}
-.console .admin-block>h2{font-size:22px;line-height:1.3;letter-spacing:-.02em;
-text-transform:none;color:var(--ink);margin:32px 0 6px;scroll-margin-top:24px}
+.console .admin-block>h2{font-size:25px;line-height:1.3;letter-spacing:-.025em;
+text-transform:none;color:var(--ink);margin:38px 0 8px;scroll-margin-top:112px}
 .admin-section-intro{font-size:14px;color:var(--muted);margin:0 0 14px}
-.admin-tasks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:24px 0}
-.admin-tasks>a{display:flex;align-items:center;gap:14px;padding:20px;min-width:0;
+.admin-tasks{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:24px 0}
+.admin-tasks>a{display:flex;align-items:center;gap:16px;padding:22px;min-width:0;
 text-decoration:none;color:var(--ink);border:1px solid var(--rule);border-radius:16px;
 background:var(--panel);box-shadow:var(--shadow)}
 .admin-tasks>a:hover{border-color:var(--acc-line);background:var(--acc-soft)}
@@ -393,7 +395,7 @@ font-size:11px;line-height:1.5;font-weight:600;white-space:normal}
 .admin-provider.ip-provider{color:var(--ok);background:var(--ok-bg)}
 .admin-advanced{margin-top:24px;border:1px solid var(--rule);border-radius:14px;
 background:var(--panel);padding:4px 18px 16px;min-width:0;max-width:100%}
-.admin-advanced>summary{padding:14px 0;font-size:15px;font-weight:650;cursor:pointer}
+.admin-advanced>summary{padding:17px 0;font-size:15px;font-weight:650;cursor:pointer}
 .admin-advanced:not([open]){padding-bottom:4px}
 .admin-advanced h2:first-of-type{margin-top:10px}
 @media(max-width:720px){.admin-tasks{grid-template-columns:1fr;gap:8px}
@@ -403,8 +405,13 @@ background:var(--panel);padding:4px 18px 16px;min-width:0;max-width:100%}
 .admin-credit-action{justify-self:end}.admin-credit-action[open]{justify-self:stretch}
 .admin-accounts .card{padding-left:16px;padding-right:16px}}
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:var(--radius);
-padding:4px 20px 16px;margin:0;box-shadow:var(--shadow)}
+padding:6px 24px 20px;margin:0;box-shadow:var(--shadow);min-width:0}
 .card.form{max-width:760px;margin-top:26px}
+.page details>summary{cursor:pointer;overflow-wrap:anywhere}
+.page details>summary:focus-visible{outline:3px solid var(--acc);outline-offset:3px}
+.console .usage-spark details{margin-top:12px;padding-top:10px;
+border-top:1px solid var(--rule-soft)}
+.console .usage-spark details>summary{color:var(--acc);font-size:13px;padding:5px 0}
 .note{color:var(--muted);font-size:13px;line-height:1.55;margin:14px 0 0;
 padding-top:12px;border-top:1px solid var(--rule-soft)}
 
@@ -413,9 +420,9 @@ padding-top:12px;border-top:1px solid var(--rule-soft)}
 .wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--rule);
 border-radius:var(--radius);box-shadow:var(--shadow)}
 table{border-collapse:collapse;width:100%;min-width:880px;font-size:14px}
-th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--rule-soft);
+th,td{padding:15px 16px;text-align:left;border-bottom:1px solid var(--rule-soft);
 vertical-align:top;white-space:nowrap}
-th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+th{font-size:12px;letter-spacing:.015em;text-transform:none;color:var(--muted);
 background:var(--inset);font-weight:650;border-bottom:1px solid var(--rule)}
 th:first-child,td:first-child{padding-left:16px}
 tbody tr:last-child td{border-bottom:0}
@@ -578,10 +585,11 @@ details.manage>summary{position:static;margin-top:10px}
 .manage-panel{padding:12px}
 }
 button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;font:inherit;
-font-size:13.5px;font-weight:600;line-height:1.25;padding:8px 14px;border-radius:10px;
+font-size:13.5px;font-weight:600;line-height:1.4;padding:9px 15px;border-radius:10px;
 border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;
 text-decoration:none;white-space:nowrap;box-shadow:0 1px 0 rgba(12,17,28,.04)}
-button:hover,.btn:hover{border-color:var(--acc);color:var(--acc)}
+button:hover,.btn:hover{border-color:var(--acc);color:var(--acc);background:var(--acc-soft)}
+button:disabled,.btn[aria-disabled="true"]{opacity:.6;cursor:wait}
 button.primary,.btn.primary{background:var(--acc);border-color:var(--acc);color:var(--on-acc)}
 button.primary:hover,.btn.primary:hover{background:var(--acc-strong);
 border-color:var(--acc-strong);color:var(--on-acc)}
@@ -591,7 +599,7 @@ button.danger:hover{border-color:var(--bad);color:var(--bad);background:var(--ba
 .console button.primary{font-size:13px;padding:8px 16px}
 label{display:block;font-size:12.5px;color:var(--muted);margin:0 0 6px;font-weight:600}
 input[type=text],input[type=email],input[type=date]{font:inherit;font-size:14px;
-padding:8px 12px;border-radius:10px;border:1px solid var(--rule);background:var(--inset);
+padding:9px 12px;border-radius:10px;border:1px solid var(--rule);background:var(--panel);
 color:var(--ink);width:100%;max-width:300px;min-height:38px}
 input[type=text]:focus,input[type=email]:focus,input[type=date]:focus{
 border-color:var(--acc);outline:3px solid var(--acc-soft);outline-offset:0;
@@ -625,11 +633,11 @@ a.back{font-size:14px;font-weight:600;text-decoration:none}
 /* Usage: who, the two windows, then the trend. */
 .usage-row{display:grid;
 grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);
-gap:16px 22px;align-items:start;padding:16px 0;border-bottom:1px solid var(--rule-soft)}
+gap:20px 28px;align-items:start;padding:24px 0;border-bottom:1px solid var(--rule-soft)}
 .usage-row:last-of-type{border-bottom:0}
 .usage-name{font-family:var(--sans);font-weight:400;font-size:13.5px;min-width:0;
 overflow-wrap:anywhere}
-.usage-slot-title{font-family:var(--mono);font-size:16px;margin:0 0 12px}
+.usage-slot-title{font-family:var(--sans);font-size:18px;margin:0 0 14px;letter-spacing:-.02em}
 .quota-historical .meter-fill{background:var(--muted);opacity:.5}
 .usage-quota,.usage-spark{min-width:0}
 .usage-total{margin-top:9px;font-size:13px}
@@ -661,9 +669,36 @@ box-shadow:inset 0 0 0 1px var(--rule-soft)}
 .meter-fill.crit{background:var(--bad)}
 .meter-foot{font-size:12px;color:var(--muted);margin-top:5px}
 
+/* Network transfer and model usage remain separate measurements. */
+.traffic-panel{min-width:0;margin:20px 0;padding:24px;background:var(--panel);
+border:1px solid var(--rule);border-radius:var(--radius)}
+.traffic-panel h2,.traffic-panel h3,.traffic-panel h4{margin:0 0 12px;font-size:19px;
+letter-spacing:-.02em;line-height:1.4}
+.traffic-panel p{margin:10px 0;line-height:1.7;overflow-wrap:anywhere}
+.traffic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));
+gap:12px;margin:16px 0;min-width:0}
+.traffic-grid>.traffic-panel{margin:0;padding:20px}
+.traffic-metric{min-width:0;padding:16px;background:var(--inset);border-radius:12px;
+border:1px solid var(--rule-soft);margin:0}
+.traffic-metric dt,.traffic-metric .traffic-label{font-size:12px;line-height:1.6;
+font-weight:500;color:var(--muted);display:block}
+.traffic-metric dd,.traffic-metric>strong{margin:7px 0 0;font-size:23px;font-weight:680;
+line-height:1.3;letter-spacing:-.025em;font-variant-numeric:tabular-nums;
+overflow-wrap:anywhere;display:block}
+.traffic-meta{font-size:12px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
+.traffic-status{display:inline-flex;align-items:center;font-size:12px;font-weight:600;
+line-height:1.5;border-radius:6px;padding:3px 8px;color:var(--muted);background:var(--inset);
+border:1px solid var(--rule-soft);max-width:100%;overflow-wrap:anywhere}
+.traffic-status.warn,.traffic-status.stale{color:var(--warn);background:var(--warn-bg);
+border-color:var(--warn-line)}
+.traffic-status.ok,.traffic-status.current{color:var(--ok);background:var(--ok-bg);
+border-color:var(--ok-line)}
+
 @media (max-width:820px){.usage-row{grid-template-columns:1fr;gap:10px}
-.strip{max-width:none}h1{font-size:25px}.page{padding-block:20px 36px}
-.topbar-in{padding:10px 16px}}
+.strip{max-width:none}h1{font-size:28px}.page{padding:24px 16px 44px}
+.topbar-in{padding:10px 16px}.traffic-panel{padding:20px 18px}}
+@media (max-width:600px){dl.traffic-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.traffic-metric{padding:12px}.traffic-metric dd{font-size:20px}}
 @media (max-width:420px){.strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
 """
 
@@ -1789,7 +1824,7 @@ def _strip_html(counts: Mapping[str, int]) -> str:
 def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, Any]],
                      now: float, cfg: Config, csrf: str = "", who: Any = None,
                      logins: Optional[Mapping[str, Any]] = None, extra: str = "",
-                     corner: str = "") -> str:
+                     corner: str = "", traffic_html: str = "") -> str:
     # who is None for callers that predate per-user accounts, which are all
     # operator-side, so the default is the full-privilege view.
     is_admin = who is None or getattr(who, "is_admin", True)
@@ -1886,7 +1921,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f'<h1>{admin_label(heading)}</h1><p class="sub">{admin_label(introduction)}</p>'
         f'<p class="sub small">{admin_label(cadence.capitalize())}{whoami}</p></div>'
         + '<div id="admin-health-counts" data-fleet-readonly>' + _strip_html(counts) + '</div>' +
-        "</header>" + extra
+        "</header>" + extra + (traffic_html if is_admin else "")
         + '<p><a href="/admin" data-fleet-status="admin" data-copy-zh=\"刷新状态\">Refresh '
             'status</a></p>'
         + '<h2 data-copy-zh=\"当前告警\">Open alerts</h2><div class="card" '

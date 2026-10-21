@@ -99,6 +99,8 @@ def test_legacy_tokens_remain_measured_without_inferred_model_cost_or_name():
                                 "cache_read_input_tokens": 10,
                                 "cache_creation_input_tokens": 20, "total_tokens": 330}
     assert entry["models"] == [] and result["model_samples"] == 0
+    assert entry["identified_model_samples"] == entry["unknown_model_samples"] == 0
+    assert entry["unrecorded_model_samples"] == 20 and entry["model_state"] == "unknown"
     assert result["estimated_usd"] is None and result["cost_state"] == "unknown"
     assert result["unpriced_samples"] == result["usage_samples"] == 20
     assert result["pricing"]["historical_model_backfill"] is False
@@ -110,6 +112,7 @@ def test_known_model_estimate_uses_matched_tokens_and_explicit_five_minute_cache
     assert result["state"] == "ready" and result["estimated_usd"] == pytest.approx(expected)
     assert result["cost_state"] == "complete"
     assert result["priced_samples"] == 20 and result["unpriced_samples"] == 0
+    assert result["identified_model_samples"] == 20 and result["model_state"] == "complete"
     model = result["entries"][0]["models"][0]
     assert model["model"] == MODEL and model["label"] == "Claude Sonnet 4.5"
     assert model["estimated_usd"] == result["estimated_usd"]
@@ -131,6 +134,8 @@ def test_mixed_legacy_and_new_coverage_keeps_unpriced_tokens_separate():
                              ["same"] * 3, {"same": "alice"}))
     entry = result["entries"][0]
     assert result["usage_samples"] == 60 and result["model_samples"] == 40
+    assert entry["identified_model_samples"] == entry["unknown_model_samples"] == 20
+    assert entry["unrecorded_model_samples"] == 20 and entry["model_state"] == "partial"
     assert result["priced_samples"] == 20 and result["unpriced_samples"] == 40
     assert result["tokens"]["total_tokens"] == 990
     assert sum(row["tokens"]["total_tokens"] for row in entry["models"]) == 660
@@ -243,6 +248,7 @@ def test_public_dto_has_no_raw_identity_or_private_payload_and_does_not_mutate()
     assert (fleet.slots, fleet.beats) == before
     entry = result["entries"][0]
     assert set(entry) == {"rank", "masked_handle", "masked_email", "member_code", *usage.COUNTERS,
+                          *usage.MODEL_COVERAGE_FIELDS, "model_state",
                           "unpriced_samples", "tokens",
                           "priced_tokens", "priced_token_state", "unpriced_tokens",
                           "unpriced_token_state",

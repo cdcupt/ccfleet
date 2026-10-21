@@ -12,6 +12,7 @@ import time
 from collections.abc import Mapping
 from typing import Any, Optional
 
+from ccfleet_agent.network_traffic import validate_observation as network_observation
 from ccfleet_agent.relay_metrics import DAY_SECONDS, WINDOW_DAYS, MetricsError, validate_report
 
 from .compatibility import clean as compatibility_report
@@ -421,6 +422,9 @@ def validate_heartbeat(payload: Any, node_id: str, *,
         "usage": _usage(usage),
         "quota": _quota(quota),
     }
+    network = network_observation(payload.get("network"))
+    if network is not None:
+        result["network"] = network
     # Only a shared machine carries these, and only when it says it is one, so
     # every ordinary node's stored heartbeat keeps exactly the shape it had.
     if payload.get("mode") == MACHINE_MODE:
