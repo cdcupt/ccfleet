@@ -460,6 +460,7 @@ border-radius:10px;display:grid;gap:8px;align-content:start}
 .offer-fields input,.offer-fields select{min-width:0;max-width:100%;width:100%!important}
 .offer-preview{margin:8px 0 12px;line-height:1.6}
 .offer-preview strong{font-size:17px;color:var(--acc)}
+.offer-preview>.sub,.offer-preview>strong{display:block}
 @media(max-width:900px){.offer-fields{grid-template-columns:1fr}.offer-costs table{min-width:680px}}
 
 /* A state, said the same way everywhere: a coloured dot and a word. */
