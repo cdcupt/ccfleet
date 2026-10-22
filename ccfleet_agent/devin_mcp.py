@@ -59,7 +59,11 @@ MAX_MESSAGES = 64
 MAX_NODES = 50000
 MAX_DEPTH = 64
 CALL_WAIT_S = 45
-SERVER_LIFETIME_S = 120
+# This clock starts before session setup and the MCP handshake. Keep the shim
+# alive for the whole native lease, including the later 120-second prompt.
+# Parent generation/transport deadlines still stop work sooner; a handoff also
+# retains its separate 45-second bound below.
+SERVER_LIFETIME_S = 180
 VERSIONS = frozenset({"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"})
 LATEST_VERSION = max(VERSIONS)
 MAX_LIFECYCLE = 64 * 1024
