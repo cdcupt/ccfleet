@@ -19,7 +19,9 @@ https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime
+import errno
 import fcntl
 import importlib.util
 import io
@@ -186,6 +188,28 @@ def hook_tool_names(catalog):
                  for tool in catalog.tools_list()["tools"])
 
 
+def _rename_exclusive(directory, source, destination):
+    """Publish one inode without replacing any existing directory entry."""
+    if sys.platform == "darwin":
+        symbol, flag = "renameatx_np", 4  # RENAME_EXCL from sys/stdio.h.
+    elif sys.platform.startswith("linux"):
+        symbol, flag = "renameat2", 1  # RENAME_NOREPLACE.
+    else:
+        raise OSError(errno.ENOTSUP, "atomic no-replace publication unavailable")
+    operation = getattr(ctypes.CDLL(None, use_errno=True), symbol, None)
+    if operation is None:
+        raise OSError(errno.ENOTSUP, "atomic no-replace publication unavailable")
+    operation.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+                          ctypes.c_uint)
+    operation.restype = ctypes.c_int
+    source, destination = os.fsencode(source), os.fsencode(destination)
+    if b"\0" in source or b"\0" in destination:
+        raise ValueError("embedded null byte")
+    ctypes.set_errno(0)
+    if operation(directory, source, directory, destination, flag) != 0:
+        raise OSError(ctypes.get_errno() or errno.EIO, "atomic no-replace publication failed")
+
+
 class RunDirectory:
     def __init__(self, path):
         value = Path(path)
@@ -250,22 +274,26 @@ class RunDirectory:
             0o600,
             dir_fd=self.fd,
         )
+        owned = None
         try:
             with os.fdopen(fd, "wb") as stream:
+                owned = os.fstat(stream.fileno())
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
-            # link is an atomic no-replace publication of a complete record.
-            os.link(
-                temporary,
-                name,
-                src_dir_fd=self.fd,
-                dst_dir_fd=self.fd,
-                follow_symlinks=False,
-            )
+            # A rename publishes the complete inode with exactly one link.
+            # link/unlink briefly exposes two links, which strict readers deny.
+            _rename_exclusive(self.fd, temporary, name)
         finally:
-            os.unlink(temporary, dir_fd=self.fd)
-        os.fsync(self.fd)
+            try:
+                current = os.stat(temporary, dir_fd=self.fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass  # Successful rename consumed this temporary name.
+            else:
+                if owned is not None and (current.st_dev, current.st_ino) == (
+                        owned.st_dev, owned.st_ino):
+                    os.unlink(temporary, dir_fd=self.fd)
+            os.fsync(self.fd)
 
 
 def _config(directory):
