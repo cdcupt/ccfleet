@@ -338,6 +338,86 @@ def test_metadata_commands_share_sixty_seconds_and_two_twenty_second_reads_pass(
     assert not list(scenario.state.iterdir())
 
 
+@pytest.mark.parametrize("budget", [10, 55.5, 60])
+def test_root_private_acquisition_budget_bounds_both_fixed_metadata_commands(
+        scenario, monkeypatch, budget):
+    now, deadlines = [0.0], []
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        now[0] += budget / 3
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0],
+                          acquisition_timeout_s=budget)
+    assert result.reason == "verified" and result.report["identity_verified"]
+    assert deadlines == [budget, budget]
+    assert [call[0][1:] for call in scenario.calls] == [
+        ["auth", "status"], ["models", "list", "--format", "json"]]
+    assert len(scenario.stopped) == 2 and not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("budget", [True, False, None, "60", 0, 9.999, 60.001,
+                                    float("nan"), float("inf"), float("-inf"),
+                                    pytest.param(10**1000, id="huge-int")])
+def test_invalid_acquisition_budget_is_refused_before_credentials_or_native_execution(
+        scenario, monkeypatch, budget):
+    monkeypatch.setattr(account, "_credential", lambda *_: pytest.fail("invalid budget read credential"))
+    with pytest.raises(account.AccountError, match="invalid_metadata_registration"):
+        scenario.run(popen_factory=scenario.popen, acquisition_timeout_s=budget)
+    assert not scenario.calls and not list(scenario.state.iterdir())
+
+
+def test_shorter_budget_timeout_cleans_both_metadata_processes_without_good(
+        scenario, monkeypatch):
+    now, deadlines = [0.0], []
+    capture = account._capture
+
+    def slow_read(process, **kwargs):
+        deadlines.append(kwargs["deadline"])
+        now[0] += 6
+        return capture(process, **kwargs)
+
+    monkeypatch.setattr(account, "_capture", slow_read)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0],
+                          acquisition_timeout_s=10)
+    assert deadlines == [10, 10] and result.cleanup_confirmed
+    assert result.reason == "metadata_authorization_or_timeout"
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.calls) == len(scenario.stopped) == 2
+    assert not list(scenario.state.iterdir())
+
+
+@pytest.mark.parametrize("phase", ["final-validation", "cleanup"])
+def test_final_validation_and_cleanup_cannot_publish_good_after_supplied_soft_deadline(
+        scenario, monkeypatch, phase):
+    now, validations = [0.0], []
+    validate = native.NativeConfig.validate
+    cleanup = account.shutil.rmtree
+
+    def slow_validation(self):
+        validations.append(self)
+        if phase == "final-validation" and len(validations) == 2:
+            now[0] = 10
+        return validate(self)
+
+    def slow_cleanup(path):
+        if phase == "cleanup":
+            now[0] = 10
+        return cleanup(path)
+
+    monkeypatch.setattr(native.NativeConfig, "validate", slow_validation)
+    monkeypatch.setattr(account.shutil, "rmtree", slow_cleanup)
+    result = scenario.run(popen_factory=scenario.popen, clock=lambda: now[0],
+                          acquisition_timeout_s=10)
+    assert result.reason == "native_metadata_timeout" and result.cleanup_confirmed
+    assert not result.report["identity_verified"] and result.credential_sha256 is None
+    assert len(scenario.calls) == len(scenario.stopped) == 2
+    assert not list(scenario.state.iterdir())
+
+
 def lookup_unavailable_status():
     return ("Logged in (via Devin).\nCredentials:\nAPI server: " + ORIGIN
             + "\nUser / team info: synthetic lookup failure\n").encode()
@@ -1065,8 +1145,11 @@ def registration(scenario):
             "runtime": scenario.runtime, "binding": asdict(scenario.binding)}
 
 
-def test_private_cli_loads_pins_and_returns_attestation_without_raw_metadata(scenario, monkeypatch):
-    pins = []
+@pytest.mark.parametrize("budget", [None, 10, 55.5, 60])
+def test_private_cli_loads_pins_and_returns_attestation_without_raw_metadata(
+        scenario, monkeypatch, budget):
+    pins, budgets = [], []
+    collect = account.collect_readiness
 
     def config_load(cls, path, *, expected_sha256):
         pins.append((path, expected_sha256))
@@ -1078,15 +1161,52 @@ def test_private_cli_loads_pins_and_returns_attestation_without_raw_metadata(sce
 
     monkeypatch.setattr(native.NativeConfig, "load", classmethod(config_load))
     monkeypatch.setattr(account.SubjectSourceProfile, "load", classmethod(source_load))
+
+    def bounded_collect(*args, **kwargs):
+        budgets.append(kwargs["acquisition_timeout_s"])
+        return collect(*args, **kwargs)
+
+    monkeypatch.setattr(account, "collect_readiness", bounded_collect)
+    payload = registration(scenario)
+    if budget is not None:
+        payload["acquisition_timeout_s"] = budget
     output = io.StringIO()
     assert account.main(["--collect-profile"],
-        stdin=io.BytesIO(json.dumps(registration(scenario)).encode()), stdout=output,
+        stdin=io.BytesIO(json.dumps(payload).encode()), stdout=output,
         popen_factory=scenario.popen) == 0
     value = json.loads(output.getvalue())
     assert len(pins) == 2 and pins[0][1] == "a" * 64 and pins[1][1] == "b" * 64
     assert value["credential_sha256"] == hashlib.sha256(CREDENTIAL).hexdigest()
     assert set(value["report"]) == REPORT_FIELDS and value["cleanup_confirmed"]
     assert SUBJECT not in output.getvalue() and SECRET.decode() not in output.getvalue()
+    assert budgets == [60 if budget is None else budget]
+
+
+@pytest.mark.parametrize("budget", [True, False, None, "60", 0, 9.999, 60.001,
+                                    float("nan"), float("inf"),
+                                    pytest.param(10**1000, id="huge-int")])
+def test_private_cli_invalid_optional_budget_never_loads_pins_or_collects(
+        scenario, monkeypatch, budget):
+    monkeypatch.setattr(native.NativeConfig, "load", lambda *_a, **_kw: pytest.fail("invalid loaded pins"))
+    monkeypatch.setattr(account, "collect_readiness", lambda *_a, **_kw: pytest.fail("invalid collected"))
+    payload = {**registration(scenario), "acquisition_timeout_s": budget}
+    output = io.StringIO()
+    assert account.main(["--collect-profile"], stdin=io.BytesIO(json.dumps(payload).encode()),
+                        stdout=output) == 2
+    value = json.loads(output.getvalue())
+    assert value["reason"] == "metadata_registration_rejected" and value["cleanup_confirmed"]
+    assert not scenario.calls
+
+
+def test_private_cli_optional_budget_does_not_allow_other_unreviewed_fields(scenario, monkeypatch):
+    monkeypatch.setattr(native.NativeConfig, "load", lambda *_a, **_kw: pytest.fail("invalid loaded pins"))
+    payload = {**registration(scenario), "acquisition_timeout_s": 55, "unreviewed": True}
+    output = io.StringIO()
+    assert account.main(["--collect-profile"], stdin=io.BytesIO(json.dumps(payload).encode()),
+                        stdout=output) == 2
+    value = json.loads(output.getvalue())
+    assert value["reason"] == "metadata_registration_rejected" and value["cleanup_confirmed"]
+    assert not scenario.calls
 
 
 @pytest.mark.parametrize("payload", [b"{}", b"not JSON", b"", b"x" * (65536 + 1)])

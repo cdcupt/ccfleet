@@ -39,6 +39,7 @@ import argparse
 import base64
 import binascii
 import contextlib
+import copy
 import grp
 import hashlib
 import io
@@ -1093,6 +1094,37 @@ def _checkpoint_native_observations(cfg, state, system, observations, *, desired
     return checkpoint, reports, verified
 
 
+def _final_key_observations(cfg, state, system, previous_controls, current_cycle_good):
+    """Revalidate this cycle's GOOD after keys-only lifecycle convergence.
+
+    The early checkpoint still withdraws changed authority. Only the normal
+    final save may pair the finalized control with an unchanged identity proof;
+    this helper neither installs grants nor replaces the proof's timestamp.
+    """
+    candidates = {}
+    for user, control in (state.get("devin_controls") or {}).items():
+        if state.get("slots") != [user] or user not in current_cycle_good:
+            continue
+        try:
+            provision = _native_provision()
+            old = provision.clean_control(previous_controls[user])
+            new = provision.clean_control(control)
+            if (old["claim"] != new["claim"] or old["runtime"] != new["runtime"]
+                    or old["keys"] == new["keys"]):
+                continue
+            candidates[user] = current_cycle_good[user]
+        except (ImportError, KeyError, TypeError, ValueError):
+            continue
+    if not candidates:
+        return {}
+    # Recheck the final account, root profile, credential, identity and original
+    # 240-second observation window. The trial worker separately keeps its
+    # 120-second new-turn margin and 300-second in-flight grant limit.
+    candidate = {**state, "devin_observations": candidates}
+    _, verified = native_provider_observations(cfg, candidate, system, fast=True)
+    return verified
+
+
 def converge_devin_access(desired, slots, cfg, system, observations, previous_users=()):
     """Reconcile before key installation and lifecycle changes; failures deny grants."""
     declared = desired.get("slots")
@@ -1444,6 +1476,10 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     except OSError:
         log.error("native observation checkpoint could not be saved")
         return 503, {}, dict(state)
+    # Keep only the result that passed this cycle's complete checkpoint guards.
+    # A later BAD/missing result must never fall back to the pre-cycle cache.
+    observed_controls = copy.deepcopy(state.get("devin_controls") or {})
+    current_cycle_good = copy.deepcopy(provider_observations)
     payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned,
                               provider_reports=provider_reports)
     # What each slot said, kept for the fast polls to repeat. Never the sign-in
@@ -1520,6 +1556,10 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     if handed is not None:
         passed[refresh_for] = handed
     new_state["quota_passed"] = passed
+    new_state["devin_observations"] = {
+        **new_state["devin_observations"],
+        **_final_key_observations(cfg, new_state, system, observed_controls, current_cycle_good),
+    }
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state
 

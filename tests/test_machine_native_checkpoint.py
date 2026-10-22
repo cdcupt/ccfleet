@@ -146,7 +146,15 @@ def test_authenticated_desired_clears_checkpoint_before_lifecycle_and_cannot_res
         assert machine.run_cycle(s.cfg, s.state, s.system)[0] == 200
     assert s.events[0][1]["devin_observations"]["slot01"]["checked_at"] == NOW
     lifecycle = next(saved for phase, saved in s.events if phase == "lifecycle")
-    assert lifecycle["devin_observations"] == s.saved()["devin_observations"] == {}
+    assert lifecycle["devin_observations"] == {}
+    if change == "key":
+        assert lifecycle["devin_controls"] == {}
+    if change == "key" and not interrupted:
+        observed = s.saved()["devin_observations"]["slot01"]
+        assert observed["checked_at"] == observed["report"]["observed_at"] == NOW
+        assert s.saved()["devin_controls"] == {"slot01": slot["devin_gateway"]}
+    else:
+        assert s.saved()["devin_observations"] == {}
 
 
 @pytest.mark.parametrize("change", ["revoke", "release", "login"])
