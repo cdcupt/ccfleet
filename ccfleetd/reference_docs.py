@@ -17,7 +17,7 @@ PUBLIC_FILES = frozenset({
     *("docs/" + name + ".html" for name in (
         "index", "guidebook", "compliance", "design", "runbooks", "tunnel",
         "local-relay", "public-gateway", "reliability-privacy", "platform-comparison",
-        "platform-improvements", "devin",
+        "platform-improvements", "devin", "devin-trial-foundation",
         "local-relay-verification", "live-folders-verification", "project-workspaces",
         "project-workspaces-verification",
     )),

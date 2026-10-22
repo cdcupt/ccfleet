@@ -204,12 +204,22 @@ class TrialRuntime:
         except (ValueError, TypeError, RecursionError):
             raise TrialUnavailable("trial_requires_supported_opus_5_5_request", 400) from None
         forwarded = devin_native._encode(clean)
-        # Reject an existing safety pause before contacting the worker. SSH
-        # readiness itself is model-free and must not consume the execution
-        # permit while the remote connection/policy is still being checked.
+        # Reject known pauses and exhausted budgets before contacting the worker.
+        # Admission below rechecks transactionally after model-free readiness;
+        # this snapshot never reserves a lease or an execution turn.
         with self._ledger() as book:
-            if book.allowance(who).paused:
+            allowance = book.allowance(who)
+            if allowance.paused:
                 raise TrialUnavailable("trial_paused", 429)
+            if (allowance.available_tokens <= 0 or allowance.remaining_requests <= 0
+                    or allowance.remaining_leases <= 0):
+                raise TrialUnavailable("daily_limit_reached", 429)
+            if (allowance.global_available_tokens <= 0 or allowance.remaining_global_requests <= 0
+                    or allowance.remaining_global_leases <= 0):
+                raise TrialUnavailable("global_daily_limit_reached", 429)
+            if (allowance.remaining_runtime_seconds < ledger.MAX_STEP_S
+                    or allowance.global_remaining_runtime_seconds < ledger.MAX_STEP_S):
+                raise TrialUnavailable("runtime_reservation_limit", 429)
         attempt = self.transport(
             self.target, SimpleNamespace(gateway_ssh_key_path=self.cfg.devin_trial_ssh_key_file)
         )

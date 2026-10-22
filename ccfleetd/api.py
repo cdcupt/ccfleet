@@ -475,6 +475,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                        "/docs/library/", "/docs/library/docs/index.html",
                        "/docs/library/docs/public-gateway.html",
                        "/docs/library/docs/devin.html",
+                       "/docs/library/docs/devin-trial-foundation.html",
                        "/docs/library/docs/platform-comparison.html"}
             return (path.rstrip("/") in ADMIN_PAGES or admin_form(path)
                     or path in current or customer_docs.page_for(path) is not None

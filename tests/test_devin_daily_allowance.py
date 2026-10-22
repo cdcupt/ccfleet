@@ -290,17 +290,17 @@ def test_same_day_limits_survive_process_reopen(tmp_path):
 
 def test_daily_requests_and_admission_caps_are_not_refunded_by_zero_usage(scene):
     ledger, _, _ = scene
-    for _ in range(4):
+    for completed in range(0, t.DAILY_REQUESTS, t.MAX_STEPS):
         lease = enter(ledger)
-        for _ in range(5):
+        for _ in range(min(t.MAX_STEPS, t.DAILY_REQUESTS - completed)):
             finish(ledger, lease, begin(ledger, lease), 0)
         ledger.close(ALICE, lease, cleanup_confirmed=True)
     assert (
         ledger.allowance(ALICE).remaining_requests == 0
         and ledger.admit(ALICE).code == "daily_limit_reached"
     )
-    # The hard global turn cap is now also twenty. Other accounts cannot
-    # bypass it after this user's twenty requests, even with measured zero.
+    # Both configured request caps still apply even when measured usage is zero.
+    # Another account cannot bypass the exhausted shared cap.
     assert ledger.admit(BOB).code == "global_daily_limit_reached"
 
 

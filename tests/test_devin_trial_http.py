@@ -72,6 +72,84 @@ def token(t):
     return found[0].decode()
 
 
+def test_runtime_limit_has_clear_reset_message_without_worker_contact_or_spending(http):
+    key = token(http)
+    principal = devin_trial.VerifiedAccount(http.alice["id"], True)
+    with http.runtime._ledger() as book:
+        book.allowance(principal)
+        day = int(http.now[0] // 86400)
+        book.connection.execute(
+            "UPDATE devin_trial_account_days SET runtime_seconds=? WHERE account_id=? AND utc_day=?",
+            (devin_trial.DAILY_RUNTIME_S - 80, principal.account_id, day),
+        )
+        book.connection.execute(
+            "UPDATE devin_trial_global_days SET runtime_seconds=? WHERE utc_day=?",
+            (devin_trial.GLOBAL_DAILY_RUNTIME_S - 80, day),
+        )
+        book.connection.commit()
+        before = list(book.connection.iterdump())
+    http.runtime.transport = lambda *a, **k: pytest.fail("exhausted quota contacted worker")
+    status, headers, raw = call(http.server, "POST", "/trial/v1/messages", body(), {
+        "x-api-key": key, "Content-Type": "application/json",
+    })
+    assert status == 429 and headers["x-should-retry"] == "false"
+    error = json.loads(raw)["error"]["message"]
+    assert "160-second reservation" in error and "00:00 UTC" in error
+    assert "Remaining tokens do not override" in error
+    assert "runtime_reservation_limit" not in error
+    with http.runtime._ledger() as book:
+        assert list(book.connection.iterdump()) == before
+
+
+def test_nested_anthropic_web_search_stays_rejected_before_runtime_or_worker(http):
+    key = token(http)
+    with http.runtime._ledger() as book:
+        before = list(book.connection.iterdump())
+    http.runtime.transport = lambda *a, **k: pytest.fail("server tool request contacted worker")
+    raw = body(tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}])
+    status, headers, response = call(http.server, "POST", "/trial/v1/messages", raw, {
+        "x-api-key": key, "Content-Type": "application/json",
+    })
+    assert status == 400 and headers["x-should-retry"] == "false"
+    assert b"Deferred, server-side or other extended tool declarations" in response
+    with http.runtime._ledger() as book:
+        assert list(book.connection.iterdump()) == before
+
+
+@pytest.mark.parametrize("block", [
+    {"type": "server_tool_use", "id": "srvtoolu_old", "name": "web_search",
+     "input": {"query": "synthetic query"}},
+    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_old", "content": []},
+])
+def test_resumed_server_web_history_rejects_without_worker_or_allowance_change(http, block):
+    key = token(http)
+    with http.runtime._ledger() as book:
+        before = list(book.connection.iterdump())
+    http.runtime.transport = lambda *a, **k: pytest.fail("unsupported history contacted worker")
+    raw = body(messages=[{"role": "user", "content": "synthetic question"},
+                         {"role": "assistant", "content": [block]},
+                         {"role": "user", "content": "hello"}])
+    status, headers, _ = call(http.server, "POST", "/trial/v1/messages", raw, {
+        "x-api-key": key, "Content-Type": "application/json",
+    })
+    assert status == 400 and headers["x-should-retry"] == "false"
+    with http.runtime._ledger() as book:
+        assert list(book.connection.iterdump()) == before
+
+
+def test_plain_declared_mcp_network_tool_is_accepted(http):
+    key = token(http)
+    raw = body(tools=[{"name": "mcp__network__Search", "description": "Local search tool",
+                      "input_schema": {"type": "object", "properties": {
+                          "query": {"type": "string"}}, "required": ["query"]}}])
+    status, _, response = call(http.server, "POST", "/trial/v1/messages", raw, {
+        "x-api-key": key, "Content-Type": "application/json",
+    })
+    assert status == 200 and json.loads(response)["stop_reason"] == "end_turn"
+    allowance = http.runtime.allowance(http.alice)
+    assert not allowance["paused"] and allowance["remaining_requests"] == devin_trial.DAILY_REQUESTS - 1
+
+
 def test_trial_get_signin_link_no_purchase_and_own_key_persists_after_refresh(http, caplog):
     t = http
     status, headers, raw = call(t.server, "GET", "/en/account/devin-trial")
@@ -238,7 +316,7 @@ def test_trial_request_at192kib_reaches_exactly_one_worker(http):
     assert status == 200 and headers["x-should-retry"] == "false"
     assert len(requests) == 1
     assert json.loads(requests[0])["messages"] == json.loads(raw)["messages"]
-    assert http.runtime.allowance(http.alice)["remaining_requests"] == 19
+    assert http.runtime.allowance(http.alice)["remaining_requests"] == devin_trial.DAILY_REQUESTS - 1
     with http.runtime._ledger() as ledger:
         assert ledger.connection.execute("SELECT COUNT(*) FROM devin_trial_sessions").fetchone()[0] == 1
 
@@ -273,7 +351,7 @@ def test_trial_model_rejects_foreign_auth_or_browser_framing_before_worker(http,
     key = token(http)
     values = {"Authorization": "Bearer " + key, "Content-Type": "application/json", **headers}
     assert call(http.server, "POST", "/trial/v1/messages", body(), values)[0] in {400, 401}
-    assert http.runtime.allowance(http.alice)["remaining_requests"] == 20
+    assert http.runtime.allowance(http.alice)["remaining_requests"] == devin_trial.DAILY_REQUESTS
 
 
 def test_trial_unsupported_history_has_static_actionable_code_before_admission(http, caplog):
@@ -505,6 +583,8 @@ def test_opus_model_env_names_are_fixed_and_command_contains_no_owner_binding(ht
         "--safe-mode",
         "--permission-mode",
         "bypassPermissions",
+        "--disallowedTools",
+        "WebSearch,WebFetch",
     ]
     pairs = dict(part.split("=", 1) for part in words[1:executable])
     assert pairs["ANTHROPIC_BASE_URL"] == "https://fleet.invalid/trial"

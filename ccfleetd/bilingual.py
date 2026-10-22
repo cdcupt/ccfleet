@@ -15,6 +15,7 @@ CURRENT_PAGES = frozenset({
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
     '/docs/library/docs/devin.html',
+    '/docs/library/docs/devin-trial-foundation.html',
     '/docs/library/docs/platform-comparison.html',
 })
 ADMIN_PAGES = frozenset({'/admin', '/auth/basic'})
@@ -53,6 +54,7 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/docs/library/docs/index.html': '文档',
              '/docs/library/docs/public-gateway.html': 'HTTPS 接入指南',
              '/docs/library/docs/devin.html': '为什么评估 Devin',
+             '/docs/library/docs/devin-trial-foundation.html': 'Devin 试用技术设计',
              '/docs/library/docs/platform-comparison.html': 'CC Fleet 架构与验证',
              '/admin': 'Fleet 管理后台', '/auth/basic': '管理员登录',
              '/account/gateway/create': '连接密钥'}

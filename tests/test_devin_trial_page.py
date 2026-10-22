@@ -48,7 +48,12 @@ def context():
     allowance = {
         "token_limit": 1000000, "global_token_limit": 10000000, "available_tokens": 982500, "reported_tokens": 15000, "reserved_tokens": 2500,
         "unmeasured_reserved_tokens": 2500, "partial_reported_tokens": 1000,
-        "global_available_tokens": 9982500, "remaining_requests": 18,
+        "global_available_tokens": 9982500, "remaining_requests": 198,
+        "remaining_global_requests": 198, "remaining_leases": 198,
+        "remaining_global_leases": 198, "remaining_turns": 73,
+        "remaining_runtime_seconds": 11680, "global_remaining_runtime_seconds": 11680,
+        "runtime_limit_seconds": 12000, "global_runtime_limit_seconds": 12000,
+        "turn_reservation_seconds": 160, "request_limit": 200, "global_request_limit": 200,
         "resets_at": 1735776000, "paused": False,
     }
     return SimpleNamespace(
@@ -104,6 +109,7 @@ def test_key_creation_has_visible_success_and_copyable_command(context):
     assert words[executable:] == [
         "claude", "--model", "claude-opus-5-5", "--effort", "max",
         "--safe-mode", "--permission-mode", "bypassPermissions",
+        "--disallowedTools", "WebSearch,WebFetch",
     ]
     assert "ENABLE_TOOL_SEARCH=false" in words[1:executable]
     assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" in words[1:executable]
@@ -120,6 +126,7 @@ def test_saved_command_update_keeps_key_and_explains_session_only_defaults(conte
     assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" in markup
     assert "CLAUDE_CODE_DISABLE_THINKING=1" in markup
     assert "--safe-mode --permission-mode bypassPermissions" in markup
+    assert "--disallowedTools WebSearch,WebFetch" in markup
     assert 'id="trial-command"' not in markup
     if language == "en":
         for phrase in (
@@ -156,7 +163,9 @@ def test_allowance_meter_displays_remaining_units_and_holds_separately(context):
     }]
     assert "982,500" in markup and "15,000" in markup and "2,500" in markup
     assert "Reported tokens" in markup and "Tokens held for accounting" in markup
-    assert "Request cap remaining" in markup and ">18</dd>" in markup
+    assert "More model turns (up to)" in markup and ">73</dd>" in markup
+    assert "Your runtime remaining" in markup and "Shared runtime remaining" in markup
+    assert "11,680 seconds" in markup and "Each model turn reserves 160 seconds" in markup
     assert "Each reply has up to 2 minutes to generate." in markup
     assert "Reserved runtime can reach the daily time limit" in markup
     assert "All users share 10,000,000 tokens per day." in markup
@@ -174,6 +183,44 @@ def test_allowance_uses_runtime_limits_instead_of_hardcoded_meter(context):
     assert "tokens available / 250,000 per day" in markup
     assert "All users share 2,500,000 tokens per day" in markup
     assert "US$0.03–US$2.50 API value" in markup
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_runtime_exhaustion_shows_zero_turns_and_keeps_token_allowance_visible(context, shared):
+    field = "global_remaining_runtime_seconds" if shared else "remaining_runtime_seconds"
+    context.allowance.update({field: 80, "remaining_turns": 0, "remaining_requests": 13})
+    markup = render(context)
+    assert "Today&#x27;s trial runtime cannot fit another turn" in markup
+    assert "80 seconds" in markup and "Each model turn reserves 160 seconds" in markup
+    assert "Remaining tokens do not override the time limit" in markup
+    assert "More model turns (up to)" in markup and ">0</dd>" in markup
+    assert "982,500" in markup
+    chinese = render(context, language="zh")
+    assert "今日剩余运行时间不足以开始下一轮" in chinese
+    assert "预留 160 秒" in chinese and "80 秒" in chinese
+    assert "Today's trial runtime" not in chinese
+
+
+def test_limits_copy_uses_actual_runtime_and_request_caps(context):
+    context.allowance.update(request_limit=90, global_request_limit=100,
+                             runtime_limit_seconds=5400, global_runtime_limit_seconds=6000)
+    markup = render(context)
+    assert "90 turns and 90 reserved runtime minutes per person" in markup
+    assert "100 turns and 100 minutes shared" in markup
+    assert "A fast reply still uses its full runtime reservation" in markup
+    assert "rejected before execution do not reserve model runtime" in markup
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_builtin_web_tools_are_explicitly_unavailable_without_removing_mcp_option(context, language):
+    markup = render(context, language=language)
+    assert "--disallowedTools WebSearch,WebFetch" in markup
+    if language == "en":
+        assert "Built-in WebSearch and WebFetch are unavailable" in markup
+        assert "compatible local or MCP tool" in markup
+    else:
+        assert "不支持内置 WebSearch 和 WebFetch" in markup
+        assert "兼容的本地或 MCP 工具" in markup
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
@@ -216,7 +263,9 @@ def test_paused_service_and_successful_key_creation_are_explained_separately(con
     assert "Trial key created" in markup
 
 
-@pytest.mark.parametrize("limit", ["available_tokens", "global_available_tokens", "remaining_requests"])
+@pytest.mark.parametrize("limit", ["available_tokens", "global_available_tokens", "remaining_requests",
+                                   "remaining_global_requests", "remaining_leases",
+                                   "remaining_global_leases"])
 def test_exhausted_daily_limits_explain_reset_without_replacement(context, limit):
     context.allowance[limit] = 0
     markup = render(context)

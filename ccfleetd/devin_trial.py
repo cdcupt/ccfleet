@@ -27,19 +27,20 @@ MAX_RUNTIME_S = 180
 MAX_STEP_S = 160
 MAX_REQUEST_BYTES = 192 * 1024
 TURN_RESERVATION_TOKENS = 20_000
-DAILY_REQUESTS = 20
-GLOBAL_DAILY_REQUESTS = 20
+DAILY_REQUESTS = 200
+GLOBAL_DAILY_REQUESTS = 200
 # A longer individual turn does not increase either daily runtime allowance.
-DAILY_RUNTIME_S = 1200
-GLOBAL_DAILY_RUNTIME_S = 1200
-DAILY_LEASES = 20
-GLOBAL_DAILY_LEASES = 20
+DAILY_RUNTIME_S = 12_000
+GLOBAL_DAILY_RUNTIME_S = 12_000
+DAILY_LEASES = 200
+GLOBAL_DAILY_LEASES = 200
 DEFAULT_DAILY_TOKENS = 1_000_000
 DEFAULT_GLOBAL_DAILY_TOKENS = 10_000_000
 # These complete records intentionally name the reviewed predecessor and target.
 # Future request/time/lease changes require their own explicit migration.
 _LIMITS_BEFORE_TOKEN_EXPANSION = "[4,20000,100000,1000000,20,20,1200,1200,20,20]"
 _LIMITS_AFTER_TOKEN_EXPANSION = "[4,20000,1000000,10000000,20,20,1200,1200,20,20]"
+_LIMITS_AFTER_ADMISSION_EXPANSION = "[4,20000,1000000,10000000,200,200,12000,12000,200,200]"
 MAX_REPORTED_TOKENS = 10**12
 _ACCOUNT = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _ID = re.compile(r"[0-9a-f]{64}\Z")
@@ -145,6 +146,19 @@ class DailyAllowance:
     unmeasured_reserved_tokens: int = 0
     partial_reported_tokens: int = 0
     global_token_limit: int = 0
+    remaining_runtime_seconds: int = 0
+    global_remaining_runtime_seconds: int = 0
+    runtime_limit_seconds: int = 0
+    global_runtime_limit_seconds: int = 0
+    turn_reservation_seconds: int = 0
+    remaining_global_requests: int = 0
+    remaining_leases: int = 0
+    remaining_global_leases: int = 0
+    remaining_turns: int = 0
+    request_limit: int = 0
+    global_request_limit: int = 0
+    lease_limit: int = 0
+    global_lease_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -259,7 +273,7 @@ class TrialLedger:
                 if prior is None:
                     raise TrialError("trial_limits_changed")
                 if prior[0] != limits:
-                    self._migrate_token_limits(prior[0], limits)
+                    self._migrate_limits(prior[0], limits)
                 self._migrate_session_limits()
             for statement in schema.split(";"):
                 if statement.strip():
@@ -279,10 +293,14 @@ class TrialLedger:
             ):
                 raise TrialError("trial_limits_changed")
 
-    def _migrate_token_limits(self, previous, expected):
-        """Expand only the known token budgets without resetting incident state."""
-        if (previous != _LIMITS_BEFORE_TOKEN_EXPANSION
-                or expected != _LIMITS_AFTER_TOKEN_EXPANSION):
+    def _migrate_limits(self, previous, expected):
+        """Follow only reviewed expansion policies, never resetting incident state."""
+        successors = {
+            _LIMITS_BEFORE_TOKEN_EXPANSION: {
+                _LIMITS_AFTER_TOKEN_EXPANSION, _LIMITS_AFTER_ADMISSION_EXPANSION},
+            _LIMITS_AFTER_TOKEN_EXPANSION: {_LIMITS_AFTER_ADMISSION_EXPANSION},
+        }
+        if expected not in successors.get(previous, set()):
             raise TrialError("trial_limits_changed")
         row = self.connection.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='devin_trial_control'"
@@ -489,20 +507,34 @@ class TrialLedger:
             now = self._tick()
             day = int(now // 86400)
             user, total = self._days(principal.account_id, day)
+            available = max(0, self.daily_token_limit - user[0] - user[1])
+            global_available = max(0, self.global_daily_token_limit - total[0] - total[1])
+            remaining_requests = max(0, DAILY_REQUESTS - user[2])
+            remaining_global_requests = max(0, GLOBAL_DAILY_REQUESTS - total[2])
+            remaining_runtime = max(0, DAILY_RUNTIME_S - user[3])
+            global_remaining_runtime = max(0, GLOBAL_DAILY_RUNTIME_S - total[3])
+            remaining_leases = max(0, DAILY_LEASES - user[4])
+            remaining_global_leases = max(0, GLOBAL_DAILY_LEASES - total[4])
+            paused = bool(self.connection.execute(
+                "SELECT paused FROM devin_trial_control WHERE id=1"
+            ).fetchone()[0])
+            # An upper bound from independent admission budgets, not a promise
+            # that future model usage fits the remaining token allowance.
+            remaining_turns = min(remaining_requests, remaining_global_requests,
+                remaining_leases, remaining_global_leases,
+                remaining_runtime // MAX_STEP_S, global_remaining_runtime // MAX_STEP_S)
+            if paused or not self.enabled or not available or not global_available:
+                remaining_turns = 0
             return DailyAllowance(
                 dt.datetime.fromtimestamp(day * 86400, dt.timezone.utc).date().isoformat(),
                 float((day + 1) * 86400),
                 self.daily_token_limit,
                 user[0],
                 user[1],
-                max(0, self.daily_token_limit - user[0] - user[1]),
-                max(0, self.global_daily_token_limit - total[0] - total[1]),
-                max(0, DAILY_REQUESTS - user[2]),
-                bool(
-                    self.connection.execute(
-                        "SELECT paused FROM devin_trial_control WHERE id=1"
-                    ).fetchone()[0]
-                ),
+                available,
+                global_available,
+                remaining_requests,
+                paused,
                 self.enabled,
                 False,
                 *self.connection.execute(
@@ -512,6 +544,19 @@ class TrialLedger:
                     (principal.account_id, day),
                 ).fetchone(),
                 global_token_limit=self.global_daily_token_limit,
+                remaining_runtime_seconds=remaining_runtime,
+                global_remaining_runtime_seconds=global_remaining_runtime,
+                runtime_limit_seconds=DAILY_RUNTIME_S,
+                global_runtime_limit_seconds=GLOBAL_DAILY_RUNTIME_S,
+                turn_reservation_seconds=MAX_STEP_S,
+                remaining_global_requests=remaining_global_requests,
+                remaining_leases=remaining_leases,
+                remaining_global_leases=remaining_global_leases,
+                remaining_turns=remaining_turns,
+                request_limit=DAILY_REQUESTS,
+                global_request_limit=GLOBAL_DAILY_REQUESTS,
+                lease_limit=DAILY_LEASES,
+                global_lease_limit=GLOBAL_DAILY_LEASES,
             )
 
     def admit(self, principal: VerifiedAccount, *, lease_seconds: int = MAX_LEASE_S) -> Decision:

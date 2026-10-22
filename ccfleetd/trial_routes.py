@@ -15,9 +15,10 @@ import threading
 
 from ccfleet_agent import devin_relay
 
+from . import devin_trial as trial_limits
 from . import gateway, usersite
 from .bilingual import bi, label
-from .devin_trial import MAX_REQUEST_BYTES
+from .devin_trial import MAX_REQUEST_BYTES, MAX_STEP_S
 from .trial_runtime import TrialUnavailable
 from .trial_worker_transport import MODEL
 
@@ -189,7 +190,11 @@ def guide():
             "stay conservatively "
             "held for that turn (or the larger known subtotal). This is not an "
             "exact token or USD "
-            "hard cap. One global active turn, twenty turns/twenty reserved minutes per day; "
+            "hard cap. One global active turn; daily per-account caps are "
+            f"{trial_limits.DAILY_REQUESTS:,} model turns and "
+            f"{trial_limits.DAILY_RUNTIME_S // 60:,} reserved runtime minutes. Shared caps are "
+            f"{trial_limits.GLOBAL_DAILY_REQUESTS:,} turns and "
+            f"{trial_limits.GLOBAL_DAILY_RUNTIME_S // 60:,} reserved minutes; "
             "a busy worker asks you to wait. Unknown execution or cleanup pauses new work. "
             "Paid private slots and their own-provider subscriptions remain separate.</p>",
             '<p>显示<a href="/account/devin-trial"'
@@ -201,7 +206,11 @@ def guide():
             '<p>每日每账号额度为 1,000,000 token，所有用户共享 10,000,000 token，'
             'UTC 零点重置。完整计量按已报告用量结算；'
             "只缺少原生缓存读取计量时，每轮保守保留最多 20,000 token 额度，已知部分更大则保留更多。"
-            "这不是精确 token 或美元硬上限。全局同时仅一轮，每日最多二十轮、预留二十分钟；"
+            "这不是精确 token 或美元硬上限。全局同时仅一轮。每日每账号最多 "
+            f"{trial_limits.DAILY_REQUESTS:,} 轮、"
+            f"预留 {trial_limits.DAILY_RUNTIME_S // 60:,} 分钟；"
+            f"全局共享 {trial_limits.GLOBAL_DAILY_REQUESTS:,} 轮、"
+            f"{trial_limits.GLOBAL_DAILY_RUNTIME_S // 60:,} 分钟；"
             "忙碌时请稍候。执行或清理不确定时暂停。付费私人槽位及自有服务商订阅仍独立使用。</p>",
         )
         + "</section>"
@@ -286,7 +295,7 @@ def _trial_setup(cfg, csrf, token):
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 ENABLE_TOOL_SEARCH=false "
             "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 CLAUDE_CODE_DISABLE_THINKING=1 "
             "claude --model " + MODEL + " --effort max --safe-mode "
-            "--permission-mode bypassPermissions"
+            "--permission-mode bypassPermissions --disallowedTools WebSearch,WebFetch"
         )
         setup += (
             "<p>" + label(
@@ -325,7 +334,8 @@ def _trial_setup(cfg, csrf, token):
                 " before ", " 放在 ", inline=True,
             ) + '<code>claude</code>' + label(
                 " and append ", " 之前，并在启动选项末尾添加 ", inline=True,
-            ) + '<code>--safe-mode --permission-mode bypassPermissions</code>' + label(
+            ) + '<code>--safe-mode --permission-mode bypassPermissions '
+            '--disallowedTools WebSearch,WebFetch</code>' + label(
                 ". You do not need a replacement key.",
                 "。无需更换密钥。", inline=True,
             ) + "</p></div>"
@@ -342,7 +352,18 @@ def _trial_setup(cfg, csrf, token):
             "可加载自定义配置，但请求仍须符合试用限制。"
             "首次启动时，Claude Code 可能要求确认绕过权限模式。", inline=True,
         ) + '</p>'
-        '</li><li class="trial-step"><h3>'
+        '<p class="trial-key-note">' + label(
+            "Built-in WebSearch and WebFetch are unavailable in this Devin trial. "
+            "For web access, use a compatible local or MCP tool, "
+            "or use Claude for those built-ins. If an older conversation contains "
+            "unsupported web-tool history, start a new conversation with this command.",
+            "此 Devin 试用不支持内置 WebSearch 和 WebFetch。"
+            "需要联网时，请使用兼容的本地或 MCP 工具，"
+            "或切换到 Claude 使用这些内置工具。若旧对话含有不支持的网页工具历史，"
+            "请用此命令开启新对话。", inline=True,
+        ) + '</p><p><a href="/docs/library/docs/devin-trial-foundation.html">'
+        + label("How the trial works, explained simply", "试用工作原理通俗说明", inline=True)
+        + '</a></p></li><li class="trial-step"><h3>'
         + label("Paste, launch, and ask something small", "粘贴启动，先问一个小问题", inline=True)
         + "</h3><p>" + label(
             "Open Terminal on macOS or Linux, or a WSL terminal on Windows. "
@@ -436,10 +457,17 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
     )
     body += bi(
         "<p>One active turn globally. If busy, wait a few seconds and submit again; "
-        "no idle session holds the worker. At most 20 turns and 20 reserved runtime minutes "
-        "per person and globally per UTC day; each native turn has at most 120 seconds of "
+        "no idle session holds the worker. At most "
+        f"{allowance['request_limit']:,} turns and {allowance['runtime_limit_seconds'] // 60:,} "
+        "reserved runtime minutes per person and "
+        f"{allowance['global_request_limit']:,} turns and "
+        f"{allowance['global_runtime_limit_seconds'] // 60:,} minutes shared per UTC day; "
+        "each native turn has at most 120 seconds of "
         "generation and reserves 160 seconds of runtime. Reserved runtime can reach the daily "
-        "time limit before the request cap. Keep requests short (192 KiB including "
+        "time limit before the request cap. A fast reply still uses its full runtime reservation. "
+        "A tool handoff and its continuation count as separate model turns; unsupported requests "
+        "rejected before execution do not reserve model runtime. "
+        "Keep requests short (192 KiB including "
         "tools/history). Before each turn "
         "we reserve up to 20,000 remaining tokens of allowance. Complete input, output, cache-read "
         "and cache-creation usage settles the actual total, including overshoot.</p>"
@@ -450,8 +478,13 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         "this is admission accounting, not a precise generation, vendor quota "
         "or USD hard cap.</p>",
         "<p>全局同时仅处理一轮；忙碌时请稍等再提交，空闲会话不会占用工作进程。"
-        "每人及全局每日均最多 20 轮、预留 20 分钟运行时间；每轮原生生成最多 120 秒，"
+        f"每人每日最多 {allowance['request_limit']:,} 轮、"
+        f"预留 {allowance['runtime_limit_seconds'] // 60:,} 分钟运行时间；"
+        f"全局共享 {allowance['global_request_limit']:,} 轮、"
+        f"{allowance['global_runtime_limit_seconds'] // 60:,} 分钟。每轮原生生成最多 120 秒，"
         "预留 160 秒运行时间。预留运行时间可能先达到每日上限。"
+        "即使回复很快，仍会占用整笔运行时间预留。工具交接和后续回复分别计为模型轮次；"
+        "执行前被拒绝的不支持请求不会预留模型运行时间。"
         "请求（含工具及历史）最多 192 KiB。每轮先预留最多 20,000 剩余 token 额度，"
         "完整的输入、输出、缓存读取及创建用量按实际总数结算，超额也完整计算。</p>"
         "<p>若已验证模型且整轮清理完成，但 Devin 只缺少缓存读取计量，则整笔预留额度保留至 UTC "
@@ -468,8 +501,25 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
             "更换密钥无法恢复服务，请稍后再试。", tone="paused",
         )
     elif (
+        allowance["remaining_runtime_seconds"] < allowance["turn_reservation_seconds"]
+        or allowance["global_remaining_runtime_seconds"] < allowance["turn_reservation_seconds"]
+    ):
+        introduction += _trial_status(
+            "Today's trial runtime cannot fit another turn", "今日剩余运行时间不足以开始下一轮",
+            f"Each model turn reserves {allowance['turn_reservation_seconds']:,} seconds. "
+            f"Your runtime remaining: {allowance['remaining_runtime_seconds']:,} seconds; "
+            f"shared remaining: {allowance['global_remaining_runtime_seconds']:,} seconds. "
+            "Resets at 00:00 UTC. Remaining tokens do not override the time limit.",
+            f"每轮模型请求预留 {allowance['turn_reservation_seconds']:,} 秒。"
+            f"个人剩余 {allowance['remaining_runtime_seconds']:,} 秒；"
+            f"全局共享剩余 {allowance['global_remaining_runtime_seconds']:,} 秒。"
+            "UTC 00:00 重置；即使还有 token，也仍需遵守时间限制。", tone="paused",
+        )
+    elif (
         allowance["available_tokens"] <= 0 or allowance["global_available_tokens"] <= 0
         or allowance["remaining_requests"] <= 0
+        or allowance["remaining_global_requests"] <= 0
+        or allowance["remaining_leases"] <= 0 or allowance["remaining_global_leases"] <= 0
     ):
         introduction += _trial_status(
             "Today's trial limit has been reached", "今日试用额度已用完",
@@ -519,8 +569,19 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         + f"{allowance['reported_tokens']:,}" + "</dd></div><div><dt>"
         + label("Tokens held for accounting", "计量预留 token 额度", inline=True) + "</dt><dd>"
         + f"{allowance['reserved_tokens']:,}" + "</dd></div><div><dt>"
-        + label("Request cap remaining", "剩余请求上限", inline=True) + "</dt><dd>"
-        + str(allowance["remaining_requests"]) + '</dd></div></dl><p class="trial-reset">'
+        + label("More model turns (up to)", "当前限制下最多还能进行的轮次", inline=True)
+        + "</dt><dd>" + str(allowance["remaining_turns"]) + "</dd></div><div><dt>"
+        + label("Your runtime remaining", "个人剩余运行时间", inline=True) + "</dt><dd>"
+        + label(f"{allowance['remaining_runtime_seconds']:,} seconds",
+                f"{allowance['remaining_runtime_seconds']:,} 秒", inline=True)
+        + "</dd></div><div><dt>"
+        + label("Shared runtime remaining", "全局共享剩余运行时间", inline=True) + "</dt><dd>"
+        + label(f"{allowance['global_remaining_runtime_seconds']:,} seconds",
+                f"{allowance['global_remaining_runtime_seconds']:,} 秒", inline=True)
+        + '</dd></div></dl><p class="trial-reset">'
+        + label(f"Each model turn reserves {allowance['turn_reservation_seconds']:,} seconds.",
+                f"每轮模型请求预留 {allowance['turn_reservation_seconds']:,} 秒。", inline=True)
+        + "<br>"
         + label("Resets every day at 00:00 UTC.", "每天 UTC 00:00 重置。", inline=True)
         + "<br>" + label(f"All users share {global_limit:,} tokens per day.",
                                  f"所有用户共享每日 {global_limit:,} token。", inline=True)
@@ -654,8 +715,13 @@ def handle(runtime, handler):
             "trial_request_rate_limit": "Too many trial requests. Wait a few seconds.",
             "daily_limit_reached": "Your daily trial allowance or turn/time limit is used. "
             "It resets at 00:00 UTC.",
-            "global_daily_limit_reached": "The shared daily trial allowance or twenty-turn "
-            "limit is used. It resets at 00:00 UTC.",
+            "global_daily_limit_reached": "The shared daily trial token, turn or request "
+            "allowance is used up. It resets at 00:00 UTC.",
+            "runtime_reservation_limit": "The daily trial runtime allowance cannot fit "
+            f"another {MAX_STEP_S}-second reservation. It resets at 00:00 UTC. "
+            "Remaining tokens do not override this time limit.",
+            "lease_time_limit": "Not enough time remains before the UTC daily reset "
+            "to start a full trial turn. Try again after 00:00 UTC.",
             "trial_paused": "The trial is paused while an unconfirmed turn is checked.",
             "trial_result_unconfirmed_do_not_retry": "The trial result could not be verified. "
             "Do not retry automatically.",

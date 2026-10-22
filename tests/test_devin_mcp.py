@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import io
 import json
 import marshal
 import os
+import stat
 import struct
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -289,6 +292,226 @@ def test_private_paths_permissions_and_exclusive_receipts_are_enforced(private):
     (path / "process.json").chmod(0o600)
     with pytest.raises(FileExistsError):
         serve(initialize())
+
+
+@pytest.mark.parametrize("name", ["process.json", "call.json"])
+def test_published_receipt_has_one_link_before_writer_returns(tmp_path, monkeypatch, name):
+    from ccfleet_agent import devin_native as native
+
+    tmp_path.chmod(0o700)
+    directory = mcp.RunDirectory(tmp_path)
+    published, release = threading.Event(), threading.Event()
+    original, errors = mcp._rename_exclusive, []
+    value = {"synthetic": "complete receipt"}
+
+    def publish(fd, source, target):
+        original(fd, source, target)
+        published.set()
+        assert release.wait(5)
+
+    def write():
+        try:
+            directory.write_exclusive(name, value)
+        except BaseException as error:
+            errors.append(error)
+
+    monkeypatch.setattr(mcp, "_rename_exclusive", publish)
+    for fallback in ("link", "rename", "replace"):
+        monkeypatch.setattr(mcp.os, fallback, lambda *a, **k: pytest.fail("unsafe publication fallback"))
+    thread = threading.Thread(target=write, daemon=True)
+    thread.start()
+    try:
+        assert published.wait(5)
+        info = (tmp_path / name).stat()
+        assert info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600
+        assert directory.read(name) == value
+        assert json.loads(native._read(tmp_path / name, uid=os.geteuid(), private=True)) == value
+        assert not list(tmp_path.glob(".pending-*"))
+    finally:
+        release.set()
+        thread.join(5)
+        directory.close()
+    assert not thread.is_alive() and not errors
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink"])
+def test_destination_created_during_publication_is_never_replaced(tmp_path, monkeypatch, kind):
+    tmp_path.chmod(0o700)
+    directory = mcp.RunDirectory(tmp_path)
+    pending, release = threading.Event(), threading.Event()
+    original, errors = mcp._rename_exclusive, []
+
+    def publish(fd, source, target):
+        pending.set()
+        assert release.wait(5)
+        original(fd, source, target)
+
+    def write():
+        try:
+            directory.write_exclusive("receipt.json", {"synthetic": "new"})
+        except BaseException as error:
+            errors.append(error)
+
+    monkeypatch.setattr(mcp, "_rename_exclusive", publish)
+    thread = threading.Thread(target=write, daemon=True)
+    thread.start()
+    target = tmp_path / "receipt.json"
+    try:
+        assert pending.wait(5)
+        if kind == "file":
+            target.write_bytes(b"existing receipt")
+        elif kind == "directory":
+            target.mkdir()
+        else:
+            target.symlink_to("untouched-target")
+    finally:
+        release.set()
+        thread.join(5)
+        directory.close()
+    assert not thread.is_alive() and len(errors) == 1 and isinstance(errors[0], OSError)
+    assert errors[0].errno in {errno.EEXIST, errno.EISDIR, errno.ENOTEMPTY}
+    if kind == "file":
+        assert target.read_bytes() == b"existing receipt"
+    elif kind == "directory":
+        assert target.is_dir() and list(target.iterdir()) == []
+    else:
+        assert target.is_symlink() and os.readlink(target) == "untouched-target"
+        assert not (tmp_path / "untouched-target").exists()
+    assert not list(tmp_path.glob(".pending-*"))
+
+
+def test_competing_writers_publish_exactly_one_complete_receipt(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    barrier, results = threading.Barrier(2), []
+    original = mcp._rename_exclusive
+
+    def publish(fd, source, target):
+        barrier.wait(5)
+        original(fd, source, target)
+
+    def write(value):
+        directory = mcp.RunDirectory(tmp_path)
+        try:
+            directory.write_exclusive("receipt.json", {"writer": value})
+            results.append((value, None))
+        except OSError as error:
+            results.append((value, error.errno))
+        finally:
+            directory.close()
+
+    monkeypatch.setattr(mcp, "_rename_exclusive", publish)
+    threads = [threading.Thread(target=write, args=(value,), daemon=True) for value in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(results) == 2 and sorted(error is None for _, error in results) == [False, True]
+    winner = next(value for value, error in results if error is None)
+    assert next(error for _, error in results if error is not None) == errno.EEXIST
+    assert json.loads((tmp_path / "receipt.json").read_bytes()) == {"writer": winner}
+    assert (tmp_path / "receipt.json").stat().st_nlink == 1
+    assert not list(tmp_path.glob(".pending-*"))
+
+
+@pytest.mark.parametrize("platform,symbol,flag", [
+    ("linux", "renameat2", 1), ("darwin", "renameatx_np", 4),
+])
+@pytest.mark.parametrize("failure", [errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP, 0])
+def test_unsupported_atomic_publication_fails_closed_without_fallback(
+        tmp_path, monkeypatch, platform, symbol, flag, failure):
+    tmp_path.chmod(0o700)
+    calls = []
+
+    def operation(*args):
+        calls.append(args)
+        mcp.ctypes.set_errno(failure)
+        return -1
+
+    def library(name, *, use_errno):
+        assert name is None and use_errno is True
+        return SimpleNamespace(**{symbol: operation})
+
+    monkeypatch.setattr(mcp.sys, "platform", platform)
+    monkeypatch.setattr(mcp.ctypes, "CDLL", library)
+    for fallback in ("link", "rename", "replace"):
+        monkeypatch.setattr(mcp.os, fallback, lambda *a, **k: pytest.fail("unsafe publication fallback"))
+    directory = mcp.RunDirectory(tmp_path)
+    try:
+        with pytest.raises(OSError) as error:
+            directory.write_exclusive("receipt.json", {"synthetic": True})
+        assert error.value.errno == (failure or errno.EIO)
+        assert len(calls) == 1 and calls[0][0] == calls[0][2] == directory.fd
+        assert calls[0][1].startswith(b".pending-") and calls[0][3:] == (b"receipt.json", flag)
+        assert operation.argtypes == (mcp.ctypes.c_int, mcp.ctypes.c_char_p, mcp.ctypes.c_int,
+                                      mcp.ctypes.c_char_p, mcp.ctypes.c_uint)
+        assert operation.restype is mcp.ctypes.c_int
+    finally:
+        directory.close()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin", "unsupported"])
+def test_missing_atomic_rename_api_has_no_publication_fallback(tmp_path, monkeypatch, platform):
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(mcp.sys, "platform", platform)
+    monkeypatch.setattr(mcp.ctypes, "CDLL", lambda *a, **k: SimpleNamespace())
+    for fallback in ("link", "rename", "replace"):
+        monkeypatch.setattr(mcp.os, fallback, lambda *a, **k: pytest.fail("unsafe publication fallback"))
+    directory = mcp.RunDirectory(tmp_path)
+    try:
+        with pytest.raises(OSError) as error:
+            directory.write_exclusive("receipt.json", {"synthetic": True})
+        assert error.value.errno == errno.ENOTSUP
+    finally:
+        directory.close()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_failed_publication_only_cleans_its_original_temporary_inode(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    replacements = []
+
+    def substitute(fd, source, target):
+        temporary = tmp_path / source
+        temporary.rename(tmp_path / "original-moved")
+        temporary.write_bytes(b"unrelated replacement")
+        replacements.append(temporary)
+        raise OSError(errno.EOPNOTSUPP, "synthetic unsupported filesystem")
+
+    monkeypatch.setattr(mcp, "_rename_exclusive", substitute)
+    directory = mcp.RunDirectory(tmp_path)
+    try:
+        with pytest.raises(OSError, match="synthetic unsupported"):
+            directory.write_exclusive("receipt.json", {"synthetic": True})
+    finally:
+        directory.close()
+    assert replacements[0].read_bytes() == b"unrelated replacement"
+    assert json.loads((tmp_path / "original-moved").read_bytes()) == {"synthetic": True}
+    assert not (tmp_path / "receipt.json").exists()
+
+
+def test_receipt_data_is_synced_before_publication_and_directory_afterward(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    events = []
+    original_sync, original_publish = os.fsync, mcp._rename_exclusive
+
+    def synced(fd):
+        events.append("directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+        original_sync(fd)
+
+    def publish(*args):
+        events.append("publish")
+        original_publish(*args)
+
+    monkeypatch.setattr(mcp.os, "fsync", synced)
+    monkeypatch.setattr(mcp, "_rename_exclusive", publish)
+    directory = mcp.RunDirectory(tmp_path)
+    try:
+        directory.write_exclusive("receipt.json", {"synthetic": True})
+    finally:
+        directory.close()
+    assert events == ["file", "publish", "directory"]
 
 
 def test_cancelled_server_never_admits_a_tool(private):

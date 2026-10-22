@@ -183,11 +183,11 @@ def test_only_exact_trusted_partial_type_can_settle(usage):
         db.close()
 
 
-def test_hard_global_twenty_turn_cap_even_complete_zero_usage_cannot_be_bypassed():
+def test_hard_global200_turn_cap_even_complete_zero_usage_cannot_be_bypassed():
     db = sqlite3.connect(":memory:")
     try:
         book = t.TrialLedger(db, enabled=True, clock=lambda: DAY + 1)
-        for index in range(20):
+        for index in range(200):
             who = t.VerifiedAccount("account" + str(index), True)
             lease = book.admit(who).lease
             permit = book.start_step(who, lease, request=b"{}", seconds=60).step
@@ -201,7 +201,7 @@ def test_hard_global_twenty_turn_cap_even_complete_zero_usage_cannot_be_bypassed
         assert book.admit(A).code == "global_daily_limit_reached"
         assert db.execute(
             "SELECT requests,runtime_seconds FROM devin_trial_global_days"
-        ).fetchone() == (20, 1200)
+        ).fetchone() == (200, 12000)
     finally:
         db.close()
 
@@ -244,7 +244,7 @@ def test_unsent_refund_is_foreign_safe_idempotent_and_closed_before_expiry_tick(
             book.finish_unsent(A, lease, step, model_started=False, cleanup_confirmed=True).code
             == "invalid_unsent_receipt"
         )
-        assert not book.allowance(A).paused and book.allowance(A).remaining_requests == 20
+        assert not book.allowance(A).paused and book.allowance(A).remaining_requests == 200
         assert book.admit(B).code == "admitted"
     finally:
         db.close()

@@ -295,7 +295,7 @@ def test_unsupported_request_before_reservation_or_worker(trial, changes):
     with pytest.raises(trial_runtime.TrialUnavailable) as error:
         trial.runtime.turn(token, body(**changes))
     assert error.value.status == 400
-    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == 20
+    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == devin_trial.DAILY_REQUESTS
 
 
 @pytest.mark.parametrize(
@@ -363,6 +363,140 @@ def test_actual_usage_overshoot_is_charged_fully_and_next_turn_denied(trial):
     with pytest.raises(trial_runtime.TrialUnavailable) as error:
         trial.runtime.turn(token, body())
     assert error.value.status == 429
+
+
+def trial_snapshot(runtime):
+    with runtime._ledger() as book:
+        return {name: list(book.connection.execute("SELECT * FROM " + name + " ORDER BY 1"))
+                for name in sorted(devin_trial._TABLES)}
+
+
+@pytest.fixture
+def legacy_runtime_trial(monkeypatch, request):
+    # Create the database under the incident's old runtime caps, rather than
+    # changing an existing ledger's reviewed limits record during a test.
+    monkeypatch.setattr(devin_trial, "DAILY_RUNTIME_S", 1200)
+    monkeypatch.setattr(devin_trial, "GLOBAL_DAILY_RUNTIME_S", 1200)
+    return request.getfixturevalue("trial")
+
+
+@pytest.mark.parametrize("account,paused", [("alice", False), ("bob", False), ("alice", True)])
+def test_seven_runtime_reservations_reject_before_transport_and_keep_prior_hold(
+        legacy_runtime_trial, account, paused):
+    trial = legacy_runtime_trial
+    completed = []
+
+    class Worker(FakeWorker):
+        def perform(self, raw, authorized):
+            value = super().perform(raw, authorized)
+            completed.append(self)
+            if len(completed) == 1:
+                value["metering"] = "cache_read_unmeasured"
+                value["usage"]["cache_read_tokens"] = None
+                del value["message"]["usage"]["cache_read_input_tokens"]
+            return value
+
+    trial.runtime.transport = Worker
+    alice = trial.runtime.create_key(trial.alice)
+    for _ in range(7):
+        trial.runtime.turn(alice, body())
+    value = trial.runtime.allowance(trial.alice)
+    assert value["remaining_runtime_seconds"] == value["global_remaining_runtime_seconds"] == 80
+    assert value["reserved_tokens"] == value["unmeasured_reserved_tokens"] == 20000
+    assert value["reported_tokens"] == 6 * 19 and not value["paused"]
+    owner = getattr(trial, account)
+    key = alice if account == "alice" else trial.runtime.create_key(owner)
+    trial.runtime.allowance(owner)  # Include the other owner's empty day row in the snapshot.
+    if paused:
+        with trial.runtime._ledger() as book:
+            book.pause()
+    before = trial_snapshot(trial.runtime)
+    trial.now[0] += 1
+    trial.runtime.transport = lambda *a, **k: pytest.fail("exhausted quota constructed transport")
+    with pytest.raises(trial_runtime.TrialUnavailable) as error:
+        trial.runtime.turn(key, body())
+    assert (error.value.code, error.value.status) == (
+        "trial_paused" if paused else "runtime_reservation_limit", 429)
+    after = trial_snapshot(trial.runtime)
+    assert all(after[name] == before[name] for name in before if name != "devin_trial_control")
+    control = list(before["devin_trial_control"][0])
+    control[3] = trial.now[0]
+    assert after["devin_trial_control"] == [tuple(control)]
+    assert len(completed) == 7 and not trial.runtime.readiness_lock.locked()
+
+
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("column", ["used_tokens", "requests", "leases"])
+def test_known_token_request_or_lease_exhaustion_never_constructs_transport(
+        trial, shared, column):
+    key = trial.runtime.create_key(trial.alice)
+    trial.runtime.allowance(trial.alice)
+    table = "devin_trial_global_days" if shared else "devin_trial_account_days"
+    with trial.runtime._ledger() as book:
+        amount = {
+            "used_tokens": book.global_daily_token_limit if shared else book.daily_token_limit,
+            "requests": devin_trial.GLOBAL_DAILY_REQUESTS if shared else devin_trial.DAILY_REQUESTS,
+            "leases": devin_trial.GLOBAL_DAILY_LEASES if shared else devin_trial.DAILY_LEASES,
+        }[column]
+        book.connection.execute("UPDATE " + table + " SET " + column + "=?", (amount,))
+        book.connection.commit()
+    before = trial_snapshot(trial.runtime)
+    trial.runtime.transport = lambda *a, **k: pytest.fail("exhausted quota constructed transport")
+    with pytest.raises(trial_runtime.TrialUnavailable) as error:
+        trial.runtime.turn(key, body())
+    assert (error.value.code, error.value.status) == (
+        "global_daily_limit_reached" if shared else "daily_limit_reached", 429)
+    assert trial_snapshot(trial.runtime) == before
+
+
+def test_one_full_runtime_reservation_still_reaches_worker(trial):
+    key = trial.runtime.create_key(trial.alice)
+    trial.runtime.allowance(trial.alice)
+    with trial.runtime._ledger() as book:
+        book.connection.execute("UPDATE devin_trial_global_days SET runtime_seconds=?",
+            (devin_trial.GLOBAL_DAILY_RUNTIME_S - devin_trial.MAX_STEP_S,))
+        book.connection.commit()
+    message, _ = trial.runtime.turn(key, body())
+    assert message["content"][0]["text"] == "PRIVATE REPLY"
+    value = trial.runtime.allowance(trial.alice)
+    assert value["global_remaining_runtime_seconds"] == 0 and not value["paused"]
+    assert value["reported_tokens"] == 19 and value["reserved_tokens"] == 0
+
+
+@pytest.mark.parametrize("runtime_changed", [False, True])
+def test_quota_change_during_readiness_still_fails_transactional_admission(trial, runtime_changed):
+    workers = []
+
+    class Worker(FakeWorker):
+        def prepare(self, authorized):
+            assert authorized()
+            workers.append(self)
+            with trial.runtime._ledger() as book:
+                if runtime_changed:
+                    book.connection.execute("UPDATE devin_trial_global_days SET runtime_seconds=?",
+                        (devin_trial.GLOBAL_DAILY_RUNTIME_S - 80,))
+                else:
+                    book.connection.execute("UPDATE devin_trial_global_days SET requests=?",
+                        (devin_trial.GLOBAL_DAILY_REQUESTS,))
+                book.connection.commit()
+
+        def perform(self, raw, authorized):
+            pytest.fail("quota changed during readiness sent a model request")
+
+    trial.runtime.transport = Worker
+    key = trial.runtime.create_key(trial.alice)
+    with pytest.raises(trial_runtime.TrialUnavailable) as error:
+        trial.runtime.turn(key, body())
+    assert (error.value.code, error.value.status) == (
+        "runtime_reservation_limit" if runtime_changed else "global_daily_limit_reached", 429)
+    assert len(workers) == 1 and workers[0].closed and not workers[0].model_started
+    assert not trial.runtime.readiness_lock.locked()
+    value = trial.runtime.allowance(trial.alice)
+    assert not value["paused"] and value["reserved_tokens"] == value["reported_tokens"] == 0
+    with trial.runtime._ledger() as book:
+        assert book.connection.execute(
+            "SELECT COUNT(*) FROM devin_trial_sessions WHERE state!='closed'"
+        ).fetchone() == (0,)
 
 
 def test_one_global_active_turn_without_idle_user_holding_worker(trial):
@@ -498,13 +632,14 @@ def test_proven_presend_failure_does_not_burn_model_turn_time_or_daily_lease_bud
 
     trial.runtime.transport = Worker
     token = trial.runtime.create_key(trial.alice)
-    for _ in range(25):
+    attempts = devin_trial.DAILY_LEASES + 5
+    for _ in range(attempts):
         with pytest.raises(trial_runtime.TrialUnavailable):
             trial.runtime.turn(token, body())
-    assert len(calls) == 25
+    assert len(calls) == attempts
     value = trial.runtime.allowance(trial.alice)
     assert value["reported_tokens"] == value["reserved_tokens"] == 0
-    assert value["remaining_requests"] == 20 and not value["paused"]
+    assert value["remaining_requests"] == devin_trial.DAILY_REQUESTS and not value["paused"]
     with trial.runtime._ledger() as book:
         assert book.connection.execute(
             "SELECT requests,runtime_seconds,leases FROM devin_trial_global_days"
@@ -513,7 +648,7 @@ def test_proven_presend_failure_does_not_burn_model_turn_time_or_daily_lease_bud
             book.connection.execute(
                 "SELECT COUNT(*) FROM devin_trial_sessions WHERE state='closed'"
             ).fetchone()[0]
-            == 25
+            == attempts
         )
 
 
@@ -563,7 +698,7 @@ def test_failed_readiness_never_reserves_or_pauses_execution(trial):
     with pytest.raises(trial_runtime.TrialUnavailable, match="trial_worker_unavailable"):
         trial.runtime.turn(token, body())
     value = trial.runtime.allowance(trial.alice)
-    assert not value["paused"] and value["remaining_requests"] == 20
+    assert not value["paused"] and value["remaining_requests"] == devin_trial.DAILY_REQUESTS
     assert value["reserved_tokens"] == 0
     with trial.runtime._ledger() as book:
         assert book.connection.execute(
@@ -624,7 +759,7 @@ def test_pause_during_readiness_closes_connection_before_any_admission(trial):
     with pytest.raises(trial_runtime.TrialUnavailable, match="trial_paused"):
         trial.runtime.turn(token, body())
     assert workers[0].closed
-    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == 20
+    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == devin_trial.DAILY_REQUESTS
 
 
 def test_only_one_readiness_or_turn_can_hold_the_worker_connection(trial):
@@ -647,7 +782,7 @@ def test_only_one_readiness_or_turn_can_hold_the_worker_connection(trial):
         with pytest.raises(trial_runtime.TrialUnavailable, match="trial_busy"):
             trial.runtime.turn(bob, body())
         assert len(preparations) == 1
-        assert trial.runtime.allowance(trial.bob)["remaining_requests"] == 20
+        assert trial.runtime.allowance(trial.bob)["remaining_requests"] == devin_trial.DAILY_REQUESTS
     finally:
         release.set()
         thread.join(3)
@@ -687,7 +822,7 @@ def test_runtime_request_boundary_is192kib_not_old64k_and_overbound_never_reserv
         trial.runtime.turn(token, exact + b" ")
     assert error.value.code == "trial_context_too_large" and error.value.status == 400
     assert trial.runtime.allowance(trial.alice) == before
-    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == 19
+    assert trial.runtime.allowance(trial.alice)["remaining_requests"] == devin_trial.DAILY_REQUESTS - 1
 
 
 @pytest.mark.parametrize("raw", [b"", None, "{}", bytearray(b"{}")])
