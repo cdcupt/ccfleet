@@ -78,3 +78,22 @@ def test_transport_still_refuses_reads_at_its_absolute_deadline(monkeypatch):
     with pytest.raises(GatewayTransportError) as error:
         reader.read(1)
     assert error.value.status == 504
+
+
+def test_model_free_refresh_cadence_fits_stale_grant_grace_and_readiness_deadline():
+    import re
+    from pathlib import Path
+
+    from ccfleet_agent import devin_trial_worker as worker
+
+    dropin = (Path(__file__).resolve().parents[1] / "deploy/devin-trial-refresh.timer.conf").read_text()
+    intervals = re.findall(r"^OnUnitInactiveSec=(.*)$", dropin, re.MULTILINE)
+    assert len(intervals) == 2 and intervals[0] == ""  # Reset the old timer vector.
+    period = float(intervals[1].removesuffix("s"))
+    accuracy = float(re.search(r"^AccuracySec=(\d+)ms$", dropin, re.MULTILINE)[1]) / 1000
+    assert "RandomizedDelaySec=0" in dropin and "OnBootSec=3s" in dropin
+    # The root poll has time to run while a stale admission waits without its
+    # lock. This does not lengthen a model turn or either freshness threshold.
+    assert period + accuracy < worker.GRANT_REFRESH_GRACE_S < transport.READINESS_SECONDS
+    assert period + accuracy + worker.GRANT_REFRESH_POLL_S < worker.GRANT_REFRESH_GRACE_S
+    assert transport.TURN_SECONDS == 155 and ledger.MAX_STEP_S == 160
