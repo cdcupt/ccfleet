@@ -34,8 +34,12 @@ DAILY_RUNTIME_S = 1200
 GLOBAL_DAILY_RUNTIME_S = 1200
 DAILY_LEASES = 20
 GLOBAL_DAILY_LEASES = 20
-DEFAULT_DAILY_TOKENS = 100_000
-DEFAULT_GLOBAL_DAILY_TOKENS = 1_000_000
+DEFAULT_DAILY_TOKENS = 1_000_000
+DEFAULT_GLOBAL_DAILY_TOKENS = 10_000_000
+# These complete records intentionally name the reviewed predecessor and target.
+# Future request/time/lease changes require their own explicit migration.
+_LIMITS_BEFORE_TOKEN_EXPANSION = "[4,20000,100000,1000000,20,20,1200,1200,20,20]"
+_LIMITS_AFTER_TOKEN_EXPANSION = "[4,20000,1000000,10000000,20,20,1200,1200,20,20]"
 MAX_REPORTED_TOKENS = 10**12
 _ACCOUNT = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _ID = re.compile(r"[0-9a-f]{64}\Z")
@@ -60,6 +64,11 @@ _COLUMNS = (
     "utc_day",
     "active_tokens",
 )
+_CONTROL_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS devin_trial_control (
+        id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL CHECK(paused IN (0,1)),
+        reason TEXT NOT NULL, last_now REAL NOT NULL, limits TEXT NOT NULL);
+"""
 _SESSION_SCHEMA = """
     CREATE TABLE IF NOT EXISTS devin_trial_sessions (
         trial_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, secret_hash TEXT NOT NULL,
@@ -135,6 +144,7 @@ class DailyAllowance:
     hard_generation_stop: bool = False
     unmeasured_reserved_tokens: int = 0
     partial_reported_tokens: int = 0
+    global_token_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -213,10 +223,7 @@ class TrialLedger:
             separators=(",", ":"),
         )
         connection.execute("PRAGMA busy_timeout=100")
-        schema = """
-            CREATE TABLE IF NOT EXISTS devin_trial_control (
-                id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL CHECK(paused IN (0,1)),
-                reason TEXT NOT NULL, last_now REAL NOT NULL, limits TEXT NOT NULL);
+        schema = _CONTROL_SCHEMA + """
             CREATE TABLE IF NOT EXISTS devin_trial_account_days (
                 account_id TEXT NOT NULL, utc_day INTEGER NOT NULL,
                 used_tokens INTEGER NOT NULL CHECK(used_tokens>=0),
@@ -249,8 +256,10 @@ class TrialLedger:
                     ).fetchone()
                 except sqlite3.DatabaseError:
                     raise TrialError("dedicated_trial_database_required") from None
-                if prior is None or prior[0] != limits:
+                if prior is None:
                     raise TrialError("trial_limits_changed")
+                if prior[0] != limits:
+                    self._migrate_token_limits(prior[0], limits)
                 self._migrate_session_limits()
             for statement in schema.split(";"):
                 if statement.strip():
@@ -269,6 +278,28 @@ class TrialLedger:
                 != limits
             ):
                 raise TrialError("trial_limits_changed")
+
+    def _migrate_token_limits(self, previous, expected):
+        """Expand only the known token budgets without resetting incident state."""
+        if (previous != _LIMITS_BEFORE_TOKEN_EXPANSION
+                or expected != _LIMITS_AFTER_TOKEN_EXPANSION):
+            raise TrialError("trial_limits_changed")
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='devin_trial_control'"
+        ).fetchone()
+        if (not row or _normalized_sql(row[0]) != _normalized_sql(_CONTROL_SCHEMA)
+                or self.connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1"
+                ).fetchone()
+                or any(self.connection.execute(f"PRAGMA foreign_key_list({name})").fetchone()
+                       for name in _TABLES)):
+            raise TrialError("trial_schema_changed")
+        changed = self.connection.execute(
+            "UPDATE devin_trial_control SET limits=? WHERE id=1 AND limits=?",
+            (expected, previous),
+        )
+        if changed.rowcount != 1:
+            raise TrialError("trial_limits_changed")
 
     def _migrate_session_limits(self):
         """Widen only the known time constraints; never rewrite incident state.
@@ -480,6 +511,7 @@ class TrialLedger:
                     "WHERE account_id=? AND utc_day=?",
                     (principal.account_id, day),
                 ).fetchone(),
+                global_token_limit=self.global_daily_token_limit,
             )
 
     def admit(self, principal: VerifiedAccount, *, lease_seconds: int = MAX_LEASE_S) -> Decision:

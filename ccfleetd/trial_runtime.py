@@ -118,7 +118,8 @@ class TrialRuntime:
             ):
                 raise ConfigError("Devin trial database protection is invalid")
             self.database_identities[name] = (info.st_dev, info.st_ino)
-        self.keys = AccessKeys(self.directory / "access.sqlite3", clock=clock)
+        self.keys = AccessKeys(self.directory / "access.sqlite3", secret=cfg.cookie_secret,
+                               clock=clock)
         with self._ledger():
             pass
 
@@ -159,6 +160,9 @@ class TrialRuntime:
         # turn() continues to enforce the ledger's global execution pause.
         return self.keys.create(principal(account))
 
+    def launch_key(self, account):
+        return self.keys.launch_key(principal(account))
+
     def revoke(self, account):
         self.keys.revoke(principal(account).account_id)
 
@@ -187,8 +191,10 @@ class TrialRuntime:
         if key is None:
             raise TrialUnavailable("trial_key_expired_or_revoked", 401)
         who = principal(self.store.get_account(key["account_id"]))
-        if not isinstance(raw, bytes) or not 0 < len(raw) <= ledger.MAX_REQUEST_BYTES:
-            raise TrialUnavailable("trial_context_too_large", 413)
+        if not isinstance(raw, bytes) or not raw:
+            raise TrialUnavailable("invalid_trial_request_framing", 400)
+        if len(raw) > ledger.MAX_REQUEST_BYTES:
+            raise TrialUnavailable("trial_context_too_large", 400)
         try:
             body = devin_native.mcp._decode(raw)
             body = native_client_request(body)

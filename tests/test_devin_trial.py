@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -49,6 +50,45 @@ def finished(ledger, lease, step, account=ALICE):
         ).code
         == "step_finished"
     )
+
+
+def test_default_token_budgets_expand_tenfold_without_changing_turn_or_time_caps(scene):
+    ledger, _, _ = scene
+    allowance = ledger.allowance(ALICE)
+    assert allowance.token_limit == allowance.available_tokens == 1_000_000
+    assert allowance.global_token_limit == allowance.global_available_tokens == 10_000_000
+    assert trial.DAILY_REQUESTS == trial.GLOBAL_DAILY_REQUESTS == 20
+    assert trial.DAILY_RUNTIME_S == trial.GLOBAL_DAILY_RUNTIME_S == 1200
+    assert trial.DAILY_LEASES == trial.GLOBAL_DAILY_LEASES == 20
+    assert trial.TURN_RESERVATION_TOKENS == 20_000
+
+
+def test_allowance_exposes_both_configured_token_limits():
+    connection = sqlite3.connect(":memory:")
+    try:
+        ledger = trial.TrialLedger(connection, daily_token_limit=234_567,
+                                   global_daily_token_limit=765_432)
+        allowance = dataclasses.asdict(ledger.allowance(ALICE))
+        assert allowance["token_limit"] == 234_567
+        assert allowance["global_token_limit"] == 765_432
+    finally:
+        connection.close()
+
+
+def test_expanded_shared_pool_keeps_ten_separate_full_personal_token_budgets(scene):
+    ledger, _, _ = scene
+    for index in range(10):
+        account = trial.VerifiedAccount("visitor" + str(index), True)
+        lease = admitted(ledger, account)
+        step = started(ledger, lease, account, seconds=1)
+        ledger.finish_step(account, lease, step, cleanup_confirmed=True,
+                           usage=trial.VerifiedUsage(1_000_000, True))
+        ledger.close(account, lease, cleanup_confirmed=True)
+        allowance = ledger.allowance(account)
+        assert allowance.available_tokens == 0
+        assert allowance.reported_tokens == 1_000_000
+        assert allowance.global_available_tokens == (9 - index) * 1_000_000
+    assert ledger.admit(ALICE).code == "global_daily_limit_reached"
 
 
 def test_default_instance_cannot_admit_or_run_even_with_an_existing_lease(scene):
@@ -488,7 +528,8 @@ LEGACY_SESSIONS = """
 
 def legacy_database(connection, state="closing"):
     now = 1_800_000_000.0
-    ledger = trial.TrialLedger(connection, enabled=True, clock=lambda: now)
+    ledger = trial.TrialLedger(connection, enabled=True, clock=lambda: now,
+                               daily_token_limit=100_000, global_daily_token_limit=1_000_000)
     lease = admitted(ledger)
     step = started(ledger, lease, seconds=60)
     assert ledger.finish_step(ALICE, lease, step, cleanup_confirmed=True,
@@ -525,17 +566,27 @@ def database_snapshot(connection):
             for name in trial._TABLES}
 
 
+def expanded_token_snapshot(before):
+    control = list(before["devin_trial_control"][0])
+    limits = json.loads(control[4])
+    assert limits[2:4] == [100_000, 1_000_000]
+    limits[2:4] = [1_000_000, 10_000_000]
+    control[4] = json.dumps(limits, separators=(",", ":"))
+    return {**before, "devin_trial_control": [tuple(control)]}
+
+
 @pytest.mark.parametrize("state", ["open", "closing", "closed"])
 def test_legacy_time_constraint_migration_preserves_every_row_and_is_idempotent(state):
     connection = sqlite3.connect(":memory:")
     lease, step = legacy_database(connection, state)
     before = database_snapshot(connection)
+    expected = expanded_token_snapshot(before)
     trial.TrialLedger(connection, enabled=True)
-    assert database_snapshot(connection) == before
+    assert database_snapshot(connection) == expected
     schema = list(connection.execute("SELECT * FROM sqlite_master ORDER BY name"))
     version = connection.execute("PRAGMA schema_version").fetchone()
     trial.TrialLedger(connection, enabled=True)
-    assert database_snapshot(connection) == before
+    assert database_snapshot(connection) == expected
     assert list(connection.execute("SELECT * FROM sqlite_master ORDER BY name")) == schema
     assert connection.execute("PRAGMA schema_version").fetchone() == version
     assert connection.execute(
@@ -553,7 +604,7 @@ def test_legacy_time_constraint_migration_preserves_every_row_and_is_idempotent(
         ledger = trial.TrialLedger(connection, enabled=True, clock=lambda: 1_800_000_000.0)
         started(ledger, admitted(ledger), seconds=160)
     else:
-        assert database_snapshot(connection) == before
+        assert database_snapshot(connection) == expected
     connection.close()
 
 
@@ -604,3 +655,102 @@ def test_failed_migration_copy_rolls_back_ddl_and_all_incident_rows():
     assert list(connection.execute("SELECT * FROM sqlite_master ORDER BY name")) == schema
     assert not connection.in_transaction
     connection.close()
+
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_known_token_expansion_preserves_usage_holds_active_permit_pause_and_history(paused):
+    connection = sqlite3.connect(":memory:")
+    now = 1_800_000_000.0
+    try:
+        old = trial.TrialLedger(connection, enabled=True, clock=lambda: now,
+                                daily_token_limit=100_000, global_daily_token_limit=1_000_000)
+        lease = admitted(old)
+        step = started(old, lease)
+        old.finish_step(ALICE, lease, step, cleanup_confirmed=True,
+                        usage=trial.VerifiedUsage(321, True))
+        old.close(ALICE, lease, cleanup_confirmed=True)
+        lease = admitted(old)
+        step = started(old, lease)
+        old.finish_step(ALICE, lease, step, cleanup_confirmed=True,
+                        usage=trial.VerifiedCacheReadUnmeasured(100, True))
+        old.close(ALICE, lease, cleanup_confirmed=True)
+        active = admitted(old, BOB)
+        permit = started(old, active, BOB, seconds=60)
+        if paused:
+            old.pause()
+        before = database_snapshot(connection)
+        schema = list(connection.execute("SELECT * FROM sqlite_master ORDER BY name"))
+        upgraded = trial.TrialLedger(connection, enabled=True, clock=lambda: now)
+        expected = expanded_token_snapshot(before)
+        assert database_snapshot(connection) == expected
+        assert list(connection.execute("SELECT * FROM sqlite_master ORDER BY name")) == schema
+        allowance = upgraded.allowance(ALICE)
+        assert allowance.reported_tokens == 321
+        assert allowance.reserved_tokens == allowance.unmeasured_reserved_tokens == 20_000
+        assert allowance.partial_reported_tokens == 100
+        assert allowance.available_tokens == 979_679
+        assert allowance.global_available_tokens == 9_959_679
+        assert allowance.paused is paused
+        assert upgraded.authorize_step(BOB, active, permit) is not paused
+        assert permit.reserved_tokens == 20_000 and permit.reserved_seconds == 60
+        trial.TrialLedger(connection, enabled=True, clock=lambda: now)
+        assert database_snapshot(connection) == expected
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("index,value", [(0, 3), (1, 21_000), (2, 100_001),
+                                         (3, 1_000_001), (4, 21), (6, 1201)])
+def test_token_expansion_refuses_unknown_limits_without_mutation(index, value):
+    connection = sqlite3.connect(":memory:")
+    try:
+        trial.TrialLedger(connection, daily_token_limit=100_000,
+                          global_daily_token_limit=1_000_000)
+        limits = json.loads(connection.execute("SELECT limits FROM devin_trial_control").fetchone()[0])
+        limits[index] = value
+        connection.execute("UPDATE devin_trial_control SET limits=?",
+                           (json.dumps(limits, separators=(",", ":")),))
+        connection.commit()
+        before = list(connection.iterdump())
+        with pytest.raises(trial.TrialError, match="trial_limits_changed"):
+            trial.TrialLedger(connection)
+        assert list(connection.iterdump()) == before
+        assert not connection.in_transaction
+    finally:
+        connection.close()
+
+
+def test_old_configuration_cannot_roll_back_expanded_budgets_or_reset_history(scene):
+    ledger, connection, _ = scene
+    lease = admitted(ledger)
+    step = started(ledger, lease)
+    ledger.finish_step(ALICE, lease, step, cleanup_confirmed=True)
+    before = list(connection.iterdump())
+    with pytest.raises(trial.TrialError, match="trial_limits_changed"):
+        trial.TrialLedger(connection, daily_token_limit=100_000,
+                          global_daily_token_limit=1_000_000)
+    assert list(connection.iterdump()) == before
+
+
+def test_token_expansion_rolls_back_if_later_initialization_fails():
+    class FailingInitialize(sqlite3.Connection):
+        blocked = False
+
+        def execute(self, sql, *args):
+            if self.blocked and sql.startswith("INSERT OR IGNORE INTO devin_trial_control"):
+                raise sqlite3.OperationalError("synthetic interrupted initialization")
+            return super().execute(sql, *args)
+
+    connection = sqlite3.connect(":memory:", factory=FailingInitialize)
+    try:
+        old = trial.TrialLedger(connection, enabled=True, daily_token_limit=100_000,
+                                global_daily_token_limit=1_000_000)
+        old.pause()
+        before = list(connection.iterdump())
+        connection.blocked = True
+        with pytest.raises(sqlite3.OperationalError, match="synthetic interrupted initialization"):
+            trial.TrialLedger(connection)
+        assert list(connection.iterdump()) == before
+        assert not connection.in_transaction
+    finally:
+        connection.close()

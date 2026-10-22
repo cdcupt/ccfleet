@@ -172,15 +172,15 @@ def test_text_then_text_with_current_catalog_and_private_reasoning_projection(
 
 def test_large_prior_partial_does_not_turn_second_valid_partial_into_unknown(full_path):
     trial, first, key, flags, receipts, homes, scenario, state = full_path
-    flags["cache_read"], flags["input_tokens"] = None, 86774
+    flags["cache_read"], flags["input_tokens"] = None, 986774
     continuation = first("text", 160)
     prior = trial.runtime.allowance(trial.alice)
-    assert prior["unmeasured_reserved_tokens"] == 86780 and prior["available_tokens"] == 13220
+    assert prior["unmeasured_reserved_tokens"] == 986780 and prior["available_tokens"] == 13220
     message, _ = trial.runtime.turn(key, json.dumps(continuation).encode())
     assert message["stop_reason"] == "end_turn"
     after = trial.runtime.allowance(trial.alice)
     assert after["paused"] is False and after["available_tokens"] == 0
-    assert after["unmeasured_reserved_tokens"] == 173560
+    assert after["unmeasured_reserved_tokens"] == 1973560
     assert all(receipt["metering"] == "cache_read_unmeasured" for receipt in receipts)
 
 
