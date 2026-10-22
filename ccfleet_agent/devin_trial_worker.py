@@ -38,6 +38,8 @@ native = relay.native
 POLICY = Path("/etc/ccfleet/devin-trial/worker.json")
 MODEL = "claude-opus-5-5"
 MAX_BODY = 192 * 1024
+GRANT_REFRESH_GRACE_S = 8.0
+GRANT_REFRESH_POLL_S = 0.1
 DIAGNOSTIC = ".trial-diagnostic.json"
 _USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
 _SAFE_NATIVE_ERRORS = native._SAFE_ACP | frozenset({
@@ -222,10 +224,6 @@ def policy():
         return current
 
     initial = grant()
-    # A full admitted turn has a 180-second lease. Do not begin from a grant
-    # already near its 300-second freshness boundary.
-    if time.time() - initial["observed_at"] > 120:
-        raise native.NativeError("trial_grant_needs_refresh")
     config = native.NativeConfig.load(value["config_path"], expected_sha256=value["config_sha256"])
     data = config.data
     binding = native.OwnershipBinding.from_dict(data["binding"])
@@ -247,6 +245,11 @@ def policy():
         != initial["credential_sha256"]
     ):
         raise native.NativeError("trial_credential_needs_refresh")
+    # Check the margin only after every other guard: stale evidence must not
+    # delay rejection of a BAD policy, config or credential. A full admitted
+    # turn has a 180-second lease within the 300-second grant boundary.
+    if time.time() - initial["observed_at"] > 120:
+        raise native.NativeError("trial_grant_needs_refresh")
 
     def refresh():
         return grant()["credential_sha256"] == initial["credential_sha256"]
@@ -366,6 +369,38 @@ def fresh_config(source, settings, policy_sha):
         raise
 
 
+def _status_policy(loader, cancelled, deadline, *, retry=False):
+    """Wait only for an otherwise verified grant's new-turn freshness margin.
+
+    Call without the maintenance/turn lock: the model-free root refresher needs
+    that same lock to publish a new grant. Every attempt reloads the full policy;
+    BAD, absent or changed evidence never receives this grace.
+    """
+    while True:
+        if cancelled.is_set():
+            raise native.NativeError("cancelled")
+        if retry:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise native.NativeError("trial_grant_needs_refresh")
+            if cancelled.wait(min(GRANT_REFRESH_POLL_S, remaining)):
+                raise native.NativeError("cancelled")
+            if time.monotonic() >= deadline:
+                raise native.NativeError("trial_grant_needs_refresh")
+        try:
+            loaded = loader()
+        except native.NativeError as error:
+            if error.code != "trial_grant_needs_refresh":
+                raise
+            retry = True
+            continue
+        if cancelled.is_set():
+            raise native.NativeError("cancelled")
+        if retry and time.monotonic() >= deadline:
+            raise native.NativeError("trial_grant_needs_refresh")
+        return loaded, retry
+
+
 def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
     runner = native.run_step if runner is None else runner
     cancelled = threading.Event() if cancelled is None else cancelled
@@ -373,44 +408,66 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
     root, clean, lock, shared_state = None, False, None, None
     result, metering, message = None, "unconfirmed", None
     attempted = False
+    readiness_deadline = time.monotonic() + GRANT_REFRESH_GRACE_S
     try:
-        source, settings, policy_sha = loader()
+        (source, settings, policy_sha), grace_used = _status_policy(
+            loader, cancelled, readiness_deadline)
         first = reader.frame()
         if first != {"version": 2, "operation": "status"}:
             raise native.NativeError("trial_status_required")
         # Readiness promises that this same connection owns the worker. Take
         # the shared maintenance/turn lock before acknowledging it, so a
         # refresh cannot win the lock between status and the request frame.
-        _, shared_state = source.validate()
-        lock = os.open(
-            shared_state / ".trial.lock",
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-            0o600,
-        )
-        info = os.fstat(lock)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o600
-            or info.st_nlink != 1
-        ):
-            raise native.NativeError("trial_lock_guard")
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            # No request frame has been read or model work started. The
-            # controller can report busy without reserving an execution turn.
-            writer.response(
-                429, "application/json", [relay._json({"error": "trial_worker_busy"})]
+        while True:
+            _, shared_state = source.validate()
+            lock = os.open(
+                shared_state / ".trial.lock",
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                0o600,
             )
-            return 2
-        if list(shared_state.glob("trial-*")):
-            raise native.NativeError("trial_cleanup_review_required")
-        # A refresh may have completed after the first loader but before this
-        # lock. Recheck the current grant and credential before claiming ready.
-        source, settings, reloaded_sha = loader()
-        if reloaded_sha != policy_sha:
-            raise native.NativeError("trial_policy_changed")
+            info = os.fstat(lock)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_nlink != 1
+            ):
+                raise native.NativeError("trial_lock_guard")
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # No request frame has been read or model work started. The
+                # controller can report busy without reserving an execution turn.
+                writer.response(
+                    429, "application/json", [relay._json({"error": "trial_worker_busy"})]
+                )
+                return 2
+            if list(shared_state.glob("trial-*")):
+                raise native.NativeError("trial_cleanup_review_required")
+            # A refresh may have completed after the first loader but before
+            # this lock. Recheck before ready; never wait while excluding it.
+            try:
+                source, settings, reloaded_sha = loader()
+            except native.NativeError as error:
+                if error.code != "trial_grant_needs_refresh":
+                    raise
+                os.close(lock)
+                lock = None
+                grace_used = True
+                (source, settings, reloaded_sha), _ = _status_policy(
+                    loader, cancelled, readiness_deadline, retry=True)
+                if reloaded_sha != policy_sha:
+                    raise native.NativeError("trial_policy_changed") from None
+                continue
+            if reloaded_sha != policy_sha:
+                raise native.NativeError("trial_policy_changed")
+            if cancelled.is_set():
+                raise native.NativeError("cancelled")
+            break
+        # A successful retry still needs the full under-lock validation. That
+        # work shares the original grace deadline; ordinary fresh checks do not.
+        if grace_used and time.monotonic() >= readiness_deadline:
+            raise native.NativeError("trial_grant_needs_refresh")
         writer.response(
             200,
             "application/json",
