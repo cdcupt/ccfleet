@@ -46,14 +46,14 @@ class TrialPage(HTMLParser):
 @pytest.fixture
 def context():
     allowance = {
-        "available_tokens": 82500, "reported_tokens": 15000, "reserved_tokens": 2500,
+        "token_limit": 1000000, "global_token_limit": 10000000, "available_tokens": 982500, "reported_tokens": 15000, "reserved_tokens": 2500,
         "unmeasured_reserved_tokens": 2500, "partial_reported_tokens": 1000,
-        "global_available_tokens": 982500, "remaining_requests": 18,
+        "global_available_tokens": 9982500, "remaining_requests": 18,
         "resets_at": 1735776000, "paused": False,
     }
     return SimpleNamespace(
         allowance=allowance,
-        runtime=SimpleNamespace(allowance=lambda account: allowance.copy()),
+        runtime=SimpleNamespace(allowance=lambda account: allowance.copy(), launch_key=lambda account: ""),
         cfg=replace(Config(), public_url="https://fleet.invalid/", cookie_secret="c" * 32),
         account={"id": "alice"}, session_id="session-alice",
     )
@@ -94,7 +94,7 @@ def test_key_creation_has_visible_success_and_copyable_command(context):
     markup = render(context, token=token)
     assert markup.index("Trial key created") < markup.index("Set up in three steps")
     assert "Copy and save the command in step 2." in markup
-    assert "save this command before leaving this page or switching language" in markup
+    assert "This command stays available here when you sign in" in markup
     command = html.unescape(re.search(r"<pre><code>(.*?)</code></pre>", markup)[1])
     words = shlex.split(command)
     assert words[0] == "env"
@@ -103,7 +103,7 @@ def test_key_creation_has_visible_success_and_copyable_command(context):
     executable = words.index("claude")
     assert words[executable:] == [
         "claude", "--model", "claude-opus-5-5", "--effort", "max",
-        "--safe-mode", "--permission-mode", "manual",
+        "--safe-mode", "--permission-mode", "bypassPermissions",
     ]
     assert "ENABLE_TOOL_SEARCH=false" in words[1:executable]
     assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" in words[1:executable]
@@ -119,20 +119,20 @@ def test_saved_command_update_keeps_key_and_explains_session_only_defaults(conte
     assert "ENABLE_TOOL_SEARCH=false" in markup
     assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" in markup
     assert "CLAUDE_CODE_DISABLE_THINKING=1" in markup
-    assert "--safe-mode --permission-mode manual" in markup
+    assert "--safe-mode --permission-mode bypassPermissions" in markup
     assert 'id="trial-command"' not in markup
     if language == "en":
         for phrase in (
             "keep its private key", "You do not need a replacement key",
             "including project instructions", "for this session",
-            "Built-in coding tools use normal approval prompts", "saved settings stay unchanged",
+            "Built-in coding tools run without approval prompts", "saved settings stay unchanged",
         ):
             assert phrase in markup
         assert "无需更换密钥" not in markup
     else:
         for phrase in (
             "保留原有私密密钥", "无需更换密钥", "仅为本次会话", "包括项目指令",
-            "内置编程工具仍会正常请求操作许可", "已保存的设置不会改变",
+            "内置编程工具无需逐次批准即可运行", "已保存的设置不会改变",
         ):
             assert phrase in markup
         assert "You do not need a replacement key" not in markup
@@ -151,15 +151,47 @@ def test_allowance_meter_displays_remaining_units_and_holds_separately(context):
     markup = render(context)
     parsed = TrialPage(markup)
     assert parsed.meters == [{
-        "min": "0", "max": "100000", "value": "82500",
+        "min": "0", "max": "1000000", "value": "982500",
         "aria-label": "Daily trial allowance available",
     }]
-    assert "82,500" in markup and "15,000" in markup and "2,500" in markup
-    assert "Reported usage" in markup and "Held for accounting" in markup
+    assert "982,500" in markup and "15,000" in markup and "2,500" in markup
+    assert "Reported tokens" in markup and "Tokens held for accounting" in markup
     assert "Request cap remaining" in markup and ">18</dd>" in markup
     assert "Each reply has up to 2 minutes to generate." in markup
     assert "Reserved runtime can reach the daily time limit" in markup
-    assert "All users share 1,000,000 units per day." in markup
+    assert "All users share 10,000,000 tokens per day." in markup
+    assert "tokens available / 1,000,000 per day" in markup
+    assert "US$0.20–US$19.65 API value" in markup
+    assert "Estimated API value depends on input, cache and output mix" in markup
+    assert "Unmeasured holds are budget reservations, not measured token use" in markup
+
+
+def test_allowance_uses_runtime_limits_instead_of_hardcoded_meter(context):
+    context.allowance.update(token_limit=250000, global_token_limit=2500000,
+                             available_tokens=125000)
+    markup = render(context)
+    assert TrialPage(markup).meters[0]["max"] == "250000"
+    assert "tokens available / 250,000 per day" in markup
+    assert "All users share 2,500,000 tokens per day" in markup
+    assert "US$0.03–US$2.50 API value" in markup
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_refresh_and_language_change_redisplay_key_without_creation_banner(context, language):
+    token = "cct_" + "d" * 64
+    accounts = []
+    def launch_key(account):
+        accounts.append(account)
+        return token
+    context.runtime.launch_key = launch_key
+    for _ in range(2):
+        markup = render(context, language=language)
+        assert token in markup
+        assert 'id="trial-command"' in markup
+        assert "Trial key created" not in markup and "试用密钥已创建" not in markup
+        assert trial_routes.COPY_COMMAND_JS in markup
+    assert accounts == [context.account, context.account]
+    assert token not in render(context, language=language, revoked=True)
 
 
 def test_technical_accounting_privacy_and_revocation_start_in_closed_details(context):
@@ -205,7 +237,7 @@ def test_chinese_setup_and_status_have_selected_language_only(context):
     context.allowance["paused"] = True
     markup = render(context, language="zh", token="cct_" + "c" * 64)
     assert "三步开始试用" in markup and "试用密钥已创建" in markup
-    assert "更换密钥无法恢复服务" in markup and "切换语言前" in markup
+    assert "更换密钥无法恢复服务" in markup and "刷新或切换语言不会丢失" in markup
     assert "Try Devin in Claude Code" not in markup
     assert 'action="/zh/account/devin-trial/create"' in markup
     assert TrialPage(markup).meters[0]["aria-label"] == "每日可用试用额度"

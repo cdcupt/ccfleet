@@ -118,7 +118,8 @@ class TrialRuntime:
             ):
                 raise ConfigError("Devin trial database protection is invalid")
             self.database_identities[name] = (info.st_dev, info.st_ino)
-        self.keys = AccessKeys(self.directory / "access.sqlite3", clock=clock)
+        self.keys = AccessKeys(self.directory / "access.sqlite3", secret=cfg.cookie_secret,
+                               clock=clock)
         with self._ledger():
             pass
 
@@ -158,6 +159,9 @@ class TrialRuntime:
         # turn. Keep setup/replacement available during operator review while
         # turn() continues to enforce the ledger's global execution pause.
         return self.keys.create(principal(account))
+
+    def launch_key(self, account):
+        return self.keys.launch_key(principal(account))
 
     def revoke(self, account):
         self.keys.revoke(principal(account).account_id)

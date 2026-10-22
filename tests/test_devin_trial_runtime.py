@@ -353,13 +353,13 @@ def test_actual_usage_overshoot_is_charged_fully_and_next_turn_denied(trial):
     class Worker(FakeWorker):
         def perform(self, raw, authorized):
             self.model_started = True
-            return receipt(100001)
+            return receipt(1000001)
 
     trial.runtime.transport = Worker
     token = trial.runtime.create_key(trial.alice)
     trial.runtime.turn(token, body())
     value = trial.runtime.allowance(trial.alice)
-    assert value["reported_tokens"] == 100010 and value["available_tokens"] == 0
+    assert value["reported_tokens"] == 1000010 and value["available_tokens"] == 0
     with pytest.raises(trial_runtime.TrialUnavailable) as error:
         trial.runtime.turn(token, body())
     assert error.value.status == 429
