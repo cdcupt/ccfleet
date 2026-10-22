@@ -13,7 +13,7 @@ from http.client import HTTPConnection
 
 import pytest
 
-from ccfleetd import sessions, usersite
+from ccfleetd import devin_trial, sessions, usersite
 from ccfleetd.api import Context, build_server
 from ccfleetd.monitor import Monitor
 from ccfleetd.notify import LogNotifier
@@ -151,6 +151,68 @@ def test_model_http_streaming_success_has_all_usage_and_never_owner_context(http
     assert "_native_context" not in seen[0][0] and "metadata" not in seen[0][1]
     assert t.runtime.allowance(t.alice)["reported_tokens"] == 19
     assert key not in caplog.text and "PRIVATE_USER" not in caplog.text
+
+
+@pytest.mark.parametrize("path", ["/trial/v1/messages", "/trial/v1/messages?beta=true"])
+def test_trial_request_over192kib_uses_context_recovery_before_rate_or_worker(http, path):
+    key = token(http)
+    before = http.runtime.allowance(http.alice)
+    http.runtime.transport = lambda *a, **k: pytest.fail("oversized request reached worker")
+    status, headers, raw = call(http.server, "POST", path,
+                               b" " * (devin_trial.MAX_REQUEST_BYTES + 1), {
+        "Authorization": "Bearer " + key, "Content-Type": "application/json",
+    })
+    error = json.loads(raw)["error"]
+    assert status == 400 and error["type"] == "invalid_request_error"
+    assert error["code"] == "trial_context_too_large"
+    assert error["message"].startswith("prompt is too long:")
+    assert "192 KiB of request JSON including tools and history" in error["message"]
+    assert "No model request was sent" in error["message"]
+    assert headers["x-should-retry"] == "false"
+    assert key not in raw.decode() and http.runtime.allowance(http.alice) == before
+    with http.runtime.keys._db() as access:
+        assert access.execute("SELECT COUNT(*) FROM trial_api_rate").fetchone()[0] == 0
+    with http.runtime._ledger() as ledger:
+        assert ledger.connection.execute("SELECT COUNT(*) FROM devin_trial_sessions").fetchone()[0] == 0
+
+
+def test_trial_request_at192kib_reaches_exactly_one_worker(http):
+    key = token(http)
+    requests = []
+
+    class Worker(FakeWorker):
+        def perform(self, raw, authorized):
+            requests.append(raw)
+            return super().perform(raw, authorized)
+
+    http.runtime.transport = Worker
+    raw = body()
+    padded = raw + b" " * (devin_trial.MAX_REQUEST_BYTES - len(raw))
+    assert len(padded) == 192 * 1024
+    status, headers, _ = call(http.server, "POST", "/trial/v1/messages", padded, {
+        "x-api-key": key, "Content-Type": "application/json",
+    })
+    assert status == 200 and headers["x-should-retry"] == "false"
+    assert len(requests) == 1
+    assert json.loads(requests[0])["messages"] == json.loads(raw)["messages"]
+    assert http.runtime.allowance(http.alice)["remaining_requests"] == 19
+    with http.runtime._ledger() as ledger:
+        assert ledger.connection.execute("SELECT COUNT(*) FROM devin_trial_sessions").fetchone()[0] == 1
+
+
+def test_empty_trial_request_is_a_framing_error_without_context_overflow(http):
+    key = token(http)
+    before = http.runtime.allowance(http.alice)
+    http.runtime.transport = lambda *a, **k: pytest.fail("empty request reached worker")
+    status, headers, raw = call(http.server, "POST", "/trial/v1/messages", b"", {
+        "x-api-key": key, "Content-Type": "application/json",
+    })
+    error = json.loads(raw)["error"]
+    assert status == 400 and error["type"] == "invalid_request_error"
+    assert error["message"] == "invalid_trial_request_framing"
+    assert "prompt is too long" not in raw.decode() and "code" not in error
+    assert headers["x-should-retry"] == "false"
+    assert http.runtime.allowance(http.alice) == before
 
 
 @pytest.mark.parametrize(
@@ -368,16 +430,24 @@ def test_opus_model_env_names_are_fixed_and_command_contains_no_owner_binding(ht
     assert status == 200
     command = html_module.unescape(re.search(r"<pre><code>(.*?)</code></pre>", raw.decode())[1])
     words = shlex.split(command)
-    assert words[0] == "env" and words[-5:] == [
+    executable = words.index("claude")
+    assert words[0] == "env" and words[executable:] == [
         "claude",
         "--model",
         "claude-opus-5-5",
         "--effort",
         "max",
+        "--safe-mode",
+        "--permission-mode",
+        "manual",
     ]
-    pairs = dict(part.split("=", 1) for part in words[1:-5])
+    pairs = dict(part.split("=", 1) for part in words[1:executable])
     assert pairs["ANTHROPIC_BASE_URL"] == "https://fleet.invalid/trial"
     assert pairs["ANTHROPIC_AUTH_TOKEN"].startswith("cct_") and pairs["ANTHROPIC_API_KEY"] == ""
+    assert pairs["ENABLE_TOOL_SEARCH"] == "false"
+    assert pairs["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert pairs["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] == "1"
+    assert pairs["CLAUDE_CODE_DISABLE_THINKING"] == "1"
     for name in (
         "ANTHROPIC_MODEL",
         "ANTHROPIC_DEFAULT_OPUS_MODEL",

@@ -681,7 +681,21 @@ def test_runtime_request_boundary_is192kib_not_old64k_and_overbound_never_reserv
     exact = raw + b" " * (192 * 1024 - len(raw))
     assert len(exact) == devin_trial.MAX_REQUEST_BYTES == 192 * 1024
     trial.runtime.turn(token, exact)
+    before = trial.runtime.allowance(trial.alice)
+    trial.runtime.transport = lambda *a, **k: pytest.fail("oversized request reached worker")
     with pytest.raises(trial_runtime.TrialUnavailable) as error:
         trial.runtime.turn(token, exact + b" ")
-    assert error.value.status == 413
+    assert error.value.code == "trial_context_too_large" and error.value.status == 400
+    assert trial.runtime.allowance(trial.alice) == before
     assert trial.runtime.allowance(trial.alice)["remaining_requests"] == 19
+
+
+@pytest.mark.parametrize("raw", [b"", None, "{}", bytearray(b"{}")])
+def test_invalid_runtime_body_is_not_reported_as_context_overflow(trial, raw):
+    token = trial.runtime.create_key(trial.alice)
+    before = trial.runtime.allowance(trial.alice)
+    trial.runtime.transport = lambda *a, **k: pytest.fail("invalid body reached worker")
+    with pytest.raises(trial_runtime.TrialUnavailable) as error:
+        trial.runtime.turn(token, raw)
+    assert error.value.code == "invalid_trial_request_framing" and error.value.status == 400
+    assert trial.runtime.allowance(trial.alice) == before

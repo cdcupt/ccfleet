@@ -279,7 +279,9 @@ def _trial_setup(cfg, csrf, token):
         ):
             command += name + "=" + MODEL + " "
         command += (
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude --model " + MODEL + " --effort max"
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 ENABLE_TOOL_SEARCH=false "
+            "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 CLAUDE_CODE_DISABLE_THINKING=1 "
+            "claude --model " + MODEL + " --effort max --safe-mode --permission-mode manual"
         )
         setup += (
             "<p>" + label(
@@ -307,9 +309,27 @@ def _trial_setup(cfg, csrf, token):
                 "or is replaced.",
                 "创建密钥后，命令会显示在这里。已保存过命令？只要密钥未过期或被更换，便可继续使用。",
                 inline=True,
+            ) + "</p><p>" + label(
+                "To update a saved command, keep its private key. Add ",
+                "更新已保存的命令时，请保留原有私密密钥。把 ", inline=True,
+            ) + '<code>ENABLE_TOOL_SEARCH=false CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 '
+            'CLAUDE_CODE_DISABLE_THINKING=1</code>' + label(
+                " before ", " 放在 ", inline=True,
+            ) + '<code>claude</code>' + label(
+                " and append ", " 之前，并在启动选项末尾添加 ", inline=True,
+            ) + '<code>--safe-mode --permission-mode manual</code>' + label(
+                ". You do not need a replacement key.",
+                "。无需更换密钥。", inline=True,
             ) + "</p></div>"
         )
     setup += (
+        '<p class="trial-key-note">' + label(
+            "This simplified launch disables customizations, including project instructions, "
+            "MCP servers and plugins, for this session. Built-in coding tools use normal "
+            "approval prompts. Your saved settings stay unchanged.",
+            "这次精简启动会仅为本次会话关闭自定义配置，包括项目指令、MCP 服务和插件。"
+            "内置编程工具仍会正常请求操作许可，已保存的设置不会改变。", inline=True,
+        ) + '</p>'
         '</li><li class="trial-step"><h3>'
         + label("Paste, launch, and ask something small", "粘贴启动，先问一个小问题", inline=True)
         + "</h3><p>" + label(
@@ -540,8 +560,10 @@ def handle(runtime, handler):
         ):
             raise TrialUnavailable("invalid_trial_request_framing", 400)
         size = int(lengths[0])
-        if not 0 < size <= MAX_REQUEST_BYTES:
-            raise TrialUnavailable("trial_context_too_large", 413)
+        if not size:
+            raise TrialUnavailable("invalid_trial_request_framing", 400)
+        if size > MAX_REQUEST_BYTES:
+            raise TrialUnavailable("trial_context_too_large", 400)
         auth, keys = (
             handler.headers.get_all("Authorization", []),
             handler.headers.get_all("x-api-key", []),
@@ -597,12 +619,14 @@ def handle(runtime, handler):
             "trial_paused": "The trial is paused while an unconfirmed turn is checked.",
             "trial_result_unconfirmed_do_not_retry": "The trial result could not be verified. "
             "Do not retry automatically.",
-            "trial_context_too_large": "Trial requests including tools/history may use at most "
-            "192 KiB. Start a smaller conversation.",
+            "trial_context_too_large": "prompt is too long: this Devin trial accepts at most "
+            "192 KiB of request JSON including tools and history. Reduce tools or start a "
+            "smaller conversation. No model request was sent.",
             "trial_requires_supported_opus_5_5_request": "Use claude-opus-5-5 and supported "
             "native-compatible request features.",
         }
-        gateway.model_error(handler, error.status, messages.get(error.code, error.code))
+        gateway.model_error(handler, error.status, messages.get(error.code, error.code),
+                            code=error.code if error.code == "trial_context_too_large" else "")
     except (ValueError, OSError, EOFError, RecursionError):
         gateway.model_error(handler, 400, "The trial request could not be confirmed.")
     except Exception:

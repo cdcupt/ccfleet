@@ -100,10 +100,42 @@ def test_key_creation_has_visible_success_and_copyable_command(context):
     assert words[0] == "env"
     assert "ANTHROPIC_AUTH_TOKEN=" + token in words
     assert "ANTHROPIC_BASE_URL=https://fleet.invalid/trial" in words
-    assert words[-5:] == ["claude", "--model", "claude-opus-5-5", "--effort", "max"]
+    executable = words.index("claude")
+    assert words[executable:] == [
+        "claude", "--model", "claude-opus-5-5", "--effort", "max",
+        "--safe-mode", "--permission-mode", "manual",
+    ]
+    assert "ENABLE_TOOL_SEARCH=false" in words[1:executable]
+    assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" in words[1:executable]
+    assert "CLAUDE_CODE_DISABLE_THINKING=1" in words[1:executable]
     assert "data-trial-copy" in markup and 'aria-live="polite"' in markup
     assert trial_routes.COPY_COMMAND_JS in markup
     assert trial_routes.COPY_COMMAND_JS not in render(context)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_saved_command_update_keeps_key_and_explains_session_only_defaults(context, language):
+    markup = render(context, language=language)
+    assert "ENABLE_TOOL_SEARCH=false" in markup
+    assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1" in markup
+    assert "CLAUDE_CODE_DISABLE_THINKING=1" in markup
+    assert "--safe-mode --permission-mode manual" in markup
+    assert 'id="trial-command"' not in markup
+    if language == "en":
+        for phrase in (
+            "keep its private key", "You do not need a replacement key",
+            "including project instructions", "for this session",
+            "Built-in coding tools use normal approval prompts", "saved settings stay unchanged",
+        ):
+            assert phrase in markup
+        assert "无需更换密钥" not in markup
+    else:
+        for phrase in (
+            "保留原有私密密钥", "无需更换密钥", "仅为本次会话", "包括项目指令",
+            "内置编程工具仍会正常请求操作许可", "已保存的设置不会改变",
+        ):
+            assert phrase in markup
+        assert "You do not need a replacement key" not in markup
 
 
 def test_command_text_escapes_token_and_keeps_it_out_of_attributes(context):

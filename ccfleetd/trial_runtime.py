@@ -187,8 +187,10 @@ class TrialRuntime:
         if key is None:
             raise TrialUnavailable("trial_key_expired_or_revoked", 401)
         who = principal(self.store.get_account(key["account_id"]))
-        if not isinstance(raw, bytes) or not 0 < len(raw) <= ledger.MAX_REQUEST_BYTES:
-            raise TrialUnavailable("trial_context_too_large", 413)
+        if not isinstance(raw, bytes) or not raw:
+            raise TrialUnavailable("invalid_trial_request_framing", 400)
+        if len(raw) > ledger.MAX_REQUEST_BYTES:
+            raise TrialUnavailable("trial_context_too_large", 400)
         try:
             body = devin_native.mcp._decode(raw)
             body = native_client_request(body)
