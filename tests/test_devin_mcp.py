@@ -23,6 +23,25 @@ INITIALIZED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 LIST = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 
 
+class TimedInput:
+    """Deliver actual JSONL packets while advancing only the injected shim clock."""
+
+    def __init__(self, now, messages, on_read=None):
+        self.now, self.messages, self.on_read = now, list(messages), on_read
+
+    def read(self, maximum):
+        if not self.messages:
+            return b""
+        instant, message = self.messages.pop(0)
+        assert instant >= self.now[0]
+        self.now[0] = instant
+        if self.on_read is not None:
+            self.on_read(instant)
+        raw = b"" if message is None else json.dumps(message).encode() + b"\n"
+        assert len(raw) <= maximum
+        return raw
+
+
 def initialize(version="2025-11-25"):
     return {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "fake"}}}
@@ -279,6 +298,68 @@ def test_cancelled_server_never_admits_a_tool(private):
     stop.set()
     code, replies = serve(initialize(), INITIALIZED, call(), cancelled=stop)
     assert code == 0 and replies == [] and not (path / "call.json").exists()
+
+
+def test_initialized_server_closes_at_whole_lifetime_without_admitting_late_tool(private):
+    path, _, _, bind, _, _ = private
+    bind()
+    now = [0.0]
+    ping = {"jsonrpc": "2.0", "id": "before-bound", "method": "ping"}
+    incoming = TimedInput(now, [
+        (0, initialize()), (5, INITIALIZED), (179.999, ping),
+        (180, call()), (181, call(rpc_id="never-read")),
+    ])
+    output = io.BytesIO()
+    assert mcp.serve(path, incoming, output, clock=lambda: now[0],
+                     identity=lambda: dict(PROCESS)) == 0
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [reply["id"] for reply in replies] == [1, "before-bound"]
+    assert now[0] == 180 and len(incoming.messages) == 1
+    assert not (path / "call.json").exists()
+    with pytest.raises(mcp.Rejected, match="mcp_shim_closed"):
+        mcp.read_lifecycle(path)
+
+
+@pytest.mark.parametrize("called_at,deadline", [(130, 175), (170, 180)])
+def test_handoff_wait_keeps45_seconds_and_cannot_extend_whole_lifetime(
+        private, called_at, deadline):
+    path, _, _, bind, _, _ = private
+    bind()
+    now = [0.0]
+    ping = {"jsonrpc": "2.0", "id": "before-bound", "method": "ping"}
+    incoming = TimedInput(now, [
+        (0, initialize()), (5, INITIALIZED), (called_at, call()),
+        (deadline - 0.001, ping),
+        (deadline, {**ping, "id": "at-bound"}),
+        (deadline + 1, {**ping, "id": "never-read"}),
+    ])
+    output = io.BytesIO()
+    assert mcp.serve(path, incoming, output, clock=lambda: now[0],
+                     identity=lambda: dict(PROCESS)) == 1
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [reply["id"] for reply in replies] == [1, "before-bound"]
+    assert json.loads((path / "call.json").read_text())["native_rpc_id"] == "call-1"
+    assert now[0] == deadline and len(incoming.messages) == 1
+
+
+def test_cancellation_after_old_lifetime_still_prevents_a_new_handoff(private):
+    path, _, _, bind, _, _ = private
+    bind()
+    now, stop = [0.0], threading.Event()
+    observed = []
+
+    def cancel(instant):
+        if instant == 130:
+            observed.append(mcp.read_lifecycle(path))
+            stop.set()
+
+    incoming = TimedInput(now, [(0, initialize()), (5, INITIALIZED), (130, call())], cancel)
+    output = io.BytesIO()
+    assert mcp.serve(path, incoming, output, clock=lambda: now[0], cancelled=stop,
+                     identity=lambda: dict(PROCESS)) == 0
+    assert observed[0]["ready"] and observed[0]["handshake_complete"]
+    assert not (path / "call.json").exists()
+    assert [json.loads(line)["id"] for line in output.getvalue().splitlines()] == [1]
 
 
 def test_json_integer_duplicate_and_wire_bounds_are_not_silently_accepted(private, monkeypatch):

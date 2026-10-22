@@ -1,14 +1,45 @@
 """Bounded trial transport/ledger clocks; no sockets or native model calls."""
 
+import io
 import json
 from types import SimpleNamespace
 
 import pytest
 
+from ccfleet_agent import devin_mcp as mcp
 from ccfleetd import devin_trial as ledger
 from ccfleetd import trial_worker_transport as transport
 from ccfleetd.gateway_transport import GatewayTransportError
+from tests.test_devin_mcp import INITIALIZED, LIST, PROCESS, TimedInput, call, initialize
+from tests.test_devin_mcp import private as private
 from tests.test_devin_trial_runtime import receipt
+
+
+def test_mcp_startup_does_not_consume_later_prompt_handoff_time(private):
+    path, _, _, bind, _, _ = private
+    bind()
+    now, observed = [0.0], []
+    arguments = {"command": "git log --since='7 days ago' --oneline"}
+
+    def inspect_ready(instant):
+        if instant == 130:
+            observed.append(mcp.read_lifecycle(path))
+
+    # Setup/handshake finish at20s. A tool selected110s into the allowed120s
+    # prompt arrives after the old shim's120s-from-start deadline.
+    incoming = TimedInput(now, [
+        (5, initialize()), (15, INITIALIZED), (20, LIST),
+        (130, call("Bash", arguments)), (131, None),
+    ], inspect_ready)
+    output = io.BytesIO()
+    assert mcp.serve(path, incoming, output, clock=lambda: now[0],
+                     identity=lambda: dict(PROCESS)) == 1
+    assert observed[0]["ready"] and observed[0]["tools_list_count"] == 1
+    record = json.loads((path / "call.json").read_text())
+    assert record["frontend_tool_use"]["name"] == "Bash"
+    assert record["frontend_tool_use"]["input"] == arguments
+    assert record["context"]["session_id"] == "native-owned"
+    assert [json.loads(line)["id"] for line in output.getvalue().splitlines()] == [1, 2]
 
 
 def test_prepared_transport_uses_one155_second_deadline_through_terminal_framing(monkeypatch):
