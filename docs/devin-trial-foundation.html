@@ -33,6 +33,19 @@ color:var(--acc,#4932c5)}
 @media print{.language-control{display:none}}
 
 
+
+/* Current platform diagrams: readable layouts for both wide and narrow screens. */
+.architecture-figure{margin:24px 0 28px;padding:18px;border:1px solid var(--line,#dce3ed);border-radius:18px;background:#f8fafc}
+.architecture-figure .arch-svg{display:block;width:100%;height:auto;max-width:100%}
+.architecture-figure .arch-mobile{display:none;max-width:480px;margin-inline:auto}
+.architecture-figure figcaption{margin-top:15px;font-size:14px;line-height:1.65;color:var(--muted,#59677c)}
+.design-lead{padding:20px 24px;background:#f0eeff;border-left:4px solid #5143ce;border-radius:0 14px 14px 0;margin:20px 0 28px}
+.architecture-details{margin:18px 0;padding:18px 22px;border:1px solid var(--line,#dce3ed);border-radius:12px;background:#fff}
+.architecture-details summary{cursor:pointer;font-weight:650;color:#182238}.architecture-details[open] summary{margin-bottom:16px}
+.architecture-details p{font-size:14px;line-height:1.75}.architecture-details ul{padding-left:22px}
+.design-links{display:flex;gap:10px 22px;flex-wrap:wrap;margin-top:18px}.design-links a{font-weight:650}
+.current-design-note{font-size:13px;color:var(--muted,#59677c)}
+@media(max-width:960px){.architecture-figure{padding:8px;border-radius:12px}.architecture-figure .arch-desktop{display:none}.architecture-figure .arch-mobile{display:block}.architecture-figure figcaption{padding:0 8px}.design-lead{padding:17px 18px}.architecture-details{padding:16px}}
 </style></head><body data-language="en">
 <nav aria-label="Documentation" data-aria-label-en="Documentation" data-aria-label-zh="文档">
 <a href="index.html">
@@ -47,18 +60,242 @@ color:var(--acc,#4932c5)}
 <span class="bi-inline"><span class="copy-en" lang="en">How the daily Devin trial works</span><span class="copy-zh" lang="zh-Hans">每日 Devin 试用怎样工作</span></span>
 </h1>
 <div class="bi"><div class="copy-en" lang="en"><p>Claude Code is the app on your computer. Devin is the remote agent doing the thinking. Fleet connects them, checks who may use the trial, and keeps the usage ledger. Your files and tools stay local; the question and any included file contents or tool results travel to Fleet and Devin.</p></div><div class="copy-zh" lang="zh-Hans"><p>Claude Code 是你电脑上的应用，Devin 是远端负责思考的智能体。Fleet 负责连接两者、验证试用身份和记录用量。文件与工具留在本机；问题，以及请求中包含的文件内容和工具结果，会发送给 Fleet 和 Devin。</p></div></div>
-<aside class="notice" id="availability">
+<p><span class="bi-inline"><span class="copy-en" lang="en"><a href="platform-comparison.html#devin-overview">Compare the private-account and shared-trial architecture</a>. The private gateway queue and trial single-worker admission are separate.</span><span class="copy-zh" lang="zh-Hans"><a href="platform-comparison.html#devin-overview">对比私人账号与共享试用架构</a>。私人网关队列与试用的单工作进程准入分别运行。</span></span></p><aside class="notice" id="availability">
 <div class="bi"><div class="copy-en" lang="en"><p><strong>The hosted trial is enabled by the operator; the source default is still off.</strong> Installing this repository does not turn it on. <code>CCFLEET_DEVIN_TRIAL_ENABLED=false</code> is the default for each installation. The signed-in <a href="/account/devin-trial">trial page</a> shows the hosted service's current availability, remaining budgets and launch command. These are the current source limits; deployment settings and availability are separate from source defaults.</p></div><div class="copy-zh" lang="zh-Hans"><p><strong>线上试用由运营方启用；源码默认仍为关闭。</strong>安装这个仓库不会自动开启试用。每个部署默认使用 <code>CCFLEET_DEVIN_TRIAL_ENABLED=false</code>。登录后的<a href="/account/devin-trial">试用页</a>显示线上服务当前是否可用、剩余额度和启动命令。本文记录当前源码的限额；部署状态与源码默认值是两回事。</p></div></div>
 </aside>
 <section id="request-cycle"><h2>
 <span class="bi-inline"><span class="copy-en" lang="en">Follow one question from start to finish</span><span class="copy-zh" lang="zh-Hans">跟着一个问题走完整个流程</span></span>
 </h2>
-<figure aria-labelledby="request-flow-caption">
+<figure class="architecture-figure" aria-labelledby="trial-lifecycle-guide-caption"><div class="bi"><div class="copy-en" lang="en"><svg class="arch-svg arch-desktop" id="trial-lifecycle-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="710" viewBox="0 0 1080 710" role="img" aria-label="One remote trial turn" aria-describedby="trial-lifecycle-en-desktop-desc" lang="en" xml:lang="en">
+
+<desc id="trial-lifecycle-en-desktop-desc">Five checks lead to four possible settlement outcomes. Check the request, verify model-free readiness, reserve allowance, run a fresh Devin turn, then verify and clean up. Full metering charges actual tokens. A clean reply missing only cache-read metering keeps a conservative hold. A verified clean timeout also keeps a conservative hold and returns a timeout. Unknown results or cleanup keep the reservation and pause for review. The trial has no waiting queue.</desc>
+<defs><marker id="trial-lifecycle-en-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="710" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">One remote trial turn</tspan></text>
+<rect x="20" y="62" width="1040" height="57" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="96" fill="#5143ce" font-size="18" font-weight="650" text-anchor="start"><tspan x="36" dy="0">No trial waiting queue</tspan></text>
+<text x="374" y="96" fill="#182238" font-size="18" font-weight="400" text-anchor="start"><tspan x="374" dy="0">Busy → 429; wait and submit later.</tspan></text>
+<path d="M 208 225 H 226" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 421 225 H 439" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 634 225 H 652" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 847 225 H 865" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<rect x="20" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="36" dy="0">01</tspan></text>
+<text x="36" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="36" dy="0">Check</tspan></text>
+<text x="36" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="36" dy="0">Key, request</tspan><tspan x="36" dy="26">and budgets</tspan></text>
+<rect x="233" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="249" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="249" dy="0">02</tspan></text>
+<text x="249" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="249" dy="0">Ready</tspan></text>
+<text x="249" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="249" dy="0">Model-free</tspan><tspan x="249" dy="26">worker check</tspan></text>
+<rect x="446" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="462" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="462" dy="0">03</tspan></text>
+<text x="462" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="462" dy="0">Reserve</tspan></text>
+<text x="462" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="462" dy="0">Hold tokens</tspan><tspan x="462" dy="26">and runtime</tspan></text>
+<rect x="659" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="675" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="675" dy="0">04</tspan></text>
+<text x="675" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="675" dy="0">Think</tspan></text>
+<text x="675" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="675" dy="0">Fresh native</tspan><tspan x="675" dy="26">Devin turn</tspan></text>
+<rect x="872" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="888" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="888" dy="0">05</tspan></text>
+<text x="888" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="888" dy="0">Verify + clean</tspan></text>
+<text x="888" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="888" dy="0">Model + meters</tspan><tspan x="888" dy="26">Stop + remove files</tspan></text>
+<path d="M 966 299 V 346 H 144" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 144 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 408 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 672 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 936 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<rect x="20" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="21" y="394" width="246" height="6" rx="3" fill="#0f766e"/>
+<text x="38" y="436" fill="#0f766e" font-size="19" font-weight="650" text-anchor="start"><tspan x="38" dy="0">Complete meters</tspan></text>
+<text x="38" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="38" dy="0">Record actual tokens</tspan><tspan x="38" dy="38">Return unused time</tspan><tspan x="38" dy="38">Reply</tspan></text>
+<rect x="284" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="285" y="394" width="246" height="6" rx="3" fill="#5143ce"/>
+<text x="302" y="436" fill="#5143ce" font-size="19" font-weight="650" text-anchor="start"><tspan x="302" dy="0">Cache-read missing</tspan></text>
+<text x="302" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="302" dy="0">Keep conservative hold</tspan><tspan x="302" dy="38">Return unused time</tspan><tspan x="302" dy="38">Reply</tspan></text>
+<rect x="548" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="549" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="566" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="566" dy="0">Clean timeout</tspan></text>
+<text x="566" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="566" dy="0">Keep conservative hold</tspan><tspan x="566" dy="38">Return unused time</tspan><tspan x="566" dy="38">504 timeout</tspan></text>
+<rect x="812" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="813" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="830" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="830" dy="0">Unknown outcome</tspan></text>
+<text x="830" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="830" dy="0">Keep reservation</tspan><tspan x="830" dy="38">Pause for review</tspan><tspan x="830" dy="38">No automatic replay</tspan></text>
+<text x="20" y="656" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">Cleanup and accounting determine when the worker can be released.</tspan><tspan x="20" dy="27">A hold is conservative accounting, not a proof of exact usage.</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-lifecycle-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1510" viewBox="0 0 340 1510" role="img" aria-label="One remote trial turn" aria-describedby="trial-lifecycle-en-mobile-desc" lang="en" xml:lang="en">
+
+<desc id="trial-lifecycle-en-mobile-desc">Five checks lead to four possible settlement outcomes. Check the request, verify model-free readiness, reserve allowance, run a fresh Devin turn, then verify and clean up. Full metering charges actual tokens. A clean reply missing only cache-read metering keeps a conservative hold. A verified clean timeout also keeps a conservative hold and returns a timeout. Unknown results or cleanup keep the reservation and pause for review. The trial has no waiting queue.</desc>
+<defs><marker id="trial-lifecycle-en-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1510" fill="#ffffff"/>
+<text x="16" y="31" fill="#182238" font-size="23" font-weight="700" text-anchor="start"><tspan x="16" dy="0">One remote trial turn</tspan></text>
+<rect x="16" y="55" width="308" height="90" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="85" fill="#5143ce" font-size="16.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">No trial waiting queue</tspan></text>
+<text x="30" y="115" fill="#182238" font-size="15" font-weight="400" text-anchor="start"><tspan x="30" dy="0">Busy → 429; wait and submit later.</tspan></text>
+<path d="M 170 268 V 283" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<path d="M 170 384 V 399" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<path d="M 170 500 V 515" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<path d="M 170 616 V 631" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="174" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="204" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">01</tspan></text>
+<text x="82" y="204" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Check</tspan></text>
+<text x="50" y="232" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Key, request</tspan><tspan x="50" dy="23">and budgets</tspan></text>
+<rect x="34" y="290" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="320" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">02</tspan></text>
+<text x="82" y="320" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Ready</tspan></text>
+<text x="50" y="348" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Model-free</tspan><tspan x="50" dy="23">worker check</tspan></text>
+<rect x="34" y="406" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="436" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">03</tspan></text>
+<text x="82" y="436" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Reserve</tspan></text>
+<text x="50" y="464" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Hold tokens</tspan><tspan x="50" dy="23">and runtime</tspan></text>
+<rect x="34" y="522" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="552" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">04</tspan></text>
+<text x="82" y="552" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Think</tspan></text>
+<text x="50" y="580" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Fresh native</tspan><tspan x="50" dy="23">Devin turn</tspan></text>
+<rect x="34" y="638" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="668" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">05</tspan></text>
+<text x="82" y="668" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Verify + clean</tspan></text>
+<text x="50" y="696" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Model + meters</tspan><tspan x="50" dy="23">Stop + remove files</tspan></text>
+<path d="M 170 732 V 755 H 16 V 1310" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 16 845 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="778" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="779" width="288" height="5" rx="2.5" fill="#0f766e"/>
+<text x="50" y="809" fill="#0f766e" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Complete meters</tspan></text>
+<text x="50" y="840" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Record actual tokens</tspan><tspan x="50" dy="26">Return unused time</tspan><tspan x="50" dy="26">Reply</tspan></text>
+<path d="M 16 1000 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="933" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="934" width="288" height="5" rx="2.5" fill="#5143ce"/>
+<text x="50" y="964" fill="#5143ce" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Cache-read missing</tspan></text>
+<text x="50" y="995" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Keep conservative hold</tspan><tspan x="50" dy="26">Return unused time</tspan><tspan x="50" dy="26">Reply</tspan></text>
+<path d="M 16 1155 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="1088" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1089" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1119" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Clean timeout</tspan></text>
+<text x="50" y="1150" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Keep conservative hold</tspan><tspan x="50" dy="26">Return unused time</tspan><tspan x="50" dy="26">504 timeout</tspan></text>
+<path d="M 16 1310 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="1243" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1244" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1274" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Unknown outcome</tspan></text>
+<text x="50" y="1305" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Keep reservation</tspan><tspan x="50" dy="26">Pause for review</tspan><tspan x="50" dy="26">No automatic replay</tspan></text>
+<text x="16" y="1420" fill="#59677c" font-size="15" font-weight="400" text-anchor="start"><tspan x="16" dy="0">Cleanup and accounting control</tspan><tspan x="16" dy="25">when the worker is released.</tspan><tspan x="16" dy="25">A hold is not exact usage.</tspan></text>
+</g></svg></div><div class="copy-zh" lang="zh-Hans"><svg class="arch-svg arch-desktop" id="trial-lifecycle-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="710" viewBox="0 0 1080 710" role="img" aria-label="一次远端试用轮次" aria-describedby="trial-lifecycle-zh-desktop-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-lifecycle-zh-desktop-desc">先检查请求，再确认不发送模型请求的就绪状态，然后预留额度、启动全新的 Devin 轮次，最后验证并清理。完整计量按实际 token 结算；只有缓存读取计量缺失且回答有效、清理完成时，保留保守额度；经验证并清理完成的超时也保留保守额度，返回超时。结果或清理不明则保留预留额度并暂停等待检查。试用不设等候队列。</desc>
+<defs><marker id="trial-lifecycle-zh-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="710" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">一次远端试用轮次</tspan></text>
+<rect x="20" y="62" width="1040" height="57" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="96" fill="#5143ce" font-size="18" font-weight="650" text-anchor="start"><tspan x="36" dy="0">试用不设等候队列</tspan></text>
+<text x="302" y="96" fill="#182238" font-size="18" font-weight="400" text-anchor="start"><tspan x="302" dy="0">忙碌时返回 429；稍候再提交。</tspan></text>
+<path d="M 208 225 H 226" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 421 225 H 439" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 634 225 H 652" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 847 225 H 865" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<rect x="20" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="36" dy="0">01</tspan></text>
+<text x="36" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="36" dy="0">检查入口</tspan></text>
+<text x="36" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="36" dy="0">密钥、请求</tspan><tspan x="36" dy="26">以及额度</tspan></text>
+<rect x="233" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="249" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="249" dy="0">02</tspan></text>
+<text x="249" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="249" dy="0">确认就绪</tspan></text>
+<text x="249" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="249" dy="0">检查工作进程</tspan><tspan x="249" dy="26">不发送模型请求</tspan></text>
+<rect x="446" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="462" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="462" dy="0">03</tspan></text>
+<text x="462" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="462" dy="0">预留额度</tspan></text>
+<text x="462" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="462" dy="0">预留 token</tspan><tspan x="462" dy="26">和运行时间</tspan></text>
+<rect x="659" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="675" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="675" dy="0">04</tspan></text>
+<text x="675" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="675" dy="0">Devin 思考</tspan></text>
+<text x="675" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="675" dy="0">全新的原生</tspan><tspan x="675" dy="26">Devin 轮次</tspan></text>
+<rect x="872" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="888" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="888" dy="0">05</tspan></text>
+<text x="888" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="888" dy="0">验证并清理</tspan></text>
+<text x="888" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="888" dy="0">核对模型与计量</tspan><tspan x="888" dy="26">停进程、删文件</tspan></text>
+<path d="M 966 299 V 346 H 144" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 144 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 408 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 672 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 936 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<rect x="20" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="21" y="394" width="246" height="6" rx="3" fill="#0f766e"/>
+<text x="38" y="436" fill="#0f766e" font-size="19" font-weight="650" text-anchor="start"><tspan x="38" dy="0">完整计量</tspan></text>
+<text x="38" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="38" dy="0">记录实际 token</tspan><tspan x="38" dy="38">退回未用时间</tspan><tspan x="38" dy="38">返回回答</tspan></text>
+<rect x="284" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="285" y="394" width="246" height="6" rx="3" fill="#5143ce"/>
+<text x="302" y="436" fill="#5143ce" font-size="19" font-weight="650" text-anchor="start"><tspan x="302" dy="0">仅缺缓存读取计量</tspan></text>
+<text x="302" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="302" dy="0">保留保守额度</tspan><tspan x="302" dy="38">退回未用时间</tspan><tspan x="302" dy="38">返回回答</tspan></text>
+<rect x="548" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="549" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="566" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="566" dy="0">已清理的超时</tspan></text>
+<text x="566" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="566" dy="0">保留保守额度</tspan><tspan x="566" dy="38">退回未用时间</tspan><tspan x="566" dy="38">返回 504 超时</tspan></text>
+<rect x="812" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="813" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="830" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="830" dy="0">结果或清理不明</tspan></text>
+<text x="830" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="830" dy="0">保留预留额度</tspan><tspan x="830" dy="38">暂停并人工检查</tspan><tspan x="830" dy="38">不自动重发</tspan></text>
+<text x="20" y="656" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">清理和计量结果决定何时可以释放工作进程。</tspan><tspan x="20" dy="27">保守保留额度，不代表已知确切用量。</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-lifecycle-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1510" viewBox="0 0 340 1510" role="img" aria-label="一次远端试用轮次" aria-describedby="trial-lifecycle-zh-mobile-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-lifecycle-zh-mobile-desc">先检查请求，再确认不发送模型请求的就绪状态，然后预留额度、启动全新的 Devin 轮次，最后验证并清理。完整计量按实际 token 结算；只有缓存读取计量缺失且回答有效、清理完成时，保留保守额度；经验证并清理完成的超时也保留保守额度，返回超时。结果或清理不明则保留预留额度并暂停等待检查。试用不设等候队列。</desc>
+<defs><marker id="trial-lifecycle-zh-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1510" fill="#ffffff"/>
+<text x="16" y="31" fill="#182238" font-size="23" font-weight="700" text-anchor="start"><tspan x="16" dy="0">一次远端试用轮次</tspan></text>
+<rect x="16" y="55" width="308" height="90" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="85" fill="#5143ce" font-size="16.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">试用不设等候队列</tspan></text>
+<text x="30" y="115" fill="#182238" font-size="15" font-weight="400" text-anchor="start"><tspan x="30" dy="0">忙碌时返回 429；稍候再提交。</tspan></text>
+<path d="M 170 268 V 283" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<path d="M 170 384 V 399" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<path d="M 170 500 V 515" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<path d="M 170 616 V 631" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="174" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="204" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">01</tspan></text>
+<text x="82" y="204" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">检查入口</tspan></text>
+<text x="50" y="232" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">密钥、请求</tspan><tspan x="50" dy="23">以及额度</tspan></text>
+<rect x="34" y="290" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="320" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">02</tspan></text>
+<text x="82" y="320" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">确认就绪</tspan></text>
+<text x="50" y="348" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">检查工作进程</tspan><tspan x="50" dy="23">不发送模型请求</tspan></text>
+<rect x="34" y="406" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="436" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">03</tspan></text>
+<text x="82" y="436" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">预留额度</tspan></text>
+<text x="50" y="464" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">预留 token</tspan><tspan x="50" dy="23">和运行时间</tspan></text>
+<rect x="34" y="522" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="552" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">04</tspan></text>
+<text x="82" y="552" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Devin 思考</tspan></text>
+<text x="50" y="580" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">全新的原生</tspan><tspan x="50" dy="23">Devin 轮次</tspan></text>
+<rect x="34" y="638" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="668" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">05</tspan></text>
+<text x="82" y="668" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">验证并清理</tspan></text>
+<text x="50" y="696" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">核对模型与计量</tspan><tspan x="50" dy="23">停进程、删文件</tspan></text>
+<path d="M 170 732 V 755 H 16 V 1310" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 16 845 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="778" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="779" width="288" height="5" rx="2.5" fill="#0f766e"/>
+<text x="50" y="809" fill="#0f766e" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">完整计量</tspan></text>
+<text x="50" y="840" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">记录实际 token</tspan><tspan x="50" dy="26">退回未用时间</tspan><tspan x="50" dy="26">返回回答</tspan></text>
+<path d="M 16 1000 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="933" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="934" width="288" height="5" rx="2.5" fill="#5143ce"/>
+<text x="50" y="964" fill="#5143ce" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">仅缺缓存读取计量</tspan></text>
+<text x="50" y="995" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">保留保守额度</tspan><tspan x="50" dy="26">退回未用时间</tspan><tspan x="50" dy="26">返回回答</tspan></text>
+<path d="M 16 1155 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="1088" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1089" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1119" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">已清理的超时</tspan></text>
+<text x="50" y="1150" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">保留保守额度</tspan><tspan x="50" dy="26">退回未用时间</tspan><tspan x="50" dy="26">返回 504 超时</tspan></text>
+<path d="M 16 1310 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="1243" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1244" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1274" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">结果或清理不明</tspan></text>
+<text x="50" y="1305" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">保留预留额度</tspan><tspan x="50" dy="26">暂停并人工检查</tspan><tspan x="50" dy="26">不自动重发</tspan></text>
+<text x="16" y="1420" fill="#59677c" font-size="15" font-weight="400" text-anchor="start"><tspan x="16" dy="0">清理和计量结果决定何时</tspan><tspan x="16" dy="25">可以释放工作进程。</tspan><tspan x="16" dy="25">保留额度不代表确切用量。</tspan></text>
+</g></svg></div></div><figcaption id="trial-lifecycle-guide-caption"><span class="bi-inline"><span class="copy-en" lang="en">No trial waiting queue: check, prepare, reserve and execute one turn; then validate, clean up and settle according to the evidence.</span><span class="copy-zh" lang="zh-Hans">试用没有等待队列：检查、准备、预留并执行一轮，随后根据证据验证、清理和结算。</span></span></figcaption></figure><figure aria-labelledby="request-flow-caption">
 <div class="bi"><div class="copy-en" lang="en"><ol class="flow"><li><strong>Your computer sends a request</strong>Claude Code sends the question, included conversation history and a list describing its available tools over HTTPS. The trial key identifies your Fleet account.</li><li><strong>Fleet checks the entrance</strong>Fleet checks the key, supported request shape, account and shared budgets, and worker readiness. It reserves a turn only after readiness succeeds, then rechecks permission immediately before sending the model request.</li><li><strong>A fresh remote Devin process thinks</strong>The dedicated worker starts with a new private HOME. Devin can produce an answer or request a tool from the exact declared list. Its own file, shell, web-fetch and delegation tools are disabled.</li><li><strong>Your computer executes a requested tool</strong>Fleet returns the tool call to Claude Code. Claude Code runs the tool locally, adds its result to local history, and sends a new request through Fleet for the next model turn.</li></ol></div><div class="copy-zh" lang="zh-Hans"><ol class="flow"><li><strong>本机发送请求</strong>Claude Code 通过 HTTPS 发送问题、包含的对话历史，以及可用工具的说明清单。试用密钥标识你的 Fleet 账号。</li><li><strong>Fleet 检查入口</strong>Fleet 检查密钥、请求格式、个人和全局额度，以及工作进程是否就绪。就绪后才预留模型轮次；发送模型请求前再检查一次权限。</li><li><strong>全新的远端 Devin 进程思考</strong>独立工作进程使用全新的私有 HOME。Devin 可以直接回答，或请求说明清单中的工具；它自己的文件、终端、网页抓取及委派工具均被禁用。</li><li><strong>本机执行所请求的工具</strong>Fleet 把工具调用交给 Claude Code。Claude Code 在本机执行工具，将结果加入本地历史，再通过 Fleet 发送新请求，开始下一轮模型处理。</li></ol></div></div>
 <figcaption id="request-flow-caption">
 <span class="bi-inline"><span class="copy-en" lang="en">A tool call is a round trip: remote thinking → local execution → another remote model turn.</span><span class="copy-zh" lang="zh-Hans">一次工具调用会往返：远端思考 → 本机执行 → 下一轮远端模型处理。</span></span>
 </figcaption></figure>
-<div class="bi"><div class="copy-en" lang="en"><p>For example, “read this file and explain it” may need one model turn to request <code>Read</code>, a local file read, then a second model turn to explain the result. A tool handoff and its continuation count as separate model turns. Each remote turn is a fresh process; continuity comes from the history Claude Code includes in the next request, not a reused remote session. Idle chats do not hold the worker.</p><p>The internal MCP bridge is a controlled mailbox for these declared tool calls. It freezes the list for that native turn and checks call/result identity. It does not give remote Devin a general shell on your computer. Replies and SSE are buffered until usage and cleanup checks finish, so they are not a promise of live token-by-token streaming.</p></div><div class="copy-zh" lang="zh-Hans"><p>例如，“读取这个文件并解释”可能先用一轮模型请求 <code>Read</code>，由本机读取文件，再用下一轮模型解释结果。工具交接和后续回复分别计为模型轮次。每轮远端进程都是新的；对话连续性来自 Claude Code 下一次请求所带的历史，而不是复用远端会话。空闲聊天不会占用工作进程。</p><p>内部 MCP 桥像一个受控信箱，只传递已声明的工具调用，并为该轮固定工具清单、核对调用与结果身份。它不会把本机的通用终端权限直接交给远端 Devin。回复和 SSE 会等到用量与清理检查完成后才返回，不保证逐 token 实时输出。</p></div></div>
+<div class="bi"><div class="copy-en" lang="en"><p>For example, “read this file and explain it” may need one model turn to request <code>Read</code>, a local file read, then a second model turn to explain the result. A tool handoff and its continuation count as separate model turns. Each remote turn is a fresh process; continuity comes from the history Claude Code includes in the next request, not a reused remote session. Idle chats do not hold the worker.</p><p>The internal MCP bridge is a controlled mailbox for these declared tool calls. It freezes the list for that native turn and verifies the native call’s tool, session and ownership binding. Claude Code carries its matching result in the next request; the bridge does not keep a cross-turn result-pairing receipt. It does not give remote Devin a general shell on your computer. Replies and SSE are buffered until usage and cleanup checks finish, so they are not a promise of live token-by-token streaming.</p></div><div class="copy-zh" lang="zh-Hans"><p>例如，“读取这个文件并解释”可能先用一轮模型请求 <code>Read</code>，由本机读取文件，再用下一轮模型解释结果。工具交接和后续回复分别计为模型轮次。每轮远端进程都是新的；对话连续性来自 Claude Code 下一次请求所带的历史，而不是复用远端会话。空闲聊天不会占用工作进程。</p><p>内部 MCP 桥像一个受控信箱，只传递已声明的工具调用，为该轮固定工具清单，并核对原生调用的工具、会话及所有权绑定。Claude Code 在下一次请求中携带对应结果；桥接器不保留跨轮次的结果配对回执。它不会把本机的通用终端权限直接交给远端 Devin。回复和 SSE 会等到用量与清理检查完成后才返回，不保证逐 token 实时输出。</p></div></div>
 </section>
 <section id="identity"><h2>
 <span class="bi-inline"><span class="copy-en" lang="en">Which agent is answering?</span><span class="copy-zh" lang="zh-Hans">回答的是哪个智能体？</span></span>
@@ -78,7 +315,7 @@ color:var(--acc,#4932c5)}
 <div class="bi"><div class="copy-en" lang="en"><p><strong>Web search.</strong> The hosted trial enables Devin's native <code>web_search</code> through a separate root-pinned capability. Ask Devin to find current public information and include sources. It does not use Claude's hosted WebSearch/WebFetch. Native file, shell, page-fetch and delegation tools stay blocked; compatible local tools can read pages and work on your files.</p><p><strong>A slow turn should not stop your next question.</strong> If a five-minute timeout has verified model identity, valid partial token records and confirmed cleanup, Fleet keeps the full token reservation or the larger known subtotal, records an interrupted-turn hold, and releases the worker. The response remains a timeout, never a successful answer or complete usage claim. Actual usage may exceed the hold. Missing model/usage evidence, lost execution or uncertain cleanup still pauses for review. No failed inference request is automatically replayed.</p></div><div class="copy-zh" lang="zh-Hans"><p><strong>网页搜索。</strong>线上试用通过独立的 root 固定能力启用 Devin 原生 <code>web_search</code>。可要求 Devin 查找最新公开信息并附上来源；它不会调用 Claude 托管的 WebSearch/WebFetch。原生文件、终端、网页抓取及委派工具仍关闭，兼容的本地工具可读取网页并处理你的文件。</p><p><strong>慢一轮不应阻止下一问。</strong>若五分钟超时后模型身份已验证、拥有有效的部分 token 记录且全部清理完成，Fleet 保留整笔 token 预留或更大的已知部分，记录“中断轮次”保留额度并释放工作进程。响应仍为超时，不会伪装成成功回复或完整用量；实际用量可能超过保留额度。模型或用量证据缺失、执行失联或清理不确定仍须暂停审查。失败推理不会自动重放。</p></div></div>
 <section id="budgets"><h2>
 <span class="bi-inline"><span class="copy-en" lang="en">Several separate budgets, not one fuel gauge</span><span class="copy-zh" lang="zh-Hans">几种独立限额，不是一根油量条</span></span>
-</h2>
+</h2><figure class="architecture-figure" aria-labelledby="trial-budgets-guide-caption"><div class="bi"><div class="copy-en" lang="en"><svg id="trial-budgets-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-label="Separate trial allowance buckets" aria-describedby="trial-budgets-en-desktop-desc" class="arch-svg arch-desktop" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-en-desktop-desc">Per UTC day: one million tokens per account, ten million shared; personal and shared runtime are each two hundred minutes. One turn executes at a time. Tokens and time are separate allowances.</desc><defs><marker id="trial-budgets-en-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="1000" height="540" rx="20" fill="#f3f5f9"/><text x="20" y="36" text-anchor="start" font-size="22" font-weight="700" fill="#182238">Tokens of allowance / UTC day</text><text x="24" y="107" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Per account: 1,000,000</text><rect x="270" y="94" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="94" width="68.0" height="22" rx="6" fill="#5143ce"/><text x="24" y="177" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Shared: 10,000,000</text><rect x="270" y="164" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="164" width="680" height="22" rx="6" fill="#0f766e"/><text x="20" y="250" text-anchor="start" font-size="22" font-weight="700" fill="#182238">Runtime allowance / UTC day</text><text x="24" y="320" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Per account: 200 minutes</text><rect x="270" y="307" width="680" height="22" rx="6" fill="#5143ce"/><text x="24" y="390" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Shared: 200 minutes</text><rect x="270" y="377" width="680" height="22" rx="6" fill="#0f766e"/><rect x="20" y="445" width="960" height="76" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="500.0" y="476" text-anchor="middle" font-size="18" font-weight="700" fill="#5143ce">Separate turn + concurrency limits</text><text x="500.0" y="505" text-anchor="middle" font-size="16" font-weight="400" fill="#59677c">1 executing turn globally · 200 turns/day per account and shared · busy asks you to wait</text></svg><svg id="trial-budgets-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 715" role="img" aria-label="Separate trial allowance buckets" aria-describedby="trial-budgets-en-mobile-desc" class="arch-svg arch-mobile" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-en-mobile-desc">Per UTC day: one million tokens per account, ten million shared; personal and shared runtime are each two hundred minutes. One turn executes at a time. Tokens and time are separate allowances.</desc><defs><marker id="trial-budgets-en-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="340" height="715" rx="20" fill="#f3f5f9"/><text x="22" y="36" text-anchor="start" font-size="18" font-weight="700" fill="#182238">Tokens of allowance / UTC day</text><text x="22" y="70" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Per account: 1,000,000</text><rect x="22" y="83" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="83" width="29.6" height="22" rx="6" fill="#5143ce"/><text x="22" y="165" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Shared: 10,000,000</text><rect x="22" y="178" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="178" width="296" height="22" rx="6" fill="#0f766e"/><text x="22" y="295" text-anchor="start" font-size="18" font-weight="700" fill="#182238">Runtime allowance / UTC day</text><text x="22" y="329" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Per account: 200 minutes</text><rect x="22" y="342" width="296" height="22" rx="6" fill="#5143ce"/><text x="22" y="424" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Shared: 200 minutes</text><rect x="22" y="437" width="296" height="22" rx="6" fill="#0f766e"/><rect x="18" y="545" width="304" height="128" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="576" text-anchor="middle" font-size="16" font-weight="700" fill="#5143ce">Separate turn + concurrency limits</text><text x="170.0" y="605" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">1 executing turn globally</text><text x="170.0" y="627" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">200 turns/day per account and shared</text><text x="170.0" y="649" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Busy returns a message; no trial queue</text></svg></div><div class="copy-zh" lang="zh-Hans"><svg id="trial-budgets-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-label="试用的几个独立限额" aria-describedby="trial-budgets-zh-desktop-desc" class="arch-svg arch-desktop" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-zh-desktop-desc">每日每人一百万 token、共享一千万 token；个人与共享运行时间各二百分种。一次仅执行一轮；token 与时间是不同的额度。</desc><defs><marker id="trial-budgets-zh-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="1000" height="540" rx="20" fill="#f3f5f9"/><text x="20" y="36" text-anchor="start" font-size="22" font-weight="700" fill="#182238">每日 token 额度</text><text x="24" y="107" text-anchor="start" font-size="17" font-weight="400" fill="#182238">每账号：1,000,000</text><rect x="270" y="94" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="94" width="68.0" height="22" rx="6" fill="#5143ce"/><text x="24" y="177" text-anchor="start" font-size="17" font-weight="400" fill="#182238">全部共享：10,000,000</text><rect x="270" y="164" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="164" width="680" height="22" rx="6" fill="#0f766e"/><text x="20" y="250" text-anchor="start" font-size="22" font-weight="700" fill="#182238">每日运行时间额度</text><text x="24" y="320" text-anchor="start" font-size="17" font-weight="400" fill="#182238">每账号：200 分钟</text><rect x="270" y="307" width="680" height="22" rx="6" fill="#5143ce"/><text x="24" y="390" text-anchor="start" font-size="17" font-weight="400" fill="#182238">全部共享：200 分钟</text><rect x="270" y="377" width="680" height="22" rx="6" fill="#0f766e"/><rect x="20" y="445" width="960" height="76" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="500.0" y="476" text-anchor="middle" font-size="18" font-weight="700" fill="#5143ce">另有执行与轮次限制</text><text x="500.0" y="505" text-anchor="middle" font-size="16" font-weight="400" fill="#59677c">全局同时 1 轮 · 个人与共享每日各 200 轮 · 忙碌时提示稍后重试</text></svg><svg id="trial-budgets-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 715" role="img" aria-label="试用的几个独立限额" aria-describedby="trial-budgets-zh-mobile-desc" class="arch-svg arch-mobile" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-zh-mobile-desc">每日每人一百万 token、共享一千万 token；个人与共享运行时间各二百分种。一次仅执行一轮；token 与时间是不同的额度。</desc><defs><marker id="trial-budgets-zh-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="340" height="715" rx="20" fill="#f3f5f9"/><text x="22" y="36" text-anchor="start" font-size="18" font-weight="700" fill="#182238">每日 token 额度</text><text x="22" y="70" text-anchor="start" font-size="14" font-weight="400" fill="#182238">每账号：1,000,000</text><rect x="22" y="83" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="83" width="29.6" height="22" rx="6" fill="#5143ce"/><text x="22" y="165" text-anchor="start" font-size="14" font-weight="400" fill="#182238">全部共享：10,000,000</text><rect x="22" y="178" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="178" width="296" height="22" rx="6" fill="#0f766e"/><text x="22" y="295" text-anchor="start" font-size="18" font-weight="700" fill="#182238">每日运行时间额度</text><text x="22" y="329" text-anchor="start" font-size="14" font-weight="400" fill="#182238">每账号：200 分钟</text><rect x="22" y="342" width="296" height="22" rx="6" fill="#5143ce"/><text x="22" y="424" text-anchor="start" font-size="14" font-weight="400" fill="#182238">全部共享：200 分钟</text><rect x="22" y="437" width="296" height="22" rx="6" fill="#0f766e"/><rect x="18" y="545" width="304" height="128" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="576" text-anchor="middle" font-size="16" font-weight="700" fill="#5143ce">另有执行与轮次限制</text><text x="170.0" y="605" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">全局同时执行 1 轮</text><text x="170.0" y="627" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">个人与共享每日各最多 200 轮</text><text x="170.0" y="649" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">忙碌时返回提示，没有试用排队区</text></svg></div></div><figcaption id="trial-budgets-guide-caption"><span class="bi-inline"><span class="copy-en" lang="en">Separate personal and shared token/runtime budgets must all allow the next turn. This is an allowance ledger, not an upstream spending cap.</span><span class="copy-zh" lang="zh-Hans">个人与共享的 token／运行时间限额必须都允许下一轮；这是额度账本，不是上游强制费用上限。</span></span></figcaption></figure>
 <div class="bi"><div class="copy-en" lang="en"><p>Having tokens left does not guarantee another turn can start. Fleet checks all of these independent limits. Both personal and shared daily budgets reset at 00:00 UTC; replacing a key resets none of them.</p></div><div class="copy-zh" lang="zh-Hans"><p>还有 token，不代表一定能开始下一轮。Fleet 会同时检查以下独立限额。个人和全局每日额度均在 UTC 00:00 重置；更换密钥不会重置任何限额。</p></div></div>
 <div class="table-scroll">
 <div class="bi"><div class="copy-en" lang="en"><table><thead><tr><th scope="col">Bucket</th><th scope="col">Current source policy</th><th scope="col">What uses it</th></tr></thead><tbody><tr><td>Token allowance</td><td>1,000,000 per account; 10,000,000 shared daily</td><td>Complete reported input, output, cache-read and cache-creation usage; conservative reservations where usage is unconfirmed.</td></tr><tr><td>Model turns and leases</td><td>200 model turns and 200 admitted leases per account and shared daily</td><td>Each accepted HTTP model request uses its own turn/lease, including a tool continuation.</td></tr><tr><td>Reserved runtime</td><td>12,000 seconds (200 minutes) per account and shared daily</td><td>Each admitted turn reserves 340 seconds. After verified settlement and cleanup, unused seconds return to the budget. A fresh budget covers 35 full-length turns up front; quick replies can allow more turns within the same daily limits.</td></tr><tr><td>Worker occupancy</td><td>One executing turn globally</td><td>An active request can occupy readiness or execution; idle chats do not hold the worker. A busy caller waits rather than taking another customer's slot.</td></tr><tr><td>API request rate</td><td>Burst 3; refill 40 requests per minute per account</td><td>Authenticated HTTP attempts, before JSON validation and SSH. An invalid request can consume this bucket without using a model turn or runtime.</td></tr></tbody></table></div><div class="copy-zh" lang="zh-Hans"><table><thead><tr><th scope="col">限额</th><th scope="col">当前源码策略</th><th scope="col">什么会占用</th></tr></thead><tbody><tr><td>Token 额度</td><td>每账号每日 1,000,000；全局共享 10,000,000</td><td>完整已报告的输入、输出、缓存读取、缓存创建用量；用量未确认时的保守预留。</td></tr><tr><td>模型轮次与租约</td><td>每账号及全局共享每日均为 200 轮、200 次已准入租约</td><td>每个被接受的 HTTP 模型请求使用独立轮次和租约，工具结果后的继续请求也计入。</td></tr><tr><td>预留运行时间</td><td>每账号及全局共享每日均为 12,000 秒（200 分钟）</td><td>每轮预留 340 秒。确认结算及清理后，未使用秒数退回预算。完整预算当前可覆盖 35 个完整时限轮次；快速回复退回时间后可继续更多轮，仍遵守每日限额。</td></tr><tr><td>工作进程占用</td><td>全局同时一轮执行</td><td>活动请求可占用就绪检查或执行阶段；空闲聊天不占用工作进程。忙碌时等待，不会借用别人的槽位。</td></tr><tr><td>API 请求速率</td><td>每账号瞬时 3 次，每分钟恢复 40 次</td><td>验证身份后的 HTTP 尝试，在 JSON 验证及 SSH 之前计入。无效请求也可能消耗此速率额度，但不消耗模型轮次或运行时间。</td></tr></tbody></table></div></div>
@@ -87,8 +324,108 @@ color:var(--acc,#4932c5)}
 </section>
 <section id="clocks"><h2>
 <span class="bi-inline"><span class="copy-en" lang="en">Why the different clocks?</span><span class="copy-zh" lang="zh-Hans">为什么有几个不同的时钟？</span></span>
-</h2>
-<div class="bi"><div class="copy-en" lang="en"><p>Think of the runtime reservation as a booked time slot, not a stopwatch refund. The shorter deadlines stop real work; the longer envelopes leave room for startup, transport and cleanup. None of them gives the model extra thinking time.</p></div><div class="copy-zh" lang="zh-Hans"><p>运行时间预留像预约时段，不是按秒退款的计时器。较短的截止时间限制实际工作，较长的外层边界为启动、传输和清理留空间；它们不会额外延长模型思考时间。</p></div></div>
+</h2><figure class="architecture-figure" aria-labelledby="trial-clocks-guide-caption"><div class="bi"><div class="copy-en" lang="en"><svg class="arch-svg arch-desktop" id="trial-clocks-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="705" viewBox="0 0 1080 705" role="img" aria-label="Several clocks protect one turn" aria-describedby="trial-clocks-en-desktop-desc" lang="en" xml:lang="en">
+
+<desc id="trial-clocks-en-desktop-desc">A separate 10-second model-free readiness check happens before reservation. After admission, overlapping bounds are 300 seconds for native generation, 335 seconds for transport, 340 seconds reserved against runtime, and 360 seconds for the lease and MCP helper. These bands are not to scale and do not add together. The longer envelopes leave room for setup and cleanup, not more thinking time.</desc>
+<defs><marker id="trial-clocks-en-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="705" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">Several clocks protect one turn</tspan></text>
+<rect x="20" y="67" width="1040" height="105" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="99" fill="#59677c" font-size="17" font-weight="650" text-anchor="start"><tspan x="40" dy="0">Before reservation</tspan></text>
+<text x="40" y="140" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">10 s readiness</tspan></text>
+<text x="370" y="138" fill="#182238" font-size="19" font-weight="400" text-anchor="start"><tspan x="370" dy="0">No model request is sent.</tspan></text>
+<text x="20" y="215" fill="#182238" font-size="19" font-weight="650" text-anchor="start"><tspan x="20" dy="0">After admission: overlapping bounds</tspan></text>
+<rect x="20" y="239" width="1040" height="365" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="279" fill="#59677c" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">360 s</tspan></text>
+<text x="162" y="278" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="162" dy="0">Lease + MCP helper lifetime</tspan></text>
+<rect x="70" y="314" width="940" height="265" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="90" y="354" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="90" dy="0">340 s</tspan></text>
+<text x="212" y="353" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="212" dy="0">Runtime reservation</tspan></text>
+<rect x="120" y="389" width="840" height="165" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="140" y="429" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="140" dy="0">335 s</tspan></text>
+<text x="262" y="428" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="262" dy="0">Transport deadline</tspan></text>
+<rect x="170" y="464" width="740" height="65" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="190" y="504" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="190" dy="0">300 s</tspan></text>
+<text x="312" y="503" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="312" dy="0">Native generation deadline</tspan></text>
+<text x="20" y="649" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">Bands are not to scale and do not add together. Generation starts after native readiness.</tspan><tspan x="20" dy="27">Longer envelopes leave room for setup and cleanup; they do not add thinking time.</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-clocks-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1060" viewBox="0 0 340 1060" role="img" aria-label="Several clocks protect one turn" aria-describedby="trial-clocks-en-mobile-desc" lang="en" xml:lang="en">
+
+<desc id="trial-clocks-en-mobile-desc">A separate 10-second model-free readiness check happens before reservation. After admission, overlapping bounds are 300 seconds for native generation, 335 seconds for transport, 340 seconds reserved against runtime, and 360 seconds for the lease and MCP helper. These bands are not to scale and do not add together. The longer envelopes leave room for setup and cleanup, not more thinking time.</desc>
+<defs><marker id="trial-clocks-en-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1060" fill="#ffffff"/>
+<text x="16" y="30" fill="#182238" font-size="22" font-weight="700" text-anchor="start"><tspan x="16" dy="0">Several clocks</tspan><tspan x="16" dy="28">protect one turn</tspan></text>
+<rect x="16" y="95" width="308" height="124" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="123" fill="#59677c" font-size="15.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">Before reservation</tspan></text>
+<text x="30" y="160" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="30" dy="0">10 s readiness</tspan></text>
+<text x="30" y="191" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="30" dy="0">No model request is sent.</tspan></text>
+<text x="16" y="256" fill="#182238" font-size="17" font-weight="650" text-anchor="start"><tspan x="16" dy="0">After admission:</tspan><tspan x="16" dy="24">overlapping bounds</tspan></text>
+<rect x="12" y="308" width="316" height="575" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="28" y="342" fill="#59677c" font-size="24" font-weight="700" text-anchor="start"><tspan x="28" dy="0">360 s</tspan></text>
+<text x="28" y="373" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="28" dy="0">Lease + MCP helper</tspan><tspan x="28" dy="24">lifetime</tspan></text>
+<rect x="24" y="422" width="292" height="433" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="456" fill="#5143ce" font-size="24" font-weight="700" text-anchor="start"><tspan x="40" dy="0">340 s</tspan></text>
+<text x="40" y="487" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="40" dy="0">Runtime reservation</tspan></text>
+<rect x="36" y="535" width="268" height="292" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="52" y="569" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="52" dy="0">335 s</tspan></text>
+<text x="52" y="600" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="52" dy="0">Transport deadline</tspan></text>
+<rect x="48" y="648" width="244" height="151" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="64" y="682" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="64" dy="0">300 s</tspan></text>
+<text x="64" y="713" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="64" dy="0">Native generation</tspan><tspan x="64" dy="24">deadline</tspan></text>
+<text x="16" y="925" fill="#59677c" font-size="15.5" font-weight="400" text-anchor="start"><tspan x="16" dy="0">Bands are not to scale.</tspan><tspan x="16" dy="25">These clocks do not add together.</tspan><tspan x="16" dy="25">Longer envelopes leave room for</tspan><tspan x="16" dy="25">setup and cleanup, not more</tspan><tspan x="16" dy="25">thinking time.</tspan></text>
+</g></svg></div><div class="copy-zh" lang="zh-Hans"><svg class="arch-svg arch-desktop" id="trial-clocks-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="705" viewBox="0 0 1080 705" role="img" aria-label="几个时钟，共同保护一轮试用" aria-describedby="trial-clocks-zh-desktop-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-clocks-zh-desktop-desc">预留额度之前，先进行独立的 10 秒就绪检查，不发送模型请求。获准执行后，重叠的边界依次为：300 秒原生生成、335 秒传输、340 秒运行时间预留，以及 360 秒租约和 MCP 助手生存期。图形不按时间比例绘制，这些时间不相加。外层较长的时间为启动和清理留余量，不会增加思考时间。</desc>
+<defs><marker id="trial-clocks-zh-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="705" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">几个时钟，共同保护一轮试用</tspan></text>
+<rect x="20" y="67" width="1040" height="105" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="99" fill="#59677c" font-size="17" font-weight="650" text-anchor="start"><tspan x="40" dy="0">预留额度之前</tspan></text>
+<text x="40" y="140" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">10 秒就绪检查</tspan></text>
+<text x="320" y="138" fill="#182238" font-size="19" font-weight="400" text-anchor="start"><tspan x="320" dy="0">不发送模型请求。</tspan></text>
+<text x="20" y="215" fill="#182238" font-size="19" font-weight="650" text-anchor="start"><tspan x="20" dy="0">获准执行后：几种边界重叠生效</tspan></text>
+<rect x="20" y="239" width="1040" height="365" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="279" fill="#59677c" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">360 秒</tspan></text>
+<text x="162" y="278" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="162" dy="0">租约与 MCP 助手生存期</tspan></text>
+<rect x="70" y="314" width="940" height="265" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="90" y="354" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="90" dy="0">340 秒</tspan></text>
+<text x="212" y="353" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="212" dy="0">运行时间预留</tspan></text>
+<rect x="120" y="389" width="840" height="165" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="140" y="429" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="140" dy="0">335 秒</tspan></text>
+<text x="262" y="428" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="262" dy="0">传输截止时间</tspan></text>
+<rect x="170" y="464" width="740" height="65" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="190" y="504" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="190" dy="0">300 秒</tspan></text>
+<text x="312" y="503" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="312" dy="0">原生生成截止时间</tspan></text>
+<text x="20" y="649" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">图形不按时间比例绘制，这些时长不相加；原生就绪后才开始生成。</tspan><tspan x="20" dy="27">外层时间为启动与清理留余量，不会增加模型思考时间。</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-clocks-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1060" viewBox="0 0 340 1060" role="img" aria-label="几个时钟，共同保护一轮试用" aria-describedby="trial-clocks-zh-mobile-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-clocks-zh-mobile-desc">预留额度之前，先进行独立的 10 秒就绪检查，不发送模型请求。获准执行后，重叠的边界依次为：300 秒原生生成、335 秒传输、340 秒运行时间预留，以及 360 秒租约和 MCP 助手生存期。图形不按时间比例绘制，这些时间不相加。外层较长的时间为启动和清理留余量，不会增加思考时间。</desc>
+<defs><marker id="trial-clocks-zh-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1060" fill="#ffffff"/>
+<text x="16" y="30" fill="#182238" font-size="22" font-weight="700" text-anchor="start"><tspan x="16" dy="0">几个时钟，</tspan><tspan x="16" dy="28">共同保护一轮试用</tspan></text>
+<rect x="16" y="95" width="308" height="124" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="123" fill="#59677c" font-size="15.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">预留额度之前</tspan></text>
+<text x="30" y="160" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="30" dy="0">10 秒就绪检查</tspan></text>
+<text x="30" y="191" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="30" dy="0">不发送模型请求。</tspan></text>
+<text x="16" y="256" fill="#182238" font-size="17" font-weight="650" text-anchor="start"><tspan x="16" dy="0">获准执行后：</tspan><tspan x="16" dy="24">几种边界重叠生效</tspan></text>
+<rect x="12" y="308" width="316" height="575" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="28" y="342" fill="#59677c" font-size="24" font-weight="700" text-anchor="start"><tspan x="28" dy="0">360 秒</tspan></text>
+<text x="28" y="373" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="28" dy="0">租约与 MCP 助手</tspan><tspan x="28" dy="24">生存期</tspan></text>
+<rect x="24" y="422" width="292" height="433" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="456" fill="#5143ce" font-size="24" font-weight="700" text-anchor="start"><tspan x="40" dy="0">340 秒</tspan></text>
+<text x="40" y="487" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="40" dy="0">运行时间预留</tspan></text>
+<rect x="36" y="535" width="268" height="292" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="52" y="569" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="52" dy="0">335 秒</tspan></text>
+<text x="52" y="600" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="52" dy="0">传输截止时间</tspan></text>
+<rect x="48" y="648" width="244" height="151" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="64" y="682" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="64" dy="0">300 秒</tspan></text>
+<text x="64" y="713" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="64" dy="0">原生生成</tspan><tspan x="64" dy="24">截止时间</tspan></text>
+<text x="16" y="925" fill="#59677c" font-size="15.5" font-weight="400" text-anchor="start"><tspan x="16" dy="0">图形不按时间比例绘制。</tspan><tspan x="16" dy="25">这些时长不相加。</tspan><tspan x="16" dy="25">外层时间为启动与清理留余量，</tspan><tspan x="16" dy="25">不会增加模型思考时间。</tspan></text>
+</g></svg></div></div><figcaption id="trial-clocks-guide-caption"><span class="bi-inline"><span class="copy-en" lang="en">Generation, transport, reserved runtime and the lease/helper lifetime are different boundaries; none grants extra model thinking time.</span><span class="copy-zh" lang="zh-Hans">生成、传输、运行预留与租约／辅助进程生命周期是不同边界；外层更长，不代表额外思考时间。</span></span></figcaption></figure>
+<div class="bi"><div class="copy-en" lang="en"><p>Think of the runtime reservation as a temporary room booking. After verified settlement and cleanup, unused reserved seconds return to the daily runtime budget. The shorter deadlines stop real work; the longer envelopes leave room for startup, transport and cleanup. None of them gives the model extra thinking time.</p></div><div class="copy-zh" lang="zh-Hans"><p>运行时间预留像暂时预约房间；确认结算及清理后，未用的预留秒数会退回每日运行预算。较短的截止时间限制实际工作，较长的外层边界为启动、传输和清理留空间；它们不会额外延长模型思考时间。</p></div></div>
 <div class="bi"><div class="copy-en" lang="en"><p>Before opening the door, a separate checker verifies the account identity and asks whether the requested model is available. If the model-list command fails, one fresh account check can run within the same 90-second total deadline. Its time budget shrinks to leave room for cleanup; it sends no model request. If verification still fails, trial access stays unavailable. After a worker access-key update finishes, Fleet can revalidate this cycle's fresh account evidence when the owner, runtime, credential and source profile still match. BAD, old or mismatched evidence still refuses readiness.</p></div><div class="copy-zh" lang="zh-Hans"><p>开门前，独立检查器会核实账号身份，并确认所需模型可用。模型清单命令失败时，可在原有 90 秒总期限内重新做一次完整账号检查；第二次会缩短检查时间，为清理留出余量，不发送模型请求。仍无法验证时，试用保持不可用。工作进程的访问密钥更新完成后，若所有者、运行环境、凭证及来源配置仍一致，Fleet 可重新核验本轮刚取得的账号证据。BAD、过期或不匹配的证据仍会拒绝就绪。</p></div></div>
 <div class="table-scroll">
 <div class="bi"><div class="copy-en" lang="en"><table><thead><tr><th scope="col">Clock</th><th scope="col">Purpose</th></tr></thead><tbody><tr><td>10-second readiness check</td><td>Model-free SSH/policy readiness before reserving a model turn. Within this limit, a grant that is too old to admit a turn can wait up to 8 seconds for newer verified evidence from the routine root refresh. Missing or changed authority still fails immediately. No inference request is replayed.</td></tr><tr><td>300-second native generation deadline</td><td>The allowed prompt-generation budget, starting after native readiness.</td></tr><tr><td>335-second transport deadline</td><td>Bounds the admitted model exchange and result transfer, leaving time for SSH teardown and ledger settlement.</td></tr><tr><td>340-second runtime reservation</td><td>The maximum reservation against personal/shared daily runtime. Verified settlement and cleanup return unused seconds; historical reservations keep their original charges.</td></tr><tr><td>360-second lease and MCP lifetime</td><td>The admitted lease and the internal MCP helper each have a 360-second outer bound. The helper starts before the prompt, so it must outlive setup plus the allowed prompt; the shorter generation/transport/cancellation limits still stop work first. A pending tool handoff also keeps its 45-second bound.</td></tr><tr><td>120/300-second grant freshness</td><td>A new turn requires source evidence no older than 120 seconds. In-flight authorization still rejects missing, revoked, changed or older-than-300-second evidence. Refresh preserves the original observation time; it does not make old evidence fresh.</td></tr></tbody></table></div><div class="copy-zh" lang="zh-Hans"><table><thead><tr><th scope="col">时钟</th><th scope="col">作用</th></tr></thead><tbody><tr><td>10 秒就绪检查</td><td>预留模型轮次前检查 SSH 与策略，不发送模型请求。在此时限内，若现有授权因时间过旧而无法准入，可等待至多 8 秒，让例行 root 刷新发布更新的已验证证据；缺失或变化的权限仍立即拒绝，不会重放推理请求。</td></tr><tr><td>300 秒原生生成截止时间</td><td>原生环境就绪后，允许提示词生成的时间。</td></tr><tr><td>335 秒传输截止时间</td><td>限制已准入的模型交换和结果传输，为 SSH 关闭与记账留出时间。</td></tr><tr><td>340 秒运行时间预留</td><td>从个人及共享每日运行预算预留的最大时段。确认结算及清理后退回未用秒数，历史预留的扣除保持原样。</td></tr><tr><td>360 秒租约与 MCP 生命周期</td><td>准入租约和内部 MCP 辅助进程各有 360 秒外层边界。辅助进程早于提示词启动，需覆盖启动加允许的提示词时间；较短的生成、传输与取消限制仍优先生效。等待中的工具交接还保留 45 秒边界。</td></tr><tr><td>120／300 秒授权新鲜度</td><td>新轮次要求来源证据不超过 120 秒；执行中仍会拒绝缺失、撤销、变化或超过 300 秒的证据。刷新使用最初观察时间，不会把旧证据变新。</td></tr></tbody></table></div></div>
