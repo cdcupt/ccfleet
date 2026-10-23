@@ -158,6 +158,9 @@ class Config:
     gateway_ssh_public_key: str = ""
     gateway_max_active: int = 16
     gateway_max_per_key: int = 8
+    gateway_max_queued: int = 16
+    gateway_max_queued_per_key: int = 8
+    gateway_queue_timeout_s: int = 30
     gateway_max_body_bytes: int = 16 * 1024 * 1024
     gateway_body_budget_bytes: int = 32 * 1024 * 1024
     gateway_max_connections: int = 128
@@ -304,6 +307,9 @@ class Config:
             gateway_ssh_public_key=env.get(ENV_PREFIX + "GATEWAY_SSH_PUBLIC_KEY", "").strip(),
             gateway_max_active=_env_int(env, "GATEWAY_MAX_ACTIVE", 16, 1),
             gateway_max_per_key=_env_int(env, "GATEWAY_MAX_PER_KEY", 8, 1),
+            gateway_max_queued=_env_int(env, "GATEWAY_MAX_QUEUED", 16, 1),
+            gateway_max_queued_per_key=_env_int(env, "GATEWAY_MAX_QUEUED_PER_KEY", 8, 1),
+            gateway_queue_timeout_s=_env_int(env, "GATEWAY_QUEUE_TIMEOUT_S", 30, 0),
             gateway_max_body_bytes=_env_int(env, "GATEWAY_MAX_BODY_BYTES", 16*1024*1024, 1024),
             gateway_body_budget_bytes=_env_int(
                 env, "GATEWAY_BODY_BUDGET_BYTES", 32*1024*1024, 1024),
@@ -385,6 +391,9 @@ class Config:
         if cfg.disk_warn_pct > cfg.disk_crit_pct:
             raise ConfigError("CCFLEET_DISK_WARN_PCT must not exceed CCFLEET_DISK_CRIT_PCT")
         if (cfg.gateway_max_active > 64 or cfg.gateway_max_per_key > cfg.gateway_max_active
+                or cfg.gateway_max_queued > 64
+                or cfg.gateway_max_queued_per_key > cfg.gateway_max_queued
+                or cfg.gateway_queue_timeout_s > 60
                 or cfg.gateway_max_connections > 256
                 or cfg.gateway_header_timeout_s > 30 or cfg.gateway_request_timeout_s > 1800
                 or cfg.gateway_max_body_bytes > 64 * 1024 * 1024

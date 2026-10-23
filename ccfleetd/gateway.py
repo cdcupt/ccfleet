@@ -128,9 +128,12 @@ class GatewayRuntime:
         self.wall_clock = wall_clock
         self.transport_factory = transport_factory or transport_attempt
         self.lock = threading.RLock()
+        self.capacity = threading.Condition(self.lock)
         self.active = 0
         self.by_key: dict[str, int] = {}
         self.body_bytes = 0
+        self.waiters = OrderedDict()
+        self.queued_by_key: dict[str, int] = {}
         self.affinity = OrderedDict()
         self.cooldowns = OrderedDict()
         self.health = OrderedDict()
@@ -141,30 +144,116 @@ class GatewayRuntime:
 
     def close(self) -> bool:
         self.stopping.set()
+        with self.capacity:
+            self.capacity.notify_all()
         return self.throughput.close() if self.throughput is not None else True
 
     @property
     def enabled(self) -> bool:
         return self.cfg.gateway_ready
 
+    def _capacity_reason(self, key_id: str, size: int) -> str:
+        """Called under the runtime lock; no request identity belongs in diagnostics."""
+        if self.active >= self.cfg.gateway_max_active:
+            return "global_capacity"
+        if self.by_key.get(key_id, 0) >= self.cfg.gateway_max_per_key:
+            return "per_key_capacity"
+        if self.body_bytes + size > self.cfg.gateway_body_budget_bytes:
+            return "body_budget"
+        return ""
+
+    def _first_eligible_waiter(self):
+        for ticket, (key_id, size) in self.waiters.items():
+            if not self._capacity_reason(key_id, size):
+                return ticket
+        return None
+
+    def _reserve_unlocked(self, key_id: str, size: int) -> None:
+        self.active += 1
+        self.by_key[key_id] = self.by_key.get(key_id, 0) + 1
+        self.body_bytes += size
+
     def _reserve(self, key_id: str, size: int) -> bool:
+        # Status probes stay nonblocking and cannot jump ahead of queued work.
         with self.lock:
-            if (self.active >= self.cfg.gateway_max_active
-                    or self.by_key.get(key_id, 0) >= self.cfg.gateway_max_per_key
-                    or self.body_bytes + size > self.cfg.gateway_body_budget_bytes):
+            if (self.stopping.is_set() or self._capacity_reason(key_id, size)
+                    or self._first_eligible_waiter() is not None):
                 return False
-            self.active += 1
-            self.by_key[key_id] = self.by_key.get(key_id, 0) + 1
-            self.body_bytes += size
+            self._reserve_unlocked(key_id, size)
             return True
 
+    def _log_admission(self, outcome: str, key_id: str, size: int) -> None:
+        log.info("Gateway admission outcome=%s capacity=%s active=%d queued=%d "
+                 "body_bytes=%d max_active=%d max_per_key=%d max_queued=%d "
+                 "max_queued_per_key=%d body_budget_bytes=%d",
+                 outcome, self._capacity_reason(key_id, size) or "available",
+                 self.active, len(self.waiters), self.body_bytes,
+                 self.cfg.gateway_max_active, self.cfg.gateway_max_per_key,
+                 self.cfg.gateway_max_queued, self.cfg.gateway_max_queued_per_key,
+                 self.cfg.gateway_body_budget_bytes)
+
+    def _admit(self, handler, key_id: str, size: int) -> str:
+        """Wait only before body reads or dispatch, with bounded threads and memory."""
+        with self.capacity:
+            if self.stopping.is_set():
+                return "stopping"
+            reason = self._capacity_reason(key_id, size)
+            if not reason and self._first_eligible_waiter() is None:
+                self._reserve_unlocked(key_id, size)
+                return ""
+            if not self.cfg.gateway_queue_timeout_s:
+                outcome = reason or "queued_work"
+                self._log_admission(outcome, key_id, size)
+                return outcome
+            # Keep connection/handler headroom for management and other traffic.
+            maximum = min(self.cfg.gateway_max_queued,
+                          max(0, self.cfg.gateway_max_connections
+                              - self.cfg.gateway_max_active - 8))
+            if len(self.waiters) >= maximum:
+                self._log_admission("queue_full", key_id, size)
+                return "queue_full"
+            if self.queued_by_key.get(key_id, 0) >= self.cfg.gateway_max_queued_per_key:
+                self._log_admission("per_key_queue_full", key_id, size)
+                return "per_key_queue_full"
+            ticket = object()
+            self.waiters[ticket] = key_id, size
+            self.queued_by_key[key_id] = self.queued_by_key.get(key_id, 0) + 1
+            deadline = self.clock() + self.cfg.gateway_queue_timeout_s
+            self._log_admission("queued", key_id, size)
+            try:
+                while True:
+                    if self.stopping.is_set():
+                        outcome = "stopping"
+                        break
+                    if self._disconnected(handler):
+                        outcome = "disconnected"
+                        break
+                    remaining = deadline - self.clock()
+                    if remaining <= 0:
+                        outcome = "queue_timeout"
+                        break
+                    if self._first_eligible_waiter() is ticket:
+                        self._reserve_unlocked(key_id, size)
+                        self._log_admission("admitted", key_id, size)
+                        return ""
+                    self.capacity.wait(min(0.2, remaining))
+                self._log_admission(outcome, key_id, size)
+                return outcome
+            finally:
+                del self.waiters[ticket]
+                self.queued_by_key[key_id] -= 1
+                if not self.queued_by_key[key_id]:
+                    del self.queued_by_key[key_id]
+                self.capacity.notify_all()
+
     def _release(self, key_id: str, size: int) -> None:
-        with self.lock:
+        with self.capacity:
             self.active -= 1
             self.body_bytes -= size
             self.by_key[key_id] -= 1
             if not self.by_key[key_id]:
                 del self.by_key[key_id]
+            self.capacity.notify_all()
 
     def _session_key(self, key, session: str) -> str:
         if not session:
@@ -352,6 +441,14 @@ class GatewayRuntime:
     @staticmethod
     def _disconnected(handler) -> bool:
         try:
+            # Linux can report a closed peer even while its unread request body
+            # remains buffered. MSG_PEEK alone would only see that pending body.
+            if hasattr(select, "POLLRDHUP"):
+                peer = select.poll()
+                peer.register(handler.connection, select.POLLRDHUP | select.POLLHUP
+                              | select.POLLERR)
+                if peer.poll(0):
+                    return True
             ready, _, _ = select.select([handler.connection], [], [], 0)
             return bool(ready and handler.connection.recv(1, socket.MSG_PEEK) == b"")
         except (OSError, ValueError):
@@ -404,10 +501,20 @@ class GatewayRuntime:
                 and handler.path not in NATIVE_MESSAGE_PATHS):
             model_error(handler, 501, "Token counting is not available for the native agent.")
             return
-        if not self._reserve(key["id"], size):
-            model_error(handler, 503, "The gateway is busy. Send a new request later.")
+        admission = self._admit(handler, key["id"], size)
+        if admission:
+            if admission != "disconnected":
+                model_error(handler, 503, "The gateway is busy. Send a new request later.",
+                            code="gateway_" + admission)
             return
         try:
+            # A queued request keeps its original selection. Revocation or an
+            # endpoint edit while waiting cannot confer authority on new slots.
+            current = authenticate(handler.headers, self.store, now=time.time(), touch=False)
+            if (current is None or current["id"] != key["id"]
+                    or current["generation"] != key["generation"]):
+                model_error(handler, 403, "Endpoint authorization changed.")
+                return
             handler.connection.settimeout(30)
             def expire_body():
                 with contextlib.suppress(OSError):
@@ -446,6 +553,9 @@ class GatewayRuntime:
                 return
             finally:
                 body_timer.cancel()
+            # Only the sanitized serialized body is needed during a long stream.
+            # Do not retain two additional full-context copies until it finishes.
+            del raw, value
             handler.connection.settimeout(15)
             self._forward(handler, key, session, pinned, model_key, headers, body)
         finally:
