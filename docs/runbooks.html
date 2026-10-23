@@ -31,6 +31,7 @@ Commands marked <em>node</em> run as the owner on the node; <em>server</em> runs
 the DMIT deployment. Use the current operator access details; public URLs and
 existing device pairings are unchanged.</p>
 <h2 id="gateway-request-bursts">Gateway busy during parallel agent work</h2>
+<p>For the plain-language platform design, see <a href="platform-comparison.html#parallel-agents">When many agents ask at once</a>.</p>
 <p>The message <em>The gateway is busy</em> is a Fleet admission refusal before any
 slot inference is dispatched. Check the admission reason in the gateway log:
 active requests, per-key concurrency and admitted body bytes are separate limits.
