@@ -402,7 +402,8 @@ def blocked_request(scenario, key=None, body=None):
 
 
 def test_per_key_capacity_is_bounded_without_blocking_another_key(scenario):
-    scenario.runtime.cfg = replace(scenario.cfg, gateway_max_active=2, gateway_max_per_key=1)
+    scenario.runtime.cfg = replace(scenario.cfg, gateway_max_active=2, gateway_max_per_key=1,
+                                   gateway_queue_timeout_s=0)
     other = scenario.store.create_gateway_key("owner-a", "Second key", scenario.own,
                                               mode="priority", now=7)
     conn, answer = blocked_request(scenario)
@@ -418,7 +419,8 @@ def test_per_key_capacity_is_bounded_without_blocking_another_key(scenario):
 
 
 def test_global_capacity_is_bounded_across_distinct_keys(scenario):
-    scenario.runtime.cfg = replace(scenario.cfg, gateway_max_active=1, gateway_max_per_key=1)
+    scenario.runtime.cfg = replace(scenario.cfg, gateway_max_active=1, gateway_max_per_key=1,
+                                   gateway_queue_timeout_s=0)
     other = scenario.store.create_gateway_key("owner-a", "Second key", scenario.own,
                                               mode="priority", now=7)
     conn, answer = blocked_request(scenario)
@@ -432,7 +434,8 @@ def test_global_capacity_is_bounded_across_distinct_keys(scenario):
 
 
 def test_total_admitted_body_budget_rejects_before_an_extra_model_request(scenario):
-    scenario.runtime.cfg = replace(scenario.cfg, gateway_body_budget_bytes=1100)
+    scenario.runtime.cfg = replace(scenario.cfg, gateway_body_budget_bytes=1100,
+                                   gateway_queue_timeout_s=0)
     body = json.dumps({"model": "opus", "messages": [{"role": "user", "content": "x" * 900}]}).encode()
     conn, answer = blocked_request(scenario, body=body)
     try:
