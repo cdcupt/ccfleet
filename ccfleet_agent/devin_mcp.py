@@ -62,10 +62,10 @@ MAX_NODES = 50000
 MAX_DEPTH = 64
 CALL_WAIT_S = 45
 # This clock starts before session setup and the MCP handshake. Keep the shim
-# alive for the whole native lease, including the later 120-second prompt.
+# alive for the whole native lease, including the later 300-second prompt.
 # Parent generation/transport deadlines still stop work sooner; a handoff also
 # retains its separate 45-second bound below.
-SERVER_LIFETIME_S = 180
+SERVER_LIFETIME_S = 360
 VERSIONS = frozenset({"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"})
 LATEST_VERSION = max(VERSIONS)
 MAX_LIFECYCLE = 64 * 1024
@@ -301,7 +301,9 @@ def _config(directory):
     required = {"tools", "binding", "session_id", "server_id", "mcp_server_name"}
     if (
         not isinstance(config, dict)
-        or set(config) != required
+        or set(config) - required - {"native_web_search"}
+        or required - set(config)
+        or type(config.get("native_web_search", False)) is not bool
     ):
         raise Rejected("invalid config fields")
     if not isinstance(config["binding"], str) or not 1 <= len(config["binding"]) <= 512:
@@ -860,6 +862,14 @@ def hook(run_dir, stdin, stdout):
             event.get("hook_event_name") == "PreToolUse"
             and (
                 (isinstance(event.get("tool_input"), dict) and name in hook_tool_names(catalog))
+                or (
+                    config.get("native_web_search") is True
+                    and name == "web_search"
+                    and isinstance(event.get("tool_input"), dict)
+                    and isinstance(event["tool_input"].get("query"), str)
+                    and 0 < len(event["tool_input"]["query"].encode()) <= 8192
+                    and len(json.dumps(event["tool_input"]).encode()) <= 16384
+                )
                 or (
                     name == "mcp_list_tools"
                     and isinstance(event.get("tool_input"), dict)

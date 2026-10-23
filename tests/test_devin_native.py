@@ -519,7 +519,7 @@ def test_native_policy_accepts_bounded_120_second_generation_without_launch(poli
 
 @pytest.mark.parametrize("change", [
     {"enabled": 1}, {"execution_uid": 0}, {"request_models": "opus"},
-    {"verified_models": ["other"]}, {"thought_level": "unknown"}, {"timeout_s": 121},
+    {"verified_models": ["other"]}, {"thought_level": "unknown"}, {"timeout_s": 301},
     {"version": True}, {"extra": "unsupported"}])
 def test_malformed_policy_has_no_authority(policy, change):
     policy.value.update(change)

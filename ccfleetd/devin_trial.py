@@ -23,9 +23,9 @@ from typing import Callable, Optional
 
 MAX_LEASE_S = 600
 MAX_STEPS = 5
-MAX_RUNTIME_S = 180
-MAX_STEP_S = 160
-MAX_REQUEST_BYTES = 192 * 1024
+MAX_RUNTIME_S = 360
+MAX_STEP_S = 340
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
 TURN_RESERVATION_TOKENS = 20_000
 DAILY_REQUESTS = 200
 GLOBAL_DAILY_REQUESTS = 200
@@ -70,20 +70,34 @@ _CONTROL_SCHEMA = """
         id INTEGER PRIMARY KEY CHECK(id=1), paused INTEGER NOT NULL CHECK(paused IN (0,1)),
         reason TEXT NOT NULL, last_now REAL NOT NULL, limits TEXT NOT NULL);
 """
+_LEGACY_UNMEASURED_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS devin_trial_unmeasured (
+        step_id TEXT PRIMARY KEY, trial_id TEXT NOT NULL, account_id TEXT NOT NULL,
+        utc_day INTEGER NOT NULL, held_tokens INTEGER NOT NULL CHECK(held_tokens>0),
+        known_tokens INTEGER NOT NULL CHECK(known_tokens>=0), settled_at REAL NOT NULL);
+"""
+_UNMEASURED_SCHEMA = _LEGACY_UNMEASURED_SCHEMA.replace(
+    "settled_at REAL NOT NULL)",
+    "settled_at REAL NOT NULL, reason TEXT NOT NULL DEFAULT 'cache_read_missing' "
+    "CHECK(reason IN ('cache_read_missing','interrupted')))",
+)
 _SESSION_SCHEMA = """
     CREATE TABLE IF NOT EXISTS devin_trial_sessions (
         trial_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, secret_hash TEXT NOT NULL,
         history_namespace TEXT NOT NULL UNIQUE, expires_at REAL NOT NULL,
         state TEXT NOT NULL CHECK(state IN ('open','closing','closed')),
         steps INTEGER NOT NULL CHECK(steps BETWEEN 0 AND 5),
-        reserved_seconds INTEGER NOT NULL CHECK(reserved_seconds BETWEEN 0 AND 180),
+        reserved_seconds INTEGER NOT NULL CHECK(reserved_seconds BETWEEN 0 AND 360),
         active_step TEXT, step_deadline REAL,
-        active_seconds INTEGER CHECK(active_seconds BETWEEN 1 AND 160),
+        active_seconds INTEGER CHECK(active_seconds BETWEEN 1 AND 340),
         utc_day INTEGER NOT NULL, active_tokens INTEGER CHECK(active_tokens>0))
 """
+_PREVIOUS_SESSION_SCHEMA = _SESSION_SCHEMA.replace(
+    "reserved_seconds BETWEEN 0 AND 360", "reserved_seconds BETWEEN 0 AND 180"
+).replace("active_seconds BETWEEN 1 AND 340", "active_seconds BETWEEN 1 AND 160")
 _LEGACY_SESSION_SCHEMA = _SESSION_SCHEMA.replace(
-    "reserved_seconds BETWEEN 0 AND 180", "reserved_seconds BETWEEN 0 AND 120"
-).replace("active_seconds BETWEEN 1 AND 160", "active_seconds BETWEEN 1 AND 60")
+    "reserved_seconds BETWEEN 0 AND 360", "reserved_seconds BETWEEN 0 AND 120"
+).replace("active_seconds BETWEEN 1 AND 340", "active_seconds BETWEEN 1 AND 60")
 _SESSION_INDEXES = {
     "devin_trial_one_active": """CREATE UNIQUE INDEX IF NOT EXISTS devin_trial_one_active
         ON devin_trial_sessions ((1)) WHERE state IN ('open','closing')""",
@@ -128,6 +142,18 @@ class VerifiedCacheReadUnmeasured:
 
     known_tokens: int
     verified_clean_reply: bool = False
+
+
+@dataclass(frozen=True)
+class VerifiedInterruptedUsage:
+    """Trusted timeout with verified model, partial records and full cleanup.
+
+    Known tokens are a lower bound, never a complete usage claim. The entire
+    reservation (or larger known subtotal) stays held when releasing the worker.
+    """
+
+    known_tokens: int
+    verified_clean_timeout: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,11 +215,13 @@ class Decision:
 class TrialLedger:
     """Dedicated offline ledger. Daily rollover never clears unresolved work/pause.
 
-    Time and requests are charged at reservation, with no refunds. Tokens reserve
+    Time and requests are charged at reservation; new longer turns return unused
+    runtime after verified settlement and cleanup. Tokens reserve
     at most 20,000 remaining user/global allowance units.
     Complete trusted usage and cleanup settle actual tokens including overshoot.
-    Only a verified clean cache-read-missing reply may retain a conservative
-    unmeasured hold and close; all other unknown usage/cleanup latches pause.
+    A verified clean cache-read-missing reply or a known-model clean timeout may
+    retain a conservative unmeasured hold and close. Other unknown usage or
+    cleanup latches pause.
     No automatic unpause/reset exists.
     """
 
@@ -251,11 +279,7 @@ class TrialLedger:
                 requests INTEGER NOT NULL CHECK(requests>=0),
                 runtime_seconds INTEGER NOT NULL CHECK(runtime_seconds>=0),
                 leases INTEGER NOT NULL CHECK(leases>=0));
-            CREATE TABLE IF NOT EXISTS devin_trial_unmeasured (
-                step_id TEXT PRIMARY KEY, trial_id TEXT NOT NULL, account_id TEXT NOT NULL,
-                utc_day INTEGER NOT NULL, held_tokens INTEGER NOT NULL CHECK(held_tokens>0),
-                known_tokens INTEGER NOT NULL CHECK(known_tokens>=0), settled_at REAL NOT NULL);
-        """
+        """ + _UNMEASURED_SCHEMA
         with self._transaction():
             tables = {
                 row[0]
@@ -275,6 +299,7 @@ class TrialLedger:
                 if prior[0] != limits:
                     self._migrate_limits(prior[0], limits)
                 self._migrate_session_limits()
+                self._migrate_unmeasured()
             for statement in schema.split(";"):
                 if statement.strip():
                     connection.execute(statement)
@@ -319,6 +344,35 @@ class TrialLedger:
         if changed.rowcount != 1:
             raise TrialError("trial_limits_changed")
 
+    def _migrate_unmeasured(self):
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='devin_trial_unmeasured'"
+        ).fetchone()
+        actual = _normalized_sql(row[0]) if row and isinstance(row[0], str) else None
+        if actual == _normalized_sql(_UNMEASURED_SCHEMA):
+            return
+        if (actual != _normalized_sql(_LEGACY_UNMEASURED_SCHEMA)
+                or self.connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') LIMIT 1"
+                ).fetchone()
+                or self.connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='index' "
+                    "AND tbl_name='devin_trial_unmeasured' AND sql IS NOT NULL"
+                ).fetchone()
+                or any(self.connection.execute(f"PRAGMA foreign_key_list({name})").fetchone()
+                       for name in _TABLES)):
+            raise TrialError("trial_schema_changed")
+        self.connection.execute(
+            "ALTER TABLE devin_trial_unmeasured RENAME TO devin_trial_unmeasured_previous"
+        )
+        self.connection.execute(_UNMEASURED_SCHEMA)
+        columns = "step_id,trial_id,account_id,utc_day,held_tokens,known_tokens,settled_at"
+        self.connection.execute(
+            f"INSERT INTO devin_trial_unmeasured({columns}) "
+            f"SELECT {columns} FROM devin_trial_unmeasured_previous"
+        )
+        self.connection.execute("DROP TABLE devin_trial_unmeasured_previous")
+
     def _migrate_session_limits(self):
         """Widen only the known time constraints; never rewrite incident state.
 
@@ -332,7 +386,8 @@ class TrialLedger:
         actual = _normalized_sql(row[0]) if row and isinstance(row[0], str) else None
         if actual == _normalized_sql(_SESSION_SCHEMA):
             return
-        if actual != _normalized_sql(_LEGACY_SESSION_SCHEMA):
+        if actual not in {_normalized_sql(_LEGACY_SESSION_SCHEMA),
+                          _normalized_sql(_PREVIOUS_SESSION_SCHEMA)}:
             raise TrialError("trial_schema_changed")
         indexes = dict(self.connection.execute(
             "SELECT name,sql FROM sqlite_master WHERE type='index' "
@@ -695,6 +750,25 @@ class TrialLedger:
                 and row["state"] == "open"
             )
 
+    def _settle_runtime(self, principal, row, instant):
+        # Only new longer reservations use elapsed billing. Historical 160s
+        # turns keep their original debit, including existing incident holds.
+        reserved = row["active_seconds"]
+        if reserved <= 160:
+            return
+        started = row["step_deadline"] - reserved
+        elapsed = min(reserved, max(1, math.ceil(instant - started)))
+        unused = reserved - elapsed
+        for table, where, identity in (
+            ("devin_trial_account_days", "account_id=? AND utc_day=?",
+             (principal.account_id, row["utc_day"])),
+            ("devin_trial_global_days", "utc_day=?", (row["utc_day"],)),
+        ):
+            self.connection.execute(
+                f"UPDATE {table} SET runtime_seconds=runtime_seconds-? WHERE {where}",
+                (unused, *identity),
+            )
+
     def finish_step(
         self,
         principal: VerifiedAccount,
@@ -716,9 +790,12 @@ class TrialLedger:
                     (row["trial_id"],),
                 )
                 return Decision("cleanup_unconfirmed")
-            if type(usage) is VerifiedCacheReadUnmeasured and (
-                usage.verified_clean_reply is True
-                and type(usage.known_tokens) is int
+            partial = (
+                type(usage) is VerifiedCacheReadUnmeasured and usage.verified_clean_reply is True
+                or type(usage) is VerifiedInterruptedUsage and usage.verified_clean_timeout is True
+            )
+            if partial and (
+                type(usage.known_tokens) is int
                 and 0 <= usage.known_tokens <= MAX_REPORTED_TOKENS
             ):
                 reserved = row["active_tokens"]
@@ -735,7 +812,7 @@ class TrialLedger:
                     (extra, row["utc_day"]),
                 )
                 self.connection.execute(
-                    "INSERT INTO devin_trial_unmeasured VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO devin_trial_unmeasured VALUES(?,?,?,?,?,?,?,?)",
                     (
                         permit.step_id,
                         row["trial_id"],
@@ -744,10 +821,13 @@ class TrialLedger:
                         held,
                         usage.known_tokens,
                         instant,
+                        "interrupted" if type(usage) is VerifiedInterruptedUsage
+                        else "cache_read_missing",
                     ),
                 )
+                self._settle_runtime(principal, row, instant)
                 # Durable accounting is now complete under the conservative
-                # policy, but actual cache-read tokens remain explicitly unknown.
+                # policy, but actual total tokens remain explicitly unknown.
                 # Close the turn before releasing the global worker; no replay
                 # can settle it again and no timer/day rollover deletes its hold.
                 self.connection.execute(
@@ -770,6 +850,7 @@ class TrialLedger:
                 )
                 return Decision("usage_unaccounted")
             amount, reserved, day = usage.reported_tokens, row["active_tokens"], row["utc_day"]
+            self._settle_runtime(principal, row, instant)
             self.connection.execute(
                 "UPDATE devin_trial_account_days SET"
                 " used_tokens=used_tokens+?,reserved_tokens=reserved_tokens-? WHERE acc"

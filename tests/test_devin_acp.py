@@ -195,7 +195,7 @@ def test_prompt_limit_is_utf8_bytes_and_checked_before_rpc(fake):
     assert len([call for call in records(record) if call["method"] == "session/prompt"]) == 1
 
 
-@pytest.mark.parametrize("limit", [0, -1, True, 1.5, 256 * 1024 + 1, "65536"])
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, 2 * 1024 * 1024 + 4097, "65536"])
 def test_trusted_prompt_limit_still_has_a_hard_validated_bound(fake, limit):
     make, record, _ = fake
     with pytest.raises(ACPError):
