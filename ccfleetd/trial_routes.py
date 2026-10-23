@@ -12,6 +12,7 @@ import logging
 import shlex
 import socket
 import threading
+import time
 
 from ccfleet_agent import devin_relay
 
@@ -294,7 +295,7 @@ def _trial_setup(cfg, csrf, token):
         command += (
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 ENABLE_TOOL_SEARCH=false "
             "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 CLAUDE_CODE_DISABLE_THINKING=1 "
-            "claude --model " + MODEL + " --effort max --safe-mode "
+            "claude --model " + MODEL + " --effort max "
             "--permission-mode bypassPermissions --disallowedTools WebSearch,WebFetch"
         )
         setup += (
@@ -334,7 +335,7 @@ def _trial_setup(cfg, csrf, token):
                 " before ", " 放在 ", inline=True,
             ) + '<code>claude</code>' + label(
                 " and append ", " 之前，并在启动选项末尾添加 ", inline=True,
-            ) + '<code>--safe-mode --permission-mode bypassPermissions '
+            ) + '<code>--permission-mode bypassPermissions '
             '--disallowedTools WebSearch,WebFetch</code>' + label(
                 ". You do not need a replacement key.",
                 "。无需更换密钥。", inline=True,
@@ -342,24 +343,23 @@ def _trial_setup(cfg, csrf, token):
         )
     setup += (
         '<p class="trial-key-note">' + label(
-            "This simplified launch disables customizations, including project instructions, "
-            "MCP servers and plugins, for this session. Built-in coding tools run without "
-            "approval prompts. Your saved settings stay unchanged. You can remove --safe-mode "
-            "to load customizations, provided the request fits the trial limits. "
+            "This launch loads your project instructions, compatible MCP servers and plugins. "
+            "Local coding tools run without approval prompts. Add --safe-mode to temporarily "
+            "disable customizations when troubleshooting. Your saved settings stay unchanged. "
             "Claude Code may ask you to accept bypass mode on its first launch.",
-            "这次精简启动会仅为本次会话关闭自定义配置，包括项目指令、MCP 服务和插件。"
-            "内置编程工具无需逐次批准即可运行，已保存的设置不会改变。移除 --safe-mode "
-            "可加载自定义配置，但请求仍须符合试用限制。"
+            "此启动方式会加载项目指令、兼容的 MCP 服务及插件。"
+            "本地编程工具无需逐次批准即可运行。排查问题时可添加 --safe-mode 暂时关闭自定义配置，"
+            "已保存的设置不会改变。"
             "首次启动时，Claude Code 可能要求确认绕过权限模式。", inline=True,
         ) + '</p>'
         '<p class="trial-key-note">' + label(
-            "Built-in WebSearch and WebFetch are unavailable in this Devin trial. "
-            "For web access, use a compatible local or MCP tool, "
-            "or use Claude for those built-ins. If an older conversation contains "
+            "Devin can use its native web search for current public information. "
+            "Claude's hosted WebSearch and WebFetch remain disabled; compatible local or MCP "
+            "tools can fetch pages. If an older conversation contains "
             "unsupported web-tool history, start a new conversation with this command.",
-            "此 Devin 试用不支持内置 WebSearch 和 WebFetch。"
-            "需要联网时，请使用兼容的本地或 MCP 工具，"
-            "或切换到 Claude 使用这些内置工具。若旧对话含有不支持的网页工具历史，"
+            "Devin 可使用其原生网页搜索获取最新公开信息。"
+            "Claude 托管的 WebSearch 和 WebFetch 仍关闭；兼容的本地或 MCP 工具可抓取网页。"
+            "若旧对话含有不支持的网页工具历史，"
             "请用此命令开启新对话。", inline=True,
         ) + '</p><p><a href="/docs/library/docs/devin-trial-foundation.html">'
         + label("How the trial works, explained simply", "试用工作原理通俗说明", inline=True)
@@ -434,13 +434,13 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         label(
             f"Fully metered reported tokens: {allowance['reported_tokens']:,}. "
             f"Reserved allowance: {allowance['reserved_tokens']:,}, including "
-            f"{allowance['unmeasured_reserved_tokens']:,} held for a missing cache-read meter. "
+            f"{allowance['unmeasured_reserved_tokens']:,} held for incomplete usage records. "
             "Those partial readings report at least "
             f"{allowance['partial_reported_tokens']:,} tokens; "
             "they are included in the hold, not added twice.",
             f"完整计量的已报告 token：{allowance['reported_tokens']:,}。"
             f"已预留额度 {allowance['reserved_tokens']:,}，其中 "
-            f"{allowance['unmeasured_reserved_tokens']:,} 因缓存读取计量缺失而保守保留；"
+            f"{allowance['unmeasured_reserved_tokens']:,} 因用量记录不完整而保守保留；"
             f"这些不完整读数至少报告 {allowance['partial_reported_tokens']:,} token，"
             "已包含在保留额度中，不重复相加。",
             inline=True,
@@ -462,18 +462,20 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         "reserved runtime minutes per person and "
         f"{allowance['global_request_limit']:,} turns and "
         f"{allowance['global_runtime_limit_seconds'] // 60:,} minutes shared per UTC day; "
-        "each native turn has at most 120 seconds of "
-        "generation and reserves 160 seconds of runtime. Reserved runtime can reach the daily "
-        "time limit before the request cap. A fast reply still uses its full runtime reservation. "
+        "each native turn has at most 300 seconds of "
+        "generation and reserves 340 seconds of runtime. After confirmed cleanup and settlement, "
+        "unused reserved seconds are returned; quick replies use their elapsed time. "
         "A tool handoff and its continuation count as separate model turns; unsupported requests "
         "rejected before execution do not reserve model runtime. "
-        "Keep requests short (192 KiB including "
-        "tools/history). Before each turn "
+        "Requests can contain up to 2 MiB including "
+        "tools/history. Before each turn "
         "we reserve up to 20,000 remaining tokens of allowance. Complete input, output, cache-read "
         "and cache-creation usage settles the actual total, including overshoot.</p>"
-        "<p>If Devin omits only the cache-read meter after a verified, fully cleaned-up reply, "
-        "the whole reservation stays held until UTC reset (more if the known subtotal exceeds "
-        "it). It is not a claim about actual usage. Other unknown usage, model identity, lost "
+        "<p>A missing cache-read meter after a verified reply, or a cleaned timeout with verified "
+        "model identity and partial usage records, retains the whole token reservation "
+        "(more if the known subtotal exceeds it). The trial remains available; the hold is "
+        "not a claim about actual usage and is never automatically refunded. Other unknown "
+        "usage, model identity, lost "
         "execution or cleanup pauses new work. An in-flight turn can exceed its reservation; "
         "this is admission accounting, not a precise generation, vendor quota "
         "or USD hard cap.</p>",
@@ -481,14 +483,15 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         f"每人每日最多 {allowance['request_limit']:,} 轮、"
         f"预留 {allowance['runtime_limit_seconds'] // 60:,} 分钟运行时间；"
         f"全局共享 {allowance['global_request_limit']:,} 轮、"
-        f"{allowance['global_runtime_limit_seconds'] // 60:,} 分钟。每轮原生生成最多 120 秒，"
-        "预留 160 秒运行时间。预留运行时间可能先达到每日上限。"
-        "即使回复很快，仍会占用整笔运行时间预留。工具交接和后续回复分别计为模型轮次；"
+        f"{allowance['global_runtime_limit_seconds'] // 60:,} 分钟。每轮原生生成最多 300 秒，"
+        "预留 340 秒运行时间。确认清理及结算后退还未用的预留秒数，快速回复按实际经过时间计入。"
+        "工具交接和后续回复分别计为模型轮次；"
         "执行前被拒绝的不支持请求不会预留模型运行时间。"
-        "请求（含工具及历史）最多 192 KiB。每轮先预留最多 20,000 剩余 token 额度，"
+        "请求（含工具及历史）最多 2 MiB。每轮先预留最多 20,000 剩余 token 额度，"
         "完整的输入、输出、缓存读取及创建用量按实际总数结算，超额也完整计算。</p>"
-        "<p>若已验证模型且整轮清理完成，但 Devin 只缺少缓存读取计量，则整笔预留额度保留至 UTC "
-        "零点（已知部分超出预留时保留更多）；这不代表实际 token 用量。其他用量、身份、执行或清理"
+        "<p>若已验证回复仅缺缓存读取计量，或超时后已验证模型、拥有部分用量记录且全部清理完成，"
+        "则保留整笔 token 预留（已知部分超出时保留更多），试用仍可继续。保留额度不代表实际用量，"
+        "也不会自动退还。其他用量、身份、执行或清理"
         '不确定时暂停新任务。进行中的一轮可能超额；这是准入计量，不是精确生成、'
         '服务商配额或美元硬上限。</p>',
     )
@@ -569,7 +572,7 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         + f"{allowance['reported_tokens']:,}" + "</dd></div><div><dt>"
         + label("Tokens held for accounting", "计量预留 token 额度", inline=True) + "</dt><dd>"
         + f"{allowance['reserved_tokens']:,}" + "</dd></div><div><dt>"
-        + label("More model turns (up to)", "当前限制下最多还能进行的轮次", inline=True)
+        + label("Full-length turns covered now", "当前可覆盖的完整时限轮次", inline=True)
         + "</dt><dd>" + str(allowance["remaining_turns"]) + "</dd></div><div><dt>"
         + label("Your runtime remaining", "个人剩余运行时间", inline=True) + "</dt><dd>"
         + label(f"{allowance['remaining_runtime_seconds']:,} seconds",
@@ -723,16 +726,32 @@ def handle(runtime, handler):
             "lease_time_limit": "Not enough time remains before the UTC daily reset "
             "to start a full trial turn. Try again after 00:00 UTC.",
             "trial_paused": "The trial is paused while an unconfirmed turn is checked.",
+            "trial_turn_timed_out": "Devin reached the five-minute turn limit. Its worker was "
+            "cleaned up and a token hold was retained for incomplete usage. The trial remains "
+            "available. You can send a new request; this request was not retried.",
             "trial_result_unconfirmed_do_not_retry": "The trial result could not be verified. "
             "Do not retry automatically.",
             "trial_context_too_large": "prompt is too long: this Devin trial accepts at most "
-            "192 KiB of request JSON including tools and history. Reduce tools or start a "
+            "2 MiB of request JSON including tools and history. Reduce tools or start a "
             "smaller conversation. No model request was sent.",
             "trial_requires_supported_opus_5_5_request": "Use claude-opus-5-5 and supported "
             "native-compatible request features.",
         }
         gateway.model_error(handler, error.status, messages.get(error.code, error.code),
                             code=error.code if error.code == "trial_context_too_large" else "")
+        if error.code == "trial_context_too_large" and size <= 2 * MAX_REQUEST_BYTES:
+            # Deliver the rejection without a TCP reset while an ordinary
+            # client is still sending its body. Drain only a bounded, already
+            # framed oversize request; never parse it or reserve a model turn.
+            deadline, remaining = time.monotonic() + 2, size
+            with contextlib.suppress(OSError, EOFError, TimeoutError):
+                handler.wfile.flush()
+                while remaining and time.monotonic() < deadline:
+                    handler.connection.settimeout(max(0.001, deadline - time.monotonic()))
+                    chunk = handler.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
     except (ValueError, OSError, EOFError, RecursionError):
         gateway.model_error(handler, 400, "The trial request could not be confirmed.")
     except Exception:

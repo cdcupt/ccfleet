@@ -37,7 +37,7 @@ else:
 native = relay.native
 POLICY = Path("/etc/ccfleet/devin-trial/worker.json")
 MODEL = "claude-opus-5-5"
-MAX_BODY = 192 * 1024
+MAX_BODY = 2 * 1024 * 1024
 GRANT_REFRESH_GRACE_S = 8.0
 GRANT_REFRESH_POLL_S = 0.1
 DIAGNOSTIC = ".trial-diagnostic.json"
@@ -50,7 +50,8 @@ _SAFE_NATIVE_ERRORS = native._SAFE_ACP | frozenset({
     "native_cleanup_unconfirmed", "native_completion_not_end_turn", "native_egress_unavailable",
     "native_model_mismatch", "native_model_state_mismatch", "native_prompt_failed",
     "native_session_changed", "native_session_guard", "native_step_failed",
-    "native_step_incomplete", "native_text_limit", "policy_guard_failed",
+    "native_step_incomplete", "native_prompt_deadline_exceeded", "native_text_limit",
+    "policy_guard_failed",
     "request_already_reserved", "result_persistence_failed", "state_lock_guard",
     "unexpected_project_configuration", "unsupported_native_content", "unsupported_native_update",
 })
@@ -79,6 +80,11 @@ def _diagnostic(state, *, phase, result=None, metering="unconfirmed", message_va
         "message_valid": message_valid is True, "metering": metering,
         "served_model_verified": accounting.get("served_model_verified") is True,
         "model_mismatch_detected": accounting.get("model_mismatch_detected") is True,
+        "native_web_search_calls": (
+            result.get("native_web_search_calls")
+            if type(result.get("native_web_search_calls")) is int
+            and 0 <= result["native_web_search_calls"] <= 512 else None
+        ),
         "provider_generation_proof": (
             type(accounting.get("unique_finalized_provider_ids")) is int
             and 1 <= accounting["unique_finalized_provider_ids"] <= 512
@@ -233,7 +239,7 @@ def policy():
         or binding.key_id != "trial-worker"
         or data["request_models"] != [MODEL]
         or data["thought_level"] != "max"
-        or data["timeout_s"] > 120
+        or data["timeout_s"] > 300
         or data["enabled"] is not True
     ):
         raise native.NativeError("trial_virtual_policy_required")
@@ -247,7 +253,8 @@ def policy():
         raise native.NativeError("trial_credential_needs_refresh")
     # Check the margin only after every other guard: stale evidence must not
     # delay rejection of a BAD policy, config or credential. A full admitted
-    # turn has a 180-second lease within the 300-second grant boundary.
+    # Longer turns require fresh same-credential observations during execution;
+    # the root refresher never extends the original observation's lifetime.
     if time.time() - initial["observed_at"] > 120:
         raise native.NativeError("trial_grant_needs_refresh")
 
@@ -567,6 +574,13 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
             error = None
         except (relay.WireError, ValueError, TypeError):
             pass
+        if (error is not None and clean and metering == "complete"
+                and type(result.get("prompt_requests")) is int and result["prompt_requests"] == 1
+                and result.get("error_code") in {"timeout", "native_prompt_deadline_exceeded"}):
+            # Finalized provider rows give a lower bound after interruption,
+            # never proof of the total. Preserve a hold while releasing a
+            # fully cleaned worker; do not report this as a successful reply.
+            metering, error = "interrupted", "native_prompt_timed_out"
         _diagnostic(shared_state, phase="result_received", result=result,
                     metering=metering, message_valid=error is None)
         if clean:
@@ -581,7 +595,7 @@ def serve(input_, output, *, loader=policy, runner=None, cancelled=None):
                         "version": 1,
                         "cleanup_confirmed": clean and root is None,
                         "metering": metering
-                        if clean and root is None and error is None
+                        if clean and root is None and (error is None or metering == "interrupted")
                         else "unconfirmed",
                         "usage": counts,
                         "message": message,

@@ -167,7 +167,8 @@ def test_stock_inert_placeholder_reaches_worker_without_annotation(trial):
     assert captured[0]["messages"] == original["messages"]
 
 
-def test_canonical_context_expansion_rejects_before_any_trial_admission(trial):
+def test_canonical_context_expansion_rejects_before_any_trial_admission(trial, monkeypatch):
+    monkeypatch.setattr(trial_runtime.devin_native, "TRIAL_MAX_PROMPT", 256 * 1024)
     # Scientific JSON floats can expand when the native context is encoded,
     # despite the raw request staying below the trial's 192 KiB wire bound.
     raw = body(tools=[{"name": "Read", "description": "Synthetic", "input_schema": {
@@ -375,6 +376,8 @@ def trial_snapshot(runtime):
 def legacy_runtime_trial(monkeypatch, request):
     # Create the database under the incident's old runtime caps, rather than
     # changing an existing ledger's reviewed limits record during a test.
+    monkeypatch.setattr(devin_trial, "MAX_STEP_S", 160)
+    monkeypatch.setattr(devin_trial, "MAX_RUNTIME_S", 180)
     monkeypatch.setattr(devin_trial, "DAILY_RUNTIME_S", 1200)
     monkeypatch.setattr(devin_trial, "GLOBAL_DAILY_RUNTIME_S", 1200)
     return request.getfixturevalue("trial")
@@ -459,7 +462,7 @@ def test_one_full_runtime_reservation_still_reaches_worker(trial):
     message, _ = trial.runtime.turn(key, body())
     assert message["content"][0]["text"] == "PRIVATE REPLY"
     value = trial.runtime.allowance(trial.alice)
-    assert value["global_remaining_runtime_seconds"] == 0 and not value["paused"]
+    assert value["global_remaining_runtime_seconds"] == devin_trial.MAX_STEP_S - 1 and not value["paused"]
     assert value["reported_tokens"] == 19 and value["reserved_tokens"] == 0
 
 
@@ -668,10 +671,10 @@ def test_slow_model_free_readiness_gets_fresh_execution_permit(trial):
             with trial.runtime._ledger() as book:
                 assert book.connection.execute(
                     "SELECT step_deadline FROM devin_trial_sessions WHERE state='open'"
-                ).fetchone()[0] == trial.now[0] + 160
+                ).fetchone()[0] == trial.now[0] + devin_trial.MAX_STEP_S
                 assert book.connection.execute(
                     "SELECT expires_at FROM devin_trial_sessions WHERE state='open'"
-                ).fetchone()[0] == trial.now[0] + 180
+                ).fetchone()[0] == trial.now[0] + devin_trial.MAX_RUNTIME_S
             # A full120s generation plus setup/cleanup remains authorized.
             trial.now[0] += 154
             return super().perform(raw, authorized)
@@ -813,8 +816,8 @@ def test_api_bucket_is_per_account_persistent_across_key_rotation_and_precedes_j
 def test_runtime_request_boundary_is192kib_not_old64k_and_overbound_never_reserves(trial):
     token = trial.runtime.create_key(trial.alice)
     raw = body()
-    exact = raw + b" " * (192 * 1024 - len(raw))
-    assert len(exact) == devin_trial.MAX_REQUEST_BYTES == 192 * 1024
+    exact = raw + b" " * (2 * 1024 * 1024 - len(raw))
+    assert len(exact) == devin_trial.MAX_REQUEST_BYTES == 2 * 1024 * 1024
     trial.runtime.turn(token, exact)
     before = trial.runtime.allowance(trial.alice)
     trial.runtime.transport = lambda *a, **k: pytest.fail("oversized request reached worker")

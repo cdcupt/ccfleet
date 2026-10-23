@@ -198,7 +198,8 @@ class TrialRuntime:
         try:
             body = devin_native.mcp._decode(raw)
             body = native_client_request(body)
-            clean = native_preflight.validate(body, request_models=[MODEL], effort="max")
+            clean = native_preflight.validate(body, request_models=[MODEL], effort="max",
+                                              context_limit=devin_native.TRIAL_MAX_PROMPT)
         except native_preflight.RequestRejected as error:
             raise TrialUnavailable(error.code, error.status, request_error=error) from None
         except (ValueError, TypeError, RecursionError):
@@ -232,7 +233,7 @@ class TrialRuntime:
                     raise TrialUnavailable("trial_busy", 429)
                 prepare(lambda: self._identity_active(key, who))
             with self._ledger() as book:
-                decision = book.admit(who, lease_seconds=180)
+                decision = book.admit(who, lease_seconds=ledger.MAX_RUNTIME_S)
                 if decision.lease is None:
                     raise TrialUnavailable(decision.code, 429)
                 lease = decision.lease
@@ -301,6 +302,8 @@ class TrialRuntime:
                     self.readiness_lock.release()
         if result is None or usage is None or not cleanup:
             raise TrialUnavailable("trial_result_unconfirmed_do_not_retry")
+        if result["error"] == "native_prompt_timed_out":
+            raise TrialUnavailable("trial_turn_timed_out", 504)
         if result["error"] is not None:
             raise TrialUnavailable("trial_native_request_failed")
         # A revoked caller receives no buffered reply even if execution settled.
@@ -359,10 +362,21 @@ class TrialRuntime:
             or type(value["version"]) is not int
             or value["version"] != 1
             or type(value["cleanup_confirmed"]) is not bool
-            or value["error"] not in {None, "native_request_failed"}
+            or value["error"] not in {None, "native_request_failed", "native_prompt_timed_out"}
         ):
             raise TrialUnavailable("trial_receipt_invalid")
         counts = value["usage"]
+        if value.get("metering") == "interrupted":
+            if (value["cleanup_confirmed"] is True and value["error"] == "native_prompt_timed_out"
+                    and value["message"] is None and isinstance(counts, dict)
+                    and set(counts) == {"input_tokens", "output_tokens", "cache_read_tokens",
+                                        "cache_creation_tokens"}
+                    and all(type(n) is int and 0 <= n <= 10**12 for n in counts.values())
+                    and sum(counts.values()) <= ledger.MAX_REPORTED_TOKENS):
+                return True, ledger.VerifiedInterruptedUsage(sum(counts.values()), True)
+            return value["cleanup_confirmed"], None
+        if value["error"] == "native_prompt_timed_out":
+            return value["cleanup_confirmed"], None
         if (
             value.get("metering") == "cache_read_unmeasured"
             and value["cleanup_confirmed"] is True

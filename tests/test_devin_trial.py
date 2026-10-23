@@ -84,7 +84,7 @@ def test_default_daily_admission_caps_expand_without_changing_tokens_or_per_turn
     assert trial.DAILY_RUNTIME_S == trial.GLOBAL_DAILY_RUNTIME_S == 12000
     assert trial.DAILY_LEASES == trial.GLOBAL_DAILY_LEASES == 200
     assert trial.TURN_RESERVATION_TOKENS == 20_000
-    assert trial.MAX_STEP_S == 160 and trial.MAX_RUNTIME_S == 180 and trial.MAX_LEASE_S == 600
+    assert trial.MAX_STEP_S == 340 and trial.MAX_RUNTIME_S == 360 and trial.MAX_LEASE_S == 600
 
 
 def test_allowance_exposes_both_configured_token_limits():
@@ -104,12 +104,12 @@ def test_allowance_exposes_independent_runtime_request_and_lease_capacity(scene)
     allowance = book.allowance(ALICE)
     assert allowance.remaining_runtime_seconds == allowance.runtime_limit_seconds == 12000
     assert allowance.global_remaining_runtime_seconds == allowance.global_runtime_limit_seconds == 12000
-    assert allowance.turn_reservation_seconds == 160
+    assert allowance.turn_reservation_seconds == 340
     assert allowance.remaining_requests == allowance.remaining_global_requests == 200
     assert allowance.remaining_leases == allowance.remaining_global_leases == 200
     assert allowance.request_limit == allowance.global_request_limit == 200
     assert allowance.lease_limit == allowance.global_lease_limit == 200
-    assert allowance.remaining_turns == 75
+    assert allowance.remaining_turns == 35
 
 
 def test_expanded_runtime_admits75_full_turns_before_shared_daily_exhaustion(scene):
@@ -307,7 +307,7 @@ def test_exact_request_byte_limit_is_accepted(scene):
     started(ledger, lease, request=b"a" * trial.MAX_REQUEST_BYTES)
 
 
-@pytest.mark.parametrize("seconds", [0, -1, 161, True, 1.5, "160"])
+@pytest.mark.parametrize("seconds", [0, -1, 341, True, 1.5, "340"])
 def test_step_cannot_reserve_more_than_the_bounded_turn(scene, seconds):
     ledger, _, _ = scene
     lease = admitted(ledger)
@@ -317,11 +317,11 @@ def test_step_cannot_reserve_more_than_the_bounded_turn(scene, seconds):
 def test_total_runtime_is_reserved_before_execution_and_never_refunded(scene):
     ledger, connection, _ = scene
     lease = admitted(ledger)
-    for seconds in (160, 20):
+    for seconds in (340, 20):
         step = started(ledger, lease, seconds=seconds)
         finished(ledger, lease, step)
     assert (
-        connection.execute("SELECT reserved_seconds FROM devin_trial_sessions").fetchone()[0] == 180
+        connection.execute("SELECT reserved_seconds FROM devin_trial_sessions").fetchone()[0] == 360
     )
     assert ledger.start_step(ALICE, lease, request=b"{}", seconds=1).code == "trial_limit_reached"
     assert ledger.admit(BOB).code == "trial_busy", "final history cleanup still required"
@@ -332,7 +332,7 @@ def test_total_runtime_is_reserved_before_execution_and_never_refunded(scene):
 def test_partial_remaining_runtime_can_only_be_reserved_within_the_budget(scene):
     ledger, _, _ = scene
     lease = admitted(ledger)
-    for seconds in (100, 60):
+    for seconds in (200, 140):
         step = started(ledger, lease, seconds=seconds)
         finished(ledger, lease, step)
     assert (
@@ -714,10 +714,10 @@ def test_legacy_time_constraint_migration_preserves_every_row_and_is_idempotent(
     ).fetchone() == ((None, None) if state == "closed" else (60, step.deadline))
     # New constraints are wider, but remain explicit hard SQLite bounds.
     with pytest.raises(sqlite3.IntegrityError):
-        connection.execute("UPDATE devin_trial_sessions SET active_seconds=161")
+        connection.execute("UPDATE devin_trial_sessions SET active_seconds=341")
     connection.rollback()
     with pytest.raises(sqlite3.IntegrityError):
-        connection.execute("UPDATE devin_trial_sessions SET reserved_seconds=181")
+        connection.execute("UPDATE devin_trial_sessions SET reserved_seconds=361")
     connection.rollback()
     if state == "closed":
         ledger = trial.TrialLedger(connection, enabled=True, clock=lambda: 1_800_000_000.0)
@@ -932,7 +932,7 @@ def test_admission_expansion_preserves143121_reserved_including_unknown20k(recov
         assert allowance.available_tokens == 856558
         assert allowance.remaining_runtime_seconds == allowance.global_remaining_runtime_seconds == 11520
         assert allowance.paused is not recovered
-        assert allowance.remaining_turns == (72 if recovered else 0)
+        assert allowance.remaining_turns == (33 if recovered else 0)
         trial.TrialLedger(connection, enabled=True, clock=lambda: now)
         assert database_snapshot(connection) == expected
     finally:
@@ -955,7 +955,7 @@ def test_daily_expansion_gives_new_capacity_without_refunding_previous1120_secon
         upgraded = trial.TrialLedger(connection, enabled=True, clock=lambda: now)
         allowance = upgraded.allowance(ALICE)
         assert allowance.remaining_runtime_seconds == allowance.global_remaining_runtime_seconds == 10880
-        assert allowance.remaining_turns == 68
+        assert allowance.remaining_turns == 32
         assert allowance.remaining_requests == allowance.remaining_leases == 193
         assert database_snapshot(connection) == expanded_policy_snapshot(before)
     finally:

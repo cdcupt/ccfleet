@@ -42,7 +42,7 @@ def test_mcp_startup_does_not_consume_later_prompt_handoff_time(private):
     assert [json.loads(line)["id"] for line in output.getvalue().splitlines()] == [1, 2]
 
 
-def test_prepared_transport_uses_one155_second_deadline_through_terminal_framing(monkeypatch):
+def test_prepared_transport_uses_one335_second_deadline_through_terminal_framing(monkeypatch):
     now = [1000.0]
     monkeypatch.setattr(transport.time, "monotonic", lambda: now[0])
     attempt = transport.TrialAttempt({}, object())
@@ -57,7 +57,7 @@ def test_prepared_transport_uses_one155_second_deadline_through_terminal_framing
         sent.append((headers, body))
 
     def chunks():
-        now[0] += 154.5
+        now[0] += 334.5
         yield json.dumps(receipt()).encode()
 
     monkeypatch.setattr(attempt, "_send_request", send)
@@ -66,15 +66,15 @@ def test_prepared_transport_uses_one155_second_deadline_through_terminal_framing
     monkeypatch.setattr(attempt, "finish", lambda *, timeout: finish.append(timeout))
     assert attempt.perform(b"synthetic request", authorized) == receipt()
     assert sent == [({}, b"synthetic request")]
-    assert attempt.process.stdout.deadline == 1155
+    assert attempt.process.stdout.deadline == 1335
     assert attempt.process.stdout.authorized is authorized
     assert finish == [0.5]
-    assert transport.TURN_SECONDS + 2 < ledger.MAX_STEP_S < ledger.MAX_RUNTIME_S == 180
+    assert transport.TURN_SECONDS + 2 < ledger.MAX_STEP_S < ledger.MAX_RUNTIME_S == 360
 
 
 def test_transport_still_refuses_reads_at_its_absolute_deadline(monkeypatch):
-    monkeypatch.setattr(transport.time, "monotonic", lambda: 1155.0)
-    reader = transport._Reader(object(), 1155.0, lambda: True)
+    monkeypatch.setattr(transport.time, "monotonic", lambda: 1335.0)
+    reader = transport._Reader(object(), 1335.0, lambda: True)
     with pytest.raises(GatewayTransportError) as error:
         reader.read(1)
     assert error.value.status == 504
@@ -96,4 +96,4 @@ def test_model_free_refresh_cadence_fits_stale_grant_grace_and_readiness_deadlin
     # lock. This does not lengthen a model turn or either freshness threshold.
     assert period + accuracy < worker.GRANT_REFRESH_GRACE_S < transport.READINESS_SECONDS
     assert period + accuracy + worker.GRANT_REFRESH_POLL_S < worker.GRANT_REFRESH_GRACE_S
-    assert transport.TURN_SECONDS == 155 and ledger.MAX_STEP_S == 160
+    assert transport.TURN_SECONDS == 335 and ledger.MAX_STEP_S == 340

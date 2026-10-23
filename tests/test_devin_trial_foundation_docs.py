@@ -64,13 +64,13 @@ def test_walkthrough_explains_local_execution_remote_identity_and_fresh_continua
 
 def test_launch_retrieval_and_web_limits_are_explicit_without_claiming_no_network():
     page = document()
-    command = next(code for code in page.codes if code.startswith("--safe-mode --permission-mode"))
-    assert shlex.split(command) == ["--safe-mode", "--permission-mode", "bypassPermissions",
+    command = next(code for code in page.codes if code.startswith("--permission-mode"))
+    assert shlex.split(command) == ["--permission-mode", "bypassPermissions",
                                     "--disallowedTools", "WebSearch,WebFetch"]
     for phrase in (
         "It lasts 30 days across daily resets", "A GET does not rotate it",
         "Explicit replacement revokes the old key immediately",
-        "Older random keys cannot be redisplayed", "Safe mode", "It is optional",
+        "Older random keys cannot be redisplayed", "Project instructions", "optional --safe-mode",
         "without individual approval prompts", "Saved settings are unchanged",
         "preserve its existing private key", "No new key or Claude /login is needed",
         "plain outer WebSearch description is not the same as its nested Anthropic server-tool request",
@@ -92,8 +92,8 @@ def test_separate_daily_and_rate_budgets_match_source_without_promising200_full_
     assert devin_trial.DAILY_LEASES == devin_trial.GLOBAL_DAILY_LEASES
     assert devin_trial.DAILY_RUNTIME_S == devin_trial.GLOBAL_DAILY_RUNTIME_S
     assert f"{devin_trial.DAILY_RUNTIME_S:,} seconds ({devin_trial.DAILY_RUNTIME_S // 60} minutes)" in text
-    assert f"reserves {devin_trial.MAX_STEP_S} seconds even when the reply is quick" in text
-    assert f"at most {devin_trial.DAILY_RUNTIME_S // devin_trial.MAX_STEP_S} full reservations" in text
+    assert f"reserves {devin_trial.MAX_STEP_S} seconds. After verified settlement and cleanup" in text
+    assert f"covers {devin_trial.DAILY_RUNTIME_S // devin_trial.MAX_STEP_S} full-length turns" in text
     assert "Burst 3; refill 40 requests per minute per account" in text
     assert "invalid request can consume this bucket without using a model turn or runtime" in text
     assert "rejects known exhausted budgets before contacting the worker" in text
@@ -108,7 +108,7 @@ def test_timing_error_recovery_and_operator_guards_remain_visible():
     text = document().text
     for phrase in (
         f"{trial_worker_transport.READINESS_SECONDS}-second readiness check",
-        "120-second native generation deadline",
+        "300-second native generation deadline",
         f"{trial_worker_transport.TURN_SECONDS}-second transport deadline",
         f"{devin_trial.MAX_STEP_S}-second runtime reservation",
         f"{devin_trial.MAX_RUNTIME_S}-second lease and MCP lifetime",
@@ -145,8 +145,8 @@ def test_readme_trial_facts_are_current_and_link_to_the_technical_walkthrough():
     page = Document(section)
     assert "docs/devin-trial-foundation.html" in page.links
     for phrase in ("1,000,000 tokens per verified Fleet account", "10,000,000 tokens shared",
-                   "200 model turns", "200 reserved runtime minutes", "75 such reservations",
-                   "120-second generation deadline", "160-second reservation",
+                   "200 model turns", "200 reserved runtime minutes", "35 full-length turns",
+                   "300-second generation deadline", "340-second reservation",
                    "--disallowedTools WebSearch,WebFetch", "重新启动 Claude Code"):
         assert phrase in page.text
     for stale in ("100,000 per verified", "twenty turns/twenty", "forty-second generation",

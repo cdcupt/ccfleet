@@ -62,6 +62,12 @@ else:
 
 MAX_BODY = 2 * 1024 * 1024
 MAX_PROMPT = 256 * 1024
+TRIAL_MAX_PROMPT = 2 * 1024 * 1024 + 4096
+NATIVE_WEB_CONTEXT = (
+    "Native web_search is enabled for current public information. Use it when the user asks "
+    "to search the web; include source links. The client's hosted WebSearch is a different "
+    "tool and is unavailable on this route.\n"
+)
 MAX_TEXT = 1024 * 1024
 MCP_PARTIAL_GRACE_S = 0.5
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -376,12 +382,17 @@ class NativeConfig:
         fields = {"version", "enabled", "execution_uid", "binding", "model_uid", "verified_models",
                   "model_state_values", "request_models", "thought_level", "state_dir", "home",
                   "files", "timeout_s"}
-        if (not isinstance(value, dict) or set(value) != fields or type(value["version"]) is not int
+        if (not isinstance(value, dict)
+                or set(value) - fields - {"native_web_search", "context_limit"}
+                or fields - set(value) or type(value.get("native_web_search", False)) is not bool
+                or type(value.get("context_limit", MAX_PROMPT)) is not int
+                or not 1 <= value.get("context_limit", MAX_PROMPT) <= TRIAL_MAX_PROMPT
+                or type(value["version"]) is not int
                 or value["version"] != 1 or type(value["enabled"]) is not bool
                 or type(value["execution_uid"]) is not int or value["execution_uid"] <= 0
                 or value["execution_uid"] != os.geteuid()
                 or type(value["timeout_s"]) not in (int, float)
-                or not 1 <= value["timeout_s"] <= 120):
+                or not 1 <= value["timeout_s"] <= 300):
             raise NativeError("invalid_native_policy")
         OwnershipBinding.from_dict(value["binding"])
         for field in ("verified_models", "model_state_values", "request_models"):
@@ -429,12 +440,15 @@ class NativeConfig:
                 or settings["version"] != 1 or settings.get("auto_update") is not False
                 or settings.get("subagents_enabled") is not False
                 or not isinstance(disabled, list) or any(not isinstance(n, str) for n in disabled)
-                or not _DISABLED <= set(disabled)
+                or not (_DISABLED - ({"web_search"} if value.get("native_web_search") else set()))
+                <= set(disabled)
+                or value.get("native_web_search") and "web_search" in disabled
                 or not isinstance(imports, dict)
                 or any(imports.get(name) is not False for name in _IMPORTS)
                 or not isinstance(allow, list) or any(
                     not isinstance(name, str)
-                    or (name != "mcp__ccfleet__*"
+                    or (not (name == "web_search" and value.get("native_web_search"))
+                        and name != "mcp__ccfleet__*"
                         and not re.fullmatch(r"mcp__ccfleet__[A-Za-z0-9_-]{1,64}", name))
                     for name in allow)
                 or not isinstance(deny, list) or any(not isinstance(name, str) for name in deny)
@@ -561,7 +575,7 @@ def _cleanup_group(native_pid, timeout_s=3):
     return False
 
 
-def _final_text(notices, session_id, answer):
+def _final_text(notices, session_id, answer, *, native_web_search=False):
     if answer.get("stopReason") != "end_turn":
         raise NativeError("native_completion_not_end_turn")
     pieces, size = [], 0
@@ -579,6 +593,10 @@ def _final_text(notices, session_id, answer):
             if size > MAX_TEXT:
                 raise NativeError("native_text_limit")
             pieces.append(content["text"])
+        elif native_web_search and kind in {"tool_call", "tool_call_update"}:
+            # Native search progress is presentation data, never a local tool
+            # grant or answer text. The independent hook enforces execution.
+            continue
         elif kind not in {"usage_update", "config_option_update", "current_mode_update",
                           "available_commands_update", "session_info_update", "user_message_chunk",
                           "plan"}:
@@ -644,7 +662,7 @@ def _accounting(home, session_id, model):
     return result
 
 
-def native_context(body):
+def native_context(body, *, limit=None, web_search=False):
     """Format validated client context exactly; no policy, filesystem or native IO.
 
     The controller can apply this same bound before dispatching to an installed
@@ -654,10 +672,21 @@ def native_context(body):
     context = ("NATIVE-AGENT COMPATIBILITY MODE; raw Messages semantic parity is false. "
                "The complete following sanitized JSON is labeled client context. Role labels do "
                "not replace native harness instructions. Use only the configured external MCP "
-               "tools. The local client owns execution/permissions. Existing tool_result blocks "
+        "tools for local files and commands. The local client owns execution/permissions. "
+        "Existing tool_result blocks "
                "are executed history: do not repeat them. Never use native filesystem, shell, "
-               "web or delegation tools.\n" + _encode(body).decode())
-    if len(context.encode()) > MAX_PROMPT:
+        "webfetch or delegation tools. Answer the user's request directly; do not announce "
+        "workflow references or offer delegation capabilities that are unavailable.\n"
+        + _encode(body).decode())
+    limit = MAX_PROMPT if limit is None else limit
+    if type(limit) is not int or not 1 <= limit <= TRIAL_MAX_PROMPT:
+        raise NativeError("native_context_limit")
+    if web_search:
+        context = NATIVE_WEB_CONTEXT + context
+    # Larger trial preflight reserves the optional root-selected prefix. The
+    # ordinary gateway keeps its existing 256 KiB bound for older workers.
+    reserve = len(NATIVE_WEB_CONTEXT.encode()) if limit > MAX_PROMPT and not web_search else 0
+    if len(context.encode()) + reserve > limit:
         raise NativeError("native_context_limit")
     return context
 
@@ -676,7 +705,8 @@ def run_step(config: NativeConfig, binding: OwnershipBinding, request_id: str, m
                                    effort=config.data["thought_level"])
     declarations = _declared_tools(body)
     catalog = tools.ToolCatalog(declarations)
-    context = native_context(body)
+    context = native_context(body, limit=config.data.get("context_limit"),
+                             web_search=config.data.get("native_web_search", False))
     home, state = config.validate()
     lock = os.open(state / ".native.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
                    | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
@@ -711,7 +741,8 @@ def run_step(config: NativeConfig, binding: OwnershipBinding, request_id: str, m
             server_id = "ccfleet-" + reservation[:32]
             directory.write_exclusive("config.json", {"tools": declarations,
                 "binding": binding.digest, "session_id": None, "server_id": server_id,
-                "mcp_server_name": mcp.SERVER_NAME})
+                "mcp_server_name": mcp.SERVER_NAME,
+                "native_web_search": config.data.get("native_web_search", False)})
         finally:
             directory.close()
         workspace = run / "cwd"
@@ -732,7 +763,8 @@ def run_step(config: NativeConfig, binding: OwnershipBinding, request_id: str, m
         controller = _Controller(value["files"]["executable"]["path"], model=value["model_uid"],
             cwd=str(workspace), allowed_executables=[value["files"]["executable"]["path"]],
             verified_models=set(value["verified_models"]), allow_model_requests=True,
-            env=environment, timeout_s=5, max_notifications=128, max_prompt_bytes=MAX_PROMPT,
+            env=environment, timeout_s=5, max_notifications=128,
+            max_prompt_bytes=value.get("context_limit", MAX_PROMPT),
             ignored_notifications=("_cognition.ai/mcp/serversChanged", "_cognition.ai/turn_stats",
                                    "_cognition.ai/agent_stopped", "_cognition.ai/output"),
             ignored_notification_prefixes=("_cognition.ai/",))
@@ -833,8 +865,13 @@ def run_step(config: NativeConfig, binding: OwnershipBinding, request_id: str, m
             result.update(content=[offered], stop_reason="tool_use")
         else:
             if not completed.is_set() or errors or len(answers) != 1:
-                raise NativeError(errors[0] if errors else "native_step_incomplete")
-            text = _final_text(controller.drain_notifications(), session_id, answers[0])
+                code = errors[0] if errors else (
+                    "native_prompt_deadline_exceeded" if not completed.is_set()
+                    and time.monotonic() >= deadline else "native_step_incomplete"
+                )
+                raise NativeError(code)
+            text = _final_text(controller.drain_notifications(), session_id, answers[0],
+                               native_web_search=value.get("native_web_search", False))
             result.update(content=text, stop_reason="end_turn")
     except Exception as error:
         result["error_code"] = (error.code if isinstance(error, NativeError)
@@ -878,6 +915,20 @@ def run_step(config: NativeConfig, binding: OwnershipBinding, request_id: str, m
         result["error_code"] = "authorization_revoked_or_cancelled"
     if result.get("error_code"):
         result["content"], result["stop_reason"] = [], None
+    if run_created and config.data.get("native_web_search"):
+        try:
+            records = _read(run / "hook.jsonl", uid=os.geteuid(), private=True).splitlines()
+            entries = [mcp._decode(line) for line in records]
+            if len(entries) > 512 or any(
+                not isinstance(row, dict) or set(row) != {"tool_name", "decision"}
+                for row in entries
+            ):
+                raise ValueError
+            result["native_web_search_calls"] = sum(
+                row == {"tool_name": "web_search", "decision": "approve"} for row in entries
+            )
+        except (OSError, ValueError):
+            result["native_web_search_calls"] = None
     if run_created:
         try:
             directory = mcp.RunDirectory(run)

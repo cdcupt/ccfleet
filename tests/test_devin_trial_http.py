@@ -94,7 +94,7 @@ def test_runtime_limit_has_clear_reset_message_without_worker_contact_or_spendin
     })
     assert status == 429 and headers["x-should-retry"] == "false"
     error = json.loads(raw)["error"]["message"]
-    assert "160-second reservation" in error and "00:00 UTC" in error
+    assert "340-second reservation" in error and "00:00 UTC" in error
     assert "Remaining tokens do not override" in error
     assert "runtime_reservation_limit" not in error
     with http.runtime._ledger() as book:
@@ -275,7 +275,7 @@ def test_model_http_streaming_success_has_all_usage_and_never_owner_context(http
 
 
 @pytest.mark.parametrize("path", ["/trial/v1/messages", "/trial/v1/messages?beta=true"])
-def test_trial_request_over192kib_uses_context_recovery_before_rate_or_worker(http, path):
+def test_trial_request_over2mib_uses_context_recovery_before_rate_or_worker(http, path):
     key = token(http)
     before = http.runtime.allowance(http.alice)
     http.runtime.transport = lambda *a, **k: pytest.fail("oversized request reached worker")
@@ -287,7 +287,7 @@ def test_trial_request_over192kib_uses_context_recovery_before_rate_or_worker(ht
     assert status == 400 and error["type"] == "invalid_request_error"
     assert error["code"] == "trial_context_too_large"
     assert error["message"].startswith("prompt is too long:")
-    assert "192 KiB of request JSON including tools and history" in error["message"]
+    assert "2 MiB of request JSON including tools and history" in error["message"]
     assert "No model request was sent" in error["message"]
     assert headers["x-should-retry"] == "false"
     assert key not in raw.decode() and http.runtime.allowance(http.alice) == before
@@ -297,7 +297,7 @@ def test_trial_request_over192kib_uses_context_recovery_before_rate_or_worker(ht
         assert ledger.connection.execute("SELECT COUNT(*) FROM devin_trial_sessions").fetchone()[0] == 0
 
 
-def test_trial_request_at192kib_reaches_exactly_one_worker(http):
+def test_trial_request_at2mib_reaches_exactly_one_worker(http):
     key = token(http)
     requests = []
 
@@ -309,7 +309,7 @@ def test_trial_request_at192kib_reaches_exactly_one_worker(http):
     http.runtime.transport = Worker
     raw = body()
     padded = raw + b" " * (devin_trial.MAX_REQUEST_BYTES - len(raw))
-    assert len(padded) == 192 * 1024
+    assert len(padded) == 2 * 1024 * 1024
     status, headers, _ = call(http.server, "POST", "/trial/v1/messages", padded, {
         "x-api-key": key, "Content-Type": "application/json",
     })
@@ -580,8 +580,7 @@ def test_opus_model_env_names_are_fixed_and_command_contains_no_owner_binding(ht
         "claude-opus-5-5",
         "--effort",
         "max",
-        "--safe-mode",
-        "--permission-mode",
+                "--permission-mode",
         "bypassPermissions",
         "--disallowedTools",
         "WebSearch,WebFetch",

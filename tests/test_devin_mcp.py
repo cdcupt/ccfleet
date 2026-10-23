@@ -529,21 +529,21 @@ def test_initialized_server_closes_at_whole_lifetime_without_admitting_late_tool
     now = [0.0]
     ping = {"jsonrpc": "2.0", "id": "before-bound", "method": "ping"}
     incoming = TimedInput(now, [
-        (0, initialize()), (5, INITIALIZED), (179.999, ping),
-        (180, call()), (181, call(rpc_id="never-read")),
+        (0, initialize()), (5, INITIALIZED), (359.999, ping),
+        (360, call()), (361, call(rpc_id="never-read")),
     ])
     output = io.BytesIO()
     assert mcp.serve(path, incoming, output, clock=lambda: now[0],
                      identity=lambda: dict(PROCESS)) == 0
     replies = [json.loads(line) for line in output.getvalue().splitlines()]
     assert [reply["id"] for reply in replies] == [1, "before-bound"]
-    assert now[0] == 180 and len(incoming.messages) == 1
+    assert now[0] == 360 and len(incoming.messages) == 1
     assert not (path / "call.json").exists()
     with pytest.raises(mcp.Rejected, match="mcp_shim_closed"):
         mcp.read_lifecycle(path)
 
 
-@pytest.mark.parametrize("called_at,deadline", [(130, 175), (170, 180)])
+@pytest.mark.parametrize("called_at,deadline", [(130, 175), (350, 360)])
 def test_handoff_wait_keeps45_seconds_and_cannot_extend_whole_lifetime(
         private, called_at, deadline):
     path, _, _, bind, _, _ = private
