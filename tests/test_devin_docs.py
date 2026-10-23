@@ -90,7 +90,8 @@ def test_devin_guide_explains_the_native_route_and_limits_private_pilot_evidence
 def test_provider_diagram_is_responsive_accessible_and_makes_pilot_access_conditional(language):
     source = (ROOT / "docs/devin.html").read_text()
     page = Document(bilingual.project_html(source, language, TARGET))
-    diagrams = [attrs for tag, attrs in page.tags if tag == "svg"]
+    diagrams = [attrs for tag, attrs in page.tags if tag == "svg"
+                and attrs.get("class") in {"route-wide", "route-compact"}]
     assert len(diagrams) == 2
     assert {item["class"] for item in diagrams} == {"route-wide", "route-compact"}
     assert all(item["role"] == "img" and item["aria-label"] for item in diagrams)

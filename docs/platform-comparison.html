@@ -32,8 +32,1079 @@ color:var(--muted,#667085);font:600 12px/1.4 system-ui;text-decoration:none;whit
 color:var(--acc,#4932c5)}
 .language-control a:focus-visible{outline:2px solid var(--acc,#4932c5);outline-offset:2px}
 @media print{.language-control{display:none}}
-</style></head><body data-language="en"><div class="shell"><nav class="doc-nav" aria-label="Documentation" data-aria-label-en="Documentation" data-aria-label-zh="文档"><a href="index.html"><span class="bi-inline"><span class="copy-en" lang="en">Documentation</span><span class="copy-zh" lang="zh-Hans">文档</span></span></a><a href="/docs/how-it-works"><span class="bi-inline"><span class="copy-en" lang="en">How it works</span><span class="copy-zh" lang="zh-Hans">工作原理</span></span></a><a href="/docs/guide"><span class="bi-inline"><span class="copy-en" lang="en">User guide</span><span class="copy-zh" lang="zh-Hans">使用指南</span></span></a><div class="language-control" role="group" aria-label="Language" data-aria-label-en="Language" data-aria-label-zh="语言" data-language-links><a href="/en/docs/library/docs/platform-comparison.html" data-language-link="en" lang="en">English</a><a href="/zh/docs/library/docs/platform-comparison.html" data-language-link="zh" lang="zh-Hans">中文</a></div></nav><main><header class="hero"><p class="eyebrow"><span class="bi-inline"><span class="copy-en" lang="en">Inside CC Fleet</span><span class="copy-zh" lang="zh-Hans">深入了解 CC Fleet</span></span></p><h1><span class="bi-inline"><span class="copy-en" lang="en">Your request, every step explained.</span><span class="copy-zh" lang="zh-Hans">你的请求，每一步都有据可查。</span></span></h1><p class="lead"><span class="bi-inline"><span class="copy-en" lang="en">Local tools. Your own account. A documented route through Fleet. Explore the architecture, the routing rules and the evidence behind them.</span><span class="copy-zh" lang="zh-Hans">工具在本机，账号归自己。从请求架构、路由规则到验证依据，了解 Fleet 如何连接两端。</span></span></p><div class="hero-actions"><a class="button primary" href="#architecture"><span class="bi-inline"><span class="copy-en" lang="en">Follow a request</span><span class="copy-zh" lang="zh-Hans">跟随一次请求</span></span></a><a class="button" href="#verification"><span class="bi-inline"><span class="copy-en" lang="en">Inspect the evidence</span><span class="copy-zh" lang="zh-Hans">查看验证依据</span></span></a></div></header><nav class="section-nav" aria-label="On this page" data-aria-label-en="On this page" data-aria-label-zh="本页内容"><a href="#architecture"><span class="bi-inline"><span class="copy-en" lang="en">Architecture</span><span class="copy-zh" lang="zh-Hans">请求架构</span></span></a><a href="#verification"><span class="bi-inline"><span class="copy-en" lang="en">Verification</span><span class="copy-zh" lang="zh-Hans">验证范围</span></span></a><a href="#routing"><span class="bi-inline"><span class="copy-en" lang="en">Routing &amp; privacy</span><span class="copy-zh" lang="zh-Hans">路由与隐私</span></span></a><a href="#parallel-agents"><span class="bi-inline"><span class="copy-en" lang="en">Parallel agents</span><span class="copy-zh" lang="zh-Hans">并行代理</span></span></a><a href="#host-comparison"><span class="bi-inline"><span class="copy-en" lang="en">Design comparison</span><span class="copy-zh" lang="zh-Hans">设计对比</span></span></a><a href="#sources"><span class="bi-inline"><span class="copy-en" lang="en">Technical references</span><span class="copy-zh" lang="zh-Hans">技术资料</span></span></a></nav><section class="section" id="architecture"><div class="section-heading"><span class="section-index" aria-hidden="true">01</span><h2><span class="bi-inline"><span class="copy-en" lang="en">One request, five stops</span><span class="copy-zh" lang="zh-Hans">一次请求，五个环节</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">This is the default Anthropic route. The response returns along the same route; permitted tools execute on your computer.</span><span class="copy-zh" lang="zh-Hans">下图是默认 Anthropic 路线。回答沿原路返回；获准的工具操作仍在你的电脑上执行。</span></span></p><ol class="route" aria-label="Default request route" data-aria-label-en="Default request route" data-aria-label-zh="默认请求路线"><li><span class="step-number" aria-hidden="true">01</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Your computer</span><span class="copy-zh" lang="zh-Hans">你的电脑</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Original Claude Code runs files, tools and normal conversation history locally. Selected model context travels with the request.</span><span class="copy-zh" lang="zh-Hans">原版 Claude Code 在本地处理文件、工具和正常会话历史。选入模型上下文的内容会随请求发送。</span></span></p></li><li><span class="step-number" aria-hidden="true">02</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Our HTTPS gateway</span><span class="copy-zh" lang="zh-Hans">我们的 HTTPS 网关</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Claude Code calls ccfleet.io with a separate Fleet connection key. The gateway decrypts the request and checks access.</span><span class="copy-zh" lang="zh-Hans">Claude Code 带独立的 Fleet 连接密钥访问 ccfleet.io。网关解密请求并验证访问权限。</span></span></p></li><li><span class="step-number" aria-hidden="true">03</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Your routing rules</span><span class="copy-zh" lang="zh-Hans">你的路由规则</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Only your selected own slots are eligible: one account, priority order, or conversation stickiness.</span><span class="copy-zh" lang="zh-Hans">只从你明确选中的自有槽位中选择：指定一个账号、按优先级，或保持会话账号。</span></span></p></li><li><span class="step-number" aria-hidden="true">04</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Your account slot</span><span class="copy-zh" lang="zh-Hans">你的账号槽位</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Restricted server-side SSH reaches the selected slot with a pinned host identity. The native Claude credential stays there.</span><span class="copy-zh" lang="zh-Hans">服务器通过受限 SSH 连接所选槽位，并核验固定的主机身份。原生 Claude 登录凭证留在槽位。</span></span></p></li><li><span class="step-number" aria-hidden="true">05</span><h3><span class="bi-inline"><span class="copy-en" lang="en">The model provider</span><span class="copy-zh" lang="zh-Hans">模型服务商</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">The slot opens a new certificate-verified HTTPS connection to Anthropic. The answer streams back to local Claude Code.</span><span class="copy-zh" lang="zh-Hans">槽位重新建立经证书校验的 HTTPS 连接，向 Anthropic 发出请求。回答以流式方式返回本地 Claude Code。</span></span></p></li></ol><p class="route-transport"><span class="bi-inline"><span class="copy-en" lang="en"><strong>Transport:</strong> computer → gateway uses HTTPS; gateway → slot uses restricted SSH; slot → Anthropic uses HTTPS. Encryption protects each connection. The gateway and slot still process model content.</span><span class="copy-zh" lang="zh-Hans"><strong>传输：</strong>电脑到网关使用 HTTPS，网关到槽位使用受限 SSH，槽位到 Anthropic 使用 HTTPS。加密保护每一段连接，网关与槽位仍会处理模型内容。</span></span></p></section><section class="section" id="verification"><div class="section-heading"><span class="section-index" aria-hidden="true">02</span><h2><span class="bi-inline"><span class="copy-en" lang="en">What we have actually verified</span><span class="copy-zh" lang="zh-Hans">已经验证到哪一步</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">Evidence is dated and limited to the cases below. A successful test is not a guarantee of future availability or provider acceptance.</span><span class="copy-zh" lang="zh-Hans">证据有明确日期，只覆盖以下范围。一次成功测试不保证未来可用性，也不保证服务商接受后续请求。</span></span></p><div class="evidence-grid"><article class="evidence-card"><div class="badge "><span class="bi-inline"><span class="copy-en" lang="en">Live verification</span><span class="copy-zh" lang="zh-Hans">真实线上验证</span></span></div><p class="evidence-date"><span class="bi-inline"><span class="copy-en" lang="en">October 11, 2026</span><span class="copy-zh" lang="zh-Hans">2026 年 10 月 11 日</span></span></p><h3><span class="bi-inline"><span class="copy-en" lang="en">Anthropic · one live slot</span><span class="copy-zh" lang="zh-Hans">Anthropic · 一个真实槽位</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Native Read/Write, streamed replies and token counting passed on one live account. Multi-slot behavior used controlled tests; no live second-account switch was exercised.</span><span class="copy-zh" lang="zh-Hans">一个真实账号通过原版客户端读写文件、流式回复和 Token 计数验证。多槽位行为使用受控测试，尚未实测第二个真实账号的线上切换。</span></span></p><a class="text-link" href="public-gateway.html#verification"><span class="bi-inline"><span class="copy-en" lang="en">Read the verification scope</span><span class="copy-zh" lang="zh-Hans">查看验证范围</span></span></a></article><article class="evidence-card"><div class="badge controlled"><span class="bi-inline"><span class="copy-en" lang="en">Controlled verification</span><span class="copy-zh" lang="zh-Hans">受控测试</span></span></div><p class="evidence-date"><span class="bi-inline"><span class="copy-en" lang="en">Scope recorded October 11, 2026</span><span class="copy-zh" lang="zh-Hans">范围记录于 2026 年 10 月 11 日</span></span></p><h3><span class="bi-inline"><span class="copy-en" lang="en">Routing and failure boundaries</span><span class="copy-zh" lang="zh-Hans">路由与故障边界</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Controlled peers exercised multi-slot routing and faults. These tests are separate from live provider tests and do not prove a live second-account failover.</span><span class="copy-zh" lang="zh-Hans">可控测试端验证多槽位路由与故障处理。这与真实服务商测试分开，不代表已验证两个真实账号之间的线上切换。</span></span></p><a class="text-link" href="public-gateway.html#choose"><span class="bi-inline"><span class="copy-en" lang="en">Inspect routing examples</span><span class="copy-zh" lang="zh-Hans">查看路由示例</span></span></a></article><article class="evidence-card" id="devin-pilot"><div class="badge limited"><span class="bi-inline"><span class="copy-en" lang="en">Experimental pilot</span><span class="copy-zh" lang="zh-Hans">实验性试点</span></span></div><p class="evidence-date"><span class="bi-inline"><span class="copy-en" lang="en">October 18, 2026</span><span class="copy-zh" lang="zh-Hans">2026 年 10 月 18 日</span></span></p><h3><span class="bi-inline"><span class="copy-en" lang="en">Devin · owner-operated slot</span><span class="copy-zh" lang="zh-Hans">Devin · 持有者自有槽位</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">In this operator-enabled own-account pilot, local Claude Code connects through Fleet to native Devin CLI on your own slot. Selected context goes to that provider; tools run on your computer. Bring your own subscription.</span><span class="copy-zh" lang="zh-Hans">这是由运营人员启用的自有账号试点：本机原版 Claude Code 通过 Fleet 连接自有槽位上的原生 Devin CLI。选中的上下文会发给该服务商；工具在你的电脑上运行。请自备订阅。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">An owner’s public-endpoint test completed Read, Edit, Bash, three passing local tests and a streamed final answer. An independent audit verified served Claude Opus 5.5 Max. Token counting and full API parity are not established.</span><span class="copy-zh" lang="zh-Hans">一位持有者经公开接口完成 Read、Edit、Bash 调用，本机三项测试通过，并收到流式最终回答。独立审计确认实际使用 Claude Opus 5.5 Max。尚未证明 Token 计数与完整 API 语义一致。</span></span></p><a class="text-link" href="devin.html#connect"><span class="bi-inline"><span class="copy-en" lang="en">Explore the pilot and limits</span><span class="copy-zh" lang="zh-Hans">查看试点与限制</span></span></a> · <a class="text-link" href="devin.html#prices"><span class="bi-inline"><span class="copy-en" lang="en">Subscription and Fleet costs</span><span class="copy-zh" lang="zh-Hans">订阅与 Fleet 费用</span></span></a></article></div><div class="boundary"><p><span class="bi-inline"><span class="copy-en" lang="en"><strong>Known limits:</strong> Fleet’s outgoing Python TLS connection has not been proven equivalent to native Claude Code’s JA3 fingerprint. The native Devin pilot makes no fingerprint-equivalence claim. These results do not establish provider approval, full API parity or a blanket reliability guarantee.</span><span class="copy-zh" lang="zh-Hans"><strong>已知边界：</strong>Fleet 发起的 Python 上游 TLS 连接，尚未证明与原版 Claude Code 的 JA3 指纹等价。原生 Devin 试点也不宣称连接指纹相同。这些结果不构成服务商认可、完整 API 一致或全面可靠性的保证。</span></span></p></div></section><section class="section" id="routing"><div class="section-heading"><span class="section-index" aria-hidden="true">03</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Account control and trust boundaries</span><span class="copy-zh" lang="zh-Hans">账号控制与信任边界</span></span></h2></div><div class="two-up"><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">You choose the eligible accounts</span><span class="copy-zh" lang="zh-Hans">由你确定可选账号</span></span></h3><ul><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>A only:</strong> selecting A does not permit automatic use of B.</span><span class="copy-zh" lang="zh-Hans"><strong>只选 A：</strong>不会自动使用 B。</span></span></li><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>A before B:</strong> eligible fallback can try B after a known pre-send failure or a supported explicit upstream rejection.</span><span class="copy-zh" lang="zh-Hans"><strong>A 优先、B 备选：</strong>发送前已确认的故障，或受支持的明确上游拒绝，才可尝试 B。</span></span></li><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>Sticky mode:</strong> new conversations start in your priority order; later requests prefer the account that began a normal response. The bounded assignment can expire or reset.</span><span class="copy-zh" lang="zh-Hans"><strong>会话保持：</strong>新会话按你的优先级开始；后续请求优先使用开始正常回复的账号。有限的运行时记录可能到期或被重置。</span></span></li><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>Pin this launch:</strong> <code>ccfleet local --slot A</code> disables cross-account switching for that launch.</span><span class="copy-zh" lang="zh-Hans"><strong>固定本次启动：</strong><code>ccfleet local --slot A</code> 会关闭本次启动的跨账号切换。</span></span></li></ul></article><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">Content and credentials are different</span><span class="copy-zh" lang="zh-Hans">内容与凭证，分别看待</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">The laptop holds a separate, revocable Fleet connection key. The selected slot keeps its native Claude or Devin credential. Slot isolation does not hide model content from the gateway, slot or chosen provider.</span><span class="copy-zh" lang="zh-Hans">电脑保存独立且可撤销的 Fleet 连接密钥；所选槽位保留原生 Claude 或 Devin 凭证。槽位隔离不会向网关、槽位或所选服务商隐藏模型内容。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">HTTPS ends at the gateway, which can read requests and responses. Privileged machine administrators retain root access. Files remain local as files, but prompts, file contents and tool results can enter model context.</span><span class="copy-zh" lang="zh-Hans">HTTPS 在网关解密，因此网关可读取请求与回复。主机管理员仍拥有 root 权限。文件本身留在本地，但提示、文件内容与工具结果可能进入模型上下文。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">If sending is uncertain or public response headers have started, Fleet does not switch and replay the request. A dispatched native Devin request is not automatically replayed.</span><span class="copy-zh" lang="zh-Hans">发送结果不确定或已经返回公共响应头后，Fleet 不会换账号重放请求。已派发的原生 Devin 请求也不会自动重放。</span></span></p><a class="text-link" href="/privacy"><span class="bi-inline"><span class="copy-en" lang="en">Read the full privacy scope</span><span class="copy-zh" lang="zh-Hans">查看完整隐私范围</span></span></a></article></div></section><section class="section" id="parallel-agents">
-<div class="section-heading"><span class="section-index" aria-hidden="true">04</span><h2><span class="bi-inline"><span class="copy-en" lang="en">When many agents ask at once</span><span class="copy-zh" lang="zh-Hans">很多代理同时提问时</span></span></h2></div>
+
+/* Current platform diagrams: readable layouts for both wide and narrow screens. */
+.architecture-figure{margin:24px 0 28px;padding:18px;border:1px solid var(--line,#dce3ed);border-radius:18px;background:#f8fafc}
+.architecture-figure .arch-svg{display:block;width:100%;height:auto;max-width:100%}
+.architecture-figure .arch-mobile{display:none}
+.architecture-figure figcaption{margin-top:15px;font-size:14px;line-height:1.65;color:var(--muted,#59677c)}
+.design-lead{padding:20px 24px;background:#f0eeff;border-left:4px solid #5143ce;border-radius:0 14px 14px 0;margin:20px 0 28px}
+.architecture-details{margin:18px 0;padding:18px 22px;border:1px solid var(--line,#dce3ed);border-radius:12px;background:#fff}
+.architecture-details summary{cursor:pointer;font-weight:650;color:#182238}.architecture-details[open] summary{margin-bottom:16px}
+.architecture-details p{font-size:14px;line-height:1.75}.architecture-details ul{padding-left:22px}
+.design-links{display:flex;gap:10px 22px;flex-wrap:wrap;margin-top:18px}.design-links a{font-weight:650}
+.current-design-note{font-size:13px;color:var(--muted,#59677c)}
+@media(max-width:700px){.architecture-figure{padding:8px;border-radius:12px}.architecture-figure .arch-desktop{display:none}.architecture-figure .arch-mobile{display:block}.architecture-figure figcaption{padding:0 8px}.design-lead{padding:17px 18px}.architecture-details{padding:16px}}
+</style></head><body data-language="en"><div class="shell"><nav class="doc-nav" aria-label="Documentation" data-aria-label-en="Documentation" data-aria-label-zh="文档"><a href="index.html"><span class="bi-inline"><span class="copy-en" lang="en">Documentation</span><span class="copy-zh" lang="zh-Hans">文档</span></span></a><a href="/docs/how-it-works"><span class="bi-inline"><span class="copy-en" lang="en">How it works</span><span class="copy-zh" lang="zh-Hans">工作原理</span></span></a><a href="/docs/guide"><span class="bi-inline"><span class="copy-en" lang="en">User guide</span><span class="copy-zh" lang="zh-Hans">使用指南</span></span></a><div class="language-control" role="group" aria-label="Language" data-aria-label-en="Language" data-aria-label-zh="语言" data-language-links><a href="/en/docs/library/docs/platform-comparison.html" data-language-link="en" lang="en">English</a><a href="/zh/docs/library/docs/platform-comparison.html" data-language-link="zh" lang="zh-Hans">中文</a></div></nav><main><header class="hero"><p class="eyebrow"><span class="bi-inline"><span class="copy-en" lang="en">Inside CC Fleet</span><span class="copy-zh" lang="zh-Hans">深入了解 CC Fleet</span></span></p><h1><span class="bi-inline"><span class="copy-en" lang="en">Your request, every step explained.</span><span class="copy-zh" lang="zh-Hans">你的请求，每一步都有据可查。</span></span></h1><p class="lead"><span class="bi-inline"><span class="copy-en" lang="en">Your computer is the workbench, Fleet the receptionist, and native Devin the remote thinker. Explore private accounts, the separate trial, local tools and the checks between them.</span><span class="copy-zh" lang="zh-Hans">电脑是工作台，Fleet 是前台，原生 Devin 是远端思考者。用图解了解私人账号、独立试用、本地工具和各环节的检查。</span></span></p><div class="hero-actions"><a class="button primary" href="#devin-overview"><span class="bi-inline"><span class="copy-en" lang="en">Follow a request</span><span class="copy-zh" lang="zh-Hans">跟随一次请求</span></span></a><a class="button" href="#verification"><span class="bi-inline"><span class="copy-en" lang="en">Inspect the evidence</span><span class="copy-zh" lang="zh-Hans">查看验证依据</span></span></a></div></header><nav class="section-nav" aria-label="On this page" data-aria-label-en="On this page" data-aria-label-zh="本页内容"><a href="#devin-overview"><span class="bi-inline"><span class="copy-en" lang="en">Devin: two paths</span><span class="copy-zh" lang="zh-Hans">Devin 两种路线</span></span></a><a href="#private-devin"><span class="bi-inline"><span class="copy-en" lang="en">Private account</span><span class="copy-zh" lang="zh-Hans">私人账号</span></span></a><a href="#devin-tool-loop"><span class="bi-inline"><span class="copy-en" lang="en">Local tools</span><span class="copy-zh" lang="zh-Hans">本地工具</span></span></a><a href="#devin-trial-design"><span class="bi-inline"><span class="copy-en" lang="en">Trial design</span><span class="copy-zh" lang="zh-Hans">试用设计</span></span></a><a href="#devin-trial-clocks"><span class="bi-inline"><span class="copy-en" lang="en">Clocks & allowances</span><span class="copy-zh" lang="zh-Hans">时钟与额度</span></span></a><a href="#architecture"><span class="bi-inline"><span class="copy-en" lang="en">Architecture</span><span class="copy-zh" lang="zh-Hans">请求架构</span></span></a><a href="#verification"><span class="bi-inline"><span class="copy-en" lang="en">Verification</span><span class="copy-zh" lang="zh-Hans">验证范围</span></span></a><a href="#routing"><span class="bi-inline"><span class="copy-en" lang="en">Routing &amp; privacy</span><span class="copy-zh" lang="zh-Hans">路由与隐私</span></span></a><a href="#parallel-agents"><span class="bi-inline"><span class="copy-en" lang="en">Parallel agents</span><span class="copy-zh" lang="zh-Hans">并行代理</span></span></a><a href="#host-comparison"><span class="bi-inline"><span class="copy-en" lang="en">Design comparison</span><span class="copy-zh" lang="zh-Hans">设计对比</span></span></a><a href="#sources"><span class="bi-inline"><span class="copy-en" lang="en">Technical references</span><span class="copy-zh" lang="zh-Hans">技术资料</span></span></a></nav><section class="section" id="devin-overview"><div class="section-heading"><span class="section-index" aria-hidden="true">01</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Two Devin doors, one local workbench</span><span class="copy-zh" lang="zh-Hans">两种 Devin 入口，同一个本地工作台</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">Your computer is the workbench. Fleet is the receptionist. Native Devin is the remote thinker. The two doors below use different accounts and different admission rules.</span><span class="copy-zh" lang="zh-Hans">电脑是工作台，Fleet 是接待前台，原生 Devin 是远端负责思考的智能体。下方两个入口使用不同的账号与准入规则。</span></span></p><p class="design-lead"><span class="bi-inline"><span class="copy-en" lang="en"><strong>Three names, three jobs:</strong> Claude Code is the local app and tool runner; native Devin is the remote agent; Opus 5.5/max is the reviewed model setting used by these pilot profiles. The app, agent harness and underlying model are separate layers.</span><span class="copy-zh" lang="zh-Hans"><strong>三个名称，三种工作：</strong>Claude Code 是本地应用与工具执行端，原生 Devin 是远端智能体，Opus 5.5／max 是这些试点配置经审核的模型设置。应用、智能体框架和底层模型是不同层。</span></span></p><figure class="architecture-figure" aria-labelledby="devin-overview-caption"><div class="bi"><div class="copy-en" lang="en"><svg id="devin-overview-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1070 485" role="img" aria-label="One workbench, two Devin entrances" aria-describedby="devin-overview-en-desktop-desc" class="arch-svg arch-desktop" style="font-family:system-ui,-apple-system,sans-serif"><desc id="devin-overview-en-desktop-desc">Local Claude Code reaches an own-account private slot or a separate Fleet trial worker through Fleet. Both use native Devin; local tools stay on the computer.</desc><defs><marker id="devin-overview-en-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="1070" height="485" rx="20" fill="#f3f5f9"/><rect x="20" y="145" width="195" height="130" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="117.5" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Your computer</text><text x="117.5" y="205" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Claude Code</text><text x="117.5" y="228" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Local files + tools</text><rect x="260" y="145" width="205" height="130" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="362.5" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Fleet front desk</text><text x="362.5" y="205" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Checks Fleet key</text><text x="362.5" y="228" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Two distinct entrances</text><rect x="520" y="35" width="245" height="155" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="642.5" y="66" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Private Devin</text><text x="642.5" y="95" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Your own slot</text><text x="642.5" y="118" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Your Devin sign-in</text><text x="642.5" y="141" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Native CLI + translator</text><rect x="520" y="245" width="245" height="155" rx="16" fill="white" stroke="#0f766e" stroke-width="2"/><text x="642.5" y="276" text-anchor="middle" font-size="17" font-weight="700" fill="#0f766e">Daily trial</text><text x="642.5" y="305" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Dedicated trial worker</text><text x="642.5" y="328" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Fleet-managed account</text><text x="642.5" y="351" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Fresh temporary HOME</text><rect x="825" y="145" width="225" height="130" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="937.5" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Devin service</text><text x="937.5" y="205" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Receives model context</text><text x="937.5" y="228" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Answer or tool request</text><path d="M215 210H253" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-en-desktop-arrow)"/><path d="M465 185H490V112H513" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-en-desktop-arrow)"/><path d="M465 235H490V322H513" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-en-desktop-arrow)"/><path d="M765 112H795V185H818" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-en-desktop-arrow)"/><path d="M765 322H795V235H818" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-en-desktop-arrow)"/><text x="535" y="448" text-anchor="middle" font-size="18" font-weight="400" fill="#182238">Credentials stay on the worker; included content travels to the model.</text></svg><svg id="devin-overview-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 750" role="img" aria-label="One workbench, two Devin entrances" aria-describedby="devin-overview-en-mobile-desc" class="arch-svg arch-mobile" style="font-family:system-ui,-apple-system,sans-serif"><desc id="devin-overview-en-mobile-desc">Local Claude Code reaches an own-account private slot or a separate Fleet trial worker through Fleet. Both use native Devin; local tools stay on the computer.</desc><defs><marker id="devin-overview-en-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="340" height="750" rx="20" fill="#f3f5f9"/><rect x="18" y="15" width="304" height="100" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="46" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Your computer</text><text x="170.0" y="75" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Claude Code</text><text x="170.0" y="98" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Files + tools stay local</text><path d="M170 115V145" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-en-mobile-arrow)"/><rect x="18" y="152" width="304" height="100" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="183" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Fleet front desk</text><text x="170.0" y="212" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Checks key + entrance</text><path d="M140 252V282H88V310" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-en-mobile-arrow)"/><path d="M200 252V282H252V310" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-en-mobile-arrow)"/><rect x="12" y="318" width="150" height="158" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="87.0" y="349" text-anchor="middle" font-size="16" font-weight="700" fill="#5143ce">Private Devin</text><text x="87.0" y="378" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Your own slot</text><text x="87.0" y="400" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Your Devin login</text><text x="87.0" y="422" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">CLI + translator</text><rect x="178" y="318" width="150" height="158" rx="16" fill="white" stroke="#0f766e" stroke-width="2"/><text x="253.0" y="349" text-anchor="middle" font-size="16" font-weight="700" fill="#0f766e">Daily trial</text><text x="253.0" y="378" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Trial worker</text><text x="253.0" y="400" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Fleet account</text><text x="253.0" y="422" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Fresh turn HOME</text><path d="M88 476V510H140V540" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-en-mobile-arrow)"/><path d="M252 476V510H200V540" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-en-mobile-arrow)"/><rect x="18" y="548" width="304" height="113" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="579" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Devin service</text><text x="170.0" y="608" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Processes included context</text><text x="170.0" y="631" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Answer or tool request</text><text x="170" y="697" text-anchor="middle" font-size="14" font-weight="400" fill="#182238">Credentials stay on the worker</text><text x="170" y="719" text-anchor="middle" font-size="14" font-weight="400" fill="#182238">Included content reaches the model</text></svg></div><div class="copy-zh" lang="zh-Hans"><svg id="devin-overview-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1070 485" role="img" aria-label="同一个工作台，两种 Devin 入口" aria-describedby="devin-overview-zh-desktop-desc" class="arch-svg arch-desktop" style="font-family:system-ui,-apple-system,sans-serif"><desc id="devin-overview-zh-desktop-desc">本机 Claude Code 经 Fleet 连接自有账号的私人槽位，或独立的 Fleet 试用工作进程。两条路径都使用原生 Devin；本机工具仍在电脑执行。</desc><defs><marker id="devin-overview-zh-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="1070" height="485" rx="20" fill="#f3f5f9"/><rect x="20" y="145" width="195" height="130" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="117.5" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">你的电脑</text><text x="117.5" y="205" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Claude Code</text><text x="117.5" y="228" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">本地文件与工具</text><rect x="260" y="145" width="205" height="130" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="362.5" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Fleet 前台</text><text x="362.5" y="205" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">检查连接密钥</text><text x="362.5" y="228" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">区分两种入口</text><rect x="520" y="35" width="245" height="155" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="642.5" y="66" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">私人 Devin</text><text x="642.5" y="95" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">你自己的槽位</text><text x="642.5" y="118" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">你自己的 Devin 登录</text><text x="642.5" y="141" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">原生 CLI + 翻译适配器</text><rect x="520" y="245" width="245" height="155" rx="16" fill="white" stroke="#0f766e" stroke-width="2"/><text x="642.5" y="276" text-anchor="middle" font-size="17" font-weight="700" fill="#0f766e">每日试用</text><text x="642.5" y="305" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">专用试用工作进程</text><text x="642.5" y="328" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Fleet 管理的账号</text><text x="642.5" y="351" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">每轮全新临时 HOME</text><rect x="825" y="145" width="225" height="130" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="937.5" y="176" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Devin 服务</text><text x="937.5" y="205" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">收到选入的上下文</text><text x="937.5" y="228" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">返回答案或工具请求</text><path d="M215 210H253" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-zh-desktop-arrow)"/><path d="M465 185H490V112H513" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-zh-desktop-arrow)"/><path d="M465 235H490V322H513" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-zh-desktop-arrow)"/><path d="M765 112H795V185H818" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-zh-desktop-arrow)"/><path d="M765 322H795V235H818" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-zh-desktop-arrow)"/><text x="535" y="448" text-anchor="middle" font-size="18" font-weight="400" fill="#182238">凭证留在对应工作机器；选入的内容会发送给模型。</text></svg><svg id="devin-overview-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 750" role="img" aria-label="同一个工作台，两种 Devin 入口" aria-describedby="devin-overview-zh-mobile-desc" class="arch-svg arch-mobile" style="font-family:system-ui,-apple-system,sans-serif"><desc id="devin-overview-zh-mobile-desc">本机 Claude Code 经 Fleet 连接自有账号的私人槽位，或独立的 Fleet 试用工作进程。两条路径都使用原生 Devin；本机工具仍在电脑执行。</desc><defs><marker id="devin-overview-zh-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="340" height="750" rx="20" fill="#f3f5f9"/><rect x="18" y="15" width="304" height="100" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="46" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">你的电脑</text><text x="170.0" y="75" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">Claude Code</text><text x="170.0" y="98" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">文件与工具留在本机</text><path d="M170 115V145" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-zh-mobile-arrow)"/><rect x="18" y="152" width="304" height="100" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="183" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Fleet 前台</text><text x="170.0" y="212" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">检查密钥，区分入口</text><path d="M140 252V282H88V310" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-zh-mobile-arrow)"/><path d="M200 252V282H252V310" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-zh-mobile-arrow)"/><rect x="12" y="318" width="150" height="158" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="87.0" y="349" text-anchor="middle" font-size="16" font-weight="700" fill="#5143ce">私人 Devin</text><text x="87.0" y="378" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">自己的槽位</text><text x="87.0" y="400" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">自己的 Devin 登录</text><text x="87.0" y="422" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">原生 CLI + 适配器</text><rect x="178" y="318" width="150" height="158" rx="16" fill="white" stroke="#0f766e" stroke-width="2"/><text x="253.0" y="349" text-anchor="middle" font-size="16" font-weight="700" fill="#0f766e">每日试用</text><text x="253.0" y="378" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">专用试用机器</text><text x="253.0" y="400" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Fleet 管理账号</text><text x="253.0" y="422" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">每轮临时 HOME</text><path d="M88 476V510H140V540" fill="none" stroke="#5143ce" stroke-width="2.5" marker-end="url(#devin-overview-zh-mobile-arrow)"/><path d="M252 476V510H200V540" fill="none" stroke="#0f766e" stroke-width="2.5" marker-end="url(#devin-overview-zh-mobile-arrow)"/><rect x="18" y="548" width="304" height="113" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="579" text-anchor="middle" font-size="17" font-weight="700" fill="#5143ce">Devin 服务</text><text x="170.0" y="608" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">处理选入的上下文</text><text x="170.0" y="631" text-anchor="middle" font-size="15" font-weight="400" fill="#59677c">返回答案或工具请求</text><text x="170" y="697" text-anchor="middle" font-size="14" font-weight="400" fill="#182238">凭证留在工作机器</text><text x="170" y="719" text-anchor="middle" font-size="14" font-weight="400" fill="#182238">选入的内容会发给模型</text></svg></div></div><figcaption id="devin-overview-caption"><span class="bi-inline"><span class="copy-en" lang="en">Two separate entrances reach native Devin. Included model context travels through Fleet; local files and tool execution stay on your computer.</span><span class="copy-zh" lang="zh-Hans">两个独立入口连接原生 Devin。选入的模型上下文经由 Fleet 传递；文件本身与工具执行仍在你的电脑上。</span></span></figcaption></figure><div class="two-up"><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">Private account: your locked room</span><span class="copy-zh" lang="zh-Hans">私人账号：你自己的房间</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">You hold a private Fleet slot and sign in to Devin on that slot. Your Fleet connection key can select only your verified own slot. The native Devin credential remains there; the local client receives a separate Fleet key.</span><span class="copy-zh" lang="zh-Hans">你持有私人 Fleet 槽位，并在该槽位登录自己的 Devin。Fleet 连接密钥只能选择已验证的自有槽位；原生 Devin 凭证留在槽位，本地客户端使用另一个独立的 Fleet 密钥。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">The own-account route is operator enabled. A fresh identity/runtime check is required before the account page offers it; Anthropic remains the default provider.</span><span class="copy-zh" lang="zh-Hans">自有账号路线由运营方启用。账号页面提供该选项前，需要新鲜的身份及运行环境验证；默认提供商仍为 Anthropic。</span></span></p></article><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">Trial pilot: a separate demo room</span><span class="copy-zh" lang="zh-Hans">试用：独立的体验房间</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Sign in to Fleet with a verified Google account and obtain a trial key. No private slot purchase or personal Devin login is required. A dedicated Fleet-managed worker uses the operator’s trial account; it never borrows a customer’s private slot.</span><span class="copy-zh" lang="zh-Hans">通过已验证的 Google 账号登录 Fleet，取得试用密钥，无需购买私人槽位或登录个人 Devin。专用的 Fleet 试用工作进程使用运营方的试用账号，不借用客户私人槽位。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">Trial access has separate keys, a separate allowance ledger and one executing turn globally. The key gives trial access, not access to private customer slots or the provider credential.</span><span class="copy-zh" lang="zh-Hans">试用拥有独立的密钥、额度账本，并且全局同时只执行一轮。试用密钥只提供试用权限，不授予客户私人槽位或服务商凭证的访问权限。</span></span></p></article></div><p class="current-design-note"><span class="bi-inline"><span class="copy-en" lang="en">These are technical pilot routes. The operator-managed free trial is separate from private own-account service and is not evidence of a commercial subscription-resale agreement.</span><span class="copy-zh" lang="zh-Hans">这是技术试点路线。运营方管理的免费试用与私人自有账号服务分开，也不代表取得了商业订阅转售协议。</span></span></p></section><section class="section" id="private-devin"><div class="section-heading"><span class="section-index" aria-hidden="true">02</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Inside the private Devin route</span><span class="copy-zh" lang="zh-Hans">私人 Devin 路线内部怎样工作</span></span></h2></div><figure class="architecture-figure" aria-labelledby="devin-private-caption"><div class="bi"><div class="copy-en" lang="en"><svg class="arch-svg arch-desktop" id="devin-private-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 740" role="img" aria-label="Your account, your private slot" aria-describedby="devin-private-en-desktop-desc">
+
+<desc id="devin-private-en-desktop-desc">Private Devin route: local Claude Code sends visible context and tool descriptions to Fleet. The gateway checks the key, current owner and claim, and fresh account/runtime evidence, then uses restricted SSH to the private slot. A fixed relay and adapter drive the official Devin CLI over ACP. Credentials remain on the slot. Included context reaches Devin. Answers or tool requests are released after confirmed cleanup; SSE is emitted after generation.</desc>
+<defs><marker id="devin-private-en-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-private-en-desktop-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-private-en-desktop-svg .muted{fill:#59677c}#devin-private-en-desktop-svg .violet{fill:#5143ce}#devin-private-en-desktop-svg .teal{fill:#0f766e}#devin-private-en-desktop-svg .amber{fill:#a65d0a}#devin-private-en-desktop-svg .bold{font-weight:650}</style>
+<rect width="1060" height="740" rx="20" fill="#f3f5f9"/>
+<text x="28" y="45" font-size="28" class="bold">
+<tspan x="28" dy="0">Your account, your private slot</tspan>
+</text>
+<text x="28" y="78" font-size="18" class="muted">
+<tspan x="28" dy="0">Claude Code keeps the tools. Fleet checks the route. Official Devin generates the next step.</tspan>
+</text>
+<rect x="28" y="118" width="280" height="330" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="348" y="118" width="310" height="330" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="698" y="118" width="334" height="330" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="48" y="151" font-size="17" class="teal bold">
+<tspan x="48" dy="0">1 · YOUR COMPUTER</tspan>
+</text>
+<text x="48" y="188" font-size="23" class="bold">
+<tspan x="48" dy="0">Claude Code</tspan>
+</text>
+<text x="48" y="225" font-size="17">
+<tspan x="48" dy="0">Your project and local tools</tspan>
+<tspan x="48" dy="31">Tool approvals stay here</tspan>
+<tspan x="48" dy="31">Original history stays local</tspan>
+</text>
+<rect x="46" y="332" width="244" height="94" rx="11" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="60" y="361" font-size="17" class="violet">
+<tspan x="60" dy="0">Sends: visible context</tspan>
+<tspan x="60" dy="27">+ declared tool descriptions</tspan>
+</text>
+<text x="368" y="151" font-size="17" class="violet bold">
+<tspan x="368" dy="0">2 · FLEET GATEWAY</tspan>
+</text>
+<text x="368" y="188" font-size="23" class="bold">
+<tspan x="368" dy="0">Check the ticket</tspan>
+</text>
+<text x="368" y="225" font-size="17">
+<tspan x="368" dy="0">API key + current owner</tspan>
+<tspan x="368" dy="31">Slot claim + fresh account proof</tspan>
+<tspan x="368" dy="31">Exact approved runtime</tspan>
+<tspan x="368" dy="31">Paid access + bounded admission</tspan>
+</text>
+<rect x="366" y="374" width="274" height="52" rx="11" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="380" y="406" font-size="17" class="violet">
+<tspan x="380" dy="0">Restricted SSH · one slot</tspan>
+</text>
+<text x="718" y="151" font-size="17" class="teal bold">
+<tspan x="718" dy="0">3 · YOUR PRIVATE SLOT</tspan>
+</text>
+<text x="718" y="188" font-size="23" class="bold">
+<tspan x="718" dy="0">Fixed relay + adapter</tspan>
+</text>
+<text x="718" y="225" font-size="17">
+<tspan x="718" dy="0">Rechecks policy, binding and files</tspan>
+<tspan x="718" dy="31">Labels and translates the context</tspan>
+<tspan x="718" dy="31">Drives official Devin CLI via ACP v1</tspan>
+</text>
+<rect x="716" y="332" width="298" height="94" rx="11" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="730" y="361" font-size="17" class="teal">
+<tspan x="730" dy="0">Native login stays on the slot</tspan>
+<tspan x="730" dy="27">Fresh process/session each step</tspan>
+</text>
+<line x1="310" y1="278" x2="339" y2="278" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-desktop-arrow)"/>
+<line x1="660" y1="278" x2="689" y2="278" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-desktop-arrow)"/>
+<line x1="865" y1="450" x2="865" y2="493" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-desktop-arrow)"/>
+<rect x="698" y="505" width="334" height="112" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="718" y="542" font-size="22" class="bold">
+<tspan x="718" dy="0">Devin provider service</tspan>
+</text>
+<text x="718" y="574" font-size="17" class="muted">
+<tspan x="718" dy="0">Receives included request context</tspan>
+<tspan x="718" dy="26">Official CLI connects over HTTPS</tspan>
+</text>
+<rect x="28" y="505" width="630" height="112" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="48" y="542" font-size="21" class="bold">
+<tspan x="48" dy="0">Return path: check and clean up before delivery</tspan>
+</text>
+<text x="48" y="576" font-size="17" class="muted">
+<tspan x="48" dy="0">Answer or tool request → Messages response; SSE follows generation.</tspan>
+<tspan x="48" dy="26">This is buffered delivery, not live token-by-token output.</tspan>
+</text>
+<rect x="28" y="647" width="1004" height="65" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="48" y="674" font-size="16" class="muted">
+<tspan x="48" dy="0">Approvals and execution stay on your computer; included history and tool results travel to Fleet and Devin.</tspan>
+<tspan x="48" dy="24">Native-agent compatibility does not promise raw Messages role, reasoning or feature parity.</tspan>
+</text>
+</svg><svg class="arch-svg arch-mobile" id="devin-private-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 1285" role="img" aria-label="Your own Devin account" aria-describedby="devin-private-en-mobile-desc">
+
+<desc id="devin-private-en-mobile-desc">Local Claude Code reaches official Devin on the private slot through Fleet checks and restricted SSH. Credentials stay on the slot; execution and approval stay on the computer. Results are buffered and delivered after cleanup.</desc>
+<defs><marker id="devin-private-en-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-private-en-mobile-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-private-en-mobile-svg .muted{fill:#59677c}#devin-private-en-mobile-svg .violet{fill:#5143ce}#devin-private-en-mobile-svg .teal{fill:#0f766e}#devin-private-en-mobile-svg .amber{fill:#a65d0a}#devin-private-en-mobile-svg .bold{font-weight:650}</style>
+<rect width="340" height="1285" rx="20" fill="#f3f5f9"/>
+<text x="16" y="39" font-size="22" class="bold">
+<tspan x="16" dy="0">Your own Devin account</tspan>
+</text>
+<text x="16" y="68" font-size="14.5" class="muted">
+<tspan x="16" dy="0">A private slot carries the native login.</tspan>
+</text>
+<rect x="16" y="100" width="308" height="184" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="129" font-size="14" class="teal bold">
+<tspan x="32" dy="0">1 · YOUR COMPUTER</tspan>
+</text>
+<text x="32" y="162" font-size="21" class="bold">
+<tspan x="32" dy="0">Claude Code</tspan>
+</text>
+<text x="32" y="190" font-size="14">
+<tspan x="32" dy="0">Project, tools and approvals stay here.</tspan>
+<tspan x="32" dy="27">Original history stays local.</tspan>
+<tspan x="32" dy="27">Sends context and tool descriptions.</tspan>
+</text>
+<line x1="170" y1="288" x2="170" y2="313" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-mobile-arrow)"/>
+<rect x="16" y="324" width="308" height="223" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="353" font-size="14" class="violet bold">
+<tspan x="32" dy="0">2 · FLEET GATEWAY</tspan>
+</text>
+<text x="32" y="385" font-size="21" class="bold">
+<tspan x="32" dy="0">Check the ticket</tspan>
+</text>
+<text x="32" y="414" font-size="14">
+<tspan x="32" dy="0">API key + current owner</tspan>
+<tspan x="32" dy="26">Slot claim + fresh account proof</tspan>
+<tspan x="32" dy="26">Exact approved runtime</tspan>
+<tspan x="32" dy="26">Paid access + bounded admission</tspan>
+<tspan x="32" dy="26">Restricted SSH · one selected slot</tspan>
+</text>
+<line x1="170" y1="551" x2="170" y2="576" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-mobile-arrow)"/>
+<rect x="16" y="587" width="308" height="270" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="616" font-size="14" class="teal bold">
+<tspan x="32" dy="0">3 · YOUR PRIVATE SLOT</tspan>
+</text>
+<text x="32" y="648" font-size="21" class="bold">
+<tspan x="32" dy="0">Fixed relay + adapter</tspan>
+</text>
+<text x="32" y="680" font-size="14">
+<tspan x="32" dy="0">Rechecks policy, binding and files.</tspan>
+<tspan x="32" dy="27">Labels and translates the context.</tspan>
+<tspan x="32" dy="27">Official Devin CLI via ACP v1.</tspan>
+</text>
+<rect x="30" y="762" width="280" height="75" rx="10" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="42" y="791" font-size="14" class="teal">
+<tspan x="42" dy="0">Native credentials stay on the slot.</tspan>
+<tspan x="42" dy="25">New process/session each step.</tspan>
+</text>
+<line x1="170" y1="861" x2="170" y2="886" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-mobile-arrow)"/>
+<rect x="16" y="897" width="308" height="102" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="930" font-size="21" class="bold">
+<tspan x="32" dy="0">Devin provider service</tspan>
+</text>
+<text x="32" y="956" font-size="14" class="muted">
+<tspan x="32" dy="0">Receives included request context.</tspan>
+<tspan x="32" dy="24">Official CLI connects over HTTPS.</tspan>
+</text>
+<line x1="170" y1="1003" x2="170" y2="1028" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-en-mobile-arrow)"/>
+<rect x="16" y="1039" width="308" height="145" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="1071" font-size="18.5" class="bold">
+<tspan x="32" dy="0">Return after cleanup</tspan>
+</text>
+<text x="32" y="1100" font-size="14" class="muted">
+<tspan x="32" dy="0">Release the answer or tool request</tspan>
+<tspan x="32" dy="23">only after confirmed cleanup.</tspan>
+<tspan x="32" dy="23">Messages SSE follows generation.</tspan>
+<tspan x="32" dy="23">Buffered, not live token streaming.</tspan>
+</text>
+<text x="18" y="1214" font-size="14" class="muted">
+<tspan x="18" dy="0">Included history goes to Fleet and Devin.</tspan>
+<tspan x="18" dy="23">Raw role, reasoning and feature parity</tspan>
+<tspan x="18" dy="23">are not promised by this bridge.</tspan>
+</text>
+</svg></div><div class="copy-zh" lang="zh-Hans"><svg class="arch-svg arch-desktop" id="devin-private-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 740" role="img" aria-label="你自己的账号，自己的私人槽位" aria-describedby="devin-private-zh-desktop-desc">
+
+<desc id="devin-private-zh-desktop-desc">私人 Devin 连接：本地 Claude Code 把可见上下文和工具说明发给 Fleet。网关核对密钥、当前归属、槽位租用和新鲜的账号与运行版本证明，通过受限 SSH 到私人槽位。固定中继和适配器通过 ACP 调用官方 Devin CLI；凭据留在槽位。请求上下文会发往 Devin 服务；确认清理后才交付答案或工具请求，SSE 在生成结束后发送。</desc>
+<defs><marker id="devin-private-zh-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-private-zh-desktop-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-private-zh-desktop-svg .muted{fill:#59677c}#devin-private-zh-desktop-svg .violet{fill:#5143ce}#devin-private-zh-desktop-svg .teal{fill:#0f766e}#devin-private-zh-desktop-svg .amber{fill:#a65d0a}#devin-private-zh-desktop-svg .bold{font-weight:650}</style>
+<rect width="1060" height="740" rx="20" fill="#f3f5f9"/>
+<text x="28" y="45" font-size="28" class="bold">
+<tspan x="28" dy="0">你自己的账号，自己的私人槽位</tspan>
+</text>
+<text x="28" y="78" font-size="18" class="muted">
+<tspan x="28" dy="0">Claude Code 管本地工具；Fleet 检查连接；官方 Devin CLI 生成下一步。</tspan>
+</text>
+<rect x="28" y="118" width="280" height="330" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="348" y="118" width="310" height="330" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="698" y="118" width="334" height="330" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="48" y="151" font-size="17" class="teal bold">
+<tspan x="48" dy="0">1 · 你的电脑</tspan>
+</text>
+<text x="48" y="188" font-size="23" class="bold">
+<tspan x="48" dy="0">Claude Code</tspan>
+</text>
+<text x="48" y="225" font-size="17">
+<tspan x="48" dy="0">项目和本地工具在这里</tspan>
+<tspan x="48" dy="31">工具批准也在这里</tspan>
+<tspan x="48" dy="31">原始对话历史保存在本地</tspan>
+</text>
+<rect x="46" y="332" width="244" height="94" rx="11" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="60" y="361" font-size="17" class="violet">
+<tspan x="60" dy="0">发出：可见上下文</tspan>
+<tspan x="60" dy="27">+ 已声明的工具说明</tspan>
+</text>
+<text x="368" y="151" font-size="17" class="violet bold">
+<tspan x="368" dy="0">2 · FLEET 网关</tspan>
+</text>
+<text x="368" y="188" font-size="23" class="bold">
+<tspan x="368" dy="0">检查通行证</tspan>
+</text>
+<text x="368" y="225" font-size="17">
+<tspan x="368" dy="0">API 密钥 + 当前用户</tspan>
+<tspan x="368" dy="31">槽位租用 + 新鲜账号证明</tspan>
+<tspan x="368" dy="31">完全匹配的已批准运行版本</tspan>
+<tspan x="368" dy="31">访问权限 + 有界请求接纳</tspan>
+</text>
+<rect x="366" y="374" width="274" height="52" rx="11" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="380" y="406" font-size="17" class="violet">
+<tspan x="380" dy="0">受限 SSH · 只选一个槽位</tspan>
+</text>
+<text x="718" y="151" font-size="17" class="teal bold">
+<tspan x="718" dy="0">3 · 你的私人槽位</tspan>
+</text>
+<text x="718" y="188" font-size="23" class="bold">
+<tspan x="718" dy="0">固定中继与适配器</tspan>
+</text>
+<text x="718" y="225" font-size="17">
+<tspan x="718" dy="0">再核对策略、账号绑定和文件版本</tspan>
+<tspan x="718" dy="31">翻译为标明来源的上下文</tspan>
+<tspan x="718" dy="31">通过 ACP v1 调用官方 Devin CLI</tspan>
+</text>
+<rect x="716" y="332" width="298" height="94" rx="11" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="730" y="361" font-size="17" class="teal">
+<tspan x="730" dy="0">账号凭据留在槽位</tspan>
+<tspan x="730" dy="27">每一步启动新的原生进程与会话</tspan>
+</text>
+<line x1="310" y1="278" x2="339" y2="278" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-desktop-arrow)"/>
+<line x1="660" y1="278" x2="689" y2="278" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-desktop-arrow)"/>
+<line x1="865" y1="450" x2="865" y2="493" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-desktop-arrow)"/>
+<rect x="698" y="505" width="334" height="112" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="718" y="542" font-size="22" class="bold">
+<tspan x="718" dy="0">Devin 服务</tspan>
+</text>
+<text x="718" y="574" font-size="17" class="muted">
+<tspan x="718" dy="0">接收本次请求包含的上下文</tspan>
+<tspan x="718" dy="26">由官方 CLI 通过 HTTPS 连接</tspan>
+</text>
+<rect x="28" y="505" width="630" height="112" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="48" y="542" font-size="21" class="bold">
+<tspan x="48" dy="0">回程：先检查和清理，再交付</tspan>
+</text>
+<text x="48" y="576" font-size="17" class="muted">
+<tspan x="48" dy="0">答案或工具请求 → Messages 响应；如需 SSE，在生成后发送。</tspan>
+<tspan x="48" dy="26">这不是实时逐 token 输出。</tspan>
+</text>
+<rect x="28" y="647" width="1004" height="65" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="48" y="674" font-size="16" class="muted">
+<tspan x="48" dy="0">本地批准与执行留在电脑；请求包含的对话和工具结果会经过 Fleet 并发往 Devin。</tspan>
+<tspan x="48" dy="24">原生智能体兼容模式：不保证原始 Messages 角色、推理或功能语义完全一致。</tspan>
+</text>
+</svg><svg class="arch-svg arch-mobile" id="devin-private-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 1285" role="img" aria-label="使用你自己的 Devin 账号" aria-describedby="devin-private-zh-mobile-desc">
+
+<desc id="devin-private-zh-mobile-desc">从本地 Claude Code，经 Fleet 网关核验和受限 SSH，到私人槽位上的官方 Devin。凭据留在槽位；本地执行和批准留在电脑；确认清理后才缓冲交付答案。</desc>
+<defs><marker id="devin-private-zh-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-private-zh-mobile-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-private-zh-mobile-svg .muted{fill:#59677c}#devin-private-zh-mobile-svg .violet{fill:#5143ce}#devin-private-zh-mobile-svg .teal{fill:#0f766e}#devin-private-zh-mobile-svg .amber{fill:#a65d0a}#devin-private-zh-mobile-svg .bold{font-weight:650}</style>
+<rect width="340" height="1285" rx="20" fill="#f3f5f9"/>
+<text x="16" y="39" font-size="22" class="bold">
+<tspan x="16" dy="0">使用你自己的 Devin 账号</tspan>
+</text>
+<text x="16" y="68" font-size="14.5" class="muted">
+<tspan x="16" dy="0">私人槽位保管官方原生登录。</tspan>
+</text>
+<rect x="16" y="100" width="308" height="184" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="129" font-size="14" class="teal bold">
+<tspan x="32" dy="0">1 · 你的电脑</tspan>
+</text>
+<text x="32" y="162" font-size="21" class="bold">
+<tspan x="32" dy="0">Claude Code</tspan>
+</text>
+<text x="32" y="190" font-size="14">
+<tspan x="32" dy="0">项目、工具和批准留在电脑。</tspan>
+<tspan x="32" dy="27">原始对话历史保存在本地。</tspan>
+<tspan x="32" dy="27">发出可见上下文与工具说明。</tspan>
+</text>
+<line x1="170" y1="288" x2="170" y2="313" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-mobile-arrow)"/>
+<rect x="16" y="324" width="308" height="223" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="353" font-size="14" class="violet bold">
+<tspan x="32" dy="0">2 · FLEET 网关</tspan>
+</text>
+<text x="32" y="385" font-size="21" class="bold">
+<tspan x="32" dy="0">检查通行证</tspan>
+</text>
+<text x="32" y="414" font-size="14">
+<tspan x="32" dy="0">API 密钥 + 当前用户</tspan>
+<tspan x="32" dy="26">槽位租用 + 新鲜账号证明</tspan>
+<tspan x="32" dy="26">完全匹配的已批准运行版本</tspan>
+<tspan x="32" dy="26">访问权限 + 有界请求接纳</tspan>
+<tspan x="32" dy="26">受限 SSH · 只选一个槽位</tspan>
+</text>
+<line x1="170" y1="551" x2="170" y2="576" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-mobile-arrow)"/>
+<rect x="16" y="587" width="308" height="270" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="616" font-size="14" class="teal bold">
+<tspan x="32" dy="0">3 · 你的私人槽位</tspan>
+</text>
+<text x="32" y="648" font-size="21" class="bold">
+<tspan x="32" dy="0">固定中继与适配器</tspan>
+</text>
+<text x="32" y="680" font-size="14">
+<tspan x="32" dy="0">再核对策略、账号绑定和文件版本。</tspan>
+<tspan x="32" dy="27">翻译为标明来源的上下文。</tspan>
+<tspan x="32" dy="27">通过 ACP v1 调用官方 Devin CLI。</tspan>
+</text>
+<rect x="30" y="762" width="280" height="75" rx="10" fill="#f3f5f9" stroke="#f3f5f9" stroke-width="1.5"/>
+<text x="42" y="791" font-size="14" class="teal">
+<tspan x="42" dy="0">账号凭据留在槽位。</tspan>
+<tspan x="42" dy="25">每一步启动新的原生进程与会话。</tspan>
+</text>
+<line x1="170" y1="861" x2="170" y2="886" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-mobile-arrow)"/>
+<rect x="16" y="897" width="308" height="102" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="930" font-size="21" class="bold">
+<tspan x="32" dy="0">Devin 服务</tspan>
+</text>
+<text x="32" y="956" font-size="14" class="muted">
+<tspan x="32" dy="0">接收本次请求包含的上下文。</tspan>
+<tspan x="32" dy="24">由官方 CLI 通过 HTTPS 连接。</tspan>
+</text>
+<line x1="170" y1="1003" x2="170" y2="1028" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-private-zh-mobile-arrow)"/>
+<rect x="16" y="1039" width="308" height="145" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="1071" font-size="18.5" class="bold">
+<tspan x="32" dy="0">回程：先清理，再交付</tspan>
+</text>
+<text x="32" y="1100" font-size="14" class="muted">
+<tspan x="32" dy="0">确认清理后，才交付答案或工具请求。</tspan>
+<tspan x="32" dy="23">转换为 Messages；如需 SSE，</tspan>
+<tspan x="32" dy="23">也在生成结束后发送。</tspan>
+<tspan x="32" dy="23">这不是实时逐 token 输出。</tspan>
+</text>
+<text x="18" y="1214" font-size="14" class="muted">
+<tspan x="18" dy="0">请求包含的历史会发往 Fleet 和 Devin。</tspan>
+<tspan x="18" dy="23">兼容模式不保证原始角色、推理</tspan>
+<tspan x="18" dy="23">或功能语义完全一致。</tspan>
+</text>
+</svg></div></div><figcaption id="devin-private-caption"><span class="bi-inline"><span class="copy-en" lang="en">The gateway checks the ticket; restricted SSH reaches the private slot; a translator controls the official native Devin process through ACP.</span><span class="copy-zh" lang="zh-Hans">网关检查通行证，经受限 SSH 到达私人槽位；适配器通过 ACP 控制官方原生 Devin 进程。</span></span></figcaption></figure><div class="two-up"><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">The passport check</span><span class="copy-zh" lang="zh-Hans">身份与权限检查</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">“Logged in” and “ready for this request” are separate checks. Fleet verifies the current slot owner and rental claim, the provider-account identity, the approved native CLI/adapter/model mapping, and a fresh readiness observation. Changed or revoked bindings invalidate old endpoint generations.</span><span class="copy-zh" lang="zh-Hans">“已经登录”和“可以处理这个请求”是两项检查。Fleet 核对当前槽位持有者与租用关系、服务商账号身份、获准的原生 CLI／适配器／模型映射，以及新鲜的就绪观察。绑定改变或撤销后，旧连接版本会失效。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">A readiness probe checks metadata without sending a model prompt. It does not promise that the provider will accept every future request or that a plan has unlimited quota.</span><span class="copy-zh" lang="zh-Hans">就绪检查读取元数据，不发送模型提示。它不保证服务商会接受未来每次请求，也不表示订阅额度无限。</span></span></p></article><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">The translator, not a new model identity</span><span class="copy-zh" lang="zh-Hans">适配器负责翻译，不更换智能体身份</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Claude Code sends its supported Messages envelope. Fleet carries visible conversation and local-tool history as labeled context, then starts native Devin through <strong>ACP</strong>—a structured conversation/control protocol. Devin still runs its own agent harness and may introduce itself as Devin.</span><span class="copy-zh" lang="zh-Hans">Claude Code 发送受支持的 Messages 请求。Fleet 将可见对话及本地工具历史整理为带标签的上下文，通过 <strong>ACP</strong>（结构化的会话控制协议）启动原生 Devin。Devin 仍使用自己的智能体框架，也可能正确地自称 Devin。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">Private assistant thinking/signature blocks are not carried over as interchangeable reasoning. Accepted cache, thinking and max-token settings do not establish full Anthropic API semantics.</span><span class="copy-zh" lang="zh-Hans">私有思考及签名块不会被当成可互换的推理状态移植。接受缓存、思考及最大 token 设置，也不表示实现了完整 Anthropic API 语义。</span></span></p></article></div><details class="architecture-details"><summary><span class="bi-inline"><span class="copy-en" lang="en">What is actually pinned and supported?</span><span class="copy-zh" lang="zh-Hans">具体固定和支持什么？</span></span></summary><p><span class="bi-inline"><span class="copy-en" lang="en">The reviewed ordinary profile uses Opus 5.5 with max effort and accepts supported text plus declared local tools. Its formatted visible-context limit remains <strong>256 KiB</strong>; tool descriptions and included history count toward it. Native token counting and full API parity are not established. The larger trial request limit and trial native web search are separate policies, not an automatic private-account upgrade.</span><span class="copy-zh" lang="zh-Hans">经审核的普通配置使用 Opus 5.5、max 努力级别，支持文字及已声明的本地工具。格式化后的可见上下文上限仍为 <strong>256 KiB</strong>，包括工具说明与包含的历史。尚未证明原生 token 计数与完整 API 语义一致。更大的试用请求上限与试用原生网页搜索属于独立策略，不会自动升级私人账号路线。</span></span></p></details></section><section class="section" id="devin-tool-loop"><div class="section-heading"><span class="section-index" aria-hidden="true">03</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Devin thinks; your computer does the file work</span><span class="copy-zh" lang="zh-Hans">Devin 思考，电脑执行文件操作</span></span></h2></div><figure class="architecture-figure" aria-labelledby="devin-tool-loop-caption"><div class="bi"><div class="copy-en" lang="en"><svg class="arch-svg arch-desktop" id="devin-tool-loop-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 930" role="img" aria-label="One local tool, two HTTP turns" aria-describedby="devin-tool-loop-en-desktop-desc">
+
+<desc id="devin-tool-loop-en-desktop-desc">Send the question and visible history. In session one, official Devin chooses a declared local tool and makes an MCP call. The adapter stops and reaps the native process before returning tool_use. Claude Code applies local permissions and executes Read, Edit or Bash on the user&#x27;s computer. The next HTTP request includes tool_result and history. A fresh Devin process/session continues and the final answer is buffered until cleanup is confirmed.</desc>
+<defs><marker id="devin-tool-loop-en-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-tool-loop-en-desktop-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-tool-loop-en-desktop-svg .muted{fill:#59677c}#devin-tool-loop-en-desktop-svg .violet{fill:#5143ce}#devin-tool-loop-en-desktop-svg .teal{fill:#0f766e}#devin-tool-loop-en-desktop-svg .amber{fill:#a65d0a}#devin-tool-loop-en-desktop-svg .bold{font-weight:650}</style>
+<rect width="1060" height="930" rx="20" fill="#f3f5f9"/>
+<text x="28" y="44" font-size="28" class="bold">
+<tspan x="28" dy="0">One local tool, two HTTP turns</tspan>
+</text>
+<text x="28" y="77" font-size="18" class="muted">
+<tspan x="28" dy="0">A fresh native process continues from the tool history sent by Claude Code.</tspan>
+</text>
+<rect x="28" y="105" width="248" height="77" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="152.0" y="135" font-size="17" class="teal bold" text-anchor="middle">
+<tspan x="152.0" dy="0">YOUR COMPUTER</tspan>
+</text>
+<text x="152.0" y="162" font-size="16" class="muted" text-anchor="middle">
+<tspan x="152.0" dy="0">Claude Code</tspan>
+</text>
+<rect x="402" y="105" width="256" height="77" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="530.0" y="135" font-size="17" class="violet bold" text-anchor="middle">
+<tspan x="530.0" dy="0">FLEET + ADAPTER</tspan>
+</text>
+<text x="530.0" y="162" font-size="16" class="muted" text-anchor="middle">
+<tspan x="530.0" dy="0">Gateway and worker</tspan>
+</text>
+<rect x="780" y="105" width="252" height="77" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="906.0" y="135" font-size="17" class="teal bold" text-anchor="middle">
+<tspan x="906.0" dy="0">OFFICIAL DEVIN</tspan>
+</text>
+<text x="906.0" y="162" font-size="16" class="muted" text-anchor="middle">
+<tspan x="906.0" dy="0">Native CLI on the worker</tspan>
+</text>
+<line x1="152" y1="184" x2="152" y2="845" stroke="#dce3ed" stroke-width="2.4" stroke-dasharray="6 8"/>
+<line x1="530" y1="184" x2="530" y2="845" stroke="#dce3ed" stroke-width="2.4" stroke-dasharray="6 8"/>
+<line x1="906" y1="184" x2="906" y2="845" stroke="#dce3ed" stroke-width="2.4" stroke-dasharray="6 8"/>
+<line x1="152" y1="236" x2="906" y2="236" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-desktop-arrow)"/>
+<text x="190" y="215" font-size="17" class="violet bold">
+<tspan x="190" dy="0">1 · HTTP: question + visible history and tool descriptions</tspan>
+</text>
+<rect x="780" y="262" width="252" height="74" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="800" y="291" font-size="17" class="bold">
+<tspan x="800" dy="0">Session 1: choose a tool</tspan>
+</text>
+<text x="800" y="317" font-size="17" class="muted">
+<tspan x="800" dy="0">Declared tools only</tspan>
+</text>
+<line x1="906" y1="377" x2="530" y2="377" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-desktop-arrow)"/>
+<text x="568" y="359" font-size="17" class="violet">
+<tspan x="568" dy="0">Genuine MCP tool request</tspan>
+</text>
+<rect x="402" y="403" width="256" height="79" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="420" y="432" font-size="17" class="bold">
+<tspan x="420" dy="0">Stop + reap native process</tspan>
+</text>
+<text x="420" y="459" font-size="17" class="muted">
+<tspan x="420" dy="0">Check call + binding</tspan>
+</text>
+<line x1="530" y1="527" x2="152" y2="527" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-desktop-arrow)"/>
+<text x="169" y="508" font-size="16.5" class="violet bold">
+<tspan x="169" dy="0">2 · tool_use after confirmed cleanup</tspan>
+</text>
+<rect x="28" y="554" width="248" height="118" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="46" y="584" font-size="20" class="bold">
+<tspan x="46" dy="0">Read / Edit / Bash</tspan>
+</text>
+<text x="46" y="614" font-size="17" class="teal">
+<tspan x="46" dy="0">Local permission check</tspan>
+<tspan x="46" dy="26">Runs on your computer</tspan>
+</text>
+<text x="792" y="578" font-size="17" class="muted">
+<tspan x="792" dy="0">Session 1 has ended.</tspan>
+<tspan x="792" dy="26">No old process waits.</tspan>
+</text>
+<line x1="152" y1="727" x2="906" y2="727" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-desktop-arrow)"/>
+<text x="190" y="699" font-size="17" class="violet bold">
+<tspan x="190" dy="0">3 · Next HTTP: tool_result + visible history + tool descriptions</tspan>
+</text>
+<rect x="780" y="751" width="252" height="74" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="800" y="780" font-size="17" class="bold">
+<tspan x="800" dy="0">Session 2: new process</tspan>
+</text>
+<text x="800" y="807" font-size="17" class="muted">
+<tspan x="800" dy="0">Continue from tool history</tspan>
+</text>
+<line x1="906" y1="861" x2="152" y2="861" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-desktop-arrow)"/>
+<text x="334" y="843" font-size="17" class="violet bold">
+<tspan x="334" dy="0">4 · Final answer after confirmed cleanup</tspan>
+</text>
+<text x="28" y="907" font-size="16" class="muted">
+<tspan x="28" dy="0">SSE is buffered until generation finishes. Project tools stay local; uncertain sends are never replayed automatically.</tspan>
+</text>
+</svg><svg class="arch-svg arch-mobile" id="devin-tool-loop-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 1560" role="img" aria-label="One local tool, two HTTP turns" aria-describedby="devin-tool-loop-en-mobile-desc">
+
+<desc id="devin-tool-loop-en-mobile-desc">A question reaches official Devin on the private slot through Fleet. A genuine MCP request is validated and the native process cleaned up before local Claude Code receives the tool request. Claude Code approves and executes locally. The next HTTP request carries tool results and history to a fresh native session. The final answer is buffered until cleanup.</desc>
+<defs><marker id="devin-tool-loop-en-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-tool-loop-en-mobile-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-tool-loop-en-mobile-svg .muted{fill:#59677c}#devin-tool-loop-en-mobile-svg .violet{fill:#5143ce}#devin-tool-loop-en-mobile-svg .teal{fill:#0f766e}#devin-tool-loop-en-mobile-svg .amber{fill:#a65d0a}#devin-tool-loop-en-mobile-svg .bold{font-weight:650}</style>
+<rect width="340" height="1560" rx="20" fill="#f3f5f9"/>
+<text x="16" y="34" font-size="24" class="bold">
+<tspan x="16" dy="0">One local tool,</tspan>
+<tspan x="16" dy="31">two HTTP turns</tspan>
+</text>
+<text x="16" y="95" font-size="14" class="muted">
+<tspan x="16" dy="0">Continue from history, in a fresh process.</tspan>
+</text>
+<rect x="16" y="126" width="308" height="147" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="154" font-size="14" class="violet bold">
+<tspan x="32" dy="0">1 · SEND THE QUESTION</tspan>
+</text>
+<text x="32" y="186" font-size="19" class="bold">
+<tspan x="32" dy="0">Computer → Fleet → Devin</tspan>
+</text>
+<text x="32" y="215" font-size="14">
+<tspan x="32" dy="0">HTTP includes the question, visible</tspan>
+<tspan x="32" dy="23">history and declared tool descriptions.</tspan>
+</text>
+<line x1="170" y1="276" x2="170" y2="302" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-mobile-arrow)"/>
+<rect x="16" y="313" width="308" height="145" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="341" font-size="14" class="teal bold">
+<tspan x="32" dy="0">2 · NATIVE SESSION 1</tspan>
+</text>
+<text x="32" y="373" font-size="19" class="bold">
+<tspan x="32" dy="0">Devin chooses a tool</tspan>
+</text>
+<text x="32" y="402" font-size="14">
+<tspan x="32" dy="0">Official CLI makes a genuine MCP call.</tspan>
+<tspan x="32" dy="23">Only this request&#x27;s declared tools.</tspan>
+</text>
+<line x1="170" y1="461" x2="170" y2="487" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-mobile-arrow)"/>
+<rect x="16" y="498" width="308" height="153" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="526" font-size="14" class="violet bold">
+<tspan x="32" dy="0">3 · STOP BEFORE DELIVERY</tspan>
+</text>
+<text x="32" y="558" font-size="19" class="bold">
+<tspan x="32" dy="0">Stop, reap and validate</tspan>
+</text>
+<text x="32" y="587" font-size="14">
+<tspan x="32" dy="0">The adapter confirms native cleanup</tspan>
+<tspan x="32" dy="23">and validates the tool call and binding</tspan>
+<tspan x="32" dy="23">before returning Messages tool_use.</tspan>
+</text>
+<line x1="170" y1="654" x2="170" y2="680" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-mobile-arrow)"/>
+<rect x="16" y="691" width="308" height="155" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="719" font-size="14" class="teal bold">
+<tspan x="32" dy="0">4 · EXECUTE ON YOUR COMPUTER</tspan>
+</text>
+<text x="32" y="751" font-size="19" class="bold">
+<tspan x="32" dy="0">Read / Edit / Bash</tspan>
+</text>
+<text x="32" y="780" font-size="14">
+<tspan x="32" dy="0">Claude Code checks local permissions.</tspan>
+<tspan x="32" dy="23">Tools run here, not on the worker.</tspan>
+<tspan x="32" dy="23">Native session 1 has ended.</tspan>
+</text>
+<line x1="170" y1="849" x2="170" y2="875" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-mobile-arrow)"/>
+<rect x="16" y="886" width="308" height="174" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="914" font-size="14" class="violet bold">
+<tspan x="32" dy="0">5 · THE NEXT HTTP REQUEST</tspan>
+</text>
+<text x="32" y="946" font-size="19" class="bold">
+<tspan x="32" dy="0">Send tool result + history</tspan>
+</text>
+<text x="32" y="975" font-size="14">
+<tspan x="32" dy="0">Claude Code sends tool_result, visible</tspan>
+<tspan x="32" dy="23">conversation and tool descriptions.</tspan>
+<tspan x="32" dy="23">Completed tools are history;</tspan>
+<tspan x="32" dy="23">they must not be repeated.</tspan>
+</text>
+<line x1="170" y1="1063" x2="170" y2="1089" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-mobile-arrow)"/>
+<rect x="16" y="1100" width="308" height="153" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="1128" font-size="14" class="teal bold">
+<tspan x="32" dy="0">6 · NATIVE SESSION 2</tspan>
+</text>
+<text x="32" y="1160" font-size="19" class="bold">
+<tspan x="32" dy="0">Start fresh native Devin</tspan>
+</text>
+<text x="32" y="1189" font-size="14">
+<tspan x="32" dy="0">New session uses the supplied history.</tspan>
+<tspan x="32" dy="23">It continues from the local tool result.</tspan>
+<tspan x="32" dy="23">No old native process is waiting.</tspan>
+</text>
+<line x1="170" y1="1256" x2="170" y2="1282" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-en-mobile-arrow)"/>
+<rect x="16" y="1293" width="308" height="160" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="1321" font-size="14" class="violet bold">
+<tspan x="32" dy="0">7 · BUFFER, CHECK, DELIVER</tspan>
+</text>
+<text x="32" y="1353" font-size="19" class="bold">
+<tspan x="32" dy="0">Answer after cleanup</tspan>
+</text>
+<text x="32" y="1382" font-size="14">
+<tspan x="32" dy="0">Release after confirmed native cleanup.</tspan>
+<tspan x="32" dy="23">If requested, emit SSE after generation.</tspan>
+<tspan x="32" dy="23">This is not live token-by-token output.</tspan>
+</text>
+<text x="18" y="1490" font-size="14" class="muted">
+<tspan x="18" dy="0">Uncertain sends are never auto-replayed.</tspan>
+<tspan x="18" dy="24">Claude Code owns local tool permissions.</tspan>
+</text>
+</svg></div><div class="copy-zh" lang="zh-Hans"><svg class="arch-svg arch-desktop" id="devin-tool-loop-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 930" role="img" aria-label="一个本地工具，两个 HTTP 回合" aria-describedby="devin-tool-loop-zh-desktop-desc">
+
+<desc id="devin-tool-loop-zh-desktop-desc">先发送问题与可见历史。官方 Devin 在第一会话中选择一个已声明工具，MCP 请求交给适配器。适配器停止并回收原生进程后，才给本地 Claude Code 返回 tool_use。Claude Code 在电脑上按本地权限执行 Read、Edit 或 Bash。下一 HTTP 请求包含结果与历史，新的 Devin 进程会话接着回答。最终答案也在确认清理后缓冲交付。</desc>
+<defs><marker id="devin-tool-loop-zh-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-tool-loop-zh-desktop-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-tool-loop-zh-desktop-svg .muted{fill:#59677c}#devin-tool-loop-zh-desktop-svg .violet{fill:#5143ce}#devin-tool-loop-zh-desktop-svg .teal{fill:#0f766e}#devin-tool-loop-zh-desktop-svg .amber{fill:#a65d0a}#devin-tool-loop-zh-desktop-svg .bold{font-weight:650}</style>
+<rect width="1060" height="930" rx="20" fill="#f3f5f9"/>
+<text x="28" y="44" font-size="28" class="bold">
+<tspan x="28" dy="0">一个本地工具，两个 HTTP 回合</tspan>
+</text>
+<text x="28" y="77" font-size="18" class="muted">
+<tspan x="28" dy="0">新的原生进程通过 Claude Code 发来的工具历史继续工作。</tspan>
+</text>
+<rect x="28" y="105" width="248" height="77" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="152.0" y="135" font-size="17" class="teal bold" text-anchor="middle">
+<tspan x="152.0" dy="0">你的电脑</tspan>
+</text>
+<text x="152.0" y="162" font-size="16" class="muted" text-anchor="middle">
+<tspan x="152.0" dy="0">Claude Code</tspan>
+</text>
+<rect x="402" y="105" width="256" height="77" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="530.0" y="135" font-size="17" class="violet bold" text-anchor="middle">
+<tspan x="530.0" dy="0">FLEET + 适配器</tspan>
+</text>
+<text x="530.0" y="162" font-size="16" class="muted" text-anchor="middle">
+<tspan x="530.0" dy="0">网关与工作机器</tspan>
+</text>
+<rect x="780" y="105" width="252" height="77" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="906.0" y="135" font-size="17" class="teal bold" text-anchor="middle">
+<tspan x="906.0" dy="0">官方 DEVIN</tspan>
+</text>
+<text x="906.0" y="162" font-size="16" class="muted" text-anchor="middle">
+<tspan x="906.0" dy="0">工作机器上的原生 CLI</tspan>
+</text>
+<line x1="152" y1="184" x2="152" y2="845" stroke="#dce3ed" stroke-width="2.4" stroke-dasharray="6 8"/>
+<line x1="530" y1="184" x2="530" y2="845" stroke="#dce3ed" stroke-width="2.4" stroke-dasharray="6 8"/>
+<line x1="906" y1="184" x2="906" y2="845" stroke="#dce3ed" stroke-width="2.4" stroke-dasharray="6 8"/>
+<line x1="152" y1="236" x2="906" y2="236" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-desktop-arrow)"/>
+<text x="190" y="215" font-size="17" class="violet bold">
+<tspan x="190" dy="0">1 · HTTP：问题 + 可见历史与工具说明</tspan>
+</text>
+<rect x="780" y="262" width="252" height="74" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="800" y="291" font-size="17" class="bold">
+<tspan x="800" dy="0">会话 1：选择下一步工具</tspan>
+</text>
+<text x="800" y="317" font-size="17" class="muted">
+<tspan x="800" dy="0">只选已声明的工具</tspan>
+</text>
+<line x1="906" y1="377" x2="530" y2="377" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-desktop-arrow)"/>
+<text x="568" y="359" font-size="17" class="violet">
+<tspan x="568" dy="0">真实 MCP 工具调用</tspan>
+</text>
+<rect x="402" y="403" width="256" height="79" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="420" y="432" font-size="17" class="bold">
+<tspan x="420" dy="0">停止并回收原生进程</tspan>
+</text>
+<text x="420" y="459" font-size="17" class="muted">
+<tspan x="420" dy="0">核对调用与归属</tspan>
+</text>
+<line x1="530" y1="527" x2="152" y2="527" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-desktop-arrow)"/>
+<text x="169" y="508" font-size="16.5" class="violet bold">
+<tspan x="169" dy="0">2 · 清理确认后返回 tool_use</tspan>
+</text>
+<rect x="28" y="554" width="248" height="118" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="46" y="584" font-size="20" class="bold">
+<tspan x="46" dy="0">Read / Edit / Bash</tspan>
+</text>
+<text x="46" y="614" font-size="17" class="teal">
+<tspan x="46" dy="0">由 Claude Code 管批准</tspan>
+<tspan x="46" dy="26">在你的电脑执行工具</tspan>
+</text>
+<text x="792" y="578" font-size="17" class="muted">
+<tspan x="792" dy="0">会话 1 已结束。</tspan>
+<tspan x="792" dy="26">旧进程不再等待结果。</tspan>
+</text>
+<line x1="152" y1="727" x2="906" y2="727" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-desktop-arrow)"/>
+<text x="190" y="699" font-size="17" class="violet bold">
+<tspan x="190" dy="0">3 · 下一 HTTP：tool_result + 可见历史 + 工具说明</tspan>
+</text>
+<rect x="780" y="751" width="252" height="74" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="800" y="780" font-size="17" class="bold">
+<tspan x="800" dy="0">会话 2：新的原生进程</tspan>
+</text>
+<text x="800" y="807" font-size="17" class="muted">
+<tspan x="800" dy="0">沿着工具结果与历史继续</tspan>
+</text>
+<line x1="906" y1="861" x2="152" y2="861" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-desktop-arrow)"/>
+<text x="334" y="843" font-size="17" class="violet bold">
+<tspan x="334" dy="0">4 · 确认清理后返回最终答案</tspan>
+</text>
+<text x="28" y="907" font-size="16" class="muted">
+<tspan x="28" dy="0">SSE 在生成后缓冲交付。本地工具不在工作机器执行；不自动重放结果不确定的请求。</tspan>
+</text>
+</svg><svg class="arch-svg arch-mobile" id="devin-tool-loop-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 1560" role="img" aria-label="一个本地工具，两个 HTTP 回合" aria-describedby="devin-tool-loop-zh-mobile-desc">
+
+<desc id="devin-tool-loop-zh-mobile-desc">问题经 Fleet 发到私人槽位的官方 Devin。真实 MCP 工具请求先经过校验和进程清理，然后交回本地 Claude Code 批准与执行。下一 HTTP 请求带着工具结果和历史进入新的原生会话；最终答案经清理后才缓冲发送。</desc>
+<defs><marker id="devin-tool-loop-zh-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5143ce"/></marker></defs>
+<style>#devin-tool-loop-zh-mobile-svg text{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","PingFang SC",sans-serif;fill:#182238}#devin-tool-loop-zh-mobile-svg .muted{fill:#59677c}#devin-tool-loop-zh-mobile-svg .violet{fill:#5143ce}#devin-tool-loop-zh-mobile-svg .teal{fill:#0f766e}#devin-tool-loop-zh-mobile-svg .amber{fill:#a65d0a}#devin-tool-loop-zh-mobile-svg .bold{font-weight:650}</style>
+<rect width="340" height="1560" rx="20" fill="#f3f5f9"/>
+<text x="16" y="34" font-size="24" class="bold">
+<tspan x="16" dy="0">一个本地工具，</tspan>
+<tspan x="16" dy="31">两个 HTTP 回合</tspan>
+</text>
+<text x="16" y="95" font-size="14" class="muted">
+<tspan x="16" dy="0">通过发来的历史继续，不保留旧进程。</tspan>
+</text>
+<rect x="16" y="126" width="308" height="147" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="154" font-size="14" class="violet bold">
+<tspan x="32" dy="0">1 · 发送问题</tspan>
+</text>
+<text x="32" y="186" font-size="19" class="bold">
+<tspan x="32" dy="0">电脑 → Fleet → Devin</tspan>
+</text>
+<text x="32" y="215" font-size="14">
+<tspan x="32" dy="0">HTTP 请求包含问题、可见历史</tspan>
+<tspan x="32" dy="23">和已声明的工具说明。</tspan>
+</text>
+<line x1="170" y1="276" x2="170" y2="302" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-mobile-arrow)"/>
+<rect x="16" y="313" width="308" height="145" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="341" font-size="14" class="teal bold">
+<tspan x="32" dy="0">2 · 原生会话 1</tspan>
+</text>
+<text x="32" y="373" font-size="19" class="bold">
+<tspan x="32" dy="0">Devin 选择一个工具</tspan>
+</text>
+<text x="32" y="402" font-size="14">
+<tspan x="32" dy="0">官方 CLI 发起真实 MCP 调用。</tspan>
+<tspan x="32" dy="23">只使用本次声明的工具。</tspan>
+</text>
+<line x1="170" y1="461" x2="170" y2="487" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-mobile-arrow)"/>
+<rect x="16" y="498" width="308" height="153" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="526" font-size="14" class="violet bold">
+<tspan x="32" dy="0">3 · 先停止，再交付</tspan>
+</text>
+<text x="32" y="558" font-size="19" class="bold">
+<tspan x="32" dy="0">停止、回收、核对</tspan>
+</text>
+<text x="32" y="587" font-size="14">
+<tspan x="32" dy="0">适配器确认原生进程已经清理，</tspan>
+<tspan x="32" dy="23">并核对工具调用及归属后，</tspan>
+<tspan x="32" dy="23">才向 Claude Code 返回 tool_use。</tspan>
+</text>
+<line x1="170" y1="654" x2="170" y2="680" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-mobile-arrow)"/>
+<rect x="16" y="691" width="308" height="155" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="719" font-size="14" class="teal bold">
+<tspan x="32" dy="0">4 · 在你的电脑执行</tspan>
+</text>
+<text x="32" y="751" font-size="19" class="bold">
+<tspan x="32" dy="0">Read / Edit / Bash</tspan>
+</text>
+<text x="32" y="780" font-size="14">
+<tspan x="32" dy="0">Claude Code 按本地权限批准。</tspan>
+<tspan x="32" dy="23">工具在电脑上执行，不在工作机器。</tspan>
+<tspan x="32" dy="23">会话 1 已结束。</tspan>
+</text>
+<line x1="170" y1="849" x2="170" y2="875" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-mobile-arrow)"/>
+<rect x="16" y="886" width="308" height="174" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="914" font-size="14" class="violet bold">
+<tspan x="32" dy="0">5 · 下一 HTTP 请求</tspan>
+</text>
+<text x="32" y="946" font-size="19" class="bold">
+<tspan x="32" dy="0">带上工具结果与历史</tspan>
+</text>
+<text x="32" y="975" font-size="14">
+<tspan x="32" dy="0">Claude Code 发来 tool_result、</tspan>
+<tspan x="32" dy="23">可见对话历史和工具说明。</tspan>
+<tspan x="32" dy="23">已执行的工具作为历史记录，</tspan>
+<tspan x="32" dy="23">不应再次执行。</tspan>
+</text>
+<line x1="170" y1="1063" x2="170" y2="1089" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-mobile-arrow)"/>
+<rect x="16" y="1100" width="308" height="153" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="1128" font-size="14" class="teal bold">
+<tspan x="32" dy="0">6 · 原生会话 2</tspan>
+</text>
+<text x="32" y="1160" font-size="19" class="bold">
+<tspan x="32" dy="0">启动新的 Devin 进程</tspan>
+</text>
+<text x="32" y="1189" font-size="14">
+<tspan x="32" dy="0">新会话使用本次提供的历史。</tspan>
+<tspan x="32" dy="23">收到结果后继续生成答案。</tspan>
+<tspan x="32" dy="23">没有等待结果的旧原生进程。</tspan>
+</text>
+<line x1="170" y1="1256" x2="170" y2="1282" stroke="#5143ce" stroke-width="2.4" marker-end="url(#devin-tool-loop-zh-mobile-arrow)"/>
+<rect x="16" y="1293" width="308" height="160" rx="15" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="32" y="1321" font-size="14" class="violet bold">
+<tspan x="32" dy="0">7 · 缓冲、核对、交付</tspan>
+</text>
+<text x="32" y="1353" font-size="19" class="bold">
+<tspan x="32" dy="0">确认清理后返回答案</tspan>
+</text>
+<text x="32" y="1382" font-size="14">
+<tspan x="32" dy="0">确认清理完成后才交付答案。</tspan>
+<tspan x="32" dy="23">如需 SSE，也在生成后发送。</tspan>
+<tspan x="32" dy="23">这不是实时逐 token 输出。</tspan>
+</text>
+<text x="18" y="1490" font-size="14" class="muted">
+<tspan x="18" dy="0">不自动重放已发送但结果不确定的请求。</tspan>
+<tspan x="18" dy="24">权限和真实执行由本地 Claude Code 管理。</tspan>
+</text>
+</svg></div></div><figcaption id="devin-tool-loop-caption"><span class="bi-inline"><span class="copy-en" lang="en">One file question can span two remote model turns. The first asks for a local tool; the next receives its result and continues in a fresh native session.</span><span class="copy-zh" lang="zh-Hans">一次文件问题可能跨越两轮远端模型处理。第一轮请求本地工具，下一轮携带工具结果，在全新的原生会话中继续。</span></span></figcaption></figure><p><span class="bi-inline"><span class="copy-en" lang="en">The internal <strong>MCP</strong> bridge is a controlled mailbox. It exposes the tool descriptions declared by the local client and records a real tool call. After cleanup, Fleet returns that call to Claude Code. Claude Code runs Read, Edit, Write, Bash or a compatible declared tool under its local permission policy.</span><span class="copy-zh" lang="zh-Hans">内部 <strong>MCP</strong> 桥像一个受控信箱，提供本地客户端声明的工具说明，并记录真实工具调用。清理后，Fleet 将调用交回 Claude Code；Read、Edit、Write、Bash 或兼容的已声明工具，按本地权限策略执行。</span></span></p><div class="two-up"><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">Conversation continuity lives with the client</span><span class="copy-zh" lang="zh-Hans">连续性由客户端保存</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">The next HTTP request includes visible history and the matching tool result. A new native process/session handles the continuation. Already executed tool results are labeled as history, not instructions to run them again. Idle chats hold no trial worker.</span><span class="copy-zh" lang="zh-Hans">下一次 HTTP 请求包含可见历史与匹配的工具结果，由全新的原生进程／会话继续处理。已执行的工具结果会标记为历史，而不是要求再执行一次。空闲聊天不占用试用工作进程。</span></span></p></article><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">Three different kinds of web tools</span><span class="copy-zh" lang="zh-Hans">三种不同的网页工具</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">The trial can use its explicitly enabled <strong>native Devin web_search</strong> remotely. A compatible custom tool declared by Claude Code runs locally. Claude’s hosted WebSearch/WebFetch request format is excluded from this route. These names do not describe the same execution path.</span><span class="copy-zh" lang="zh-Hans">试用可以在远端使用明确启用的 <strong>Devin 原生 web_search</strong>。Claude Code 声明的兼容自定义工具在本机运行；Claude 托管 WebSearch／WebFetch 的请求格式不在此路线支持范围内。这几种名称对应不同的执行路径。</span></span></p></article></div><p class="design-lead"><span class="bi-inline"><span class="copy-en" lang="en"><strong>Honest streaming:</strong> native generation or tool handoff, usage collection and cleanup complete before the Messages/SSE response is emitted. SSE is the delivery format here; it does not mean live token-by-token native generation. A lost response after dispatch is not blindly replayed.</span><span class="copy-zh" lang="zh-Hans"><strong>如实说明流式：</strong>原生生成或工具交接、用量采集和清理完成后，才发出 Messages／SSE 回复。SSE 是这里的交付格式，不代表原生生成时逐 token 实时传送。派发后丢失的回复不会被盲目重放。</span></span></p></section><section class="section" id="devin-trial-design"><div class="section-heading"><span class="section-index" aria-hidden="true">04</span><h2><span class="bi-inline"><span class="copy-en" lang="en">The trial receptionist also keeps a notebook</span><span class="copy-zh" lang="zh-Hans">试用前台还负责记账</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">The trial is a separate entrance at <code>/trial/v1/messages</code>. It checks the Fleet trial key and request, checks the worker without a model prompt, then transactionally reserves allowance before dispatch. Its access-key and allowance databases are separate from the product database.</span><span class="copy-zh" lang="zh-Hans">试用使用独立入口 <code>/trial/v1/messages</code>。先检查 Fleet 试用密钥与请求，再进行不发送模型提示的工作进程检查，最后在事务中预留额度并派发。访问密钥与额度账本使用独立于产品数据库的数据库。</span></span></p><figure class="architecture-figure" aria-labelledby="trial-lifecycle-caption"><div class="bi"><div class="copy-en" lang="en"><svg class="arch-svg arch-desktop" id="trial-lifecycle-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="710" viewBox="0 0 1080 710" role="img" aria-label="One remote trial turn" aria-describedby="trial-lifecycle-en-desktop-desc" lang="en" xml:lang="en">
+
+<desc id="trial-lifecycle-en-desktop-desc">Five checks lead to four possible settlement outcomes. Check the request, verify model-free readiness, reserve allowance, run a fresh Devin turn, then verify and clean up. Full metering charges actual tokens. A clean reply missing only cache-read metering keeps a conservative hold. A verified clean timeout also keeps a conservative hold and returns a timeout. Unknown results or cleanup keep the reservation and pause for review. The trial has no waiting queue.</desc>
+<defs><marker id="trial-lifecycle-en-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="710" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">One remote trial turn</tspan></text>
+<rect x="20" y="62" width="1040" height="57" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="96" fill="#5143ce" font-size="18" font-weight="650" text-anchor="start"><tspan x="36" dy="0">No trial waiting queue</tspan></text>
+<text x="374" y="96" fill="#182238" font-size="18" font-weight="400" text-anchor="start"><tspan x="374" dy="0">Busy → 429; wait and submit later.</tspan></text>
+<path d="M 208 225 H 226" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 421 225 H 439" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 634 225 H 652" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 847 225 H 865" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<rect x="20" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="36" dy="0">01</tspan></text>
+<text x="36" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="36" dy="0">Check</tspan></text>
+<text x="36" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="36" dy="0">Key, request</tspan><tspan x="36" dy="26">and budgets</tspan></text>
+<rect x="233" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="249" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="249" dy="0">02</tspan></text>
+<text x="249" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="249" dy="0">Ready</tspan></text>
+<text x="249" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="249" dy="0">Model-free</tspan><tspan x="249" dy="26">worker check</tspan></text>
+<rect x="446" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="462" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="462" dy="0">03</tspan></text>
+<text x="462" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="462" dy="0">Reserve</tspan></text>
+<text x="462" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="462" dy="0">Hold tokens</tspan><tspan x="462" dy="26">and runtime</tspan></text>
+<rect x="659" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="675" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="675" dy="0">04</tspan></text>
+<text x="675" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="675" dy="0">Think</tspan></text>
+<text x="675" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="675" dy="0">Fresh native</tspan><tspan x="675" dy="26">Devin turn</tspan></text>
+<rect x="872" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="888" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="888" dy="0">05</tspan></text>
+<text x="888" y="211" fill="#182238" font-size="20" font-weight="650" text-anchor="start"><tspan x="888" dy="0">Verify + clean</tspan></text>
+<text x="888" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="888" dy="0">Model + meters</tspan><tspan x="888" dy="26">Stop + remove files</tspan></text>
+<path d="M 966 299 V 346 H 144" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 144 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 408 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 672 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<path d="M 936 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-desktop-arrow)"/>
+<rect x="20" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="21" y="394" width="246" height="6" rx="3" fill="#0f766e"/>
+<text x="38" y="436" fill="#0f766e" font-size="19" font-weight="650" text-anchor="start"><tspan x="38" dy="0">Complete meters</tspan></text>
+<text x="38" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="38" dy="0">Record actual tokens</tspan><tspan x="38" dy="38">Return unused time</tspan><tspan x="38" dy="38">Reply</tspan></text>
+<rect x="284" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="285" y="394" width="246" height="6" rx="3" fill="#5143ce"/>
+<text x="302" y="436" fill="#5143ce" font-size="19" font-weight="650" text-anchor="start"><tspan x="302" dy="0">Cache-read missing</tspan></text>
+<text x="302" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="302" dy="0">Keep conservative hold</tspan><tspan x="302" dy="38">Return unused time</tspan><tspan x="302" dy="38">Reply</tspan></text>
+<rect x="548" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="549" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="566" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="566" dy="0">Clean timeout</tspan></text>
+<text x="566" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="566" dy="0">Keep conservative hold</tspan><tspan x="566" dy="38">Return unused time</tspan><tspan x="566" dy="38">504 timeout</tspan></text>
+<rect x="812" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="813" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="830" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="830" dy="0">Unknown outcome</tspan></text>
+<text x="830" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="830" dy="0">Keep reservation</tspan><tspan x="830" dy="38">Pause for review</tspan><tspan x="830" dy="38">No automatic replay</tspan></text>
+<text x="20" y="656" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">Cleanup and accounting determine when the worker can be released.</tspan><tspan x="20" dy="27">A hold is conservative accounting, not a proof of exact usage.</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-lifecycle-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1510" viewBox="0 0 340 1510" role="img" aria-label="One remote trial turn" aria-describedby="trial-lifecycle-en-mobile-desc" lang="en" xml:lang="en">
+
+<desc id="trial-lifecycle-en-mobile-desc">Five checks lead to four possible settlement outcomes. Check the request, verify model-free readiness, reserve allowance, run a fresh Devin turn, then verify and clean up. Full metering charges actual tokens. A clean reply missing only cache-read metering keeps a conservative hold. A verified clean timeout also keeps a conservative hold and returns a timeout. Unknown results or cleanup keep the reservation and pause for review. The trial has no waiting queue.</desc>
+<defs><marker id="trial-lifecycle-en-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1510" fill="#ffffff"/>
+<text x="16" y="31" fill="#182238" font-size="23" font-weight="700" text-anchor="start"><tspan x="16" dy="0">One remote trial turn</tspan></text>
+<rect x="16" y="55" width="308" height="90" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="85" fill="#5143ce" font-size="16.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">No trial waiting queue</tspan></text>
+<text x="30" y="115" fill="#182238" font-size="15" font-weight="400" text-anchor="start"><tspan x="30" dy="0">Busy → 429; wait and submit later.</tspan></text>
+<path d="M 170 268 V 283" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<path d="M 170 384 V 399" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<path d="M 170 500 V 515" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<path d="M 170 616 V 631" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="174" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="204" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">01</tspan></text>
+<text x="82" y="204" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Check</tspan></text>
+<text x="50" y="232" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Key, request</tspan><tspan x="50" dy="23">and budgets</tspan></text>
+<rect x="34" y="290" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="320" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">02</tspan></text>
+<text x="82" y="320" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Ready</tspan></text>
+<text x="50" y="348" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Model-free</tspan><tspan x="50" dy="23">worker check</tspan></text>
+<rect x="34" y="406" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="436" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">03</tspan></text>
+<text x="82" y="436" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Reserve</tspan></text>
+<text x="50" y="464" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Hold tokens</tspan><tspan x="50" dy="23">and runtime</tspan></text>
+<rect x="34" y="522" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="552" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">04</tspan></text>
+<text x="82" y="552" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Think</tspan></text>
+<text x="50" y="580" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Fresh native</tspan><tspan x="50" dy="23">Devin turn</tspan></text>
+<rect x="34" y="638" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="668" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">05</tspan></text>
+<text x="82" y="668" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Verify + clean</tspan></text>
+<text x="50" y="696" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Model + meters</tspan><tspan x="50" dy="23">Stop + remove files</tspan></text>
+<path d="M 170 732 V 755 H 16 V 1310" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 16 845 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="778" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="779" width="288" height="5" rx="2.5" fill="#0f766e"/>
+<text x="50" y="809" fill="#0f766e" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Complete meters</tspan></text>
+<text x="50" y="840" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Record actual tokens</tspan><tspan x="50" dy="26">Return unused time</tspan><tspan x="50" dy="26">Reply</tspan></text>
+<path d="M 16 1000 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="933" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="934" width="288" height="5" rx="2.5" fill="#5143ce"/>
+<text x="50" y="964" fill="#5143ce" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Cache-read missing</tspan></text>
+<text x="50" y="995" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Keep conservative hold</tspan><tspan x="50" dy="26">Return unused time</tspan><tspan x="50" dy="26">Reply</tspan></text>
+<path d="M 16 1155 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="1088" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1089" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1119" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Clean timeout</tspan></text>
+<text x="50" y="1150" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Keep conservative hold</tspan><tspan x="50" dy="26">Return unused time</tspan><tspan x="50" dy="26">504 timeout</tspan></text>
+<path d="M 16 1310 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-en-mobile-arrow)"/>
+<rect x="34" y="1243" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1244" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1274" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">Unknown outcome</tspan></text>
+<text x="50" y="1305" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">Keep reservation</tspan><tspan x="50" dy="26">Pause for review</tspan><tspan x="50" dy="26">No automatic replay</tspan></text>
+<text x="16" y="1420" fill="#59677c" font-size="15" font-weight="400" text-anchor="start"><tspan x="16" dy="0">Cleanup and accounting control</tspan><tspan x="16" dy="25">when the worker is released.</tspan><tspan x="16" dy="25">A hold is not exact usage.</tspan></text>
+</g></svg></div><div class="copy-zh" lang="zh-Hans"><svg class="arch-svg arch-desktop" id="trial-lifecycle-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="710" viewBox="0 0 1080 710" role="img" aria-label="一次远端试用轮次" aria-describedby="trial-lifecycle-zh-desktop-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-lifecycle-zh-desktop-desc">先检查请求，再确认不发送模型请求的就绪状态，然后预留额度、启动全新的 Devin 轮次，最后验证并清理。完整计量按实际 token 结算；只有缓存读取计量缺失且回答有效、清理完成时，保留保守额度；经验证并清理完成的超时也保留保守额度，返回超时。结果或清理不明则保留预留额度并暂停等待检查。试用不设等候队列。</desc>
+<defs><marker id="trial-lifecycle-zh-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="710" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">一次远端试用轮次</tspan></text>
+<rect x="20" y="62" width="1040" height="57" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="96" fill="#5143ce" font-size="18" font-weight="650" text-anchor="start"><tspan x="36" dy="0">试用不设等候队列</tspan></text>
+<text x="302" y="96" fill="#182238" font-size="18" font-weight="400" text-anchor="start"><tspan x="302" dy="0">忙碌时返回 429；稍候再提交。</tspan></text>
+<path d="M 208 225 H 226" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 421 225 H 439" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 634 225 H 652" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 847 225 H 865" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<rect x="20" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="36" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="36" dy="0">01</tspan></text>
+<text x="36" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="36" dy="0">检查入口</tspan></text>
+<text x="36" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="36" dy="0">密钥、请求</tspan><tspan x="36" dy="26">以及额度</tspan></text>
+<rect x="233" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="249" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="249" dy="0">02</tspan></text>
+<text x="249" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="249" dy="0">确认就绪</tspan></text>
+<text x="249" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="249" dy="0">检查工作进程</tspan><tspan x="249" dy="26">不发送模型请求</tspan></text>
+<rect x="446" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="462" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="462" dy="0">03</tspan></text>
+<text x="462" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="462" dy="0">预留额度</tspan></text>
+<text x="462" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="462" dy="0">预留 token</tspan><tspan x="462" dy="26">和运行时间</tspan></text>
+<rect x="659" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="675" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="675" dy="0">04</tspan></text>
+<text x="675" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="675" dy="0">Devin 思考</tspan></text>
+<text x="675" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="675" dy="0">全新的原生</tspan><tspan x="675" dy="26">Devin 轮次</tspan></text>
+<rect x="872" y="151" width="188" height="148" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="888" y="179" fill="#5143ce" font-size="16" font-weight="650" text-anchor="start"><tspan x="888" dy="0">05</tspan></text>
+<text x="888" y="211" fill="#182238" font-size="21" font-weight="650" text-anchor="start"><tspan x="888" dy="0">验证并清理</tspan></text>
+<text x="888" y="247" fill="#59677c" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="888" dy="0">核对模型与计量</tspan><tspan x="888" dy="26">停进程、删文件</tspan></text>
+<path d="M 966 299 V 346 H 144" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 144 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 408 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 672 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<path d="M 936 346 V 386" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-desktop-arrow)"/>
+<rect x="20" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="21" y="394" width="246" height="6" rx="3" fill="#0f766e"/>
+<text x="38" y="436" fill="#0f766e" font-size="19" font-weight="650" text-anchor="start"><tspan x="38" dy="0">完整计量</tspan></text>
+<text x="38" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="38" dy="0">记录实际 token</tspan><tspan x="38" dy="38">退回未用时间</tspan><tspan x="38" dy="38">返回回答</tspan></text>
+<rect x="284" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="285" y="394" width="246" height="6" rx="3" fill="#5143ce"/>
+<text x="302" y="436" fill="#5143ce" font-size="19" font-weight="650" text-anchor="start"><tspan x="302" dy="0">仅缺缓存读取计量</tspan></text>
+<text x="302" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="302" dy="0">保留保守额度</tspan><tspan x="302" dy="38">退回未用时间</tspan><tspan x="302" dy="38">返回回答</tspan></text>
+<rect x="548" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="549" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="566" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="566" dy="0">已清理的超时</tspan></text>
+<text x="566" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="566" dy="0">保留保守额度</tspan><tspan x="566" dy="38">退回未用时间</tspan><tspan x="566" dy="38">返回 504 超时</tspan></text>
+<rect x="812" y="393" width="248" height="216" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="813" y="394" width="246" height="6" rx="3" fill="#a65d0a"/>
+<text x="830" y="436" fill="#a65d0a" font-size="19" font-weight="650" text-anchor="start"><tspan x="830" dy="0">结果或清理不明</tspan></text>
+<text x="830" y="483" fill="#182238" font-size="17.5" font-weight="400" text-anchor="start"><tspan x="830" dy="0">保留预留额度</tspan><tspan x="830" dy="38">暂停并人工检查</tspan><tspan x="830" dy="38">不自动重发</tspan></text>
+<text x="20" y="656" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">清理和计量结果决定何时可以释放工作进程。</tspan><tspan x="20" dy="27">保守保留额度，不代表已知确切用量。</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-lifecycle-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1510" viewBox="0 0 340 1510" role="img" aria-label="一次远端试用轮次" aria-describedby="trial-lifecycle-zh-mobile-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-lifecycle-zh-mobile-desc">先检查请求，再确认不发送模型请求的就绪状态，然后预留额度、启动全新的 Devin 轮次，最后验证并清理。完整计量按实际 token 结算；只有缓存读取计量缺失且回答有效、清理完成时，保留保守额度；经验证并清理完成的超时也保留保守额度，返回超时。结果或清理不明则保留预留额度并暂停等待检查。试用不设等候队列。</desc>
+<defs><marker id="trial-lifecycle-zh-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1510" fill="#ffffff"/>
+<text x="16" y="31" fill="#182238" font-size="23" font-weight="700" text-anchor="start"><tspan x="16" dy="0">一次远端试用轮次</tspan></text>
+<rect x="16" y="55" width="308" height="90" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="85" fill="#5143ce" font-size="16.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">试用不设等候队列</tspan></text>
+<text x="30" y="115" fill="#182238" font-size="15" font-weight="400" text-anchor="start"><tspan x="30" dy="0">忙碌时返回 429；稍候再提交。</tspan></text>
+<path d="M 170 268 V 283" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<path d="M 170 384 V 399" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<path d="M 170 500 V 515" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<path d="M 170 616 V 631" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="174" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="204" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">01</tspan></text>
+<text x="82" y="204" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">检查入口</tspan></text>
+<text x="50" y="232" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">密钥、请求</tspan><tspan x="50" dy="23">以及额度</tspan></text>
+<rect x="34" y="290" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="320" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">02</tspan></text>
+<text x="82" y="320" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">确认就绪</tspan></text>
+<text x="50" y="348" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">检查工作进程</tspan><tspan x="50" dy="23">不发送模型请求</tspan></text>
+<rect x="34" y="406" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="436" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">03</tspan></text>
+<text x="82" y="436" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">预留额度</tspan></text>
+<text x="50" y="464" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">预留 token</tspan><tspan x="50" dy="23">和运行时间</tspan></text>
+<rect x="34" y="522" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="552" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">04</tspan></text>
+<text x="82" y="552" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">Devin 思考</tspan></text>
+<text x="50" y="580" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">全新的原生</tspan><tspan x="50" dy="23">Devin 轮次</tspan></text>
+<rect x="34" y="638" width="272" height="94" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="50" y="668" fill="#5143ce" font-size="15" font-weight="650" text-anchor="start"><tspan x="50" dy="0">05</tspan></text>
+<text x="82" y="668" fill="#182238" font-size="18" font-weight="650" text-anchor="start"><tspan x="82" dy="0">验证并清理</tspan></text>
+<text x="50" y="696" fill="#59677c" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">核对模型与计量</tspan><tspan x="50" dy="23">停进程、删文件</tspan></text>
+<path d="M 170 732 V 755 H 16 V 1310" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 16 845 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="778" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="779" width="288" height="5" rx="2.5" fill="#0f766e"/>
+<text x="50" y="809" fill="#0f766e" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">完整计量</tspan></text>
+<text x="50" y="840" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">记录实际 token</tspan><tspan x="50" dy="26">退回未用时间</tspan><tspan x="50" dy="26">返回回答</tspan></text>
+<path d="M 16 1000 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="933" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="934" width="288" height="5" rx="2.5" fill="#5143ce"/>
+<text x="50" y="964" fill="#5143ce" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">仅缺缓存读取计量</tspan></text>
+<text x="50" y="995" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">保留保守额度</tspan><tspan x="50" dy="26">退回未用时间</tspan><tspan x="50" dy="26">返回回答</tspan></text>
+<path d="M 16 1155 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="1088" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1089" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1119" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">已清理的超时</tspan></text>
+<text x="50" y="1150" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">保留保守额度</tspan><tspan x="50" dy="26">退回未用时间</tspan><tspan x="50" dy="26">返回 504 超时</tspan></text>
+<path d="M 16 1310 H 27" fill="none" stroke="#59677c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#trial-lifecycle-zh-mobile-arrow)"/>
+<rect x="34" y="1243" width="290" height="134" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<rect x="35" y="1244" width="288" height="5" rx="2.5" fill="#a65d0a"/>
+<text x="50" y="1274" fill="#a65d0a" font-size="17.5" font-weight="650" text-anchor="start"><tspan x="50" dy="0">结果或清理不明</tspan></text>
+<text x="50" y="1305" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="50" dy="0">保留预留额度</tspan><tspan x="50" dy="26">暂停并人工检查</tspan><tspan x="50" dy="26">不自动重发</tspan></text>
+<text x="16" y="1420" fill="#59677c" font-size="15" font-weight="400" text-anchor="start"><tspan x="16" dy="0">清理和计量结果决定何时</tspan><tspan x="16" dy="25">可以释放工作进程。</tspan><tspan x="16" dy="25">保留额度不代表确切用量。</tspan></text>
+</g></svg></div></div><figcaption id="trial-lifecycle-caption"><span class="bi-inline"><span class="copy-en" lang="en">A result is released only after validation and cleanup. Complete usage, partial metering, clean timeout and unknown execution take different accounting branches.</span><span class="copy-zh" lang="zh-Hans">验证和清理完成后才交付结果。完整计量、不完整计量、已确认清理的超时，以及执行情况未知，分别走不同的记账分支。</span></span></figcaption></figure><div class="two-up"><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">One demo room; no trial waiting queue</span><span class="copy-zh" lang="zh-Hans">一个体验房间，没有试用排队区</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Only one trial turn executes globally. If the worker is busy, Fleet returns <strong>429</strong> and asks the caller to wait and submit later. The private gateway’s bounded 30-second queue does not apply to the trial. Replacing a trial key does not reset its account budgets.</span><span class="copy-zh" lang="zh-Hans">全局同时只执行一轮试用。工作进程繁忙时，Fleet 返回 <strong>429</strong>，请调用方稍候再提交。私人网关的有限 30 秒队列不适用于试用；更换试用密钥也不会重置账号额度。</span></span></p></article><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">A clean room for each turn</span><span class="copy-zh" lang="zh-Hans">每轮使用干净的临时房间</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">A dedicated non-root worker creates a fresh private HOME with only its provider credential and pinned configuration. It copies no previous conversation directory. After confirmed process cleanup and usage collection, turn artifacts are removed. Uncertain cleanup quarantines artifacts and pauses new trial work.</span><span class="copy-zh" lang="zh-Hans">专用的非 root 工作进程为每轮创建私有临时 HOME，只带入所需服务商凭证与固定配置，不复制旧会话目录。确认进程清理并采集用量后，删除该轮产物；清理不确定时隔离产物并暂停新试用任务。</span></span></p></article></div><details class="architecture-details"><summary><span class="bi-inline"><span class="copy-en" lang="en">What happens to an uncertain receipt?</span><span class="copy-zh" lang="zh-Hans">回执不确定时怎么办？</span></span></summary><p><span class="bi-inline"><span class="copy-en" lang="en">Complete trusted metering charges the actual sum of input, output, cache-read and cache-creation tokens, including overshoot. When only cache-read metering is missing, a verified model, valid reply and complete cleanup can release the worker while keeping at least the full reservation or larger known subtotal. A separately verified clean five-minute timeout can also release the worker with a retained hold, but returns a timeout, not success.</span><span class="copy-zh" lang="zh-Hans">完整可信计量会计入输入、输出、缓存读取和缓存创建的实际总量，超额也计入。只缺缓存读取计量时，若模型已验证、回复有效且清理完整，可释放工作进程，但至少保留整笔预留额度或更大的已知小计。另有明确验证并清理的五分钟超时策略，也可在保留额度后释放工作进程；它返回超时，不会当作成功。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">Unknown execution, required usage, model identity or cleanup retains the reservation and pauses for operator review. It does not become zero usage. A daily reset does not erase unresolved holds or clear a safety pause. A proven failure before a model request was sent can release its model/runtime reservation, with an audit row retained.</span><span class="copy-zh" lang="zh-Hans">执行情况、必需用量、模型身份或清理未知时，保留预留额度并暂停，等待运营方核实，不会补成零用量。每日重置不会抹去未解决的保留额度或解除安全暂停。若能证明请求尚未发给模型，可退回该轮模型及时间预留，并保留审计记录。</span></span></p></details></section><section class="section" id="devin-trial-clocks"><div class="section-heading"><span class="section-index" aria-hidden="true">05</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Different clocks protect different jobs</span><span class="copy-zh" lang="zh-Hans">不同的时钟保护不同环节</span></span></h2></div><figure class="architecture-figure" aria-labelledby="trial-clocks-caption"><div class="bi"><div class="copy-en" lang="en"><svg class="arch-svg arch-desktop" id="trial-clocks-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="705" viewBox="0 0 1080 705" role="img" aria-label="Several clocks protect one turn" aria-describedby="trial-clocks-en-desktop-desc" lang="en" xml:lang="en">
+
+<desc id="trial-clocks-en-desktop-desc">A separate 10-second model-free readiness check happens before reservation. After admission, overlapping bounds are 300 seconds for native generation, 335 seconds for transport, 340 seconds reserved against runtime, and 360 seconds for the lease and MCP helper. These bands are not to scale and do not add together. The longer envelopes leave room for setup and cleanup, not more thinking time.</desc>
+<defs><marker id="trial-clocks-en-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="705" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">Several clocks protect one turn</tspan></text>
+<rect x="20" y="67" width="1040" height="105" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="99" fill="#59677c" font-size="17" font-weight="650" text-anchor="start"><tspan x="40" dy="0">Before reservation</tspan></text>
+<text x="40" y="140" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">10 s readiness</tspan></text>
+<text x="370" y="138" fill="#182238" font-size="19" font-weight="400" text-anchor="start"><tspan x="370" dy="0">No model request is sent.</tspan></text>
+<text x="20" y="215" fill="#182238" font-size="19" font-weight="650" text-anchor="start"><tspan x="20" dy="0">After admission: overlapping bounds</tspan></text>
+<rect x="20" y="239" width="1040" height="365" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="279" fill="#59677c" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">360 s</tspan></text>
+<text x="162" y="278" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="162" dy="0">Lease + MCP helper lifetime</tspan></text>
+<rect x="70" y="314" width="940" height="265" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="90" y="354" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="90" dy="0">340 s</tspan></text>
+<text x="212" y="353" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="212" dy="0">Runtime reservation</tspan></text>
+<rect x="120" y="389" width="840" height="165" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="140" y="429" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="140" dy="0">335 s</tspan></text>
+<text x="262" y="428" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="262" dy="0">Transport deadline</tspan></text>
+<rect x="170" y="464" width="740" height="65" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="190" y="504" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="190" dy="0">300 s</tspan></text>
+<text x="312" y="503" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="312" dy="0">Native generation deadline</tspan></text>
+<text x="20" y="649" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">Bands are not to scale and do not add together. Generation starts after native readiness.</tspan><tspan x="20" dy="27">Longer envelopes leave room for setup and cleanup; they do not add thinking time.</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-clocks-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1060" viewBox="0 0 340 1060" role="img" aria-label="Several clocks protect one turn" aria-describedby="trial-clocks-en-mobile-desc" lang="en" xml:lang="en">
+
+<desc id="trial-clocks-en-mobile-desc">A separate 10-second model-free readiness check happens before reservation. After admission, overlapping bounds are 300 seconds for native generation, 335 seconds for transport, 340 seconds reserved against runtime, and 360 seconds for the lease and MCP helper. These bands are not to scale and do not add together. The longer envelopes leave room for setup and cleanup, not more thinking time.</desc>
+<defs><marker id="trial-clocks-en-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1060" fill="#ffffff"/>
+<text x="16" y="30" fill="#182238" font-size="22" font-weight="700" text-anchor="start"><tspan x="16" dy="0">Several clocks</tspan><tspan x="16" dy="28">protect one turn</tspan></text>
+<rect x="16" y="95" width="308" height="124" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="123" fill="#59677c" font-size="15.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">Before reservation</tspan></text>
+<text x="30" y="160" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="30" dy="0">10 s readiness</tspan></text>
+<text x="30" y="191" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="30" dy="0">No model request is sent.</tspan></text>
+<text x="16" y="256" fill="#182238" font-size="17" font-weight="650" text-anchor="start"><tspan x="16" dy="0">After admission:</tspan><tspan x="16" dy="24">overlapping bounds</tspan></text>
+<rect x="12" y="308" width="316" height="575" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="28" y="342" fill="#59677c" font-size="24" font-weight="700" text-anchor="start"><tspan x="28" dy="0">360 s</tspan></text>
+<text x="28" y="373" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="28" dy="0">Lease + MCP helper</tspan><tspan x="28" dy="24">lifetime</tspan></text>
+<rect x="24" y="422" width="292" height="433" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="456" fill="#5143ce" font-size="24" font-weight="700" text-anchor="start"><tspan x="40" dy="0">340 s</tspan></text>
+<text x="40" y="487" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="40" dy="0">Runtime reservation</tspan></text>
+<rect x="36" y="535" width="268" height="292" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="52" y="569" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="52" dy="0">335 s</tspan></text>
+<text x="52" y="600" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="52" dy="0">Transport deadline</tspan></text>
+<rect x="48" y="648" width="244" height="151" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="64" y="682" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="64" dy="0">300 s</tspan></text>
+<text x="64" y="713" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="64" dy="0">Native generation</tspan><tspan x="64" dy="24">deadline</tspan></text>
+<text x="16" y="925" fill="#59677c" font-size="15.5" font-weight="400" text-anchor="start"><tspan x="16" dy="0">Bands are not to scale.</tspan><tspan x="16" dy="25">These clocks do not add together.</tspan><tspan x="16" dy="25">Longer envelopes leave room for</tspan><tspan x="16" dy="25">setup and cleanup, not more</tspan><tspan x="16" dy="25">thinking time.</tspan></text>
+</g></svg></div><div class="copy-zh" lang="zh-Hans"><svg class="arch-svg arch-desktop" id="trial-clocks-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" width="1080" height="705" viewBox="0 0 1080 705" role="img" aria-label="几个时钟，共同保护一轮试用" aria-describedby="trial-clocks-zh-desktop-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-clocks-zh-desktop-desc">预留额度之前，先进行独立的 10 秒就绪检查，不发送模型请求。获准执行后，重叠的边界依次为：300 秒原生生成、335 秒传输、340 秒运行时间预留，以及 360 秒租约和 MCP 助手生存期。图形不按时间比例绘制，这些时间不相加。外层较长的时间为启动和清理留余量，不会增加思考时间。</desc>
+<defs><marker id="trial-clocks-zh-desktop-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="1080" height="705" fill="#ffffff"/>
+<text x="20" y="36" fill="#182238" font-size="26" font-weight="700" text-anchor="start"><tspan x="20" dy="0">几个时钟，共同保护一轮试用</tspan></text>
+<rect x="20" y="67" width="1040" height="105" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="99" fill="#59677c" font-size="17" font-weight="650" text-anchor="start"><tspan x="40" dy="0">预留额度之前</tspan></text>
+<text x="40" y="140" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">10 秒就绪检查</tspan></text>
+<text x="320" y="138" fill="#182238" font-size="19" font-weight="400" text-anchor="start"><tspan x="320" dy="0">不发送模型请求。</tspan></text>
+<text x="20" y="215" fill="#182238" font-size="19" font-weight="650" text-anchor="start"><tspan x="20" dy="0">获准执行后：几种边界重叠生效</tspan></text>
+<rect x="20" y="239" width="1040" height="365" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="279" fill="#59677c" font-size="23" font-weight="700" text-anchor="start"><tspan x="40" dy="0">360 秒</tspan></text>
+<text x="162" y="278" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="162" dy="0">租约与 MCP 助手生存期</tspan></text>
+<rect x="70" y="314" width="940" height="265" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="90" y="354" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="90" dy="0">340 秒</tspan></text>
+<text x="212" y="353" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="212" dy="0">运行时间预留</tspan></text>
+<rect x="120" y="389" width="840" height="165" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="140" y="429" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="140" dy="0">335 秒</tspan></text>
+<text x="262" y="428" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="262" dy="0">传输截止时间</tspan></text>
+<rect x="170" y="464" width="740" height="65" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="190" y="504" fill="#0f766e" font-size="23" font-weight="700" text-anchor="start"><tspan x="190" dy="0">300 秒</tspan></text>
+<text x="312" y="503" fill="#182238" font-size="20" font-weight="550" text-anchor="start"><tspan x="312" dy="0">原生生成截止时间</tspan></text>
+<text x="20" y="649" fill="#59677c" font-size="17" font-weight="400" text-anchor="start"><tspan x="20" dy="0">图形不按时间比例绘制，这些时长不相加；原生就绪后才开始生成。</tspan><tspan x="20" dy="27">外层时间为启动与清理留余量，不会增加模型思考时间。</tspan></text>
+</g></svg><svg class="arch-svg arch-mobile" id="trial-clocks-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" width="340" height="1060" viewBox="0 0 340 1060" role="img" aria-label="几个时钟，共同保护一轮试用" aria-describedby="trial-clocks-zh-mobile-desc" lang="zh-Hans" xml:lang="zh-Hans">
+
+<desc id="trial-clocks-zh-mobile-desc">预留额度之前，先进行独立的 10 秒就绪检查，不发送模型请求。获准执行后，重叠的边界依次为：300 秒原生生成、335 秒传输、340 秒运行时间预留，以及 360 秒租约和 MCP 助手生存期。图形不按时间比例绘制，这些时间不相加。外层较长的时间为启动和清理留余量，不会增加思考时间。</desc>
+<defs><marker id="trial-clocks-zh-mobile-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 7 4 L 1 7" fill="none" stroke="#59677c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<rect width="340" height="1060" fill="#ffffff"/>
+<text x="16" y="30" fill="#182238" font-size="22" font-weight="700" text-anchor="start"><tspan x="16" dy="0">几个时钟，</tspan><tspan x="16" dy="28">共同保护一轮试用</tspan></text>
+<rect x="16" y="95" width="308" height="124" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="30" y="123" fill="#59677c" font-size="15.5" font-weight="650" text-anchor="start"><tspan x="30" dy="0">预留额度之前</tspan></text>
+<text x="30" y="160" fill="#5143ce" font-size="23" font-weight="700" text-anchor="start"><tspan x="30" dy="0">10 秒就绪检查</tspan></text>
+<text x="30" y="191" fill="#182238" font-size="16" font-weight="400" text-anchor="start"><tspan x="30" dy="0">不发送模型请求。</tspan></text>
+<text x="16" y="256" fill="#182238" font-size="17" font-weight="650" text-anchor="start"><tspan x="16" dy="0">获准执行后：</tspan><tspan x="16" dy="24">几种边界重叠生效</tspan></text>
+<rect x="12" y="308" width="316" height="575" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="28" y="342" fill="#59677c" font-size="24" font-weight="700" text-anchor="start"><tspan x="28" dy="0">360 秒</tspan></text>
+<text x="28" y="373" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="28" dy="0">租约与 MCP 助手</tspan><tspan x="28" dy="24">生存期</tspan></text>
+<rect x="24" y="422" width="292" height="433" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="40" y="456" fill="#5143ce" font-size="24" font-weight="700" text-anchor="start"><tspan x="40" dy="0">340 秒</tspan></text>
+<text x="40" y="487" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="40" dy="0">运行时间预留</tspan></text>
+<rect x="36" y="535" width="268" height="292" rx="14" fill="#f3f5f9" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="52" y="569" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="52" dy="0">335 秒</tspan></text>
+<text x="52" y="600" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="52" dy="0">传输截止时间</tspan></text>
+<rect x="48" y="648" width="244" height="151" rx="14" fill="#ffffff" stroke="#dce3ed" stroke-width="1.5"/>
+<text x="64" y="682" fill="#0f766e" font-size="24" font-weight="700" text-anchor="start"><tspan x="64" dy="0">300 秒</tspan></text>
+<text x="64" y="713" fill="#182238" font-size="16.5" font-weight="400" text-anchor="start"><tspan x="64" dy="0">原生生成</tspan><tspan x="64" dy="24">截止时间</tspan></text>
+<text x="16" y="925" fill="#59677c" font-size="15.5" font-weight="400" text-anchor="start"><tspan x="16" dy="0">图形不按时间比例绘制。</tspan><tspan x="16" dy="25">这些时长不相加。</tspan><tspan x="16" dy="25">外层时间为启动与清理留余量，</tspan><tspan x="16" dy="25">不会增加模型思考时间。</tspan></text>
+</g></svg></div></div><figcaption id="trial-clocks-caption"><span class="bi-inline"><span class="copy-en" lang="en">The 300-second native deadline sits inside longer transport, runtime and lease/helper envelopes. Readiness happens before the model reservation.</span><span class="copy-zh" lang="zh-Hans">300 秒原生生成截止时间，位于更长的传输、运行时间及租约／辅助进程边界之内；就绪检查在预留模型额度前进行。</span></span></figcaption></figure><p><span class="bi-inline"><span class="copy-en" lang="en">Think of the <strong>340-second runtime reservation</strong> as booking a room before knowing how long the visit will take. After verified settlement and cleanup, the ledger returns unused seconds. A verified 30-second turn can return 310 seconds from that booking. The 300-second generation deadline remains five minutes; a larger outer timer gives setup and cleanup room, not extra model thinking time.</span><span class="copy-zh" lang="zh-Hans">把 <strong>340 秒运行时间预留</strong>想成先预约房间，再核对实际用时。确认结算及清理后，账本退回未用秒数；已验证的 30 秒轮次可退回该笔预留中的 310 秒。生成截止时间仍是 300 秒，即五分钟；外层时钟较长，是给启动和清理留空间，不是额外思考时间。</span></span></p><figure class="architecture-figure" aria-labelledby="trial-budgets-caption"><div class="bi"><div class="copy-en" lang="en"><svg id="trial-budgets-en-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-label="Separate trial allowance buckets" aria-describedby="trial-budgets-en-desktop-desc" class="arch-svg arch-desktop" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-en-desktop-desc">Per UTC day: one million tokens per account, ten million shared; personal and shared runtime are each two hundred minutes. One turn executes at a time. Tokens and time are separate allowances.</desc><defs><marker id="trial-budgets-en-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="1000" height="540" rx="20" fill="#f3f5f9"/><text x="20" y="36" text-anchor="start" font-size="22" font-weight="700" fill="#182238">Tokens of allowance / UTC day</text><text x="24" y="107" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Per account: 1,000,000</text><rect x="270" y="94" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="94" width="68.0" height="22" rx="6" fill="#5143ce"/><text x="24" y="177" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Shared: 10,000,000</text><rect x="270" y="164" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="164" width="680" height="22" rx="6" fill="#0f766e"/><text x="20" y="250" text-anchor="start" font-size="22" font-weight="700" fill="#182238">Runtime allowance / UTC day</text><text x="24" y="320" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Per account: 200 minutes</text><rect x="270" y="307" width="680" height="22" rx="6" fill="#5143ce"/><text x="24" y="390" text-anchor="start" font-size="17" font-weight="400" fill="#182238">Shared: 200 minutes</text><rect x="270" y="377" width="680" height="22" rx="6" fill="#0f766e"/><rect x="20" y="445" width="960" height="76" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="500.0" y="476" text-anchor="middle" font-size="18" font-weight="700" fill="#5143ce">Separate turn + concurrency limits</text><text x="500.0" y="505" text-anchor="middle" font-size="16" font-weight="400" fill="#59677c">1 executing turn globally · 200 turns/day per account and shared · busy asks you to wait</text></svg><svg id="trial-budgets-en-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 715" role="img" aria-label="Separate trial allowance buckets" aria-describedby="trial-budgets-en-mobile-desc" class="arch-svg arch-mobile" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-en-mobile-desc">Per UTC day: one million tokens per account, ten million shared; personal and shared runtime are each two hundred minutes. One turn executes at a time. Tokens and time are separate allowances.</desc><defs><marker id="trial-budgets-en-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="340" height="715" rx="20" fill="#f3f5f9"/><text x="22" y="36" text-anchor="start" font-size="18" font-weight="700" fill="#182238">Tokens of allowance / UTC day</text><text x="22" y="70" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Per account: 1,000,000</text><rect x="22" y="83" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="83" width="29.6" height="22" rx="6" fill="#5143ce"/><text x="22" y="165" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Shared: 10,000,000</text><rect x="22" y="178" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="178" width="296" height="22" rx="6" fill="#0f766e"/><text x="22" y="295" text-anchor="start" font-size="18" font-weight="700" fill="#182238">Runtime allowance / UTC day</text><text x="22" y="329" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Per account: 200 minutes</text><rect x="22" y="342" width="296" height="22" rx="6" fill="#5143ce"/><text x="22" y="424" text-anchor="start" font-size="14" font-weight="400" fill="#182238">Shared: 200 minutes</text><rect x="22" y="437" width="296" height="22" rx="6" fill="#0f766e"/><rect x="18" y="545" width="304" height="128" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="576" text-anchor="middle" font-size="16" font-weight="700" fill="#5143ce">Separate turn + concurrency limits</text><text x="170.0" y="605" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">1 executing turn globally</text><text x="170.0" y="627" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">200 turns/day per account and shared</text><text x="170.0" y="649" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">Busy returns a message; no trial queue</text></svg></div><div class="copy-zh" lang="zh-Hans"><svg id="trial-budgets-zh-desktop-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img" aria-label="试用的几个独立限额" aria-describedby="trial-budgets-zh-desktop-desc" class="arch-svg arch-desktop" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-zh-desktop-desc">每日每人一百万 token、共享一千万 token；个人与共享运行时间各二百分种。一次仅执行一轮；token 与时间是不同的额度。</desc><defs><marker id="trial-budgets-zh-desktop-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="1000" height="540" rx="20" fill="#f3f5f9"/><text x="20" y="36" text-anchor="start" font-size="22" font-weight="700" fill="#182238">每日 token 额度</text><text x="24" y="107" text-anchor="start" font-size="17" font-weight="400" fill="#182238">每账号：1,000,000</text><rect x="270" y="94" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="94" width="68.0" height="22" rx="6" fill="#5143ce"/><text x="24" y="177" text-anchor="start" font-size="17" font-weight="400" fill="#182238">全部共享：10,000,000</text><rect x="270" y="164" width="680" height="22" rx="6" fill="#e4e8ef"/><rect x="270" y="164" width="680" height="22" rx="6" fill="#0f766e"/><text x="20" y="250" text-anchor="start" font-size="22" font-weight="700" fill="#182238">每日运行时间额度</text><text x="24" y="320" text-anchor="start" font-size="17" font-weight="400" fill="#182238">每账号：200 分钟</text><rect x="270" y="307" width="680" height="22" rx="6" fill="#5143ce"/><text x="24" y="390" text-anchor="start" font-size="17" font-weight="400" fill="#182238">全部共享：200 分钟</text><rect x="270" y="377" width="680" height="22" rx="6" fill="#0f766e"/><rect x="20" y="445" width="960" height="76" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="500.0" y="476" text-anchor="middle" font-size="18" font-weight="700" fill="#5143ce">另有执行与轮次限制</text><text x="500.0" y="505" text-anchor="middle" font-size="16" font-weight="400" fill="#59677c">全局同时 1 轮 · 个人与共享每日各 200 轮 · 忙碌时提示稍后重试</text></svg><svg id="trial-budgets-zh-mobile-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 715" role="img" aria-label="试用的几个独立限额" aria-describedby="trial-budgets-zh-mobile-desc" class="arch-svg arch-mobile" style="font-family:system-ui,-apple-system,sans-serif"><desc id="trial-budgets-zh-mobile-desc">每日每人一百万 token、共享一千万 token；个人与共享运行时间各二百分种。一次仅执行一轮；token 与时间是不同的额度。</desc><defs><marker id="trial-budgets-zh-mobile-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs><rect width="340" height="715" rx="20" fill="#f3f5f9"/><text x="22" y="36" text-anchor="start" font-size="18" font-weight="700" fill="#182238">每日 token 额度</text><text x="22" y="70" text-anchor="start" font-size="14" font-weight="400" fill="#182238">每账号：1,000,000</text><rect x="22" y="83" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="83" width="29.6" height="22" rx="6" fill="#5143ce"/><text x="22" y="165" text-anchor="start" font-size="14" font-weight="400" fill="#182238">全部共享：10,000,000</text><rect x="22" y="178" width="296" height="22" rx="6" fill="#e4e8ef"/><rect x="22" y="178" width="296" height="22" rx="6" fill="#0f766e"/><text x="22" y="295" text-anchor="start" font-size="18" font-weight="700" fill="#182238">每日运行时间额度</text><text x="22" y="329" text-anchor="start" font-size="14" font-weight="400" fill="#182238">每账号：200 分钟</text><rect x="22" y="342" width="296" height="22" rx="6" fill="#5143ce"/><text x="22" y="424" text-anchor="start" font-size="14" font-weight="400" fill="#182238">全部共享：200 分钟</text><rect x="22" y="437" width="296" height="22" rx="6" fill="#0f766e"/><rect x="18" y="545" width="304" height="128" rx="16" fill="white" stroke="#5143ce" stroke-width="2"/><text x="170.0" y="576" text-anchor="middle" font-size="16" font-weight="700" fill="#5143ce">另有执行与轮次限制</text><text x="170.0" y="605" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">全局同时执行 1 轮</text><text x="170.0" y="627" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">个人与共享每日各最多 200 轮</text><text x="170.0" y="649" text-anchor="middle" font-size="14" font-weight="400" fill="#59677c">忙碌时返回提示，没有试用排队区</text></svg></div></div><figcaption id="trial-budgets-caption"><span class="bi-inline"><span class="copy-en" lang="en">Token allowances and elapsed runtime use separate units. Personal and shared limits must both allow the next turn; the account page shows remaining capacity.</span><span class="copy-zh" lang="zh-Hans">Token 额度和运行时间使用不同单位。个人与共享限额都要允许，下一轮才能开始；账号页面显示剩余容量。</span></span></figcaption></figure><p><span class="bi-inline"><span class="copy-en" lang="en">Before a model send, Fleet holds up to <strong>20,000 remaining allowance tokens</strong> and 340 seconds. The token hold and <code>max_tokens</code> are not enforced upstream spending or output caps; actual reported usage can be larger. Turn handoffs and continuations count separately toward daily turn/runtime limits. Here, one turn means one accepted Fleet model request; a native agent may make several internal provider calls, so this is not a provider billing-request count. Reset is at <strong>00:00 UTC</strong>.</span><span class="copy-zh" lang="zh-Hans">发送模型请求前，Fleet 预留最多 <strong>20,000 个剩余额度 token</strong>和 340 秒。Token 预留及 <code>max_tokens</code>不是上游强制的费用或输出上限；实际报告用量可能更高。工具交接与继续请求分别计入每日轮次／运行时间限制。这里一轮指一次获准的 Fleet 模型请求；原生智能体内部可能发起多次服务商调用，因此不是服务商计费请求次数。每日 <strong>UTC 00:00</strong>重置。</span></span></p><div class="design-links"><span class="bi-inline"><span class="copy-en" lang="en"><a href="devin-trial-foundation.html#budgets">All current trial limits and failure rules</a></span><span class="copy-zh" lang="zh-Hans"><a href="devin-trial-foundation.html#budgets">全部当前试用限额与故障规则</a></span></span><span class="bi-inline"><span class="copy-en" lang="en"><a href="devin.html#connect">Connect a private Devin account</a></span><span class="copy-zh" lang="zh-Hans"><a href="devin.html#connect">连接私人 Devin 账号</a></span></span></div></section><section class="section" id="architecture"><div class="section-heading"><span class="section-index" aria-hidden="true">06</span><h2><span class="bi-inline"><span class="copy-en" lang="en">One request, five stops</span><span class="copy-zh" lang="zh-Hans">一次请求，五个环节</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">This is the default Anthropic route. The response returns along the same route; permitted tools execute on your computer.</span><span class="copy-zh" lang="zh-Hans">下图是默认 Anthropic 路线。回答沿原路返回；获准的工具操作仍在你的电脑上执行。</span></span></p><ol class="route" aria-label="Default request route" data-aria-label-en="Default request route" data-aria-label-zh="默认请求路线"><li><span class="step-number" aria-hidden="true">01</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Your computer</span><span class="copy-zh" lang="zh-Hans">你的电脑</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Original Claude Code runs files, tools and normal conversation history locally. Selected model context travels with the request.</span><span class="copy-zh" lang="zh-Hans">原版 Claude Code 在本地处理文件、工具和正常会话历史。选入模型上下文的内容会随请求发送。</span></span></p></li><li><span class="step-number" aria-hidden="true">02</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Our HTTPS gateway</span><span class="copy-zh" lang="zh-Hans">我们的 HTTPS 网关</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Claude Code calls ccfleet.io with a separate Fleet connection key. The gateway decrypts the request and checks access.</span><span class="copy-zh" lang="zh-Hans">Claude Code 带独立的 Fleet 连接密钥访问 ccfleet.io。网关解密请求并验证访问权限。</span></span></p></li><li><span class="step-number" aria-hidden="true">03</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Your routing rules</span><span class="copy-zh" lang="zh-Hans">你的路由规则</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Only your selected own slots are eligible: one account, priority order, or conversation stickiness.</span><span class="copy-zh" lang="zh-Hans">只从你明确选中的自有槽位中选择：指定一个账号、按优先级，或保持会话账号。</span></span></p></li><li><span class="step-number" aria-hidden="true">04</span><h3><span class="bi-inline"><span class="copy-en" lang="en">Your account slot</span><span class="copy-zh" lang="zh-Hans">你的账号槽位</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Restricted server-side SSH reaches the selected slot with a pinned host identity. The native Claude credential stays there.</span><span class="copy-zh" lang="zh-Hans">服务器通过受限 SSH 连接所选槽位，并核验固定的主机身份。原生 Claude 登录凭证留在槽位。</span></span></p></li><li><span class="step-number" aria-hidden="true">05</span><h3><span class="bi-inline"><span class="copy-en" lang="en">The model provider</span><span class="copy-zh" lang="zh-Hans">模型服务商</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">The slot opens a new certificate-verified HTTPS connection to Anthropic. The answer streams back to local Claude Code.</span><span class="copy-zh" lang="zh-Hans">槽位重新建立经证书校验的 HTTPS 连接，向 Anthropic 发出请求。回答以流式方式返回本地 Claude Code。</span></span></p></li></ol><p class="route-transport"><span class="bi-inline"><span class="copy-en" lang="en"><strong>Transport:</strong> computer → gateway uses HTTPS; gateway → slot uses restricted SSH; slot → Anthropic uses HTTPS. Encryption protects each connection. The gateway and slot still process model content.</span><span class="copy-zh" lang="zh-Hans"><strong>传输：</strong>电脑到网关使用 HTTPS，网关到槽位使用受限 SSH，槽位到 Anthropic 使用 HTTPS。加密保护每一段连接，网关与槽位仍会处理模型内容。</span></span></p></section><section class="section" id="verification"><div class="section-heading"><span class="section-index" aria-hidden="true">07</span><h2><span class="bi-inline"><span class="copy-en" lang="en">What we have actually verified</span><span class="copy-zh" lang="zh-Hans">已经验证到哪一步</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">Evidence is dated and limited to the cases below. A successful test is not a guarantee of future availability or provider acceptance.</span><span class="copy-zh" lang="zh-Hans">证据有明确日期，只覆盖以下范围。一次成功测试不保证未来可用性，也不保证服务商接受后续请求。</span></span></p><div class="evidence-grid"><article class="evidence-card"><div class="badge "><span class="bi-inline"><span class="copy-en" lang="en">Live verification</span><span class="copy-zh" lang="zh-Hans">真实线上验证</span></span></div><p class="evidence-date"><span class="bi-inline"><span class="copy-en" lang="en">October 11, 2026</span><span class="copy-zh" lang="zh-Hans">2026 年 10 月 11 日</span></span></p><h3><span class="bi-inline"><span class="copy-en" lang="en">Anthropic · one live slot</span><span class="copy-zh" lang="zh-Hans">Anthropic · 一个真实槽位</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Native Read/Write, streamed replies and token counting passed on one live account. Multi-slot behavior used controlled tests; no live second-account switch was exercised.</span><span class="copy-zh" lang="zh-Hans">一个真实账号通过原版客户端读写文件、流式回复和 Token 计数验证。多槽位行为使用受控测试，尚未实测第二个真实账号的线上切换。</span></span></p><a class="text-link" href="public-gateway.html#verification"><span class="bi-inline"><span class="copy-en" lang="en">Read the verification scope</span><span class="copy-zh" lang="zh-Hans">查看验证范围</span></span></a></article><article class="evidence-card"><div class="badge controlled"><span class="bi-inline"><span class="copy-en" lang="en">Controlled verification</span><span class="copy-zh" lang="zh-Hans">受控测试</span></span></div><p class="evidence-date"><span class="bi-inline"><span class="copy-en" lang="en">Scope recorded October 11, 2026</span><span class="copy-zh" lang="zh-Hans">范围记录于 2026 年 10 月 11 日</span></span></p><h3><span class="bi-inline"><span class="copy-en" lang="en">Routing and failure boundaries</span><span class="copy-zh" lang="zh-Hans">路由与故障边界</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Controlled peers exercised multi-slot routing and faults. These tests are separate from live provider tests and do not prove a live second-account failover.</span><span class="copy-zh" lang="zh-Hans">可控测试端验证多槽位路由与故障处理。这与真实服务商测试分开，不代表已验证两个真实账号之间的线上切换。</span></span></p><a class="text-link" href="public-gateway.html#choose"><span class="bi-inline"><span class="copy-en" lang="en">Inspect routing examples</span><span class="copy-zh" lang="zh-Hans">查看路由示例</span></span></a></article><article class="evidence-card" id="devin-pilot"><div class="badge limited"><span class="bi-inline"><span class="copy-en" lang="en">Experimental pilot</span><span class="copy-zh" lang="zh-Hans">实验性试点</span></span></div><p class="evidence-date"><span class="bi-inline"><span class="copy-en" lang="en">October 18, 2026</span><span class="copy-zh" lang="zh-Hans">2026 年 10 月 18 日</span></span></p><h3><span class="bi-inline"><span class="copy-en" lang="en">Devin · owner-operated slot</span><span class="copy-zh" lang="zh-Hans">Devin · 持有者自有槽位</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">In this operator-enabled own-account pilot, local Claude Code connects through Fleet to native Devin CLI on your own slot. Selected context goes to that provider; tools run on your computer. Bring your own subscription.</span><span class="copy-zh" lang="zh-Hans">这是由运营人员启用的自有账号试点：本机原版 Claude Code 通过 Fleet 连接自有槽位上的原生 Devin CLI。选中的上下文会发给该服务商；工具在你的电脑上运行。请自备订阅。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">An owner’s public-endpoint test completed Read, Edit, Bash, three passing local tests and a streamed final answer. An independent audit verified served Claude Opus 5.5 Max. Token counting and full API parity are not established.</span><span class="copy-zh" lang="zh-Hans">一位持有者经公开接口完成 Read、Edit、Bash 调用，本机三项测试通过，并收到流式最终回答。独立审计确认实际使用 Claude Opus 5.5 Max。尚未证明 Token 计数与完整 API 语义一致。</span></span></p><a class="text-link" href="devin.html#connect"><span class="bi-inline"><span class="copy-en" lang="en">Explore the pilot and limits</span><span class="copy-zh" lang="zh-Hans">查看试点与限制</span></span></a> · <a class="text-link" href="devin.html#prices"><span class="bi-inline"><span class="copy-en" lang="en">Subscription and Fleet costs</span><span class="copy-zh" lang="zh-Hans">订阅与 Fleet 费用</span></span></a></article></div><div class="boundary"><p><span class="bi-inline"><span class="copy-en" lang="en"><strong>Known limits:</strong> Fleet’s outgoing Python TLS connection has not been proven equivalent to native Claude Code’s JA3 fingerprint. The native Devin pilot makes no fingerprint-equivalence claim. These results do not establish provider approval, full API parity or a blanket reliability guarantee.</span><span class="copy-zh" lang="zh-Hans"><strong>已知边界：</strong>Fleet 发起的 Python 上游 TLS 连接，尚未证明与原版 Claude Code 的 JA3 指纹等价。原生 Devin 试点也不宣称连接指纹相同。这些结果不构成服务商认可、完整 API 一致或全面可靠性的保证。</span></span></p></div></section><section class="section" id="routing"><div class="section-heading"><span class="section-index" aria-hidden="true">08</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Account control and trust boundaries</span><span class="copy-zh" lang="zh-Hans">账号控制与信任边界</span></span></h2></div><div class="two-up"><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">You choose the eligible accounts</span><span class="copy-zh" lang="zh-Hans">由你确定可选账号</span></span></h3><ul><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>A only:</strong> selecting A does not permit automatic use of B.</span><span class="copy-zh" lang="zh-Hans"><strong>只选 A：</strong>不会自动使用 B。</span></span></li><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>A before B:</strong> eligible fallback can try B after a known pre-send failure or a supported explicit upstream rejection.</span><span class="copy-zh" lang="zh-Hans"><strong>A 优先、B 备选：</strong>发送前已确认的故障，或受支持的明确上游拒绝，才可尝试 B。</span></span></li><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>Sticky mode:</strong> new conversations start in your priority order; later requests prefer the account that began a normal response. The bounded assignment can expire or reset.</span><span class="copy-zh" lang="zh-Hans"><strong>会话保持：</strong>新会话按你的优先级开始；后续请求优先使用开始正常回复的账号。有限的运行时记录可能到期或被重置。</span></span></li><li><span class="bi-inline"><span class="copy-en" lang="en"><strong>Pin this launch:</strong> <code>ccfleet local --slot A</code> disables cross-account switching for that launch.</span><span class="copy-zh" lang="zh-Hans"><strong>固定本次启动：</strong><code>ccfleet local --slot A</code> 会关闭本次启动的跨账号切换。</span></span></li></ul></article><article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">Content and credentials are different</span><span class="copy-zh" lang="zh-Hans">内容与凭证，分别看待</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">The laptop holds a separate, revocable Fleet connection key. The selected slot keeps its native Claude or Devin credential. Slot isolation does not hide model content from the gateway, slot or chosen provider.</span><span class="copy-zh" lang="zh-Hans">电脑保存独立且可撤销的 Fleet 连接密钥；所选槽位保留原生 Claude 或 Devin 凭证。槽位隔离不会向网关、槽位或所选服务商隐藏模型内容。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">HTTPS ends at the gateway, which can read requests and responses. Privileged machine administrators retain root access. Files remain local as files, but prompts, file contents and tool results can enter model context.</span><span class="copy-zh" lang="zh-Hans">HTTPS 在网关解密，因此网关可读取请求与回复。主机管理员仍拥有 root 权限。文件本身留在本地，但提示、文件内容与工具结果可能进入模型上下文。</span></span></p><p><span class="bi-inline"><span class="copy-en" lang="en">If sending is uncertain or public response headers have started, Fleet does not switch and replay the request. A dispatched native Devin request is not automatically replayed.</span><span class="copy-zh" lang="zh-Hans">发送结果不确定或已经返回公共响应头后，Fleet 不会换账号重放请求。已派发的原生 Devin 请求也不会自动重放。</span></span></p><a class="text-link" href="/privacy"><span class="bi-inline"><span class="copy-en" lang="en">Read the full privacy scope</span><span class="copy-zh" lang="zh-Hans">查看完整隐私范围</span></span></a></article></div></section><section class="section" id="parallel-agents">
+<div class="section-heading"><span class="section-index" aria-hidden="true">09</span><h2><span class="bi-inline"><span class="copy-en" lang="en">When many agents ask at once</span><span class="copy-zh" lang="zh-Hans">很多代理同时提问时</span></span></h2></div>
 <p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">Think of Fleet as a shared reception desk outside private rooms. Your slot and provider account stay yours. The desk has limited space to handle questions and a small waiting area for a rush.</span><span class="copy-zh" lang="zh-Hans">把 Fleet 想成私人房间外共用的收件前台。槽位和服务商账号仍归各自所有；前台一次能处理的问题有限，突然来很多问题时，还有一个小等候区。</span></span></p>
 <div class="evidence-grid">
 <article class="detail-card"><h3><span class="bi-inline"><span class="copy-en" lang="en">1. Check the ticket</span><span class="copy-zh" lang="zh-Hans">1. 检查通行证</span></span></h3><p><span class="bi-inline"><span class="copy-en" lang="en">Fleet checks the connection key and the slots it is allowed to use. The parent agent, its subagents and other chats using that same key share one traffic limit.</span><span class="copy-zh" lang="zh-Hans">Fleet 先检查连接密钥，以及它获准使用的槽位。主代理、子代理和使用同一密钥的其他会话，共享同一连接的请求上限。</span></span></p></article>
@@ -67,7 +1138,7 @@ color:var(--acc,#4932c5)}
 </div>
 <p><span class="bi-inline"><span class="copy-en" lang="en"><strong>How operators update it:</strong> pause new starts, let existing replies finish, then replace the gateway and reopen traffic after checks. If current work has not finished within the maintenance window, operators should postpone the update and reopen traffic. This is an operator procedure, not an automatic promise of uninterrupted restarts.</span><span class="copy-zh" lang="zh-Hans"><strong>运营者如何更新：</strong>先暂停新任务开始，等现有回复结束，再更换网关并在检查后恢复流量。如果当前任务未在维护窗口内结束，运营者应推迟更新并恢复流量。这是运营流程，不表示重启会自动保持所有请求不中断。</span></span></p>
 <p><span class="bi-inline"><span class="copy-en" lang="en"><a class="text-link" href="public-gateway.html#busy">What to do when the gateway is busy</a> · <a class="text-link" href="runbooks.html#gateway-request-bursts">Operator controls and recovery</a></span><span class="copy-zh" lang="zh-Hans"><a class="text-link" href="public-gateway.html#busy">网关忙碌时怎么办</a> · <a class="text-link" href="runbooks.html#gateway-request-bursts">运营配置与恢复步骤</a></span></span></p>
-</section><section class="section" id="host-comparison"><div class="section-heading"><span class="section-index" aria-hidden="true">05</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Compare the design decisions</span><span class="copy-zh" lang="zh-Hans">对比设计选择</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">A reference platform helps explain the alternatives. This is a summary of vendor documentation checked October 11, 2026; internals were not audited.</span><span class="copy-zh" lang="zh-Hans">以参考平台解释其他设计选择。内容依据 2026 年 10 月 11 日核对的厂商文档整理，未审计其内部实现。</span></span></p><div class="table-scroll"><table><caption><span class="bi-inline"><span class="copy-en" lang="en">Vendor documentation; internals not audited</span><span class="copy-zh" lang="zh-Hans">厂商公开文档；内部实现未审计</span></span></caption><thead><tr><th scope="col"><span class="bi-inline"><span class="copy-en" lang="en">Decision</span><span class="copy-zh" lang="zh-Hans">设计问题</span></span></th><th scope="col">CC Fleet</th><th scope="col"><span class="bi-inline"><span class="copy-en" lang="en">Reference platform</span><span class="copy-zh" lang="zh-Hans">参考平台</span></span></th></tr></thead><tbody><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Eligible accounts</span><span class="copy-zh" lang="zh-Hans">可用账号</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Only slots you own and explicitly select. Each connection key chooses one provider: default Anthropic or a verified Devin pilot slot.</span><span class="copy-zh" lang="zh-Hans">只使用你自己持有且明确选中的槽位。每个连接密钥选择一种服务商：默认 Anthropic，或已验证的 Devin 试点槽位。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs describe manual or automatic selection of ready accounts, including permitted shared accounts and groups.</span><span class="copy-zh" lang="zh-Hans">文档说明可手动选择或自动纳入已就绪账号，也包括获准使用的共享账号与账号组。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Default account selection</span><span class="copy-zh" lang="zh-Hans">默认选择方式</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Sticky mode begins in your priority order, then remembers the responding account. Priority mode reconsiders that order for each request.</span><span class="copy-zh" lang="zh-Hans">会话保持模式先按优先级，再记住开始正常回复的账号；优先级模式则每次请求重新考虑顺序。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs describe default random allocation with conversation stickiness; ordered priority is another choice.</span><span class="copy-zh" lang="zh-Hans">默认随机策略分配账号，并保持可识别会话的账号；也可另选按顺序的优先级。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Backup boundaries</span><span class="copy-zh" lang="zh-Hans">备用切换边界</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Known pre-send failures or supported explicit upstream rejections may try the next selected slot. No replay after an uncertain send or public response headers.</span><span class="copy-zh" lang="zh-Hans">确认发生在发送前的故障，或受支持的明确上游拒绝，才可尝试下个已选槽位。发送结果不确定或已返回公共响应头后，不重放。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs list authentication, rate-limit and some service errors as switching triggers. Ambiguous-send and interrupted-stream behavior was not independently verified.</span><span class="copy-zh" lang="zh-Hans">文档将认证、限流与部分服务异常列为切换原因。未独立验证发送结果不确定或流式回复中断后的行为。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Credentials and visibility</span><span class="copy-zh" lang="zh-Hans">凭证与可见范围</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Native credentials stay in the slot. The gateway, slot and selected provider process model content; their privileged administrators are in the trust boundary.</span><span class="copy-zh" lang="zh-Hans">原生凭证留在槽位。网关、槽位与所选服务商处理模型内容，相关管理员属于需要信任的范围。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs describe credentials in separate account environments. Central content access and retention were not audited; credential isolation does not prove content blindness.</span><span class="copy-zh" lang="zh-Hans">文档说明凭证保留于独立账号环境。未审计中央服务的内容访问与保留范围；凭证隔离不等于内容不可见。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Evidence and unknowns</span><span class="copy-zh" lang="zh-Hans">验证与未知范围</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Dated live evidence and controlled routing tests are separated above. No live second-account switch or native TLS fingerprint equivalence is claimed.</span><span class="copy-zh" lang="zh-Hans">上文分别列出有日期的线上实测和受控路由测试。不宣称已验证第二个真实账号切换，或原生 TLS 指纹等价。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Public documentation only. No live routing, isolation, performance or provider-acceptance test was performed.</span><span class="copy-zh" lang="zh-Hans">仅依据公开文档；未做实际路由、隔离、性能或服务商接受情况测试。</span></span></td></tr></tbody></table></div><p class="comparison-note"><span class="bi-inline"><span class="copy-en" lang="en">There is no blanket superiority claim. A similar HTTPS entry point does not prove the same internal behavior. The reference platform’s exact fingerprint/TLS stack and renewal algorithm remain unverified.</span><span class="copy-zh" lang="zh-Hans">这里不作全面优劣结论。相似的 HTTPS 入口不代表内部行为相同；参考平台的具体 TLS 指纹、连接实现与续期算法仍未独立验证。</span></span></p></section><section class="section" id="sources"><div class="section-heading"><span class="section-index" aria-hidden="true">06</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Technical references, one click away</span><span class="copy-zh" lang="zh-Hans">技术资料，一步直达</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">Start with the gateway guide, then inspect the original design and implementation snapshots. The October 11 snapshots support the Anthropic route; they predate the Devin pilot.</span><span class="copy-zh" lang="zh-Hans">先阅读网关指南，再查看原始设计与实现快照。10 月 11 日快照用于默认 Anthropic 路线，时间早于 Devin 试点。</span></span></p><ul class="references"><li><a href="https://github.com/cdcupt/ccfleet/blob/eeaf4e71860f4b355be512d6906ae18bc772082b/ccfleetd/gateway.py" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Parallel-request design · October 23</span><span class="copy-zh" lang="zh-Hans">并行请求设计 · 10 月 23 日</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">The waiting room, capacity checks and cancellation rules. <a href="https://github.com/cdcupt/ccfleet/blob/eeaf4e71860f4b355be512d6906ae18bc772082b/tests/test_gateway_admission.py" target="_blank" rel="noopener noreferrer">Read the controlled tests</a>.</span><span class="copy-zh" lang="zh-Hans">等候区、容量检查与取消规则。<a href="https://github.com/cdcupt/ccfleet/blob/eeaf4e71860f4b355be512d6906ae18bc772082b/tests/test_gateway_admission.py" target="_blank" rel="noopener noreferrer">查看受控测试</a>。</span></span></p></li><li><a href="public-gateway.html"><span class="bi-inline"><span class="copy-en" lang="en">Gateway design and setup</span><span class="copy-zh" lang="zh-Hans">网关设计与配置</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">The current address, account selection, retry boundaries and verification scope.</span><span class="copy-zh" lang="zh-Hans">当前地址、账号选择、重试边界与验证范围。</span></span></p></li><li><a href="local-relay-verification.html"><span class="bi-inline"><span class="copy-en" lang="en">Recorded relay verification</span><span class="copy-zh" lang="zh-Hans">中继验证记录</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Technical checks, known limits and the scope of earlier experiments.</span><span class="copy-zh" lang="zh-Hans">技术检查、已知限制与早期实验覆盖范围。</span></span></p></li><li><a href="devin.html#connect"><span class="bi-inline"><span class="copy-en" lang="en">Devin pilot</span><span class="copy-zh" lang="zh-Hans">Devin 试点</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Setup, readiness and the experimental text/code route.</span><span class="copy-zh" lang="zh-Hans">连接方法、就绪检查与实验性文字／代码路线。</span></span></p></li><li><a href="https://github.com/cdcupt/ccfleet/blob/1494f6b0646188bbdab622ddd4321627df328c7c/docs/public-gateway.html" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Anthropic design snapshot</span><span class="copy-zh" lang="zh-Hans">Anthropic 设计快照</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Pinned documentation from the October 11 evidence review.</span><span class="copy-zh" lang="zh-Hans">10 月 11 日证据核对时使用的固定文档版本。</span></span></p></li><li><a href="https://github.com/cdcupt/ccfleet/blob/1494f6b0646188bbdab622ddd4321627df328c7c/ccfleetd/gateway.py" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Routing implementation snapshot</span><span class="copy-zh" lang="zh-Hans">路由实现快照</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Pinned source for the Anthropic gateway behavior described here.</span><span class="copy-zh" lang="zh-Hans">本文 Anthropic 网关行为所对应的固定源代码版本。</span></span></p></li><li><a href="/privacy"><span class="bi-inline"><span class="copy-en" lang="en">Privacy and retention</span><span class="copy-zh" lang="zh-Hans">隐私与保存时长</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Content processing, administrator access and stored observations.</span><span class="copy-zh" lang="zh-Hans">内容处理、管理员权限与保存的状态观察。</span></span></p></li></ul></section></main><footer><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet technical guide · Evidence dates are shown with each verification scope.</span><span class="copy-zh" lang="zh-Hans">CC Fleet 技术指南 · 每项验证范围均标明对应日期。</span></span></footer></div><script>(()=>{'use strict';
+</section><section class="section" id="host-comparison"><div class="section-heading"><span class="section-index" aria-hidden="true">10</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Compare the design decisions</span><span class="copy-zh" lang="zh-Hans">对比设计选择</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">A reference platform helps explain the alternatives. This is a summary of vendor documentation checked October 11, 2026; internals were not audited.</span><span class="copy-zh" lang="zh-Hans">以参考平台解释其他设计选择。内容依据 2026 年 10 月 11 日核对的厂商文档整理，未审计其内部实现。</span></span></p><div class="table-scroll"><table><caption><span class="bi-inline"><span class="copy-en" lang="en">Vendor documentation; internals not audited</span><span class="copy-zh" lang="zh-Hans">厂商公开文档；内部实现未审计</span></span></caption><thead><tr><th scope="col"><span class="bi-inline"><span class="copy-en" lang="en">Decision</span><span class="copy-zh" lang="zh-Hans">设计问题</span></span></th><th scope="col">CC Fleet</th><th scope="col"><span class="bi-inline"><span class="copy-en" lang="en">Reference platform</span><span class="copy-zh" lang="zh-Hans">参考平台</span></span></th></tr></thead><tbody><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Eligible accounts</span><span class="copy-zh" lang="zh-Hans">可用账号</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Only slots you own and explicitly select. Each connection key chooses one provider: default Anthropic or a verified Devin pilot slot.</span><span class="copy-zh" lang="zh-Hans">只使用你自己持有且明确选中的槽位。每个连接密钥选择一种服务商：默认 Anthropic，或已验证的 Devin 试点槽位。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs describe manual or automatic selection of ready accounts, including permitted shared accounts and groups.</span><span class="copy-zh" lang="zh-Hans">文档说明可手动选择或自动纳入已就绪账号，也包括获准使用的共享账号与账号组。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Default account selection</span><span class="copy-zh" lang="zh-Hans">默认选择方式</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Sticky mode begins in your priority order, then remembers the responding account. Priority mode reconsiders that order for each request.</span><span class="copy-zh" lang="zh-Hans">会话保持模式先按优先级，再记住开始正常回复的账号；优先级模式则每次请求重新考虑顺序。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs describe default random allocation with conversation stickiness; ordered priority is another choice.</span><span class="copy-zh" lang="zh-Hans">默认随机策略分配账号，并保持可识别会话的账号；也可另选按顺序的优先级。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Backup boundaries</span><span class="copy-zh" lang="zh-Hans">备用切换边界</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Known pre-send failures or supported explicit upstream rejections may try the next selected slot. No replay after an uncertain send or public response headers.</span><span class="copy-zh" lang="zh-Hans">确认发生在发送前的故障，或受支持的明确上游拒绝，才可尝试下个已选槽位。发送结果不确定或已返回公共响应头后，不重放。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs list authentication, rate-limit and some service errors as switching triggers. Ambiguous-send and interrupted-stream behavior was not independently verified.</span><span class="copy-zh" lang="zh-Hans">文档将认证、限流与部分服务异常列为切换原因。未独立验证发送结果不确定或流式回复中断后的行为。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Credentials and visibility</span><span class="copy-zh" lang="zh-Hans">凭证与可见范围</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Native credentials stay in the slot. The gateway, slot and selected provider process model content; their privileged administrators are in the trust boundary.</span><span class="copy-zh" lang="zh-Hans">原生凭证留在槽位。网关、槽位与所选服务商处理模型内容，相关管理员属于需要信任的范围。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Docs describe credentials in separate account environments. Central content access and retention were not audited; credential isolation does not prove content blindness.</span><span class="copy-zh" lang="zh-Hans">文档说明凭证保留于独立账号环境。未审计中央服务的内容访问与保留范围；凭证隔离不等于内容不可见。</span></span></td></tr><tr><th scope="row"><span class="bi-inline"><span class="copy-en" lang="en">Evidence and unknowns</span><span class="copy-zh" lang="zh-Hans">验证与未知范围</span></span></th><td><span class="bi-inline"><span class="copy-en" lang="en">Dated live evidence and controlled routing tests are separated above. No live second-account switch or native TLS fingerprint equivalence is claimed.</span><span class="copy-zh" lang="zh-Hans">上文分别列出有日期的线上实测和受控路由测试。不宣称已验证第二个真实账号切换，或原生 TLS 指纹等价。</span></span></td><td><span class="bi-inline"><span class="copy-en" lang="en">Public documentation only. No live routing, isolation, performance or provider-acceptance test was performed.</span><span class="copy-zh" lang="zh-Hans">仅依据公开文档；未做实际路由、隔离、性能或服务商接受情况测试。</span></span></td></tr></tbody></table></div><p class="comparison-note"><span class="bi-inline"><span class="copy-en" lang="en">There is no blanket superiority claim. A similar HTTPS entry point does not prove the same internal behavior. The reference platform’s exact fingerprint/TLS stack and renewal algorithm remain unverified.</span><span class="copy-zh" lang="zh-Hans">这里不作全面优劣结论。相似的 HTTPS 入口不代表内部行为相同；参考平台的具体 TLS 指纹、连接实现与续期算法仍未独立验证。</span></span></p></section><section class="section" id="sources"><div class="section-heading"><span class="section-index" aria-hidden="true">11</span><h2><span class="bi-inline"><span class="copy-en" lang="en">Technical references, one click away</span><span class="copy-zh" lang="zh-Hans">技术资料，一步直达</span></span></h2></div><p class="section-lead"><span class="bi-inline"><span class="copy-en" lang="en">Start with the gateway guide, then inspect the original design and implementation snapshots. The October 11 snapshots support the Anthropic route; they predate the Devin pilot.</span><span class="copy-zh" lang="zh-Hans">先阅读网关指南，再查看原始设计与实现快照。10 月 11 日快照用于默认 Anthropic 路线，时间早于 Devin 试点。</span></span></p><ul class="references"><li><a href="https://github.com/cdcupt/ccfleet/blob/354089db334e925ded13d6b0072871e09f16d8c6/ccfleetd/trial_runtime.py" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Current Devin orchestration · October 23</span><span class="copy-zh" lang="zh-Hans">当前 Devin 编排 · 10 月 23 日</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Source-pinned trial readiness, reservation, dispatch and settlement; the ordinary private profile is independently pinned.</span><span class="copy-zh" lang="zh-Hans">固定版本的试用就绪检查、预留、派发与结算；普通私人配置独立固定。</span></span></p></li><li><a href="https://agentclientprotocol.com/protocol/v1/overview" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">What ACP means</span><span class="copy-zh" lang="zh-Hans">ACP 是什么</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">The official structured client/agent protocol. Fleet’s adapter and capability limits are described above.</span><span class="copy-zh" lang="zh-Hans">官方的结构化客户端／智能体协议；Fleet 适配器及能力限制见上文。</span></span></p></li><li><a href="https://github.com/cdcupt/ccfleet/blob/eeaf4e71860f4b355be512d6906ae18bc772082b/ccfleetd/gateway.py" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Parallel-request design · October 23</span><span class="copy-zh" lang="zh-Hans">并行请求设计 · 10 月 23 日</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">The waiting room, capacity checks and cancellation rules. <a href="https://github.com/cdcupt/ccfleet/blob/eeaf4e71860f4b355be512d6906ae18bc772082b/tests/test_gateway_admission.py" target="_blank" rel="noopener noreferrer">Read the controlled tests</a>.</span><span class="copy-zh" lang="zh-Hans">等候区、容量检查与取消规则。<a href="https://github.com/cdcupt/ccfleet/blob/eeaf4e71860f4b355be512d6906ae18bc772082b/tests/test_gateway_admission.py" target="_blank" rel="noopener noreferrer">查看受控测试</a>。</span></span></p></li><li><a href="public-gateway.html"><span class="bi-inline"><span class="copy-en" lang="en">Gateway design and setup</span><span class="copy-zh" lang="zh-Hans">网关设计与配置</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">The current address, account selection, retry boundaries and verification scope.</span><span class="copy-zh" lang="zh-Hans">当前地址、账号选择、重试边界与验证范围。</span></span></p></li><li><a href="local-relay-verification.html"><span class="bi-inline"><span class="copy-en" lang="en">Recorded relay verification</span><span class="copy-zh" lang="zh-Hans">中继验证记录</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Technical checks, known limits and the scope of earlier experiments.</span><span class="copy-zh" lang="zh-Hans">技术检查、已知限制与早期实验覆盖范围。</span></span></p></li><li><a href="devin.html#connect"><span class="bi-inline"><span class="copy-en" lang="en">Devin pilot</span><span class="copy-zh" lang="zh-Hans">Devin 试点</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Setup, readiness and the experimental text/code route.</span><span class="copy-zh" lang="zh-Hans">连接方法、就绪检查与实验性文字／代码路线。</span></span></p></li><li><a href="https://github.com/cdcupt/ccfleet/blob/1494f6b0646188bbdab622ddd4321627df328c7c/docs/public-gateway.html" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Anthropic design snapshot</span><span class="copy-zh" lang="zh-Hans">Anthropic 设计快照</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Pinned documentation from the October 11 evidence review.</span><span class="copy-zh" lang="zh-Hans">10 月 11 日证据核对时使用的固定文档版本。</span></span></p></li><li><a href="https://github.com/cdcupt/ccfleet/blob/1494f6b0646188bbdab622ddd4321627df328c7c/ccfleetd/gateway.py" target="_blank" rel="noopener noreferrer"><span class="bi-inline"><span class="copy-en" lang="en">Routing implementation snapshot</span><span class="copy-zh" lang="zh-Hans">路由实现快照</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Pinned source for the Anthropic gateway behavior described here.</span><span class="copy-zh" lang="zh-Hans">本文 Anthropic 网关行为所对应的固定源代码版本。</span></span></p></li><li><a href="/privacy"><span class="bi-inline"><span class="copy-en" lang="en">Privacy and retention</span><span class="copy-zh" lang="zh-Hans">隐私与保存时长</span></span></a><p><span class="bi-inline"><span class="copy-en" lang="en">Content processing, administrator access and stored observations.</span><span class="copy-zh" lang="zh-Hans">内容处理、管理员权限与保存的状态观察。</span></span></p></li></ul></section></main><footer><span class="bi-inline"><span class="copy-en" lang="en">CC Fleet technical guide · Evidence dates are shown with each verification scope.</span><span class="copy-zh" lang="zh-Hans">CC Fleet 技术指南 · 每项验证范围均标明对应日期。</span></span></footer></div><script>(()=>{'use strict';
 document.querySelectorAll('a[data-language-link]').forEach(link=>{
   link.addEventListener('click',()=>{
     const target=new URL(link.href,location.href);
