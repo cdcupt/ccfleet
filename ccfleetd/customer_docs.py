@@ -23,7 +23,7 @@ from .render import _meter
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-20"
+DOCS_UPDATED = "2026-10-30"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -538,8 +538,8 @@ def _demo() -> str:
         )
         + bi(
             '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
-            "Max 20x plan.</p>",
-            '<p class="signed">已登录 <strong>alice@example.com</strong> &middot; Max 20x '
+            "Max plan.</p>",
+            '<p class="signed">已登录 <strong>alice@example.com</strong> &middot; Max '
             "订阅。</p>",
         )
         + bi(
@@ -559,9 +559,9 @@ def _demo() -> str:
         + "</div></div></div>"
         "<figcaption>"
         + bi(
-            "An example of your page: the slot, your Claude account on it, and how much of "
-            "your usage limits is left.",
-            "槽位页面示例：查看登录的 Claude 账号，以及账号的用量。",
+            "Example with a Max plan: your slot, the Claude account signed in to it, "
+            "and reported usage. Limits depend on your plan.",
+            "Max 订阅页面示例：查看槽位、登录的 Claude 账号和上报用量。限制因订阅方案而异。",
             inline=True,
         )
         + "</figcaption></figure>"
@@ -719,11 +719,11 @@ def overview(
         + "<li>"
         + bi(
             'For Anthropic, your own paid Claude plan that includes Claude Code: '
-            '<strong>Pro, Max, Team '
+            '<strong>Pro, Max, Ultra, Team '
             "or Enterprise</strong>. You sign that account in to your slot once; API keys "
             "do not replace that subscription sign-in.",
             '使用 Anthropic 时，需要你自己的 Claude 付费订阅，并且包含 Claude '
-            'Code：<strong>Pro、Max、Team 或 '
+            'Code：<strong>Pro、Max、Ultra、Team 或 '
             "Enterprise</strong>。你需要亲自在槽位上登录该账号，普通 API key "
             "不能代替这一步。",
             inline=True,
@@ -741,6 +741,21 @@ def overview(
         + bi("A Google account, to sign in here.", "一个 Google 账号，用于登录本站。", inline=True)
         + "</li>"
         + "</ul>"
+        + bi(
+            '<p><strong>Your plan sets your limits.</strong> Max has five-hour and weekly '
+            'limits. Ultra (formerly Max 20x) removes the five-hour limit for accounts '
+            'verified by Anthropic; weekly and model-specific limits still apply. '
+            'Fleet does not increase your Claude allowance. '
+            '<a href="https://claude.com/pricing">Current Claude plans</a> · '
+            '<a href="https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan">'
+            'Ultra limits and verification</a>.</p>',
+            '<p><strong>用量限制由你的订阅决定。</strong>Max 有五小时和每周限制。'
+            'Ultra（原 Max 20x）仅为经 Anthropic 验证的账号取消五小时限制，每周及特定模型的限制'
+            '仍然适用。Fleet 不会增加你的 Claude 额度。'
+            '<a href="https://claude.com/pricing">Claude 当前订阅方案</a> · '
+            '<a href="https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan">'
+            'Ultra 限制与验证说明</a>。</p>',
+        )
         + bi(
             '<p class="callout">For paid private slots, ccfleet sells the machine, not Claude '
             'or Devin subscriptions. They use only your own provider sign-in; '
@@ -1694,12 +1709,19 @@ def guide(
             "的不同槽位使用独立的 Linux 用户，槽位内没有管理员权限（sudo）。</p>",
         )
         + bi(
-            "<p>The 5-hour and weekly bars cover the whole Claude account. The token count "
+            "<p>The usage bars cover the whole Claude account. Available windows depend on "
+            "your plan: Ultra accounts verified by Anthropic have no five-hour limit, but weekly "
+            "and model-specific limits still apply. A missing reading does not confirm that a "
+            "limit has been removed. Check your Claude account for current limits and "
+            "verification status. Fleet does not increase your allowance. The token count "
             "covers what Claude Code used on this slot, not complete local-relay usage. "
             'Quota is read every five minutes; <span class="btnlabel">Refresh</span> reads '
             'it now. Pair more devices with <span class="btnlabel">Connect another '
             "computer</span>; each device is independently revocable.</p>",
-            "<p>五小时和每周进度条表示整个 Claude 账号的用量；token 数表示这个槽位上的 "
+            "<p>用量进度条表示整个 Claude 账号的用量。适用窗口取决于你的订阅：经 Anthropic 验证的 "
+            "Ultra 账号没有五小时限制，但每周及特定模型的限制仍然适用。缺少读数不代表限制已"
+            "取消。请在 Claude 账号中确认当前限制和验证状态；Fleet 不会增加额度。token 数表示"
+            "这个槽位上的 "
             "Claude Code 使用量，不是完整的本地转发统计。配额每五分钟读取一次，点击 <span "
             'class="btnlabel">刷新</span> 可立即读取。通过 <span class="btnlabel">连接另一'
             "台电脑</span> 添加设备，之后可单独撤销。</p>",

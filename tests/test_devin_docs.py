@@ -142,18 +142,25 @@ def test_prices_keep_current_plans_and_fleet_fees_separate_from_other_metrics(la
     assert {"plans", "allowance", "value", "api"} <= comparisons
     prices = {(attrs["data-plan"], float(attrs["data-monthly-usd"]))
               for _, attrs in page.tags if "data-plan" in attrs}
-    assert {("Pro", 20), ("Max 5x", 100), ("Max 20x", 200), ("Max", 200)} <= prices
+    assert {("Pro", 20), ("Max", 100), ("Ultra", 200), ("Max", 200)} <= prices
     if language == "en":
-        for phrase in ("US$200/year prepaid", "about US$17/month", "Claude Max is monthly only",
+        for phrase in ("US$200/year prepaid", "about US$17/month", "Claude Max and Ultra are monthly only",
                        "five-hour and weekly limits", "larger weekly allowance, no daily cap",
+                       "10× Pro weekly usage", "no five-hour limit for accounts verified by Anthropic",
+                       "temporary session limits apply until verification",
+                       "Fleet does not increase your provider allowance",
+                       "cannot fund interactive Claude Code or app extra usage",
                        "tax",
                        "provider subscription + selected Fleet slot + extra usage and tax",
                        "billing period"):
             assert phrase in page.text
         assert "Fleet 槽位费用另计" not in page.text
     else:
-        for phrase in ("预付每年 200 美元", "约每月 17 美元", "Claude Max 只按月订阅",
+        for phrase in ("预付每年 200 美元", "约每月 17 美元", "Claude Max 和 Ultra 只按月订阅",
                        "五小时及每周额度", "无每日上限", "税费",
+                       "每周为 Pro 的 10 倍", "只有通过 Anthropic 验证的账号取消五小时限制",
+                       "验证前仍有临时会话限制", "Fleet 不会增加提供商额度",
+                       "不能用于交互式 Claude Code 或应用的额外用量",
                        "提供商订阅 + 所选 Fleet 槽位 + 额外用量及税费",
                        "计费周期"):
             assert phrase in page.text

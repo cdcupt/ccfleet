@@ -1231,7 +1231,7 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
         "不展示邮箱域名；不适合安全遮盖的短邮箱等情况使用遮盖昵称或用户编号。"
         "这些片段会公开，这不等于匿名。",
         inline=True) + '</p><p>' + label(
-        "The reference value is not a Claude Pro/Max bill, an amount paid, a quota balance, "
+        "The reference value is not a Claude subscription bill, an amount paid, a quota balance, "
         "unlimited usage or guaranteed savings. Reported-model API estimates stay in the "
         "details and use only matched model observations. Model-specific estimates use the "
         "model names reported by the agent. "
@@ -1239,7 +1239,7 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
         "estimate because its per-request prompt tier is absent. Actual cache TTL, context "
         "and service tiers can change API pricing. These statistics retain no raw replies "
         "and do not reconstruct older model identities. Reading this page makes no model call. ",
-        "参考折算值不是 Claude Pro/Max 账单、实际付款、剩余额度、无限用量，也不保证节省了这些"
+        "参考折算值不是 Claude 订阅账单、实际付款、剩余额度、无限用量，也不保证节省了这些"
         "费用。按上报模型计价的 API 估值保留在明细中，只使用已匹配模型的观测；模型名称由代理"
         "上报。由于缺少每次请求的"
         "提示长度计价档位，Haiku 5.5 暂无上报模型估值。实际缓存有效期、上下文和服务档位"
@@ -2358,7 +2358,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             (
                 "The ranking uses Opus 5.5 standard global reference rates per million "
                 "tokens: input $4, output $20, five-minute cache writes $5 and cache reads "
-                "$0.20. It is not a Claude Pro/Max subscription bill, an amount paid, a "
+                "$0.20. It is not a Claude subscription bill, an amount paid, a "
                 "quota balance, unlimited usage or a promise of savings. The primary token "
                 "total and reference value cover the same measured categories. Missing "
                 "replies or cache fields make the subtotal partial, never fabricated zero. "
@@ -2368,7 +2368,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "Processed totals include cached context counted again per request; "
                 "they are not generated or unique text. No older model identity is inferred.",
                 "排行统一采用 Opus 5.5 标准全球参考价格，每百万 Token：输入 $4、输出 $20、"
-                "五分钟缓存写入 $5、缓存读取 $0.20。这不是 Claude Pro/Max 订阅账单、实际付款、"
+                "五分钟缓存写入 $5、缓存读取 $0.20。这不是 Claude 订阅账单、实际付款、"
                 "剩余额度、无限用量，也不保证节省了这些费用。排行主表的 Token 总量与参考折算值"
                 "覆盖相同的已观测分类；缺少回复或缓存字段时，标注部分小计，不伪造为零。实际"
                 "模型估值在展开明细中单独展示，只覆盖对应的已计价 Token。"
@@ -3698,7 +3698,17 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             + bars
             + _notice(
                 ACCOUNT_WIDE,
-                ("这两个窗口包含这个 Claude 账号在所有设备上的使用，不仅是当前槽位。"),
+                ("这些读数包含这个 Claude 账号在所有设备上的使用，不仅是当前槽位。"),
+                "small muted",
+            )
+            + _notice(
+                "Ultra accounts verified by Anthropic have no five-hour limit; weekly and "
+                "model-specific limits still apply. A missing reading does not confirm "
+                "verification or available quota. Check your Claude account for current limits. "
+                "Fleet does not increase your allowance.",
+                "经 Anthropic 验证的 Ultra 账号没有五小时限制，但每周及特定模型的限制仍然适用。"
+                "缺少读数不代表已通过验证或仍有可用额度。请在 Claude 账号中确认当前限制；"
+                "Fleet 不会增加额度。",
                 "small muted",
             )
             + refresh
