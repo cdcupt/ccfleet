@@ -1,7 +1,7 @@
 """A Claude plan, said the way Anthropic sells it (Erik, 2026-09-24).
 
 Claude Code's own words for a plan are "max" and "default_claude_max_20x";
-the holder and the operator read "Max 20x" on every page that names it.
+the holder and the operator read "Ultra" on every page that names it.
 """
 from __future__ import annotations
 
@@ -26,11 +26,16 @@ from .test_usersite import claimed, machine, report, site  # noqa: F401 (a fixtu
 
 
 @pytest.mark.parametrize("sub,tier,said", [
-    ("max", "default_claude_max_20x", "Max 20x"),
-    ("max", "default_claude_max_5x", "Max 5x"),
-    ("MAX", "default_claude_max_5x", "Max 5x"),
-    ("", "default_claude_max_20x", "Max 20x"),
-    (None, "default_claude_max_20x", "Max 20x"),
+    ("max", "default_claude_max_20x", "Ultra"),
+    ("max", "default_claude_max_5x", "Max"),
+    ("MAX", "default_claude_max_5x", "Max"),
+    ("", "default_claude_max_20x", "Ultra"),
+    (None, "default_claude_max_20x", "Ultra"),
+    ("ultra", None, "Ultra"),
+    (" ULTRA ", "default_claude_max_5x", "Ultra"),
+    ("max", "default_claude_max_10x", "Max 10x"),
+    ("max", "default_claude_max_20x_unknown", "Max"),
+    ("max", "notmax_20x", "Max"),
     ("max", None, "Max"),
     ("max", "default_claude_ai", "Max"),
     ("pro", "default_claude_ai", "Pro"),
@@ -77,7 +82,7 @@ def test_the_slots_card_says_each_holders_plan(console):  # noqa: F811
     held_slot(store)
     machine_said(store, signed_in("default_claude_max_5x"))
     row = row_of(slots_card(call("GET", "/admin").body), "m1")
-    assert 'ana@example.com<span class="sub">Max 5x</span>' in row
+    assert 'ana@example.com<span class="sub">Max</span>' in row
 
 
 def test_a_free_slot_says_no_plan(console):  # noqa: F811
@@ -87,7 +92,7 @@ def test_a_free_slot_says_no_plan(console):  # noqa: F811
     store.apply_slot_report("m1", [{"unix_user": "slot01", "present": False}], now=time.time())
     machine_said(store, signed_in("default_claude_max_5x"))
     row = row_of(slots_card(call("GET", "/admin").body), "m1")
-    assert "Max 5x" not in row
+    assert "Max" not in row
 
 
 def test_an_own_machine_says_its_owners_plan(console):  # noqa: F811
@@ -98,7 +103,7 @@ def test_an_own_machine_says_its_owners_plan(console):  # noqa: F811
                                              "subscription_type": "max",
                                              "plan": "default_claude_max_20x"}})
     row = row_of(slots_card(call("GET", "/admin").body), "erik-1")
-    assert 'cdcupt@gmail.com<span class="sub">Max 20x</span>' in row
+    assert 'cdcupt@gmail.com<span class="sub">Ultra</span>' in row
 
 
 def test_the_accounts_card_says_each_persons_plans(console):  # noqa: F811
@@ -114,7 +119,7 @@ def test_the_accounts_card_says_each_persons_plans(console):  # noqa: F811
         "node_id": "erik-1", "credentials": {"subscription_type": "pro"}})
     page = call("GET", "/admin").body
     accounts = Document(accounts_card(page)).text
-    assert "2 slots (Max 20x, Pro) · " in accounts and "Team" not in accounts
+    assert "2 slots (Pro, Ultra) · " in accounts and "Team" not in accounts
 
 
 @pytest.mark.parametrize("credentials", [{"present": False},
@@ -126,9 +131,9 @@ def test_signed_out_slots_do_not_show_cached_plans_in_console_cards(console, cre
         "credentials": {**credentials, "subscription_type": "max",
                         "plan": "default_claude_max_20x"}})
     page = call("GET", "/admin").body
-    assert "Max 20x" not in slots_card(page)
+    assert "Ultra" not in slots_card(page)
     accounts = Document(accounts_card(page)).text
-    assert "Max 20x" not in accounts and "1 slot · " in accounts
+    assert "Ultra" not in accounts and "1 slot · " in accounts
 
 
 def test_somebody_with_no_plan_says_none(console):  # noqa: F811
@@ -158,7 +163,7 @@ def test_the_fleet_table_says_the_plan_before_the_login(console):  # noqa: F811
                                              "mtime": time.time() - 600}})
     page = call("GET", "/admin").body
     table = page[page.index("<table"):page.index("</table>")]
-    assert "Max 20x · refreshed 10m ago" in table
+    assert "Ultra · refreshed 10m ago" in table
 
 
 def test_the_holders_page_says_their_plan(site):  # noqa: F811
@@ -169,4 +174,4 @@ def test_the_holders_page_says_their_plan(site):  # noqa: F811
     report(store, "m1", [{**signed_in("default_claude_max_20x"), "unix_user": slot["unix_user"],
                           "remote_control": {"state": "active"}}])
     assert store.get_slot(slot["id"])["state"] == slots.ACTIVE
-    assert " · Max 20x plan" in erik.page()
+    assert " · Ultra plan" in erik.page()

@@ -334,7 +334,7 @@ def test_a_signed_out_slot_does_not_display_a_cached_plan(console, credentials):
                         "plan": "default_claude_max_20x", "expires_at": 0}}])
     row = row_of(call("GET", "/admin").body, "ysflowerdog-1")
     assert "not signed in" in row and "token unavailable" in row
-    assert "Max 20x" not in row and "refreshed" not in row
+    assert "Ultra" not in row and "refreshed" not in row
 
 
 def test_missing_login_telemetry_stays_unknown(console):

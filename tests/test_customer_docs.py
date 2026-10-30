@@ -115,8 +115,13 @@ def test_the_plan_requirement_is_said_where_people_decide():
     """ccfleet sells a machine, not Claude. The overview says so before anybody
     pays, and the terms say it again."""
     overview = render("/docs")
-    assert "Pro, Max, Team or Enterprise" in overview
+    assert "Pro, Max, Ultra, Team or Enterprise" in overview
     assert "API keys do not replace" in overview
+    assert "Ultra (formerly Max 20x)" in overview
+    assert "five-hour limit for accounts verified by Anthropic" in overview
+    assert "weekly and model-specific limits still apply" in overview
+    assert "Fleet does not increase your Claude allowance" in overview
+    assert 'href="https://claude.com/pricing"' in overview
     assert "ccfleet sells the machine, not Claude" in overview
     assert "does not provide access to Claude" in render("/docs/terms")
 
@@ -248,6 +253,8 @@ def test_how_it_works_scopes_local_network_and_supported_telemetry_controls():
 def test_the_guide_says_what_the_usage_numbers_count():
     guide = render("/docs/guide")
     assert "bars cover the whole Claude account" in guide
+    assert "Ultra accounts verified by Anthropic have no five-hour limit" in guide
+    assert "A missing reading does not confirm" in guide
     assert "token count covers what Claude Code used on this slot" in guide
 
 

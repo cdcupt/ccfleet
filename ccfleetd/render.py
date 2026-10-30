@@ -1654,6 +1654,11 @@ def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
     bars += '<div class="usage-nums muted">' + bi_label(
         'Claude account · every device · reported usage',
         'Claude 账号 · 所有设备合计 · 上报用量', inline=True) + '</div>'
+    bars += _quota_notice(
+        'Limits depend on the plan. Ultra accounts verified by Anthropic have no five-hour limit. '
+        'A missing reading does not confirm verification; weekly limits still apply.',
+        '限制因套餐而异。经 Anthropic 验证的 Ultra 账号没有五小时限制，但仍有每周限制；'
+        '缺少读数不代表账号已通过验证。')
     for window, en, zh in ((session, '5-hour session', '五小时窗口'),
                            (week, 'This week', '本周窗口')):
         meter = _meter(window.get('used_pct'), en, window.get('resets'),
