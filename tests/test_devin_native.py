@@ -582,6 +582,8 @@ def test_source_pins_reject_hash_changes_and_writable_source_ancestry(tmp_path):
 
 def test_root_traverse_only_ancestry_uses_opath_without_listing(monkeypatch):
     opened, closed = [], []
+    # Keep the fake descriptors out of pytest's capture and the process-wide os module.
+    monkeypatch.setattr(native, "os", types.SimpleNamespace(**vars(os)))
     monkeypatch.setattr(native.os, "O_PATH", 0x200000, raising=False)
 
     def open_directory(path, flags, **kwargs):
