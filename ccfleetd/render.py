@@ -1695,8 +1695,9 @@ def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
         'was removed. Check your Claude account for your plan and verification status.',
         '读数包含这个 Claude 账号在所有设备上的用量。这里只展示已上报的窗口；没有显示某个'
         '窗口，不代表对应限制已取消。请在 Claude 账号中确认套餐和验证状态。', inline=True)
-        + ' <a href="/docs/library/docs/public-gateway.html#account-usage">'
-        + bi_label('How usage limits work', '了解用量限制', inline=True) + '</a></p></details>')
+        + ' <a href="https://claude.ai/settings/usage">'
+        + bi_label('View usage in Claude', '在 Claude 中查看用量', inline=True)
+        + '</a></p></details>')
     state = ' quota-historical' if historical and meters else ''
     return (f'<div class="quota-panel{state}">' + title + body
             + (help_text if include_help else '') + '</div>',
