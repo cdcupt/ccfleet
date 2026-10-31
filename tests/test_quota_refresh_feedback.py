@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from ccfleetd import bilingual, render, usersite
+from ccfleetd import bilingual, render, slots, usersite
 from ccfleetd.api import HTML_HEADERS
 from ccfleetd.config import Config
 from tests.test_html_document_preservation import Document
@@ -42,11 +42,74 @@ def test_bad_or_future_request_time_never_starts_polling(wanted):
     assert render.quota_reading(wanted, NOW - 10, NOW) is False
 
 
-def test_missing_five_hour_window_remains_visible_as_unknown():
-    text = Document(usersite._in_use({"credentials": {"logged_in": True},
-        "quota": {"checked_at": NOW, "week": {"used_pct": 8}}}, NOW)).text
-    assert "5-hour session" in text and "Current quota is unavailable" in text
-    assert "does not mean quota remains" in text and "8%" in text
+@pytest.mark.parametrize("surface", ["customer", "admin"])
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_weekly_only_reading_has_no_invented_session_or_exemption(surface, language):
+    report = {"credentials": {"logged_in": True, "subscription_type": "ultra"},
+              "quota": {"checked_at": NOW, "week": {"used_pct": 8}}}
+    source = (usersite._in_use(report, NOW) if surface == "customer"
+              else render._quota_html(report, NOW))
+    text = Document(bilingual.project_html(source, language)).text
+    assert "8%" in text and source.count('class="meter-track"') == 1
+    assert 'quota-week' in source and 'quota-session' not in source
+    assert "5-hour session" not in text and "五小时窗口" not in text
+    assert "Current quota is unavailable" not in text and "当前额度未知" not in text
+    assert "no five-hour limit" not in text and "没有五小时限制" not in text
+    assert '<details class="quota-help">' in source
+
+
+@pytest.mark.parametrize("surface", ["customer", "admin"])
+@pytest.mark.parametrize("session", [0, 100])
+def test_reported_session_limits_remain_visible_after_weekly_usage(surface, session):
+    report = {"credentials": {"logged_in": True}, "quota": {"checked_at": NOW,
+              "session": {"used_pct": session}, "week": {"used_pct": 41}}}
+    source = (usersite._in_use(report, NOW) if surface == "customer"
+              else render._quota_html(report, NOW))
+    assert source.index('quota-week') < source.index('quota-session')
+    assert source.count('class="meter-track"') == 2
+    assert f'width:{session}%' in source
+    if session == 100:
+        assert 'meter-fill crit' in source
+
+
+@pytest.mark.parametrize("surface", ["customer", "admin"])
+@pytest.mark.parametrize("invalid", [None, True, "0", float("nan"), float("inf"), -1, 101,
+                                    10**400])
+def test_no_valid_readings_show_one_unknown_state_and_keep_refresh(surface, invalid):
+    quota = {"checked_at": NOW, "session": {"used_pct": invalid},
+             "week": {"used_pct": invalid}}
+    if surface == "customer":
+        report = {"credentials": {"logged_in": True}, "quota": quota}
+        refresh = usersite._quota_refresh({"id": "synthetic"}, report, "csrf", NOW)
+        source = usersite._in_use(report, NOW, refresh, slot_id="synthetic")
+        assert 'id="slot-synthetic-quota" data-fleet-readonly' in source
+        action = '/account/slots/synthetic/quota'
+    else:
+        source = render._quota_html({"slot_id": "synthetic", "quota": quota}, NOW, "csrf")
+        assert 'id="admin-quota-synthetic" data-fleet-quota' in source
+        action = '/actions/slot/synthetic/quota'
+    text = Document(bilingual.project_html(source, "en")).text
+    assert source.count('class="quota-empty"') == 1 and 'meter-track' not in source
+    assert text.count('Current quota is unavailable.') == 1
+    assert 'Missing data does not mean quota remains.' in text
+    assert f'action="{action}"' in source
+
+
+def test_customer_slot_does_not_show_quota_from_before_account_change():
+    slot = {"id": "synthetic", "name": "preview-1", "unix_user": "slot01",
+            "state": slots.ACTIVE, "claimed_at": NOW - 1000,
+            "account_switched_at": NOW - 10}
+    report = {"unix_user": "slot01", "present": True, "credentials": {"logged_in": True},
+              "quota": {"checked_at": NOW - 20, "week": {"used_pct": 73}}}
+    source = usersite._slot_card(slot, {}, {"ts": NOW, "payload": {"slots": [report]}},
+                                {}, "csrf", Config(), NOW)
+    assert '73%' not in source
+    assert 'Waiting for a quota reading for the current account.' in source
+    assert 'read 20s ago' not in source
+    assert 'action="/account/slots/synthetic/quota"' in source
+    admin = render._quota_html({"slot_id": "synthetic", "quota": report['quota'],
+                                "usage_since": NOW - 10}, NOW, "csrf")
+    assert '73%' not in admin and 'current account' in admin
 
 
 @pytest.mark.parametrize("outcome", sorted(render.QUOTA_READ_FAILURES))

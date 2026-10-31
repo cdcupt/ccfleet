@@ -669,6 +669,26 @@ box-shadow:inset 0 0 0 1px var(--rule-soft)}
 .meter-fill.warn{background:var(--warn)}
 .meter-fill.crit{background:var(--bad)}
 .meter-foot{font-size:12px;color:var(--muted);margin-top:5px}
+.quota-heading{display:flex;justify-content:space-between;align-items:baseline;
+gap:6px 16px;flex-wrap:wrap;margin-bottom:14px}
+.quota-heading strong{font-size:14px;font-weight:650;color:var(--ink)}
+.quota-heading small{font-size:11.5px;color:var(--muted)}
+.quota-windows{display:grid;gap:14px;min-width:0}
+.quota-window .meter{margin:0}
+.quota-week .meter-head{align-items:center;font-size:14px;color:var(--ink)}
+.quota-week .meter-pct{font-family:var(--sans);font-size:30px;letter-spacing:-.035em}
+.quota-week .meter-track{height:10px}
+.quota-session{padding-top:12px;border-top:1px solid var(--rule-soft)}
+.quota-session:only-child{padding-top:0;border-top:0}
+.quota-empty{padding:14px 16px;border:1px dashed var(--rule);border-radius:10px}
+.quota-empty strong{font-size:14px;color:var(--ink)}
+.quota-empty p{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
+.quota-panel .quota-help{margin:12px 0 0;font-size:12px;color:var(--muted)}
+.quota-panel .quota-help>summary{font-size:12px;font-weight:500;cursor:pointer;
+padding:0;border:0;background:none;color:var(--muted)}
+.quota-panel .quota-help>p{margin:8px 0 0;line-height:1.55}
+.quota-panel .quota-help a{color:var(--acc)}
+.quota-panel .meter-fill[style="width:0%"]{min-width:0}
 
 /* Network transfer and model usage remain separate measurements. */
 .traffic-panel{min-width:0;margin:20px 0;padding:24px;background:var(--panel);
@@ -1626,57 +1646,72 @@ def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) 
     return result + form
 
 
+def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
+                 include_help: bool = True) -> tuple[str, Any]:
+    """Weekly first, and only observed windows; absence establishes no entitlement."""
+    checked = quota.get("checked_at")
+    known = (type(checked) in (int, float) and 0 < checked <= now
+             and math.isfinite(checked))
+    previous_account = (known and type(since) in (int, float)
+                        and 0 <= since <= now and math.isfinite(since) and checked < since)
+    if previous_account:
+        quota, checked, known = {}, None, False
+    historical = not known or now - checked > 10 * 60
+    meters = []
+    for key, en, zh in (('week', 'This week', '本周窗口'),
+                       ('session', '5-hour session', '五小时窗口')):
+        window = quota.get(key)
+        window = window if isinstance(window, Mapping) else {}
+        used = window.get('used_pct')
+        if (type(used) not in (int, float) or not 0 <= used <= 100
+                or not math.isfinite(used)):
+            continue
+        meter = _meter(used, en, window.get('resets'), checked if known else None,
+                       now, window.get('resets_at'))
+        meter = meter.replace(f'<span>{en}</span>', '<span>' + bi_label(en, zh, inline=True)
+                              + '</span>').replace('<div class="meter-foot">resets ',
+            '<div class="meter-foot">' + bi_label('resets', '重置时间', inline=True) + ' ')
+        meters.append(f'<div class="quota-window quota-{key}">{meter}</div>')
+    title = '<div class="quota-heading"><strong>' + bi_label(
+        'Claude usage', 'Claude 用量', inline=True) + '</strong><small>' + bi_label(
+        'Account-wide · every device', '整个账号 · 所有设备', inline=True) + '</small></div>'
+    if meters:
+        message = (_quota_notice(
+            '<strong>Historical reading · current quota unknown.</strong>',
+            '<strong>历史读数 · 当前额度未知。</strong>', 'small lapsed') if historical else '')
+        body = message + '<div class="quota-windows">' + ''.join(meters) + '</div>'
+    else:
+        body = '<div class="quota-empty"><strong>' + bi_label(
+            'Waiting for a quota reading for the current account.' if previous_account
+            else 'Current quota is unavailable.',
+            '正在等待当前账号的额度读数。' if previous_account else '当前额度未知。',
+            inline=True) + '</strong><p>' + bi_label(
+                'No window reading yet. Missing data does not mean quota remains.',
+                '尚无窗口读数；没有数据不代表还有剩余额度。', inline=True) + '</p></div>'
+    help_text = ('<details class="quota-help"><summary>' + bi_label(
+        'About these limits', '关于用量限制', inline=True) + '</summary><p>' + bi_label(
+        'These count everything this Claude account does, wherever you use it. '
+        'Only reported windows are shown; an absent window does not confirm that its limit '
+        'was removed. Check your Claude account for your plan and verification status.',
+        '读数包含这个 Claude 账号在所有设备上的用量。这里只展示已上报的窗口；没有显示某个'
+        '窗口，不代表对应限制已取消。请在 Claude 账号中确认套餐和验证状态。', inline=True)
+        + ' <a href="/docs/library/docs/public-gateway.html#account-usage">'
+        + bi_label('How usage limits work', '了解用量限制', inline=True) + '</a></p></details>')
+    state = ' quota-historical' if historical and meters else ''
+    return (f'<div class="quota-panel{state}">' + title + body
+            + (help_text if include_help else '') + '</div>',
+            checked if known else None)
+
+
 def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
     """Keep historical account readings visibly distinct from current availability."""
-    quota = row.get("quota") or {}
-    session, week = quota.get("session") or {}, quota.get("week") or {}
-    checked = quota.get("checked_at")
-    known = (type(checked) in (int, float) and math.isfinite(checked)
-             and 0 < checked <= now)
-    since = row.get('usage_since', 0)
-    previous_account = (known and type(since) in (int, float)
-                        and math.isfinite(since) and checked < since)
-    if previous_account:
-        session, week, checked, known = {}, {}, None, False
-    historical = not known or now - checked > 10 * 60
+    bars, checked = _quota_panel(row.get("quota") or {}, now, row.get('usage_since', 0))
     region = (f'<div id="admin-quota-{escape(row["slot_id"])}" data-fleet-quota '
               'data-fleet-readonly>' if row.get("slot_id") else '<div>')
-    bars = ''
-    if previous_account:
-        bars += _quota_notice('Waiting for a quota reading for the current account.',
-                              '正在等待当前账号的额度读数。')
-    elif not session and not week:
-        bars += _quota_notice('No window reading yet. Current quota is unknown.',
-                              '尚无窗口读数，当前额度未知。')
-    elif historical:
-        bars += _quota_notice('<strong>Historical reading · current quota unknown.</strong>',
-                              '<strong>历史读数 · 当前额度未知。</strong>', 'small lapsed')
-    bars += '<div class="usage-nums muted">' + bi_label(
-        'Claude account · every device · reported usage',
-        'Claude 账号 · 所有设备合计 · 上报用量', inline=True) + '</div>'
-    bars += _quota_notice(
-        'Limits depend on the plan. Ultra accounts verified by Anthropic have no five-hour limit. '
-        'A missing reading does not confirm verification; weekly limits still apply.',
-        '限制因套餐而异。经 Anthropic 验证的 Ultra 账号没有五小时限制，但仍有每周限制；'
-        '缺少读数不代表账号已通过验证。')
-    for window, en, zh in ((session, '5-hour session', '五小时窗口'),
-                           (week, 'This week', '本周窗口')):
-        meter = _meter(window.get('used_pct'), en, window.get('resets'),
-                       checked if known else None, now, window.get('resets_at'))
-        if meter:
-            meter = meter.replace(f'<span>{en}</span>', '<span>' + bi_label(en, zh, inline=True)
-                                  + '</span>').replace('<div class="meter-foot">resets ',
-                '<div class="meter-foot">' + bi_label('resets', '重置时间', inline=True) + ' ')
-        else:
-            meter = '<div class="meter">' + bi_label(en, zh, inline=True) + _quota_notice(
-                'Current quota is unavailable. This does not mean quota remains.',
-                '当前额度未知，不代表还有剩余额度。') + '</div>'
-        bars += meter
-    if known:
+    if checked is not None:
         age = escape(_age(now, checked))
         bars += _quota_notice(f'read {age} ago', f'最近读取：{age} 前')
-    return (region + ('<div class="quota-historical">' if historical else '<div>')
-            + bars + '</div>' + _quota_refresh(row, checked, now, csrf) + '</div>')
+    return region + bars + _quota_refresh(row, checked, now, csrf) + '</div>'
 
 
 def _admin_relay_usage(row: Mapping[str, Any], now: float) -> str:

@@ -83,7 +83,7 @@ from .render import (
     PANEL_ACTION_TAG,
     _age,
     _human_tokens,
-    _meter,
+    _quota_panel,
     _usage_chart,
     _usage_span,
     console_href,
@@ -2970,6 +2970,7 @@ def _slot_card(
                     report.get("credentials"), heard, now, cfg.heartbeat_max_age_s, listening
                 ),
                 slot_id=slot["id"],
+                since=max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0),
             )
         ]
         if not own:
@@ -3457,25 +3458,8 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
     return "".join(lines)
 
 
-def _quota_meter(used: Any, en: str, zh: str, reset: Any, read: Any, now: float, exact: Any) -> str:
-    """Keep native quota/reset calculations; translate only their authored labels."""
-    source = _meter(used, en, reset, read, now, exact)
-    if not source:
-        return '<div class="meter"><div class="meter-head"><span>' + label(
-            en, zh, inline=True) + '</span></div>' + _notice(
-                "Current quota is unavailable. This does not mean quota remains.",
-                "当前额度未知，不代表还有剩余额度。", "small muted") + '</div>'
-    source = source.replace(
-        f"<span>{escape(en)}</span>", "<span>" + label(en, zh, inline=True) + "</span>"
-    )
-    return source.replace(
-        '<div class="meter-foot">resets ',
-        '<div class="meter-foot">' + label("resets", "重置时间", inline=True) + " ",
-    )
-
-
 def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True,
-            slot_id: Optional[str] = None) -> str:
+            slot_id: Optional[str] = None, since: float = 0) -> str:
     """The bound account and observed usage, with the same readiness conditions."""
     if not fresh:
         return _notice(
@@ -3635,26 +3619,7 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             )
         )
     quota = report.get("quota") or {}
-    session, week = quota.get("session") or {}, quota.get("week") or {}
-    read = quota.get("checked_at")
-    quota_age = now - read if type(read) in (int, float) else None
-    bars = _quota_meter(
-        session.get("used_pct"),
-        "5-hour session",
-        "五小时窗口",
-        session.get("resets"),
-        read,
-        now,
-        session.get("resets_at"),
-    ) + _quota_meter(
-        week.get("used_pct"),
-        "This week",
-        "本周窗口",
-        week.get("resets"),
-        read,
-        now,
-        week.get("resets_at"),
-    )
+    bars, _ = _quota_panel(quota, now, since)
     usage = report.get("usage") or {}
     spent = ""
     if usage:
@@ -3686,44 +3651,7 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
                     f' {escape(span_zh)}</div>'
                 ),
             )
-    if bars:
-        bars = (
-            '<div class="usage-nums muted">'
-            + label(
-                ("last reported Claude account usage · every device"),
-                ("上次上报的 Claude 账号用量 · 所有设备合计"),
-                inline=True,
-            )
-            + "</div>"
-            + bars
-            + _notice(
-                ACCOUNT_WIDE,
-                ("这些读数包含这个 Claude 账号在所有设备上的使用，不仅是当前槽位。"),
-                "small muted",
-            )
-            + _notice(
-                "Ultra accounts verified by Anthropic have no five-hour limit; weekly and "
-                "model-specific limits still apply. A missing reading does not confirm "
-                "verification or available quota. Check your Claude account for current limits. "
-                "Fleet does not increase your allowance.",
-                "经 Anthropic 验证的 Ultra 账号没有五小时限制，但每周及特定模型的限制仍然适用。"
-                "缺少读数不代表已通过验证或仍有可用额度。请在 Claude 账号中确认当前限制；"
-                "Fleet 不会增加额度。",
-                "small muted",
-            )
-            + refresh
-        )
-        if quota_age is None or quota_age > 10 * 60 or quota_age < 0:
-            bars = _notice(
-                "<strong>Historical reading · current quota unknown.</strong> "
-                "A signed-in account can still have reached its limit.",
-                "<strong>历史读数 · 当前额度未知。</strong>账号已登录也可能已达到用量限制。",
-                "small lapsed") + bars
-    elif refresh:
-        bars = (
-            _notice(("No reading of your limits yet."), "尚未读取用量限制。", "small muted")
-            + refresh
-        )
+    bars += refresh
     halves = [
         f'<div class="usage-{name}"'
         + (f' id="slot-{escape(slot_id)}-quota" data-fleet-readonly'
@@ -4039,7 +3967,10 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
     """Read account quota now, keeping the same protected action."""
     read = (report.get("quota") or {}).get("checked_at")
     acknowledgement = (report.get("quota") or {}).get("refresh")
-    known = isinstance(read, (int, float)) and not isinstance(read, bool)
+    known = (type(read) in (int, float) and 0 < read <= now and math.isfinite(read))
+    since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
+    if known and read < since:
+        read, known = None, False
     when = f"read {_age(now, read)} ago · " if known else ""
     when_zh = f"最近读取：{_age(now, read)} 前 · " if known else ""
     if quota_reading(slot.get("quota_wanted_at"), read, now, acknowledgement):
