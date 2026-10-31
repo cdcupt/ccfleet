@@ -95,10 +95,11 @@ def test_no_valid_readings_show_one_unknown_state_and_keep_refresh(surface, inva
     assert f'action="{action}"' in source
 
 
-def test_customer_slot_does_not_show_quota_from_before_account_change():
+@pytest.mark.parametrize("switched_at", [NOW - 10, NOW + 10])
+def test_customer_slot_does_not_show_quota_from_before_account_change(switched_at):
     slot = {"id": "synthetic", "name": "preview-1", "unix_user": "slot01",
             "state": slots.ACTIVE, "claimed_at": NOW - 1000,
-            "account_switched_at": NOW - 10}
+            "account_switched_at": switched_at}
     report = {"unix_user": "slot01", "present": True, "credentials": {"logged_in": True},
               "quota": {"checked_at": NOW - 20, "week": {"used_pct": 73}}}
     source = usersite._slot_card(slot, {}, {"ts": NOW, "payload": {"slots": [report]}},
@@ -108,7 +109,7 @@ def test_customer_slot_does_not_show_quota_from_before_account_change():
     assert 'read 20s ago' not in source
     assert 'action="/account/slots/synthetic/quota"' in source
     admin = render._quota_html({"slot_id": "synthetic", "quota": report['quota'],
-                                "usage_since": NOW - 10}, NOW, "csrf")
+                                "usage_since": switched_at}, NOW, "csrf")
     assert '73%' not in admin and 'current account' in admin
 
 

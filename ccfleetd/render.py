@@ -18,7 +18,7 @@ from .admin_locale import label as admin_label
 from .bilingual import bi
 from .bilingual import label as bi_label
 from .config import Config
-from .credential_health import access_expiry
+from .credential_health import access_expiry, instant
 from .desired import is_channel, is_login_url
 from .heartbeat import relay_report
 
@@ -1652,8 +1652,8 @@ def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
     checked = quota.get("checked_at")
     known = (type(checked) in (int, float) and 0 < checked <= now
              and math.isfinite(checked))
-    previous_account = (known and type(since) in (int, float)
-                        and 0 <= since <= now and math.isfinite(since) and checked < since)
+    account_since = instant(since)
+    previous_account = known and account_since is not None and checked < account_since
     if previous_account:
         quota, checked, known = {}, None, False
     historical = not known or now - checked > 10 * 60
