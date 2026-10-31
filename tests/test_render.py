@@ -341,7 +341,7 @@ def test_a_quiet_week_says_so_rather_than_drawing_a_floor():
 def test_the_windows_are_labelled_as_the_accounts():
     rows = [{"id": "n", "owner": "e", "usage": {"total_tokens": 5},
              "quota": {"session": {"used_pct": 6}, "week": {"used_pct": 20}}}]
-    assert "Claude account · every device" in _usage_html(rows, NOW)
+    assert "Account-wide · every device" in _usage_html(rows, NOW)
 
 
 def test_each_button_sends_you_back_to_the_card_you_pressed_it_on():

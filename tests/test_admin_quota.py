@@ -21,7 +21,7 @@ def visible(source, language='en'):
 
 
 @pytest.mark.parametrize('language', ['en', 'zh'])
-def test_stale_admin_quota_is_historical_and_missing_window_is_unknown(language):
+def test_stale_admin_quota_is_historical_without_inventing_a_missing_window(language):
     row = {'slot_id': 'synthetic', 'quota': {'checked_at': NOW - 7127,
                                             'week': {'used_pct': 8}}}
     source = render._quota_html(row, NOW, 'synthetic-csrf')
@@ -30,7 +30,8 @@ def test_stale_admin_quota_is_historical_and_missing_window_is_unknown(language)
     assert ('current quota unknown' if language == 'en' else '当前额度未知') in text
     assert '8%' in text and '0%' not in text
     assert 'quota-historical' in source
-    assert ('does not mean quota remains' if language == 'en' else '不代表还有剩余额度') in text
+    assert ('5-hour session' if language == 'en' else '五小时窗口') not in text
+    assert source.count('class="meter-track"') == 1
 
 
 def test_acknowledged_failure_stops_polling_and_explains_retry_without_new_values():
@@ -157,7 +158,7 @@ def test_quota_from_before_current_claim_or_account_switch_is_not_attributed_to_
     source = render._quota_html(row, NOW, 'csrf')
     assert '8%' not in source
     assert 'Waiting for a quota reading for the current account' in visible(source)
-    assert 'Current quota is unavailable' in visible(source)
+    assert source.count('class="quota-empty"') == 1 and 'meter-track' not in source
     # A genuinely new observation restores the meter.
     row['quota']['checked_at'] = NOW - 2
     assert '8%' in render._quota_html(row, NOW, 'csrf')

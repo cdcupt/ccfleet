@@ -435,8 +435,8 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     # The windows are the account's, used anywhere; said under them, so a week
     # at 30% beside 900 tokens here does not read as a mistake.
     assert usersite.ACCOUNT_WIDE in shown
-    assert project_html(label("last reported Claude account usage · every device",
-                              "上次上报的 Claude 账号用量 · 所有设备合计",
+    assert project_html(label("Account-wide · every device",
+                              "整个账号 · 所有设备",
                               inline=True), 'en') in shown
     assert "Sign in again" in shown
 

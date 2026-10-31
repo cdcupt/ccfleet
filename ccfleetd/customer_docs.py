@@ -19,11 +19,11 @@ from typing import Any, Callable, Optional
 from . import pricing, statuspage
 from .bilingual import bi, label
 from .config import Config
-from .render import _meter
+from .render import _quota_panel
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-30"
+DOCS_UPDATED = "2026-10-31"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -522,10 +522,15 @@ ICONS = {
 def _demo() -> str:
     """The landing page's picture: a slot, as its holder's own page shows it.
 
-    Built from the page's own parts rather than drawn, so it cannot drift from
-    what somebody sees once they have a slot. Hidden from screen readers; the
-    caption says what it shows.
+    Uses the shared usage meter for an illustrative, Anthropic-verified Ultra
+    account. This is not a live reading or a plan-based inference about a user.
+    Hidden from screen readers; the caption identifies the example.
     """
+    sample_time = 1_800_000_000
+    usage, _ = _quota_panel(
+        {"checked_at": sample_time, "week": {"used_pct": 41}}, sample_time,
+        include_help=False,
+    )
     return (
         '<figure class="hero-demo"><div class="demo-card" aria-hidden="true"><div '
         'class="demo-head"><b>slot-4821</b><span class="pill ok">'
@@ -538,8 +543,8 @@ def _demo() -> str:
         )
         + bi(
             '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
-            "Max plan.</p>",
-            '<p class="signed">已登录 <strong>alice@example.com</strong> &middot; Max '
+            "Ultra plan.</p>",
+            '<p class="signed">已登录 <strong>alice@example.com</strong> &middot; Ultra '
             "订阅。</p>",
         )
         + bi(
@@ -548,20 +553,14 @@ def _demo() -> str:
             "即可开始。</p>",
         )
         + '<div class="demo-usage">'
-        + bi(
-            _meter(34, "5-hour session", "at 11:40pm"),
-            _meter(34, "五小时用量", "at 11:40pm").replace("resets at 11:40pm", "23:40 重置"),
-        )
-        + bi(
-            _meter(61, "This week", "on Friday"),
-            _meter(61, "本周用量", "on Friday").replace("resets on Friday", "周五重置"),
-        )
+        + usage
         + "</div></div></div>"
         "<figcaption>"
         + bi(
-            "Example with a Max plan: your slot, the Claude account signed in to it, "
-            "and reported usage. Limits depend on your plan.",
-            "Max 订阅页面示例：查看槽位、登录的 Claude 账号和上报用量。限制因订阅方案而异。",
+            "Illustrative Ultra account verified by Anthropic: weekly usage, with no "
+            "five-hour limit. Your own slot shows the windows Claude reports for your account.",
+            "示意：经 Anthropic 验证的 Ultra 账号，显示每周用量，没有五小时限制。"
+            "你的槽位只显示 Claude 为你账号上报的用量窗口。",
             inline=True,
         )
         + "</figcaption></figure>"
@@ -1709,8 +1708,10 @@ def guide(
             "的不同槽位使用独立的 Linux 用户，槽位内没有管理员权限（sudo）。</p>",
         )
         + bi(
-            "<p>The usage bars cover the whole Claude account. Available windows depend on "
-            "your plan: Ultra accounts verified by Anthropic have no five-hour limit, but weekly "
+            "<p>The usage bars cover the whole Claude account. Weekly usage comes first; "
+            "a five-hour session appears only when Claude reports that window. Available "
+            "windows depend on your plan: Pro and Max retain five-hour limits. Ultra accounts "
+            "verified by Anthropic have no five-hour limit, but weekly "
             "and model-specific limits still apply. A missing reading does not confirm that a "
             "limit has been removed. Check your Claude account for current limits and "
             "verification status. Fleet does not increase your allowance. The token count "
@@ -1718,7 +1719,9 @@ def guide(
             'Quota is read every five minutes; <span class="btnlabel">Refresh</span> reads '
             'it now. Pair more devices with <span class="btnlabel">Connect another '
             "computer</span>; each device is independently revocable.</p>",
-            "<p>用量进度条表示整个 Claude 账号的用量。适用窗口取决于你的订阅：经 Anthropic 验证的 "
+            "<p>用量进度条表示整个 Claude 账号的用量，优先显示每周用量；只有 Claude 上报"
+            "五小时窗口时才显示该项。适用窗口取决于你的订阅：Pro 和 Max 仍有五小时限制。"
+            "经 Anthropic 验证的 "
             "Ultra 账号没有五小时限制，但每周及特定模型的限制仍然适用。缺少读数不代表限制已"
             "取消。请在 Claude 账号中确认当前限制和验证状态；Fleet 不会增加额度。token 数表示"
             "这个槽位上的 "
