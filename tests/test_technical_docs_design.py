@@ -100,6 +100,35 @@ def test_current_customer_documents_hide_competitor_names_and_identifying_urls()
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
+def test_platform_guide_leads_with_fleet_and_keeps_devin_details_optional(language):
+    source = bilingual.project_html((ROOT / "docs/platform-comparison.html").read_text(),
+                                    language, COMPARISON)
+    elements = Placement(source).elements
+    hero = re.search(r'<header class="hero">.*?</header>', source, re.S).group()
+    assert "Devin" not in Document(hero).text
+    primary = next(attrs for tag, attrs, _ in Placement(hero).elements
+                   if tag == "a" and attrs.get("class") == "button primary")
+    assert bilingual.route_target(primary["href"])[0] == COMPARISON + "#architecture"
+    core = ("architecture", "routing", "parallel-agents", "verification", "host-comparison")
+    positions = [source.index(f'id="{name}"') for name in core]
+    assert positions == sorted(positions)
+    assert positions[-1] < source.index('id="optional-integrations"')
+    optional = {"devin-overview", "private-devin", "devin-tool-loop",
+                "devin-trial-design", "devin-trial-clocks", "devin-pilot"}
+    for tag, attrs, parents in elements:
+        if attrs.get("id") in core:
+            assert all(parent_tag != "details" for parent_tag, _ in parents)
+        if attrs.get("id") in optional:
+            disclosure = [parent for parent_tag, parent in parents
+                          if parent_tag == "details"
+                          and parent.get("class") == "integration-details"]
+            assert len(disclosure) == 1 and "open" not in disclosure[0]
+        if tag == "a" and any(parent.get("class") == "section-nav" for _, parent in parents):
+            assert not any(attrs.get("href", "").endswith("#" + name) for name in optional)
+    assert optional <= Document(source).ids
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
 def test_every_how_it_works_disclosure_has_a_shared_summary_and_padded_body(language):
     """All three sections retain the same layout boundary in either language."""
     source = bilingual.project_html(customer_docs.how_it_works(Config()), language,
