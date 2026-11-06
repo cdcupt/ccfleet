@@ -70,14 +70,18 @@ def test_technical_guide_keeps_architecture_evidence_and_sources_visible(languag
     source = bilingual.project_html((ROOT / "docs/platform-comparison.html").read_text(),
                                     language, COMPARISON)
     page = Document(source)
-    assert {"architecture", "verification", "routing", "host-comparison", "sources"} <= page.ids
+    assert {"architecture", "verification", "routing", "host-comparison", "agent-apps",
+            "sources"} <= page.ids
     for _, attrs, parents in Placement(source).elements:
-        if attrs.get("id") in {"architecture", "verification", "sources"}:
+        if attrs.get("id") in {"architecture", "verification", "agent-apps", "sources"}:
             assert all(tag != "details" for tag, _ in parents)
     assert source.index('id="architecture"') < source.index('id="verification"')
     assert source.index('id="verification"') < source.index('id="host-comparison"')
     assert not page.duplicate_ids
-    assert len(page.tables) == 1
+    table_sections = [next((attrs.get("id") for tag, attrs in reversed(parents)
+                            if tag == "section"), None) for parents in page.tables]
+    assert table_sections == ["host-comparison", "agent-apps"]
+    assert all(tag != "details" for parents in page.tables for tag, _ in parents)
     assert any("1494f6b0646188bbdab622ddd4321627df328c7c/ccfleetd/gateway.py" in link
                for link in page.links)
     if language == "en":

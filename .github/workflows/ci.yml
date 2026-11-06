@@ -6,8 +6,9 @@ on:
   pull_request:
 
 jobs:
+  # Keep the Python 3.9 floor and unit fixtures on a supported, stable LTS image.
   python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -26,7 +27,7 @@ jobs:
       - run: pytest -q --cov --cov-report=term-missing --cov-fail-under=80
 
   shell:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
@@ -52,7 +53,7 @@ jobs:
           done
 
   units:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: stub the commands the units reference
