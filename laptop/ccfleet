@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.8"
+CLIENT_VERSION = "0.2.9"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -2629,6 +2629,345 @@ def cmd_local(args: argparse.Namespace) -> int:
                     settings_path.unlink(missing_ok=True)
 
 
+LAUNCHER_MARKER = "# CC Fleet external Claude launcher"
+LAUNCHER_SETTINGS_LIMIT = 1024 * 1024
+LAUNCHER_ROUTE_ENV = frozenset({
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+    "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_CLIENT_DATA_URL",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+})
+LAUNCHER_AUTH_SETTINGS = frozenset({
+    "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod",
+    "forceLoginOrgUUID",
+})
+
+
+def _launcher_directory(name: str, *, create: bool = False) -> Path:
+    if not SESSION_RE.fullmatch(name):
+        raise CliError("launcher names use 1-32 letters, digits, underscores or hyphens")
+    root = home().absolute()
+    for directory in (root, root / "launchers"):
+        if create:
+            directory.mkdir(mode=0o700, parents=directory == root, exist_ok=True)
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
+            raise CliError("launcher directories must be private and owned by this user")
+    directory = root / "launchers" / name
+    if not create or directory.exists() or directory.is_symlink():
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
+            raise CliError("launcher profile must be a private user-owned directory")
+    return directory
+
+
+def _launcher_json(value: str, *, private: bool = False) -> dict[str, Any]:
+    """Read app settings without following a leaf symlink or echoing their contents."""
+    try:
+        if not private and value.lstrip().startswith("{"):
+            raw = value.encode("utf-8")
+        else:
+            fd = os.open(Path(value).expanduser(), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & (0o077 if private else 0o022)):
+                    raise ValueError("unsafe settings")
+                raw = source.read(LAUNCHER_SETTINGS_LIMIT + 1)
+        if len(raw) > LAUNCHER_SETTINGS_LIMIT:
+            raise ValueError("oversized settings")
+
+        def unique(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError("duplicate setting")
+                result[key] = item
+            return result
+
+        def nonfinite(_value):
+            raise ValueError("nonfinite setting")
+
+        result = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+        if not isinstance(result, dict):
+            raise ValueError("settings must be an object")
+        return result
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        raise CliError("launcher settings must be a bounded JSON object or a safe user-owned "
+                       "JSON file; no settings contents were printed") from None
+
+
+def _launcher_binary(value: str) -> Path:
+    path = Path(value).expanduser()
+    try:
+        if not path.is_absolute() or path.lstat().st_uid not in {0, os.getuid()}:
+            raise ValueError("not a fixed executable")
+        # Keep the selected installation entrypoint, while allowing its native
+        # updater to replace a version symlink. Execute only the checked target.
+        path = path.resolve(strict=True)
+        info = path.stat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.getuid()}
+                or info.st_mode & 0o022 or not os.access(path, os.X_OK)
+                or path == Path(__file__).resolve()):
+            raise ValueError("unsafe executable")
+        with path.open("rb") as source:
+            prefix = source.read(512)
+            if (LAUNCHER_MARKER.encode() in prefix or b"# ccfleet-release-state: " in prefix):
+                raise ValueError("recursive launcher")
+        return path
+    except (OSError, ValueError, RuntimeError):
+        raise CliError("the launcher's original Claude executable is unavailable or unsafe; "
+                       "choose the real Claude binary with --claude") from None
+
+
+def _load_launcher(name: str) -> dict[str, Any]:
+    directory = _launcher_directory(name)
+    value = _launcher_json(str(directory / "profile.json"), private=True)
+    if (set(value) != {"version", "slot_id", "server", "provider", "claude"}
+            or type(value.get("version")) is not int or value["version"] != 1
+            or not isinstance(value.get("slot_id"), str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", value["slot_id"])
+            or not isinstance(value.get("provider"), str)
+            or value["provider"] not in {"anthropic", "devin"}
+            or not isinstance(value.get("claude"), str)):
+        raise CliError("launcher profile is invalid; create a new named launcher")
+    _gateway_url(value["server"])
+    return {**value, "claude": str(_launcher_binary(value["claude"]))}
+
+
+def _launcher_client_command() -> list[str]:
+    """Managed launchers must follow activation and rollback, not a hidden old bundle."""
+    source = Path(__file__).resolve()
+    if any(parent.name == ".ccfleet-releases" for parent in source.parents):
+        directory = install_directory()
+        helper = client_release()
+        try:
+            installed = helper.status(directory, RELEASE_PUBLIC_KEY)
+            expected = directory / helper.ROOT_NAME / installed["current"] / "ccfleet"
+            if not installed.get("managed") or expected != source:
+                raise ValueError("inactive release")
+        except (helper.ReleaseError, KeyError, ValueError):
+            raise CliError("create launchers through the active verified Fleet installation") \
+                from None
+        return [str(directory / "ccfleet")]
+    return [sys.executable, "-I", str(source)]
+
+
+def cmd_launcher_create(args: argparse.Namespace) -> int:
+    directory = _launcher_directory(args.name, create=True)
+    if directory.exists():
+        raise CliError("that launcher already exists; choose a different launcher name")
+    selected = args.claude or find_local_claude()
+    try:
+        binary = Path(selected).expanduser().absolute()
+        _launcher_binary(str(binary))
+    except (OSError, RuntimeError):
+        raise CliError("choose an installed original Claude executable with --claude") from None
+    route = local_route(load_config(), args.slot, "gateway", require_ready=False)
+    gateway = route["gateway"]
+    if gateway is None or not route["slot_id"]:
+        raise CliError("a launcher needs one explicitly selected existing HTTPS gateway slot")
+    value = {"version": 1, "slot_id": route["slot_id"], "server": gateway["base_url"],
+             "provider": route["provider"], "claude": str(binary)}
+    client_command = _launcher_client_command()
+    wrapper = ("#!/bin/sh\n" + LAUNCHER_MARKER + "\n"
+               + "export CCFLEET_HOME=" + shlex.quote(str(home().absolute())) + "\n"
+               + "exec " + " ".join(shlex.quote(part) for part in (
+                   *client_command, "__external-claude", "--launcher", args.name, "--"))
+               + ' "$@"\n')
+    directory.mkdir(mode=0o700)
+    try:
+        for name, data, mode in (("profile.json", json.dumps(value, sort_keys=True) + "\n", 0o600),
+                                 ("claude", wrapper, 0o700)):
+            fd = os.open(directory / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         mode)
+            with os.fdopen(fd, "w") as destination:
+                destination.write(data)
+    except BaseException:
+        for name in ("claude", "profile.json"):
+            (directory / name).unlink(missing_ok=True)
+        directory.rmdir()
+        raise
+    print(directory / "claude")
+    return 0
+
+
+def _launcher_merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in extra.items():
+        result[key] = (_launcher_merge(result[key], value)
+                       if isinstance(result.get(key), dict) and isinstance(value, dict) else value)
+    return result
+
+
+def _launcher_arguments(arguments: list[str]) -> tuple[list[str], dict[str, Any], bool]:
+    """Retain native options; merge only app settings, rejecting routing authority."""
+    result, settings = [], {}
+    bare = False
+    if arguments and arguments[0] in {
+            "auth", "login", "logout", "setup-token", "install", "update", "upgrade",
+            "remote-control", "rc", "web", "cloud", "teleport", "mcp", "plugin", "doctor"}:
+        raise CliError("the app launcher supports local Claude conversations and --version/--help, "
+                       "not local account management or remote execution")
+    forbidden = {"--cloud", "--teleport", "--remote-control", "--environment",
+                 "--client-data-url", "--bg", "--background"}
+    # Values of these native options can themselves look like an option. They
+    # remain opaque, including prompts, schemas and app-owned MCP configuration.
+    takes_value = {"--system-prompt", "--append-system-prompt", "--model", "--effort",
+                   "--permission-mode", "--input-format", "--output-format", "--tools",
+                   "--allowedTools", "--disallowedTools", "--mcp-config", "--agents",
+                   "--agent", "--plugin-dir", "--setting-sources", "--settings-sources",
+                   "--session-id", "--json-schema", "--max-budget-usd", "--fallback-model",
+                   "--name", "--debug-file", "--permission-prompt-tool", "--betas"}
+    position = 0
+    while position < len(arguments):
+        value = arguments[position]
+        if value == "--":
+            result.extend(arguments[position:])
+            break
+        name, separator, inline = value.partition("=")
+        if name in forbidden:
+            raise CliError("this app option leaves the launcher's fixed local Claude route")
+        if name == "--settings":
+            if not separator:
+                position += 1
+                if position == len(arguments):
+                    raise CliError("--settings requires a JSON object or file")
+                inline = arguments[position]
+            extra = _launcher_json(inline)
+            env = extra.get("env", {})
+            if (not isinstance(env, dict)
+                    or any(not isinstance(item, str) for item in env.values())
+                    or any(key in LAUNCHER_ROUTE_ENV or key.startswith("CLAUDE_CODE_USE_")
+                           for key in env)
+                    or any(extra.get(key) for key in LAUNCHER_AUTH_SETTINGS)):
+                raise CliError("app settings conflict with Fleet routing or authentication; "
+                               "keep provider credentials in Fleet")
+            settings = _launcher_merge(settings, extra)
+        else:
+            result.append(value)
+            bare = bare or value == "--bare"
+            if name in takes_value and not separator and position + 1 < len(arguments):
+                position += 1
+                result.append(arguments[position])
+        position += 1
+    return result, settings, bare
+
+
+class _LauncherCancelled(BaseException):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+
+
+def cmd_external_claude(args: argparse.Namespace) -> int:
+    """A Claude executable adapter: no prompts read, no defaults, no stdout narration."""
+    profile = _load_launcher(args.launcher)
+    arguments = list(args.claude_args)
+    if arguments[:1] == ["--"]:
+        arguments.pop(0)
+    info_only = len(arguments) == 1 and arguments[0] in {"--version", "-v", "--help", "-h"}
+    child = None
+    starting_child = False
+    settings_path = None
+    cancelled = None
+    cancelled_at = None
+    # A terminal launch keeps native /dev/tty access. Headless SDK launches get
+    # an isolated process group so cancelling a request can reap its descendants.
+    own_group = not sys.stdin.isatty()
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGWINCH)
+    old_handlers = {number: signal.getsignal(number) for number in signals}
+
+    def signal_child(number):
+        if child is not None:
+            with contextlib.suppress(ProcessLookupError):
+                (os.killpg if own_group else os.kill)(child.pid, number)
+
+    def forward(number, _frame):
+        nonlocal cancelled, cancelled_at
+        if number == signal.SIGINT and not own_group and child is not None:
+            # Terminal Ctrl-C already reaches native Claude's foreground group.
+            # It may cancel one turn and stay open; do not deliver it twice or
+            # turn an interactive interrupt into process termination.
+            return
+        if number == signal.SIGWINCH:
+            signal_child(number)
+            return
+        cancelled, cancelled_at = number, cancelled_at or time.monotonic()
+        if child is None:
+            if starting_child:
+                return  # Publish Popen's child, then deliver the pending cancellation.
+            raise _LauncherCancelled(number)
+        signal_child(number)
+
+    try:
+        for number in signals:
+            signal.signal(number, forward)
+        env = dict(os.environ)
+        command = [profile["claude"], *arguments]
+        if not info_only:
+            forwarded, settings, bare = _launcher_arguments(arguments)
+            check_managed_route()
+            saved_gateway = load_gateway()
+            if (saved_gateway is None or saved_gateway["base_url"] != profile["server"]
+                    or saved_gateway.get("provider", "anthropic") != profile["provider"]):
+                raise CliError("the launcher needs its original Fleet HTTPS origin and provider")
+            route = local_route(load_config(), profile["slot_id"], "gateway", canonical=True)
+            gateway = route["gateway"]
+            if (gateway is None or gateway["base_url"] != profile["server"]
+                    or route["slot_id"] != profile["slot_id"]
+                    or route["provider"] != profile["provider"]):
+                raise CliError("the launcher no longer matches its selected Fleet origin, "
+                               "slot and provider; no Claude process was started")
+            env.update(settings.get("env", {}))
+            native_choices = {key: env[key] for key in (
+                "ANTHROPIC_MODEL", "CLAUDE_CODE_EFFORT_LEVEL") if key in env}
+            native_proxy_exclusions(env, Path.cwd(), forwarded)
+            pinned = native_settings(env, gateway["base_url"], gateway["secret"],
+                                     bare=bare, slot_id=profile["slot_id"])
+            env.update(native_choices)
+            settings = _launcher_merge(settings, pinned)
+            fd, filename = tempfile.mkstemp(prefix=".launcher-settings-", suffix=".json",
+                                            dir=home())
+            settings_path = Path(filename)
+            with os.fdopen(fd, "w") as destination:
+                os.fchmod(destination.fileno(), 0o600)
+                json.dump(settings, destination)
+            split = forwarded.index("--") if "--" in forwarded else len(forwarded)
+            command = [profile["claude"], *forwarded[:split], "--settings", str(settings_path),
+                       *forwarded[split:]]
+        # Do not interrupt Popen between creating and publishing its child.
+        # Blocking signals here would leak a blocked mask into the native child.
+        starting_child = True
+        try:
+            child = subprocess.Popen(command, env=env, start_new_session=own_group)
+        finally:
+            starting_child = False
+        if cancelled is not None:
+            signal_child(cancelled)
+        while True:
+            try:
+                code = child.wait(timeout=0.2)
+                if cancelled is not None:
+                    return 128 + cancelled
+                return 128 - code if code < 0 else code
+            except subprocess.TimeoutExpired:
+                # App SDKs may force-kill their executable after one second.
+                # Reap its process group and remove settings before that deadline.
+                if cancelled_at is not None and time.monotonic() - cancelled_at >= 0.5:
+                    signal_child(signal.SIGKILL)
+    except _LauncherCancelled as exc:
+        return 128 + exc.signum
+    finally:
+        if child is not None and (cancelled is not None or child.poll() is None):
+            signal_child(signal.SIGKILL)
+            child.wait()
+        if settings_path is not None:
+            settings_path.unlink(missing_ok=True)
+        for number, previous in old_handlers.items():
+            signal.signal(number, previous)
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     config = load_config()
     selected = local_slot_choice(config)
@@ -2978,6 +3317,15 @@ def parser() -> argparse.ArgumentParser:
                                    "priority: try account order for each request")
             item.add_argument("--name", default="This computer", help="endpoint key label")
     gateway.set_defaults(slot="")
+    launcher = sub.add_parser("launcher", help="create a fixed-slot Claude executable for an app")
+    launcher_sub = launcher.add_subparsers(dest="launcher_action", required=True)
+    create = launcher_sub.add_parser("create", help="create a private, secret-free app launcher")
+    create.add_argument("name", help="a new launcher profile name")
+    create.add_argument("--slot", required=True, help="one existing HTTPS gateway slot")
+    create.add_argument("--claude", default="", help="path to the original local Claude executable")
+    external = sub.add_parser("__external-claude", add_help=False, help=argparse.SUPPRESS)
+    external.add_argument("--launcher", required=True)
+    external.add_argument("claude_args", nargs=argparse.REMAINDER)
     attach = sub.add_parser("attach", aliases=["remote"],
                             help="open remote Claude with slot files and persistent tmux")
     attach.add_argument("--slot", default="", help="slot id or name")
@@ -3162,7 +3510,7 @@ def parser() -> argparse.ArgumentParser:
     resident.add_argument("--project-id", required=True)
     # argparse otherwise prints suppressed subcommands as '==SUPPRESS=='.
     sub.metavar = "COMMAND"
-    internal_commands = {"proxy", "live-serve", "__job-run", "__job-exec"}
+    internal_commands = {"proxy", "live-serve", "__job-run", "__job-exec", "__external-claude"}
     sub._choices_actions = [action for action in sub._choices_actions
                             if action.dest not in internal_commands]
     return root
@@ -3193,6 +3541,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_setup(args)
         if args.command == "gateway":
             return cmd_gateway(args)
+        if args.command == "launcher":
+            return cmd_launcher_create(args)
+        if args.command == "__external-claude":
+            return cmd_external_claude(args)
         if args.command in ("start", "menu"):
             return cmd_start(args)
         if args.command == "sessions":
