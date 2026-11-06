@@ -582,16 +582,18 @@ def test_source_pins_reject_hash_changes_and_writable_source_ancestry(tmp_path):
 
 def test_root_traverse_only_ancestry_uses_opath_without_listing(monkeypatch):
     opened, closed = [], []
-    monkeypatch.setattr(native.os, "O_PATH", 0x200000, raising=False)
 
     def open_directory(path, flags, **kwargs):
         opened.append((path, flags, kwargs))
         return len(opened) + 100
 
-    monkeypatch.setattr(native.os, "open", open_directory)
-    monkeypatch.setattr(native.os, "close", closed.append)
-    monkeypatch.setattr(native.os, "fstat", lambda _: types.SimpleNamespace(
-        st_mode=stat.S_IFDIR | 0o711, st_uid=0))
+    # Keep descriptor doubles local: the test runner uses real OS descriptors.
+    fake_os = types.SimpleNamespace(**vars(os))
+    fake_os.O_PATH = 0x200000
+    fake_os.open = open_directory
+    fake_os.close = closed.append
+    fake_os.fstat = lambda _: types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o711, st_uid=0)
+    monkeypatch.setattr(native, "os", fake_os)
     native._root_ancestry(Path("/etc/ccfleet/devin/slot/key.json"))
     assert len(opened) == len(closed) == 5
     assert all(flags & 0x200000 and flags & os.O_DIRECTORY and flags & os.O_NOFOLLOW
