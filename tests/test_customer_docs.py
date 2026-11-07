@@ -215,11 +215,22 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
         for line in block.splitlines():
             if line.startswith("ccfleet "):
                 checked.append(parser.parse_args(shlex.split(line)[1:]))
-    assert {"local", "gateway", "start", "sessions", "update", "doctor"} <= {
+    assert {"local", "gateway", "start", "sessions", "update", "doctor", "launcher"} <= {
         command.command for command in checked
     }
     assert "/model" in page.text and "/effort" in page.text
-    assert "ANTHROPIC_BASE_URL" not in page.text and "CLAUDE_CODE_OAUTH_TOKEN" not in page.text
+    # T3's parent process needs the public base URL to identify a custom endpoint.
+    # Native credentials still do not belong in the main guide or app settings.
+    from tests.test_account_setup_flow import Flow
+
+    flow = Flow(bilingual.project_html(render("/docs/guide"), "en"))
+    apps, = flow.find("section", id="agent-apps")
+    t3, = [card for card in flow.inside(apps, "article")
+           if flow.inside(card, "h3")[0].text == "T3 Code"]
+    assert page.text.count("ANTHROPIC_BASE_URL") == 1
+    assert "ANTHROPIC_BASE_URL" in t3.text and "https://ccfleet.io" in t3.text
+    assert all(secret_name not in page.text for secret_name in (
+        "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"))
     assert "ccfleet new" not in page.text and "ccfleet remote" not in page.text
 
 
