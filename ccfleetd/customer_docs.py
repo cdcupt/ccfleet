@@ -110,6 +110,8 @@ box-shadow:0 1px 0 var(--rule);white-space:nowrap}
 .doc .card>h2:first-child,.how .card>h2:first-child{margin-top:20px}
 .card h3{margin:16px 0 6px}
 .card[id]{scroll-margin-top:110px}
+.guide-jumps{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:18px;font-size:14px}
+.guide-jumps a{font-weight:600}
 .connection-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;
 margin:18px 0}
 .connection-choice{border:1px solid var(--rule);border-radius:12px;padding:4px 16px 12px;
@@ -1404,6 +1406,122 @@ def _client_tools() -> str:
     )
 
 
+def _guide_navigation() -> str:
+    links = (("setup", "Install & check", "安装与检查"),
+             ("agent-apps", "Orca, Herdr & T3 Code", "Orca、Herdr 与 T3 Code"),
+             ("local-work", "Files & conversations", "文件与会话"),
+             ("slot-care", "Slot care", "管理槽位"))
+
+    def navigation(title: str, language: int) -> str:
+        return ('<nav class="guide-jumps" aria-label="' + escape(title, quote=True) + '">'
+                + ''.join('<a href="#' + row[0] + '">' + escape(row[language]) + '</a>'
+                          for row in links) + '</nav>')
+
+    return bi(navigation("On this page", 1), navigation("本页导航", 2))
+
+
+def _agent_app_guide() -> str:
+    """Practical app setup; the linked platform guide owns the detailed limits."""
+    return (
+        '<section class="card" id="agent-apps" aria-labelledby="agent-apps-title">'
+        '<h2 id="agent-apps-title">'
+        + label("Use Orca, Herdr or T3 Code", "使用 Orca、Herdr 或 T3 Code", inline=True)
+        + '</h2>'
+        + bi(
+            '<p>Use the app’s <strong>Claude</strong> integration with Fleet 0.2.9 or later. '
+            'On the macOS or Linux machine that actually runs the agent—including a remote '
+            'app backend—finish <a href="#setup">Fleet setup</a> first and choose a '
+            'Claude-backed slot. Keep original Claude Code installed.</p>',
+            '<p>使用应用的 <strong>Claude</strong> 集成，Fleet 客户端需为 0.2.9 或更新版本。'
+            '在实际运行代理的 macOS 或 Linux 主机上（也包括远程应用后端），先完成'
+            '<a href="#setup">Fleet 配置</a>，并选择使用 Claude 账号的槽位。'
+            '请保留原版 Claude Code。</p>',
+        )
+        + '<pre><code>ccfleet update\nccfleet launcher create daily-claude --slot SLOT</code></pre>'
+        + bi(
+            '<p>Replace <code>SLOT</code> with your slot’s current name or ID. The command '
+            'prints an absolute launcher path; use that path in the app below. For a custom '
+            'Claude installation, add <code>--claude PATH</code> with its original executable. '
+            'The launcher uses your existing Fleet connection and creates no new '
+            'connection key.</p>',
+            '<p>将 <code>SLOT</code> 替换为槽位的当前名称或 ID。命令会输出启动器的绝对路径，'
+            '请在下面的应用中使用该路径。如果 Claude 安装在自定义位置，可追加 '
+            '<code>--claude PATH</code>，指定原版可执行程序。启动器使用已有的 Fleet 连接，'
+            '不会创建新的连接密钥。</p>',
+        )
+        + '<div class="connection-choices"><article class="connection-choice"><h3>Orca</h3>'
+        + bi(
+            '<p>Open <strong>Settings → Agents</strong>. Set Claude’s binary path or '
+            '<strong>Command</strong> to the printed launcher path. Keep launch options in '
+            '<strong>Arguments</strong>. The terminal and structured chat share '
+            'these settings.</p>',
+            '<p>打开 <strong>Settings → Agents（设置 → 代理）</strong>，将 Claude 的程序路径或 '
+            '<strong>Command</strong> 设为输出的启动器路径。启动选项仍放在 '
+            '<strong>Arguments</strong> 中；终端和结构化聊天共用这些设置。</p>',
+        )
+        + '</article><article class="connection-choice"><h3>Herdr</h3>'
+        + bi(
+            '<p>In the Herdr app, add a separate Fleet Claude entry to '
+            '<code>programs.json</code>. Put the printed absolute path in its '
+            '<code>run</code> array, for example:</p>',
+            '<p>在 Herdr 应用的 <code>programs.json</code> 中新增一个独立的 Fleet Claude 项，'
+            '将输出的绝对路径放入它的 <code>run</code> 数组，例如：</p>',
+        )
+        + '<pre><code>"run": ["/absolute/path/from-the-command"]</code></pre>'
+        + bi('<p>Use an executable path, not a shell alias.</p>',
+             '<p>使用可执行文件路径，不要使用 shell 别名。</p>')
+        + '</article><article class="connection-choice"><h3>T3 Code</h3>'
+        + bi(
+            '<p>In <strong>Settings → Providers</strong>, add a Claude instance and set '
+            '<strong>Binary path</strong> to the launcher. Add the environment variable '
+            '<code>ANTHROPIC_BASE_URL</code> with value <code>https://ccfleet.io</code> so '
+            'T3 recognizes the custom endpoint. Fleet supplies authentication from its '
+            'private configuration.</p>',
+            '<p>在 <strong>Settings → Providers（设置 → 服务商）</strong> 中新增 Claude 实例，'
+            '将 <strong>Binary path</strong> 设为启动器路径。添加环境变量 '
+            '<code>ANTHROPIC_BASE_URL</code>，值为 <code>https://ccfleet.io</code>，'
+            '让 T3 识别自定义接口。认证信息由 Fleet 从私有配置中提供。</p>',
+        )
+        + '</article></div>'
+        + bi(
+            '<p><strong>One launcher, one selected slot.</strong> Changing '
+            '<code>ccfleet use</code> or the app’s native account/profile does not switch '
+            'this launcher’s Fleet slot. Create and select another launcher for a different '
+            'slot. The app keeps control of files, tools, sessions and permission choices; '
+            'the launcher adds no default model, effort level or permission bypass.</p>',
+            '<p><strong>一个启动器固定一个槽位。</strong>更改 <code>ccfleet use</code> 或应用中的'
+            '原生账号／配置不会切换此启动器的 Fleet 槽位；需要其他槽位时，请创建并选择另一个'
+            '启动器。文件、工具、会话与权限选择仍由应用控制；启动器不会额外指定默认模型、'
+            '思考强度或跳过权限确认。</p>',
+        )
+        + bi(
+            '<p class="callout">Codex keeps its own connection. The experimental Devin '
+            'route does not support every request these apps make, including T3’s structured '
+            'titles with an empty tool set. Herdr TUI is separate from the desktop app: '
+            'resume through the Fleet launcher, because automatic native restore may invoke '
+            '<code>claude --resume</code> directly. Manage hosted sign-in through Fleet and '
+            'native Claude updates through its original executable or installer.</p>',
+            '<p class="callout">Codex 仍使用自己的连接。Devin 实验路线不支持这些应用的所有请求，'
+            '例如 T3 使用空工具集生成结构化标题的请求。Herdr TUI 与桌面应用是不同程序：'
+            '请通过 Fleet 启动器恢复会话，因为原生自动恢复可能直接调用 '
+            '<code>claude --resume</code>。托管账号登录由 Fleet 管理，原版 Claude 更新则使用'
+            '其原版可执行程序或安装器。</p>',
+        )
+        + bi(
+            '<p>Controlled launcher, terminal and signed-client checks passed. Full app/model '
+            'sessions remain unverified. Start with a small test session, including any '
+            'automatic title or helper requests you use. '
+            '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
+            'Detailed app settings, compatibility limits and verification scope</a>.</p>',
+            '<p>受控启动器、终端和签名客户端检查已通过；完整的应用／模型会话仍未验证。'
+            '请先进行一个小型测试会话，也检查自己会用到的自动标题或辅助请求。'
+            '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
+            '查看详细应用设置、兼容性限制与验证范围</a>。</p>',
+        )
+        + '</section>'
+    )
+
+
 def guide(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
     per_slot_pricing: bool = False, wallet_enabled: bool = False,
@@ -1436,6 +1554,7 @@ def guide(
             '<p class="lead">你的电脑负责工作，槽位上你自己的服务商 '
             "账号负责模型访问。按下面几步，把两边准备好。</p>",
         )
+        + _guide_navigation()
         + '</div><ol class="steps">'
         + "<li>"
         + bi(
@@ -1602,6 +1721,7 @@ def guide(
             "启用的槽位。</p>",
         )
         + "</div>"
+        + _agent_app_guide()
         + _advanced_model_connections(cfg)
         + '<div class="card" id="local-work">'
         + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
