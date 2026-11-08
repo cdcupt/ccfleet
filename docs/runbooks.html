@@ -147,42 +147,39 @@ legitimate new activity to force an old baseline comparison.</p>
 <p>The public service address is <strong>https://ccfleet.io</strong>. Retain the previous domain as an explicit HTTPS/API and secure WebSocket compatibility alias while older clients are in use. Browser pages may redirect; authenticated APIs, WebSocket upgrades, node heartbeats and OAuth callbacks must retain their direct behavior.</p>
 <p>Signed client 0.2.6 resolves only the exact known legacy HTTPS/WSS authority at the outbound boundary. It keeps raw saved pairings, endpoint secrets, key IDs, slot choices, provider configuration and native history in place. It does not follow an authentication redirect or retry a failed canonical request through the old host. Custom deployments and loopback transports retain their own origins. Fresh pairings default to the canonical domain.</p>
 <p>Publish the immutable signed manifest before advancing the signed stable channel. Verify every committed bundle digest and preserve all older signed artifacts. The installer’s <code>--next</code> option verifies the fixed signed 0.2.6 manifest and installs a separate <code>ccfleet-next</code> wrapper over its own managed release directory. It does not replace the usual launcher or change pairing, native Claude, shell configuration or active processes. Use the existing connection for the domain trial; pairing or replacing a key is a separate account change. The normal <code>ccfleet update</code> and <code>ccfleet update --rollback</code> commands remain available. Fleet 0.2.7 adds <code>upgrade</code> as an alias, root <code>-v</code>/<code>--version</code>, local <code>-c</code>/<code>-r</code>, and preferred <code>--permission-mode</code> with <code>--mode</code> retained. Existing clients obtain these spellings through <code>ccfleet update</code>; no re-pairing is required. The fixed 0.2.6 trial does not acquire these new aliases merely by installing <code>--next</code>. See the <a href="https://ccfleet.io/docs/guide#command-reference">current command reference</a>.</p>
-<p>For client recovery, <code>ccfleet list --remote</code> fetches current own-slot names; the default list remains saved pairings. A working paired slot can authorize <code>gateway setup --provider devin</code> for exactly one verified own slot. Use the <a href="https://ccfleet.io/docs/guide#devin-cli">CLI provider-selection recipe</a>; native runtime preparation and account verification still come first.</p>
+<p>For client recovery, <code>ccfleet list --remote</code> fetches current own-slot names; the default list shows saved routing and pairings. A working paired slot can authorize <code>gateway setup --provider devin</code> for exactly one verified own slot. Use the <a href="https://ccfleet.io/docs/guide#devin-cli">CLI provider-selection recipe</a>; native runtime preparation and account verification still come first.</p>
 <p>For an existing shared machine, inspect the effective service configuration before changing its reporting URL. The agent loads <code>/etc/ccfleet/agent.env</code>, then lets process environment override it. Require the expected enabled machine identity, an idle one-shot service and its existing state lock, a private root-owned file and no URL override. Back up the exact file privately and atomically replace only the literal <code>CCFLEET_URL</code> value. Preserve token and all other bytes, owner and permissions. Let the next ordinary timer run load the new URL; do not restart active sign-ins, provisioning, native sessions or broker connections. Verify a fresh successful heartbeat and the effective canonical URL. Leave disabled machines and loopback/tunnel configurations alone.</p>
 <h2 id="naming-machines-and-slots">Naming machines and slots</h2>
-<p>One machine is one slot. Its authenticated node ID and slot ID remain stable;
-its display name and desired hostname follow the slot's lifecycle. Choose initial
-IDs by role:</p>
-<ul>
-<li><code>&lt;operator&gt;-N</code> for the operator's own machines, owner nodes and shared
-machines kept for their own account alike: <code>erik-1</code>, <code>erik-2</code>;</li>
-<li><code>pool-N</code> for shared machines offered to customers: <code>pool-1</code>, <code>pool-2</code>.</li>
-</ul>
-<p>A shared machine's one slot normally starts with the same ID as its node
-(<code>pool-1</code> on <code>pool-1</code>),
-and its Linux user is <code>slot01</code>. When somebody claims it, the slot gets a
-neutral name, <code>slot-4821</code> (random digits nobody answers to yet), never anything
-from their address: Claude Code can report the hostname to Anthropic
-(Erik, 2026-09-24). The holder renames it on their page, and
-<code>ccfleetd slot name &lt;slot&gt; [&lt;name&gt;]</code> does it for them (no name: a fresh neutral
-one). A handle set with <code>ccfleetd account handle &lt;email&gt; &lt;handle&gt;</code>, only at the
-person's request, names their slots <code>&lt;handle&gt;-&lt;n&gt;</code> instead (<code>alice-1</code>, then
-<code>alice-2</code>). The machine takes the name as its hostname on its next run; the
-console marks the machine &quot;hostname pending&quot; until it has. When the wipe that frees the slot completes, the name
-goes and the slot receives an unused <code>pool-N</code> name. The pool name remains
-reserved for that slot across later claims and releases; an existing <code>pool-N</code>
-identity is retained when available. The authenticated node and slot IDs do not change,
-so installed agents, SSH pins and history keep their existing identities. A failed or
-unfinished wipe never makes the slot free or publishes it as a new pool slot.</p>
-<p>In the operator console, a confirmed free, holderless machine slot uses only its
-<code>pool-N</code> name in the Fleet row, Slots row and Manage heading. Internal
-node/slot IDs, owner and region remain under the Slots row's Manage controls.
-Reservations remain visible as a warning and retain their account details under Manage;
-cleanup and health warnings remain. Retired or disabled machines are omitted from the
-normal catalogue; their underlying records remain available for operator recovery.</p>
-<p>New node and slot IDs must not reuse an existing slot's reserved pool name,
-including while that slot is held. Check the current names in the console before
-registering another machine; choose an unused ID if a pool name is already reserved.</p>
+<p><strong>Use one visible slot-name convention.</strong> Available and claimed slots
+use neutral generated names such as <code>slot-1234</code> and <code>slot-5678</code>.
+Use the name shown on the slot page in customer commands and instructions. A holder
+may still choose a nickname; keep that name consistent wherever their slot appears.</p>
+<p>One machine is one slot. Authenticated node IDs and slot IDs are stable internal
+identities. Older IDs such as <code>pool-1</code> are still valid in operator records,
+agent configuration and exact recovery commands; they are not a second user-facing
+naming convention. Do not rename node IDs, slot IDs, SSH pins, billing references or
+account bindings just to change a display label. The Linux login remains
+<code>slot01</code>.</p>
+<p>On claim, the slot receives a neutral name unrelated to the holder’s email.
+Claude Code can report the hostname to Anthropic. The holder can rename their slot
+on its page; <code>ccfleetd slot name &lt;slot&gt; [&lt;name&gt;]</code> does it for them
+(no name: a fresh neutral name). An account handle is used only at the person’s
+request. The machine applies the current display name as its hostname on its next
+run; the console marks it <strong>hostname pending</strong> until then.</p>
+<p>After a confirmed wipe, a freed slot uses a reserved neutral
+<code>slot-XXXX</code> alias. The database field is still named <code>pool_name</code>
+for compatibility. A valid neutral alias stays reserved for that slot across claims
+and releases. Legacy aliases are normalized at server startup only for confirmed
+free, holderless slots whose Linux account is reported absent. Held slots, unfinished
+wipes and unknown machine reports are not relabeled by this cleanup. A failed or
+unfinished wipe never makes a slot free.</p>
+<p>The operator console uses the same visible slot name in its Fleet row, Slots row
+and Manage heading. Internal node/slot IDs, owner and region remain available under
+Manage. Reservations and cleanup/health warnings remain visible. Retired or disabled
+machines are omitted from the normal catalogue; their records remain for recovery.</p>
+<p>Before registering a new machine, check node IDs, slot IDs, chosen names and reserved
+aliases. Never reuse a reserved alias even while its slot is held. Existing installed
+agents, signed clients and authentication records continue to use their immutable IDs.</p>
 <p>The public status page lists monitored slot machines in a compact table with
 <code>Machine</code>, <code>Status</code> and <code>Last report</code> columns immediately
 before <code>Reading this page</code>. Each machine keeps a stable <code>Machine N</code>
@@ -192,8 +189,8 @@ describes machine health only; the table does not include detailed reasons or pe
 uptime cards. Public visitors do not see holder names, account state or raw alerts.</p>
 <p>Set the hostname when the machine is added, the way step 4 of
 <a href="#rename-a-machine">Rename a machine</a> does, so a provider's serial-number
-hostname never reaches the picker. A fleet already running under other names
-moves onto these with <a href="#rename-a-machine">Rename a machine</a>, held slots included.</p>
+hostname never reaches the picker. Display-name normalization does not require
+<a href="#rename-a-machine">renaming the immutable machine identity</a>.</p>
 <h2 id="public-output-speed">Read public output speed</h2>
 
 <p>The <a href="/status#performance">Status performance panel</a> shows streamed output

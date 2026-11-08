@@ -752,6 +752,9 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
                 conn.execute("UPDATE nodes SET public_status_number = ? WHERE id = ?",
                              (number, row["id"]))
             self._save_public_status_high_water(conn, number, now=0.0)
+            # Upgrade only confirmed empty aliases. Immutable node/slot IDs,
+            # active holder names, credentials and claim generations stay intact.
+            self._normalize_free_pool_names(conn)
 
     def _add_missing_columns(self, table: str, columns: dict[str, str]) -> None:
         """Idempotent ALTER TABLE ADD COLUMN. Called with literals only."""
@@ -3796,25 +3799,27 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
 
     @classmethod
     def _pool_name_for(cls, conn: sqlite3.Connection, row: sqlite3.Row) -> str:
-        if names.valid_pool_name(row["pool_name"]):
+        if names.valid_neutral_name(row["pool_name"]):
             return row["pool_name"]
         taken = cls._taken_names(conn, but=row["id"], node_but=row["node_id"])
         for candidate in (row["id"], row["node_id"]):
-            if names.valid_pool_name(candidate) and candidate not in taken:
+            if names.valid_neutral_name(candidate) and candidate not in taken:
                 return candidate
-        return names.next_name("pool", taken)
+        return names.neutral_name(taken)
 
     @classmethod
     def _normalize_free_pool_names(cls, conn: sqlite3.Connection, *,
                                    slot_id: Optional[str] = None) -> list[dict[str, str]]:
         rows = conn.execute(
             "SELECT * FROM slots WHERE state = ? AND kind = ? AND present = 0 "
-            "AND held_by IS NULL AND claimed_at IS NULL AND pool_name IS NULL "
+            "AND held_by IS NULL AND claimed_at IS NULL "
             + ("AND id = ? " if slot_id is not None else "") + "ORDER BY node_id, id",
             (slotstates.FREE, slotstates.MACHINE_SLOT,
              *([slot_id] if slot_id is not None else []))).fetchall()
         changed = []
         for row in rows:
+            if names.valid_neutral_name(row["pool_name"]):
+                continue
             pool_name = cls._pool_name_for(conn, row)
             conn.execute("UPDATE slots SET pool_name = ?, name = NULL WHERE id = ?",
                          (pool_name, row["id"]))

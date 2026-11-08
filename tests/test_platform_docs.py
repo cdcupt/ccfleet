@@ -25,7 +25,7 @@ def test_current_cli_reference_keeps_update_and_native_aliases_separate_from_fix
         for command in ("ccfleet update", "ccfleet upgrade", "ccfleet -v", "ccfleet --version",
                         "ccfleet local -c", "ccfleet local -r",
                         "ccfleet local --permission-mode plan", "--mode",
-                        "ccfleet local --slot A --project PATH", "ccfleet local -- --verbose"):
+                        "ccfleet local --slot slot-1234 --project PATH", "ccfleet local -- --verbose"):
             assert command in text, (relative, command)
         assert "0.2.7" in text
     runbook = read_document(ROOT / "docs/runbooks.html").text
@@ -35,9 +35,9 @@ def test_current_cli_reference_keeps_update_and_native_aliases_separate_from_fix
         text = read_document(ROOT / relative).text
         assert "current signed 0.2.5" not in text
     gateway = read_document(ROOT / "docs/public-gateway.html")
-    assert ("ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n"
-            "ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n"
-            "ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 "
+    assert ("ccfleet update\nccfleet list --remote --slot slot-1234\n"
+            "ccfleet gateway setup --slot slot-1234 --slots slot-5678 --provider devin\n"
+            "ccfleet local --transport gateway --slot slot-5678 --model claude-opus-5-5 "
             "--effort max --new -- --safe-mode") in gateway.pre_codes
     history = gateway.text
     assert "Recorded on October 11, 2026:" in history

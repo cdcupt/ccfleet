@@ -47,7 +47,7 @@ def native_details(store: Any, cfg: Any, account: Mapping[str, Any],
     state = native_state(store, cfg, account, slot, now=now)
     if state is None:
         return ""
-    optional = state == "setup_required" and slot.get("state") == slotstates.ACTIVE
+    optional = state == "setup_required"
     section_class = "devin-connection devin-optional" if optional else "devin-connection"
     opening = ('<section class="' + section_class + '" data-provider="devin" data-native-state="'
                + state + '">')

@@ -159,7 +159,8 @@ NOTES = {
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
     "signin": ("ok", "Starting the sign-in on your slot…"),
     "switch": ("ok", "Starting the change of account on your slot…"),
-    "cli-revoked": ("ok", "That computer can no longer connect to this slot."),
+    "cli-revoked": ("ok", "Account pairing removed. Saved API connection keys remain active "
+                           "until you revoke them separately in connection settings."),
     "code": ("ok", "Code sent to your slot."),
     "cancelled": ("ok", "Cancelled."),
     "not-now": ("warn", "Your slot cannot do that right now. It may still be setting up, "
@@ -197,7 +198,8 @@ NOTES_ZH = {
                                 "可在“月付管理”操作。"),
     "confirm": "请先勾选确认框：归还槽位会删除其中的所有内容。",
     "signin": "正在槽位上启动 Claude 登录…", "switch": "正在槽位上启动账号更换…",
-    "cli-revoked": "这台电脑已无法通过原配对连接该槽位。", "code": "授权码已发往槽位。",
+    "cli-revoked": "账号配对已移除。已保存的 API 连接密钥仍然有效，需在连接设置中单独撤销。",
+    "code": "授权码已发往槽位。",
     "cancelled": "已取消。", "not-now": "槽位目前无法执行此操作，可能仍在准备或清空中。",
     "updating": (
         '正在更新槽位上的 Claude Code。'
@@ -232,16 +234,15 @@ STATE_ZH = {
     )),
 }
 
-# The pill says the state the way every page says a state: green running,
-# amber waiting on you, the accent while the machine is working on it, grey on
-# its way out.
+# Blue identifies a held slot throughout setup and use. Machine and provider
+# health retain their own warning/error colors; returning a slot stays grey.
 STATE_WORDS = {
-    slotstates.CLAIMING: ("busy", "Setting up",
+    slotstates.CLAIMING: ("assigned", "Setting up",
                           "Creating your account on the machine and installing Claude Code. "
                           "A few minutes."),
-    slotstates.CLAIMED: ("warn", "Ready to sign in",
+    slotstates.CLAIMED: ("assigned", "Ready to sign in",
                          "Sign in to your own Claude account below to start using it."),
-    slotstates.ACTIVE: ("ok", "In use", ""),
+    slotstates.ACTIVE: ("assigned", "In use", ""),
     slotstates.RELEASING: ("disabled", "Being wiped",
                            (
                                'Everything on it is being deleted. It stops counting '
@@ -773,6 +774,14 @@ border-color:var(--acc-line)}
 .slot-browse-link{min-width:0}.slot-browse-link p{margin:0 0 8px}
 
 /* Account setup: one clear action per slot; details stay available on demand. */
+:root{--slot-assigned:#1d4ed8;--slot-assigned-bg:#eff6ff;
+--slot-assigned-line:#bfdbfe}
+:root[data-theme="dark"]{--slot-assigned:#93c5fd;--slot-assigned-bg:#172554;
+--slot-assigned-line:#1e40af}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+--slot-assigned:#93c5fd;--slot-assigned-bg:#172554;--slot-assigned-line:#1e40af}}
+.pill.assigned{color:var(--slot-assigned);
+background:var(--slot-assigned-bg);border-color:var(--slot-assigned-line)}
 .account-dashboard{min-width:0}
 .account-dashboard .account-heading{display:flex;justify-content:space-between;
 align-items:center;gap:20px;margin-bottom:24px}
@@ -799,6 +808,8 @@ letter-spacing:-.025em;overflow-wrap:anywhere}
 .account-dashboard .slot-head .pill{font-size:11px;letter-spacing:0;padding:5px 8px}
 .account-dashboard .slot-body{padding:4px 20px 12px;min-width:0}
 .account-dashboard .slot-body p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.account-dashboard .machine-line .bi-inline .st-dot{margin-inline-end:8px}
+.account-dashboard .machine-line .bi-inline a{margin-inline-start:8px}
 .account-dashboard .slot-connect{margin:14px 0;border:1px solid var(--acc-line);
 border-radius:12px;overflow:hidden;background:var(--panel)}
 .account-dashboard .slot-connect>summary{display:flex;align-items:center;
@@ -1365,6 +1376,7 @@ FORM_ZH = {
     "Change account": "更换账号", "Send code": "提交授权码", "Cancel": "取消",
     "Cancel setup": "取消设置", "Back to Stable": "切回稳定版", "Refresh": "刷新用量",
     "Rename": "重命名", "Give this slot back": "归还并清空槽位", "Remove": "移除电脑",
+    "Remove account pairing": "移除账号配对",
     "Connect another computer": "连接另一台电脑", "Connect this computer": "连接电脑",
     "Turn on": "开启", "Turn off": "关闭", "Sign out": "退出登录",
     "Update to the latest release": "更新到最新版",
@@ -1530,11 +1542,21 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             financial[slot["id"]] = (end, end is None or now < end)
         except Exception:
             financial[slot["id"]] = (None, False)
-    pairing_slots = [s for s in held if s.get("kind") == slotstates.MACHINE_SLOT
-                     and s["state"] == slotstates.ACTIVE and financial[s["id"]][1]
+    authorized_slots = [s for s in held if s.get("kind") == slotstates.MACHINE_SLOT
+                     and s["state"] == slotstates.ACTIVE
+                     and nodes.get(s["node_id"], {}).get("enabled")
                      and nodes.get(s["node_id"], {}).get("access_host")
                      and nodes.get(s["node_id"], {}).get("ssh_host_key")]
-    authorizer = next((s for s in pairing_slots if cli_devices[s["id"]]),
+    pairing_slots = [s for s in authorized_slots if financial[s["id"]][1]]
+    # A valid pairing authorizes its holder's HTTPS slot choices. It is not a
+    # separate computer for every slot, nor evidence that a computer is online
+    # or has selected this slot locally. Check the current account/slot binding
+    # so a stale registration never becomes another holder's connection.
+    account_devices = [{**device, "slot_id": s["id"], "slot_name": names.display(s)}
+                       for s in authorized_slots for device in cli_devices[s["id"]]
+                       if store.cli_device_is_active(device["id"])]
+    paired_ids = {device["slot_id"] for device in account_devices}
+    authorizer = next((s for s in pairing_slots if s["id"] in paired_ids),
                       pairing_slots[0] if pairing_slots else None)
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
@@ -1543,6 +1565,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                devin_state=native_states[s["id"]],
                                devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
                                authorizer=authorizer,
+                               account_devices=account_devices,
                                payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
                                recurring=s["id"] in recurring_slots,
                                traffic_html=traffic_ui.slot_panel(traffic.slot_summary(
@@ -2708,29 +2731,34 @@ def _slot_disclosure(english: str, chinese: str, content: str, cls: str,
 
 def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                   cfg: Config, devin_state: Optional[str],
-                  authorizer: Optional[Mapping[str, Any]]) -> str:
+                  authorizer: Optional[Mapping[str, Any]], *,
+                  connected: bool = False, paid_access: bool = True) -> str:
     """Show complete, secret-free instructions for an existing supported route.
 
     CLI enrollment still requires a ready hosted Claude slot. A verified Devin
     slot alone cannot mint that pairing; never present the CLI recipe without
     an eligible authorizer, or imply that website key creation saves a CLI key.
     """
-    if (slot.get('kind') == slotstates.OWNER_SLOT or not gateway_ui.available(cfg)
+    container = ('<div id="slot-' + escape(str(slot['id']))
+                 + '-connect-instructions" data-fleet-readonly>')
+    if (not paid_access or slot.get('kind') == slotstates.OWNER_SLOT
+            or not gateway_ui.available(cfg)
             or slot.get('state') not in CAN_SIGN_IN):
-        return ''
+        return container + '</div>'
     providers = []
-    if devin_state == 'ready':
-        providers.append(('devin', 'Devin'))
     if (slot.get('state') == slotstates.ACTIVE
             and (report.get('credentials') or {}).get('logged_in') is True):
         providers.append(('anthropic', 'Claude'))
+    if devin_state == 'ready':
+        providers.append(('devin', 'Devin'))
     result = []
     for provider, name in providers:
         title = label('Use ' + name + ' on my computer', '在电脑上使用 ' + name, inline=True)
-        start = ('<details class="slot-connect" data-slot-connect="' + provider
+        start = ('<details class="slot-connect" id="slot-' + escape(str(slot['id']))
+                 + '-connect-' + provider + '" data-slot-connect="' + provider
                  + '"><summary><span>' + title
                  + '</span><span class="connect-arrow" aria-hidden="true">→</span></summary>')
-        if authorizer is None:
+        if authorizer is None and not connected:
             result.append(start + '<div class="connect-body">' + bi(
                 '<p>First computer? This pilot needs assisted Fleet CLI setup. '
                 'You can also create a connection key for Claude Code in advanced connections.</p>',
@@ -2740,21 +2768,28 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                 + label('Open connection settings', '打开连接设置', inline=True)
                 + '</a></div></details>')
             continue
-        source = shlex.quote(names.display(authorizer))
         target = shlex.quote(names.display(slot))
-        setup = ('ccfleet gateway setup --slot ' + source + ' --slots ' + target
+        # The webpage cannot know which of the account's computers is running
+        # this command. Let that computer use its own saved authorization.
+        setup = ('ccfleet gateway setup --slots ' + target
                  + ' --provider ' + provider)
         launch = ('ccfleet local --transport gateway --slot ' + target
                   + (' --model claude-opus-5-5 --effort max' if provider == 'devin' else '')
                   + ' --new' + (' -- --safe-mode' if provider == 'devin' else ''))
         pair = ('<details class="connect-first-time"><summary>'
-                + label('First time on this computer?', '第一次在这台电脑上使用？', inline=True)
+                + label('Using a different computer?' if connected else
+                        'First time on this computer?',
+                        '要使用另一台电脑？' if connected else '第一次在这台电脑上使用？',
+                        inline=True)
                 + '</summary>' + bi(
                     '<p>Connect this computer once, then return here. '
                     'Already used Fleet on this computer? Skip this step.</p>',
                     '<p>先连接这台电脑，再返回这里。已经在这台电脑上用过 Fleet？跳过此步。</p>')
-                + _form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
-                        'Connect this computer', cls='primary') + '</details>')
+                + (_form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
+                         'Connect this computer', cls='primary') if authorizer is not None else
+                   _notice('To connect a different computer, first renew a Claude-ready slot.',
+                           '如需连接另一台电脑，请先续费一个已登录 Claude 的槽位。'))
+                + '</details>')
         steps = ''.join('<li><div><b>' + label(en, zh, inline=True)
                         + '</b><pre><code>' + escape(command) + '</code></pre></div></li>'
                         for en, zh, command in (
@@ -2769,13 +2804,22 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
         result.append(start + '<div class="connect-body">' + bi(
             '<p>Open Terminal in your project folder. Run these commands in order.</p>',
             '<p>在项目文件夹中打开终端，按顺序运行下面的命令。</p>')
+            + (bi('<p>A computer connection is already saved for your Fleet account. '
+                  'Use it to add this slot; no separate pairing is needed on that computer. '
+                  'The commands below select this one slot.</p>',
+                  '<p>你的 Fleet 账号已有电脑连接。在已连接的电脑上添加这个槽位，'
+                  '无需再次配对。下面的命令会固定使用这一个槽位。</p>') if connected else '')
             + pair + '<ol class="connect-steps">' + steps + '</ol>' + bi(
                 '<p class="connect-hint">Keep the setup command: it saves the connection '
                 'that the start command needs. Your tools and files stay on your computer; '
                 'selected context is sent for model replies.</p>',
                 '<p class="connect-hint">请先运行“保存这个连接”，再启动。工具与文件在电脑上，'
-                '选中的上下文会发送出去以获取模型回复。</p>') + pilot + '</div></details>')
-    return ''.join(result)
+                '选中的上下文会发送出去以获取模型回复。</p>')
+            + '<p><a href="/docs/guide#add-slot">'
+            + label('Use several slots: priority and sticky sessions',
+                    '使用多个槽位：优先顺序与会话保持', inline=True)
+            + '</a></p>' + pilot + '</div></details>')
+    return container + ''.join(result) + '</div>'
 
 
 def _slot_card(
@@ -2796,6 +2840,7 @@ def _slot_card(
     devin_state: Optional[str] = None,
     devin_html: str = "",
     authorizer: Optional[Mapping[str, Any]] = None,
+    account_devices: Optional[list[Mapping[str, Any]]] = None,
     payment_end: Optional[float] = None,
     paid_access: bool = True,
     recurring: bool = False,
@@ -2819,7 +2864,7 @@ def _slot_card(
                   and (report.get("credentials") or {}).get("logged_in") is not True)
     devin_only = devin_slot and devin_state == "ready"
     if devin_slot:
-        tone, title, detail = (("ok", "Devin ready", "") if devin_only
+        tone, title, detail = (("assigned", "Devin ready", "") if devin_only
                               else ("warn", "Devin needs a check", ""))
     heard = (heartbeat or {}).get("ts")
     if heard is None:
@@ -2948,10 +2993,8 @@ def _slot_card(
             parts.append('<p class="lapsed">' + label(
                 "Payment status is unavailable. New connections are paused.",
                 "付费状态暂不可用，已暂停新连接。", inline=True) + '</p>')
-    if paid_access:
-        parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer))
-    parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
-                 if devin_only else devin_html)
+    parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer,
+                               connected=bool(account_devices), paid_access=paid_access))
     account_parts = []
     if not own and slot["state"] in CAN_SIGN_IN:
         account_parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
@@ -3001,28 +3044,23 @@ def _slot_card(
         account_parts.append(_sign_in(slot, report, login, csrf, now))
         technical.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         if not own:
-            # A Devin connection does not require a Claude sign-in or SSH pairing
-            # on this slot. Its paired authorizer is explained in the connect guide.
-            if not devin_slot:
-                parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
-                    _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access),
-                    'slot-devices'))
+            parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
+                _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access,
+                    account_devices=account_devices if gateway_ui.available(cfg) else None,
+                    authorizer=authorizer, provider='devin' if devin_only else 'anthropic',
+                    provider_ready=devin_only or slot["state"] == slotstates.ACTIVE and signed_in),
+                'slot-devices'))
     if account_parts:
         if devin_slot:
-            parts.append('<details class="provider-other"><summary>' + label(
-                'Anthropic sign-in (optional)', 'Anthropic 登录（可选）', inline=True
-            ) + '</summary><p>' + label(
-                'This is for a separate Claude account. '
-                + ('Your Devin connection is ready.' if devin_only else
-                   'The Devin check is handled separately.'),
-                '这里用于连接独立的 Claude 账号。'
-                + ('你的 Devin 连接已经就绪。' if devin_only else 'Devin 检查会单独处理。'),
-                inline=True
-            ) + '</p>' + ''.join(account_parts) + '</details>')
-        else:
-            needs_sign_in = not signed_in or bool(login)
-            parts.append(_slot_disclosure('Claude account', 'Claude 账号',
-                ''.join(account_parts), 'slot-account', expanded=needs_sign_in))
+            account_parts.insert(0, _notice(
+                'Sign in to your own Claude account to use Anthropic. '
+                'Your Devin connection is configured separately.',
+                '登录你自己的 Claude 账号即可使用 Anthropic。Devin 连接单独配置。'))
+        needs_sign_in = not signed_in or bool(login)
+        parts.append(_slot_disclosure('Claude account', 'Claude 账号',
+            ''.join(account_parts), 'slot-account', expanded=needs_sign_in))
+    parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
+                 if devin_only else devin_html)
     if slot["state"] in CAN_SIGN_IN and not own:
         technical.append(_rename(slot, csrf))
     parts.append(_slot_disclosure('Slot details', '槽位详情', ''.join(technical), 'slot-technical'))
@@ -3914,28 +3952,46 @@ def _claude_line_zh(said: Mapping[str, Any]) -> str:
 
 def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
                 devices: list[Mapping[str, Any]], csrf: str, now: float,
-                *, paid_access: bool = True) -> str:
+                *, paid_access: bool = True,
+                account_devices: Optional[list[Mapping[str, Any]]] = None,
+                authorizer: Optional[Mapping[str, Any]] = None,
+                provider: str = 'anthropic', provider_ready: Optional[bool] = None) -> str:
     """Pair and revoke local ccfleet installations. No Claude token is involved."""
     base = f"/account/slots/{escape(slot['id'])}"
     configured = bool(node.get("access_host") and node.get("ssh_host_key"))
-    ready = configured and slot.get("state") == slotstates.ACTIVE
+    ready = configured and slot.get("state") == slotstates.ACTIVE and provider_ready is not False
+    connections = account_devices if account_devices is not None else devices
+    remove_label = "Remove account pairing" if account_devices is not None else "Remove"
     rows = []
-    for device in devices:
+    for device in connections:
+        source = str(device.get("slot_id") or slot["id"])
         seen = device.get("last_seen_at") or 0
         when = label(f"used {_age(now, seen)} ago" if seen else "not used yet",
                      f"最近使用：{_age(now, seen)} 前" if seen else "尚未使用", inline=True)
         rows.append('<div class="device"><span><b>' + escape(str(device["name"]))
                     + f'</b><small>{when} · {escape(str(device["fingerprint"]))}</small>'
-                    + '</span>' + _form(f"{base}/cli-revoke", csrf, "Remove",
+                    + '</span>' + _form(f"/account/slots/{escape(source)}/cli-revoke",
+                                        csrf, remove_label,
                                         '<input type="hidden" name="device_id" value="'
                                         + escape(str(device["id"])) + '">', "quiet") + '</div>')
     if not paid_access:
         button = '<span class="muted small">' + label("Renew this slot to connect a computer.",
             "请先续费此槽位，再连接电脑。", inline=True) + '</span>'
+    elif account_devices:
+        target = ('#slot-' + escape(str(slot['id'])) + '-connect-' + provider
+                  if ready or provider == 'devin' and provider_ready else '/docs/guide#add-slot')
+        button = ('<a class="btn primary" href="' + target + '">'
+                  + label('Use a connected computer', '使用已连接的电脑', inline=True) + '</a>')
+        if authorizer is not None:
+            button += _form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
+                            'Connect another computer', cls='quiet')
     elif ready:
         button = _form(f"{base}/cli", csrf,
                        "Connect another computer" if devices else "Connect this computer",
                        cls="primary")
+    elif provider == 'devin':
+        button = ('<a class="btn quiet" href="/account#gateway">'
+                  + label('Open connection settings', '打开连接设置', inline=True) + '</a>')
     elif configured:
         button = '<span class="muted small">' + label(
             "Finish signing in to Claude on this slot, then connect this computer.",
@@ -3955,8 +4011,31 @@ def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
                 '电脑访问密钥不是你的 Claude 凭据。'
             ),
         ])
+    if account_devices is not None:
+        introduction = bi(
+            '<p class="small muted">One computer connection can configure all your owned '
+            'slots. Each slot still needs its provider sign-in and local connection setup. '
+            'Saved connections below do not show which computers are online or which slot '
+            'a local session has selected.</p>',
+            '<p class="small muted">电脑连接一次即可配置你持有的所有槽位。每个槽位仍需完成'
+            '服务商登录，并在本机保存连接设置。下面的已保存连接不表示电脑在线，'
+            '也不表示本机会话当前选用了哪个槽位。</p>')
+        if connections:
+            introduction += _notice('Your Fleet account has a saved computer connection. '
+                'Adding this slot does not require pairing that computer again.',
+                '你的 Fleet 账号已有电脑连接。添加这个槽位，无需让那台电脑再次配对。')
+            introduction += _notice(
+                'Removing an account pairing affects this computer’s setup access across '
+                'your slots. Saved API connection keys are managed separately below.',
+                '移除账号配对会影响这台电脑对所有槽位的连接设置权限。'
+                '已保存的 API 连接密钥需在下方单独管理。')
+            if not ready and provider != 'devin':
+                introduction += _notice('Finish Claude sign-in for this slot, then add it '
+                    'on your connected computer.', '请先完成此槽位的 Claude 登录，'
+                    '再在已连接的电脑上添加它。')
     return ((
-        '<div class="row-line stacked cli-access"><div '
+        '<div class="row-line stacked cli-access" id="slot-' + escape(str(slot['id']))
+        + '-computers" data-fleet-readonly><div '
         'class="row-name">CC Fleet CLI</div>'
     )
             + introduction + ''.join(rows) + f'<div class="actions">{button}</div></div>')

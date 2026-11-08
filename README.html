@@ -173,7 +173,7 @@ rewrite existing conversations or synchronize history between computers.</p>
 <tr><td><code>ccfleet local -c</code> or <code>--continue</code></td><td>Continue the last native Claude conversation in this directory.</td></tr>
 <tr><td><code>ccfleet local -r</code> or <code>--resume [NAME_OR_ID]</code></td><td>Open native history, or resume the named conversation.</td></tr>
 <tr><td><code>ccfleet local --permission-mode plan</code></td><td>Choose native permissions; <code>--mode</code> remains an alias.</td></tr>
-<tr><td><code>ccfleet local --slot A --project PATH</code></td><td>Fleet-specific: pin one already selected slot and choose the local working directory.</td></tr>
+<tr><td><code>ccfleet local --slot slot-1234 --project PATH</code></td><td>Fleet-specific: pin one already selected slot and choose the local working directory.</td></tr>
 <tr><td><code>ccfleet list --remote</code></td><td>Fetch current own-slot names from the server; plain <code>ccfleet list</code> shows saved pairings.</td></tr>
 </tbody></table></div>
 <p>For a verified own Devin slot, follow <a href="https://ccfleet.io/docs/guide#devin-cli">the CLI provider-selection recipe</a>: refresh the remote slot list, authorize with a working pairing, then choose exactly one Devin slot with <code>--provider devin</code>.</p>

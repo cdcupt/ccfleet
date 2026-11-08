@@ -227,9 +227,11 @@ def test_a_slot_given_back_answers_to_its_pool_name_again(console):
     store.apply_slot_report("pool-1", [{"unix_user": "slot01", "present": False}],
                             now=time.time())
     assert store.get_slot("pool-1")["state"] == slots.FREE
+    alias = store.get_slot("pool-1")["pool_name"]
+    assert alias.startswith("slot-")
     page = call("GET", "/admin").body
-    assert byline(row_of(page, "pool-1")) == ""
-    assert 'row-name">pool-1</div>' in manage_line(page, "pool-1")
+    assert byline(row_of(page, alias)) == ""
+    assert f'row-name">{alias}</div>' in manage_line(page, alias)
     assert "ysflowerdog-1" not in page
 
 
@@ -249,13 +251,14 @@ def test_a_free_pool_slot_explains_its_missing_installation(console):
     store.begin_release("erik-2")
     store.apply_slot_report("erik-2", [{"unix_user": "slot01", "present": False}], now=now)
     machine_beat(store, "erik-2", now, [{"unix_user": "slot01", "present": False}])
-    assert store.get_slot("erik-2")["pool_name"] == "pool-4"
+    alias = store.get_slot("erik-2")["pool_name"]
+    assert alias.startswith("slot-")
     page = call("GET", "/admin").body
-    row = row_of(page, "pool-4")
+    row = row_of(page, alias)
     assert byline(row) == ""
     assert "erik" not in row and "us-west-residential" not in row
-    manage = manage_line(page, "pool-4")
-    assert 'row-name">pool-4</div>' in manage
+    manage = manage_line(page, alias)
+    assert f'row-name">{alias}</div>' in manage
     assert 'action="/actions/node/erik-2/disable"' in manage
     assert 'name="confirm" value="erik-2"' in manage
     assert "Installed on claim" in row and "available · in pool" in row
@@ -271,8 +274,9 @@ def test_a_free_slot_does_not_show_the_previous_holders_login(console):
                             now=time.time())
     # Until the next heartbeat, the last stored report still belongs to the
     # previous holder. The lifecycle record already confirms the wipe.
-    assert store.get_slot("erik-2")["pool_name"] == "pool-4"
-    row = row_of(call("GET", "/admin").body, "pool-4")
+    alias = store.get_slot("erik-2")["pool_name"]
+    assert alias.startswith("slot-")
+    row = row_of(call("GET", "/admin").body, alias)
     assert "available · in pool" in row and "Installed on claim" in row
     assert "2.1.281" not in row and "Max" not in row and "token " not in row
     assert ">disabled (hosted)<" in row and ">active<" not in row

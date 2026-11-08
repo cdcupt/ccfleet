@@ -51,9 +51,9 @@ def test_shared_runnable_examples_do_not_duplicate_or_expose_operator_configurat
         )
         == 1
     )
-    assert commands.count("ccfleet gateway setup --slots A B --routing sticky --replace") == 1
-    assert commands.count("ccfleet gateway setup --slots A B --routing priority --replace") == 1
-    assert commands.count("ccfleet local --slot A") == 1
+    assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky") == 1
+    assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing priority") == 1
+    assert commands.count("ccfleet local --slot slot-1234") == 1
     assert commands.count("https://ccfleet.io/v1/messages") == 1
     assert "YOUR_MATCHING_PUBLIC_KEY" not in commands
     assert "CCFLEET_GATEWAY_SSH" not in commands
@@ -69,7 +69,7 @@ def test_account_choices_and_saved_url_are_explained_without_adding_accounts():
         "Fixed",
         "Priority",
         "Sticky",
-        "does not add B automatically",
+        "does not add slot-5678 automatically",
         "up to 24 hours",
         "does not start a local HTTP server",
         "not the slot's Claude credential",

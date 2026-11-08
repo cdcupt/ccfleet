@@ -40,12 +40,19 @@ _NICKNAME_RE = re.compile(rf"[a-z0-9][a-z0-9-]{{0,{MAX_NICKNAME - 2}}}[a-z0-9]")
 # waits to become a neutral one that another slot is later given.
 _RESERVED_RE = re.compile(r"(?:pool|slot)-[0-9]+")
 _POOL_RE = re.compile(r"pool-[1-9][0-9]*")
+_NEUTRAL_RE = re.compile(r"slot-[0-9]{4,}")
+
+
+def valid_neutral_name(name: Any) -> bool:
+    """The same generated slot label is used before and after a claim."""
+    return (isinstance(name, str) and valid_hostname(name)
+            and _NEUTRAL_RE.fullmatch(name) is not None)
 
 
 def valid_pool_name(name: Any) -> bool:
-    """An authored, numbered pool hostname, never a holder's nickname."""
+    """A reserved empty-slot alias, including legacy internal pool labels."""
     return (isinstance(name, str) and valid_hostname(name)
-            and _POOL_RE.fullmatch(name) is not None)
+            and (_POOL_RE.fullmatch(name) is not None or valid_neutral_name(name)))
 
 
 def valid_handle(handle: Any) -> bool:
