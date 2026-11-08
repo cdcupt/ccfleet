@@ -83,7 +83,7 @@ def test_slot_choice_and_safe_switching_are_explained_in_both_languages():
         "Once public response headers are sent",
         "up to 24 hours",
         "not two live accounts",
-        "Connect Claude",
+        "Advanced connections",
     ):
         assert phrase in copy.text("en")
     for phrase in (
@@ -93,7 +93,7 @@ def test_slot_choice_and_safe_switching_are_explained_in_both_languages():
         "即使屏幕还没出现文字",
         "最多保留 24 小时",
         "并非两个真实账号的线上实测",
-        "我的槽位 → 连接 Claude",
+        "我的槽位 → 高级连接设置",
     ):
         assert phrase in copy.text("zh-Hans")
     assert "API endpoints" not in copy.text("en")
