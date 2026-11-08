@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.9"
+CLIENT_VERSION = "0.2.10"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -229,11 +229,79 @@ def _gateway_profile(value: Any) -> dict[str, Any]:
             or len(set(value["slot_ids"])) != len(value["slot_ids"])
             or ("provider" in value and (not isinstance(value["provider"], str)
                                          or value["provider"] not in {"anthropic", "devin"}))
+            or ("slot_names" in value and (
+                not isinstance(value["slot_names"], dict) or len(value["slot_names"]) > 100
+                or any(not isinstance(identifier, str)
+                       or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", identifier)
+                       or identifier not in value["slot_ids"]
+                       or not isinstance(name, str) or not name or len(name) > 200
+                       or any(ord(char) < 32 or ord(char) == 127 for char in name)
+                       for identifier, name in value["slot_names"].items())))
             or not isinstance(value.get("device_id"), str) or not value["device_id"]):
         raise CliError("saved gateway configuration is invalid; rerun ccfleet gateway setup")
     result = dict(value)
     result["base_url"] = _gateway_url(value.get("base_url"))
     return result
+
+
+def slot_label(name: Any) -> str:
+    """Display names are separate from the internal identifiers used for routing."""
+    if (not isinstance(name, str) or not name or len(name) > 200
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)
+            or re.fullmatch(r"pool-[0-9]+", name)):
+        return "Name unavailable"
+    return name
+
+
+def gateway_slot_labels(profile: dict[str, Any], rows=(), config=None) -> list[str]:
+    names = {}
+    if config is not None:
+        def same_endpoint(device):
+            if not isinstance(device, dict):
+                return False
+            try:
+                return _gateway_url(device.get("server")) == _gateway_url(profile["base_url"])
+            except CliError:
+                return False
+        names.update({device.get("slot_id"): device.get("slot_name")
+                      for device in config["devices"].values() if same_endpoint(device)})
+        choice = config.get("local_slot_choice")
+        if (isinstance(choice, dict)
+                and same_endpoint(config["devices"].get(choice.get("device_id")))):
+            names[choice.get("slot_id")] = choice.get("slot_name")
+    names.update(profile.get("slot_names", {}))
+    names.update({row["id"]: row["name"] for row in rows if row.get("name")})
+    return [slot_label(names.get(identifier)) for identifier in profile["slot_ids"]]
+
+
+def print_gateway_order(profile: dict[str, Any], rows=(), config=None, *, stream=None,
+                        overridden=False) -> None:
+    routing = ("Configured gateway routing: " + profile["mode"]
+               + " (overridden by fixed slot)" if overridden else "Routing: " + profile["mode"])
+    order = "Configured gateway slot order: " if overridden else "Slot order: "
+    print(routing, file=stream)
+    print(order + " → ".join(gateway_slot_labels(profile, rows, config)), file=stream)
+
+
+def select_gateway_pool(config: dict[str, Any]) -> None:
+    """Keep pairing authority and endpoint secrets; remove only the local override."""
+    if "local_slot_choice" in config:
+        config.pop("local_slot_choice")
+        save_config(config)
+
+
+def finish_gateway_setup(args, profile, slots) -> None:
+    config = load_config()
+    if getattr(args, "slots", None):
+        # An explicit ordered selection is also the user's requested local route.
+        # Wait until enrollment/readiness succeeds before replacing a fixed choice.
+        select_gateway_pool(config)
+        print("Local route: configured slot pool. Any previous single-slot pin was cleared.")
+    elif local_slot_choice(config):
+        name = slot_label(config["local_slot_choice"]["slot_name"])
+        print(f"Local route remains fixed to {name}; gateway pool routing is overridden.\n"
+              "Run ccfleet use --pool to follow the configured pool.")
+    print_gateway_order(profile, slots, config, overridden=bool(local_slot_choice(config)))
 
 
 def own_gateway_slots(device: dict[str, Any]) -> list[dict[str, Any]]:
@@ -335,8 +403,12 @@ def check_gateway(profile: dict[str, Any], slot_id: str = "", *,
     current = answer.get("key")
     updated_profile = dict(profile)
     if isinstance(current, dict):
-        refreshed = _gateway_profile({**profile, "slot_ids": current.get("slot_ids"),
-                                      "mode": current.get("mode")})
+        refreshed = {**profile, "slot_ids": current.get("slot_ids"), "mode": current.get("mode")}
+        if "slot_names" in profile and isinstance(refreshed["slot_ids"], list):
+            refreshed["slot_names"] = {identifier: name for identifier, name in
+                                       profile["slot_names"].items()
+                                       if identifier in refreshed["slot_ids"]}
+        refreshed = _gateway_profile(refreshed)
         if current.get("id") != profile["key_id"]:
             raise CliError("gateway returned a different endpoint identity")
         updated_profile.update(refreshed)
@@ -416,10 +488,11 @@ def cmd_gateway(args: argparse.Namespace) -> int:
     device = choose_device(config, args.slot)
     if args.gateway_action in (None, "status"):
         profile = gateway_for_launch(config, device, "gateway")
-        check_gateway(profile)
-        print("Direct HTTPS gateway ready.\nBase URL: " + profile["base_url"]
-              + "\nRouting: " + profile["mode"] + "\nSelected slots: "
-              + ", ".join(profile["slot_ids"]))
+        answer = check_gateway(profile)
+        print("Direct HTTPS gateway ready.\nBase URL: " + profile["base_url"])
+        print_gateway_order(profile, answer.get("slots", []), config,
+                            overridden=bool(local_slot_choice(config)))
+        print_local_selection(config, profile, answer.get("slots", []))
         return 0
     if args.gateway_action == "remove":
         profile = load_gateway()
@@ -457,6 +530,7 @@ def cmd_gateway(args: argparse.Namespace) -> int:
                      or requested_provider == previous.get("provider", "anthropic"))):
             print("Existing gateway configuration kept. Base URL: " + server
                   + "\nRun ccfleet local.")
+            finish_gateway_setup(args, previous, slots)
             return 0
     provider = requested_provider or (
         previous.get("provider", "anthropic") if same_previous else "anthropic")
@@ -473,6 +547,8 @@ def cmd_gateway(args: argparse.Namespace) -> int:
                                 "secret": answer.get("secret"), "key_id": key.get("id"),
                                 "mode": key.get("mode"), "slot_ids": key.get("slot_ids"),
                                 "provider": key.get("provider", "anthropic"),
+                                "slot_names": {row["id"]: row["name"] for row in slots
+                                               if row["id"] in selected},
                                 "device_id": device["device_id"]})
     if (profile["base_url"] != server or profile["slot_ids"] != selected
             or profile["provider"] != provider):
@@ -493,6 +569,7 @@ def cmd_gateway(args: argparse.Namespace) -> int:
           "Base URL: " + profile["base_url"] + "\nRun ccfleet local. "
           "Model requests use HTTPS directly; no local HTTP listener or laptop SSH is needed.\n"
           "Manage routing and revoke keys on " + server + "/account#gateway")
+    finish_gateway_setup(args, profile, slots)
     return 0
 
 def generate_key() -> tuple[Path, str]:
@@ -771,8 +848,29 @@ def local_route(config: dict[str, Any], wanted: str = "", transport: str = "auto
 def print_local_route(route: dict[str, Any]) -> None:
     provider = "Devin" if route["provider"] == "devin" else "Claude / Anthropic"
     transport = "HTTPS gateway" if route["gateway"] is not None else "paired slot bridge"
-    print(f"Selected route: {route['slot_name']} · {provider} · {transport}.",
+    print(f"Selected route: {slot_label(route['slot_name'])} · {provider} · {transport}.",
           file=sys.stderr, flush=True)
+    gateway = route["gateway"]
+    if gateway is None:
+        return
+    if route["slot_id"]:
+        print("Model route: one fixed selected account; automatic switching is disabled.\n"
+              "This local slot pin overrides gateway pool routing. "
+              "Run ccfleet use --pool to restore the pool.", file=sys.stderr, flush=True)
+    elif len(gateway["slot_ids"]) == 1:
+        print("Model route: one fixed selected account; automatic switching is disabled.",
+              file=sys.stderr, flush=True)
+    elif gateway["mode"] == "sticky":
+        print("Model route: sticky. New conversations start with the first eligible slot; "
+              "conversations keep the account that last succeeded when the client supplies "
+              "a session ID. Eligible failures can use the next slot.",
+              file=sys.stderr, flush=True)
+    else:
+        print("Model route: priority order for each request. "
+              "Eligible failures can use the next slot.", file=sys.stderr, flush=True)
+    print_gateway_order(gateway, route.get("answer", {}).get("slots", []),
+                        {"devices": {"device": route["device"]}}, stream=sys.stderr,
+                        overridden=bool(route["slot_id"]))
 
 
 def frame(payload: bytes, opcode: int = 2) -> bytes:
@@ -2598,17 +2696,6 @@ def cmd_local(args: argparse.Namespace) -> int:
               + "Native prompts/tool results can still\n"
               "contain local context; this is not an anonymity guarantee.",
               file=sys.stderr, flush=True)
-        if gateway is not None:
-            if gateway_slot or len(gateway["slot_ids"]) == 1:
-                print("Model route: one fixed selected account; automatic switching is disabled.",
-                      file=sys.stderr, flush=True)
-            elif gateway["mode"] == "sticky":
-                print("Model route: your selected account pool. Conversations keep the account "
-                      "that last succeeded when the client supplies a session ID.",
-                      file=sys.stderr, flush=True)
-            else:
-                print("Model route: your selected account pool in priority order for each request.",
-                      file=sys.stderr, flush=True)
         command = local_claude_command(claude, args, settings_path, extra)
         if getattr(args, "_background_job", False):
             return subprocess.run(command, cwd=project, env=env,
@@ -2968,37 +3055,99 @@ def cmd_external_claude(args: argparse.Namespace) -> int:
             signal.signal(number, previous)
 
 
+def print_local_selection(config: dict[str, Any], profile=None, rows=()) -> None:
+    selected = local_slot_choice(config)
+    if selected:
+        name = config["local_slot_choice"]["slot_name"]
+        name = next((row["name"] for row in rows
+                     if row["id"] == selected and row.get("name")), name)
+        print(f"Local route: fixed to {slot_label(name)} (pool routing is overridden).\n"
+              "Run ccfleet use --pool to follow the configured pool.")
+    elif profile is not None:
+        print("Local route: configured slot pool (no single-slot pin).")
+    elif config["devices"]:
+        device = choose_device(config)
+        print(f"Local route: paired slot {slot_label(device.get('slot_name'))}.")
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     config = load_config()
     selected = local_slot_choice(config)
     if getattr(args, "remote", False):
         device = choose_device(config, getattr(args, "slot", ""))
-        for slot in own_gateway_slots(device):
-            active = "*" if slot["id"] == (selected or device["slot_id"]) else " "
-            print(f"{active} {slot['name']} ({slot['id']})")
+        slots = own_gateway_slots(device)
+        profile, answer = None, None
+        same_selection_endpoint = (not selected or _gateway_url(device.get("server"))
+            == _gateway_url(config["devices"][config["local_slot_choice"]["device_id"]]
+                            .get("server")))
+        if not same_selection_endpoint:
+            selected = ""
+        try:
+            saved = load_gateway()
+            if saved is not None:
+                if _gateway_url(device.get("server")) != saved["base_url"]:
+                    print("The saved gateway belongs to another connection; "
+                          "its routing was not checked.")
+                else:
+                    current = gateway_for_launch(config, device, "gateway")
+                    answer = check_gateway(current, require_ready=False)
+                    profile = current
+        except CliError:
+            print("Gateway routing is unavailable; current owned slots are listed below.\n"
+                  "Run ccfleet gateway setup to configure a working connection.")
+        if profile is not None:
+            if same_selection_endpoint:
+                print_local_selection(config, profile, slots)
+            else:
+                print("The saved local slot pin belongs to another connection.")
+            print_gateway_order(profile, answer.get("slots", []), config,
+                                overridden=bool(selected))
+        print("Your current slots:")
+        for slot in slots:
+            markers = []
+            if slot["id"] == selected:
+                markers.append("fixed local choice")
+            if profile is not None and slot["id"] in profile["slot_ids"]:
+                markers.append("pool priority " + str(profile["slot_ids"].index(slot["id"]) + 1))
+            suffix = " — " + ", ".join(markers) if markers else ""
+            print(f"  {slot_label(slot['name'])}{suffix}")
+        print("This shows configuration, not the slot currently serving a conversation.")
         return 0
+    profile = load_gateway()
     if not config["devices"]:
         print("No slots connected. Run ccfleet login.")
         return 0
-    for device_id, device in config["devices"].items():
-        active = "*" if (device["slot_id"] == selected if selected
-                          else device_id == config.get("active")) else " "
-        print(f"{active} {device['slot_name']} ({device['slot_id']})")
-    if selected and not any(device.get("slot_id") == selected
-                            for device in config["devices"].values()):
-        print(f"* {config['local_slot_choice']['slot_name']} ({selected})")
+    print_local_selection(config, profile)
+    if profile is not None:
+        print_gateway_order(profile, config=config, overridden=bool(selected))
+    print("Saved computer pairings:")
+    for device in config["devices"].values():
+        print("  " + slot_label(device.get("slot_name")))
+    print("Saved information only; run ccfleet list --remote for current names and routing.\n"
+          "Pairings authorize this computer; they do not show a conversation's active slot.")
     return 0
 
 
 def cmd_use(args: argparse.Namespace) -> int:
     config = load_config()
+    if getattr(args, "pool", False):
+        profile = load_gateway()
+        if profile is None:
+            raise CliError("run ccfleet gateway setup --slots SLOT before choosing the pool")
+        device = choose_device(config, profile["device_id"])
+        profile = gateway_for_launch(config, device, "gateway")
+        answer = check_gateway(profile, require_ready=False)
+        select_gateway_pool(config)
+        print("Using the configured slot pool for new local sessions.")
+        print_gateway_order(profile, answer.get("slots", []), config)
+        return 0
     route = local_route(config, args.slot, require_ready=False, check_bridge=False)
     device = route["migration_device"] or route["device"]
     remember_local_slot(config, device,
                         slot_id=route["slot_id"] or route["device"]["slot_id"],
                         slot_name=route["slot_name"])
     save_config(config)
-    print(f"Using {route['slot_name']} for local Claude Code.")
+    print(f"Using {slot_label(route['slot_name'])} for local Claude Code.")
     print_local_route(route)
     return 0
 
@@ -3499,8 +3648,11 @@ def parser() -> argparse.ArgumentParser:
                              help="list saved pairings, or current owned slots with --remote")
     listing.add_argument("--remote", action="store_true", help="fetch your current owned slots")
     listing.add_argument("--slot", default="", help="saved pairing used to authorize --remote")
-    use = sub.add_parser("use", help="choose the default local slot without changing website keys")
-    use.add_argument("slot")
+    use = sub.add_parser("use", help="choose one local slot or restore configured pool routing")
+    selection = use.add_mutually_exclusive_group(required=True)
+    selection.add_argument("slot", nargs="?", help="fix new local sessions to one slot")
+    selection.add_argument("--pool", action="store_true",
+                           help="clear the local slot pin and follow the existing gateway pool")
     logout = sub.add_parser("logout", help="revoke this computer and remove its local key")
     logout.add_argument("--slot", default="", help="slot id or name")
     logout.add_argument("--local-only", action="store_true", help=argparse.SUPPRESS)
