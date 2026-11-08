@@ -288,7 +288,8 @@ def test_default_list_is_only_saved_pairings_and_never_calls_network(discovery, 
     monkeypatch.setitem(discovery.scope, "api_json", lambda *args, **kwargs: pytest.fail("cached list made a request"))
     assert discovery.loaded["main"](["list"]) == 0
     output = capsys.readouterr().out
-    assert "old-slot" in output and "reused" in output and "fresh-slot" not in output
+    assert "reused" in output and "Saved computer pairings:" in output
+    assert "old-slot" not in output and "fresh-slot" not in output
     pairings_unchanged(discovery)
 
 
@@ -300,7 +301,8 @@ def test_remote_list_uses_device_auth_fresh_owned_options_without_rewriting_pair
     assert len(calls) == 1 and calls[0][0].endswith("/api/cli/gateway/options")
     assert calls[0][1] == discovery.device["device_token"] and calls[0][3] == "GET"
     output = capsys.readouterr().out
-    assert "fresh-slot" in output and "reused" in output and "old-slot" not in output
+    assert "reused" in output and "Your current slots:" in output
+    assert "fresh-slot" not in output and "old-slot" not in output
     assert SECRET not in output and discovery.device["device_token"] not in output
     assert discovery.loaded["load_gateway"]() is None
     pairings_unchanged(discovery)
