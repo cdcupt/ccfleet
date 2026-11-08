@@ -419,7 +419,8 @@ def test_use_current_unpaired_gateway_slot_persists_canonical_selection(client, 
     assert "Devin" in output.err and "two" in output.err and "HTTPS" in output.err
     assert client.loaded["main"](["list"]) == 0
     listing = capsys.readouterr().out
-    assert "* two (slot-two)" in listing and "* one" not in listing
+    assert "Local route: fixed to two" in listing and "*" not in listing
+    assert "(slot-two)" not in listing
 
 
 def test_use_gateway_current_name_cannot_resurrect_retired_pairing(client, monkeypatch):
