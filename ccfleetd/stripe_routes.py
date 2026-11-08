@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from html import escape
+from typing import Any, Optional
 
 from . import stripe_billing, stripe_checkout, wallet
 from .bilingual import label
@@ -19,8 +20,8 @@ MESSAGES = {
                  '在线充值暂未开通，您的 Fleet 余额没有变化。'),
     'request': ('Choose a listed USD amount and try again.', '请选择列表中的美元金额后重试。'),
     'signin': ('Sign in to add Fleet credit.', '请先登录，再添加 Fleet 余额。'),
-    'unconfirmed': ('Checkout could not be confirmed. Return to your balance and retry '
-                    'the same request.', '暂时无法确认付款页面。请返回余额页面，重试同一次充值。'),
+    'unconfirmed': ('Checkout could not be confirmed. Retry the same top-up below.',
+                    '暂时无法确认付款页面。请点击下方按钮，重试同一次充值。'),
 }
 
 
@@ -32,11 +33,23 @@ def enabled(billing: Any, cfg: Any) -> bool:
             and getattr(cfg, 'stripe_product_approved', False) is True)
 
 
-def _failure(code: str, status: int):
+def _failure(code: str, status: int, *, retry: Optional[Mapping[str, str]] = None):
     from . import usersite
+    retry_form = ''
+    if retry is not None:
+        # These are the caller-authenticated, validated fields from this POST.
+        # Returning to the amount chooser would mint a different nonce/order.
+        fields = ''.join('<input type="hidden" name="' + name + '" value="'
+                         + escape(retry[name], quote=True) + '">'
+                         for name in ('csrf', 'idempotency_key', 'amount_cents'))
+        retry_form = ('<form method="post" action="/account/topup">' + fields
+            + '<button class="btn primary" type="submit">'
+            + label('Retry the same top-up', '重试同一次充值', inline=True)
+            + '</button></form>')
     body = ('<section class="card"><h1>'
             + label('Add Fleet credit', '添加 Fleet 余额', inline=True) + '</h1><p>'
-            + label(*MESSAGES[code], inline=True) + '</p><a class="btn" href="/account#wallet">'
+            + label(*MESSAGES[code], inline=True) + '</p>' + retry_form
+            + '<a class="btn" href="/account#wallet">'
             + label('Back to your balance', '返回余额页面', inline=True) + '</a></section>')
     return usersite.Outcome(status, body=usersite._shell('Add Fleet credit', body, door=True))
 
@@ -73,16 +86,18 @@ def start(billing: Any, cfg: Any, account: Any, form: Mapping[str, str], now: fl
         moment = wallet.instant(now)
     except (ValueError, wallet.WalletError):
         return _failure('request', 400)
+    retry = {'csrf': form['csrf'], 'idempotency_key': identity, 'amount_cents': str(amount)}
     try:
         session = billing.start_checkout(account_id, amount, idempotency_key=identity, now=moment)
         location = _checkout_url(session, getattr(cfg, 'stripe_mode', ''))
     except stripe_billing.BillingError as error:
         return _failure('request' if error.status_code == 400 else 'unconfirmed',
-                        400 if error.status_code == 400 else 503)
+                        400 if error.status_code == 400 else 503,
+                        retry=None if error.status_code == 400 else retry)
     except Exception:
         # The HTTP boundary must not reflect an injected transport/provider
         # diagnostic, request body or secret in an HTML error response.
-        return _failure('unconfirmed', 503)
+        return _failure('unconfirmed', 503, retry=retry)
     return usersite.Outcome(303, location=location)
 
 

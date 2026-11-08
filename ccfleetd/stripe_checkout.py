@@ -217,7 +217,8 @@ def _hosted_url(value: Any, session_id: str) -> str:
         parsed = urllib.parse.urlsplit(value)
         valid = (parsed.scheme == "https" and parsed.hostname == "checkout.stripe.com"
                  and parsed.username is None and parsed.password is None and parsed.port is None
-                 and parsed.path in {"/c/pay/" + session_id, "/pay/" + session_id})
+                 and parsed.path in {"/c/pay/" + session_id, "/g/pay/" + session_id,
+                                     "/pay/" + session_id})
     except ValueError:
         valid = False
     _require(valid, "Checkout redirect is not the expected Stripe-hosted session")
