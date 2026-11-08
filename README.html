@@ -319,30 +319,30 @@ or modify a different local database.</p>
 page; <code>/admin</code> is the operator console. <code>CCFLEET_ADMIN_HOST</code> can move the
 console to a separate hostname.</p>
 <p>Create a shared machine and its slots:</p>
-<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node add pool-1 --owner ops --region us-west
-docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd slot add pool-1 --machine pool-1 --unix-user slot01
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node add slot-1234 --owner ops --region us-west
+docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd slot add slot-1234 --machine slot-1234 --unix-user slot01
 </code></pre>
 <p>On a fresh Ubuntu machine, first install base hardening and then the shared
 machine agent:</p>
 <pre><code class="language-bash">git clone https://github.com/cdcupt/ccfleet.git
 sudo ./ccfleet/node/bootstrap.sh ops &quot;ssh-ed25519 AAAA... operator&quot;
-sudo hostnamectl set-hostname pool-1
+sudo hostnamectl set-hostname slot-1234
 sudo timedatectl set-timezone Etc/UTC
 
 curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/node/machine-setup.sh \
   | sudo bash -s -- \
       --server https://fleet.example.com \
-      --node pool-1 \
+      --node slot-1234 \
       --token &lt;node-token&gt;
 </code></pre>
 <p>Configure the fixed endpoint the CC Fleet server uses to reach that machine. Copy
 the node's public SSH host key over an authenticated operator channel to a
 readable file inside the primary container, for example
-<code>/data/pool-1-ssh_host_ed25519_key.pub</code>:</p>
-<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node access pool-1 \
+<code>/data/slot-1234-ssh_host_ed25519_key.pub</code>:</p>
+<pre><code class="language-bash">docker compose -f deploy/docker-compose.yml exec ccfleetd ccfleetd node access slot-1234 \
   --host &lt;address-reachable-from-server&gt; \
   --port 22 \
-  --host-key-file /data/pool-1-ssh_host_ed25519_key.pub
+  --host-key-file /data/slot-1234-ssh_host_ed25519_key.pub
 </code></pre>
 <p>Only the CC Fleet server needs network access to the node's SSH port. The customer uses
 the public HTTPS/WSS service and never receives the node address.</p>
