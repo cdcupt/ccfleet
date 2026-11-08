@@ -919,13 +919,13 @@ def _model_connections(cfg: Config, *, framed: bool = True) -> str:
         + "</div>"
         + bi(
             '<p><strong>On the website:</strong> open <a href="/account#gateway">Your '
-            "slots → Connect Claude</a>. Give slot-1234 priority <code>1</code> and "
+            "slots → Advanced connections</a>. Give slot-1234 priority <code>1</code> and "
             "slot-5678 priority <code>2</code>; leave any excluded slot blank. "
             "Priorities must be unique. "
             "Choose your routing mode, then save. Only your own held slots are selectable, "
             "and each needs a usable Claude sign-in before it can receive requests.</p>",
-            '<p><strong>在网页上：</strong>打开<a href="/account#gateway">我的槽位 → 连接 '
-            "Claude</a>。只用 slot-1234 时，仅给 slot-1234 填 <code>1</code>；"
+            '<p><strong>在网页上：</strong>打开<a href="/account#gateway">我的槽位 → 高级连接设置'
+            "</a>。只用 slot-1234 时，仅给 slot-1234 填 <code>1</code>；"
             "需要 slot-5678 备选时，再给 slot-5678 填 <code>2</code>。"
             "不想使用的槽位留空，排序数字不能重复。选择路由方式后保存。只能"
             "选择你自己持有的槽位，而且各槽位需要有效的 Claude 登录才能接收请求。</p>",

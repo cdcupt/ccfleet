@@ -31,6 +31,7 @@ def test_additional_slot_and_routing_instructions_are_visible_before_app_integra
         if attrs.get("id") in {"add-slot", "model-connections"}:
             assert all(tag != "details" for tag, _ in parents)
     assert not parsed.duplicate_ids
+    assert ("Advanced connections" if language == "en" else "高级连接设置") in parsed.text
     assert all(link[1:] in parsed.ids for link in parsed.links if link.startswith("#"))
 
 
@@ -79,6 +80,7 @@ def test_canonical_gateway_reference_has_the_same_onboarding_and_pool_controls(l
     parsed = Document(bilingual.project_html(source, language))
     assert {"add-slot", "choose"} <= parsed.ids
     assert not parsed.duplicate_ids
+    assert ("Advanced connections" if language == "en" else "高级连接设置") in parsed.text
     assert "ccfleet use --pool\nccfleet gateway status\nccfleet local --check\nccfleet local" in parsed.pre_codes
     commands = "\n".join(parsed.pre_codes)
     assert "ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky" in commands
