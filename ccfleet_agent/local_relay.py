@@ -49,6 +49,7 @@ MAX_BODY = 64 * 1024 * 1024
 CHUNK_SIZE = 64 * 1024
 REQUEST_TIMEOUT = 900
 INPUT_TIMEOUT = 60
+UPLOAD_TIMEOUT = 600
 CONNECT_TIMEOUT = 20
 READ_TIMEOUT = 300
 USER_AGENT = "ccfleet-slot-relay/2"
@@ -71,6 +72,56 @@ class RelayError(ValueError):
         self.status = status
 
 
+class _DeadlineExpired(BaseException):
+    """Do not let best-effort metrics or parsing handlers swallow a deadline."""
+
+
+class _RequestDeadline:
+    """Bound idle input, progressing uploads, and the whole request separately."""
+
+    def __init__(self) -> None:
+        self.overall = time.monotonic() + REQUEST_TIMEOUT
+        self.upload: Optional[float] = None
+        self.message = "slot inference exceeded its connection deadline"
+
+    def _arm(self, deadline: float, message: str) -> None:
+        remaining = deadline - time.monotonic()
+        self.message = message
+        if remaining <= 0:
+            raise _DeadlineExpired(message)
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+
+    def expired(self, *_args: Any) -> None:
+        raise _DeadlineExpired(self.message)
+
+    def start_input(self) -> None:
+        self.upload = None
+        self._arm(min(self.overall, time.monotonic() + INPUT_TIMEOUT),
+                  "slot inference metadata exceeded its input deadline")
+
+    def start_body(self) -> None:
+        self.upload = min(self.overall, time.monotonic() + UPLOAD_TIMEOUT)
+        self.progress()
+
+    def progress(self) -> None:
+        assert self.upload is not None
+        idle = time.monotonic() + INPUT_TIMEOUT
+        if idle < self.upload:
+            self._arm(idle, "slot inference upload stopped making progress")
+        else:
+            self._arm(self.upload, "slot inference upload exceeded its total deadline")
+
+    def finish_body(self) -> None:
+        assert self.upload is not None
+        # Parsing and credential checks are still bounded, but are not idle I/O.
+        self._arm(self.upload, "slot inference upload exceeded its total deadline")
+
+    def request_ready(self) -> None:
+        if self.upload is not None and time.monotonic() >= self.upload:
+            raise _DeadlineExpired("slot inference upload exceeded its total deadline")
+        self._arm(self.overall, "slot inference exceeded its connection deadline")
+
+
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -88,13 +139,18 @@ def decode_json(raw: bytes) -> Any:
     return json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant)
 
 
-def read_exact(stream: BinaryIO, size: int) -> bytes:
+def read_exact(stream: BinaryIO, size: int, *,
+               progress: Optional[Callable[[], None]] = None) -> bytes:
     data = bytearray()
+    # Buffered read(n) can wait for all n bytes and hide a slow but live upload.
+    read = getattr(stream, "read1", stream.read) if progress is not None else stream.read
     while len(data) < size:
-        chunk = stream.read(min(CHUNK_SIZE, size - len(data)))
+        chunk = read(min(CHUNK_SIZE, size - len(data)))
         if not chunk:
             raise EOFError("incomplete inference frame")
         data.extend(chunk)
+        if progress is not None:
+            progress()
     return bytes(data)
 
 
@@ -547,6 +603,7 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
               policy: Callable[[], None] = require_enabled,
               connect: Callable[[], Any] = connect_upstream,
               request_ready: Callable[[], None] = lambda: None,
+              input_deadline: Optional[_RequestDeadline] = None,
               watch: bool = False, gateway: bool = False, phase: str = "any") -> int:
     if gateway:
         output = _GatewayOutput(output)
@@ -583,14 +640,22 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             write_chunk(output, b"")
             return 0
         path, headers, size = validate_request(meta)
-        body = sanitize_body(read_exact(input_, size))
+        if input_deadline is not None:
+            input_deadline.start_body()
+        raw_body = read_exact(input_, size, progress=(
+            input_deadline.progress if input_deadline is not None else None))
+        if input_deadline is not None:
+            input_deadline.finish_body()
+        body = sanitize_body(raw_body)
+        del raw_body
         credential(home, time.time())
         policy()
         if bound_account(home) != account:
             raise RelayError(409, "slot account changed while opening inference")
         request_ready()
         connection = connect()
-        deadline = time.monotonic() + REQUEST_TIMEOUT
+        deadline = (input_deadline.overall if input_deadline is not None
+                    else time.monotonic() + REQUEST_TIMEOUT)
 
         def stop_if_revoked() -> None:
             while not finished.wait(0.25):
@@ -707,6 +772,11 @@ def serve_one(input_: BinaryIO, output: BinaryIO, home: Path, *,
             except Exception:
                 pass
         return 0
+    except _DeadlineExpired as exc:
+        outcome = "cancelled"
+        if not began:
+            send_error(output, 504, str(exc), retryable=not request_sent)
+        return 2
     except RelayError as exc:
         outcome = "cancelled" if exc.status in {409, 504} else _outcome(exc.status)
         if not began:
@@ -745,27 +815,27 @@ def main(argv: Optional[list[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
-    def expired(*args: Any) -> None:
-        raise RelayError(504, "slot inference exceeded its connection deadline")
-
-    signal.signal(signal.SIGALRM, expired)
-    signal.alarm(INPUT_TIMEOUT)
+    deadline = _RequestDeadline()
+    signal.signal(signal.SIGALRM, deadline.expired)
     try:
+        deadline.start_input()
         home = Path(pwd.getpwuid(os.getuid()).pw_dir)
         if gateway:
             ready = serve_one(sys.stdin.buffer, sys.stdout.buffer, home,
                               gateway=True, phase="ready")
             if ready:
                 return ready
-            signal.alarm(INPUT_TIMEOUT)
+            deadline.start_input()
         return serve_one(sys.stdin.buffer, sys.stdout.buffer,
                          home, watch=True, gateway=gateway,
                          phase="request" if gateway else "any",
-                         request_ready=lambda: signal.alarm(REQUEST_TIMEOUT))
-    except (OSError, BrokenPipeError):
+                         request_ready=deadline.request_ready, input_deadline=deadline)
+    except (_DeadlineExpired, OSError):
+        # A deadline during cleanup may follow a dispatched request or response.
+        # Close without another frame or a claim that replay would be safe.
         return 2
     finally:
-        signal.alarm(0)
+        signal.setitimer(signal.ITIMER_REAL, 0)
 
 
 if __name__ == "__main__":
