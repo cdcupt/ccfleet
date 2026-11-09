@@ -175,6 +175,12 @@ model-request capacity. Busy requests may wait up to ten seconds before receivin
 a structured overload response and a three-second retry hint; rejected requests
 are not forwarded or replayed. The WebSocket TLS stream uses one nonblocking
 I/O owner with bounded buffers and explicit cancellation.</p>
+<p>Updated slot relays allow up to ten minutes to receive a progressing request body,
+while stopping uploads that receive no bytes for sixty seconds. Metadata still has
+a sixty-second deadline, and upload time counts toward the fifteen-minute overall
+request budget. The 64 MiB wire limit remains a size ceiling, not a promise that
+every connection can upload that much within the time budget. These bounds do not
+replay a failed request or change its assigned account.</p>
 <p>If an older client reports an empty <code>503</code> while multiple agents are running,
 stop its retry loop, run <code>ccfleet update</code>, and reopen the same conversation
 with <code>ccfleet local --continue</code>. Update preserves pairing and local history.
