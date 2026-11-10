@@ -1331,12 +1331,14 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
                        ("alerts", "node_id"), ("logins", "node_id"),
                        ("outages", "component"))
 
-    # A paid receipt keeps the original resource identifiers. These references
-    # block raw ID renames/deletions; they must never join the mutable lists.
+    # Paid receipts and private-owner bindings keep their resource identities.
+    # The private-owner lifecycle guard is separate from the paid-history guard;
+    # neither kind of reference may join the mutable rename lists.
     IMMUTABLE_RESOURCE_ID_COLUMNS = (("slot_purchases", "node_id"),
                                      ("slot_purchases", "slot_id"),
                                      ("slot_subscription_orders", "node_id"),
-                                     ("slot_subscription_orders", "slot_id"))
+                                     ("slot_subscription_orders", "slot_id"),
+                                     ("private_owner_nodes", "node_id"))
 
     @staticmethod
     def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
