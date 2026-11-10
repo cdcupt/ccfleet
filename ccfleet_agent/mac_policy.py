@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 CONFIG_PARTS = (".config", "ccfleet", "private-owner")
-FILES = frozenset({"policy.json", "agent.json", "grants.json", "maintenance.json"})
+FILES = frozenset({"policy.json", "agent.json", "grants.json", "maintenance.json",
+                   "relay-quarantine.json"})
 MAX_BYTES = 64 * 1024
 GRANT_TTL = 180
 _TRUST_ROOT = Path("/")
@@ -120,7 +121,7 @@ def read_json(home: Path, name: str) -> dict[str, Any]:
 
 
 def write_json(home: Path, name: str, value: dict[str, Any]) -> None:
-    if name not in {"grants.json", "maintenance.json"}:
+    if name not in {"grants.json", "maintenance.json", "relay-quarantine.json"}:
         raise MacPolicyError("private owner file is not writable by this agent")
     raw = json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
     if len(raw) > MAX_BYTES:

@@ -9,7 +9,7 @@ from typing import Optional
 
 
 def sibling(name: str):
-    if name not in {"mac_policy", "local_relay"}:
+    if name not in {"mac_policy", "mac_relay_client"}:
         raise ValueError("unsupported private owner module")
     spec = importlib.util.spec_from_file_location(
         "ccfleet_mac_entry_" + name, Path(__file__).with_name(name + ".py"))
@@ -35,9 +35,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         directory = policy.open_directory(Path(__file__).absolute().parent)
         os.close(directory)
         policy.require_enabled(Path(owner.pw_dir))
-        relay = sibling("local_relay")
-        relay.MAC_PRIVATE_OWNER = True
-        return relay.main(["--gateway-protocol-v1" if gateway else "--protocol-v2"])
+        client = sibling("mac_relay_client")
+        return client.forward(b"G" if gateway else b"D", home=Path(owner.pw_dir))
     except (OSError, ValueError):
         print("private owner inference is unavailable", file=sys.stderr)
         return 2

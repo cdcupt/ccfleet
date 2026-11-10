@@ -912,8 +912,11 @@ block in <code>~/.ssh/authorized_keys</code>, preserving existing administrator
 keys. Controller grants expire after three minutes without a fresh accepted
 heartbeat. Use a dedicated reverse-SSH account restricted to one listener on the
 controller's private container interface; do not publish the Mac's SSH port.</p>
-<p>Credentials remain in the native user's default macOS Keychain. The relay reads
-only the access credential and expiry into memory. Native Claude owns renewal;
+<p>Credentials remain in the native user's default macOS Keychain. A GUI-session
+LaunchAgent starts a fixed inference worker for each request. The restricted SSH
+entry only transports framed requests through an owner-only Unix socket; it
+never receives the credential. The worker reads only the access credential and
+expiry into memory. Native Claude owns renewal;
 no refresh-token implementation, credential-file shadow, or credential transfer
 is used. The minimal owner agent does not scan project histories or execute
 server-supplied lifecycle commands. It follows the Mac's existing system routing

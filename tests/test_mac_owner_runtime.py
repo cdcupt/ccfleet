@@ -203,7 +203,7 @@ def test_mac_forced_entry_allows_only_exact_inference_protocols(owner, monkeypat
     calls = []
     fake_policy = SimpleNamespace(authenticated_owner=lambda: owner[2],
         open_directory=lambda path: os.open(home, os.O_RDONLY), require_enabled=lambda selected: None)
-    relay = SimpleNamespace(main=lambda argv: calls.append(argv) or 0)
+    relay = SimpleNamespace(forward=lambda role, **kwargs: calls.append((role, kwargs)) or 0)
     monkeypatch.setattr(mac_slot_entry, "sibling", lambda name:
                         fake_policy if name == "mac_policy" else relay)
     monkeypatch.setattr(mac_slot_entry.sys, "platform", "darwin")
@@ -213,7 +213,8 @@ def test_mac_forced_entry_allows_only_exact_inference_protocols(owner, monkeypat
     assert (mac_slot_entry.main(args) == 0) == accepted
     assert bool(calls) == accepted
     if accepted:
-        assert relay.MAC_PRIVATE_OWNER is True
+        assert calls[0][0] == (b"G" if args else b"D")
+        assert calls[0][1]["home"] == home
 
 
 def test_mac_owner_payload_does_not_scan_history_or_report_identity_secrets(owner, monkeypatch):
