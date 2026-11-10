@@ -42,6 +42,10 @@ except ImportError:
     _spec.loader.exec_module(inference_policy)
 
 POLICY_DIR = Path("/etc/ccfleet/local-relay")
+# Enabled only by the separately installed, inference-only private Mac entry.
+# The ordinary hosted relay and its Linux root-policy checks remain unchanged.
+MAC_PRIVATE_OWNER = False
+_MAC_MODULES: dict[str, Any] = {}
 UPSTREAM_HOST = "api.anthropic.com"
 MAX_HEADER = 32 * 1024
 # An individual wire-request safety bound, not a project or file-count limit.
@@ -305,7 +309,28 @@ def send_upstream_error(stream: BinaryIO, status: int, headers: dict[str, str], 
     write_chunk(stream, b"")
 
 
+def _mac_module(name: str):
+    if name not in {"mac_policy", "mac_credentials"}:
+        raise RelayError(403, "private owner runtime is unavailable")
+    if name in _MAC_MODULES:
+        return _MAC_MODULES[name]
+    spec = importlib.util.spec_from_file_location(
+        "ccfleet_" + name, Path(__file__).with_name(name + ".py"))
+    if spec is None or spec.loader is None:
+        raise RelayError(403, "private owner runtime is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _MAC_MODULES[name] = module
+    return module
+
+
 def require_enabled(policy_dir: Path = POLICY_DIR) -> None:
+    if MAC_PRIVATE_OWNER:
+        try:
+            _mac_module("mac_policy").require_enabled(Path(pwd.getpwuid(os.getuid()).pw_dir))
+            return
+        except (OSError, ValueError):
+            raise RelayError(403, "private owner inference is unavailable") from None
     name = pwd.getpwuid(os.getuid()).pw_name
     try:
         inference_policy.require_enabled(policy_dir, name)
@@ -348,7 +373,13 @@ def read_object(path: Path, limit: int = 64 * 1024) -> dict[str, Any]:
 
 def bound_account(home: Path) -> str:
     profile = read_object(home / ".claude.json", 4 * 1024 * 1024).get("oauthAccount")
-    state = read_object(home / ".config/ccfleet/slot-state.json")
+    if MAC_PRIVATE_OWNER:
+        try:
+            state = _mac_module("mac_policy").policy(home)
+        except (OSError, ValueError):
+            raise RelayError(403, "private owner binding is unavailable") from None
+    else:
+        state = read_object(home / ".config/ccfleet/slot-state.json")
     account = profile.get("accountUuid") if isinstance(profile, dict) else None
     if (not isinstance(account, str) or not 1 <= len(account.strip()) <= 256
             or not account.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in account)):
@@ -361,7 +392,13 @@ def bound_account(home: Path) -> str:
 
 def credential(home: Path, now: float, *, minimum_remaining: float = 30) -> tuple[str, float]:
     bound_account(home)
-    oauth = read_object(home / ".claude/.credentials.json").get("claudeAiOauth")
+    if MAC_PRIVATE_OWNER:
+        try:
+            oauth = _mac_module("mac_credentials").read_oauth(home)
+        except (OSError, ValueError):
+            raise RelayError(401, "native Mac sign-in is unavailable") from None
+    else:
+        oauth = read_object(home / ".claude/.credentials.json").get("claudeAiOauth")
     if not isinstance(oauth, dict):
         raise RelayError(401, "sign in to Claude on your slot page")
     token, expiry = oauth.get("accessToken"), oauth.get("expiresAt")

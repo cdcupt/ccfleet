@@ -660,7 +660,8 @@ class GatewayRuntime:
                     error_body = wire.chunk(safe)
                 if status < 400:
                     self._success(session, target, key)
-                if (self.throughput is not None and handler.path.split("?", 1)[0] == "/v1/messages"
+                if (self.throughput is not None and not target.get("private_owner")
+                        and handler.path.split("?", 1)[0] == "/v1/messages"
                         # Native SSE is emitted after generation and cleanup;
                         # its delivery span is not a live generation interval.
                         and key.get("provider", gateway_providers.ANTHROPIC)

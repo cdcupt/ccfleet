@@ -237,7 +237,8 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         start = datetime.fromtimestamp(first * DAY_SECONDS, timezone.utc).date().isoformat()
         result = _empty(start)
         nodes = {node["id"] for node in store.list_nodes()
-                 if isinstance(node, Mapping) and isinstance(node.get("id"), str)
+                     if isinstance(node, Mapping) and not node.get("private_owner")
+                 and isinstance(node.get("id"), str)
                  and type(node.get("enabled")) in (int, bool) and node["enabled"] == 1}
         latest = store.latest_heartbeats()
         try:
