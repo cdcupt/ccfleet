@@ -21,11 +21,27 @@ FILES = frozenset({"policy.json", "agent.json", "grants.json", "maintenance.json
                    "relay-quarantine.json"})
 MAX_BYTES = 64 * 1024
 GRANT_TTL = 180
+LEASE_CLOCK_FORMAT = "system-monotonic-v1"
 _TRUST_ROOT = Path("/")
 
 
 class MacPolicyError(ValueError):
     """A fixed-message failure of the explicit private-owner boundary."""
+
+
+def lease_clock() -> float:
+    """A system-wide clock suitable for receipts read by another process.
+
+    macOS Python3.9 time.monotonic() has a process-relative origin. It remains
+    suitable for local deadlines, but cannot timestamp a persisted grant.
+    """
+    try:
+        value = time.clock_gettime(time.CLOCK_MONOTONIC)
+    except (AttributeError, OSError, ValueError):
+        raise MacPolicyError("private owner lease clock is unavailable") from None
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        raise MacPolicyError("private owner lease clock is invalid")
+    return float(value)
 
 
 def authenticated_owner(home: Optional[Path] = None):
@@ -172,8 +188,10 @@ def require_enabled(home: Path, *, now: Optional[float] = None,
     if value["enabled"] is not True:
         raise MacPolicyError("private owner inference is disabled")
     state = read_json(home, "grants.json")
+    if state.get("clock") != LEASE_CLOCK_FORMAT:
+        raise MacPolicyError("private owner authorization clock is unsupported")
     now = time.time() if now is None else now
-    monotonic = time.monotonic() if monotonic is None else monotonic
+    monotonic = lease_clock() if monotonic is None else monotonic
     for key, current in (("received_at", now), ("received_monotonic", monotonic)):
         stamp = state.get(key)
         if (type(stamp) not in (int, float) or not math.isfinite(stamp)

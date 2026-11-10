@@ -4,8 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -40,8 +42,9 @@ def owner(tmp_path, monkeypatch):
 def _grant(owner, *, enabled=True, received_at=None, received_monotonic=None):
     home, _base, identity, _fp = owner
     now = time.time() if received_at is None else received_at
-    mono = time.monotonic() if received_monotonic is None else received_monotonic
-    mac_policy.write_json(home, "grants.json", {"version": 1, "received_at": now,
+    mono = mac_policy.lease_clock() if received_monotonic is None else received_monotonic
+    mac_policy.write_json(home, "grants.json", {"version": 1,
+        "clock": mac_policy.LEASE_CLOCK_FORMAT, "received_at": now,
         "received_monotonic": mono, "access": {"version": 1, "enabled": enabled,
         "unix_user": identity.pw_name, "device_public_keys": [], "gateway_public_keys": []}})
     return now, mono
@@ -411,3 +414,114 @@ def test_advanced_expiry_does_not_hide_unconfirmed_native_cleanup(owner, monkeyp
     assert mac_policy.read_json(home, "maintenance.json")["cleanup_confirmed"] is False
     report = mac_owner_agent.maintain_native({}, home, current, now + 600)
     assert report["state"] == "blocked" and len(calls) == 1
+
+
+@pytest.mark.parametrize('clock', [None, '', 'process-monotonic', 'system-monotonic-v2', True])
+def test_legacy_or_unknown_grant_clocks_fail_closed(owner, clock):
+    home = owner[0]
+    _grant(owner)
+    receipt = mac_policy.read_json(home, 'grants.json')
+    if clock is None:
+        receipt.pop('clock')
+    else:
+        receipt['clock'] = clock
+    mac_policy.write_json(home, 'grants.json', receipt)
+    with pytest.raises(mac_policy.MacPolicyError):
+        mac_policy.require_enabled(home)
+
+
+@pytest.mark.parametrize('wall_delta,steady_delta', [(-1, 1), (1, -100), (181, 1), (1, 181)])
+def test_lease_wall_rollback_steady_reset_and_either_expired_clock_reject(owner,
+                                                                     wall_delta, steady_delta):
+    home = owner[0]
+    _grant(owner, received_at=1_000_000, received_monotonic=10_000)
+    with pytest.raises(mac_policy.MacPolicyError):
+        mac_policy.require_enabled(home, now=1_000_000 + wall_delta,
+                                   monotonic=10_000 + steady_delta)
+
+
+def test_lease_clock_uses_system_clock_and_has_no_process_relative_fallback(monkeypatch):
+    monkeypatch.setattr(mac_policy.time, 'monotonic', lambda:
+                        pytest.fail('process-relative clock must not timestamp grants'))
+    monkeypatch.setattr(mac_policy.time, 'clock_gettime', lambda kind: 12345.5)
+    assert mac_policy.lease_clock() == 12345.5
+    monkeypatch.setattr(mac_policy.time, 'clock_gettime', lambda kind:
+                        (_ for _ in ()).throw(OSError('synthetic clock unavailable')))
+    with pytest.raises(mac_policy.MacPolicyError):
+        mac_policy.lease_clock()
+
+
+def test_grant_writer_stamps_system_clock_format_and_shared_value(owner, monkeypatch):
+    home, _base, identity, _fp = owner
+    snapshot = {'version': 1, 'unix_user': identity.pw_name, 'enabled': True,
+                'device_public_keys': [], 'gateway_public_keys': []}
+    keys = SimpleNamespace(validate_snapshot=lambda value: value, reconcile=lambda *a, **kw: {})
+    monkeypatch.setattr(mac_owner_agent, 'sibling', lambda name:
+                        mac_policy if name == 'mac_policy' else keys)
+    monkeypatch.setattr(mac_policy, 'lease_clock', lambda: 4567.25)
+    mac_owner_agent.converge_access(home, snapshot, now=10000)
+    receipt = mac_policy.read_json(home, 'grants.json')
+    assert receipt['clock'] == mac_policy.LEASE_CLOCK_FORMAT
+    assert receipt['received_monotonic'] == 4567.25 and receipt['received_at'] == 10000
+    mac_policy.require_enabled(home, now=10000.10, monotonic=4567.35)
+
+
+CLOCK_CHILD = r'''
+import json,sys,time
+sys.path.insert(0,sys.argv[1])
+from ccfleet_agent import mac_policy
+if sys.argv[2]=='first':
+    time.sleep(0.25)
+print(json.dumps({'value':mac_policy.lease_clock(),'python':list(sys.version_info[:2])}))
+'''
+
+
+def test_actual_separate_system_python_processes_share_lease_clock():
+    executable = '/usr/bin/python3' if sys.platform == 'darwin' else sys.executable
+    root = str(Path(__file__).resolve().parents[1])
+    def sample(mode):
+        result = subprocess.run([executable, '-I', '-B', '-c', CLOCK_CHILD, root, mode],
+                                check=True, capture_output=True, timeout=5)
+        return json.loads(result.stdout)
+    first = sample('first')
+    time.sleep(0.15)
+    second = sample('second')
+    assert first['python'][0] == second['python'][0] == 3
+    assert 0.15 <= second['value'] - first['value'] < 5
+
+
+GRANT_CHILD = r'''
+import json,os,sys,time
+from pathlib import Path
+from types import SimpleNamespace
+sys.path.insert(0,sys.argv[1])
+from ccfleet_agent import mac_policy,mac_owner_agent
+home=Path(sys.argv[2])
+mac_policy._TRUST_ROOT=home.parent
+owner=SimpleNamespace(pw_uid=os.getuid(),pw_dir=str(home),pw_name='synthetic')
+mac_policy.authenticated_owner=lambda selected=None:owner
+if sys.argv[3]=='write':
+    time.sleep(0.25)
+    keys=SimpleNamespace(validate_snapshot=lambda value:value,reconcile=lambda *a,**kw:{})
+    mac_owner_agent.sibling=lambda name:mac_policy if name=='mac_policy' else keys
+    mac_owner_agent.converge_access(home,{'version':1,'unix_user':'synthetic','enabled':True,
+                                        'device_public_keys':[],'gateway_public_keys':[]})
+else:
+    mac_policy.require_enabled(home)
+receipt=mac_policy.read_json(home,'grants.json')
+print(json.dumps({'clock':receipt['clock'],'age':mac_policy.lease_clock()-receipt['received_monotonic']}))
+'''
+
+
+def test_actual_grant_writer_and_fresh_reader_process_round_trip(owner):
+    executable = '/usr/bin/python3' if sys.platform == 'darwin' else sys.executable
+    root = str(Path(__file__).resolve().parents[1])
+    def invoke(mode):
+        result = subprocess.run([executable, '-I', '-B', '-c', GRANT_CHILD, root,
+                                 str(owner[0]), mode], check=True, capture_output=True, timeout=5)
+        return json.loads(result.stdout)
+    assert invoke('write')['clock'] == mac_policy.LEASE_CLOCK_FORMAT
+    time.sleep(0.15)
+    observed = invoke('read')
+    assert observed['clock'] == mac_policy.LEASE_CLOCK_FORMAT
+    assert 0.15 <= observed['age'] < 5

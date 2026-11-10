@@ -278,9 +278,9 @@ def converge_access(home: Path, access: Any, *, now: Optional[float] = None) -> 
     except (ValueError, OSError):
         snapshot = disabled
     result = keys.reconcile(snapshot, home=home)
-    policy.write_json(home, "grants.json", {"version": 1,
+    policy.write_json(home, "grants.json", {"version": 1, "clock": policy.LEASE_CLOCK_FORMAT,
                       "received_at": time.time() if now is None else now,
-                      "received_monotonic": time.monotonic(), "access": snapshot})
+                      "received_monotonic": policy.lease_clock(), "access": snapshot})
     return result
 
 
