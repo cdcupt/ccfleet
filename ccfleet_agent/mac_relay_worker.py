@@ -111,7 +111,10 @@ def main(argv=None) -> int:
         start_parent_watch(lease)
         _WATCH_STARTED = True
         code = run(args[0])
-        sys.stdout.buffer.flush()
+        # Status uses print(), whose TextIOWrapper can still own pending
+        # encoded bytes. Flush the text layer before publishing completion;
+        # flushing only .buffer would let the parent kill us before JSON arrives.
+        sys.stdout.flush()
     except BaseException:
         code = 255
     try:

@@ -329,7 +329,7 @@ def test_status_rpc_uses_a_total_deadline_for_empty_dripping_frames(owner, monke
 def test_worker_private_status_fd_is_not_inherited_by_native_subprocesses(monkeypatch):
     read, write = os.pipe()
     lease_read, lease_write = os.pipe()
-    monkeypatch.setattr(worker.sys, 'stdout', SimpleNamespace(buffer=io.BytesIO()))
+    monkeypatch.setattr(worker.sys, 'stdout', io.TextIOWrapper(io.BytesIO()))
     def run(role):
         assert role == '--device' and os.get_inheritable(write) is False
         assert os.get_inheritable(lease_read) is False
@@ -471,3 +471,32 @@ def test_service_refuses_automatic_child_reaping(owner, monkeypatch):
     with pytest.raises(service.ServiceError):
         service.RelayService(owner[0]).start()
     assert not client.socket_path(owner[0]).exists()
+
+
+def test_actual_worker_buffered_status_print_is_flushed_before_terminal_frame(owner, running,
+                                                                             monkeypatch):
+    # Exercise real run()/main(), including print() and its TextIOWrapper,
+    # instead of the os.write-based transport fake used by other cases.
+    script = r'''
+import os,sys,threading
+from pathlib import Path
+from types import SimpleNamespace
+sys.path.insert(0,sys.argv[1])
+from ccfleet_agent import mac_relay_worker as worker
+home,role,status_fd,lease_fd=sys.argv[2:]
+worker.sys.platform='darwin'
+worker.sibling=lambda name: SimpleNamespace(authenticated_owner=lambda: SimpleNamespace(pw_dir=home))
+worker.status_snapshot=lambda selected: {'available':True,'expires_in_seconds':3600,'binding_matches':True,'policy_enabled':False}
+assert role=='S'
+code=worker.main(['--status','--status-fd',status_fd,'--lease-fd',lease_fd])
+if worker._RESULT_PUBLISHED and worker._WATCH_STARTED:
+    threading.Event().wait()
+os._exit(code)
+'''
+    monkeypatch.setattr(service, 'worker_command', lambda role, descriptor, lease:
+        [sys.executable, '-c', script, str(Path(__file__).resolve().parents[1]),
+         str(owner[0]), role.decode(), str(descriptor), str(lease)])
+    start, _calls, _modes = running
+    start()
+    assert client.status(owner[0]) == {'available': True, 'expires_in_seconds': 3600,
+                                      'binding_matches': True, 'policy_enabled': False}
