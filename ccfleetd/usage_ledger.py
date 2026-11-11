@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS usage_ledger_sources (
     claim_day_authorized INTEGER NOT NULL DEFAULT 0 CHECK (claim_day_authorized IN (0,1)),
     claim_day_proof TEXT NOT NULL DEFAULT '',
     last_observed_at REAL NOT NULL,
-    needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0,1))
+    needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0,1)),
+    review_until_day INTEGER NOT NULL DEFAULT -1
 );
 CREATE TABLE IF NOT EXISTS usage_ledger_days (
     source_key TEXT NOT NULL,
@@ -236,7 +237,11 @@ class UsageLedgerStoreMixin:
                 continue
             # Only the FIRST attributable observation can prove an empty start.
             # A later zero after a reset must not erase a prior positive baseline.
-            return row["id"] if report["requests"] == report["success"] == 0 else None
+            return (
+                {"id": row["id"], "observed_at": report["observed_at"]}
+                if report["requests"] == report["success"] == 0
+                else None
+            )
         return None
 
     @staticmethod
@@ -251,6 +256,7 @@ class UsageLedgerStoreMixin:
         private,
         authorize_claim_day=False,
         proof="",
+        baseline_at=0,
     ):
         from .store import StoreError
 
@@ -260,9 +266,12 @@ class UsageLedgerStoreMixin:
         ).fetchone()
         if source is not None and source["account_id"] != account_id:
             raise StoreError("recorded usage belongs to its original owner")
-        boundary = int(max(slot["claimed_at"], slot.get("account_switched_at") or 0) // DAY)
+        started = max(slot["claimed_at"], slot.get("account_switched_at") or 0)
+        boundary = int(started // DAY)
         authorized = authorize_claim_day or bool(source and source["claim_day_authorized"])
         observed = report["observed_at"]
+        if observed < started or authorized and observed < baseline_at:
+            raise StoreError("usage observation predates its assignment or zero baseline")
         today = int(now // DAY)
         days = {
             int(day): snapshot
@@ -296,14 +305,16 @@ class UsageLedgerStoreMixin:
                     observed,
                 ),
             )
-        elif authorize_claim_day:
+        elif authorize_claim_day and (
+            not source["claim_day_authorized"] or re.fullmatch(r"[0-9a-f]{64}", proof)
+        ):
             conn.execute(
                 "UPDATE usage_ledger_sources SET claim_day_authorized=1,claim_day_proof=? "
                 "WHERE source_key=?",
                 (proof, source_key),
             )
         changed = 0
-        conflict = False
+        conflicts = set()
         previous = {
             row["day"]: row
             for row in conn.execute(
@@ -313,7 +324,7 @@ class UsageLedgerStoreMixin:
         }
         for day, old in previous.items():
             if day not in days and observed > old["observed_at"]:
-                conflict = True
+                conflicts.add(day)
         for day, snapshot in days.items():
             old = previous.get(day)
             raw = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
@@ -321,7 +332,8 @@ class UsageLedgerStoreMixin:
                 if observed < old["observed_at"]:
                     continue
                 if not _dominates(snapshot, json.loads(old["snapshot_json"])):
-                    conflict |= observed > old["observed_at"]
+                    if observed > old["observed_at"]:
+                        conflicts.add(day)
                     continue
             conn.execute(
                 "INSERT INTO usage_ledger_days VALUES(?,?,?,?) "
@@ -330,17 +342,21 @@ class UsageLedgerStoreMixin:
                 (source_key, day, observed, raw),
             )
             changed += int(old is None or old["snapshot_json"] != raw)
+        review_until = max(
+            source["review_until_day"] if source is not None else -1, max(conflicts, default=-1)
+        )
         if source is None or observed >= source["last_observed_at"]:
             conn.execute(
-                "UPDATE usage_ledger_sources SET last_observed_at=?,needs_review=? "
+                "UPDATE usage_ledger_sources SET last_observed_at=?,needs_review=?,"
+                "review_until_day=? "
                 "WHERE source_key=?",
-                (observed, int(conflict), source_key),
+                (observed, int(review_until >= 0), review_until, source_key),
             )
         return {
             "source_key": source_key,
             "days_changed": changed,
             "claim_day_authorized": authorized,
-            "needs_review": conflict,
+            "needs_review": review_until >= today - WINDOW + 1,
         }
 
     def import_usage_days(
@@ -390,13 +406,27 @@ class UsageLedgerStoreMixin:
         if "usage_days" not in clean or clean["observed_at"] > now + 60:
             raise StoreError("daily usage evidence is unavailable")
         slot, private = self._usage_slot(conn, slot_id, account_id, claimed_at, bound_fp)
+        started = max(slot["claimed_at"], slot.get("account_switched_at") or 0)
+        if clean["observed_at"] < started:
+            raise StoreError("usage import predates its assignment")
         if self._usage_archive_evidence(conn, slot, bound_fp) is None:
             raise StoreError("matching archived assignment/account evidence is required")
+        existing = conn.execute(
+            "SELECT claim_day_authorized FROM usage_ledger_sources WHERE source_key=?",
+            (identity(slot, bound_fp),),
+        ).fetchone()
+        needs_zero = include_claim_day or bool(
+            existing
+            and existing["claim_day_authorized"]
+            and str(int(started // DAY)) in clean["usage_days"]
+        )
+        zero = self._usage_archive_evidence(conn, slot, bound_fp, zero=True) if needs_zero else None
         if include_claim_day and (
-            re.fullmatch(r"[0-9a-f]{64}", claim_day_proof or "") is None
-            or self._usage_archive_evidence(conn, slot, bound_fp, zero=True) is None
+            re.fullmatch(r"[0-9a-f]{64}", claim_day_proof or "") is None or zero is None
         ):
             raise StoreError("claim-day import needs reviewed proof and a matching zero snapshot")
+        if needs_zero and (zero is None or clean["observed_at"] < zero["observed_at"]):
+            raise StoreError("usage import predates its matching zero snapshot")
         return self._save_usage_days(
             conn,
             slot,
@@ -407,6 +437,7 @@ class UsageLedgerStoreMixin:
             private=private,
             authorize_claim_day=include_claim_day,
             proof=claim_day_proof,
+            baseline_at=zero["observed_at"] if zero is not None else 0,
         )
 
     def import_usage_days_batch(
@@ -487,7 +518,8 @@ class UsageLedgerStoreMixin:
                         now,
                         private=private,
                         authorize_claim_day=zero is not None,
-                        proof="heartbeat:" + str(zero) if zero is not None else "",
+                        proof="heartbeat:" + str(zero["id"]) if zero is not None else "",
+                        baseline_at=zero["observed_at"] if zero is not None else 0,
                     )
                     changed += result["days_changed"]
                 except (ValueError, TypeError, OverflowError):
@@ -510,15 +542,22 @@ class UsageLedgerStoreMixin:
             for source in sources:
                 saved = dict(source)
                 saved["days"] = []
+                saved["needs_review"] = bool(
+                    source["needs_review"] and source["review_until_day"] >= first
+                )
+                current_rows = 0
                 for row in self._conn.execute(
                     "SELECT day,snapshot_json FROM usage_ledger_days WHERE source_key=? "
                     "AND day>=? AND day<=? ORDER BY day",
                     (source["source_key"], first, today),
                 ):
+                    current_rows += 1
                     try:
                         saved["days"].append(_read_day(row["snapshot_json"], row["day"], now))
                     except (ValueError, TypeError, KeyError, OverflowError):
                         saved["needs_review"] = 1
+                if not current_rows:
+                    saved["needs_review"] = False
                 rows.append(saved)
         return {"sources": rows}
 
@@ -526,6 +565,12 @@ class UsageLedgerStoreMixin:
         if not _instant(now):
             raise ValueError("invalid usage ledger clock")
         with self._write_txn() as conn:
-            return conn.execute(
+            removed = conn.execute(
                 "DELETE FROM usage_ledger_days WHERE day<?", (int(now // DAY) - WINDOW + 1,)
             ).rowcount
+            conn.execute(
+                "UPDATE usage_ledger_sources SET needs_review=0,review_until_day=-1 "
+                "WHERE review_until_day<?",
+                (int(now // DAY) - WINDOW + 1,),
+            )
+            return removed

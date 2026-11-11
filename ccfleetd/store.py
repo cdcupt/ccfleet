@@ -643,6 +643,13 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
             self._add_missing_columns("private_owner_nodes", {
                 "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
             })
+            self._add_missing_columns("usage_ledger_sources", {
+                "review_until_day": "INTEGER NOT NULL DEFAULT -1",
+            })
+            self._conn.execute(
+                "UPDATE usage_ledger_sources SET review_until_day=COALESCE("
+                "(SELECT MAX(day) FROM usage_ledger_days d WHERE d.source_key="
+                "usage_ledger_sources.source_key),-1) WHERE needs_review=1 AND review_until_day=-1")
             # CREATE TABLE IF NOT EXISTS does nothing to a table that already
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate

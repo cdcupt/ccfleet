@@ -100,6 +100,32 @@ def test_replays_out_of_order_and_counter_decreases_do_not_add_or_erase(fleet):
     assert public(fleet, NOW + 2)["state"] == "partial"
 
 
+def test_reset_review_stays_until_the_affected_day_expires(fleet):
+    publish(fleet, "s1", reading({TODAY: 20}))
+    publish(fleet, "s1", reading({TODAY: 3}, NOW + 1), now=NOW + 1)
+    publish(fleet, "s1", reading({TODAY: 21}, NOW + 2), now=NOW + 2)
+    source = fleet.public_usage_ledger(NOW + 2)["sources"][0]
+    assert source["needs_review"] and source["review_until_day"] == TODAY
+    assert public(fleet, NOW + 2)["state"] == "partial"
+    later = NOW + DAY
+    publish(fleet, "s1", reading({TODAY: 21, TODAY + 1: 2}, later), now=later)
+    fleet.set_enabled("m1", False)
+    after_expiry = (TODAY + 7) * DAY
+    source = fleet.public_usage_ledger(after_expiry)["sources"][0]
+    assert source["days"] and not source["needs_review"]
+    assert public(fleet, after_expiry)["usage_samples"] == 2
+    assert public(fleet, after_expiry)["state"] == "ready"
+    # A retained source record with no remaining window data cannot taint
+    # unrelated accounts' current, complete observations.
+    add_held_slot(fleet, 2, "a2", now=NOW - 10 * DAY)
+    current = (TODAY + 8) * DAY + 100
+    publish(fleet, "s2", reading({TODAY + 8: 5}, current), now=current, fp="b" * 16)
+    old = next(s for s in fleet.public_usage_ledger(current)["sources"] if s["slot_id"] == "s1")
+    assert old["days"] == [] and not old["needs_review"]
+    assert public(fleet, current)["state"] == "ready"
+    assert public(fleet, current)["usage_samples"] == 5
+
+
 def test_saved_days_survive_disable_and_stale_or_logged_out_heartbeat(fleet):
     publish(fleet, "s1", reading({TODAY: 20}))
     before = public(fleet)["entries"][0]
@@ -186,6 +212,39 @@ def test_archival_binding_and_zero_proof_required_for_operator_import(fleet):
         imported(fleet, "mac-admin", report, include_claim_day=True)
     assert imported(fleet, "mac-admin", report, include_claim_day=True,
                     claim_day_proof="c" * 64)["claim_day_authorized"]
+
+
+@pytest.mark.parametrize("observed", [NOW - 200, NOW - 95])
+def test_claim_day_import_cannot_precede_assignment_or_its_zero_evidence(fleet, observed):
+    mac(fleet)
+    fleet.set_private_owner_public_usage("mac-admin", "a1", True, now=NOW)
+    with pytest.raises(StoreError, match="predates"):
+        imported(fleet, "mac-admin", reading({TODAY: 7}, observed), include_claim_day=True,
+                 claim_day_proof="c" * 64)
+    assert fleet.public_usage_ledger(NOW)["sources"] == []
+    imported(fleet, "mac-admin", reading({TODAY: 7}), include_claim_day=True,
+             claim_day_proof="c" * 64)
+    # An already-authorized source is not an escape from the same temporal proof.
+    with pytest.raises(StoreError, match="predates"):
+        imported(fleet, "mac-admin", reading({TODAY: 9}, observed))
+    assert public(fleet)["usage_samples"] == 7
+
+
+def test_automatic_observation_before_claim_day_zero_does_not_authorize_it(fleet):
+    mac(fleet)
+    fleet.set_private_owner_public_usage("mac-admin", "a1", True, now=NOW)
+    assert publish(fleet, "mac-admin", reading({TODAY: 7}, NOW - 95)) == 0
+    assert fleet.public_usage_ledger(NOW)["sources"] == []
+
+
+def test_operator_import_cannot_precede_a_later_account_switch(fleet):
+    fleet._conn.execute("UPDATE slots SET account_switched_at=? WHERE id='s1'", (NOW - 100,))
+    fleet._conn.commit()
+    slot = fleet.get_slot("s1")
+    fleet.insert_heartbeat("m1", NOW, payload(slot, reading({TODAY: 1})))
+    with pytest.raises(StoreError, match="predates"):
+        imported(fleet, "s1", reading({TODAY: 8}, NOW - 200))
+    assert fleet.public_usage_ledger(NOW)["sources"] == []
 
 
 def test_unproven_claim_day_does_not_create_coverage_or_suppress_legacy(fleet):
