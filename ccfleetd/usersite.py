@@ -1346,9 +1346,12 @@ def public_usage_panel(ranking: Any) -> str:
         inline=True) + '</p><p class="usage-scope">' + label(
         "Each row is a real user with recorded activity. We apply the same reference prices "
         "to everyone's recorded input, output and cache tokens, even when the original model "
-        "was not recorded. Dollar values cover the tokens shown in the same row.",
+        "was not recorded. Saved daily usage stays with the same user when a slot goes "
+        "offline or changes; it expires normally from this seven-day window. "
+        "Dollar values cover the tokens shown in the same row.",
         "每一行都来自有实际活动的真实用户。我们用同一参考价格折算每个人已记录的输入、输出"
-        "和缓存 Token，即使没有记录原模型，也能参与排行。美元折算值对应同一行展示的用量。",
+        "和缓存 Token，即使没有记录原模型，也能参与排行。槽位离线或更换后，已保存的每日用量"
+        "仍归属于同一用户，并按七个 UTC 日期的窗口正常到期。美元折算值对应同一行展示的用量。",
         inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
@@ -2360,8 +2363,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "仍可能让人识别出某位用户。排行可以包含仅一位参与用户。",
             ),
             (
-                "The ranking uses validated usage totals from current, fresh, account-bound "
-                "slot reports. All measured token categories use the same reference rates, "
+                "The ranking uses validated, account-bound usage reports. Saved daily "
+                "measurements remain with their original user across slot changes and outages, "
+                "within the seven-UTC-day window. Older agents without saved daily measurements "
+                "still require a fresh report. Private owner usage is excluded unless its owner "
+                "explicitly opts into this masked account ranking; that consent does not publish "
+                "the private computer's identity, operating cost or status. "
+                "All measured token categories use the same reference rates, "
                 "including existing aggregates without a known model. This conversion does "
                 "not identify the model that served a reply. Reported-model details and their "
                 "separate estimates use only matched model observations. Model names are reported "
@@ -2373,7 +2381,11 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "coverage are shown. Missing reported-model prices stay unknown. No "
                 "prompts, response content, raw errors, hostnames, IP addresses, login "
                 "accounts or individual request timestamps appear in the ranking.",
-                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。所有已观测 Token "
+                "排行使用与账号绑定且经验证的用量报告。更换槽位或暂时离线后，已保存的每日观测"
+                "仍归属于原用户，保留在七个 UTC 日期的窗口内；"
+                "未保存每日观测的旧版代理仍需最新报告。"
+                "私人自有节点的用量默认不公开，只有所有者明确选择加入此遮盖账号排行后才参与；"
+                "该选择不会公开私人电脑的身份、运行成本或状态。所有已观测 Token "
                 "分类均采用同一参考价格，包括缺少模型信息的已有汇总；折算不代表确定了生成回复"
                 "的模型。上报模型明细与单独估值只使用已匹配的模型观测，模型名称由代理上报。符合条件的"
                 "原生、桥接和网关模型调用在节点上只计一次，不代表全部 Claude 活动的完整记录。"

@@ -50,6 +50,12 @@ class Monitor:
         now = self._clock() if now is None else now
         with self._lock:
             self._store.insert_heartbeat(node["id"], now, payload)
+            try:
+                self._store.observe_usage_days(node["id"], payload, now=now,
+                                               max_age_s=self._cfg.heartbeat_max_age_s)
+            except Exception:
+                # Optional numeric history must never change inference readiness.
+                log.warning("daily usage observation could not be retained")
             return self._check_node_locked(node, now)
 
     def check_node(self, node: dict[str, Any], now: Optional[float] = None) -> list[dict[str, Any]]:
@@ -246,6 +252,7 @@ class Monitor:
         # Optional numeric telemetry must not interrupt machine checks or alerting.
         try:
             self._store.prune_gateway_throughput(now)
+            self._store.prune_usage_ledger(now)
         except Exception:
             log.debug("gateway output-rate retention is temporarily unavailable")
         if removed:

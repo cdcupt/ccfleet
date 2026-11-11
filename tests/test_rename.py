@@ -440,6 +440,7 @@ NEITHER = {("accounts", "id"), ("payments", "id"), ("payments", "account_id"),
 # The original resource references remain in IMMUTABLE_RESOURCE_ID_COLUMNS below.
 NEITHER |= {
     ("private_owner_nodes", "account_id"),
+    ("usage_ledger_sources", "account_id"),
     ("slot_subscription_customers", "id"), ("slot_subscription_customers", "account_id"),
     ("slot_subscription_customers", "merchant_id"), ("slot_subscription_customers", "customer_id"),
     ("slot_subscription_orders", "id"), ("slot_subscription_orders", "account_id"),
@@ -471,6 +472,7 @@ def test_every_id_column_in_the_schema_is_known_to_the_renames(st):
         ("slot_purchases", "node_id"), ("slot_purchases", "slot_id"),
         ("slot_subscription_orders", "node_id"), ("slot_subscription_orders", "slot_id"),
         ("private_owner_nodes", "node_id"),
+        ("usage_ledger_sources", "node_id"), ("usage_ledger_sources", "slot_id"),
     }
     assert not (snapshots & mutable or snapshots & NEITHER)
     covered = mutable | snapshots | NEITHER

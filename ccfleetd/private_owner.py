@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS private_owner_nodes (
     account_id TEXT NOT NULL UNIQUE,
     monthly_cost_usd_cents INTEGER NOT NULL CHECK (monthly_cost_usd_cents >= 0),
     inference_enabled INTEGER NOT NULL DEFAULT 0 CHECK (inference_enabled IN (0,1)),
+    public_usage_enabled INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );

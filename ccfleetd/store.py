@@ -43,6 +43,7 @@ from . import (
     pricing,
     private_owner,
     slot_subscriptions,
+    usage_ledger,
     wallet,
     wallet_topups,
 )
@@ -445,7 +446,7 @@ CREATE TABLE IF NOT EXISTS outage_emails (
     sent_at REAL,
     PRIMARY KEY (outage_id, kind, account_id)
 );
-""" + private_owner.SCHEMA
+""" + private_owner.SCHEMA + usage_ledger.SCHEMA
 
 #: The settings row saying since when the serving loop has listened for reports
 #: this time. Before then no report could arrive, so a machine's silence counts
@@ -619,7 +620,8 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscriptionStoreMixin,
+class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreMixin,
+            slot_subscriptions.SlotSubscriptionStoreMixin,
             wallet_topups.TopupStoreMixin):
     """Thread-safe wrapper around one SQLite connection."""
 
@@ -638,6 +640,9 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA)
+            self._add_missing_columns("private_owner_nodes", {
+                "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
+            })
             # CREATE TABLE IF NOT EXISTS does nothing to a table that already
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate
@@ -1338,7 +1343,9 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
                                      ("slot_purchases", "slot_id"),
                                      ("slot_subscription_orders", "node_id"),
                                      ("slot_subscription_orders", "slot_id"),
-                                     ("private_owner_nodes", "node_id"))
+                                     ("private_owner_nodes", "node_id"),
+                                     ("usage_ledger_sources", "node_id"),
+                                     ("usage_ledger_sources", "slot_id"))
 
     @staticmethod
     def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
@@ -1346,6 +1353,10 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
         if column not in {"node_id", "slot_id"}:
             raise ValueError("unknown paid resource identifier")
         for identifier in identifiers:
+            if conn.execute(f"SELECT 1 FROM usage_ledger_sources WHERE {column}=? LIMIT 1",
+                            (identifier,)).fetchone() is not None:
+                raise StoreError("Recorded usage keeps this resource ID. Change its display name "
+                                 "or disable it instead of renaming or deleting its identity.")
             subscription_slots = conn.execute(
                 f"SELECT slot_id FROM slot_subscription_orders WHERE {column}=?",
                 (identifier,)).fetchall()
