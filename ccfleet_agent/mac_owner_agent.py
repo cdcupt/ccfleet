@@ -7,12 +7,15 @@ renew its own Keychain credential through a bounded native safe-mode /usage prob
 from __future__ import annotations
 
 import fcntl
+import http.client
 import importlib.util
 import json
 import os
 import re
+import socket
 import stat
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -222,20 +225,100 @@ def _quota_cache(home: Path, bound: str, now: float) -> dict[str, Any]:
     return value if value and value["checked_at"] <= now + 60 else {}
 
 
+def _saved_quota(value: Any, now: float) -> dict[str, Any]:
+    """Numeric model limits only; never forward arbitrary local state fields."""
+    if not isinstance(value, dict):
+        return {}
+    checked = value.get("checked_at")
+    if not _number(checked) or not 0 < checked <= now + 60:
+        return {}
+    out = {}
+    windows = [(name, value.get(name)) for name in ("session", "week")]
+    models = value.get("models")
+    if isinstance(models, dict):
+        windows.extend((name, models.get(name)) for name in sibling("agent").QUOTA_MODEL_FAMILIES)
+    for name, window in windows:
+        if (not isinstance(window, dict) or not _number(window.get("used_pct"))
+                or window["used_pct"] > 100):
+            continue
+        entry = {"used_pct": window["used_pct"]}
+        reset = window.get("resets_at")
+        if _number(reset) and 0 < reset < 1e11:
+            entry["resets_at"] = reset
+        if name in ("session", "week"):
+            out[name] = entry
+        else:
+            out.setdefault("models", {})[name] = entry
+    return {**out, "checked_at": checked} if out else {}
+
+
+def _provider_quota(home: Path, bound: str) -> dict[str, Any]:
+    """One bounded metadata GET with the existing local native access credential.
+
+    This is the structured source behind /usage, not a model request or an OAuth
+    renewal. Native Claude remains the sole writer of its Keychain credential.
+    """
+    relay = sibling("local_relay")
+    relay.MAC_PRIVATE_OWNER = True
+    connection = timer = None
+    peer = [None]
+
+    def expire():
+        if peer[0] is not None:
+            try:
+                peer[0].shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    try:
+        if relay.bound_account(home) != bound:
+            return {"outcome": "native_auth_rejected"}
+        token, _ = relay.credential(home, time.time())
+        connection = relay.connect_upstream()
+        connection.timeout = 10
+        timer = threading.Timer(20, expire)
+        timer.daemon = True
+        timer.start()
+        deadline = time.monotonic() + 20
+        connection.connect()
+        peer[0] = connection.sock
+        if time.monotonic() >= deadline:
+            return {"outcome": "native_network_error"}
+        connection.sock.settimeout(10)
+        connection.request("GET", "/api/oauth/usage", headers={
+            "authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20",
+            "anthropic-version": "2023-06-01", "user-agent": relay.USER_AGENT, "x-app": "cli"})
+        response = connection.getresponse()
+        if response.status != 200:
+            return {"outcome": "native_rate_limited" if response.status == 429 else
+                    "native_auth_rejected" if response.status in (401, 403) else
+                    "native_network_error"}
+        raw = response.read(MAX_REPLY + 1)
+        if len(raw) > MAX_REPLY or time.monotonic() >= deadline:
+            return {"outcome": "native_network_error"}
+        value = relay.decode_json(raw)
+        if not isinstance(value, dict) or relay.bound_account(home) != bound:
+            return {"outcome": "native_auth_rejected"}
+        windows = sibling("agent")._cached_quota_windows(value)
+        return ({"outcome": "quota_read", "reading": {**windows, "checked_at": time.time()}}
+                if windows else {"outcome": "native_refresh_unconfirmed"})
+    except (OSError, ValueError, RecursionError, http.client.HTTPException):
+        return {"outcome": "native_network_error"}
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if connection is not None:
+            connection.close()
+
+
 def quota_report(cfg: dict, home: Path, facts: dict[str, Any], now: float,
                  *, maintenance: bool = True) -> dict[str, Any]:
-    """Read native account quota, refreshing only through the existing safe /usage probe.
-
-    A recent native renewal also satisfies the five-minute probe budget. No OAuth request,
-    model request, credential copy or user project is introduced by this reader.
-    """
+    """Read bound account limits; metadata polls never renew or export credentials."""
     bound = facts.get("bound_fp")
     if (facts.get("logged_in") is not True or not isinstance(bound, str)
             or facts.get("account_fp") != bound):
         return {}
     report = _quota_cache(home, bound, now)
-    if not maintenance:
-        return report
     policy = sibling("mac_policy")
     try:
         previous = policy.read_json(home, "maintenance.json")
@@ -243,6 +326,11 @@ def quota_report(cfg: dict, home: Path, facts: dict[str, Any], now: float,
         previous = {}
     if previous.get("bound_fp") != bound:
         previous = {}
+    saved = _saved_quota(previous.get("quota_reading"), now)
+    if saved and saved["checked_at"] > report.get("checked_at", 0):
+        report = saved
+    if not maintenance:
+        return report
     wanted = previous.get("quota_requested_at")
     wanted = wanted if _number(wanted) and 0 < wanted <= now + 60 else None
     ack = previous.get("quota_refresh")
@@ -251,20 +339,21 @@ def quota_report(cfg: dict, home: Path, facts: dict[str, Any], now: float,
     answered = answered if _number(answered) else 0
     asked = wanted is not None and wanted > answered
     due = not report or now - report["checked_at"] >= QUOTA_INTERVAL
-    attempts = [previous.get("last_attempt_at"), previous.get("quota_attempted_at")]
-    throttled = any(_number(value) and now - value < QUOTA_INTERVAL for value in attempts)
+    attempt = previous.get("quota_api_attempted_at")
+    throttled = _number(attempt) and 0 <= now - attempt < QUOTA_INTERVAL
     cleaned = previous.get("cleanup_confirmed") is not False
     outcome = "quota_read" if report and not due else "native_probe_busy"
     if due and not throttled and cleaned:
         reservation = {**previous, "version": 1, "bound_fp": bound,
-                       "quota_attempted_at": now, "cleanup_confirmed": False}
+                       "quota_api_attempted_at": now}
         policy.write_json(home, "maintenance.json", reservation)
-        observed = _native_renewal_probe(cfg, home, bound)
-        report = _quota_cache(home, bound, time.time())
-        cleaned = observed.get("cleanup_confirmed") is True
-        outcome = ("quota_read" if cleaned and report and
-                   report["checked_at"] >= now - 90 else observed.get("outcome"))
-        previous = {**reservation, "cleanup_confirmed": cleaned}
+        observed = _provider_quota(home, bound)
+        reading = _saved_quota(observed.get("reading"), time.time())
+        outcome = observed.get("outcome")
+        previous = reservation
+        if outcome == "quota_read" and reading:
+            report = reading
+            previous = {**reservation, "quota_reading": reading}
         policy.write_json(home, "maintenance.json", previous)
     if asked:
         refresh = sibling("agent")._quota_refresh(wanted, max(now, time.time()), outcome)

@@ -1,4 +1,4 @@
-"""Private Mac quota uses the same bound native cache and safe probe budget."""
+"""Private Mac quota combines its bound cache and bounded provider metadata reads."""
 from __future__ import annotations
 
 import json
@@ -37,20 +37,20 @@ def quota_runtime(synthetic_owner, monkeypatch):  # noqa: F811
 def test_private_mac_reads_cached_fable_without_native_launch(quota_runtime, monkeypatch):
     owner = quota_runtime
     cache(owner, NOW - 20)
-    monkeypatch.setattr(mac_owner_agent, "_native_renewal_probe", lambda *a: pytest.fail("no probe"))
+    monkeypatch.setattr(mac_owner_agent, "_provider_quota", lambda *a: pytest.fail("no probe"))
     got = mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW)
     assert got["week"]["used_pct"] == 51 and got["models"]["fable"]["used_pct"] == 100
     assert "synthetic-account" not in json.dumps(got) and "never-report-this" not in json.dumps(got)
 
 
-def test_private_mac_refreshes_native_usage_at_most_every_five_minutes(quota_runtime, monkeypatch):
+def test_private_mac_polls_structured_usage_at_most_every_five_minutes(quota_runtime, monkeypatch):
     owner = quota_runtime
     calls = []
     def probe(*args):
         calls.append(args)
         cache(owner, NOW)
-        return {"cleanup_confirmed": True, "outcome": "native_refresh_unconfirmed"}
-    monkeypatch.setattr(mac_owner_agent, "_native_renewal_probe", probe)
+        return {"outcome": "quota_read", "reading": agent.cached_usage(owner[0] / ".claude", global_config=owner[0] / ".claude.json")}
+    monkeypatch.setattr(mac_owner_agent, "_provider_quota", probe)
     got = mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW)
     assert got["models"]["fable"]["used_pct"] == 100 and len(calls) == 1
     mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW + 299)
@@ -58,19 +58,18 @@ def test_private_mac_refreshes_native_usage_at_most_every_five_minutes(quota_run
     mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW + 301)
     assert len(calls) == 2
     state = mac_policy.read_json(owner[0], "maintenance.json")
-    assert state["cleanup_confirmed"] is True and state["quota_attempted_at"] == NOW + 301
+    assert state["quota_api_attempted_at"] == NOW + 301
     assert "never-report-this" not in json.dumps(state)
 
 
 @pytest.mark.parametrize("prior", [
-    {"cleanup_confirmed": False}, {"cleanup_confirmed": True, "last_attempt_at": NOW - 10},
-    {"cleanup_confirmed": True, "quota_attempted_at": NOW - 10},
+    {"cleanup_confirmed": False}, {"cleanup_confirmed": True, "quota_api_attempted_at": NOW - 10},
 ])
-def test_quota_probe_respects_renewal_budget_and_failed_cleanup(quota_runtime, monkeypatch, prior):
+def test_quota_poll_respects_metadata_budget_and_failed_native_cleanup(quota_runtime, monkeypatch, prior):
     owner = quota_runtime
     cache(owner, NOW - 1000)
     mac_policy.write_json(owner[0], "maintenance.json", {"version": 1, "bound_fp": owner[3], **prior})
-    monkeypatch.setattr(mac_owner_agent, "_native_renewal_probe", lambda *a: pytest.fail("no probe"))
+    monkeypatch.setattr(mac_owner_agent, "_provider_quota", lambda *a: pytest.fail("no probe"))
     got = mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW)
     assert got["checked_at"] == NOW - 1000
 
@@ -78,19 +77,19 @@ def test_quota_probe_respects_renewal_budget_and_failed_cleanup(quota_runtime, m
 def test_failed_native_quota_read_preserves_observation_age_and_cleanup_guard(quota_runtime, monkeypatch):
     owner = quota_runtime
     cache(owner, NOW - 1000)
-    monkeypatch.setattr(mac_owner_agent, "_native_renewal_probe", lambda *a:
-                        {"cleanup_confirmed": False, "outcome": "native_timeout"})
+    monkeypatch.setattr(mac_owner_agent, "_provider_quota", lambda *a:
+                        {"outcome": "native_network_error"})
     mac_owner_agent.remember_quota_request(owner[0], {"requested_at": NOW - 1}, now=NOW)
     got = mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW)
     assert got["checked_at"] == NOW - 1000
-    assert got["refresh"]["outcome"] == "native_timeout"
-    assert mac_policy.read_json(owner[0], "maintenance.json")["cleanup_confirmed"] is False
+    assert got["refresh"]["outcome"] == "native_network_error"
+    assert mac_policy.read_json(owner[0], "maintenance.json").get("cleanup_confirmed") is not False
 
 
 def test_explicit_request_uses_fresh_bound_cache_without_extra_native_probe(quota_runtime, monkeypatch):
     owner = quota_runtime
     cache(owner, NOW - 20)
-    monkeypatch.setattr(mac_owner_agent, "_native_renewal_probe", lambda *a: pytest.fail("no probe"))
+    monkeypatch.setattr(mac_owner_agent, "_provider_quota", lambda *a: pytest.fail("no probe"))
     mac_owner_agent.remember_quota_request(owner[0], {"requested_at": NOW - 1}, now=NOW)
     got = mac_owner_agent.quota_report({}, owner[0], facts(owner), NOW)
     assert got["checked_at"] == NOW - 20
