@@ -1820,7 +1820,8 @@ def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
                 '尚无窗口读数；没有数据不代表还有剩余额度。', inline=True) + '</p></div>'
     help_text = ('<details class="quota-help"><summary>' + bi_label(
         'About these limits', '关于用量限制', inline=True) + '</summary><p>' + bi_label(
-        'These are the account limits shown by Claude Code /usage, across all devices. '
+        'These count everything this Claude account does, wherever you use it. '
+        'They match the limits shown by Claude Code /usage. '
         'Model limits are part of the all-model allowance; do not add the percentages. '
         'Only reported windows are shown; an absent window does not confirm that its limit '
         'was removed. Check your Claude account for your plan and verification status.',
