@@ -823,11 +823,13 @@ def test_cancelled_buffered_chunk_is_not_forwarded_after_blocking_read(slot):
 
 
 def test_upstream_host_port_and_certificate_verification_are_fixed(monkeypatch):
+    from ccfleet_agent import egress
+
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                  "all_proxy", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS"):
         monkeypatch.setenv(name, "https://untrusted-routing.invalid")
     captured = []
-    monkeypatch.setattr(relay.http.client, "HTTPSConnection", lambda *args, **kwargs:
+    monkeypatch.setattr(egress.http.client, "HTTPSConnection", lambda *args, **kwargs:
                         captured.append((args, kwargs)))
     relay.connect_upstream()
     args, kwargs = captured[0]
@@ -840,8 +842,9 @@ def test_v2_main_uses_authenticated_unix_home_not_forwarded_environment(monkeypa
     monkeypatch.setenv("HOME", "/untrusted-client-home")
     monkeypatch.setattr(relay.pwd, "getpwuid", lambda _: SimpleNamespace(pw_dir="/slot-home"))
     monkeypatch.setattr(relay.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(relay.time, "monotonic", lambda: 100)
     alarms = []
-    monkeypatch.setattr(relay.signal, "alarm", alarms.append)
+    monkeypatch.setattr(relay.signal, "setitimer", lambda kind, value: alarms.append((kind, value)))
     monkeypatch.setattr(relay.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
     monkeypatch.setattr(relay.sys, "stdout", SimpleNamespace(buffer=io.BytesIO()))
     calls = []
@@ -854,7 +857,35 @@ def test_v2_main_uses_authenticated_unix_home_not_forwarded_environment(monkeypa
     monkeypatch.setattr(relay, "serve_one", serve)
     assert relay.main(["--protocol-v2"]) == 0
     assert calls == [(Path("/slot-home"), True)]
-    assert alarms == [relay.INPUT_TIMEOUT, relay.REQUEST_TIMEOUT, 0]
+    assert alarms == [(relay.signal.ITIMER_REAL, value)
+                      for value in (relay.INPUT_TIMEOUT, relay.REQUEST_TIMEOUT, 0)]
+
+
+def test_deadline_is_not_swallowed_by_optional_usage_collection(slot, monkeypatch):
+    def expired(_content_type):
+        raise relay._DeadlineExpired("slot inference exceeded its connection deadline")
+
+    monkeypatch.setattr(relay, "_metrics_module", lambda: SimpleNamespace(UsageCollector=expired))
+    code, raw, upstream = run(slot)
+    assert code == 2 and response(raw)[0]["status"] == 504
+    assert len(upstream.calls) == 1
+    assert upstream.closed
+
+
+def test_main_does_not_add_retryable_response_after_deadline_during_cleanup(monkeypatch):
+    monkeypatch.setattr(relay.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(relay.signal, "setitimer", lambda *a: None)
+    output = io.BytesIO()
+    monkeypatch.setattr(relay.sys, "stdin", SimpleNamespace(buffer=io.BytesIO()))
+    monkeypatch.setattr(relay.sys, "stdout", SimpleNamespace(buffer=output))
+
+    def serve(*args, **kwargs):
+        output.write(b"already-sent-response")
+        raise relay._DeadlineExpired("slot inference exceeded its connection deadline")
+
+    monkeypatch.setattr(relay, "serve_one", serve)
+    assert relay.main(["--protocol-v2"]) == 2
+    assert output.getvalue() == b"already-sent-response"
 
 
 @pytest.mark.parametrize("command,accepted", [

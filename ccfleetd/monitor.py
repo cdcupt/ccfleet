@@ -73,14 +73,30 @@ class Monitor:
         open_alerts = self._store.open_alerts()
         raised = frozenset(a["rule"] for a in open_alerts if a["node_id"] == node["id"])
         silent = frozenset(a["node_id"] for a in open_alerts if a["rule"] == "no_heartbeat")
-        places = rules.account_places(self._store.list_nodes(), self._store.latest_heartbeats(),
+        visible_nodes = self._store.list_nodes()
+        if not node.get("private_owner"):
+            # A public node's alert must not reveal a private Mac's identity or
+            # activity. The private owner still receives its own duplicate warning.
+            visible_nodes = [entry for entry in visible_nodes if not entry.get("private_owner")]
+        places = rules.account_places(visible_nodes, self._store.latest_heartbeats(),
                                       every_slot, now, self._cfg, listening, silent)
+        place_names = rules.place_names(every_slot)
+        if node.get("private_owner"):
+            owner = node["private_owner"]["account_id"]
+            other_private = {entry["id"] for entry in visible_nodes
+                             if entry.get("private_owner")
+                             and entry["private_owner"]["account_id"] != owner}
+            for identifier in other_private:
+                place_names[identifier] = "another private node"
+            for slot in every_slot:
+                if slot["node_id"] in other_private:
+                    place_names[slot["id"]] = "another private node"
         # A machine's own slots: an owner slot is a record, with nothing on the
         # machine's side to judge.
         findings = rules.evaluate(node, latest, previous, now, self._cfg,
                                   self._store.list_slots(node_id=node["id"],
                                                          kind=slotstates.MACHINE_SLOT), places,
-                                  rules.place_names(every_slot), listening, raised)
+                                  place_names, listening, raised)
         preserve = frozenset()
         if latest and (latest.get("payload") or {}).get("mode") == slotstates.MACHINE_MODE:
             from .credential_health import fresh_observation
@@ -186,9 +202,10 @@ class Monitor:
             if rule_name not in wanted and rule_name not in preserve:
                 self._store.close_alert(alert["id"], now)
                 events.append({"event": "closed", "alert": alert})
-        for event in events:
-            self._notifier.send(format_event(event["event"], event["alert"], node,
-                                             self._cfg.public_url))
+        if not node.get("private_owner"):
+            for event in events:
+                self._notifier.send(format_event(event["event"], event["alert"], node,
+                                                 self._cfg.public_url))
         return events
 
     def _expire_logins(self, now: float) -> None:

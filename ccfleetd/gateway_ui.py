@@ -49,7 +49,9 @@ def _csrf(token: str) -> str:
 
 
 def _selectable(held: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [slot for slot in held if slot.get("kind") == slotstates.MACHINE_SLOT
+    return [slot for slot in held
+            if (slot.get("kind") == slotstates.MACHINE_SLOT
+                or slot.get("inference_enabled") is True)
             and slot.get("state") in (slotstates.CLAIMING, slotstates.CLAIMED,
                                      slotstates.ACTIVE)]
 
@@ -451,9 +453,7 @@ border-radius:12px;background:var(--inset)}
 
 
 def selected_slots(store: Any, account_id: str, form: Mapping[str, str]) -> list[str]:
-    held = {slot["id"]: slot for slot in store.list_slots(held_by=account_id)
-            if slot.get("kind") == slotstates.MACHINE_SLOT and slot.get("state") in (
-                slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)}
+    held = {slot["id"]: slot for slot in _selectable(store.list_slots(held_by=account_id))}
     choices = []
     for field, value in form.items():
         if not field.startswith('slot.') or value == '':

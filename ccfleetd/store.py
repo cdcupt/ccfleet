@@ -34,12 +34,14 @@ from ccfleet_agent.relay_metrics import (
 from . import (
     claude_versions,
     cli_access,
+    credential_health,
     gateway_access,
     gateway_providers,
     names,
     offers,
     payments,
     pricing,
+    private_owner,
     slot_subscriptions,
     wallet,
     wallet_topups,
@@ -443,7 +445,7 @@ CREATE TABLE IF NOT EXISTS outage_emails (
     sent_at REAL,
     PRIMARY KEY (outage_id, kind, account_id)
 );
-"""
+""" + private_owner.SCHEMA
 
 #: The settings row saying since when the serving loop has listened for reports
 #: this time. Before then no report could arrive, so a machine's silence counts
@@ -617,7 +619,8 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupStoreMixin):
+class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscriptionStoreMixin,
+            wallet_topups.TopupStoreMixin):
     """Thread-safe wrapper around one SQLite connection."""
 
     def __init__(self, path: str,
@@ -747,6 +750,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
                          "ON nodes(public_status_number) WHERE public_status_number IS NOT NULL")
             number = self._public_status_high_water(conn)
             for row in conn.execute("SELECT id FROM nodes WHERE public_status_number IS NULL "
+                                    "AND id NOT IN (SELECT node_id FROM private_owner_nodes) "
                                     "ORDER BY created_at, id").fetchall():
                 number += 1
                 conn.execute("UPDATE nodes SET public_status_number = ? WHERE id = ?",
@@ -898,6 +902,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         if self.get_node(node_id) is None:
             raise StoreError(f"unknown node: {node_id}")
         with self._lock:
+            self._require_not_private_node(self._conn, node_id)
             self._begin_login(self._conn, node_id, email, now, kind)
             self._conn.commit()
 
@@ -971,6 +976,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         if kind not in self.SLOT_LOGIN_KINDS:
             raise StoreError(f"unknown sign-in kind: {kind}")
         with self._write_txn() as conn:
+            self._require_not_private_slot(conn, slot_id)
             row = self._held(conn, slot_id, held_by)
             if row["state"] not in self.SLOT_SIGN_IN_STATES:
                 raise StoreError(f"{slot_id} is {row['state']}; it can be signed "
@@ -1325,12 +1331,14 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
                        ("alerts", "node_id"), ("logins", "node_id"),
                        ("outages", "component"))
 
-    # A paid receipt keeps the original resource identifiers. These references
-    # block raw ID renames/deletions; they must never join the mutable lists.
+    # Paid receipts and private-owner bindings keep their resource identities.
+    # The private-owner lifecycle guard is separate from the paid-history guard;
+    # neither kind of reference may join the mutable rename lists.
     IMMUTABLE_RESOURCE_ID_COLUMNS = (("slot_purchases", "node_id"),
                                      ("slot_purchases", "slot_id"),
                                      ("slot_subscription_orders", "node_id"),
-                                     ("slot_subscription_orders", "slot_id"))
+                                     ("slot_subscription_orders", "slot_id"),
+                                     ("private_owner_nodes", "node_id"))
 
     @staticmethod
     def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
@@ -1371,6 +1379,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         """
         validate_node_id(new)
         with self._write_txn() as conn:
+            self._require_not_private_node(conn, old)
             if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (old,)).fetchone() is None:
                 raise StoreError(f"unknown node {old!r}")
             if conn.execute("SELECT 1 FROM nodes WHERE id = ?", (new,)).fetchone() is not None:
@@ -1416,12 +1425,12 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
     def get_node(self, node_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
             row = self._conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
-        return _row_to_node(row) if row else None
+        return self._private_node_annotations([_row_to_node(row)])[0] if row else None
 
     def list_nodes(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM nodes ORDER BY owner, id").fetchall()
-        return [_row_to_node(r) for r in rows]
+        return self._private_node_annotations([_row_to_node(r) for r in rows])
 
     def node_for_token(self, token: str) -> Optional[dict[str, Any]]:
         """Return the enabled node owning ``token``, or None."""
@@ -1434,7 +1443,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             ).fetchone()
         if row is None or not hmac.compare_digest(row["token_hash"], digest):
             return None
-        return _row_to_node(row)
+        return self._private_node_annotations([_row_to_node(row)])[0]
 
     # -- heartbeats --------------------------------------------------------
 
@@ -1953,6 +1962,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             raise StoreError(f"{slotstates.ONE_SLOT_WHY}; a machine's capacity is at most "
                              f"{self._max_slots}")
         with self._write_txn() as conn:
+            self._require_not_private_node(conn, node_id)
             have = conn.execute(
                 "SELECT COUNT(*) AS n FROM slots WHERE node_id = ?",
                 (node_id,)).fetchone()["n"]
@@ -2024,6 +2034,14 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         if role not in ("user", "admin"):
             raise StoreError("role must be 'user' or 'admin'")
         with self._write_txn() as conn:
+            if role != "admin":
+                for private in conn.execute("SELECT node_id FROM private_owner_nodes "
+                                            "WHERE account_id=?",
+                                             (account_id,)).fetchall():
+                    private_owner.invalidate(conn, private["node_id"])
+                    conn.execute("UPDATE private_owner_nodes SET inference_enabled=0 "
+                                 "WHERE node_id=?",
+                                 (private["node_id"],))
             cur = conn.execute("UPDATE accounts SET role = ? WHERE id = ?", (role, account_id))
         return cur.rowcount > 0
 
@@ -2474,7 +2492,12 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             offer = offers.Offer(host_brand, ip_brand, ip_type, hosting, ip)
         except offers.OfferError as exc:
             raise StoreError(str(exc)) from exc
-        self._update_node(node_id, "offer_json", offers.to_json(offer))
+        with self._write_txn() as conn:
+            self._require_not_private_node(conn, node_id)
+            changed = conn.execute("UPDATE nodes SET offer_json=? WHERE id=?",
+                                   (offers.to_json(offer), node_id)).rowcount
+            if not changed:
+                raise StoreError(f"unknown node {node_id!r}")
         return offer
 
     def clear_node_offer(self, node_id: str) -> None:
@@ -2601,6 +2624,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         check. One transaction, the holder checked inside it.
         """
         with self._write_txn() as conn:
+            self._require_not_private_slot(conn, slot_id)
             row = self._choosable(conn, slot_id, held_by)
             self._set_channel(conn, row, slot_id, "latest")
             conn.execute(
@@ -2674,6 +2698,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             raise StoreError("unix user must be a valid Linux login name")
         validate_node_id(node_id)
         with self._write_txn() as conn:
+            self._require_not_private_node(conn, node_id)
             node = conn.execute(
                 "SELECT capacity FROM nodes WHERE id = ?", (node_id,)).fetchone()
             if node is None:
@@ -2767,6 +2792,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         """
         validate_slot_id(new)
         with self._write_txn() as conn:
+            self._require_not_private_slot(conn, old)
             if conn.execute("SELECT 1 FROM slots WHERE id = ?", (old,)).fetchone() is None:
                 raise StoreError(f"no slot {old!r}")
             if conn.execute("SELECT 1 FROM slots WHERE id = ?", (new,)).fetchone() is not None:
@@ -2830,7 +2856,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-        return dict(row) if row else None
+        return self._private_slot_annotations([dict(row)])[0] if row else None
 
     def list_slots(self, *, node_id: str | None = None,
                    held_by: str | None = None,
@@ -2854,7 +2880,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             rows = self._conn.execute(
                 "SELECT * FROM slots" + clause + " ORDER BY node_id, unix_user",  # noqa: S608
                 args).fetchall()
-        return [dict(r) for r in rows]
+        return self._private_slot_annotations([dict(r) for r in rows])
 
     # -- local ccfleet CLI ------------------------------------------------
 
@@ -2866,8 +2892,8 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             row = self._held(conn, slot_id, account_id)
             if row["state"] != slotstates.ACTIVE:
                 raise StoreError(f"{slot_id} can connect once it is signed in and in use")
-            if row["kind"] != slotstates.MACHINE_SLOT:
-                raise StoreError("CLI pairing is enabled for hosted slots")
+            if not private_owner.slot_allowed(conn, slot_id, account_id):
+                raise StoreError("CLI pairing is not enabled for this slot")
             if admit is not None:
                 current = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
                 if not callable(admit) or admit(dict(current)) is not True:
@@ -2930,6 +2956,8 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             if (row["state"] != slotstates.ACTIVE or row["held_by"] != row["account_id"]
                     or not row["enabled"]):
                 raise StoreError("that slot is no longer available to this account")
+            if not private_owner.slot_allowed(conn, row["slot_id"], row["account_id"]):
+                raise StoreError("that slot is not authorized for inference")
             if not row["access_host"] or not row["ssh_host_key"]:
                 raise StoreError("that slot is not ready for CLI access")
             active = int(conn.execute(
@@ -2996,6 +3024,8 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
                     or not row["enabled"] or not row["access_host"]
                     or not row["ssh_host_key"]):
                 return None
+            if not private_owner.slot_allowed(conn, row["slot_id"], row["account_id"]):
+                return None
             if touch:
                 conn.execute("UPDATE cli_devices SET last_seen_at = ? WHERE id = ?",
                              (now, row["device_id"]))
@@ -3005,13 +3035,15 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         """Whether an open broker stream is still authorized right now."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT 1 FROM cli_devices d JOIN slots s ON s.id = d.slot_id "
+                "SELECT s.id AS slot_id,d.account_id FROM cli_devices d "
+                "JOIN slots s ON s.id = d.slot_id "
                 "JOIN nodes n ON n.id = s.node_id "
                 "WHERE d.id = ? AND d.revoked_at IS NULL AND s.state = ? "
                 "AND s.held_by = d.account_id AND n.enabled = 1 "
                 "AND n.access_host != '' AND n.ssh_host_key != ''",
                 (device_id, slotstates.ACTIVE)).fetchone()
-        return row is not None
+            return row is not None and private_owner.slot_allowed(
+                self._conn, row["slot_id"], row["account_id"])
 
     def revoke_cli_token(self, device_token: str) -> bool:
         if not cli_access.token_has_prefix(device_token, cli_access.DEVICE_PREFIX):
@@ -3190,6 +3222,10 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             raise StoreError("invalid gateway provider")
         if provider == gateway_providers.ANTHROPIC:
             return
+        if any(conn.execute("SELECT 1 FROM private_owner_nodes p "
+                            "JOIN slots s ON s.node_id=p.node_id "
+                            "WHERE s.id=?", (identifier,)).fetchone() for identifier in selected):
+            raise StoreError("private owner nodes support Claude inference only")
         if not allow_devin or len(selected) != 1:
             raise StoreError("Devin requires explicit enablement and one verified own slot")
         slot = Store._provider_slot(conn, selected[0], account_id)
@@ -3232,7 +3268,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
                 (slot_id,)).fetchone()
             if row is None or row["held_by"] != account_id:
                 raise NotYours("every selected slot must be held by this account")
-            if (row["kind"] != slotstates.MACHINE_SLOT
+            if (not private_owner.slot_allowed(conn, slot_id, account_id)
                     or row["state"] not in (slotstates.CLAIMING, *Store.SLOT_SIGN_IN_STATES)
                     or not row["gateway_claim_id"]):
                 raise StoreError("select currently held hosted slots that are not being released")
@@ -3331,16 +3367,19 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             return answer
 
     @staticmethod
-    def _gateway_report_ready(conn: sqlite3.Connection, node_id: str, unix_user: str) -> bool:
+    def _gateway_report_ready(conn: sqlite3.Connection, node_id: str, unix_user: str, *,
+                              private: bool = False, now: Optional[float] = None) -> bool:
         """Do not dispatch through a slot the machine explicitly reported unhealthy.
 
         A missing report is not a credential proof; the relay still authorizes
         against the current native credential and root-owned policy before use.
         """
-        latest = conn.execute("SELECT payload FROM heartbeats WHERE node_id = ? "
+        latest = conn.execute("SELECT ts,payload FROM heartbeats WHERE node_id = ? "
                               "ORDER BY ts DESC, id DESC LIMIT 1", (node_id,)).fetchone()
         if latest is None:
-            return True
+            return not private
+        if private and latest["ts"] < (time.time() if now is None else now) - 180:
+            return False
         try:
             payload = json.loads(latest["payload"])
         except (TypeError, ValueError):
@@ -3349,13 +3388,22 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             return False
         reports = payload.get("slots")
         if not isinstance(reports, list):
-            return True
+            return not private
         for report in reports:
             if not isinstance(report, dict) or report.get("unix_user") != unix_user:
                 continue
             if report.get("present") is False:
                 return False
             credentials = report.get("credentials")
+            if private:
+                return (report.get("present") is True and isinstance(credentials, dict)
+                        and credentials.get("logged_in") is True
+                        and credentials.get("present") is True
+                        and isinstance(credentials.get("bound_fp"), str)
+                        and bool(credentials["bound_fp"])
+                        and credentials.get("account_fp") == credentials["bound_fp"]
+                        and (credential_health.access_expiry(credentials) or 0)
+                        > (time.time() if now is None else now) + credential_health.ACCESS_MARGIN_S)
             if not isinstance(credentials, dict):
                 return True
             if credentials.get("logged_in") is False or credentials.get("present") is False:
@@ -3363,7 +3411,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             bound, actual = credentials.get("bound_fp"), credentials.get("account_fp")
             return not (isinstance(bound, str) and bound and isinstance(actual, str)
                         and actual and bound != actual)
-        return True
+        return not private
 
     @staticmethod
     def _gateway_targets(conn: sqlite3.Connection, key: sqlite3.Row, *, allow_devin: bool = False,
@@ -3389,22 +3437,26 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
             row = conn.execute(
                 "SELECT s.id AS slot_id, s.node_id, s.unix_user, s.claimed_at, "
                 "s.gateway_generation AS claim_generation, s.gateway_claim_id, "
-                "n.access_host, n.access_port, n.ssh_host_key "
+                "n.access_host, n.access_port, n.ssh_host_key, s.kind "
                 "FROM slots s JOIN nodes n ON n.id = s.node_id "
                 "JOIN accounts a ON a.id = s.held_by "
-                "WHERE s.id = ? AND s.held_by = ? AND s.kind = ? AND s.state = ? "
+                "WHERE s.id = ? AND s.held_by = ? AND s.state = ? "
                 "AND n.enabled = 1 AND n.access_host != '' AND n.ssh_host_key != '' "
                 "AND NOT EXISTS (SELECT 1 FROM logins l WHERE l.node_id = ? "
                 "AND l.kind IN ('login', 'switch') "
                 "AND l.state IN ('requested', 'url_ready', 'code_sent'))",
-                (slot_id, key["account_id"], slotstates.MACHINE_SLOT, slotstates.ACTIVE,
+                (slot_id, key["account_id"], slotstates.ACTIVE,
                  slot_login_key(slot_id))).fetchone()
             if (row is None or not bindings.get(slot_id)
-                    or bindings[slot_id] != row["gateway_claim_id"]):
+                    or bindings[slot_id] != row["gateway_claim_id"]
+                    or not private_owner.slot_allowed(conn, slot_id, key["account_id"])):
                 continue
-            if not Store._gateway_report_ready(conn, row["node_id"], row["unix_user"]):
+            if not Store._gateway_report_ready(conn, row["node_id"], row["unix_user"],
+                private=row["kind"] == slotstates.OWNER_SLOT, now=now):
                 continue
             target = dict(row)
+            if target.pop("kind") == slotstates.OWNER_SLOT:
+                target["private_owner"] = True
             target.pop("gateway_claim_id")
             targets.append(target)
         return targets
@@ -3564,6 +3616,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         happened in between.
         """
         with self._write_txn() as conn:
+            self._require_not_private_slot(conn, slot_id)
             row = conn.execute(
                 "SELECT state FROM slots WHERE id = ?", (slot_id,)).fetchone()
             if row is None:
@@ -3854,6 +3907,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         False, asking nothing, while a request under QUOTA_ASK_EVERY_S old is
         still out: a button pressed twice asks once."""
         with self._write_txn() as conn:
+            self._require_not_private_slot(conn, slot_id)
             row = self._held(conn, slot_id, held_by)
             if row["kind"] != slotstates.MACHINE_SLOT or row["state"] != slotstates.ACTIVE:
                 raise StoreError(f"{slot_id} can read its usage once it is in use")
@@ -3918,6 +3972,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         it to somebody else checks their allowance.
         """
         with self._write_txn() as conn:
+            self._require_not_private_node(conn, node_id)
             node = conn.execute("SELECT owner FROM nodes WHERE id = ?", (node_id,)).fetchone()
             if node is None:
                 raise StoreError(f"no node {node_id!r}")
@@ -3977,6 +4032,7 @@ class Store(slot_subscriptions.SlotSubscriptionStoreMixin, wallet_topups.TopupSt
         """Stop counting somebody's own node as their slot. Forgets the record
         and nothing else: the node, its history and its own sign-in stay."""
         with self._write_txn() as conn:
+            self._require_not_private_node(conn, node_id)
             held = [r["id"] for r in conn.execute(
                 "SELECT id FROM slots WHERE node_id = ? AND kind = ?",
                 (node_id, slotstates.OWNER_SLOT))]
