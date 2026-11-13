@@ -3920,14 +3920,18 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
 
     def request_quota_read(self, slot_id: str, now: float, *,
                            held_by: Optional[str] = None) -> bool:
-        """Ask a machine's slot in use to read its usage windows again now,
+        """Ask an active managed or opted-in private slot to read its limits,
         rather than at its next five minutes (Erik, 2026-09-24). Returns
         False, asking nothing, while a request under QUOTA_ASK_EVERY_S old is
         still out: a button pressed twice asks once."""
         with self._write_txn() as conn:
-            self._require_not_private_slot(conn, slot_id)
             row = self._held(conn, slot_id, held_by)
-            if row["kind"] != slotstates.MACHINE_SLOT or row["state"] != slotstates.ACTIVE:
+            from .private_owner import eligible as private_owner_eligible
+
+            private_allowed = (row["kind"] == slotstates.OWNER_SLOT
+                               and private_owner_eligible(conn, row["node_id"], row["held_by"]))
+            if (row["state"] != slotstates.ACTIVE
+                    or row["kind"] != slotstates.MACHINE_SLOT and not private_allowed):
                 raise StoreError(f"{slot_id} can read its usage once it is in use")
             asked = conn.execute("SELECT quota_wanted_at FROM slots WHERE id = ?",
                                  (slot_id,)).fetchone()[0]
