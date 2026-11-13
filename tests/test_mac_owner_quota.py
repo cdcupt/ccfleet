@@ -64,6 +64,7 @@ def test_private_mac_polls_structured_usage_at_most_every_five_minutes(quota_run
 
 @pytest.mark.parametrize("prior", [
     {"cleanup_confirmed": False}, {"cleanup_confirmed": True, "quota_api_attempted_at": NOW - 10},
+    {"cleanup_confirmed": True, "last_attempt_at": NOW - 10},
 ])
 def test_quota_poll_respects_metadata_budget_and_failed_native_cleanup(quota_runtime, monkeypatch, prior):
     owner = quota_runtime

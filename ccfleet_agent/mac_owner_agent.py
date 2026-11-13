@@ -340,7 +340,11 @@ def quota_report(cfg: dict, home: Path, facts: dict[str, Any], now: float,
     asked = wanted is not None and wanted > answered
     due = not report or now - report["checked_at"] >= QUOTA_INTERVAL
     attempt = previous.get("quota_api_attempted_at")
-    throttled = _number(attempt) and 0 <= now - attempt < QUOTA_INTERVAL
+    renewal = previous.get("last_attempt_at")
+    # A native renewal can already use most of this heartbeat's time budget.
+    # Let it publish its grant before adding an optional metadata request.
+    throttled = (_number(attempt) and 0 <= now - attempt < QUOTA_INTERVAL
+                 or _number(renewal) and 0 <= now - renewal < 60)
     cleaned = previous.get("cleanup_confirmed") is not False
     outcome = "quota_read" if report and not due else "native_probe_busy"
     if due and not throttled and cleaned:
