@@ -9,15 +9,17 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
-    '/', '/slots', '/account', '/account/available', '/account/purchase', '/account/renew',
+    '/', '/slots', '/account', '/account/usage', '/account/available', '/account/purchase',
+    '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
     '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
     '/docs/library/docs/devin.html',
+    '/docs/library/docs/devin-trial-foundation.html',
     '/docs/library/docs/platform-comparison.html',
 })
-ADMIN_PAGES = frozenset({'/admin', '/auth/basic'})
+ADMIN_PAGES = frozenset({'/admin', '/admin/usage', '/auth/basic'})
 ADMIN_ACTIONS = {
     'node': frozenset({'enable', 'disable', 'rc-on', 'rc-off', 'pin', 'login-start',
                        'token-start', 'login-code', 'login-cancel', 'token-show',
@@ -40,7 +42,7 @@ POST_PAGES = frozenset({'/account/devin-trial/create', '/account/devin-trial/rev
 VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
                   'meta', 'param', 'source', 'track', 'wbr'})
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
-             '/account/available': '可用槽位',
+             '/account/available': '可用槽位', '/account/usage': '用量与额度',
              '/account/purchase': '确认购买槽位', '/account/renew': '续费槽位',
              '/account/devin-trial': 'Devin 试用',
              '/account/devin-trial/create': 'Devin 试用',
@@ -53,8 +55,10 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/docs/library/docs/index.html': '文档',
              '/docs/library/docs/public-gateway.html': 'HTTPS 接入指南',
              '/docs/library/docs/devin.html': '为什么评估 Devin',
+             '/docs/library/docs/devin-trial-foundation.html': 'Devin 试用技术设计',
              '/docs/library/docs/platform-comparison.html': 'CC Fleet 架构与验证',
-             '/admin': 'Fleet 管理后台', '/auth/basic': '管理员登录',
+             '/admin': 'Fleet 管理后台', '/admin/usage': '账号用量与额度',
+             '/auth/basic': '管理员登录',
              '/account/gateway/create': '连接密钥'}
 
 

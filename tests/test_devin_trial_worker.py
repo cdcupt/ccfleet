@@ -764,3 +764,286 @@ def test_worker_reloads_same_policy_new_good_credential_under_lock_before_turn(s
     out = io.BytesIO()
     assert worker.serve(frames(body()), out, loader=load, runner=run) == 0
     assert len(calls) == 3 and unpack(out.getvalue())[-1][1]["cleanup_confirmed"]
+
+
+@pytest.fixture
+def readiness_clock(monkeypatch):
+    class Clock:
+        now = 100.0
+        stopped = False
+        on_wait = None
+
+        def __init__(self):
+            self.waits = []
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, seconds):
+            self.waits.append(seconds)
+            self.now += seconds
+            if self.on_wait is not None:
+                self.on_wait()
+            return self.stopped
+
+    clock = Clock()
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock.now)
+    return clock
+
+
+def assert_refresh_can_take_lock(state):
+    """The root refresher uses this same lock, and must run during the grace."""
+    assert not list(state.glob("trial-*"))
+    if not (state / ".trial.lock").exists():
+        return
+    descriptor = os.open(state / ".trial.lock", os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.parametrize("phase", ["initial", "under_lock"])
+def test_status_grace_reloads_stale_grant_without_model_or_request_frame(
+        scene, readiness_clock, phase):
+    source, settings, sha, _, state, _ = scene
+    clock, calls = readiness_clock, []
+    incoming = frames(body())
+    status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
+    # EOF after status is a model-free readiness check, even after waiting.
+    incoming = io.BytesIO(incoming.getvalue()[:status_end])
+    clock.on_wait = lambda: assert_refresh_can_take_lock(state)
+
+    def load():
+        calls.append(clock.now)
+        if phase == "under_lock" and len(calls) == 1:
+            return source, settings, sha
+        if clock.now < 100.3:
+            assert incoming.tell() == (0 if phase == "initial" else status_end)
+            raise worker.native.NativeError("trial_grant_needs_refresh")
+        return source, settings, sha
+
+    out = io.BytesIO()
+    assert worker.serve(
+        incoming, out, loader=load, cancelled=clock,
+        runner=lambda *a, **kw: pytest.fail("status grace ran a model"),
+    ) == 0
+    [ready] = unpack(out.getvalue())
+    assert ready[0]["status"] == 200 and ready[1]["ready"] is True
+    assert ready[1]["policy_sha256"] == sha
+    assert clock.waits and clock.now < 100 + worker.GRANT_REFRESH_GRACE_S
+    assert incoming.tell() == status_end and not list(state.glob("trial-*"))
+    assert_refresh_can_take_lock(state)
+
+
+@pytest.mark.parametrize("phase", ["initial", "under_lock"])
+def test_persistent_stale_grant_exhausts_original_grace_without_consuming_request(
+        scene, readiness_clock, phase):
+    source, settings, sha, _, state, _ = scene
+    clock, calls = readiness_clock, []
+    incoming, out = frames(body()), io.BytesIO()
+    status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
+    clock.on_wait = lambda: assert_refresh_can_take_lock(state)
+
+    def load():
+        calls.append(clock.now)
+        if phase == "under_lock" and len(calls) == 1:
+            clock.now += worker.GRANT_REFRESH_GRACE_S - 0.2
+            return source, settings, sha
+        raise worker.native.NativeError("trial_grant_needs_refresh")
+
+    assert worker.serve(
+        incoming, out, loader=load, cancelled=clock,
+        runner=lambda *a, **kw: pytest.fail("stale grant ran a model"),
+    ) == 2
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503
+    assert clock.now == pytest.approx(100 + worker.GRANT_REFRESH_GRACE_S)
+    assert sum(clock.waits) == pytest.approx(
+        worker.GRANT_REFRESH_GRACE_S if phase == "initial" else 0.2)
+    assert incoming.tell() == (0 if phase == "initial" else status_end)
+    assert_refresh_can_take_lock(state)
+
+
+@pytest.mark.parametrize("stale_first", [False, True])
+@pytest.mark.parametrize("failure", [
+    worker.native.NativeError("trial_grant_stale_or_changed"),
+    worker.native.NativeError("trial_credential_needs_refresh"),
+    worker.native.NativeError("trial_policy_changed"),
+    worker.native.NativeError("trial_grant_needs_refresh PRIVATE"),
+    FileNotFoundError("PRIVATE missing grant"),
+])
+def test_status_grace_never_retries_bad_changed_or_missing_grants(
+        scene, readiness_clock, stale_first, failure):
+    *_, state, _ = scene
+    clock, calls = readiness_clock, []
+
+    def load():
+        calls.append(1)
+        if stale_first and len(calls) == 1:
+            raise worker.native.NativeError("trial_grant_needs_refresh")
+        raise failure
+
+    incoming, out = frames(body()), io.BytesIO()
+    assert worker.serve(
+        incoming, out, loader=load, cancelled=clock,
+        runner=lambda *a, **kw: pytest.fail("BAD grant ran a model"),
+    ) == 2
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503 and b"PRIVATE" not in out.getvalue()
+    assert len(calls) == (2 if stale_first else 1)
+    assert len(clock.waits) == (1 if stale_first else 0)
+    assert incoming.tell() == 0 and not list(state.glob("trial-*"))
+
+
+@pytest.mark.parametrize("change,code", [
+    ("credential", "trial_credential_needs_refresh"),
+    ("config", "policy_guard_failed"),
+])
+def test_stale_margin_never_masks_other_full_policy_failures(
+        policy_scene, readiness_clock, monkeypatch, change, code):
+    _, grant, _ = policy_scene
+    grant["observed_at"] = 950.0  # 150 seconds old, inside the unchanged 300-second bound.
+    if change == "credential":
+        grant["credential_sha256"] = "0" * 64
+    else:
+        def rejected(*args, **kwargs):
+            raise worker.native.NativeError("policy_guard_failed")
+
+        monkeypatch.setattr(worker.native.NativeConfig, "load", rejected)
+    with pytest.raises(worker.native.NativeError, match=code):
+        worker._status_policy(worker.policy, readiness_clock,
+                              readiness_clock.now + worker.GRANT_REFRESH_GRACE_S)
+    assert not readiness_clock.waits
+
+
+@pytest.mark.parametrize("phase", ["before", "waiting", "loaded"])
+def test_status_grace_cancellation_stops_before_readiness_or_model(scene, readiness_clock, phase):
+    source, settings, sha, _, state, _ = scene
+    clock, calls = readiness_clock, []
+    if phase == "before":
+        clock.set()
+    elif phase == "waiting":
+        clock.on_wait = clock.set
+
+    def load():
+        calls.append(1)
+        if phase == "waiting":
+            raise worker.native.NativeError("trial_grant_needs_refresh")
+        clock.set()
+        return source, settings, sha
+
+    incoming, out = frames(body()), io.BytesIO()
+    assert worker.serve(
+        incoming, out, loader=load, cancelled=clock,
+        runner=lambda *a, **kw: pytest.fail("canceled readiness ran a model"),
+    ) == 2
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503
+    assert len(calls) == (0 if phase == "before" else 1)
+    assert len(clock.waits) == (1 if phase == "waiting" else 0)
+    assert incoming.tell() == 0 and not list(state.glob("trial-*"))
+
+
+def test_fresh_status_does_not_wait_or_add_loader_attempts(scene, readiness_clock):
+    source, settings, sha, _, _, _ = scene
+    calls = []
+
+    def load():
+        calls.append(1)
+        return source, settings, sha
+
+    out = io.BytesIO()
+    assert worker.serve(frames(body()), out, loader=load, cancelled=readiness_clock,
+                        runner=lambda config, *a, **kw: result(config)) == 0
+    assert len(calls) == 3 and not readiness_clock.waits
+    assert [record[0]["status"] for record in unpack(out.getvalue())] == [200, 200]
+
+
+def test_stale_grace_deadline_includes_final_under_lock_validation(scene, readiness_clock):
+    source, settings, sha, _, state, _ = scene
+    clock, calls = readiness_clock, []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 1:
+            raise worker.native.NativeError("trial_grant_needs_refresh")
+        if len(calls) == 2:
+            clock.now = 100 + worker.GRANT_REFRESH_GRACE_S - 0.1
+        else:
+            clock.now += 0.2
+        return source, settings, sha
+
+    incoming, out = frames(body()), io.BytesIO()
+    status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
+    assert worker.serve(
+        incoming, out, loader=load, cancelled=clock,
+        runner=lambda *a, **kw: pytest.fail("expired readiness grace ran a model"),
+    ) == 2
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503 and len(calls) == 3
+    assert clock.now == pytest.approx(100 + worker.GRANT_REFRESH_GRACE_S + 0.1)
+    assert incoming.tell() == status_end
+    assert_refresh_can_take_lock(state)
+
+
+def test_fresh_status_has_no_new_grace_deadline(scene, readiness_clock):
+    source, settings, sha, _, _, _ = scene
+    clock, calls = readiness_clock, []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 2:
+            clock.now += worker.GRANT_REFRESH_GRACE_S + 0.1
+        return source, settings, sha
+
+    out = io.BytesIO()
+    assert worker.serve(frames(body()), out, loader=load, cancelled=clock,
+                        runner=lambda config, *a, **kw: result(config)) == 0
+    assert len(calls) == 3 and not clock.waits
+    assert [record[0]["status"] for record in unpack(out.getvalue())] == [200, 200]
+
+
+def test_status_grace_keeps_policy_pin_after_under_lock_staleness(scene, readiness_clock):
+    source, settings, sha, _, state, _ = scene
+    calls = []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 2:
+            raise worker.native.NativeError("trial_grant_needs_refresh")
+        return source, settings, sha if len(calls) == 1 else "0" * 64
+
+    incoming, out = frames(body()), io.BytesIO()
+    status_end = 4 + struct.unpack("!I", incoming.getvalue()[:4])[0]
+    assert worker.serve(
+        incoming, out, loader=load, cancelled=readiness_clock,
+        runner=lambda *a, **kw: pytest.fail("changed policy ran a model"),
+    ) == 2
+    [response] = unpack(out.getvalue())
+    assert response[0]["status"] == 503 and len(calls) == 3
+    assert incoming.tell() == status_end
+    assert_refresh_can_take_lock(state)
+
+
+def test_stale_grant_after_request_does_not_receive_readiness_grace(scene, readiness_clock):
+    source, settings, sha, _, state, _ = scene
+    calls = []
+
+    def load():
+        calls.append(1)
+        if len(calls) == 3:
+            raise worker.native.NativeError("trial_grant_needs_refresh")
+        return source, settings, sha
+
+    out = io.BytesIO()
+    assert worker.serve(
+        frames(body()), out, loader=load, cancelled=readiness_clock,
+        runner=lambda *a, **kw: pytest.fail("stale admitted grant ran a model"),
+    ) == 2
+    assert [record[0]["status"] for record in unpack(out.getvalue())] == [200, 503]
+    assert len(calls) == 3 and not readiness_clock.waits
+    assert not list(state.glob("trial-*"))

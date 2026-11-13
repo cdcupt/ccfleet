@@ -39,6 +39,7 @@ import argparse
 import base64
 import binascii
 import contextlib
+import copy
 import grp
 import hashlib
 import io
@@ -1050,6 +1051,80 @@ def native_provider_observations(cfg, state, system, *, fast):
     return reports, observations
 
 
+def _desired_native_controls(desired, slots, system):
+    """Only authenticated, eligible single-slot intent can retain native authority."""
+    if not isinstance(desired.get("slots"), list) or len(desired["slots"]) != 1 or len(slots) != 1:
+        return {}
+    slot = slots[0]
+    user = slot["unix_user"]
+    if (_native_account(system.lookup(user), system) and slot.get("state") in SIGN_IN_STATES
+            and slot.get("inference_allowed") is True and not slot.get("login")
+            and slot.get("devin_gateway") is not None):
+        return {user: slot["devin_gateway"]}
+    return {}
+
+
+def _checkpoint_native_observations(cfg, state, system, observations, *, desired=None):
+    """Publish only revalidated evidence, without changing its authority or clock.
+
+    The machine's only-run lock serializes its state writer. The trial refresher
+    reads atomic snapshots independently of slow slot facts and heartbeats.
+    Missing/BAD evidence replaces the old observation rather than inheriting it.
+    """
+    if not (state.get("devin_controls") or state.get("devin_observations") or observations):
+        return dict(state), {}, {}
+    original_state = state
+    if desired is not None:
+        allowed = _desired_native_controls(desired, wanted_slots(desired), system)
+        retained = {u: c for u, c in (state.get("devin_controls") or {}).items()
+                    if state.get("slots") == [u] and allowed.get(u) == c}
+        # Remove revoked authority durably as well as its evidence. Otherwise
+        # an interrupted lifecycle could recollect it on the next machine run.
+        # Newly granted/changed controls wait for normal final convergence.
+        if "devin_controls" in state:
+            state = {**state, "devin_controls": retained}
+        observations = {u: v for u, v in observations.items() if u in retained}
+    candidate = {**state, "devin_observations": observations}
+    # Reuse the credential/profile/claim checks, never perform another native
+    # collection or replace checked_at with publication time.
+    reports, verified = native_provider_observations(cfg, candidate, system, fast=True)
+    checkpoint = {**state, "devin_observations": verified}
+    if checkpoint != original_state and not core.write_state(cfg.state_path, checkpoint):
+        raise OSError("native observation checkpoint could not be saved")
+    return checkpoint, reports, verified
+
+
+def _final_key_observations(cfg, state, system, previous_controls, current_cycle_good):
+    """Revalidate this cycle's GOOD after keys-only lifecycle convergence.
+
+    The early checkpoint still withdraws changed authority. Only the normal
+    final save may pair the finalized control with an unchanged identity proof;
+    this helper neither installs grants nor replaces the proof's timestamp.
+    """
+    candidates = {}
+    for user, control in (state.get("devin_controls") or {}).items():
+        if state.get("slots") != [user] or user not in current_cycle_good:
+            continue
+        try:
+            provision = _native_provision()
+            old = provision.clean_control(previous_controls[user])
+            new = provision.clean_control(control)
+            if (old["claim"] != new["claim"] or old["runtime"] != new["runtime"]
+                    or old["keys"] == new["keys"]):
+                continue
+            candidates[user] = current_cycle_good[user]
+        except (ImportError, KeyError, TypeError, ValueError):
+            continue
+    if not candidates:
+        return {}
+    # Recheck the final account, root profile, credential, identity and original
+    # 240-second observation window. The trial worker separately keeps its
+    # 120-second new-turn margin and 300-second in-flight grant limit.
+    candidate = {**state, "devin_observations": candidates}
+    _, verified = native_provider_observations(cfg, candidate, system, fast=True)
+    return verified
+
+
 def converge_devin_access(desired, slots, cfg, system, observations, previous_users=()):
     """Reconcile before key installation and lifecycle changes; failures deny grants."""
     declared = desired.get("slots")
@@ -1361,6 +1436,7 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
               ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """One post, then whatever the reply calls for. Returns (status, desired, state)."""
     users = [u for u in state.get("slots") or [] if isinstance(u, str)]
+    previous_devin_users = tuple(state.get("devin_controls") or {})
     try:
         egress_enabled = bool(egress.native_environment())
     except OSError:
@@ -1394,6 +1470,16 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
                     provider_observations.get(user), now=system.clock())
             except (ImportError, OSError, ValueError, TypeError, KeyError):
                 log.error("native gateway policy could not be reconciled")
+    try:
+        state, provider_reports, provider_observations = _checkpoint_native_observations(
+            cfg, state, system, provider_observations)
+    except OSError:
+        log.error("native observation checkpoint could not be saved")
+        return 503, {}, dict(state)
+    # Keep only the result that passed this cycle's complete checkpoint guards.
+    # A later BAD/missing result must never fall back to the pre-cycle cache.
+    observed_controls = copy.deepcopy(state.get("devin_controls") or {})
+    current_cycle_good = copy.deepcopy(provider_observations)
     payload = machine_payload(cfg, state, system, refresh_for, fast, abandoned,
                               provider_reports=provider_reports)
     # What each slot said, kept for the fast polls to repeat. Never the sign-in
@@ -1410,6 +1496,15 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
         log.error("heartbeat rejected: status=%s category=%s", logged_status, category)
         return status, {}, dict(state)
     desired = core.parse_desired(text)
+    try:
+        # A newly received revocation must reach the refresher before hostname,
+        # key or slot lifecycle work can block or fail. Later saves use this
+        # filtered evidence, so they cannot restore the earlier checkpoint.
+        state, _, provider_observations = _checkpoint_native_observations(
+            cfg, state, system, provider_observations, desired=desired)
+    except OSError:
+        log.error("native observation checkpoint could not be saved")
+        return 503, desired, dict(state)
     # A heartbeat can overlap an operator changing the opt-in. Recheck before
     # any provisioning, key, policy or hostname change rather than carrying a
     # stale decision across that network operation.
@@ -1430,11 +1525,10 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     wanted = wanted_slots(desired)
     converge_inference_access(desired, wanted, cfg, system)
     converge_devin_access(desired, wanted, cfg, system, provider_observations,
-                          previous_users=state.get("devin_controls") or {})
+                          previous_users=previous_devin_users)
     converge_ssh_access(wanted, system)
     new_state = act_on_slots(wanted, state, cfg, system)
-    new_state["devin_controls"] = {s["unix_user"]: s["devin_gateway"] for s in wanted
-                                  if "devin_gateway" in s}
+    new_state["devin_controls"] = _desired_native_controls(desired, wanted, system)
     new_state["devin_observations"] = {u: v for u, v in provider_observations.items()
                                       if u in new_state["devin_controls"]}
     # A claiming account did not exist for the first pass. Clear any managed
@@ -1462,6 +1556,10 @@ def run_cycle(cfg: MachineConfig, state: Mapping[str, Any], system: System,
     if handed is not None:
         passed[refresh_for] = handed
     new_state["quota_passed"] = passed
+    new_state["devin_observations"] = {
+        **new_state["devin_observations"],
+        **_final_key_observations(cfg, new_state, system, observed_controls, current_cycle_good),
+    }
     core.write_state(cfg.state_path, new_state)
     return status, desired, new_state
 

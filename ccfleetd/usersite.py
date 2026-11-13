@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from ccfleet_agent.model_usage import LABELS, MODELS_URL, PRICING_URL
+from ccfleet_agent.model_usage import FAMILIES, FAMILY_ORDER, LABELS, MODELS_URL, PRICING_URL
 
 from . import (
     claude_versions,
@@ -83,7 +83,7 @@ from .render import (
     PANEL_ACTION_TAG,
     _age,
     _human_tokens,
-    _meter,
+    _quota_panel,
     _usage_chart,
     _usage_span,
     console_href,
@@ -159,7 +159,8 @@ NOTES = {
     "confirm": ("warn", "Tick the box first: giving a slot back deletes everything on it."),
     "signin": ("ok", "Starting the sign-in on your slot…"),
     "switch": ("ok", "Starting the change of account on your slot…"),
-    "cli-revoked": ("ok", "That computer can no longer connect to this slot."),
+    "cli-revoked": ("ok", "Account pairing removed. Saved API connection keys remain active "
+                           "until you revoke them separately in connection settings."),
     "code": ("ok", "Code sent to your slot."),
     "cancelled": ("ok", "Cancelled."),
     "not-now": ("warn", "Your slot cannot do that right now. It may still be setting up, "
@@ -197,7 +198,8 @@ NOTES_ZH = {
                                 "可在“月付管理”操作。"),
     "confirm": "请先勾选确认框：归还槽位会删除其中的所有内容。",
     "signin": "正在槽位上启动 Claude 登录…", "switch": "正在槽位上启动账号更换…",
-    "cli-revoked": "这台电脑已无法通过原配对连接该槽位。", "code": "授权码已发往槽位。",
+    "cli-revoked": "账号配对已移除。已保存的 API 连接密钥仍然有效，需在连接设置中单独撤销。",
+    "code": "授权码已发往槽位。",
     "cancelled": "已取消。", "not-now": "槽位目前无法执行此操作，可能仍在准备或清空中。",
     "updating": (
         '正在更新槽位上的 Claude Code。'
@@ -232,16 +234,15 @@ STATE_ZH = {
     )),
 }
 
-# The pill says the state the way every page says a state: green running,
-# amber waiting on you, the accent while the machine is working on it, grey on
-# its way out.
+# Blue identifies a held slot throughout setup and use. Machine and provider
+# health retain their own warning/error colors; returning a slot stays grey.
 STATE_WORDS = {
-    slotstates.CLAIMING: ("busy", "Setting up",
+    slotstates.CLAIMING: ("assigned", "Setting up",
                           "Creating your account on the machine and installing Claude Code. "
                           "A few minutes."),
-    slotstates.CLAIMED: ("warn", "Ready to sign in",
+    slotstates.CLAIMED: ("assigned", "Ready to sign in",
                          "Sign in to your own Claude account below to start using it."),
-    slotstates.ACTIVE: ("ok", "In use", ""),
+    slotstates.ACTIVE: ("assigned", "In use", ""),
     slotstates.RELEASING: ("disabled", "Being wiped",
                            (
                                'Everything on it is being deleted. It stops counting '
@@ -378,7 +379,7 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
         return _back("emails-on" if on else "emails-off", "outage-emails")
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
-        if slot is None:
+        if slot is None or (slot.get("private_owner") and account.get("role") != "admin"):
             return not_found(viewer)
         try:
             return _on_slot(store, slot, account["id"], parts[3], form, now, viewer)
@@ -668,6 +669,13 @@ white-space:normal;overflow-wrap:anywhere;max-width:26ch}
 .usage-ranking .usage-model-coverage{display:block;max-width:30ch;white-space:normal;
 font-weight:400;color:var(--muted);font-size:11px;line-height:1.6;margin-top:5px}
 .usage-ranking .usage-models{display:grid;gap:10px;margin:12px 0 0}
+.usage-family-summary{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.usage-family{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:4px;
+padding:6px 10px;border:1px solid var(--rule-soft);border-radius:8px;font-size:12px}
+.usage-family-fable{border-color:var(--acc);background:var(--panel);color:var(--ink)}
+.usage-family-other{color:var(--muted)}
+.usage-ranking .usage-family-heading{margin:18px 0 8px;font-size:14px;font-weight:650}
+.usage-ranking .usage-model-explanation{font-size:12px;line-height:1.6;color:var(--muted)}
 .usage-model{padding:16px 18px;border:1px solid var(--rule-soft);border-radius:10px;
 background:var(--inset);white-space:normal;min-width:0}
 .usage-model-head{display:flex;flex-wrap:wrap;justify-content:space-between;
@@ -773,6 +781,14 @@ border-color:var(--acc-line)}
 .slot-browse-link{min-width:0}.slot-browse-link p{margin:0 0 8px}
 
 /* Account setup: one clear action per slot; details stay available on demand. */
+:root{--slot-assigned:#1d4ed8;--slot-assigned-bg:#eff6ff;
+--slot-assigned-line:#bfdbfe}
+:root[data-theme="dark"]{--slot-assigned:#93c5fd;--slot-assigned-bg:#172554;
+--slot-assigned-line:#1e40af}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+--slot-assigned:#93c5fd;--slot-assigned-bg:#172554;--slot-assigned-line:#1e40af}}
+.pill.assigned{color:var(--slot-assigned);
+background:var(--slot-assigned-bg);border-color:var(--slot-assigned-line)}
 .account-dashboard{min-width:0}
 .account-dashboard .account-heading{display:flex;justify-content:space-between;
 align-items:center;gap:20px;margin-bottom:24px}
@@ -798,7 +814,14 @@ align-items:start;gap:20px}
 letter-spacing:-.025em;overflow-wrap:anywhere}
 .account-dashboard .slot-head .pill{font-size:11px;letter-spacing:0;padding:5px 8px}
 .account-dashboard .slot-body{padding:4px 20px 12px;min-width:0}
+.slot-quota-primary{margin:16px 0 20px;padding:18px;border:1px solid var(--acc-line);
+border-radius:12px;background:var(--inset)}
+.slot-quota-primary>p{margin:14px 0 0;font-size:12px}
+.private-owner-slot>.usage-bars{margin:18px 0;padding:18px;border:1px solid var(--acc-line);
+border-radius:12px;background:var(--inset)}
 .account-dashboard .slot-body p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.account-dashboard .machine-line .bi-inline .st-dot{margin-inline-end:8px}
+.account-dashboard .machine-line .bi-inline a{margin-inline-start:8px}
 .account-dashboard .slot-connect{margin:14px 0;border:1px solid var(--acc-line);
 border-radius:12px;overflow:hidden;background:var(--panel)}
 .account-dashboard .slot-connect>summary{display:flex;align-items:center;
@@ -983,7 +1006,8 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             + '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">' + label("Source code", "源代码", inline=True)
             + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG
-            + (QUOTA_POLL_TAG + PANEL_ACTION_TAG if title == "your slots" else "")
+            + (QUOTA_POLL_TAG + PANEL_ACTION_TAG
+               if title in ("your slots", "Usage & limits") else "")
             + '</body></html>')
 
 
@@ -1086,7 +1110,7 @@ def _public_usage_model_summary(reading: Mapping[str, Any]) -> str:
     """Expose only observed catalogue labels, never infer a model from the reference."""
     models = reading.get("models")
     names, unknown = [], False
-    for model in models[:16] if isinstance(models, list) else []:
+    for model in models[:len(LABELS)] if isinstance(models, list) else []:
         if not isinstance(model, Mapping) or not _public_usage_count(model.get("samples")):
             continue
         key = model.get("model")
@@ -1122,14 +1146,55 @@ def _public_usage_model_coverage(reading: Mapping[str, Any]) -> str:
     return text
 
 
+def _public_usage_family_title(family: str) -> str:
+    return (label("Model not identified", "模型未识别", inline=True) if family == "other"
+            else escape(family.title()))
+
+
+def _public_usage_families(reading: Mapping[str, Any]) -> str:
+    """Visible family subtotals use only recorded, finite model identities."""
+    models = reading.get("models")
+    totals: dict[str, int] = {}
+    for model in models[:len(LABELS)] if isinstance(models, list) else []:
+        if not isinstance(model, Mapping) or not _public_usage_count(model.get("samples")):
+            continue
+        key = model.get("model")
+        tokens = model.get("tokens")
+        count = (_public_usage_count(tokens.get("total_tokens"))
+                 if isinstance(tokens, Mapping) else None)
+        if not isinstance(key, str) or key not in FAMILIES or count is None:
+            continue
+        family = FAMILIES[key]
+        total = totals.get(family, 0) + count
+        if _public_usage_count(total) is not None:
+            totals[family] = total
+    rows = []
+    for family in FAMILY_ORDER:
+        if family not in totals:
+            continue
+        rows.append('<span class="usage-family usage-family-' + family + '"><b>'
+                    + _public_usage_family_title(family) + '</b> · '
+                    + _public_usage_token(totals[family])
+                    + label(" tokens", " Token", inline=True) + '</span>')
+    unrecorded = _public_usage_count(reading.get("unrecorded_model_samples"))
+    if unrecorded:
+        rows.append('<span class="usage-family usage-family-other">' + label(
+            f"Model not recorded · {unrecorded:,} replies",
+            f"未记录模型 · {unrecorded:,} 个回复", inline=True) + '</span>')
+    return ('<div class="usage-family-summary">' + ''.join(rows) + '</div>' if rows else '')
+
+
 def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
-    priced_rows, unpriced_rows = [], []
-    for model in models[:16] if isinstance(models, list) else []:
+    families: dict[str, list[str]] = {}
+    for model in models[:len(LABELS)] if isinstance(models, list) else []:
         if not isinstance(model, Mapping):
             continue
         key = model.get("model")
-        title = (escape(LABELS[key]) if isinstance(key, str) and key in LABELS
-                 and key != "other" else label("Other / unknown", "其他／未知", inline=True))
+        if not isinstance(key, str) or key not in FAMILIES:
+            continue
+        family = FAMILIES[key]
+        title = (escape(LABELS[key]) if key != "other"
+                 else _public_usage_family_title("other"))
         tokens = model.get("tokens")
         tokens = tokens if isinstance(tokens, Mapping) else {}
         sample_text = _public_usage_number(model.get("samples"))
@@ -1148,7 +1213,7 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
         paired = ('<small>' + label("API estimate for ", "API 估值对应 ", inline=True)
                   + _public_usage_token(tokens.get("total_tokens"))
                   + label(" tokens", " Token", inline=True) + '</small>' if known else '')
-        (priced_rows if known else unpriced_rows).append(
+        families.setdefault(family, []).append(
                     '<div class="usage-model"><div class="usage-model-head">'
                     '<span class="usage-model-name">' + title + '</span>'
                     '<span class="usage-model-value">' + value + '</span></div>' + paired
@@ -1168,17 +1233,25 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
               + _public_usage_badge(reading) + ' · ' + label("for ", "对应 ", inline=True)
               + _public_usage_token(priced.get("total_tokens"))
               + label(" priced tokens", " 已计价 Token", inline=True) + '</p>' if matched else '')
-    detail += ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
-              + '</p><div class="usage-models">' + ''.join(priced_rows) + '</div>'
-              if priced_rows else '<p>' + label(
-                  "Reported-model pricing has no matched observations yet. The ranking still "
-                  "converts recorded tokens at the common Opus 5.5 reference rates.",
-                  "上报模型计价暂无匹配观测；排行仍按统一的 Opus 5.5 参考价格折算已记录 Token。",
-                  inline=True) + '</p>')
-    outside = ('<p>' + label("Model observations without a reported-model price",
-                            "暂无上报模型价格的观测", inline=True)
-               + '</p><div class="usage-models">' + ''.join(unpriced_rows) + '</div>'
-               if unpriced_rows else '')
+    for family in FAMILY_ORDER:
+        if family not in families:
+            continue
+        detail += ('<h3 class="usage-family-heading">' + _public_usage_family_title(family)
+                   + '</h3><div class="usage-models">' + ''.join(families[family]) + '</div>')
+        if family == "other":
+            detail += '<p class="usage-model-explanation">' + label(
+                "These tokens were recorded, but a usable original model name was not kept. "
+                "They cannot be reliably reassigned to Fable or another model. Newly recognized "
+                "model versions are counted separately from these saved unknown totals.",
+                "这些 Token 已记录，但没有保留可用的原始模型名称，因此无法可靠地重新归入 Fable "
+                "或其他模型。新识别的模型版本会单独统计，不会改写这些已保存的未知用量。",
+                inline=True) + '</p>'
+    if not families:
+        detail += '<p>' + label(
+            "No model breakdown was recorded for this usage. The recorded token totals still "
+            "count toward the ranking; no model name or model-specific price is inferred.",
+            "这些用量没有记录模型明细；已记录 Token 仍参与排行，但不推测模型名称或模型价格。",
+            inline=True) + '</p>'
     totals = reading.get("tokens")
     totals = totals if isinstance(totals, Mapping) else {}
     unpriced = reading.get("unpriced_tokens")
@@ -1190,23 +1263,27 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                            ("cache_read_input_tokens", "Cache read", "缓存读取"),
                            ("cache_creation_input_tokens", "Cache write", "缓存写入")))
     aggregate = '<div class="usage-model"><span class="usage-model-name">' + label(
-        "Recorded usage used for the common reference",
-        "统一参考折算使用的已记录用量",
+        "Tokens used to calculate this ranking",
+        "本次排行采用的 Token 用量",
         inline=True)
     aggregate += '</span><p>' + label("Reported total ", "上报总量 ", inline=True)
     aggregate += _public_usage_token(totals.get("total_tokens")) + ' · ' + label(
         "Without matched model price ", "未匹配上报模型价格 ", inline=True)
     aggregate += _public_usage_token(unpriced.get("total_tokens"))
     aggregate += '</p><small>' + label(
-        "The ranking converts these recorded categories at one reference price. Reported-model "
-        "estimates above cover only matched model observations.",
-        "排行按同一参考价格折算这些已记录分类；上方上报模型估值只覆盖已匹配的模型观测。",
+        "We price everyone's recorded tokens using the same Opus 5.5 rates so the amounts "
+        "can be compared. This is a comparison score in dollars, not your bill or remaining "
+        "Claude quota. The model estimates above use each identified model's own price.",
+        "我们将所有人已记录的 Token 按同一套 Opus 5.5 价格折算，便于比较。美元数值是比较用的"
+        "分数，不是账单或 Claude 剩余额度。上方模型估值则使用各个已识别模型自己的价格。",
         inline=True) + '</small>'
     aggregate += '<dl class="usage-token-grid">' + reported + '</dl></div>'
-    return ('<details class="usage-model-detail"><summary>'
-            + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
+    return (_public_usage_families(reading)
+            + '<details class="usage-model-detail"><summary>'
+            + label("Model versions & calculation", "模型版本与计算方式", inline=True)
+            + '</summary>'
             + '<p class="usage-model-coverage">' + _public_usage_model_coverage(reading)
-            + '</p>' + detail + aggregate + outside + '<p>' + _public_usage_coverage(reading)
+            + '</p>' + detail + aggregate + '<p>' + _public_usage_coverage(reading)
             + '</p></details>')
 
 
@@ -1231,7 +1308,7 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
         "不展示邮箱域名；不适合安全遮盖的短邮箱等情况使用遮盖昵称或用户编号。"
         "这些片段会公开，这不等于匿名。",
         inline=True) + '</p><p>' + label(
-        "The reference value is not a Claude Pro/Max bill, an amount paid, a quota balance, "
+        "The reference value is not a Claude subscription bill, an amount paid, a quota balance, "
         "unlimited usage or guaranteed savings. Reported-model API estimates stay in the "
         "details and use only matched model observations. Model-specific estimates use the "
         "model names reported by the agent. "
@@ -1239,7 +1316,7 @@ def _public_usage_method(report: Mapping[str, Any]) -> str:
         "estimate because its per-request prompt tier is absent. Actual cache TTL, context "
         "and service tiers can change API pricing. These statistics retain no raw replies "
         "and do not reconstruct older model identities. Reading this page makes no model call. ",
-        "参考折算值不是 Claude Pro/Max 账单、实际付款、剩余额度、无限用量，也不保证节省了这些"
+        "参考折算值不是 Claude 订阅账单、实际付款、剩余额度、无限用量，也不保证节省了这些"
         "费用。按上报模型计价的 API 估值保留在明细中，只使用已匹配模型的观测；模型名称由代理"
         "上报。由于缺少每次请求的"
         "提示长度计价档位，Haiku 5.5 暂无上报模型估值。实际缓存有效期、上下文和服务档位"
@@ -1335,9 +1412,15 @@ def public_usage_panel(ranking: Any) -> str:
         inline=True) + '</p><p class="usage-scope">' + label(
         "Each row is a real user with recorded activity. We apply the same reference prices "
         "to everyone's recorded input, output and cache tokens, even when the original model "
-        "was not recorded. Dollar values cover the tokens shown in the same row.",
+        "was not recorded. Saved daily usage stays with the same user when a slot goes "
+        "offline or changes; it expires normally from this seven-day window. "
+        "Dollar values cover the tokens shown in the same row. This is a comparison value, "
+        "not a bill or your remaining Claude quota. Model families are shown separately "
+        "below each row.",
         "每一行都来自有实际活动的真实用户。我们用同一参考价格折算每个人已记录的输入、输出"
-        "和缓存 Token，即使没有记录原模型，也能参与排行。美元折算值对应同一行展示的用量。",
+        "和缓存 Token，即使没有记录原模型，也能参与排行。槽位离线或更换后，已保存的每日用量"
+        "仍归属于同一用户，并按七个 UTC 日期的窗口正常到期。美元折算值对应同一行展示的用量，"
+        "仅用于比较，不是账单或 Claude 剩余额度。每行下方单独展示各类模型用量。",
         inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
@@ -1365,6 +1448,7 @@ FORM_ZH = {
     "Change account": "更换账号", "Send code": "提交授权码", "Cancel": "取消",
     "Cancel setup": "取消设置", "Back to Stable": "切回稳定版", "Refresh": "刷新用量",
     "Rename": "重命名", "Give this slot back": "归还并清空槽位", "Remove": "移除电脑",
+    "Remove account pairing": "移除账号配对",
     "Connect another computer": "连接另一台电脑", "Connect this computer": "连接电脑",
     "Turn on": "开启", "Turn off": "关闭", "Sign out": "退出登录",
     "Update to the latest release": "更新到最新版",
@@ -1439,7 +1523,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         return _signed_out(cfg)
     from . import trial_routes
 
-    held = store.list_slots(held_by=account["id"])
+    held = [slot for slot in store.list_slots(held_by=account["id"])
+            if not slot.get("private_owner") or account.get("role") == "admin"]
     recurring_slots = set()
     if held:
         try:
@@ -1530,11 +1615,22 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             financial[slot["id"]] = (end, end is None or now < end)
         except Exception:
             financial[slot["id"]] = (None, False)
-    pairing_slots = [s for s in held if s.get("kind") == slotstates.MACHINE_SLOT
-                     and s["state"] == slotstates.ACTIVE and financial[s["id"]][1]
+    authorized_slots = [s for s in held if (s.get("kind") == slotstates.MACHINE_SLOT
+                     or s.get("inference_enabled") is True)
+                     and s["state"] == slotstates.ACTIVE
+                     and nodes.get(s["node_id"], {}).get("enabled")
                      and nodes.get(s["node_id"], {}).get("access_host")
                      and nodes.get(s["node_id"], {}).get("ssh_host_key")]
-    authorizer = next((s for s in pairing_slots if cli_devices[s["id"]]),
+    pairing_slots = [s for s in authorized_slots if financial[s["id"]][1]]
+    # A valid pairing authorizes its holder's HTTPS slot choices. It is not a
+    # separate computer for every slot, nor evidence that a computer is online
+    # or has selected this slot locally. Check the current account/slot binding
+    # so a stale registration never becomes another holder's connection.
+    account_devices = [{**device, "slot_id": s["id"], "slot_name": names.display(s)}
+                       for s in authorized_slots for device in cli_devices[s["id"]]
+                       if store.cli_device_is_active(device["id"])]
+    paired_ids = {device["slot_id"] for device in account_devices}
+    authorizer = next((s for s in pairing_slots if s["id"] in paired_ids),
                       pairing_slots[0] if pairing_slots else None)
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
@@ -1543,6 +1639,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                devin_state=native_states[s["id"]],
                                devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
                                authorizer=authorizer,
+                               account_devices=account_devices,
                                payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
                                recurring=s["id"] in recurring_slots,
                                traffic_html=traffic_ui.slot_panel(traffic.slot_summary(
@@ -1635,6 +1732,7 @@ def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -
 
 def _account_nav(current: str, *, monthly: bool = False) -> str:
     pages = [("/account", "Your slots", "我的槽位"),
+             ("/account/usage", "Usage & limits", "用量与额度"),
              ("/account/available", "Available slots", "可用槽位")]
     if monthly:
         pages.append(("/account/subscriptions", "Monthly payments", "月付管理"))
@@ -1647,12 +1745,101 @@ def _account_nav(current: str, *, monthly: bool = False) -> str:
             + '</nav>')
 
 
+def _account_quota(slot: Mapping[str, Any], report: Mapping[str, Any], now: float,
+                   csrf: str, *, heard: Any = None, max_age: float = 15 * 60,
+                   usage_page: bool = False) -> str:
+    """A visible quota region, separate from credential and connection details."""
+    creds = report.get('credentials') or {}
+    quota = report.get('quota') or {}
+    renewal = renewal_report(creds.get('renewal'))
+    if (creds.get('logged_in') is False or renewal.get('reason') in TRANSITION_REASONS
+            or creds.get('account_fp')
+            and creds.get('bound_fp') and creds['account_fp'] != creds['bound_fp']):
+        quota = {}
+    since = max(slot.get('claimed_at') or 0, slot.get('account_switched_at') or 0)
+    heard_at = instant(heard)
+    fresh = heard_at is not None and now - min(max_age, 10 * 60) <= heard_at <= now + 60
+    bars, checked = _quota_panel(quota, now, since, observation_fresh=fresh)
+    if ((slot.get('kind') != slotstates.OWNER_SLOT or slot.get('private_owner'))
+            and slot.get('state') == slotstates.ACTIVE):
+        bars += _quota_refresh(slot, {**report, 'quota': quota}, csrf, now,
+                               usage_page=usage_page)
+    else:
+        if checked is not None:
+            bars += _notice('Read ' + _age(now, checked) + ' ago.',
+                            '最近读取：' + _age(now, checked) + ' 前。', 'small muted')
+        bars += _notice('Readings come from Claude Code on this computer.',
+                        '读数来自这台电脑上的 Claude Code。', 'small muted')
+    return ('<div class="usage-bars" id="slot-' + escape(slot['id'])
+            + '-quota" data-fleet-readonly>' + bars + '</div>')
+
+
+def usage_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
+                session_id: str, now: float, note: str = '') -> str:
+    """The signed-in holder's /usage-style account and model quota page."""
+    if account is None:
+        return _signed_out(cfg)
+    held = [slot for slot in store.list_slots(held_by=account['id'])
+            if not slot.get('private_owner') or account.get('role') == 'admin']
+    latest = store.latest_heartbeats()
+    csrf = csrf_for(session_id, cfg.cookie_secret)
+    cards = []
+    for slot in held:
+        hb = latest.get(slot['node_id'])
+        report = (_own_report(hb) if slot.get('kind') == slotstates.OWNER_SLOT
+                  and not slot.get('private_owner')
+                  else _report_for(slot, hb))
+        creds = report.get('credentials') or {}
+        plan = plans.label(creds.get('subscription_type'), creds.get('plan'))
+        since = max(slot.get('claimed_at') or 0, slot.get('account_switched_at') or 0)
+        heard = instant((hb or {}).get('ts'))
+        matched = (creds.get('bound_fp') and creds.get('bound_fp') == creds.get('account_fp'))
+        identity = (creds.get('email') if creds.get('logged_in') is True and matched
+                    and heard is not None and heard >= since else None)
+        subtitle = (escape(str(identity)) if identity else
+                    label('Your Claude account', '你的 Claude 账号', inline=True))
+        if plan:
+            subtitle += ' · ' + escape(plan)
+        cards.append('<section class="card slot quota-account-card" id="slot-'
+                     + escape(slot['id']) + '"><h2>' + escape(names.display(slot))
+                     + '</h2><p class="quota-account-identity">' + subtitle + '</p>'
+                     + _account_quota(slot, report, now, csrf, heard=(hb or {}).get('ts'),
+                                      max_age=cfg.heartbeat_max_age_s, usage_page=True)
+                     + '</section>')
+    empty = ('<div class="quota-empty"><strong>' + label(
+        'No Claude account quota to show yet.', '暂无可显示的 Claude 账号额度。', inline=True)
+        + '</strong><p>' + label('Claim a slot and sign in to Claude to see its limits here.',
+                                 '领取槽位并登录 Claude 后，即可在此查看额度。', inline=True)
+        + '</p><a class="btn" href="/account">'
+        + label('Your slots', '我的槽位', inline=True) + '</a></div>')
+    tone, words = NOTES.get(note, ('', ''))
+    banner = ('<div class="note-banner ' + tone + '">'
+              + label(words, NOTES_ZH.get(note, words)) + '</div>' if words else '')
+    body = ('<section class="account-dashboard"><div class="quota-page-head"><div><h1>'
+            + label('Usage & limits', '用量与额度', inline=True) + '</h1>'
+            + '<p class="quota-page-intro">' + label(
+                'Your Claude Code /usage limits, in one place. See the weekly allowance, '
+                'Fable and other model limits, and when each resets.',
+                '在同一页面查看 Claude Code /usage 的额度：每周总额度、Fable 等模型的'
+                '专属额度，以及各自的重置时间。', inline=True) + '</p></div>'
+            + '<a class="btn" href="https://claude.ai/settings/usage">'
+            + label('Open Claude usage', '打开 Claude 用量页', inline=True) + '</a></div>'
+            + _account_nav('/account/usage', monthly=_monthly_management(store, cfg, account))
+            + banner + '<p><a href="/account/usage" data-fleet-status="account">'
+            + label('Refresh page readings', '刷新页面读数', inline=True)
+            + '</a></p><div class="quota-overview">' + (''.join(cards) or empty)
+            + '</div></section>')
+    return _shell('Usage & limits', body,
+                  viewer=viewer_for(account, session_id, cfg, store), width='wide')
+
+
 def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                    session_id: str, now: float, query: Mapping[str, str]) -> str:
     """Only this customer's eligible pool; browsing never claims or starts a model."""
     if account is None:
         return _signed_out(cfg)
-    held = store.list_slots(held_by=account["id"])
+    held = [slot for slot in store.list_slots(held_by=account["id"])
+            if not slot.get("private_owner") or account.get("role") == "admin"]
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
     can_claim = wallet_routes.enabled(cfg) or counted < quota
@@ -2334,8 +2521,13 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "仍可能让人识别出某位用户。排行可以包含仅一位参与用户。",
             ),
             (
-                "The ranking uses validated usage totals from current, fresh, account-bound "
-                "slot reports. All measured token categories use the same reference rates, "
+                "The ranking uses validated, account-bound usage reports. Saved daily "
+                "measurements remain with their original user across slot changes and outages, "
+                "within the seven-UTC-day window. Older agents without saved daily measurements "
+                "still require a fresh report. Private owner usage is excluded unless its owner "
+                "explicitly opts into this masked account ranking; that consent does not publish "
+                "the private computer's identity, operating cost or status. "
+                "All measured token categories use the same reference rates, "
                 "including existing aggregates without a known model. This conversion does "
                 "not identify the model that served a reply. Reported-model details and their "
                 "separate estimates use only matched model observations. Model names are reported "
@@ -2347,7 +2539,11 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "coverage are shown. Missing reported-model prices stay unknown. No "
                 "prompts, response content, raw errors, hostnames, IP addresses, login "
                 "accounts or individual request timestamps appear in the ranking.",
-                "排行使用当前槽位最新报告中，与账号绑定且经验证的用量汇总。所有已观测 Token "
+                "排行使用与账号绑定且经验证的用量报告。更换槽位或暂时离线后，已保存的每日观测"
+                "仍归属于原用户，保留在七个 UTC 日期的窗口内；"
+                "未保存每日观测的旧版代理仍需最新报告。"
+                "私人自有节点的用量默认不公开，只有所有者明确选择加入此遮盖账号排行后才参与；"
+                "该选择不会公开私人电脑的身份、运行成本或状态。所有已观测 Token "
                 "分类均采用同一参考价格，包括缺少模型信息的已有汇总；折算不代表确定了生成回复"
                 "的模型。上报模型明细与单独估值只使用已匹配的模型观测，模型名称由代理上报。符合条件的"
                 "原生、桥接和网关模型调用在节点上只计一次，不代表全部 Claude 活动的完整记录。"
@@ -2358,7 +2554,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
             (
                 "The ranking uses Opus 5.5 standard global reference rates per million "
                 "tokens: input $4, output $20, five-minute cache writes $5 and cache reads "
-                "$0.20. It is not a Claude Pro/Max subscription bill, an amount paid, a "
+                "$0.20. It is not a Claude subscription bill, an amount paid, a "
                 "quota balance, unlimited usage or a promise of savings. The primary token "
                 "total and reference value cover the same measured categories. Missing "
                 "replies or cache fields make the subtotal partial, never fabricated zero. "
@@ -2368,7 +2564,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                 "Processed totals include cached context counted again per request; "
                 "they are not generated or unique text. No older model identity is inferred.",
                 "排行统一采用 Opus 5.5 标准全球参考价格，每百万 Token：输入 $4、输出 $20、"
-                "五分钟缓存写入 $5、缓存读取 $0.20。这不是 Claude Pro/Max 订阅账单、实际付款、"
+                "五分钟缓存写入 $5、缓存读取 $0.20。这不是 Claude 订阅账单、实际付款、"
                 "剩余额度、无限用量，也不保证节省了这些费用。排行主表的 Token 总量与参考折算值"
                 "覆盖相同的已观测分类；缺少回复或缓存字段时，标注部分小计，不伪造为零。实际"
                 "模型估值在展开明细中单独展示，只覆盖对应的已计价 Token。"
@@ -2708,29 +2904,35 @@ def _slot_disclosure(english: str, chinese: str, content: str, cls: str,
 
 def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                   cfg: Config, devin_state: Optional[str],
-                  authorizer: Optional[Mapping[str, Any]]) -> str:
+                  authorizer: Optional[Mapping[str, Any]], *,
+                  connected: bool = False, paid_access: bool = True) -> str:
     """Show complete, secret-free instructions for an existing supported route.
 
     CLI enrollment still requires a ready hosted Claude slot. A verified Devin
     slot alone cannot mint that pairing; never present the CLI recipe without
     an eligible authorizer, or imply that website key creation saves a CLI key.
     """
-    if (slot.get('kind') == slotstates.OWNER_SLOT or not gateway_ui.available(cfg)
+    container = ('<div id="slot-' + escape(str(slot['id']))
+                 + '-connect-instructions" data-fleet-readonly>')
+    if (not paid_access or (slot.get('kind') == slotstates.OWNER_SLOT
+            and slot.get("inference_enabled") is not True)
+            or not gateway_ui.available(cfg)
             or slot.get('state') not in CAN_SIGN_IN):
-        return ''
+        return container + '</div>'
     providers = []
-    if devin_state == 'ready':
-        providers.append(('devin', 'Devin'))
     if (slot.get('state') == slotstates.ACTIVE
             and (report.get('credentials') or {}).get('logged_in') is True):
         providers.append(('anthropic', 'Claude'))
+    if devin_state == 'ready':
+        providers.append(('devin', 'Devin'))
     result = []
     for provider, name in providers:
         title = label('Use ' + name + ' on my computer', '在电脑上使用 ' + name, inline=True)
-        start = ('<details class="slot-connect" data-slot-connect="' + provider
+        start = ('<details class="slot-connect" id="slot-' + escape(str(slot['id']))
+                 + '-connect-' + provider + '" data-slot-connect="' + provider
                  + '"><summary><span>' + title
                  + '</span><span class="connect-arrow" aria-hidden="true">→</span></summary>')
-        if authorizer is None:
+        if authorizer is None and not connected:
             result.append(start + '<div class="connect-body">' + bi(
                 '<p>First computer? This pilot needs assisted Fleet CLI setup. '
                 'You can also create a connection key for Claude Code in advanced connections.</p>',
@@ -2740,21 +2942,28 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                 + label('Open connection settings', '打开连接设置', inline=True)
                 + '</a></div></details>')
             continue
-        source = shlex.quote(names.display(authorizer))
         target = shlex.quote(names.display(slot))
-        setup = ('ccfleet gateway setup --slot ' + source + ' --slots ' + target
+        # The webpage cannot know which of the account's computers is running
+        # this command. Let that computer use its own saved authorization.
+        setup = ('ccfleet gateway setup --slots ' + target
                  + ' --provider ' + provider)
         launch = ('ccfleet local --transport gateway --slot ' + target
                   + (' --model claude-opus-5-5 --effort max' if provider == 'devin' else '')
                   + ' --new' + (' -- --safe-mode' if provider == 'devin' else ''))
         pair = ('<details class="connect-first-time"><summary>'
-                + label('First time on this computer?', '第一次在这台电脑上使用？', inline=True)
+                + label('Using a different computer?' if connected else
+                        'First time on this computer?',
+                        '要使用另一台电脑？' if connected else '第一次在这台电脑上使用？',
+                        inline=True)
                 + '</summary>' + bi(
                     '<p>Connect this computer once, then return here. '
                     'Already used Fleet on this computer? Skip this step.</p>',
                     '<p>先连接这台电脑，再返回这里。已经在这台电脑上用过 Fleet？跳过此步。</p>')
-                + _form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
-                        'Connect this computer', cls='primary') + '</details>')
+                + (_form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
+                         'Connect this computer', cls='primary') if authorizer is not None else
+                   _notice('To connect a different computer, first renew a Claude-ready slot.',
+                           '如需连接另一台电脑，请先续费一个已登录 Claude 的槽位。'))
+                + '</details>')
         steps = ''.join('<li><div><b>' + label(en, zh, inline=True)
                         + '</b><pre><code>' + escape(command) + '</code></pre></div></li>'
                         for en, zh, command in (
@@ -2769,13 +2978,22 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
         result.append(start + '<div class="connect-body">' + bi(
             '<p>Open Terminal in your project folder. Run these commands in order.</p>',
             '<p>在项目文件夹中打开终端，按顺序运行下面的命令。</p>')
+            + (bi('<p>A computer connection is already saved for your Fleet account. '
+                  'Use it to add this slot; no separate pairing is needed on that computer. '
+                  'The commands below select this one slot.</p>',
+                  '<p>你的 Fleet 账号已有电脑连接。在已连接的电脑上添加这个槽位，'
+                  '无需再次配对。下面的命令会固定使用这一个槽位。</p>') if connected else '')
             + pair + '<ol class="connect-steps">' + steps + '</ol>' + bi(
                 '<p class="connect-hint">Keep the setup command: it saves the connection '
                 'that the start command needs. Your tools and files stay on your computer; '
                 'selected context is sent for model replies.</p>',
                 '<p class="connect-hint">请先运行“保存这个连接”，再启动。工具与文件在电脑上，'
-                '选中的上下文会发送出去以获取模型回复。</p>') + pilot + '</div></details>')
-    return ''.join(result)
+                '选中的上下文会发送出去以获取模型回复。</p>')
+            + '<p><a href="/docs/guide#add-slot">'
+            + label('Use several slots: priority and sticky sessions',
+                    '使用多个槽位：优先顺序与会话保持', inline=True)
+            + '</a></p>' + pilot + '</div></details>')
+    return container + ''.join(result) + '</div>'
 
 
 def _slot_card(
@@ -2796,13 +3014,44 @@ def _slot_card(
     devin_state: Optional[str] = None,
     devin_html: str = "",
     authorizer: Optional[Mapping[str, Any]] = None,
+    account_devices: Optional[list[Mapping[str, Any]]] = None,
     payment_end: Optional[float] = None,
     paid_access: bool = True,
     recurring: bool = False,
     traffic_html: str = "",
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
-    report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
+    report = (_own_report(heartbeat) if own and not slot.get('private_owner')
+              else _report_for(slot, heartbeat))
+    if slot.get("private_owner"):
+        private = node.get("private_owner") or {}
+        cents = private.get("monthly_cost_usd_cents")
+        cost = f"${cents / 100:.2f} / month" if type(cents) is int else "Unknown"
+        connected = any(device.get("slot_id") == slot["id"] for device in account_devices or ())
+        warning = (_notice(
+            "This Claude account is also reported on another node. "
+            "Keep one active node per account.",
+            "该 Claude 账号也在其他节点上报告登录。每个账号仅保留一个活动节点。", "small lapsed")
+            if "account_elsewhere" in flagged else "")
+        return ('<section class="card slot slot-card private-owner-slot" id="slot-'
+                + escape(slot["id"]) + '"><h2>' + escape(names.display(slot)) + '</h2><p>'
+                + label("Private administrator Mac", "管理员私有 Mac", inline=True)
+                + '</p>' + _account_quota(slot, report, now, csrf,
+                    heard=(heartbeat or {}).get('ts'), max_age=cfg.heartbeat_max_age_s)
+                + '<p>' + label("Operating cost: ", "运行成本：", inline=True)
+                + escape(cost) + '</p>' + machine_line + warning
+                + '<p class="muted">' + label(
+                    "This is your own computer. Sign-in and maintenance happen on the Mac; "
+                    "it is never offered for rent or wiped by Fleet.",
+                    "这是你的自有电脑，登录和维护在 Mac 本机进行；"
+                    "Fleet 不会出租或清除它。", inline=True)
+                + '</p>' + _slot_connect(slot, report, csrf, cfg, None, authorizer,
+                    connected=connected, paid_access=paid_access)
+                + _cli_access(slot, node, cli_devices or [], csrf, now,
+                    account_devices=account_devices, authorizer=authorizer,
+                    paid_access=paid_access,
+                    provider_ready=slot.get("inference_enabled") is True)
+                + traffic_html + '</section>')
     # A sign-in that failed, or a change of account that finished, is
     # over: it is said once, below, and the buttons come back as if nothing
     # were in flight.
@@ -2819,7 +3068,7 @@ def _slot_card(
                   and (report.get("credentials") or {}).get("logged_in") is not True)
     devin_only = devin_slot and devin_state == "ready"
     if devin_slot:
-        tone, title, detail = (("ok", "Devin ready", "") if devin_only
+        tone, title, detail = (("assigned", "Devin ready", "") if devin_only
                               else ("warn", "Devin needs a check", ""))
     heard = (heartbeat or {}).get("ts")
     if heard is None:
@@ -2887,6 +3136,13 @@ def _slot_card(
         )
         + f"</span></span>{mine}</h2></div><div class=\"slot-body\">",
     ]
+    if slot['state'] == slotstates.ACTIVE or own:
+        parts.append('<section class="slot-quota-primary">'
+                     + _account_quota(slot, report, now, csrf, heard=heard,
+                                      max_age=cfg.heartbeat_max_age_s)
+                     + '<p><a href="/account/usage">'
+                     + label('Open Usage & limits', '查看用量与额度', inline=True)
+                     + '</a></p></section>')
     technical = ['<p class="slot-meta">'
         + bi(
             (about + " · " if about else "") + "machine " + machine,
@@ -2948,10 +3204,8 @@ def _slot_card(
             parts.append('<p class="lapsed">' + label(
                 "Payment status is unavailable. New connections are paused.",
                 "付费状态暂不可用，已暂停新连接。", inline=True) + '</p>')
-    if paid_access:
-        parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer))
-    parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
-                 if devin_only else devin_html)
+    parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer,
+                               connected=bool(account_devices), paid_access=paid_access))
     account_parts = []
     if not own and slot["state"] in CAN_SIGN_IN:
         account_parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
@@ -2970,6 +3224,8 @@ def _slot_card(
                     report.get("credentials"), heard, now, cfg.heartbeat_max_age_s, listening
                 ),
                 slot_id=slot["id"],
+                since=max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0),
+                include_quota=False,
             )
         ]
         if not own:
@@ -2977,8 +3233,8 @@ def _slot_card(
             usage.append(
                 _relay_usage(report.get("relay"), heard, now, cfg.heartbeat_max_age_s, since=since)
             )
-        parts.append(_slot_disclosure('Usage & limits', '用量与额度', ''.join(usage),
-                                      'slot-usage'))
+        parts.append(_slot_disclosure('Measured usage & sign-in', '观测用量与登录状态',
+                                      ''.join(usage), 'slot-usage'))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
@@ -3000,28 +3256,23 @@ def _slot_card(
         account_parts.append(_sign_in(slot, report, login, csrf, now))
         technical.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
         if not own:
-            # A Devin connection does not require a Claude sign-in or SSH pairing
-            # on this slot. Its paired authorizer is explained in the connect guide.
-            if not devin_slot:
-                parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
-                    _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access),
-                    'slot-devices'))
+            parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
+                _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access,
+                    account_devices=account_devices if gateway_ui.available(cfg) else None,
+                    authorizer=authorizer, provider='devin' if devin_only else 'anthropic',
+                    provider_ready=devin_only or slot["state"] == slotstates.ACTIVE and signed_in),
+                'slot-devices'))
     if account_parts:
         if devin_slot:
-            parts.append('<details class="provider-other"><summary>' + label(
-                'Anthropic sign-in (optional)', 'Anthropic 登录（可选）', inline=True
-            ) + '</summary><p>' + label(
-                'This is for a separate Claude account. '
-                + ('Your Devin connection is ready.' if devin_only else
-                   'The Devin check is handled separately.'),
-                '这里用于连接独立的 Claude 账号。'
-                + ('你的 Devin 连接已经就绪。' if devin_only else 'Devin 检查会单独处理。'),
-                inline=True
-            ) + '</p>' + ''.join(account_parts) + '</details>')
-        else:
-            needs_sign_in = not signed_in or bool(login)
-            parts.append(_slot_disclosure('Claude account', 'Claude 账号',
-                ''.join(account_parts), 'slot-account', expanded=needs_sign_in))
+            account_parts.insert(0, _notice(
+                'Sign in to your own Claude account to use Anthropic. '
+                'Your Devin connection is configured separately.',
+                '登录你自己的 Claude 账号即可使用 Anthropic。Devin 连接单独配置。'))
+        needs_sign_in = not signed_in or bool(login)
+        parts.append(_slot_disclosure('Claude account', 'Claude 账号',
+            ''.join(account_parts), 'slot-account', expanded=needs_sign_in))
+    parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
+                 if devin_only else devin_html)
     if slot["state"] in CAN_SIGN_IN and not own:
         technical.append(_rename(slot, csrf))
     parts.append(_slot_disclosure('Slot details', '槽位详情', ''.join(technical), 'slot-technical'))
@@ -3457,25 +3708,8 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
     return "".join(lines)
 
 
-def _quota_meter(used: Any, en: str, zh: str, reset: Any, read: Any, now: float, exact: Any) -> str:
-    """Keep native quota/reset calculations; translate only their authored labels."""
-    source = _meter(used, en, reset, read, now, exact)
-    if not source:
-        return '<div class="meter"><div class="meter-head"><span>' + label(
-            en, zh, inline=True) + '</span></div>' + _notice(
-                "Current quota is unavailable. This does not mean quota remains.",
-                "当前额度未知，不代表还有剩余额度。", "small muted") + '</div>'
-    source = source.replace(
-        f"<span>{escape(en)}</span>", "<span>" + label(en, zh, inline=True) + "</span>"
-    )
-    return source.replace(
-        '<div class="meter-foot">resets ',
-        '<div class="meter-foot">' + label("resets", "重置时间", inline=True) + " ",
-    )
-
-
 def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True,
-            slot_id: Optional[str] = None) -> str:
+            slot_id: Optional[str] = None, since: float = 0, include_quota: bool = True) -> str:
     """The bound account and observed usage, with the same readiness conditions."""
     if not fresh:
         return _notice(
@@ -3635,26 +3869,7 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             )
         )
     quota = report.get("quota") or {}
-    session, week = quota.get("session") or {}, quota.get("week") or {}
-    read = quota.get("checked_at")
-    quota_age = now - read if type(read) in (int, float) else None
-    bars = _quota_meter(
-        session.get("used_pct"),
-        "5-hour session",
-        "五小时窗口",
-        session.get("resets"),
-        read,
-        now,
-        session.get("resets_at"),
-    ) + _quota_meter(
-        week.get("used_pct"),
-        "This week",
-        "本周窗口",
-        week.get("resets"),
-        read,
-        now,
-        week.get("resets_at"),
-    )
+    bars = _quota_panel(quota, now, since)[0] if include_quota else ''
     usage = report.get("usage") or {}
     spent = ""
     if usage:
@@ -3686,34 +3901,8 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
                     f' {escape(span_zh)}</div>'
                 ),
             )
-    if bars:
-        bars = (
-            '<div class="usage-nums muted">'
-            + label(
-                ("last reported Claude account usage · every device"),
-                ("上次上报的 Claude 账号用量 · 所有设备合计"),
-                inline=True,
-            )
-            + "</div>"
-            + bars
-            + _notice(
-                ACCOUNT_WIDE,
-                ("这两个窗口包含这个 Claude 账号在所有设备上的使用，不仅是当前槽位。"),
-                "small muted",
-            )
-            + refresh
-        )
-        if quota_age is None or quota_age > 10 * 60 or quota_age < 0:
-            bars = _notice(
-                "<strong>Historical reading · current quota unknown.</strong> "
-                "A signed-in account can still have reached its limit.",
-                "<strong>历史读数 · 当前额度未知。</strong>账号已登录也可能已达到用量限制。",
-                "small lapsed") + bars
-    elif refresh:
-        bars = (
-            _notice(("No reading of your limits yet."), "尚未读取用量限制。", "small muted")
-            + refresh
-        )
+    if include_quota:
+        bars += refresh
     halves = [
         f'<div class="usage-{name}"'
         + (f' id="slot-{escape(slot_id)}-quota" data-fleet-readonly'
@@ -3976,28 +4165,46 @@ def _claude_line_zh(said: Mapping[str, Any]) -> str:
 
 def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
                 devices: list[Mapping[str, Any]], csrf: str, now: float,
-                *, paid_access: bool = True) -> str:
+                *, paid_access: bool = True,
+                account_devices: Optional[list[Mapping[str, Any]]] = None,
+                authorizer: Optional[Mapping[str, Any]] = None,
+                provider: str = 'anthropic', provider_ready: Optional[bool] = None) -> str:
     """Pair and revoke local ccfleet installations. No Claude token is involved."""
     base = f"/account/slots/{escape(slot['id'])}"
     configured = bool(node.get("access_host") and node.get("ssh_host_key"))
-    ready = configured and slot.get("state") == slotstates.ACTIVE
+    ready = configured and slot.get("state") == slotstates.ACTIVE and provider_ready is not False
+    connections = account_devices if account_devices is not None else devices
+    remove_label = "Remove account pairing" if account_devices is not None else "Remove"
     rows = []
-    for device in devices:
+    for device in connections:
+        source = str(device.get("slot_id") or slot["id"])
         seen = device.get("last_seen_at") or 0
         when = label(f"used {_age(now, seen)} ago" if seen else "not used yet",
                      f"最近使用：{_age(now, seen)} 前" if seen else "尚未使用", inline=True)
         rows.append('<div class="device"><span><b>' + escape(str(device["name"]))
                     + f'</b><small>{when} · {escape(str(device["fingerprint"]))}</small>'
-                    + '</span>' + _form(f"{base}/cli-revoke", csrf, "Remove",
+                    + '</span>' + _form(f"/account/slots/{escape(source)}/cli-revoke",
+                                        csrf, remove_label,
                                         '<input type="hidden" name="device_id" value="'
                                         + escape(str(device["id"])) + '">', "quiet") + '</div>')
     if not paid_access:
         button = '<span class="muted small">' + label("Renew this slot to connect a computer.",
             "请先续费此槽位，再连接电脑。", inline=True) + '</span>'
+    elif account_devices:
+        target = ('#slot-' + escape(str(slot['id'])) + '-connect-' + provider
+                  if ready or provider == 'devin' and provider_ready else '/docs/guide#add-slot')
+        button = ('<a class="btn primary" href="' + target + '">'
+                  + label('Use a connected computer', '使用已连接的电脑', inline=True) + '</a>')
+        if authorizer is not None:
+            button += _form('/account/slots/' + escape(str(authorizer['id'])) + '/cli', csrf,
+                            'Connect another computer', cls='quiet')
     elif ready:
         button = _form(f"{base}/cli", csrf,
                        "Connect another computer" if devices else "Connect this computer",
                        cls="primary")
+    elif provider == 'devin':
+        button = ('<a class="btn quiet" href="/account#gateway">'
+                  + label('Open connection settings', '打开连接设置', inline=True) + '</a>')
     elif configured:
         button = '<span class="muted small">' + label(
             "Finish signing in to Claude on this slot, then connect this computer.",
@@ -4017,19 +4224,45 @@ def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
                 '电脑访问密钥不是你的 Claude 凭据。'
             ),
         ])
+    if account_devices is not None:
+        introduction = bi(
+            '<p class="small muted">One computer connection can configure all your owned '
+            'slots. Each slot still needs its provider sign-in and local connection setup. '
+            'Saved connections below do not show which computers are online or which slot '
+            'a local session has selected.</p>',
+            '<p class="small muted">电脑连接一次即可配置你持有的所有槽位。每个槽位仍需完成'
+            '服务商登录，并在本机保存连接设置。下面的已保存连接不表示电脑在线，'
+            '也不表示本机会话当前选用了哪个槽位。</p>')
+        if connections:
+            introduction += _notice('Your Fleet account has a saved computer connection. '
+                'Adding this slot does not require pairing that computer again.',
+                '你的 Fleet 账号已有电脑连接。添加这个槽位，无需让那台电脑再次配对。')
+            introduction += _notice(
+                'Removing an account pairing affects this computer’s setup access across '
+                'your slots. Saved API connection keys are managed separately below.',
+                '移除账号配对会影响这台电脑对所有槽位的连接设置权限。'
+                '已保存的 API 连接密钥需在下方单独管理。')
+            if not ready and provider != 'devin':
+                introduction += _notice('Finish Claude sign-in for this slot, then add it '
+                    'on your connected computer.', '请先完成此槽位的 Claude 登录，'
+                    '再在已连接的电脑上添加它。')
     return ((
-        '<div class="row-line stacked cli-access"><div '
+        '<div class="row-line stacked cli-access" id="slot-' + escape(str(slot['id']))
+        + '-computers" data-fleet-readonly><div '
         'class="row-name">CC Fleet CLI</div>'
     )
             + introduction + ''.join(rows) + f'<div class="actions">{button}</div></div>')
 
 
 def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
-                   now: float) -> str:
+                   now: float, *, usage_page: bool = False) -> str:
     """Read account quota now, keeping the same protected action."""
     read = (report.get("quota") or {}).get("checked_at")
     acknowledgement = (report.get("quota") or {}).get("refresh")
-    known = isinstance(read, (int, float)) and not isinstance(read, bool)
+    known = (type(read) in (int, float) and 0 < read <= now and math.isfinite(read))
+    since = max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0)
+    if known and read < since:
+        read, known = None, False
     when = f"read {_age(now, read)} ago · " if known else ""
     when_zh = f"最近读取：{_age(now, read)} 前 · " if known else ""
     if quota_reading(slot.get("quota_wanted_at"), read, now, acknowledgement):
@@ -4061,6 +4294,8 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
     return (failed + latest + '<div class="refresh"><span class="small muted">'
             + label(when + "every five minutes", when_zh + "每五分钟读取一次", inline=True)
             + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh",
+                               '<input type="hidden" name="usage_page" value="1">'
+                               if usage_page else '',
                                partial="quota")
             + '</div>')
 

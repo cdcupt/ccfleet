@@ -19,11 +19,11 @@ from typing import Any, Callable, Optional
 from . import pricing, statuspage
 from .bilingual import bi, label
 from .config import Config
-from .render import _meter
+from .render import _quota_panel
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-10-20"
+DOCS_UPDATED = "2026-11-08"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -110,6 +110,8 @@ box-shadow:0 1px 0 var(--rule);white-space:nowrap}
 .doc .card>h2:first-child,.how .card>h2:first-child{margin-top:20px}
 .card h3{margin:16px 0 6px}
 .card[id]{scroll-margin-top:110px}
+.guide-jumps{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:18px;font-size:14px}
+.guide-jumps a{font-weight:600}
 .connection-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;
 margin:18px 0}
 .connection-choice{border:1px solid var(--rule);border-radius:12px;padding:4px 16px 12px;
@@ -522,13 +524,18 @@ ICONS = {
 def _demo() -> str:
     """The landing page's picture: a slot, as its holder's own page shows it.
 
-    Built from the page's own parts rather than drawn, so it cannot drift from
-    what somebody sees once they have a slot. Hidden from screen readers; the
-    caption says what it shows.
+    Uses the shared usage meter for an illustrative, Anthropic-verified Ultra
+    account. This is not a live reading or a plan-based inference about a user.
+    Hidden from screen readers; the caption identifies the example.
     """
+    sample_time = 1_800_000_000
+    usage, _ = _quota_panel(
+        {"checked_at": sample_time, "week": {"used_pct": 41}}, sample_time,
+        include_help=False,
+    )
     return (
         '<figure class="hero-demo"><div class="demo-card" aria-hidden="true"><div '
-        'class="demo-head"><b>slot-4821</b><span class="pill ok">'
+        'class="demo-head"><b>slot-4821</b><span class="pill assigned">'
         + label("In use", "使用中", inline=True)
         + "</span></div>"
         '<div class="demo-body">'
@@ -538,8 +545,8 @@ def _demo() -> str:
         )
         + bi(
             '<p class="signed">Signed in as <strong>alice@example.com</strong> &middot; '
-            "Max 20x plan.</p>",
-            '<p class="signed">已登录 <strong>alice@example.com</strong> &middot; Max 20x '
+            "Ultra plan.</p>",
+            '<p class="signed">已登录 <strong>alice@example.com</strong> &middot; Ultra '
             "订阅。</p>",
         )
         + bi(
@@ -548,20 +555,14 @@ def _demo() -> str:
             "即可开始。</p>",
         )
         + '<div class="demo-usage">'
-        + bi(
-            _meter(34, "5-hour session", "at 11:40pm"),
-            _meter(34, "五小时用量", "at 11:40pm").replace("resets at 11:40pm", "23:40 重置"),
-        )
-        + bi(
-            _meter(61, "This week", "on Friday"),
-            _meter(61, "本周用量", "on Friday").replace("resets on Friday", "周五重置"),
-        )
+        + usage
         + "</div></div></div>"
         "<figcaption>"
         + bi(
-            "An example of your page: the slot, your Claude account on it, and how much of "
-            "your usage limits is left.",
-            "槽位页面示例：查看登录的 Claude 账号，以及账号的用量。",
+            "Illustrative Ultra account verified by Anthropic: weekly usage, with no "
+            "five-hour limit. Your own slot shows the windows Claude reports for your account.",
+            "示意：经 Anthropic 验证的 Ultra 账号，显示每周用量，没有五小时限制。"
+            "你的槽位只显示 Claude 为你账号上报的用量窗口。",
             inline=True,
         )
         + "</figcaption></figure>"
@@ -719,11 +720,11 @@ def overview(
         + "<li>"
         + bi(
             'For Anthropic, your own paid Claude plan that includes Claude Code: '
-            '<strong>Pro, Max, Team '
+            '<strong>Pro, Max, Ultra, Team '
             "or Enterprise</strong>. You sign that account in to your slot once; API keys "
             "do not replace that subscription sign-in.",
             '使用 Anthropic 时，需要你自己的 Claude 付费订阅，并且包含 Claude '
-            'Code：<strong>Pro、Max、Team 或 '
+            'Code：<strong>Pro、Max、Ultra、Team 或 '
             "Enterprise</strong>。你需要亲自在槽位上登录该账号，普通 API key "
             "不能代替这一步。",
             inline=True,
@@ -741,6 +742,21 @@ def overview(
         + bi("A Google account, to sign in here.", "一个 Google 账号，用于登录本站。", inline=True)
         + "</li>"
         + "</ul>"
+        + bi(
+            '<p><strong>Your plan sets your limits.</strong> Max has five-hour and weekly '
+            'limits. Ultra (formerly Max 20x) removes the five-hour limit for accounts '
+            'verified by Anthropic; weekly and model-specific limits still apply. '
+            'Fleet does not increase your Claude allowance. '
+            '<a href="https://claude.com/pricing">Current Claude plans</a> · '
+            '<a href="https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan">'
+            'Ultra limits and verification</a>.</p>',
+            '<p><strong>用量限制由你的订阅决定。</strong>Max 有五小时和每周限制。'
+            'Ultra（原 Max 20x）仅为经 Anthropic 验证的账号取消五小时限制，每周及特定模型的限制'
+            '仍然适用。Fleet 不会增加你的 Claude 额度。'
+            '<a href="https://claude.com/pricing">Claude 当前订阅方案</a> · '
+            '<a href="https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan">'
+            'Ultra 限制与验证说明</a>。</p>',
+        )
         + bi(
             '<p class="callout">For paid private slots, ccfleet sells the machine, not Claude '
             'or Devin subscriptions. They use only your own provider sign-in; '
@@ -843,33 +859,34 @@ def _model_connections(cfg: Config, *, framed: bool = True) -> str:
         (
             "Only one account",
             "只使用指定账号",
-            "Select A only",
-            "只选 A",
-            "Every request uses A. Owning B does not add it automatically; if A is "
-            "unavailable, this connection reports the error.",
-            "每条请求只使用 A。即使你还持有 B，也不会自动使用它；A 不可用时，这个连接会报错。",
+            "Select slot-1234 only",
+            "只选 slot-1234",
+            "Every request uses slot-1234. Owning slot-5678 does not add it automatically; "
+            "if slot-1234 is unavailable, this connection reports the error.",
+            "每条请求只使用 slot-1234。即使你还持有 slot-5678，也不会自动使用它；"
+            "slot-1234 不可用时，这个连接会报错。",
         ),
         (
             "Priority",
             "按优先级选择",
-            "A first, B second",
-            "A 为第一选择，B 为备选",
+            "slot-1234 first, slot-5678 second",
+            "slot-1234 为第一选择，slot-5678 为备选",
             "Each request prefers the highest-priority eligible slot. A safe failure can "
-            "use B. After A recovers and its brief cooldown ends, a later request may use "
-            "A again.",
-            "每条请求优先选可用、排序最前的槽位。遇到可以安全切换的失败时才用 B；A "
-            "恢复且短暂等待结束后，后续请求可能重新使用 A。",
+            "use slot-5678. After slot-1234 recovers and its brief cooldown ends, "
+            "a later request may use slot-1234 again.",
+            "每条请求优先选可用、排序最前的槽位。遇到可以安全切换的失败时才用 slot-5678；slot-1234 "
+            "恢复且短暂等待结束后，后续请求可能重新使用 slot-1234。",
         ),
         (
             "Sticky",
             "保持会话账号",
-            "A first, B second; keep each conversation on one account",
-            "A 优先、B 备选；同一会话尽量保持同一账号",
-            "Once a normal response starts on B, later requests in that conversation "
-            "prefer B while the assignment is remembered and B remains eligible. A new "
-            "conversation starts from your priority order.",
-            "如果安全切换后 B 开始正常回复，这个会话后续会优先使用 "
-            "B，只要服务仍记得这个选择且 B 仍可用。新会话从你设置的优先顺序开始。",
+            "slot-1234 first, slot-5678 second; keep each conversation on one account",
+            "slot-1234 优先、slot-5678 备选；同一会话尽量保持同一账号",
+            "Once a normal response starts on slot-5678, later requests in that conversation "
+            "prefer slot-5678 while the assignment is remembered and slot-5678 remains "
+            "eligible. A new conversation starts from your priority order.",
+            "如果安全切换后 slot-5678 开始正常回复，这个会话后续会优先使用 "
+            "slot-5678，只要服务仍记得这个选择且 slot-5678 仍可用。新会话从你设置的优先顺序开始。",
         ),
     )
     cards = []
@@ -902,32 +919,72 @@ def _model_connections(cfg: Config, *, framed: bool = True) -> str:
         + "</div>"
         + bi(
             '<p><strong>On the website:</strong> open <a href="/account#gateway">Your '
-            "slots → Connect Claude</a>. Give A priority <code>1</code> and B priority "
-            "<code>2</code>; leave any excluded slot blank. Priorities must be unique. "
+            "slots → Advanced connections</a>. Give slot-1234 priority <code>1</code> and "
+            "slot-5678 priority <code>2</code>; leave any excluded slot blank. "
+            "Priorities must be unique. "
             "Choose your routing mode, then save. Only your own held slots are selectable, "
             "and each needs a usable Claude sign-in before it can receive requests.</p>",
-            '<p><strong>在网页上：</strong>打开<a href="/account#gateway">我的槽位 → 连接 '
-            "Claude</a>。只用 A 时，仅给 A 填 <code>1</code>；需要 B 备选时，再给 B 填 "
-            "<code>2</code>。不想使用的槽位留空，排序数字不能重复。选择路由方式后保存。只能"
+            '<p><strong>在网页上：</strong>打开<a href="/account#gateway">我的槽位 → 高级连接设置'
+            "</a>。只用 slot-1234 时，仅给 slot-1234 填 <code>1</code>；"
+            "需要 slot-5678 备选时，再给 slot-5678 填 <code>2</code>。"
+            "不想使用的槽位留空，排序数字不能重复。选择路由方式后保存。只能"
             "选择你自己持有的槽位，而且各槽位需要有效的 Claude 登录才能接收请求。</p>",
         )
         + bi(
             "<p><strong>In the CLI:</strong> after pairing, choose one of these examples. "
-            "Replace A and B with your actual slot names. <code>--replace</code> is an "
-            "explicit replacement of an existing saved connection; it creates a new "
-            "key.</p>",
-            "<p><strong>使用 CLI：</strong>完成配对后，按需求选择下面的一条命令，把 A、B "
-            "换成真实槽位名称。<code>--replace</code> 表示主动替换已经保存的连接，并生成新"
-            "密钥。</p>",
+            "Replace these examples with the names on Your slots. First update the client with "
+            "<code>ccfleet update</code>. Explicit <code>--slots</code> selects the configured "
+            "pool for future launches after readiness succeeds.</p>",
+            "<p><strong>使用 CLI：</strong>完成配对后，先运行 <code>ccfleet update</code>，"
+            "再按需求选择下面的一条命令，"
+            "把示例名称换成“我的槽位”中的名称。明确指定 <code>--slots</code> 后，"
+            "就绪检查通过时，后续启动会使用所配置的槽位池。</p>",
         )
-        + "<pre><code>ccfleet gateway setup --slots A --replace\nccfleet gateway setup "
-        "--slots A B --routing priority --replace\nccfleet gateway setup --slots A B "
-        "--routing sticky --replace</code></pre>"
+        + "<pre><code>ccfleet gateway setup --slots slot-1234 --provider anthropic\n"
+        "ccfleet gateway setup "
+        "--slots slot-1234 slot-5678 --routing priority --provider anthropic\n"
+        "ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky "
+        "--provider anthropic</code></pre>"
         + bi(
-            "<p>For one launch, <code>ccfleet local --slot A</code> pins a slot already "
+            "<p><strong>Keep sessions together:</strong> use <code>--routing sticky</code>. "
+            "The order still matters: slot-1234 is tried first for a new conversation, "
+            "with slot-5678 as backup. <code>--routing priority</code> instead checks that "
+            "order for every request. These are two distinct policies.</p>",
+            "<p><strong>保持会话账号：</strong>使用 <code>--routing sticky</code>。"
+            "顺序仍然有效：新会话优先使用 slot-1234，slot-5678 为备选。"
+            "<code>--routing priority</code> 则会在每条请求时重新检查顺序；这是两种不同策略。</p>",
+        )
+        + bi(
+            "<p><strong>Return from a fixed slot to the pool:</strong> "
+            "<code>ccfleet use slot-5678</code> saves a single-slot override. To clear that "
+            "override and follow the gateway policy, run the commands below. This keeps "
+            "your pairings and keys. With several selected slots, the check should show "
+            "<code>configured slot pool</code>; a slot name means a fixed route "
+            "is still active.</p>",
+            "<p><strong>从固定槽位回到槽位池：</strong><code>ccfleet use slot-5678</code> "
+            "会保存单槽位固定选择。下面的命令清除这个选择，重新遵循网关策略，"
+            "保留配对和密钥。选了多个槽位时，检查应显示 <code>configured slot pool</code>；"
+            "如果显示具体槽位名称，说明仍在固定使用单槽位。</p>",
+        )
+        + "<pre><code>ccfleet use --pool\nccfleet gateway status\n"
+        "ccfleet local --check\nccfleet local</code></pre>"
+        + bi(
+            "<p><code>ccfleet list</code> shows the saved local routing mode and connection "
+            "order. <code>ccfleet list --remote</code> refreshes current slot names and "
+            "ownership. Neither list tells you which slot is serving an individual "
+            "conversation. Start a new local launch to use a changed connection; existing "
+            "launches keep their saved connection key.</p>",
+            "<p><code>ccfleet list</code> 显示已保存的本地路由方式和连接顺序；"
+            "<code>ccfleet list --remote</code> 刷新当前槽位名称与归属。"
+            "列表不会显示某个会话此刻由哪个槽位处理。更改连接后，请重新启动本地会话；"
+            "已有进程继续使用启动时保存的连接密钥。</p>",
+        )
+        + bi(
+            "<p>For one launch, <code>ccfleet local --slot slot-1234</code> pins a slot already "
             "selected for that connection and disables backup switching for that launch. "
             "It cannot add an unselected slot or someone else&#x27;s account.</p>",
-            "<p>只想让这次启动固定使用 A，可以运行 <code>ccfleet local --slot A</code>。A "
+            "<p>只想让这次启动固定使用 slot-1234，可以运行 "
+            "<code>ccfleet local --slot slot-1234</code>。slot-1234 "
             "必须已经在这个连接的选择范围内；固定后，这次启动不会切到备选槽位，也不能借此使"
             "用未选中的槽位或其他用户的账号。</p>",
         )
@@ -1135,12 +1192,15 @@ def _client_command_reference() -> str:
         ('<code>ccfleet local --permission-mode plan</code>',
          'Choose native permissions; --mode remains an alias.',
          '选择原生权限模式；--mode 仍为兼容别名。'),
-        ('<code>ccfleet local --slot A --project PATH</code>',
+        ('<code>ccfleet local --slot slot-1234 --project PATH</code>',
          'Fleet-specific: pin an already selected slot and choose the local working directory.',
          'Fleet 专用：固定使用已选中的槽位，并指定本地工作目录。'),
+        ('<code>ccfleet use --pool</code>',
+         'Clear a saved fixed-slot choice and use the configured gateway policy.',
+         '清除已保存的固定槽位选择，使用所配置的网关策略。'),
         ('<code>ccfleet list --remote</code>',
-         'Fetch your current own-slot names from the server; plain list shows saved pairings.',
-         '从服务器读取当前自有槽位名称；不加参数的 list 显示已保存的配对。'),
+         'Fetch current own-slot names and ownership; plain list shows saved routing and pairings.',
+         '从服务器读取当前自有槽位名称与归属；不加参数的 list 显示已保存的路由和配对。'),
     )
     return (
         '<h3 id="command-reference">'
@@ -1148,9 +1208,11 @@ def _client_command_reference() -> str:
                 '熟悉的 Claude 选项，Fleet 连接方式', inline=True)
         + '</h3>'
         + bi(
-            '<p>Fleet 0.2.7 adds these familiar spellings. Existing clients can install '
+            '<p>Fleet 0.2.7 introduced the familiar Claude spellings below. '
+            'Update to the current client for pool selection. Existing clients can install '
             'it with <code>ccfleet update</code>; pairing and local history are preserved.</p>',
-            '<p>Fleet 0.2.7 新增这些熟悉的写法。旧客户端运行 <code>ccfleet update</code> '
+            '<p>Fleet 0.2.7 引入了下面这些熟悉的 Claude 写法；槽位池选择需要更新至当前客户端。'
+            '旧客户端运行 <code>ccfleet update</code> '
             '即可安装新版；配对与本地历史保持不变。</p>',
         )
         + '<div class="doc-table-scroll" role="region" tabindex="0" '
@@ -1186,19 +1248,19 @@ def _devin_cli_connection() -> str:
             'choose <strong>Use Devin on my computer</strong>. Follow its three steps '
             'in order: update Fleet, save the connection, then start coding.</p>'
             '<p>For an already paired computer, Fleet 0.2.7 can also save that choice '
-            'directly from the CLI. Replace <code>PAIRED_SLOT</code> '
+            'directly from the CLI. Replace <code>slot-1234</code> '
             'with a working saved pairing that authorizes your account. Replace '
-            '<code>DEVIN_SLOT</code> with the current name or ID from the remote list:</p>',
+            '<code>slot-5678</code> with the current name or ID from the remote list:</p>',
             '<p>Devin 通过你自己已验证的槽位工作。显示 <strong>Devin 已就绪</strong>后，'
             '打开<a href="/account">我的槽位</a>，选择<strong>在电脑上使用 Devin</strong>，'
             '依次完成三步：更新 Fleet、保存连接、开始编程。</p>'
             '<p>电脑已有配对时，Fleet 0.2.7 也可直接在 CLI 保存这个选择。'
-            '把 <code>PAIRED_SLOT</code> 换成可用的已有配对，用它授权'
-            '访问自己的账号；把 <code>DEVIN_SLOT</code> 换成远程列表中的当前名称或 ID：</p>',
+            '把 <code>slot-1234</code> 换成可用的已有配对，用它授权'
+            '访问自己的账号；把 <code>slot-5678</code> 换成远程列表中的当前名称或 ID：</p>',
         )
-        + '<pre><code>ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n'
-        'ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n'
-        'ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 '
+        + '<pre><code>ccfleet update\nccfleet list --remote --slot slot-1234\n'
+        'ccfleet gateway setup --slot slot-1234 --slots slot-5678 --provider devin\n'
+        'ccfleet local --transport gateway --slot slot-5678 --model claude-opus-5-5 '
         '--effort max --new -- --safe-mode</code></pre>'
         + bi(
             '<p>Devin requires exactly one verified slot of your own. This setup saves '
@@ -1210,7 +1272,7 @@ def _devin_cli_connection() -> str:
             'The first launch above turns off custom plugins and MCP tools for that '
             'session. Use <code>--remote</code> to check current ownership and names. To authorize '
             'the lookup with a specific working pairing, run '
-            '<code class="code-wrap">ccfleet list --remote --slot PAIRED_SLOT</code>.</p>',
+            '<code class="code-wrap">ccfleet list --remote --slot slot-1234</code>.</p>',
             '<p>Devin 只接受一个已验证的自有槽位。这里保存的是 Fleet 连接密钥，不是登录 '
             'Devin；槽位未就绪时会拒绝配置。省略 <code>--provider</code> 时，同一配对和'
             '服务器保留已有服务选择，新连接默认 Anthropic。直接运行 <code>ccfleet list</code> '
@@ -1218,7 +1280,7 @@ def _devin_cli_connection() -> str:
             'Devin 运行的位置。上述首次启动会仅在本次会话关闭自定义插件与 MCP 工具。'
             '加 <code>--remote</code> 查询当前归属'
             '与名称。若要用指定的有效配对查询，运行 '
-            '<code class="code-wrap">ccfleet list --remote --slot PAIRED_SLOT</code>。</p>',
+            '<code class="code-wrap">ccfleet list --remote --slot slot-1234</code>。</p>',
         )
     )
 
@@ -1390,6 +1452,177 @@ def _client_tools() -> str:
     )
 
 
+def _additional_slot_setup() -> str:
+    """The existing-computer path must be visible before advanced app setup."""
+    return (
+        '<section class="card" id="add-slot">'
+        + bi("<h2>New slot, same computer</h2>", "<h2>新槽位，继续使用这台电脑</h2>")
+        + bi(
+            '<p>After claiming another slot, wait for setup and complete '
+            '<strong>Sign in to Claude</strong> with that slot’s own Claude account. '
+            'If this computer already has a valid Fleet pairing for the same Fleet '
+            'account, keep it. You do not need another computer or a new pairing for '
+            'each slot. Add the new slot to this computer’s model connection instead.</p>',
+            '<p>领取另一个槽位后，等待准备完成，再用该槽位绑定的 Claude 账号完成'
+            '<strong>登录 Claude</strong>。如果这台电脑已有同一个 Fleet 用户账号的有效配对，'
+            '请继续保留。每加一个槽位，无需换电脑，也无需重新配对；把新槽位加入这台电脑的'
+            '模型连接即可。</p>',
+        )
+        + bi(
+            '<p><strong>Use only the new slot:</strong> replace <code>slot-5678</code> '
+            'with its name on Your slots, then run:</p>',
+            '<p><strong>只使用新槽位：</strong>把 <code>slot-5678</code> 换成'
+            '“我的槽位”中显示的名称，然后运行：</p>',
+        )
+        + '<pre><code>ccfleet update\nccfleet list --remote\n'
+        'ccfleet gateway setup --slots slot-5678 --provider anthropic\n'
+        'ccfleet local --check\nccfleet local</code></pre>'
+        + bi(
+            '<p><code>list --remote</code> only discovers your slots; it does not add '
+            'them to the saved connection. <code>gateway setup --slots</code> saves the '
+            'complete selected list. To keep an earlier slot as the first choice and '
+            'the new slot as backup, follow <a href="#model-connections">Sticky and '
+            'priority routing</a> below. Simply rerunning the installer keeps the '
+            'existing pairing and does not select newly claimed slots.</p>',
+            '<p><code>list --remote</code> 只是查询你的槽位，不会把它们加入已保存的连接。'
+            '<code>gateway setup --slots</code> 保存的是完整的槽位选择列表。'
+            '如果希望旧槽位优先、新槽位备选，请按下面的<a href="#model-connections">'
+            '会话保持与优先级路由</a>配置。重新运行安装器会保留已有配对，'
+            '不会自动选中刚领取的槽位。</p>',
+        )
+        + bi(
+            '<p><strong>If the saved pairing no longer works:</strong> on a ready '
+            'slot choose <strong>Connect this computer</strong>, run '
+            '<code>ccfleet login</code>, and enter that fresh code in the hidden prompt. '
+            'Then repeat gateway setup with the slots you want. A released or revoked '
+            'pairing cannot authorize a new connection.</p>',
+            '<p><strong>如果旧配对已失效：</strong>在就绪槽位上选择<strong>连接这台电脑</strong>，'
+            '运行 <code>ccfleet login</code>，在隐藏输入提示中填写新配对码；'
+            '然后重新为想使用的槽位执行 gateway setup。已归还槽位或已撤销的配对'
+            '不能授权新连接。</p>',
+        )
+        + '</section>'
+    )
+
+
+def _guide_navigation() -> str:
+    links = (("setup", "First computer", "首次连接电脑"),
+             ("add-slot", "Add another slot", "添加另一个槽位"),
+             ("model-connections", "Sticky & priority", "会话保持与优先级"),
+             ("agent-apps", "Orca, Herdr & T3 Code", "Orca、Herdr 与 T3 Code"),
+             ("local-work", "Files & conversations", "文件与会话"),
+             ("slot-care", "Slot care", "管理槽位"))
+
+    def navigation(title: str, language: int) -> str:
+        return ('<nav class="guide-jumps" aria-label="' + escape(title, quote=True) + '">'
+                + ''.join('<a href="#' + row[0] + '">' + escape(row[language]) + '</a>'
+                          for row in links) + '</nav>')
+
+    return bi(navigation("On this page", 1), navigation("本页导航", 2))
+
+
+def _agent_app_guide() -> str:
+    """Practical app setup; the linked platform guide owns the detailed limits."""
+    return (
+        '<section class="card" id="agent-apps" aria-labelledby="agent-apps-title">'
+        '<h2 id="agent-apps-title">'
+        + label("Use Orca, Herdr or T3 Code", "使用 Orca、Herdr 或 T3 Code", inline=True)
+        + '</h2>'
+        + bi(
+            '<p>Use the app’s <strong>Claude</strong> integration with Fleet 0.2.9 or later. '
+            'On the macOS or Linux machine that actually runs the agent—including a remote '
+            'app backend—finish <a href="#setup">Fleet setup</a> first and choose a '
+            'Claude-backed slot. Keep original Claude Code installed.</p>',
+            '<p>使用应用的 <strong>Claude</strong> 集成，Fleet 客户端需为 0.2.9 或更新版本。'
+            '在实际运行代理的 macOS 或 Linux 主机上（也包括远程应用后端），先完成'
+            '<a href="#setup">Fleet 配置</a>，并选择使用 Claude 账号的槽位。'
+            '请保留原版 Claude Code。</p>',
+        )
+        + '<pre><code>ccfleet update\nccfleet launcher create daily-claude --slot SLOT</code></pre>'
+        + bi(
+            '<p>Replace <code>SLOT</code> with your slot’s current name or ID. The command '
+            'prints an absolute launcher path; use that path in the app below. For a custom '
+            'Claude installation, add <code>--claude PATH</code> with its original executable. '
+            'The launcher uses your existing Fleet connection and creates no new '
+            'connection key.</p>',
+            '<p>将 <code>SLOT</code> 替换为槽位的当前名称或 ID。命令会输出启动器的绝对路径，'
+            '请在下面的应用中使用该路径。如果 Claude 安装在自定义位置，可追加 '
+            '<code>--claude PATH</code>，指定原版可执行程序。启动器使用已有的 Fleet 连接，'
+            '不会创建新的连接密钥。</p>',
+        )
+        + '<div class="connection-choices"><article class="connection-choice"><h3>Orca</h3>'
+        + bi(
+            '<p>Open <strong>Settings → Agents</strong>. Set Claude’s binary path or '
+            '<strong>Command</strong> to the printed launcher path. Keep launch options in '
+            '<strong>Arguments</strong>. The terminal and structured chat share '
+            'these settings.</p>',
+            '<p>打开 <strong>Settings → Agents（设置 → 代理）</strong>，将 Claude 的程序路径或 '
+            '<strong>Command</strong> 设为输出的启动器路径。启动选项仍放在 '
+            '<strong>Arguments</strong> 中；终端和结构化聊天共用这些设置。</p>',
+        )
+        + '</article><article class="connection-choice"><h3>Herdr</h3>'
+        + bi(
+            '<p>In the Herdr app, add a separate Fleet Claude entry to '
+            '<code>programs.json</code>. Put the printed absolute path in its '
+            '<code>run</code> array, for example:</p>',
+            '<p>在 Herdr 应用的 <code>programs.json</code> 中新增一个独立的 Fleet Claude 项，'
+            '将输出的绝对路径放入它的 <code>run</code> 数组，例如：</p>',
+        )
+        + '<pre><code>"run": ["/absolute/path/from-the-command"]</code></pre>'
+        + bi('<p>Use an executable path, not a shell alias.</p>',
+             '<p>使用可执行文件路径，不要使用 shell 别名。</p>')
+        + '</article><article class="connection-choice"><h3>T3 Code</h3>'
+        + bi(
+            '<p>In <strong>Settings → Providers</strong>, add a Claude instance and set '
+            '<strong>Binary path</strong> to the launcher. Add the environment variable '
+            '<code>ANTHROPIC_BASE_URL</code> with value <code>https://ccfleet.io</code> so '
+            'T3 recognizes the custom endpoint. Fleet supplies authentication from its '
+            'private configuration.</p>',
+            '<p>在 <strong>Settings → Providers（设置 → 服务商）</strong> 中新增 Claude 实例，'
+            '将 <strong>Binary path</strong> 设为启动器路径。添加环境变量 '
+            '<code>ANTHROPIC_BASE_URL</code>，值为 <code>https://ccfleet.io</code>，'
+            '让 T3 识别自定义接口。认证信息由 Fleet 从私有配置中提供。</p>',
+        )
+        + '</article></div>'
+        + bi(
+            '<p><strong>One launcher, one selected slot.</strong> Changing '
+            '<code>ccfleet use</code> or the app’s native account/profile does not switch '
+            'this launcher’s Fleet slot. Create and select another launcher for a different '
+            'slot. The app keeps control of files, tools, sessions and permission choices; '
+            'the launcher adds no default model, effort level or permission bypass.</p>',
+            '<p><strong>一个启动器固定一个槽位。</strong>更改 <code>ccfleet use</code> 或应用中的'
+            '原生账号／配置不会切换此启动器的 Fleet 槽位；需要其他槽位时，请创建并选择另一个'
+            '启动器。文件、工具、会话与权限选择仍由应用控制；启动器不会额外指定默认模型、'
+            '思考强度或跳过权限确认。</p>',
+        )
+        + bi(
+            '<p class="callout">Codex keeps its own connection. The experimental Devin '
+            'route does not support every request these apps make, including T3’s structured '
+            'titles with an empty tool set. Herdr TUI is separate from the desktop app: '
+            'resume through the Fleet launcher, because automatic native restore may invoke '
+            '<code>claude --resume</code> directly. Manage hosted sign-in through Fleet and '
+            'native Claude updates through its original executable or installer.</p>',
+            '<p class="callout">Codex 仍使用自己的连接。Devin 实验路线不支持这些应用的所有请求，'
+            '例如 T3 使用空工具集生成结构化标题的请求。Herdr TUI 与桌面应用是不同程序：'
+            '请通过 Fleet 启动器恢复会话，因为原生自动恢复可能直接调用 '
+            '<code>claude --resume</code>。托管账号登录由 Fleet 管理，原版 Claude 更新则使用'
+            '其原版可执行程序或安装器。</p>',
+        )
+        + bi(
+            '<p>Controlled launcher, terminal and signed-client checks passed. Full app/model '
+            'sessions remain unverified. Start with a small test session, including any '
+            'automatic title or helper requests you use. '
+            '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
+            'Detailed app settings, compatibility limits and verification scope</a>.</p>',
+            '<p>受控启动器、终端和签名客户端检查已通过；完整的应用／模型会话仍未验证。'
+            '请先进行一个小型测试会话，也检查自己会用到的自动标题或辅助请求。'
+            '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
+            '查看详细应用设置、兼容性限制与验证范围</a>。</p>',
+        )
+        + '</section>'
+    )
+
+
 def guide(
     cfg: Config, viewer: Optional[Viewer] = None, *, price: Optional[pricing.Price] = None,
     per_slot_pricing: bool = False, wallet_enabled: bool = False,
@@ -1422,6 +1655,7 @@ def guide(
             '<p class="lead">你的电脑负责工作，槽位上你自己的服务商 '
             "账号负责模型访问。按下面几步，把两边准备好。</p>",
         )
+        + _guide_navigation()
         + '</div><ol class="steps">'
         + "<li>"
         + bi(
@@ -1492,7 +1726,7 @@ def guide(
             'filter the list, review a machine’s price, then choose '
             '<span class="btnlabel">Claim this slot</span> for that machine. You return to '
             'Your slots. The '
-            'card shows <span class="pill busy">Setting up</span> while the machine '
+            'card shows <span class="pill assigned">Setting up</span> while the machine '
             "creates your separate Linux account and installs Claude Code. This takes a "
             "few minutes; the page updates itself.</p>",
             '<h3>选择并领取主机</h3><p>在<a href="/account">我的槽位</a>选择'
@@ -1500,22 +1734,24 @@ def guide(
             '再点击该主机的 <span class="btnlabel">领取此槽位</span>。随后返回“我的槽位”。'
             '机器会建立独'
             '立的 Linux 用户环境并安装 Claude Code，此时显示 <span class="pill '
-            'busy">正在准备</span>。通常需要几分钟，页面会自动更新。</p>',
+            'assigned">正在准备</span>。通常需要几分钟，页面会自动更新。</p>',
         ))
         + "</li>"
         + "<li>"
         + bi(
-            '<h3>Choose your provider</h3><p><strong>Anthropic:</strong> at <span '
-            'class="pill warn">Ready to sign '
+            '<h3>Sign in to your Claude account</h3><p><strong>Claude / Anthropic is '
+            'the main Fleet connection.</strong> When the slot shows <span '
+            'class="pill assigned">Ready to sign '
             'in</span>, choose <span class="btnlabel">Sign in to Claude</span>. Open the '
             "link, sign in with your own paid Claude account, copy its code and paste it "
             'back. Choose <span class="btnlabel">Send code</span>. A completed sign-in '
-            'shows <span class="pill ok">In use</span>.</p>',
-            '<h3>选择模型服务</h3><p><strong>Anthropic：</strong>显示 <span class="pill '
-            'warn">可以登录</span> '
+            'shows <span class="pill assigned">In use</span>.</p>',
+            '<h3>登录你自己的 Claude 账号</h3><p><strong>Claude / Anthropic 是 Fleet 的'
+            '主要连接方式。</strong>显示 <span class="pill '
+            'assigned">可以登录</span> '
             '后，点击 <span class="btnlabel">登录 Claude</span>。打开链接，用你自己的付费 '
             'Claude 账号登录，把提供的代码复制回来，再点击 <span class="btnlabel">提交代码<'
-            '/span>。成功后显示 <span class="pill ok">使用中</span>。</p>',
+            '/span>。成功后显示 <span class="pill assigned">使用中</span>。</p>',
         )
         + bi(
             '<p><strong>Devin:</strong> open the slot’s <a '
@@ -1539,12 +1775,13 @@ def guide(
             "terminal. It keeps an existing pairing and local Claude installation; if "
             "Claude is missing, it installs the original local CLI from the fixed vendor "
             'URL. Only if asked, choose <span class="btnlabel">Connect this computer</span>'
-            " on your slot and paste a fresh pairing code.</p>",
+            " on your slot and paste a fresh pairing code. Pair this computer once; an "
+            "existing valid pairing can authorize your other owned slots.</p>",
             "<h3>在电脑上安装</h3><p>使用 Anthropic 或已配对的 Fleet 客户端时，在普通终端"
             "运行下面的命令。已有配对和本地 Claude "
             "安装会保留；尚未安装 Claude 时，会从固定的官方地址安装原版客户端。只有终端要求"
             '输入配对码时，才点击槽位上的 <span class="btnlabel">连接这台电脑</span>，输入'
-            "新生成的配对码。</p>",
+            "新生成的配对码。同一台电脑只需配对一次；有效的已有配对可用于授权你持有的其他槽位。</p>",
         )
         + "</li></ol>"
         + bi(
@@ -1559,7 +1796,8 @@ def guide(
             '<a href="/docs/library/docs/devin.html#prices">订阅价格对比</a>。</p>',
         )
         + '<div class="card" id="setup">'
-        + bi("<h2>Install, check, then start</h2>", "<h2>安装、检查，然后开始</h2>")
+        + bi("<h2>First computer: install, connect, then start</h2>",
+             "<h2>首次连接电脑：安装、连接，然后开始</h2>")
         + "<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/la"
         "ptop/install.sh | bash -s -- --setup\n\ncd ~/code/my-project\nccfleet local "
         "--check\nccfleet local</code></pre>"
@@ -1588,7 +1826,9 @@ def guide(
             "启用的槽位。</p>",
         )
         + "</div>"
-        + _advanced_model_connections(cfg)
+        + _additional_slot_setup()
+        + _model_connections(cfg)
+        + _agent_app_guide()
         + '<div class="card" id="local-work">'
         + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
         + bi(
@@ -1678,12 +1918,12 @@ def guide(
             "<p>Account changes keep files and settings but invalidate requests using the "
             "previous binding. CC Fleet does not automatically close your local Claude "
             "process or delete its history. It cancels an in-flight request if that "
-            'account changes. Wait for the slot to show <span class="pill ok">In '
+            'account changes. Wait for the slot to show <span class="pill assigned">In '
             "use</span> before retrying deliberately; new requests then use its current "
             "bound account. An account change is visible to the operator.</p>",
             "<p>更换账号保留文件与设置，但旧绑定的请求会失效。CC Fleet 不会自动关闭本地 "
             "Claude 进程，也不会删除历史；账号改变时，会取消正在进行的请求。等槽位重新显示 "
-            '<span class="pill ok">使用中</span>，再主动重试；新的请求使用当前绑定账号。运'
+            '<span class="pill assigned">使用中</span>，再主动重试；新的请求使用当前绑定账号。运'
             "营者能看到账号更换。</p>",
         )
         + bi(
@@ -1694,12 +1934,23 @@ def guide(
             "的不同槽位使用独立的 Linux 用户，槽位内没有管理员权限（sudo）。</p>",
         )
         + bi(
-            "<p>The 5-hour and weekly bars cover the whole Claude account. The token count "
+            "<p>The usage bars cover the whole Claude account. Weekly usage comes first; "
+            "a five-hour session appears only when Claude reports that window. Available "
+            "windows depend on your plan: Pro and Max retain five-hour limits. Ultra accounts "
+            "verified by Anthropic have no five-hour limit, but weekly "
+            "and model-specific limits still apply. A missing reading does not confirm that a "
+            "limit has been removed. Check your Claude account for current limits and "
+            "verification status. Fleet does not increase your allowance. The token count "
             "covers what Claude Code used on this slot, not complete local-relay usage. "
             'Quota is read every five minutes; <span class="btnlabel">Refresh</span> reads '
             'it now. Pair more devices with <span class="btnlabel">Connect another '
             "computer</span>; each device is independently revocable.</p>",
-            "<p>五小时和每周进度条表示整个 Claude 账号的用量；token 数表示这个槽位上的 "
+            "<p>用量进度条表示整个 Claude 账号的用量，优先显示每周用量；只有 Claude 上报"
+            "五小时窗口时才显示该项。适用窗口取决于你的订阅：Pro 和 Max 仍有五小时限制。"
+            "经 Anthropic 验证的 "
+            "Ultra 账号没有五小时限制，但每周及特定模型的限制仍然适用。缺少读数不代表限制已"
+            "取消。请在 Claude 账号中确认当前限制和验证状态；Fleet 不会增加额度。token 数表示"
+            "这个槽位上的 "
             "Claude Code 使用量，不是完整的本地转发统计。配额每五分钟读取一次，点击 <span "
             'class="btnlabel">刷新</span> 可立即读取。通过 <span class="btnlabel">连接另一'
             "台电脑</span> 添加设备，之后可单独撤销。</p>",
@@ -1993,11 +2244,12 @@ def how_it_works(
             "monitored machine as Operational, Degraded or Down, with the machine-level "
             "reason and last report. Stable labels such as Machine 1 protect holder names; "
             "your slot card links to the matching label. A completed slot release clears "
-            "your chosen name and returns the machine under its reserved pool-N name.</p>",
+            "your chosen name; the slot becomes available again only after its files "
+            "are wiped.</p>",
             '<p><a href="/status#slot-machines">槽位主机详情</a>逐台展示已监测主机的正常、异常'
             "或离线状态，以及主机层面的原因和最近报告时间。“主机 1”等固定标签保护持有者"
             "的名称；你的槽位卡片链接到对应标签。槽位归还且删除确认完成后，会清除你选择的"
-            "名称，并恢复该槽位保留的 pool-N 名称。</p>",
+            "名称；只有文件已确认删除，槽位才会重新开放领取。</p>",
         )
         + bi(
             "<p>Model requests need the configured gateway and an eligible slot. A gateway "

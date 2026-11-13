@@ -435,8 +435,8 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     # The windows are the account's, used anywhere; said under them, so a week
     # at 30% beside 900 tokens here does not read as a mistake.
     assert usersite.ACCOUNT_WIDE in shown
-    assert project_html(label("last reported Claude account usage · every device",
-                              "上次上报的 Claude 账号用量 · 所有设备合计",
+    assert project_html(label("Account-wide · every device",
+                              "整个账号 · 所有设备",
                               inline=True), 'en') in shown
     assert "Sign in again" in shown
 
@@ -481,7 +481,8 @@ def test_a_note_is_chosen_by_code_never_written_by_the_link(site):
     erik = sign_in(quota=1)
     evil = erik.call("GET", "/account?note=" + urllib.parse.quote(
         "<script>alert(1)</script>Your account is locked, call +1-555"))
-    assert "alert(1)" not in evil.body and "locked" not in evil.body
+    assert "alert(1)" not in evil.body
+    assert "Your account is locked" not in evil.body and "+1-555" not in evil.body
     # Only the four authored scripts are present; CSP allows their explicit hashes.
     assert evil.body.count("<script") == 4
     assert usersite.QUOTA_POLL_TAG in evil.body

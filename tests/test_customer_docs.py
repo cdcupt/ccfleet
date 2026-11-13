@@ -115,8 +115,18 @@ def test_the_plan_requirement_is_said_where_people_decide():
     """ccfleet sells a machine, not Claude. The overview says so before anybody
     pays, and the terms say it again."""
     overview = render("/docs")
-    assert "Pro, Max, Team or Enterprise" in overview
+    assert "Pro, Max, Ultra, Team or Enterprise" in overview
     assert "API keys do not replace" in overview
+    assert "Ultra (formerly Max 20x)" in overview
+    assert "five-hour limit for accounts verified by Anthropic" in overview
+    assert "weekly and model-specific limits still apply" in overview
+    assert "Fleet does not increase your Claude allowance" in overview
+    assert 'href="https://claude.com/pricing"' in overview
+    demo = overview[overview.index('<figure class="hero-demo">'):].split("</figure>", 1)[0]
+    assert "Ultra plan" in demo and "Illustrative Ultra account verified by Anthropic" in demo
+    assert "This week" in demo and "5-hour session" not in demo
+    assert 'class="quota-window quota-week"' in demo and "41%" in demo
+    assert "<details" not in demo and "<summary" not in demo
     assert "ccfleet sells the machine, not Claude" in overview
     assert "does not provide access to Claude" in render("/docs/terms")
 
@@ -205,11 +215,22 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
         for line in block.splitlines():
             if line.startswith("ccfleet "):
                 checked.append(parser.parse_args(shlex.split(line)[1:]))
-    assert {"local", "gateway", "start", "sessions", "update", "doctor"} <= {
+    assert {"local", "gateway", "start", "sessions", "update", "doctor", "launcher"} <= {
         command.command for command in checked
     }
     assert "/model" in page.text and "/effort" in page.text
-    assert "ANTHROPIC_BASE_URL" not in page.text and "CLAUDE_CODE_OAUTH_TOKEN" not in page.text
+    # T3's parent process needs the public base URL to identify a custom endpoint.
+    # Native credentials still do not belong in the main guide or app settings.
+    from tests.test_account_setup_flow import Flow
+
+    flow = Flow(bilingual.project_html(render("/docs/guide"), "en"))
+    apps, = flow.find("section", id="agent-apps")
+    t3, = [card for card in flow.inside(apps, "article")
+           if flow.inside(card, "h3")[0].text == "T3 Code"]
+    assert page.text.count("ANTHROPIC_BASE_URL") == 1
+    assert "ANTHROPIC_BASE_URL" in t3.text and "https://ccfleet.io" in t3.text
+    assert all(secret_name not in page.text for secret_name in (
+        "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"))
     assert "ccfleet new" not in page.text and "ccfleet remote" not in page.text
 
 
@@ -248,6 +269,11 @@ def test_how_it_works_scopes_local_network_and_supported_telemetry_controls():
 def test_the_guide_says_what_the_usage_numbers_count():
     guide = render("/docs/guide")
     assert "bars cover the whole Claude account" in guide
+    assert "Weekly usage comes first" in guide
+    assert "a five-hour session appears only when Claude reports that window" in guide
+    assert "Pro and Max retain five-hour limits" in guide
+    assert "Ultra accounts verified by Anthropic have no five-hour limit" in guide
+    assert "A missing reading does not confirm" in guide
     assert "token count covers what Claude Code used on this slot" in guide
 
 

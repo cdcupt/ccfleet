@@ -226,7 +226,7 @@ def trial_template(policy, source_template, trial):
         and config.get("thought_level") == "max"
         and type(config.get("timeout_s")) in (int, float)
         and math.isfinite(config["timeout_s"])
-        and 1 <= config["timeout_s"] <= 120
+        and 1 <= config["timeout_s"] <= 300
         and config.get("model_uid") == source_template["model_uid"]
         and config.get("verified_models") == source_template["verified_models"]
         and config["files"]["executable"] == source_template["files"]["executable"]
@@ -375,13 +375,12 @@ def refresh(*, now=time.time, monotonic=time.monotonic, lookup=pwd.getpwnam, gro
         if (unchanged and current_grant_matches(grant, now=now())
                 and not pending_artifacts(state_fd)):
             confirm()
-            # A legitimate worker may have started while root rechecked the
-            # source. Leave its grant alone; do not mistake active artifacts for
-            # an idle quarantine or block its request on the refresher's lock.
-            if pending_artifacts(state_fd):
-                return {"outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
-            publish_grant(grant, trial)
-            return {"outcome": "refreshed", "credential_copy_attempted": False, "provider_calls": 0}
+            # A worker can start during confirmation. In that case the lock
+            # check below distinguishes active work from idle quarantine.
+            if not pending_artifacts(state_fd):
+                publish_grant(grant, trial)
+                return {"outcome": "refreshed", "credential_copy_attempted": False,
+                        "provider_calls": 0}
         try:
             lock = os.open(
                 ".trial.lock",
@@ -407,6 +406,14 @@ def refresh(*, now=time.time, monotonic=time.monotonic, lookup=pwd.getpwnam, gro
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            if unchanged and current_grant_matches(grant, now=now()):
+                # Update authority only, never credentials or the running
+                # HOME. This permits longer turns while retaining the original
+                # timestamp from independently refreshed source evidence.
+                confirm()
+                publish_grant(grant, trial)
+                return {"outcome": "refreshed", "credential_copy_attempted": False,
+                        "provider_calls": 0}
             return {"outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
         need(not pending_artifacts(state_fd))
         bounded()

@@ -19,7 +19,9 @@ https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime
+import errno
 import fcntl
 import importlib.util
 import io
@@ -59,7 +61,11 @@ MAX_MESSAGES = 64
 MAX_NODES = 50000
 MAX_DEPTH = 64
 CALL_WAIT_S = 45
-SERVER_LIFETIME_S = 120
+# This clock starts before session setup and the MCP handshake. Keep the shim
+# alive for the whole native lease, including the later 300-second prompt.
+# Parent generation/transport deadlines still stop work sooner; a handoff also
+# retains its separate 45-second bound below.
+SERVER_LIFETIME_S = 360
 VERSIONS = frozenset({"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"})
 LATEST_VERSION = max(VERSIONS)
 MAX_LIFECYCLE = 64 * 1024
@@ -182,6 +188,28 @@ def hook_tool_names(catalog):
                  for tool in catalog.tools_list()["tools"])
 
 
+def _rename_exclusive(directory, source, destination):
+    """Publish one inode without replacing any existing directory entry."""
+    if sys.platform == "darwin":
+        symbol, flag = "renameatx_np", 4  # RENAME_EXCL from sys/stdio.h.
+    elif sys.platform.startswith("linux"):
+        symbol, flag = "renameat2", 1  # RENAME_NOREPLACE.
+    else:
+        raise OSError(errno.ENOTSUP, "atomic no-replace publication unavailable")
+    operation = getattr(ctypes.CDLL(None, use_errno=True), symbol, None)
+    if operation is None:
+        raise OSError(errno.ENOTSUP, "atomic no-replace publication unavailable")
+    operation.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+                          ctypes.c_uint)
+    operation.restype = ctypes.c_int
+    source, destination = os.fsencode(source), os.fsencode(destination)
+    if b"\0" in source or b"\0" in destination:
+        raise ValueError("embedded null byte")
+    ctypes.set_errno(0)
+    if operation(directory, source, directory, destination, flag) != 0:
+        raise OSError(ctypes.get_errno() or errno.EIO, "atomic no-replace publication failed")
+
+
 class RunDirectory:
     def __init__(self, path):
         value = Path(path)
@@ -246,22 +274,26 @@ class RunDirectory:
             0o600,
             dir_fd=self.fd,
         )
+        owned = None
         try:
             with os.fdopen(fd, "wb") as stream:
+                owned = os.fstat(stream.fileno())
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
-            # link is an atomic no-replace publication of a complete record.
-            os.link(
-                temporary,
-                name,
-                src_dir_fd=self.fd,
-                dst_dir_fd=self.fd,
-                follow_symlinks=False,
-            )
+            # A rename publishes the complete inode with exactly one link.
+            # link/unlink briefly exposes two links, which strict readers deny.
+            _rename_exclusive(self.fd, temporary, name)
         finally:
-            os.unlink(temporary, dir_fd=self.fd)
-        os.fsync(self.fd)
+            try:
+                current = os.stat(temporary, dir_fd=self.fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass  # Successful rename consumed this temporary name.
+            else:
+                if owned is not None and (current.st_dev, current.st_ino) == (
+                        owned.st_dev, owned.st_ino):
+                    os.unlink(temporary, dir_fd=self.fd)
+            os.fsync(self.fd)
 
 
 def _config(directory):
@@ -269,7 +301,9 @@ def _config(directory):
     required = {"tools", "binding", "session_id", "server_id", "mcp_server_name"}
     if (
         not isinstance(config, dict)
-        or set(config) != required
+        or set(config) - required - {"native_web_search"}
+        or required - set(config)
+        or type(config.get("native_web_search", False)) is not bool
     ):
         raise Rejected("invalid config fields")
     if not isinstance(config["binding"], str) or not 1 <= len(config["binding"]) <= 512:
@@ -828,6 +862,14 @@ def hook(run_dir, stdin, stdout):
             event.get("hook_event_name") == "PreToolUse"
             and (
                 (isinstance(event.get("tool_input"), dict) and name in hook_tool_names(catalog))
+                or (
+                    config.get("native_web_search") is True
+                    and name == "web_search"
+                    and isinstance(event.get("tool_input"), dict)
+                    and isinstance(event["tool_input"].get("query"), str)
+                    and 0 < len(event["tool_input"]["query"].encode()) <= 8192
+                    and len(json.dumps(event["tool_input"]).encode()) <= 16384
+                )
                 or (
                     name == "mcp_list_tools"
                     and isinstance(event.get("tool_input"), dict)

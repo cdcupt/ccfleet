@@ -360,7 +360,7 @@ def test_existing_active_worker_artifacts_keep_good_grant_but_bad_source_still_r
         # generation. Its original grant must remain valid for that whole turn.
         started_at, generation_seconds = 1020, 40
         assert s.run(now=lambda: started_at + 30) == {
-            "outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
+            "outcome": "refreshed", "credential_copy_attempted": False, "provider_calls": 0}
         assert t.GRANT.read_bytes() == previous
         assert started_at + generation_seconds - json.loads(previous)["observed_at"] <= 300
         write(Path(s.reg["state_path"]), dict(s.machine, devin_observations={}))
@@ -398,7 +398,7 @@ def test_worker_starting_during_root_rechecks_keeps_its_grant_without_renewal(sc
     monkeypatch.setattr(t, "revoke", lambda: pytest.fail("active worker grant revoked"))
     try:
         assert s.run() == {
-            "outcome": "busy", "credential_copy_attempted": False, "provider_calls": 0}
+            "outcome": "refreshed", "credential_copy_attempted": False, "provider_calls": 0}
         assert len(descriptors) == 1 and t.GRANT.read_bytes() == previous
     finally:
         for descriptor in descriptors:
@@ -618,7 +618,7 @@ def test_trial_template_cannot_become_the_source_owner_or_change_runtime(scene, 
     elif change == "binding":
         template["binding"]["owner_id"] = "owner-a"
     elif change == "timeout":
-        template["timeout_s"] = 121
+        template["timeout_s"] = 301
     else:
         template["version"] = True
     policy = dict(scene.policy, config_sha256=write(t.TEMPLATE, template, 0o640))

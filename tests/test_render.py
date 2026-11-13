@@ -285,7 +285,7 @@ def test_the_dashboard_shell_is_themed_and_bounded(cfg):
     assert "#eef0f3" not in html, "no hard-coded greys left over from the old sheet"
     assert 'class="page"' in html and "max-width:1240px" in html
     assert 'rel="icon"' in html
-    assert "Nothing open" in html, "an empty alert list should say so in words"
+    assert "No open alerts" in html, "an empty alert list should say so in words"
 
 
 def test_the_chart_caption_does_not_outlive_the_chart():
@@ -341,7 +341,7 @@ def test_a_quiet_week_says_so_rather_than_drawing_a_floor():
 def test_the_windows_are_labelled_as_the_accounts():
     rows = [{"id": "n", "owner": "e", "usage": {"total_tokens": 5},
              "quota": {"session": {"used_pct": 6}, "week": {"used_pct": 20}}}]
-    assert "Claude account · every device" in _usage_html(rows, NOW)
+    assert "Account-wide · every device" in _usage_html(rows, NOW)
 
 
 def test_each_button_sends_you_back_to_the_card_you_pressed_it_on():

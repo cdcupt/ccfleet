@@ -305,4 +305,5 @@ def test_ui_displays_usage_coverage_units_and_unknown_cache_not_fake_zero(slot):
     assert "not a bill" in body and "No model/session IDs" in body
     legacy = copy.deepcopy(summary)
     legacy.pop("token_usage")
+    legacy.pop("usage_days")
     assert "not measured by this report" in usersite._relay_usage(legacy, now, now, 300)

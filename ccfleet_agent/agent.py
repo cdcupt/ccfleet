@@ -820,6 +820,10 @@ QUOTA_TIMEOUT_S = 90.0
 # it are compared here and dropped.
 QUOTA_CACHE_KEY = "cachedUsageUtilization"
 QUOTA_CACHE_WINDOWS = (("session", "five_hour"), ("week", "seven_day"))
+# Finite families, never labels copied from provider responses or native screens.
+QUOTA_MODEL_FAMILIES = ("fable", "opus", "sonnet", "haiku", "mythos")
+QUOTA_MODEL_CACHE_KEYS = (("fable", "seven_day_overage_included"),
+                         *((name, "seven_day_" + name) for name in QUOTA_MODEL_FAMILIES))
 # A reading Claude Code made this long before a probe began still answers it:
 # it fetches at most once a minute, so the probe could have caused none newer.
 QUOTA_CACHE_SLACK_S = 90.0
@@ -828,6 +832,8 @@ QUOTA_CACHE_SLACK_S = 90.0
 QUOTA_LABELS = (
     ("Current session", "session"),
     ("Current week (all models)", "week"),
+    *(("Current week (" + name.title() + ")", name) for name in QUOTA_MODEL_FAMILIES),
+    *((name.title() + " limit", name) for name in QUOTA_MODEL_FAMILIES),
 )
 PERCENT_RE = re.compile(r"(\d{1,3})%\s+used")
 RESETS_RE = re.compile(r"Resets\s+([^\n]{1,40})")
@@ -914,7 +920,8 @@ def parse_quota(pane: str) -> dict[str, Any]:
         # figure. Another known label ends it early whatever the line count.
         block = []
         for line in lines[at + 1:at + 1 + QUOTA_BLOCK_LINES]:
-            if any(other in line for other, _ in QUOTA_LABELS):
+            if (any(other in line for other, _ in QUOTA_LABELS)
+                    or "Current week (" in line):
                 break
             block.append(line)
         window = "\n".join(block)
@@ -928,7 +935,10 @@ def parse_quota(pane: str) -> dict[str, Any]:
         resets = RESETS_RE.search(window)
         if resets:
             entry["resets"] = " ".join(resets.group(1).split())[:40]
-        out[name] = entry
+        if name in QUOTA_MODEL_FAMILIES:
+            _strictest_quota_window(out.setdefault("models", {}), name, entry)
+        else:
+            out[name] = entry
     return out
 
 
@@ -1202,7 +1212,10 @@ def _read_quota_locked(path: str, probe: str, runner: Runner,
             # weekly one still to come. Taking that would cache a half
             # answer for the next half hour, so keep the best seen and wait
             # for both; settle for a partial one only when time runs out.
-            if len(found) > len(result or {}):
+            def window_count(value: Mapping[str, Any]) -> int:
+                return len(value) + len(value.get("models", {}))
+
+            if window_count(found) > window_count(result or {}):
                 result = found
             if "session" in found and "week" in found:
                 break
@@ -1232,8 +1245,93 @@ def _percent(value: Any) -> Optional[float]:
     return value if 0 <= value <= 100 else None
 
 
+def _strictest_quota_window(windows: dict[str, Any], name: str,
+                           entry: dict[str, Any]) -> None:
+    """Keep the most used reported window when a family appears twice.
+
+    Equal percentages with different reset times retain the later known reset;
+    an unknown reset stays unknown. No percentages or periods are added together.
+    """
+    previous = windows.get(name)
+    if previous is None or entry["used_pct"] > previous["used_pct"]:
+        windows[name] = entry
+    elif entry["used_pct"] == previous["used_pct"]:
+        resets = [previous.get("resets_at"), entry.get("resets_at")]
+        if all(type(value) in (int, float) for value in resets):
+            windows[name] = {"used_pct": entry["used_pct"], "resets_at": max(resets)}
+        elif previous != entry:
+            windows[name] = {"used_pct": entry["used_pct"]}
+
+
+def _cached_quota_window(window: Any, percent_key: str = "utilization") -> Optional[dict]:
+    if not isinstance(window, Mapping):
+        return None
+    used = _percent(window.get(percent_key))
+    if used is None:
+        return None
+    at = _instant(window.get("resets_at"))
+    return {"used_pct": used, **({"resets_at": at} if at is not None and 0 < at < 1e11 else {})}
+
+
+def _quota_model_scope(scope: Any) -> Optional[str]:
+    """Recognize whole-family weekly scopes; do not broaden a surface/version cap."""
+    if (not isinstance(scope, Mapping) or set(scope) - {"model", "surface"}
+            or scope.get("surface") is not None):
+        return None
+    model = scope.get("model")
+    if not isinstance(model, Mapping):
+        return None
+    display = model.get("display_name")
+    if not isinstance(display, str) or len(display) > 32:
+        return None
+    name = display.lower().removeprefix("claude ")
+    if name not in QUOTA_MODEL_FAMILIES:
+        return None
+    if model.get("id") not in (None, name, "claude-" + name):
+        return None
+    return name
+
+
+def _cached_quota_windows(windows: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name, key in QUOTA_CACHE_WINDOWS:
+        entry = _cached_quota_window(windows.get(key))
+        if entry is not None:
+            out[name] = entry
+    models: dict[str, Any] = {}
+    for name, key in QUOTA_MODEL_CACHE_KEYS:
+        entry = _cached_quota_window(windows.get(key))
+        if entry is not None:
+            _strictest_quota_window(models, name, entry)
+    # Current native Claude stores model-specific limits in an array. Missing
+    # legacy fields do not mean unlimited quota; valid array entries supersede
+    # only their corresponding legacy window.
+    limits = windows.get("limits")
+    current: dict[str, Any] = {}
+    overall: dict[str, Any] = {}
+    if isinstance(limits, list) and len(limits) <= 64:
+        for limit in limits:
+            if not isinstance(limit, Mapping) or limit.get("group") != "weekly":
+                continue
+            entry = _cached_quota_window(limit, "percent")
+            if entry is None:
+                continue
+            if limit.get("kind") == "weekly_all" and limit.get("scope") is None:
+                _strictest_quota_window(overall, "week", entry)
+            elif limit.get("kind") == "weekly_scoped":
+                name = _quota_model_scope(limit.get("scope"))
+                if name is not None:
+                    _strictest_quota_window(current, name, entry)
+    out.update(overall)
+    models.update(current)
+    if models:
+        out["models"] = models
+    return out
+
+
 def cached_usage(config_dir: Path, *,
-                 global_config: Optional[Path] = None) -> Optional[dict[str, Any]]:
+                 global_config: Optional[Path] = None,
+                 account_fp: Optional[str] = None) -> Optional[dict[str, Any]]:
     """The windows Claude Code last fetched for the account signed in now.
 
     Shaped as a report: each window's percentage used and the moment it resets,
@@ -1253,18 +1351,14 @@ def cached_usage(config_dir: Path, *,
     owner = cache.get("accountUuid")
     fetched = cache.get("fetchedAtMs")
     windows = cache.get("utilization")
-    if (not isinstance(owner, str) or owner != account.get("accountUuid")
+    if (not isinstance(owner, str) or not owner or owner != account.get("accountUuid")
             or isinstance(fetched, bool) or not isinstance(fetched, (int, float))
-            or not isinstance(windows, dict)):
+            or not 0 < fetched < 1e14 or not isinstance(windows, dict)):
         return None
-    out: dict[str, Any] = {}
-    for name, key in QUOTA_CACHE_WINDOWS:
-        window = windows.get(key)
-        used = _percent(window.get("utilization")) if isinstance(window, dict) else None
-        if used is None:
-            continue
-        at = _instant(window.get("resets_at"))
-        out[name] = {"used_pct": used, **({"resets_at": at} if at is not None else {})}
+    if (account_fp is not None
+            and hashlib.sha256(owner.strip().encode()).hexdigest()[:16] != account_fp):
+        return None
+    out = _cached_quota_windows(windows)
     if not out:
         return None
     return {**out, "checked_at": fetched / 1000}
@@ -1305,7 +1399,8 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
     kept = float((cached or {}).get("ts") or 0)
     asked = _asked(wanted_at, max(kept, float((cached or {}).get("asked") or 0)))
     theirs = cached_usage(config_dir, global_config=_native_global_config(config_dir))
-    if (theirs and theirs["checked_at"] > kept and now - theirs["checked_at"] < QUOTA_REFRESH_S
+    if (theirs and kept < theirs["checked_at"] <= now + 60
+            and now - theirs["checked_at"] < QUOTA_REFRESH_S
             and (not asked or theirs["checked_at"] >= wanted_at)):
         ack = _quota_refresh(wanted_at, max(now, time.time()), "quota_read") if asked else {}
         return {**theirs, **ack}, {**theirs, "ts": theirs["checked_at"], **ack}
@@ -1328,7 +1423,7 @@ def quota_summary(state: Mapping[str, Any], runner: Runner = subprocess.run,
     observation: dict[str, Any] = {}
     fresh = read_quota(runner, now, expected_config_dir=config_dir, probe_result=observation)
     theirs = cached_usage(config_dir, global_config=_native_global_config(config_dir))
-    if theirs and theirs["checked_at"] >= now - QUOTA_CACHE_SLACK_S:
+    if theirs and now - QUOTA_CACHE_SLACK_S <= theirs["checked_at"] <= now + 60:
         ack = _quota_refresh(wanted_at, max(now, time.time()), "quota_read") if asked else {}
         return {**theirs, **ack}, {**theirs, "ts": now, **tried, **ack}
     if fresh is None:

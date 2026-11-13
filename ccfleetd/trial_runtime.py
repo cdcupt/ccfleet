@@ -118,7 +118,8 @@ class TrialRuntime:
             ):
                 raise ConfigError("Devin trial database protection is invalid")
             self.database_identities[name] = (info.st_dev, info.st_ino)
-        self.keys = AccessKeys(self.directory / "access.sqlite3", clock=clock)
+        self.keys = AccessKeys(self.directory / "access.sqlite3", secret=cfg.cookie_secret,
+                               clock=clock)
         with self._ledger():
             pass
 
@@ -159,6 +160,9 @@ class TrialRuntime:
         # turn() continues to enforce the ledger's global execution pause.
         return self.keys.create(principal(account))
 
+    def launch_key(self, account):
+        return self.keys.launch_key(principal(account))
+
     def revoke(self, account):
         self.keys.revoke(principal(account).account_id)
 
@@ -187,23 +191,36 @@ class TrialRuntime:
         if key is None:
             raise TrialUnavailable("trial_key_expired_or_revoked", 401)
         who = principal(self.store.get_account(key["account_id"]))
-        if not isinstance(raw, bytes) or not 0 < len(raw) <= ledger.MAX_REQUEST_BYTES:
-            raise TrialUnavailable("trial_context_too_large", 413)
+        if not isinstance(raw, bytes) or not raw:
+            raise TrialUnavailable("invalid_trial_request_framing", 400)
+        if len(raw) > ledger.MAX_REQUEST_BYTES:
+            raise TrialUnavailable("trial_context_too_large", 400)
         try:
             body = devin_native.mcp._decode(raw)
             body = native_client_request(body)
-            clean = native_preflight.validate(body, request_models=[MODEL], effort="max")
+            clean = native_preflight.validate(body, request_models=[MODEL], effort="max",
+                                              context_limit=devin_native.TRIAL_MAX_PROMPT)
         except native_preflight.RequestRejected as error:
             raise TrialUnavailable(error.code, error.status, request_error=error) from None
         except (ValueError, TypeError, RecursionError):
             raise TrialUnavailable("trial_requires_supported_opus_5_5_request", 400) from None
         forwarded = devin_native._encode(clean)
-        # Reject an existing safety pause before contacting the worker. SSH
-        # readiness itself is model-free and must not consume the execution
-        # permit while the remote connection/policy is still being checked.
+        # Reject known pauses and exhausted budgets before contacting the worker.
+        # Admission below rechecks transactionally after model-free readiness;
+        # this snapshot never reserves a lease or an execution turn.
         with self._ledger() as book:
-            if book.allowance(who).paused:
+            allowance = book.allowance(who)
+            if allowance.paused:
                 raise TrialUnavailable("trial_paused", 429)
+            if (allowance.available_tokens <= 0 or allowance.remaining_requests <= 0
+                    or allowance.remaining_leases <= 0):
+                raise TrialUnavailable("daily_limit_reached", 429)
+            if (allowance.global_available_tokens <= 0 or allowance.remaining_global_requests <= 0
+                    or allowance.remaining_global_leases <= 0):
+                raise TrialUnavailable("global_daily_limit_reached", 429)
+            if (allowance.remaining_runtime_seconds < ledger.MAX_STEP_S
+                    or allowance.global_remaining_runtime_seconds < ledger.MAX_STEP_S):
+                raise TrialUnavailable("runtime_reservation_limit", 429)
         attempt = self.transport(
             self.target, SimpleNamespace(gateway_ssh_key_path=self.cfg.devin_trial_ssh_key_file)
         )
@@ -216,7 +233,7 @@ class TrialRuntime:
                     raise TrialUnavailable("trial_busy", 429)
                 prepare(lambda: self._identity_active(key, who))
             with self._ledger() as book:
-                decision = book.admit(who, lease_seconds=180)
+                decision = book.admit(who, lease_seconds=ledger.MAX_RUNTIME_S)
                 if decision.lease is None:
                     raise TrialUnavailable(decision.code, 429)
                 lease = decision.lease
@@ -285,6 +302,8 @@ class TrialRuntime:
                     self.readiness_lock.release()
         if result is None or usage is None or not cleanup:
             raise TrialUnavailable("trial_result_unconfirmed_do_not_retry")
+        if result["error"] == "native_prompt_timed_out":
+            raise TrialUnavailable("trial_turn_timed_out", 504)
         if result["error"] is not None:
             raise TrialUnavailable("trial_native_request_failed")
         # A revoked caller receives no buffered reply even if execution settled.
@@ -343,10 +362,21 @@ class TrialRuntime:
             or type(value["version"]) is not int
             or value["version"] != 1
             or type(value["cleanup_confirmed"]) is not bool
-            or value["error"] not in {None, "native_request_failed"}
+            or value["error"] not in {None, "native_request_failed", "native_prompt_timed_out"}
         ):
             raise TrialUnavailable("trial_receipt_invalid")
         counts = value["usage"]
+        if value.get("metering") == "interrupted":
+            if (value["cleanup_confirmed"] is True and value["error"] == "native_prompt_timed_out"
+                    and value["message"] is None and isinstance(counts, dict)
+                    and set(counts) == {"input_tokens", "output_tokens", "cache_read_tokens",
+                                        "cache_creation_tokens"}
+                    and all(type(n) is int and 0 <= n <= 10**12 for n in counts.values())
+                    and sum(counts.values()) <= ledger.MAX_REPORTED_TOKENS):
+                return True, ledger.VerifiedInterruptedUsage(sum(counts.values()), True)
+            return value["cleanup_confirmed"], None
+        if value["error"] == "native_prompt_timed_out":
+            return value["cleanup_confirmed"], None
         if (
             value.get("metering") == "cache_read_unmeasured"
             and value["cleanup_confirmed"] is True

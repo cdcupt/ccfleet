@@ -290,6 +290,8 @@ class MachineDetail:
 
 def public_machine_number(node: Mapping[str, Any]) -> Optional[int]:
     """A persistent authored public label, with no fallback to private names."""
+    if node.get("private_owner"):
+        return None
     value = node.get("public_status_number")
     return value if type(value) is int and value > 0 else None
 
@@ -367,7 +369,8 @@ def components(nodes: Sequence[Mapping[str, Any]], slot_rows: Sequence[Mapping[s
     for row in slot_rows:
         kinds.setdefault(row["node_id"], set()).add(row["kind"])
     return [(node, slotstates.MACHINE_SLOT in kinds[node["id"]]) for node in nodes
-            if node.get("enabled") and node["id"] in kinds and node["id"] in latest]
+            if node.get("enabled") and not node.get("private_owner")
+            and node["id"] in kinds and node["id"] in latest]
 
 
 def group_state(states: Sequence[State]) -> State:
@@ -519,6 +522,9 @@ def history(store: Any, now: float, days: int = HISTORY_DAYS) -> History:
     today = int(now // 60) // 1440
     window = [utc_day((today - back) * 1440) for back in range(days - 1, -1, -1)]
     rows = store.status_minutes(since_day=window[0])
+    private_components = {MACHINE_PREFIX + node["id"] for node in store.list_nodes()
+                          if node.get("private_owner")}
+    rows = [row for row in rows if row["component"] not in private_components]
     by_component: dict[str, dict[str, Day]] = {}
     for row in rows:
         by_component.setdefault(row["component"], {})[row["day"]] = _day_of(row)

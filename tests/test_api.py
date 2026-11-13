@@ -640,7 +640,7 @@ def _post(srv, token, payload):
 
 
 def test_a_machine_is_told_to_answer_to_its_slots_name(server):
-    """Free, the slot is called by its id; claimed, by its holder's name — and
+    """Free, the slot uses a neutral slot label; claimed, its holder's name — and
     the machine is told to take that as its hostname, since claude.ai/code
     shows a machine by its hostname."""
     srv, store = server
@@ -649,7 +649,9 @@ def test_a_machine_is_told_to_answer_to_its_slots_name(server):
     store.add_account("a1", "sub-1", "alice@example.com", slot_quota=1, now=1.0)
     store.set_account_handle("a1", "alice")
     free = [{"unix_user": "slot01", "present": False}]
-    assert _post(srv, token, _machine_payload("pool-1", free))["desired"]["hostname"] == "pool-1"
+    hostname = _post(srv, token, _machine_payload("pool-1", free))["desired"]["hostname"]
+    assert hostname.startswith("slot-") and hostname == store.get_slot("pool-1")["pool_name"]
+    assert store.get_slot("pool-1")["id"] == "pool-1"
     store.claim_slot("a1", now=time.time())
     assert _post(srv, token, _machine_payload("pool-1", free))["desired"]["hostname"] == "alice-1"
 

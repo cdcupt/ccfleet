@@ -33,7 +33,9 @@ devin_native = devin_account.native
 ROOT_UID = 0
 DEFAULT_DIRECTORY = Path("/etc/ccfleet/devin")
 MAX_KEYS = 20
-_RETRY_MINIMUM_SECONDS = devin_account.METADATA_ACQUISITION_TIMEOUT_S + 10
+_METADATA_CLEANUP_RESERVE_SECONDS = 10
+_RETRY_MINIMUM_SECONDS = (devin_account.MIN_METADATA_ACQUISITION_TIMEOUT_S
+                          + _METADATA_CLEANUP_RESERVE_SECONDS)
 log = logging.getLogger(__name__)
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
@@ -273,7 +275,7 @@ def _collection_authority(directory, account, control):
 
 def _remaining_timeout(deadline, monotonic, minimum):
     remaining = deadline - monotonic()
-    if remaining <= 0 or remaining < minimum:
+    if not math.isfinite(remaining) or remaining <= 0 or remaining < minimum:
         raise ProvisionError("native_metadata_child_unverified", collector_reason=(
             "native_models_list_rejected" if minimum else "native_metadata_timeout"))
     return remaining
@@ -373,6 +375,15 @@ def _collect_once(directory, account, control, *, spawn, lookup, groups_of, now,
         fd = None
         try:
             timeout = _remaining_timeout(deadline, monotonic, minimum_timeout)
+            # Recompute after snapshot copying. Both attempts share the
+            # original 90-second parent deadline; the child may use only the
+            # remaining acquisition time after import/validation/cleanup room.
+            acquisition_timeout = min(devin_account.METADATA_ACQUISITION_TIMEOUT_S,
+                                      timeout - _METADATA_CLEANUP_RESERVE_SECONDS)
+            if acquisition_timeout < devin_account.MIN_METADATA_ACQUISITION_TIMEOUT_S:
+                raise ProvisionError("native_metadata_child_unverified",
+                                     collector_reason="native_metadata_timeout")
+            request["acquisition_timeout_s"] = acquisition_timeout
         except ProvisionError:
             cleanup = True  # This exclusive snapshot has not been given to any child.
             raise

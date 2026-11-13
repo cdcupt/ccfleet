@@ -1,9 +1,11 @@
-"""Trial-only hashed access keys, isolated from product slots and financial Store."""
+"""Trial-only hashed keys with authenticated owner retrieval, never provider credentials."""
 
 from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
+import json
 import math
 import os
 import re
@@ -17,11 +19,19 @@ from .devin_trial import TrialError, VerifiedAccount
 
 PREFIX = "cct_"
 TTL_S = 30 * 86400
+_RECOVERABLE_ID = re.compile(r"v1_[0-9a-f]{32}\Z")
+_DERIVATION_DOMAIN = b"ccfleet/trial/launch-token/derive-v1"
 
 
 class AccessKeys:
-    def __init__(self, path: Path, *, clock=time.time):
+    def __init__(self, path: Path, *, secret: str, clock=time.time):
+        if not isinstance(secret, str) or not secret:
+            raise TrialError("trial_key_derivation_secret_required")
         self.path, self.clock = path, clock
+        # Domain-separated from browser-cookie signatures and other HMAC uses.
+        # The deployment secret stays outside the access database and backups.
+        self._derivation_key = hmac.new(secret.encode(), _DERIVATION_DOMAIN,
+                                        hashlib.sha256).digest()
         self.identity = (path.stat().st_dev, path.stat().st_ino)
         self.initializing = True
         with self._db() as db:
@@ -106,7 +116,8 @@ class AccessKeys:
     def create(self, principal: VerifiedAccount):
         if type(principal) is not VerifiedAccount or principal.email_verified is not True:
             raise TrialError("verified_account_required")
-        now, token = self._now(), PREFIX + secrets.token_hex(32)
+        now, identifier = self._now(), "v1_" + secrets.token_hex(16)
+        token = self._derived_token(principal.account_id, identifier)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             count = db.execute(
@@ -121,7 +132,7 @@ class AccessKeys:
             db.execute(
                 "INSERT INTO trial_access VALUES(?,?,?,?,?,0)",
                 (
-                    secrets.token_hex(16),
+                    identifier,
                     principal.account_id,
                     hashlib.sha256(token.encode()).hexdigest(),
                     now,
@@ -129,6 +140,33 @@ class AccessKeys:
                 ),
             )
         return token
+
+    def _derived_token(self, account_id, identifier):
+        message = json.dumps([account_id, identifier], separators=(",", ":")).encode()
+        return PREFIX + hmac.new(self._derivation_key, message, hashlib.sha256).hexdigest()
+
+    def launch_key(self, principal: VerifiedAccount):
+        """Read the owner's active key without rotation or any allowance/rate work.
+
+        Legacy random keys cannot be recovered. Changing the deployment secret
+        also makes retrieval unavailable, while the stored hash keeps existing
+        API commands valid until explicit replacement, revocation or expiry.
+        """
+        if type(principal) is not VerifiedAccount or principal.email_verified is not True:
+            raise TrialError("verified_account_required")
+        with self._db() as db:
+            row = db.execute(
+                "SELECT id,token_sha256 FROM trial_access WHERE account_id=? "
+                "AND revoked=0 AND expires_at>?",
+                (principal.account_id, self._now()),
+            ).fetchone()
+        if (row is None or not isinstance(row[0], str)
+                or not _RECOVERABLE_ID.fullmatch(row[0])
+                or not isinstance(row[1], str) or not re.fullmatch(r"[0-9a-f]{64}", row[1])):
+            return ""
+        candidate = self._derived_token(principal.account_id, row[0])
+        digest = hashlib.sha256(candidate.encode()).hexdigest()
+        return candidate if hmac.compare_digest(digest, row[1]) else ""
 
     def resolve(self, token):
         if not isinstance(token, str) or not re.fullmatch(r"cct_[0-9a-f]{64}", token):

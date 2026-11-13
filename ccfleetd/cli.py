@@ -45,6 +45,24 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--rc-expected", action="store_true",
                      help="alert when the remote-control service is not active")
     node.add_parser("list", help="list nodes")
+    private_add = node.add_parser(
+        "private-add", help="register an administrator's non-rentable owner node")
+    private_add.add_argument("node_id")
+    private_add.add_argument("--account-id", required=True)
+    private_add.add_argument("--unix-user", required=True)
+    private_add.add_argument("--monthly-cost-usd-cents", required=True, type=int)
+    private_add.add_argument("--region", default="")
+    private_mode = node.add_parser(
+        "private-inference", help="enable or revoke private owner inference")
+    private_mode.add_argument("node_id")
+    private_mode.add_argument("--account-id", required=True)
+    private_mode.add_argument("state", choices=("on", "off"))
+    node.add_parser("private-show", help="show private owner metadata").add_argument("node_id")
+    private_usage = node.add_parser(
+        "private-public-usage", help="opt into masked private usage totals")
+    private_usage.add_argument("node_id")
+    private_usage.add_argument("--account-id", required=True)
+    private_usage.add_argument("state", choices=("on", "off"))
     offer = node.add_parser("offer", help="set public brands, IP type and actual supplier costs; "
                             "shown, never charged").add_subparsers(
                                 dest="offer_command", required=True)
@@ -456,7 +474,26 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
                 print("Resource " + pricing.display(value.resource) + " + service fee "
                       + pricing.display(value.service_fee) + " = " + pricing.display(value.total))
         return EXIT_OK
-    if args.node_command == "add":
+    if args.node_command == "private-add":
+        created = store.register_private_owner_node(args.node_id, args.account_id, args.unix_user,
+            monthly_cost_usd_cents=args.monthly_cost_usd_cents, region=args.region, now=time.time())
+        _print_token(args.node_id, created["node_token"], cfg)
+        print("Private owner node registered; inference remains disabled until explicitly enabled.")
+    elif args.node_command == "private-inference":
+        store.set_private_owner_inference(args.node_id, args.account_id,
+                                          args.state == "on", now=time.time())
+        print(f"{args.node_id}: private owner inference {args.state}")
+    elif args.node_command == "private-public-usage":
+        store.set_private_owner_public_usage(args.node_id, args.account_id,
+                                             args.state == "on", now=time.time())
+        print(f"{args.node_id}: masked public usage {args.state}")
+    elif args.node_command == "private-show":
+        import json
+        record = store.private_owner_node(args.node_id)
+        if record is None:
+            raise StoreError("no private owner node")
+        print(json.dumps(record, sort_keys=True))
+    elif args.node_command == "add":
         token = store.add_node(args.node_id, args.owner, args.region, args.pinned_version,
                                args.rc_expected, now=time.time())
         _print_token(args.node_id, token, cfg)
