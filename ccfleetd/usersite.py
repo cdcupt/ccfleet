@@ -379,7 +379,7 @@ def act(store: Store, cfg: Config, account: Mapping[str, Any], path: str,
         return _back("emails-on" if on else "emails-off", "outage-emails")
     if len(parts) == 4 and parts[:2] == ["account", "slots"] and parts[3] in SLOT_ACTIONS:
         slot = store.get_slot(parts[2])
-        if slot is None:
+        if slot is None or (slot.get("private_owner") and account.get("role") != "admin"):
             return not_found(viewer)
         try:
             return _on_slot(store, slot, account["id"], parts[3], form, now, viewer)
@@ -1451,7 +1451,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
         return _signed_out(cfg)
     from . import trial_routes
 
-    held = store.list_slots(held_by=account["id"])
+    held = [slot for slot in store.list_slots(held_by=account["id"])
+            if not slot.get("private_owner") or account.get("role") == "admin"]
     recurring_slots = set()
     if held:
         try:
@@ -1542,7 +1543,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
             financial[slot["id"]] = (end, end is None or now < end)
         except Exception:
             financial[slot["id"]] = (None, False)
-    authorized_slots = [s for s in held if s.get("kind") == slotstates.MACHINE_SLOT
+    authorized_slots = [s for s in held if (s.get("kind") == slotstates.MACHINE_SLOT
+                     or s.get("inference_enabled") is True)
                      and s["state"] == slotstates.ACTIVE
                      and nodes.get(s["node_id"], {}).get("enabled")
                      and nodes.get(s["node_id"], {}).get("access_host")
@@ -1675,7 +1677,8 @@ def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any
     """Only this customer's eligible pool; browsing never claims or starts a model."""
     if account is None:
         return _signed_out(cfg)
-    held = store.list_slots(held_by=account["id"])
+    held = [slot for slot in store.list_slots(held_by=account["id"])
+            if not slot.get("private_owner") or account.get("role") == "admin"]
     quota = int(account.get("slot_quota") or 0)
     counted = sum(1 for slot in held if slot["state"] in slotstates.HELD)
     can_claim = wallet_routes.enabled(cfg) or counted < quota
@@ -2741,7 +2744,8 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
     """
     container = ('<div id="slot-' + escape(str(slot['id']))
                  + '-connect-instructions" data-fleet-readonly>')
-    if (not paid_access or slot.get('kind') == slotstates.OWNER_SLOT
+    if (not paid_access or (slot.get('kind') == slotstates.OWNER_SLOT
+            and slot.get("inference_enabled") is not True)
             or not gateway_ui.available(cfg)
             or slot.get('state') not in CAN_SIGN_IN):
         return container + '</div>'
@@ -2848,6 +2852,33 @@ def _slot_card(
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
     report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
+    if slot.get("private_owner"):
+        private = node.get("private_owner") or {}
+        cents = private.get("monthly_cost_usd_cents")
+        cost = f"${cents / 100:.2f} / month" if type(cents) is int else "Unknown"
+        connected = any(device.get("slot_id") == slot["id"] for device in account_devices or ())
+        warning = (_notice(
+            "This Claude account is also reported on another node. "
+            "Keep one active node per account.",
+            "该 Claude 账号也在其他节点上报告登录。每个账号仅保留一个活动节点。", "small lapsed")
+            if "account_elsewhere" in flagged else "")
+        return ('<section class="card slot-card private-owner-slot" id="slot-'
+                + escape(slot["id"]) + '"><h2>' + escape(names.display(slot)) + '</h2><p>'
+                + label("Private administrator Mac", "管理员私有 Mac", inline=True)
+                + '</p><p>' + label("Operating cost: ", "运行成本：", inline=True)
+                + escape(cost) + '</p>' + machine_line + warning
+                + '<p class="muted">' + label(
+                    "This is your own computer. Sign-in and maintenance happen on the Mac; "
+                    "it is never offered for rent or wiped by Fleet.",
+                    "这是你的自有电脑，登录和维护在 Mac 本机进行；"
+                    "Fleet 不会出租或清除它。", inline=True)
+                + '</p>' + _slot_connect(slot, report, csrf, cfg, None, authorizer,
+                    connected=connected, paid_access=paid_access)
+                + _cli_access(slot, node, cli_devices or [], csrf, now,
+                    account_devices=account_devices, authorizer=authorizer,
+                    paid_access=paid_access,
+                    provider_ready=slot.get("inference_enabled") is True)
+                + traffic_html + '</section>')
     # A sign-in that failed, or a change of account that finished, is
     # over: it is said once, below, and the buttons come back as if nothing
     # were in flight.
