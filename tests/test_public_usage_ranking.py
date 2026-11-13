@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from ccfleet_agent.model_usage import LABELS, MODELS_URL, PRICING_URL
+from ccfleet_agent.model_usage import LABELS, MODEL_KEYS, MODELS_URL, PRICING_URL
 from ccfleetd import bilingual, customer_docs, usage, usersite
 from ccfleetd.config import Config
 from tests.test_customer_docs import ADMIN, _serve
@@ -136,7 +136,7 @@ def test_renderer_bounds_rows_and_expanded_model_rows():
     report["omitted_entries"] = 50
     page = shown(report)
     assert page.count('scope="row"') == 50
-    assert page.count('<span class="usage-model-name">Claude ') == 50 * 16
+    assert page.count('<span class="usage-model-name">Claude ') == 50 * len(MODEL_KEYS)
     assert "50 further entries omitted" in Document(page).text
 
 

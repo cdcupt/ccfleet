@@ -43,6 +43,7 @@ from . import (
     pricing,
     private_owner,
     slot_subscriptions,
+    usage_ledger,
     wallet,
     wallet_topups,
 )
@@ -445,7 +446,7 @@ CREATE TABLE IF NOT EXISTS outage_emails (
     sent_at REAL,
     PRIMARY KEY (outage_id, kind, account_id)
 );
-""" + private_owner.SCHEMA
+""" + private_owner.SCHEMA + usage_ledger.SCHEMA
 
 #: The settings row saying since when the serving loop has listened for reports
 #: this time. Before then no report could arrive, so a machine's silence counts
@@ -619,7 +620,8 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscriptionStoreMixin,
+class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreMixin,
+            slot_subscriptions.SlotSubscriptionStoreMixin,
             wallet_topups.TopupStoreMixin):
     """Thread-safe wrapper around one SQLite connection."""
 
@@ -638,6 +640,16 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA)
+            self._add_missing_columns("private_owner_nodes", {
+                "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
+            })
+            self._add_missing_columns("usage_ledger_sources", {
+                "review_until_day": "INTEGER NOT NULL DEFAULT -1",
+            })
+            self._conn.execute(
+                "UPDATE usage_ledger_sources SET review_until_day=COALESCE("
+                "(SELECT MAX(day) FROM usage_ledger_days d WHERE d.source_key="
+                "usage_ledger_sources.source_key),-1) WHERE needs_review=1 AND review_until_day=-1")
             # CREATE TABLE IF NOT EXISTS does nothing to a table that already
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate
@@ -1338,7 +1350,9 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
                                      ("slot_purchases", "slot_id"),
                                      ("slot_subscription_orders", "node_id"),
                                      ("slot_subscription_orders", "slot_id"),
-                                     ("private_owner_nodes", "node_id"))
+                                     ("private_owner_nodes", "node_id"),
+                                     ("usage_ledger_sources", "node_id"),
+                                     ("usage_ledger_sources", "slot_id"))
 
     @staticmethod
     def _require_no_paid_resource_history(conn: sqlite3.Connection, column: str,
@@ -1346,6 +1360,10 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
         if column not in {"node_id", "slot_id"}:
             raise ValueError("unknown paid resource identifier")
         for identifier in identifiers:
+            if conn.execute(f"SELECT 1 FROM usage_ledger_sources WHERE {column}=? LIMIT 1",
+                            (identifier,)).fetchone() is not None:
+                raise StoreError("Recorded usage keeps this resource ID. Change its display name "
+                                 "or disable it instead of renaming or deleting its identity.")
             subscription_slots = conn.execute(
                 f"SELECT slot_id FROM slot_subscription_orders WHERE {column}=?",
                 (identifier,)).fetchall()
@@ -3902,14 +3920,18 @@ class Store(private_owner.PrivateOwnerStoreMixin, slot_subscriptions.SlotSubscri
 
     def request_quota_read(self, slot_id: str, now: float, *,
                            held_by: Optional[str] = None) -> bool:
-        """Ask a machine's slot in use to read its usage windows again now,
+        """Ask an active managed or opted-in private slot to read its limits,
         rather than at its next five minutes (Erik, 2026-09-24). Returns
         False, asking nothing, while a request under QUOTA_ASK_EVERY_S old is
         still out: a button pressed twice asks once."""
         with self._write_txn() as conn:
-            self._require_not_private_slot(conn, slot_id)
             row = self._held(conn, slot_id, held_by)
-            if row["kind"] != slotstates.MACHINE_SLOT or row["state"] != slotstates.ACTIVE:
+            from .private_owner import eligible as private_owner_eligible
+
+            private_allowed = (row["kind"] == slotstates.OWNER_SLOT
+                               and private_owner_eligible(conn, row["node_id"], row["held_by"]))
+            if (row["state"] != slotstates.ACTIVE
+                    or row["kind"] != slotstates.MACHINE_SLOT and not private_allowed):
                 raise StoreError(f"{slot_id} can read its usage once it is in use")
             asked = conn.execute("SELECT quota_wanted_at FROM slots WHERE id = ?",
                                  (slot_id,)).fetchone()[0]

@@ -16,7 +16,7 @@ from typing import Any
 from ccfleet_agent import model_usage
 from ccfleet_agent.relay_metrics import DAY_SECONDS, MAX_COUNTER, WINDOW_DAYS
 
-from . import names, performance
+from . import names, performance, usage_ledger
 
 MAX_ENTRIES = 50
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens",
@@ -249,6 +249,16 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         except Exception:
             accounts = {}
         groups, all_data = {}, _bucket()
+        ledger = (store.public_usage_ledger(instant) if hasattr(store, "public_usage_ledger")
+                  else {"sources": []})
+        sources = ledger["sources"]
+        covered = {source["source_key"] for source in sources if source["days"]}
+        incomplete = any(source["needs_review"] for source in sources)
+        for source in sources:
+            for saved in source["days"]:
+                group = groups.setdefault(source["account_id"], _bucket())
+                _add(group, saved)
+                _add(all_data, saved)
         for slot in performance._active_slots(store.list_slots(), nodes):
             result["eligible_slots"] += 1
             report = performance._current_report(slot, latest.get(slot["node_id"]), slot["node_id"],
@@ -256,6 +266,13 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
             if report is None or "token_usage" not in report:
                 continue
             result["reporting_slots"] += 1
+            entry = next((entry for entry in latest[slot["node_id"]]["payload"]["slots"]
+                          if isinstance(entry, dict)
+                          and entry.get("unix_user") == slot["unix_user"]), {})
+            fp = entry["credentials"]["bound_fp"]
+            if covered and usage_ledger.identity(slot, fp) in covered:
+                # A rolling report must never be added to its saved daily snapshots.
+                continue
             group = groups.setdefault(slot["held_by"], _bucket())
             _add(group, report)
             _add(all_data, report)
@@ -289,7 +306,7 @@ def public_summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         if result["usage_samples"]:
             result["state"] = ("ready" if result["cost_state"] == "complete"
                                and result["eligible_slots"] == result["reporting_slots"]
-                               else "partial")
+                               and not incomplete else "partial")
         return result
     except Exception:
         return _empty(start)

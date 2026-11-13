@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS private_owner_nodes (
     account_id TEXT NOT NULL UNIQUE,
     monthly_cost_usd_cents INTEGER NOT NULL CHECK (monthly_cost_usd_cents >= 0),
     inference_enabled INTEGER NOT NULL DEFAULT 0 CHECK (inference_enabled IN (0,1)),
+    public_usage_enabled INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -248,6 +249,25 @@ class PrivateOwnerStoreMixin:
                 if allowed and gateway_public_key
                 else [],
             }
+
+    def private_owner_quota(self, node_id: str) -> Optional[dict[str, Any]]:
+        """One bounded usage-refresh timestamp for this authenticated owner's node."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT s.quota_wanted_at FROM private_owner_nodes p "
+                "JOIN nodes n ON n.id=p.node_id "
+                "JOIN accounts a ON a.id=p.account_id "
+                "JOIN slots s ON s.node_id=p.node_id AND s.id=p.node_id "
+                "WHERE p.node_id=? AND n.enabled=1 AND p.inference_enabled=1 AND a.role='admin' "
+                "AND s.kind='owner' AND s.state='active' AND s.held_by=p.account_id "
+                "AND s.gateway_claim_id!=''",
+                (node_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        wanted = row["quota_wanted_at"]
+        return ({"requested_at": wanted} if type(wanted) in (int, float)
+                and 0 < wanted < 1e11 else {})
 
 
 def is_private(node: Mapping[str, Any]) -> bool:

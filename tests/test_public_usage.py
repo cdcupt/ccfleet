@@ -54,13 +54,17 @@ def rate(fleet):
 
 
 def test_catalogue_is_finite_authored_and_conservative_about_unknown_tiers():
-    assert len(model_usage.PUBLIC_MODELS) == 16
+    assert len(model_usage.PUBLIC_MODELS) == 18
     assert set(model_usage.LABELS) == set(model_usage.PRICES) == set(model_usage.PUBLIC_MODELS)
     assert model_usage.PRICES["claude-haiku-5-5"] is None
     assert model_usage.PRICES["other"] is None
     assert model_usage.PRICES["claude-opus-5-5"] == (4, 20, 5, 8, .2)
     assert model_usage.PRICES["claude-sonnet-4-5"] == (3, 15, 3.75, 6, .3)
     assert model_usage.LABELS["claude-fable-5-1"] == "Claude Fable 5.1"
+    assert model_usage.PRICES["claude-fable-5-2"] == (8, 40, 10, 16, .2)
+    assert model_usage.PRICES["claude-mythos-5-2"] == (8, 40, 10, 16, .2)
+    assert model_usage.FAMILIES["claude-fable-5-2"] == "fable"
+    assert model_usage.FAMILIES["other"] == "other"
 
 
 @pytest.mark.parametrize("value", [SECRET, None, True, 7, {}, "claude-opus-4-1",

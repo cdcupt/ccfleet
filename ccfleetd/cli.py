@@ -58,6 +58,11 @@ def _parser() -> argparse.ArgumentParser:
     private_mode.add_argument("--account-id", required=True)
     private_mode.add_argument("state", choices=("on", "off"))
     node.add_parser("private-show", help="show private owner metadata").add_argument("node_id")
+    private_usage = node.add_parser(
+        "private-public-usage", help="opt into masked private usage totals")
+    private_usage.add_argument("node_id")
+    private_usage.add_argument("--account-id", required=True)
+    private_usage.add_argument("state", choices=("on", "off"))
     offer = node.add_parser("offer", help="set public brands, IP type and actual supplier costs; "
                             "shown, never charged").add_subparsers(
                                 dest="offer_command", required=True)
@@ -478,6 +483,10 @@ def _node_command(args: argparse.Namespace, store: Store, cfg: Config) -> int:
         store.set_private_owner_inference(args.node_id, args.account_id,
                                           args.state == "on", now=time.time())
         print(f"{args.node_id}: private owner inference {args.state}")
+    elif args.node_command == "private-public-usage":
+        store.set_private_owner_public_usage(args.node_id, args.account_id,
+                                             args.state == "on", now=time.time())
+        print(f"{args.node_id}: masked public usage {args.state}")
     elif args.node_command == "private-show":
         import json
         record = store.private_owner_node(args.node_id)

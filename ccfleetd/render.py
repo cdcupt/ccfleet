@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+import re
 from collections.abc import Mapping, Sequence
 from html import escape
 from shlex import quote as shq
@@ -18,7 +19,7 @@ from .admin_locale import label as admin_label
 from .bilingual import bi
 from .bilingual import label as bi_label
 from .config import Config
-from .credential_health import access_expiry, instant
+from .credential_health import TRANSITION_REASONS, access_expiry, instant, renewal_report
 from .desired import is_channel, is_login_url
 from .heartbeat import relay_report
 
@@ -109,7 +110,7 @@ var result=JSON.parse(r.text);if(!result||typeof result!=='object'||Array.isArra
 Object.keys(result).length!==1||typeof result.location!=='string'||
 result.location.length>1024)throw Error('format');
 var target=same(result.location),expected=kind==='admin-quota'?'/admin':'/account';
-if(plain(target.pathname)!==expected)throw Error('destination');
+if(![expected,expected+'/usage'].includes(plain(target.pathname)))throw Error('destination');
 var fresh=await page(target.pathname+target.search);update(form,kind,fresh);
 var banner=fresh.querySelector('.note-banner');
 message(form,banner?banner.textContent:words('Saved. Status updated.','已保存，状态已更新。'));
@@ -123,7 +124,8 @@ words('Could not submit this form. Your inputs are kept.','无法提交，已保
 document.addEventListener('click',async function(event){
 var link=event.target.closest&&event.target.closest('a[data-fleet-status]');
 if(!link)return;var kind=link.dataset.fleetStatus,url;
-try{url=same(link.href);if(!['account','admin'].includes(kind)||plain(url.pathname)!=='/'+kind)return;}
+try{url=same(link.href);if(!['account','admin'].includes(kind)||
+!['/'+kind,'/'+kind+'/usage'].includes(plain(url.pathname)))return;}
 catch(e){return;}event.preventDefault();if(busy.has('status'))return;busy.add('status');
 try{message(link,words('Checking…','正在检查…'));var fresh=await page(url.pathname);
 refresh(document,fresh);message(link,words('Status updated.','状态已更新。'));
@@ -151,7 +153,7 @@ async function poll(){timer=null;var nodes=pending();if(!nodes.length)return;
 if(Date.now()>=until){stop(nodes);return;}running=true;
 var controller=new AbortController(),abort=setTimeout(function(){controller.abort();},10000);
 try{var path=location.pathname;
-if(!/^\/(?:en\/|zh\/)?admin\/?$/.test(path))throw Error('path');
+if(!/^\/(?:en\/|zh\/)?admin(?:\/usage)?\/?$/.test(path))throw Error('path');
 var r=await fetch(path,{credentials:'same-origin',cache:'no-store',redirect:'error',
 signal:controller.signal});if(!r.ok)throw Error('response');
 var text=await r.text();if(text.length>2097152)throw Error('size');
@@ -689,6 +691,43 @@ padding:0;border:0;background:none;color:var(--muted)}
 .quota-panel .quota-help>p{margin:8px 0 0;line-height:1.55}
 .quota-panel .quota-help a{color:var(--acc)}
 .quota-panel .meter-fill[style="width:0%"]{min-width:0}
+.quota-used-label{font-family:var(--sans);font-size:12px;font-weight:400;margin-left:5px;
+color:var(--muted)}
+.quota-window{min-width:0}
+.quota-window.quota-model{padding:14px 16px;border:1px solid var(--rule);
+border-radius:10px;background:var(--panel)}
+.quota-window.quota-fable{border-color:var(--acc-line);background:var(--acc-soft)}
+.quota-model .meter-head{font-size:14px;color:var(--ink)}
+.quota-model .meter-pct{font-family:var(--sans);font-size:24px;letter-spacing:-.025em}
+.quota-remaining{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;
+margin:8px 0 0;font-size:12px;color:var(--muted)}
+.quota-blocked{padding:12px 14px;margin:0 0 16px;border:1px solid var(--bad);
+border-radius:10px;color:var(--bad);font-size:13px;line-height:1.6;background:var(--panel)}
+.quota-blocked strong{display:block;font-size:14px}
+.quota-model-missing{padding:12px 14px;border:1px dashed var(--rule);border-radius:10px;
+font-size:12px;line-height:1.6;color:var(--muted)}
+.quota-model-missing strong{color:var(--ink)}
+.quota-overview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;
+align-items:start;margin:24px 0}
+.quota-overview>.card.quota-account-card{margin:0;min-width:0;padding:24px}
+.quota-account-card>h2,.quota-account-card>h3{margin:0 0 8px;font-family:var(--sans);
+font-size:20px;letter-spacing:-.025em;overflow-wrap:anywhere}
+.quota-account-identity{color:var(--muted);font-size:13px;margin:0 0 20px;
+overflow-wrap:anywhere}
+.site p.quota-account-identity>.bi-inline>.copy-en,
+.site p.quota-account-identity>.bi-inline>.copy-zh{display:inline}
+.quota-account-card .quota-heading{padding-top:18px;border-top:1px solid var(--rule-soft)}
+.quota-entry{display:flex;align-items:center;justify-content:space-between;gap:16px;
+flex-wrap:wrap;padding:18px 22px;margin:0 0 24px;border:1px solid var(--acc-line);
+border-radius:12px;background:var(--acc-soft)}
+.quota-entry h2{margin:0 0 5px;font-size:18px}.quota-entry p{margin:0;font-size:13px}
+.quota-page-intro{max-width:70ch;color:var(--muted);font-size:15px;line-height:1.7}
+.quota-page-head{display:flex;align-items:start;justify-content:space-between;
+gap:18px;flex-wrap:wrap}
+.quota-page-head h1{margin-bottom:12px}.quota-page-head .btn{margin-top:8px}
+@media(max-width:760px){.quota-overview{grid-template-columns:minmax(0,1fr);gap:16px}
+.quota-overview>.card.quota-account-card{padding:18px}.quota-heading strong{font-size:15px}
+.quota-entry{padding:16px}.quota-model .meter-pct{font-size:22px}}
 
 /* Network transfer and model usage remain separate measurements. */
 .traffic-panel{min-width:0;margin:20px 0;padding:24px;background:var(--panel);
@@ -784,28 +823,57 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
     agent says it is a shared machine, is described by its slot and named
     after it, the way claude.ai and the Slots card name it.
     """
+    # status imports the shared age renderer; defer this import until rendering.
+    from . import status
+
     alerts_by_node: dict[str, list[Mapping[str, Any]]] = {}
     for alert in alerts:
         alerts_by_node.setdefault(alert["node_id"], []).append(alert)
     machine_slots: dict[str, list[Mapping[str, Any]]] = {}
+    private_slots: dict[str, list[Mapping[str, Any]]] = {}
     for slot in slots:
         if slot.get("kind") == slotstates.MACHINE_SLOT:
             machine_slots.setdefault(slot["node_id"], []).append(slot)
+        elif slot.get('private_owner'):
+            private_slots.setdefault(slot['node_id'], []).append(slot)
     rows = []
     for node in nodes:
         hb = latest.get(node["id"])
         payload = (hb or {}).get("payload") or {}
         node_alerts = alerts_by_node.get(node["id"], [])
-        level = "ok"
+        private = bool(node.get('private_owner'))
+        mine = (private_slots if private else machine_slots).get(node["id"], [])
+        machine = not private and (bool(mine) or payload.get("mode") == slotstates.MACHINE_MODE)
+        # Do not wait for the next monitor pass to notice missing reports.
+        # Existing alerts remain authoritative across the restart grace period.
+        since = (None if any(alert["rule"] == "no_heartbeat" for alert in node_alerts)
+                 else listening_since)
+        observed = status.machine_state(hb, (), machine, now, since)
+        level = ({status.GREEN: "ok", status.YELLOW: "warn", status.RED: "critical"}
+                 [observed.level] if hb is not None else "warn")
+        report_state = ("missing" if hb is None else
+                        "restart" if since is not None
+                        and hb["ts"] < since and observed.level == status.GREEN
+                        else observed.level)
         for alert in node_alerts:
             if LEVEL_ORDER.get(alert["level"], 0) > LEVEL_ORDER[level]:
                 level = alert["level"]
-        mine = machine_slots.get(node["id"], [])
-        machine = bool(mine) or payload.get("mode") == slotstates.MACHINE_MODE
-        facts, shown = _slot_facts(node, payload, mine) if machine else (payload, node["id"])
+        facts, shown = (_slot_facts(node, payload, mine) if machine or private
+                        else (payload, node["id"]))
         creds = facts.get("credentials") or {}
+        renewal = renewal_report(creds.get('renewal'))
+        quota_attributed = not (
+            creds.get('logged_in') is False or renewal.get('reason') in TRANSITION_REASONS
+            or creds.get('bound_fp') and creds.get('account_fp')
+            and creds['bound_fp'] != creds['account_fp'])
+        usage_since = (max(mine[0].get('claimed_at') or 0,
+                           mine[0].get('account_switched_at') or 0) if len(mine) == 1 else 0)
+        heard = instant((hb or {}).get('ts'))
+        quota_fresh = (heard is not None and heard >= usage_since
+                       and now - min(max_age, 10 * 60) <= heard <= now + 60)
         rows.append({
             "id": node["id"], "name": shown, "machine": machine, "slot_count": len(mine),
+            "private_owner": private,
             # Named while somebody holds it: from the claim until the wipe that
             # frees it (see _called).
             "held_name": len(mine) == 1 and bool(mine[0].get("name")),
@@ -820,6 +888,7 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "owner": node["owner"], "region": node["region"],
             "enabled": node["enabled"], "status": level if node["enabled"] else "disabled",
             "last_seen_ts": (hb or {}).get("ts"),
+            "report_state": report_state,
             "hostname": payload.get("hostname"),
             "claude_version": (facts.get("claude") or {}).get("version"),
             "compatibility": compatibility.observation(
@@ -835,6 +904,10 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "device_token_at": node.get("device_token_at"),
             "credentials_present": creds.get("present"),
             "credentials_logged_in": creds.get("logged_in"),
+            "credentials_email": creds.get("email") if quota_attributed else None,
+            "quota_account": (creds.get("bound_fp") if creds.get("bound_fp")
+                              == creds.get("account_fp") and quota_attributed else None),
+            "quota_observation_fresh": quota_fresh,
             "credentials_mtime": creds.get("mtime"),
             "token_expires_at": creds.get("expires_at"),
             "subscription_type": creds.get("subscription_type"),
@@ -849,9 +922,8 @@ def build_rows(nodes: list[Mapping[str, Any]], latest: Mapping[str, Mapping[str,
             "reboot_required": payload.get("reboot_required") is True,
             "usage": facts.get("usage") or {},
             "relay": facts.get("relay"),
-            "usage_since": max(mine[0].get("claimed_at") or 0,
-                               mine[0].get("account_switched_at") or 0) if len(mine) == 1 else 0,
-            "quota": facts.get("quota") or {},
+            "usage_since": usage_since,
+            "quota": (facts.get("quota") or {}) if quota_attributed else {},
             "open_alerts": [a["rule"] for a in node_alerts],
         })
     return rows
@@ -984,9 +1056,17 @@ def _row_html(row: Mapping[str, Any], now: float) -> str:
     if not free:
         login += ('<br><span class="muted">token '
                   + escape(_in(now, row["token_expires_at"])) + "</span>")
+    report_words = {
+        "missing": ("No machine report", "尚无主机报告"),
+        "restart": ("Waiting for a report after restart", "重启后等待新报告"),
+        "yellow": ("Machine report is late", "主机报告延迟"),
+        "red": ("Machine stopped reporting", "主机已停止上报"),
+    }.get(row.get("report_state"))
+    report_note = ('<br><span class="muted">' + bi_label(*report_words, inline=True)
+                   + '</span>') if report_words and row.get("enabled") else ''
     return (
         f'<tr class="r-{escape(row["status"])}">'
-        f"<td>{_pill(row['status'])}</td>"
+        f"<td>{_pill(row['status'])}{report_note}</td>"
         f'<td><span class="node-id">{escape(shown)}</span>'
         + (' <span class="pill warn">reboot needed</span>' if row.get("reboot_required") else "")
         + (f'<br><span class="muted">{escape(byline)}</span>' if byline else "") + "</td>"
@@ -1606,7 +1686,8 @@ def _quota_notice(en: str, zh: str, cls: str = "muted small") -> str:
     return f'<p class="{cls}">' + bi(en, zh, inline=True) + '</p>'
 
 
-def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) -> str:
+def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str, *,
+                   usage_page: bool = False) -> str:
     """Request once, then report the machine's result without restamping its data."""
     slot_id = row.get("slot_id")
     if not csrf or not slot_id:
@@ -1619,6 +1700,7 @@ def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) 
     form = (f'<form class="inline" method="post" '
             f'action="/actions/slot/{escape(slot_id)}/quota" data-fleet-action="admin-quota">'
             f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+            + ('<input type="hidden" name="usage_page" value="1">' if usage_page else '') +
             '<button type="submit">' + bi_label('Refresh', '刷新', inline=True)
             + '</button></form>')
     if quota_reading(wanted, checked, now, acknowledgement):
@@ -1647,8 +1729,8 @@ def _quota_refresh(row: Mapping[str, Any], checked: Any, now: float, csrf: str) 
 
 
 def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
-                 include_help: bool = True) -> tuple[str, Any]:
-    """Weekly first, and only observed windows; absence establishes no entitlement."""
+                 include_help: bool = True, observation_fresh: bool = True) -> tuple[str, Any]:
+    """Native account limits, including model caps; missing data is never a zero."""
     checked = quota.get("checked_at")
     known = (type(checked) in (int, float) and 0 < checked <= now
              and math.isfinite(checked))
@@ -1656,30 +1738,78 @@ def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
     previous_account = known and account_since is not None and checked < account_since
     if previous_account:
         quota, checked, known = {}, None, False
-    historical = not known or now - checked > 10 * 60
-    meters = []
-    for key, en, zh in (('week', 'This week', '本周窗口'),
-                       ('session', '5-hour session', '五小时窗口')):
-        window = quota.get(key)
+    historical = not observation_fresh or not known or now - checked > 10 * 60
+    meters, blocked = [], []
+    models = quota.get('models')
+    models = models if isinstance(models, Mapping) else {}
+    windows = [('week', 'This week · all models', '本周窗口 · 所有模型', quota.get('week'))]
+    windows.extend((family, name + ' · this week', name + ' · 本周窗口', models.get(family))
+                   for family, name in (('fable', 'Fable'), ('opus', 'Opus'),
+                                        ('sonnet', 'Sonnet'), ('haiku', 'Haiku'),
+                                        ('mythos', 'Mythos')))
+    windows.append(('session', '5-hour session', '五小时窗口', quota.get('session')))
+    fable_reported = False
+    for key, en, zh, window in windows:
         window = window if isinstance(window, Mapping) else {}
         used = window.get('used_pct')
         if (type(used) not in (int, float) or not 0 <= used <= 100
                 or not math.isfinite(used)):
             continue
-        meter = _meter(used, en, window.get('resets'), checked if known else None,
-                       now, window.get('resets_at'))
+        if key == 'fable':
+            fable_reported = True
+        reset = instant(window.get('resets_at'))
+        lapsed = reset is not None and reset <= now
+        current = not historical and not lapsed
+        if used >= 100 and current:
+            blocked.append(('All models' if key == 'week' else
+                            '5-hour session' if key == 'session' else key.title(),
+                            '所有模型' if key == 'week' else
+                            '五小时窗口' if key == 'session' else key.title()))
+        meter = _meter(used, en, window.get('resets'), checked if known else None, now, reset)
         meter = meter.replace(f'<span>{en}</span>', '<span>' + bi_label(en, zh, inline=True)
                               + '</span>').replace('<div class="meter-foot">resets ',
             '<div class="meter-foot">' + bi_label('resets', '重置时间', inline=True) + ' ')
-        meters.append(f'<div class="quota-window quota-{key}">{meter}</div>')
+        meter = meter.replace('%</span></div>', '%<span class="quota-used-label">'
+                              + bi_label('used', '已用', inline=True) + '</span></span></div>')
+        remaining = (bi_label(f'{100 - used:g}% left', f'剩余 {100 - used:g}%', inline=True)
+                     if current else bi_label('Current remaining quota unknown',
+                                               '当前剩余额度未知', inline=True))
+        if lapsed:
+            remaining += ' · ' + bi_label('Reset time passed; refresh this reading.',
+                                          '重置时间已过，请刷新读数。', inline=True)
+        model_class = ' quota-model' if key not in ('week', 'session') else ''
+        state_class = ' quota-historical' if not current else ''
+        meters.append(f'<div class="quota-window quota-{key}{model_class}{state_class}">'
+                      + meter + '<div class="quota-remaining">' + remaining + '</div></div>')
     title = '<div class="quota-heading"><strong>' + bi_label(
-        'Claude usage', 'Claude 用量', inline=True) + '</strong><small>' + bi_label(
+        'Claude account quota', 'Claude 账号额度', inline=True) + '</strong><small>' + bi_label(
         'Account-wide · every device', '整个账号 · 所有设备', inline=True) + '</small></div>'
     if meters:
         message = (_quota_notice(
             '<strong>Historical reading · current quota unknown.</strong>',
             '<strong>历史读数 · 当前额度未知。</strong>', 'small lapsed') if historical else '')
-        body = message + '<div class="quota-windows">' + ''.join(meters) + '</div>'
+        exhausted = ''
+        if blocked:
+            en, zh = ', '.join(v[0] for v in blocked), '、'.join(v[1] for v in blocked)
+            exhausted = ('<div class="quota-blocked" role="status"><strong>' + bi_label(
+                en + ' limit reached', zh + '额度已用完', inline=True) + '</strong>'
+                + bi_label('Wait for the reset shown below. A model limit can be full '
+                           'while the all-model allowance still has room.',
+                           '请等待下方显示的重置时间。即使所有模型总额度还有剩余，'
+                           '单个模型的额度也可能已用完。', inline=True) + '</div>')
+            if all(key not in ('All models', '5-hour session') for key, _ in blocked):
+                exhausted = exhausted.replace('</div>', ' ' + bi_label(
+                    'Other models may still be available.', '其他模型可能仍可使用。',
+                    inline=True) + '</div>')
+        missing = ('' if fable_reported else '<div class="quota-model-missing"><strong>'
+                   + bi_label('Fable limit: not reported', 'Fable 额度：尚未上报', inline=True)
+                   + '</strong><br>' + bi_label(
+                       'Fable has its own allowance on some plans. This reading does not '
+                       'confirm how much is left.',
+                       '部分套餐为 Fable 单独设置额度；当前读数无法确认其剩余额度。',
+                       inline=True) + '</div>')
+        body = message + exhausted + '<div class="quota-windows">' + ''.join(meters)
+        body += missing + '</div>'
     else:
         body = '<div class="quota-empty"><strong>' + bi_label(
             'Waiting for a quota reading for the current account.' if previous_account
@@ -1691,9 +1821,12 @@ def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
     help_text = ('<details class="quota-help"><summary>' + bi_label(
         'About these limits', '关于用量限制', inline=True) + '</summary><p>' + bi_label(
         'These count everything this Claude account does, wherever you use it. '
+        'They match the limits shown by Claude Code /usage. '
+        'Model limits are part of the all-model allowance; do not add the percentages. '
         'Only reported windows are shown; an absent window does not confirm that its limit '
         'was removed. Check your Claude account for your plan and verification status.',
-        '读数包含这个 Claude 账号在所有设备上的用量。这里只展示已上报的窗口；没有显示某个'
+        '这些是 Claude Code /usage 中的账号额度，包含所有设备的用量。模型专属额度属于'
+        '总额度的一部分，请勿把百分比相加。这里只展示已上报的窗口；没有显示某个'
         '窗口，不代表对应限制已取消。请在 Claude 账号中确认套餐和验证状态。', inline=True)
         + ' <a href="https://claude.ai/settings/usage">'
         + bi_label('View usage in Claude', '在 Claude 中查看用量', inline=True)
@@ -1704,15 +1837,18 @@ def _quota_panel(quota: Mapping[str, Any], now: float, since: Any = 0, *,
             checked if known else None)
 
 
-def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "") -> str:
+def _quota_html(row: Mapping[str, Any], now: float, csrf: str = "", *,
+                usage_page: bool = False) -> str:
     """Keep historical account readings visibly distinct from current availability."""
-    bars, checked = _quota_panel(row.get("quota") or {}, now, row.get('usage_since', 0))
+    bars, checked = _quota_panel(row.get("quota") or {}, now, row.get('usage_since', 0),
+                                observation_fresh=row.get('quota_observation_fresh', True))
     region = (f'<div id="admin-quota-{escape(row["slot_id"])}" data-fleet-quota '
               'data-fleet-readonly>' if row.get("slot_id") else '<div>')
     if checked is not None:
         age = escape(_age(now, checked))
         bars += _quota_notice(f'read {age} ago', f'最近读取：{age} 前')
-    return region + bars + _quota_refresh(row, checked, now, csrf) + '</div>'
+    return region + bars + _quota_refresh(row, checked, now, csrf,
+                                         usage_page=usage_page) + '</div>'
 
 
 def _admin_relay_usage(row: Mapping[str, Any], now: float) -> str:
@@ -1823,6 +1959,64 @@ def _usage_span(usage: Mapping[str, Any]) -> str:
     return _plural(count, "day") if count else "?"
 
 
+def _quota_accounts(rows: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """One current row per verified Claude account, never sum account percentages."""
+    selected: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        if row.get('enabled') is False or (row.get('machine') and row.get('slot_state')
+                not in (slotstates.CLAIMED, slotstates.ACTIVE)):
+            continue
+        if not row.get('slot_id') and not row.get('quota') and not row.get('credentials_logged_in'):
+            continue
+        bound = row.get('quota_account')
+        key = ('account:' + bound if isinstance(bound, str)
+               and re.fullmatch(r'[0-9a-f]{16}', bound) else 'slot:' + str(row['id']))
+        current = selected.get(key)
+        at = instant((row.get('quota') or {}).get('checked_at')) or 0
+        previous = instant((current.get('quota') or {}).get('checked_at')) or 0 if current else -1
+        if current is None or at > previous:
+            selected[key] = row
+    return list(selected.values())
+
+
+def render_usage_dashboard(rows: list[Mapping[str, Any]], now: float, cfg: Config,
+                           csrf: str = '', who: Any = None, corner: str = '') -> str:
+    """A dedicated private /usage-style page using the console's scoped rows."""
+    is_admin = who is None or getattr(who, 'is_admin', True)
+    cards = []
+    for row in _quota_accounts(rows):
+        shown, _ = _called(row)
+        identity = row.get('credentials_email') or row.get('owner') or ''
+        plan = plans.label(row.get('subscription_type'), row.get('plan'))
+        identity = escape(str(identity)) + (' · ' + escape(plan) if plan else '')
+        cards.append('<section class="card quota-account-card"><h2>' + escape(shown)
+                     + '</h2><p class="quota-account-identity">' + identity + '</p>'
+                     + _quota_html(row, now, csrf if is_admin else '', usage_page=True)
+                     + '</section>')
+    empty = ('<div class="quota-empty"><strong>' + bi_label(
+        'No assigned Claude accounts yet.', '暂无已分配的 Claude 账号。', inline=True)
+        + '</strong></div>')
+    content = ('<div class="quota-page-head"><div><h1>'
+               + bi_label('Usage & limits', '用量与额度', inline=True) + '</h1>'
+               + '<p class="quota-page-intro">' + bi_label(
+                   'The same account limits as Claude Code /usage. Check the overall '
+                   'allowance and each model separately, including Fable.',
+                   '查看与 Claude Code /usage 相同的账号额度，分别显示总额度与 Fable 等'
+                   '各模型的专属额度。', inline=True) + '</p></div>'
+               + '<a class="btn" href="/admin" data-copy-zh="返回管理页">Back to admin</a>'
+               + '</div><p><a href="/admin/usage" data-fleet-status="admin">'
+               + bi_label('Refresh page readings', '刷新页面读数', inline=True)
+               + '</a></p><div class="quota-overview">' + (''.join(cards) or empty) + '</div>')
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<title>CC Fleet · Usage &amp; limits</title>'
+            f'<link rel="icon" href="{FAVICON}"><style>{CSS}{bilingual.CSS}</style>'
+            '</head><body class="console">'
+            + _console_bar(corner, product_href(cfg, '/')) + '<main class="page">'
+            + content + '</main>' + LOCAL_TIMES_TAG + PANEL_ACTION_TAG
+            + ADMIN_QUOTA_POLL_TAG + bilingual.SCRIPT_TAG + '</body></html>')
+
+
 def _usage_chart(usage: Mapping[str, Any]) -> tuple[str, str]:
     """The chart and its caption. Hourly from agents that report it, daily
     from older ones, and a plain sentence when the window holds nothing."""
@@ -1859,7 +2053,9 @@ def _strip_html(counts: Mapping[str, int]) -> str:
     for key, label in TILES:
         n = int(counts.get(key) or 0)
         cls = f"tile {key}" if n else "tile zero"
-        tiles.append(f'<div class="{cls}"><b>{n}</b><span>{admin_label(label)}</span></div>')
+        words = (bi_label('No reported issues', '未报告异常', inline=True)
+                 if key == 'ok' else admin_label(label))
+        tiles.append(f'<div class="{cls}"><b>{n}</b><span>{words}</span></div>')
     return f'<div class="strip">{"".join(tiles)}</div>'
 
 
@@ -1893,9 +2089,7 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f'<span class="alert-msg">{escape(a["message"])}</span>'
         f'<span class="muted small">{escape(_age(now, a["opened_at"]))} ago</span></div>'
         for a in alerts) or (
-        '<p class="quiet" data-copy-zh=\"当前没有告警，'
-            '所有节点均在阈值范围内。\">Nothing open. Every '
-            'node is inside its thresholds.</p>')
+        '<p class="quiet" data-copy-zh="当前没有告警。">No open alerts.</p>')
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
@@ -1963,7 +2157,13 @@ def render_dashboard(rows: list[Mapping[str, Any]], alerts: list[Mapping[str, An
         f'<h1>{admin_label(heading)}</h1><p class="sub">{admin_label(introduction)}</p>'
         f'<p class="sub small">{admin_label(cadence.capitalize())}{whoami}</p></div>'
         + '<div id="admin-health-counts" data-fleet-readonly>' + _strip_html(counts) + '</div>' +
-        "</header>" + extra + (traffic_html if is_admin else "")
+        "</header>" + '<section class="quota-entry"><div><h2>'
+        + bi_label('Claude account quotas', 'Claude 账号额度', inline=True)
+        + '</h2><p>' + bi_label('Overall and model limits, including Fable, in one place.',
+                               '在同一页面查看总额度与 Fable 等模型的专属额度。', inline=True)
+        + '</p></div><a class="btn primary" href="/admin/usage">'
+        + bi_label('Open Usage & limits', '查看用量与额度', inline=True) + '</a></section>'
+        + extra + (traffic_html if is_admin else "")
         + '<p><a href="/admin" data-fleet-status="admin" data-copy-zh=\"刷新状态\">Refresh '
             'status</a></p>'
         + '<h2 data-copy-zh=\"当前告警\">Open alerts</h2><div class="card" '

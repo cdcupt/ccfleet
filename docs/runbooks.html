@@ -895,8 +895,16 @@ Restarting ends whatever is running in Remote Control, so pick a quiet moment.</
 <h2 id="private-mac-owner-slot">Private Mac owner inference</h2>
 <p>A private owner node belongs to one administrator account. It is not rental
 inventory: other accounts and anonymous pages cannot see its identity, operating
-cost, usage, performance, or alerts. Its cost is private operator metadata and
+cost, performance, or alerts. Usage is excluded from the public ranking by default;
+the owner can explicitly opt into combining only measured token and model totals
+under their existing masked account. This does not publish the private machine's
+identity or operating cost. Its cost is private operator metadata and
 never creates an offer, service-fee quote, wallet debit, or subscription.</p>
+<p>After the owner's explicit choice, use
+<code>ccfleetd node private-public-usage NODE --account-id ACCOUNT_ID on</code>
+to include its measured daily totals in that owner's masked ranking. Use
+<code>off</code> to exclude those private contributions again. Both operations
+leave inference access and paired devices unchanged.</p>
 <p>Register it with <code>ccfleetd node private-add NODE --account-id ACCOUNT_ID
 --unix-user OWNER --monthly-cost-usd-cents COST_CENTS</code>. Capture the one-time
 node token directly into the owner's protected agent configuration; do not paste
@@ -933,6 +941,14 @@ normal unlock/login procedure.</p>
 that lacks private-node filtering. Preserve the additive private-owner table and
 current data. A legacy standby broker must reject owner-slot devices until its
 private-owner authorization support is upgraded.</p>
+<p>Usage history belongs to the account that produced it. Persist validated daily
+measurements before retiring or reassigning a slot, then combine sources by that
+account inside the existing seven-UTC-day window. Replace repeated cumulative
+daily snapshots rather than adding heartbeat totals. Older rolling reports cannot
+be split into invented daily values; use their original numeric day buckets for
+a verified migration backfill. Do not reactivate an old account or copy native
+credentials to recover usage. A private owner's publication consent must be
+explicit and must not change inference grants, pairing, wallet entries or prices.</p>
 <h2 id="count-an-owners-own-node-as-their-slot-legacy">Count an owner's own node as their slot (legacy)</h2>
 <p>An owner's own node can count as a slot they hold, so everything a person
 uses is one list on their page and in the console: one account, one slot.
