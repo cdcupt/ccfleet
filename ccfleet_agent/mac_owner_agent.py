@@ -9,7 +9,6 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
-import math
 import os
 import re
 import stat
@@ -47,10 +46,11 @@ AGENT_VERSION = "private-mac-1"
 RENEW_EARLY = 600
 RENEW_RETRY = 300
 MAX_REPLY = 64 * 1024
+QUOTA_INTERVAL = 300
 
 
 def _number(value):
-    return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    return type(value) in (int, float) and 0 <= value < 1e14
 
 
 def load_config(home: Path) -> dict[str, Any]:
@@ -194,7 +194,8 @@ def maintain_native(cfg: dict, home: Path, facts: dict[str, Any], now: float) ->
         return {"state": "retrying", "reason": "native_refresh_unconfirmed", "checked_at": now}
     # Store only a bound fingerprint, timestamps and fixed outcomes, never token
     # bytes, token hashes, or captured native output.
-    reservation = {"version": 1, "bound_fp": bound, "last_attempt_at": now,
+    reservation = {**(previous if previous.get("bound_fp") == bound else {}),
+                   "version": 1, "bound_fp": bound, "last_attempt_at": now,
                    "next_attempt_at": now + RENEW_RETRY, "cleanup_confirmed": False}
     policy.write_json(home, "maintenance.json", reservation)
     observed = _native_renewal_probe(cfg, home, bound)
@@ -215,6 +216,93 @@ def maintain_native(cfg: dict, home: Path, facts: dict[str, Any], now: float) ->
     return report
 
 
+def _quota_cache(home: Path, bound: str, now: float) -> dict[str, Any]:
+    value = sibling("agent").cached_usage(home / ".claude", global_config=home / ".claude.json",
+                                         account_fp=bound)
+    return value if value and value["checked_at"] <= now + 60 else {}
+
+
+def quota_report(cfg: dict, home: Path, facts: dict[str, Any], now: float,
+                 *, maintenance: bool = True) -> dict[str, Any]:
+    """Read native account quota, refreshing only through the existing safe /usage probe.
+
+    A recent native renewal also satisfies the five-minute probe budget. No OAuth request,
+    model request, credential copy or user project is introduced by this reader.
+    """
+    bound = facts.get("bound_fp")
+    if (facts.get("logged_in") is not True or not isinstance(bound, str)
+            or facts.get("account_fp") != bound):
+        return {}
+    report = _quota_cache(home, bound, now)
+    if not maintenance:
+        return report
+    policy = sibling("mac_policy")
+    try:
+        previous = policy.read_json(home, "maintenance.json")
+    except ValueError:
+        previous = {}
+    if previous.get("bound_fp") != bound:
+        previous = {}
+    wanted = previous.get("quota_requested_at")
+    wanted = wanted if _number(wanted) and 0 < wanted <= now + 60 else None
+    ack = previous.get("quota_refresh")
+    ack = ack if isinstance(ack, dict) else {}
+    answered = ack.get("requested_at")
+    answered = answered if _number(answered) else 0
+    asked = wanted is not None and wanted > answered
+    due = not report or now - report["checked_at"] >= QUOTA_INTERVAL
+    attempts = [previous.get("last_attempt_at"), previous.get("quota_attempted_at")]
+    throttled = any(_number(value) and now - value < QUOTA_INTERVAL for value in attempts)
+    cleaned = previous.get("cleanup_confirmed") is not False
+    outcome = "quota_read" if report and not due else "native_probe_busy"
+    if due and not throttled and cleaned:
+        reservation = {**previous, "version": 1, "bound_fp": bound,
+                       "quota_attempted_at": now, "cleanup_confirmed": False}
+        policy.write_json(home, "maintenance.json", reservation)
+        observed = _native_renewal_probe(cfg, home, bound)
+        report = _quota_cache(home, bound, time.time())
+        cleaned = observed.get("cleanup_confirmed") is True
+        outcome = ("quota_read" if cleaned and report and
+                   report["checked_at"] >= now - 90 else observed.get("outcome"))
+        previous = {**reservation, "cleanup_confirmed": cleaned}
+        policy.write_json(home, "maintenance.json", previous)
+    if asked:
+        refresh = sibling("agent")._quota_refresh(wanted, max(now, time.time()), outcome)
+        if refresh:
+            ack = refresh["refresh"]
+            previous = {**previous, "version": 1, "bound_fp": bound, "quota_refresh": ack}
+            policy.write_json(home, "maintenance.json", previous)
+    if ack:
+        # The helper validates fixed outcomes and numeric timestamps before the
+        # persisted acknowledgement can cross the heartbeat boundary.
+        report.update(sibling("agent")._quota_refresh(
+            ack.get("requested_at"), ack.get("attempted_at"), ack.get("outcome")))
+    return report
+
+
+def remember_quota_request(home: Path, request: Any, *, now: Optional[float] = None) -> None:
+    """Accept one typed refresh timestamp; generic controller commands stay ignored."""
+    now = time.time() if now is None else now
+    if not isinstance(request, dict) or set(request) != {"requested_at"}:
+        return
+    wanted = request["requested_at"]
+    if not _number(wanted) or not 0 < wanted <= now + 60:
+        return
+    policy = sibling("mac_policy")
+    bound = policy.policy(home)["bound_fp"]
+    try:
+        previous = policy.read_json(home, "maintenance.json")
+    except ValueError:
+        previous = {}
+    if previous.get("bound_fp") != bound:
+        previous = {}
+    remembered = previous.get("quota_requested_at")
+    if _number(remembered) and wanted <= remembered:
+        return
+    policy.write_json(home, "maintenance.json", {**previous, "version": 1, "bound_fp": bound,
+                                                "quota_requested_at": wanted})
+
+
 def build_payload(cfg: dict, home: Path, *, now: Optional[float] = None,
                   maintenance: bool = True) -> dict[str, Any]:
     now = time.time() if now is None else now
@@ -228,6 +316,9 @@ def build_payload(cfg: dict, home: Path, *, now: Optional[float] = None,
         facts.update(credential_facts(home, status))
     slot: dict[str, Any] = {"unix_user": owner.pw_name, "present": True,
                             "claude": {"version": version}, "credentials": facts}
+    quota = quota_report(cfg, home, facts, now, maintenance=maintenance)
+    if quota:
+        slot["quota"] = quota
     if facts.get("logged_in") is True and isinstance(facts.get("bound_fp"), str):
         try:
             metrics = sibling("relay_metrics")
@@ -236,7 +327,7 @@ def build_payload(cfg: dict, home: Path, *, now: Optional[float] = None,
             pass
     return {"node_id": cfg["node_id"], "ts": now, "agent_version": AGENT_VERSION,
             "mode": "private_owner", "claude": {"version": version},
-            "credentials": facts, "slots": [slot]}
+            "credentials": facts, "slots": [slot], **({"quota": quota} if quota else {})}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -306,13 +397,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        # Only this fixed typed grant response is acted on. Generic desired
-        # state, login, upgrade, wipe and arbitrary command fields are ignored.
+        # Only fixed typed grants and quota-read timestamps are acted on. Generic
+        # desired state, login, upgrade, wipe and arbitrary commands are ignored.
         status, response = post_heartbeat(cfg, build_payload(cfg, home))
         if status != 200:
             print("private owner heartbeat unavailable", file=sys.stderr)
             return 1
         converge_access(home, response.get("private_owner_access"))
+        remember_quota_request(home, response.get("private_owner_quota"))
         print("private owner heartbeat accepted", file=sys.stderr)
         return 0
     except (OSError, ValueError):

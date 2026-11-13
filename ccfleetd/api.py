@@ -72,6 +72,7 @@ from .render import (
     render_add_result,
     render_dashboard,
     render_token_result,
+    render_usage_dashboard,
 )
 from .store import Store, StoreError, slot_login_key
 
@@ -117,6 +118,7 @@ def access_log_route(target: Any) -> str:
     except ValueError:
         return "unknown_route"
     if path in {"/", "/healthz", "/slots", "/account", "/account/available", "/privacy", "/status",
+                "/account/usage", "/admin/usage",
                 "/account/purchase", "/account/renew", "/account/topup",
                 "/account/subscribe", "/account/subscriptions",
                 "/account/subscriptions/portal", "/account/subscriptions/cancel",
@@ -467,6 +469,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
             current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
+                       "/account/usage",
                        "/account/purchase", "/account/renew", "/account/topup",
                        "/account/devin-trial",
                 "/account/subscribe", "/account/subscriptions",
@@ -940,11 +943,16 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
                                        session_id)
             if outcome.location:
+                location = outcome.location
+                if (form.get("usage_page") == "1"
+                        and re.fullmatch(r"/account/slots/[A-Za-z0-9_.:-]+/quota", path)
+                        and location.startswith("/account?")):
+                    location = "/account/usage" + location[len("/account"):]
                 if (self.headers.get("X-Fleet-Partial") == "1"
                         and partial_account_action(path)):
-                    self._json(200, {"location": self._page_location(outcome.location)})
+                    self._json(200, {"location": self._page_location(location)})
                 else:
-                    self._redirect(outcome.location)
+                    self._redirect(location)
             else:
                 self._send(outcome.status, outcome.body.encode("utf-8"),
                            {**HTML_HEADERS, "Cache-Control": "no-store"})
@@ -1357,12 +1365,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/api/cli/connect":
                 self._cli_connect()
                 return
-            admin_only = (path in ("/api/nodes", "/api/alerts", "/auth/basic")
+            admin_only = (path in ("/api/nodes", "/api/alerts", "/auth/basic", "/admin/usage")
                           or path.rstrip("/") == CONSOLE_PATH)
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    (path in ("/slots", "/account", "/account/available", "/account/purchase",
+                    (path in ("/slots", "/account", "/account/usage", "/account/available",
+                              "/account/purchase",
                               "/account/renew", "/account/topup", "/privacy", "/status")
                      or customer_docs.page_for(path))
                     and not self._product_site()):
@@ -1395,6 +1404,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._send(200, usersite.page(ctx.store, ctx.cfg, account, session_id,
                     time.time(), note, topup_ready=stripe_routes.enabled(
                         ctx.billing, ctx.cfg)).encode("utf-8"),
+                           HTML_HEADERS)
+            elif path == "/account/usage":
+                account, session_id = self._signed_in()
+                try:
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query,
+                                                   max_num_fields=16)
+                except ValueError:
+                    self._json(400, {"error": "too many query fields"})
+                    return
+                note = query.get("note", [""])[0]
+                self._send(200, usersite.usage_page(
+                    ctx.store, ctx.cfg, account, session_id, time.time(), note).encode("utf-8"),
                            HTML_HEADERS)
             elif path == trial_routes.PAGE:
                 if not self._product_site() or ctx.cfg.broker_only:
@@ -1474,11 +1495,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._redirect(CONSOLE_PATH)
                     return
                 self._docs_page(customer_docs.overview)
-            elif path.rstrip("/") == CONSOLE_PATH:
+            elif path.rstrip("/") == CONSOLE_PATH or path == "/admin/usage":
                 who = (identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
                        or self._operator_session())
                 if who is None:
                     self._console_door()
+                elif path == "/admin/usage":
+                    self._send(200, render_usage_dashboard(
+                        self._rows(who), time.time(), ctx.cfg, csrf_token(ctx.cfg), who,
+                        corner=self._console_corner()).encode("utf-8"), HTML_HEADERS)
                 else:
                     self._send(200, self._dashboard(who).encode("utf-8"), HTML_HEADERS)
             elif path == "/api/nodes":
@@ -1683,6 +1708,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(200, {"ok": True, "pinned_version": "", "desired": {},
                     "private_owner_access": ctx.store.private_owner_access(
                         node["id"], ctx.cfg.gateway_ssh_public_key if ctx.gateway.enabled else ""),
+                    "private_owner_quota": ctx.store.private_owner_quota(node["id"]),
                     "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                     "events": len(events)})
                 return
@@ -1876,14 +1902,17 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         return
                     anchor = consoleslots.act(ctx.store, parts[1], parts[2], parts[3],
                                               form, time.time(), by=who.label)
+                    destination = ("/admin/usage" if form.get("usage_page") == "1"
+                                   and parts[1] == "slot" and parts[3] == "quota"
+                                   else CONSOLE_PATH)
                     if anchor is None:
                         self._json(404, {"error": "not found"})
                     elif (self.headers.get("X-Fleet-Partial") == "1"
                           and parts[1] == "slot" and parts[3] == "quota"):
                         self._json(200, {"location": self._page_location(
-                            f"{CONSOLE_PATH}#{anchor}")})
+                            f"{destination}#{anchor}")})
                     else:
-                        self._redirect(f"{CONSOLE_PATH}#{anchor}")
+                        self._redirect(f"{destination}#{anchor}")
                 else:
                     self._json(404, {"error": "not found"})
             except StoreError as exc:

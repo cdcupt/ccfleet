@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, Optional
 
-from ccfleet_agent.model_usage import LABELS, MODELS_URL, PRICING_URL
+from ccfleet_agent.model_usage import FAMILIES, FAMILY_ORDER, LABELS, MODELS_URL, PRICING_URL
 
 from . import (
     claude_versions,
@@ -669,6 +669,13 @@ white-space:normal;overflow-wrap:anywhere;max-width:26ch}
 .usage-ranking .usage-model-coverage{display:block;max-width:30ch;white-space:normal;
 font-weight:400;color:var(--muted);font-size:11px;line-height:1.6;margin-top:5px}
 .usage-ranking .usage-models{display:grid;gap:10px;margin:12px 0 0}
+.usage-family-summary{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.usage-family{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:4px;
+padding:6px 10px;border:1px solid var(--rule-soft);border-radius:8px;font-size:12px}
+.usage-family-fable{border-color:var(--acc);background:var(--panel);color:var(--ink)}
+.usage-family-other{color:var(--muted)}
+.usage-ranking .usage-family-heading{margin:18px 0 8px;font-size:14px;font-weight:650}
+.usage-ranking .usage-model-explanation{font-size:12px;line-height:1.6;color:var(--muted)}
 .usage-model{padding:16px 18px;border:1px solid var(--rule-soft);border-radius:10px;
 background:var(--inset);white-space:normal;min-width:0}
 .usage-model-head{display:flex;flex-wrap:wrap;justify-content:space-between;
@@ -807,6 +814,11 @@ align-items:start;gap:20px}
 letter-spacing:-.025em;overflow-wrap:anywhere}
 .account-dashboard .slot-head .pill{font-size:11px;letter-spacing:0;padding:5px 8px}
 .account-dashboard .slot-body{padding:4px 20px 12px;min-width:0}
+.slot-quota-primary{margin:16px 0 20px;padding:18px;border:1px solid var(--acc-line);
+border-radius:12px;background:var(--inset)}
+.slot-quota-primary>p{margin:14px 0 0;font-size:12px}
+.private-owner-slot>.usage-bars{margin:18px 0;padding:18px;border:1px solid var(--acc-line);
+border-radius:12px;background:var(--inset)}
 .account-dashboard .slot-body p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
 .account-dashboard .machine-line .bi-inline .st-dot{margin-inline-end:8px}
 .account-dashboard .machine-line .bi-inline a{margin-inline-start:8px}
@@ -994,7 +1006,8 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             + '<a href="https://github.com/cdcupt/ccfleet" target="_blank" '
             'rel="noopener noreferrer">' + label("Source code", "源代码", inline=True)
             + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG
-            + (QUOTA_POLL_TAG + PANEL_ACTION_TAG if title == "your slots" else "")
+            + (QUOTA_POLL_TAG + PANEL_ACTION_TAG
+               if title in ("your slots", "Usage & limits") else "")
             + '</body></html>')
 
 
@@ -1097,7 +1110,7 @@ def _public_usage_model_summary(reading: Mapping[str, Any]) -> str:
     """Expose only observed catalogue labels, never infer a model from the reference."""
     models = reading.get("models")
     names, unknown = [], False
-    for model in models[:16] if isinstance(models, list) else []:
+    for model in models[:len(LABELS)] if isinstance(models, list) else []:
         if not isinstance(model, Mapping) or not _public_usage_count(model.get("samples")):
             continue
         key = model.get("model")
@@ -1133,14 +1146,55 @@ def _public_usage_model_coverage(reading: Mapping[str, Any]) -> str:
     return text
 
 
+def _public_usage_family_title(family: str) -> str:
+    return (label("Model not identified", "模型未识别", inline=True) if family == "other"
+            else escape(family.title()))
+
+
+def _public_usage_families(reading: Mapping[str, Any]) -> str:
+    """Visible family subtotals use only recorded, finite model identities."""
+    models = reading.get("models")
+    totals: dict[str, int] = {}
+    for model in models[:len(LABELS)] if isinstance(models, list) else []:
+        if not isinstance(model, Mapping) or not _public_usage_count(model.get("samples")):
+            continue
+        key = model.get("model")
+        tokens = model.get("tokens")
+        count = (_public_usage_count(tokens.get("total_tokens"))
+                 if isinstance(tokens, Mapping) else None)
+        if not isinstance(key, str) or key not in FAMILIES or count is None:
+            continue
+        family = FAMILIES[key]
+        total = totals.get(family, 0) + count
+        if _public_usage_count(total) is not None:
+            totals[family] = total
+    rows = []
+    for family in FAMILY_ORDER:
+        if family not in totals:
+            continue
+        rows.append('<span class="usage-family usage-family-' + family + '"><b>'
+                    + _public_usage_family_title(family) + '</b> · '
+                    + _public_usage_token(totals[family])
+                    + label(" tokens", " Token", inline=True) + '</span>')
+    unrecorded = _public_usage_count(reading.get("unrecorded_model_samples"))
+    if unrecorded:
+        rows.append('<span class="usage-family usage-family-other">' + label(
+            f"Model not recorded · {unrecorded:,} replies",
+            f"未记录模型 · {unrecorded:,} 个回复", inline=True) + '</span>')
+    return ('<div class="usage-family-summary">' + ''.join(rows) + '</div>' if rows else '')
+
+
 def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
-    priced_rows, unpriced_rows = [], []
-    for model in models[:16] if isinstance(models, list) else []:
+    families: dict[str, list[str]] = {}
+    for model in models[:len(LABELS)] if isinstance(models, list) else []:
         if not isinstance(model, Mapping):
             continue
         key = model.get("model")
-        title = (escape(LABELS[key]) if isinstance(key, str) and key in LABELS
-                 and key != "other" else label("Other / unknown", "其他／未知", inline=True))
+        if not isinstance(key, str) or key not in FAMILIES:
+            continue
+        family = FAMILIES[key]
+        title = (escape(LABELS[key]) if key != "other"
+                 else _public_usage_family_title("other"))
         tokens = model.get("tokens")
         tokens = tokens if isinstance(tokens, Mapping) else {}
         sample_text = _public_usage_number(model.get("samples"))
@@ -1159,7 +1213,7 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
         paired = ('<small>' + label("API estimate for ", "API 估值对应 ", inline=True)
                   + _public_usage_token(tokens.get("total_tokens"))
                   + label(" tokens", " Token", inline=True) + '</small>' if known else '')
-        (priced_rows if known else unpriced_rows).append(
+        families.setdefault(family, []).append(
                     '<div class="usage-model"><div class="usage-model-head">'
                     '<span class="usage-model-name">' + title + '</span>'
                     '<span class="usage-model-value">' + value + '</span></div>' + paired
@@ -1179,17 +1233,25 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
               + _public_usage_badge(reading) + ' · ' + label("for ", "对应 ", inline=True)
               + _public_usage_token(priced.get("total_tokens"))
               + label(" priced tokens", " 已计价 Token", inline=True) + '</p>' if matched else '')
-    detail += ('<p>' + label("Priced model breakdown", "已计价模型明细", inline=True)
-              + '</p><div class="usage-models">' + ''.join(priced_rows) + '</div>'
-              if priced_rows else '<p>' + label(
-                  "Reported-model pricing has no matched observations yet. The ranking still "
-                  "converts recorded tokens at the common Opus 5.5 reference rates.",
-                  "上报模型计价暂无匹配观测；排行仍按统一的 Opus 5.5 参考价格折算已记录 Token。",
-                  inline=True) + '</p>')
-    outside = ('<p>' + label("Model observations without a reported-model price",
-                            "暂无上报模型价格的观测", inline=True)
-               + '</p><div class="usage-models">' + ''.join(unpriced_rows) + '</div>'
-               if unpriced_rows else '')
+    for family in FAMILY_ORDER:
+        if family not in families:
+            continue
+        detail += ('<h3 class="usage-family-heading">' + _public_usage_family_title(family)
+                   + '</h3><div class="usage-models">' + ''.join(families[family]) + '</div>')
+        if family == "other":
+            detail += '<p class="usage-model-explanation">' + label(
+                "These tokens were recorded, but a usable original model name was not kept. "
+                "They cannot be reliably reassigned to Fable or another model. Newly recognized "
+                "model versions are counted separately from these saved unknown totals.",
+                "这些 Token 已记录，但没有保留可用的原始模型名称，因此无法可靠地重新归入 Fable "
+                "或其他模型。新识别的模型版本会单独统计，不会改写这些已保存的未知用量。",
+                inline=True) + '</p>'
+    if not families:
+        detail += '<p>' + label(
+            "No model breakdown was recorded for this usage. The recorded token totals still "
+            "count toward the ranking; no model name or model-specific price is inferred.",
+            "这些用量没有记录模型明细；已记录 Token 仍参与排行，但不推测模型名称或模型价格。",
+            inline=True) + '</p>'
     totals = reading.get("tokens")
     totals = totals if isinstance(totals, Mapping) else {}
     unpriced = reading.get("unpriced_tokens")
@@ -1201,23 +1263,27 @@ def _public_usage_models(models: Any, reading: Mapping[str, Any]) -> str:
                            ("cache_read_input_tokens", "Cache read", "缓存读取"),
                            ("cache_creation_input_tokens", "Cache write", "缓存写入")))
     aggregate = '<div class="usage-model"><span class="usage-model-name">' + label(
-        "Recorded usage used for the common reference",
-        "统一参考折算使用的已记录用量",
+        "Tokens used to calculate this ranking",
+        "本次排行采用的 Token 用量",
         inline=True)
     aggregate += '</span><p>' + label("Reported total ", "上报总量 ", inline=True)
     aggregate += _public_usage_token(totals.get("total_tokens")) + ' · ' + label(
         "Without matched model price ", "未匹配上报模型价格 ", inline=True)
     aggregate += _public_usage_token(unpriced.get("total_tokens"))
     aggregate += '</p><small>' + label(
-        "The ranking converts these recorded categories at one reference price. Reported-model "
-        "estimates above cover only matched model observations.",
-        "排行按同一参考价格折算这些已记录分类；上方上报模型估值只覆盖已匹配的模型观测。",
+        "We price everyone's recorded tokens using the same Opus 5.5 rates so the amounts "
+        "can be compared. This is a comparison score in dollars, not your bill or remaining "
+        "Claude quota. The model estimates above use each identified model's own price.",
+        "我们将所有人已记录的 Token 按同一套 Opus 5.5 价格折算，便于比较。美元数值是比较用的"
+        "分数，不是账单或 Claude 剩余额度。上方模型估值则使用各个已识别模型自己的价格。",
         inline=True) + '</small>'
     aggregate += '<dl class="usage-token-grid">' + reported + '</dl></div>'
-    return ('<details class="usage-model-detail"><summary>'
-            + label("Token & model details", "Token 与模型明细", inline=True) + '</summary>'
+    return (_public_usage_families(reading)
+            + '<details class="usage-model-detail"><summary>'
+            + label("Model versions & calculation", "模型版本与计算方式", inline=True)
+            + '</summary>'
             + '<p class="usage-model-coverage">' + _public_usage_model_coverage(reading)
-            + '</p>' + detail + aggregate + outside + '<p>' + _public_usage_coverage(reading)
+            + '</p>' + detail + aggregate + '<p>' + _public_usage_coverage(reading)
             + '</p></details>')
 
 
@@ -1348,10 +1414,13 @@ def public_usage_panel(ranking: Any) -> str:
         "to everyone's recorded input, output and cache tokens, even when the original model "
         "was not recorded. Saved daily usage stays with the same user when a slot goes "
         "offline or changes; it expires normally from this seven-day window. "
-        "Dollar values cover the tokens shown in the same row.",
+        "Dollar values cover the tokens shown in the same row. This is a comparison value, "
+        "not a bill or your remaining Claude quota. Model families are shown separately "
+        "below each row.",
         "每一行都来自有实际活动的真实用户。我们用同一参考价格折算每个人已记录的输入、输出"
         "和缓存 Token，即使没有记录原模型，也能参与排行。槽位离线或更换后，已保存的每日用量"
-        "仍归属于同一用户，并按七个 UTC 日期的窗口正常到期。美元折算值对应同一行展示的用量。",
+        "仍归属于同一用户，并按七个 UTC 日期的窗口正常到期。美元折算值对应同一行展示的用量，"
+        "仅用于比较，不是账单或 Claude 剩余额度。每行下方单独展示各类模型用量。",
         inline=True) + '</p>'
     source += '<p>' + label(
         "Reported processed tokens include cached context counted again on each request; "
@@ -1663,6 +1732,7 @@ def _monthly_management(store: Store, cfg: Config, account: Mapping[str, Any]) -
 
 def _account_nav(current: str, *, monthly: bool = False) -> str:
     pages = [("/account", "Your slots", "我的槽位"),
+             ("/account/usage", "Usage & limits", "用量与额度"),
              ("/account/available", "Available slots", "可用槽位")]
     if monthly:
         pages.append(("/account/subscriptions", "Monthly payments", "月付管理"))
@@ -1673,6 +1743,94 @@ def _account_nav(current: str, *, monthly: bool = False) -> str:
                       + label(en, zh, inline=True) + '</a>'
                       for path, en, zh in pages)
             + '</nav>')
+
+
+def _account_quota(slot: Mapping[str, Any], report: Mapping[str, Any], now: float,
+                   csrf: str, *, heard: Any = None, max_age: float = 15 * 60,
+                   usage_page: bool = False) -> str:
+    """A visible quota region, separate from credential and connection details."""
+    creds = report.get('credentials') or {}
+    quota = report.get('quota') or {}
+    renewal = renewal_report(creds.get('renewal'))
+    if (creds.get('logged_in') is False or renewal.get('reason') in TRANSITION_REASONS
+            or creds.get('account_fp')
+            and creds.get('bound_fp') and creds['account_fp'] != creds['bound_fp']):
+        quota = {}
+    since = max(slot.get('claimed_at') or 0, slot.get('account_switched_at') or 0)
+    heard_at = instant(heard)
+    fresh = heard_at is not None and now - min(max_age, 10 * 60) <= heard_at <= now + 60
+    bars, checked = _quota_panel(quota, now, since, observation_fresh=fresh)
+    if ((slot.get('kind') != slotstates.OWNER_SLOT or slot.get('private_owner'))
+            and slot.get('state') == slotstates.ACTIVE):
+        bars += _quota_refresh(slot, {**report, 'quota': quota}, csrf, now,
+                               usage_page=usage_page)
+    else:
+        if checked is not None:
+            bars += _notice('Read ' + _age(now, checked) + ' ago.',
+                            '最近读取：' + _age(now, checked) + ' 前。', 'small muted')
+        bars += _notice('Readings come from Claude Code on this computer.',
+                        '读数来自这台电脑上的 Claude Code。', 'small muted')
+    return ('<div class="usage-bars" id="slot-' + escape(slot['id'])
+            + '-quota" data-fleet-readonly>' + bars + '</div>')
+
+
+def usage_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
+                session_id: str, now: float, note: str = '') -> str:
+    """The signed-in holder's /usage-style account and model quota page."""
+    if account is None:
+        return _signed_out(cfg)
+    held = [slot for slot in store.list_slots(held_by=account['id'])
+            if not slot.get('private_owner') or account.get('role') == 'admin']
+    latest = store.latest_heartbeats()
+    csrf = csrf_for(session_id, cfg.cookie_secret)
+    cards = []
+    for slot in held:
+        hb = latest.get(slot['node_id'])
+        report = (_own_report(hb) if slot.get('kind') == slotstates.OWNER_SLOT
+                  and not slot.get('private_owner')
+                  else _report_for(slot, hb))
+        creds = report.get('credentials') or {}
+        plan = plans.label(creds.get('subscription_type'), creds.get('plan'))
+        since = max(slot.get('claimed_at') or 0, slot.get('account_switched_at') or 0)
+        heard = instant((hb or {}).get('ts'))
+        matched = (creds.get('bound_fp') and creds.get('bound_fp') == creds.get('account_fp'))
+        identity = (creds.get('email') if creds.get('logged_in') is True and matched
+                    and heard is not None and heard >= since else None)
+        subtitle = (escape(str(identity)) if identity else
+                    label('Your Claude account', '你的 Claude 账号', inline=True))
+        if plan:
+            subtitle += ' · ' + escape(plan)
+        cards.append('<section class="card slot quota-account-card" id="slot-'
+                     + escape(slot['id']) + '"><h2>' + escape(names.display(slot))
+                     + '</h2><p class="quota-account-identity">' + subtitle + '</p>'
+                     + _account_quota(slot, report, now, csrf, heard=(hb or {}).get('ts'),
+                                      max_age=cfg.heartbeat_max_age_s, usage_page=True)
+                     + '</section>')
+    empty = ('<div class="quota-empty"><strong>' + label(
+        'No Claude account quota to show yet.', '暂无可显示的 Claude 账号额度。', inline=True)
+        + '</strong><p>' + label('Claim a slot and sign in to Claude to see its limits here.',
+                                 '领取槽位并登录 Claude 后，即可在此查看额度。', inline=True)
+        + '</p><a class="btn" href="/account">'
+        + label('Your slots', '我的槽位', inline=True) + '</a></div>')
+    tone, words = NOTES.get(note, ('', ''))
+    banner = ('<div class="note-banner ' + tone + '">'
+              + label(words, NOTES_ZH.get(note, words)) + '</div>' if words else '')
+    body = ('<section class="account-dashboard"><div class="quota-page-head"><div><h1>'
+            + label('Usage & limits', '用量与额度', inline=True) + '</h1>'
+            + '<p class="quota-page-intro">' + label(
+                'Your Claude Code /usage limits, in one place. See the weekly allowance, '
+                'Fable and other model limits, and when each resets.',
+                '在同一页面查看 Claude Code /usage 的额度：每周总额度、Fable 等模型的'
+                '专属额度，以及各自的重置时间。', inline=True) + '</p></div>'
+            + '<a class="btn" href="https://claude.ai/settings/usage">'
+            + label('Open Claude usage', '打开 Claude 用量页', inline=True) + '</a></div>'
+            + _account_nav('/account/usage', monthly=_monthly_management(store, cfg, account))
+            + banner + '<p><a href="/account/usage" data-fleet-status="account">'
+            + label('Refresh page readings', '刷新页面读数', inline=True)
+            + '</a></p><div class="quota-overview">' + (''.join(cards) or empty)
+            + '</div></section>')
+    return _shell('Usage & limits', body,
+                  viewer=viewer_for(account, session_id, cfg, store), width='wide')
 
 
 def available_page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
@@ -2863,7 +3021,8 @@ def _slot_card(
     traffic_html: str = "",
 ) -> str:
     own = slot.get("kind") == slotstates.OWNER_SLOT
-    report = _own_report(heartbeat) if own else _report_for(slot, heartbeat)
+    report = (_own_report(heartbeat) if own and not slot.get('private_owner')
+              else _report_for(slot, heartbeat))
     if slot.get("private_owner"):
         private = node.get("private_owner") or {}
         cents = private.get("monthly_cost_usd_cents")
@@ -2874,10 +3033,12 @@ def _slot_card(
             "Keep one active node per account.",
             "该 Claude 账号也在其他节点上报告登录。每个账号仅保留一个活动节点。", "small lapsed")
             if "account_elsewhere" in flagged else "")
-        return ('<section class="card slot-card private-owner-slot" id="slot-'
+        return ('<section class="card slot slot-card private-owner-slot" id="slot-'
                 + escape(slot["id"]) + '"><h2>' + escape(names.display(slot)) + '</h2><p>'
                 + label("Private administrator Mac", "管理员私有 Mac", inline=True)
-                + '</p><p>' + label("Operating cost: ", "运行成本：", inline=True)
+                + '</p>' + _account_quota(slot, report, now, csrf,
+                    heard=(heartbeat or {}).get('ts'), max_age=cfg.heartbeat_max_age_s)
+                + '<p>' + label("Operating cost: ", "运行成本：", inline=True)
                 + escape(cost) + '</p>' + machine_line + warning
                 + '<p class="muted">' + label(
                     "This is your own computer. Sign-in and maintenance happen on the Mac; "
@@ -2975,6 +3136,13 @@ def _slot_card(
         )
         + f"</span></span>{mine}</h2></div><div class=\"slot-body\">",
     ]
+    if slot['state'] == slotstates.ACTIVE or own:
+        parts.append('<section class="slot-quota-primary">'
+                     + _account_quota(slot, report, now, csrf, heard=heard,
+                                      max_age=cfg.heartbeat_max_age_s)
+                     + '<p><a href="/account/usage">'
+                     + label('Open Usage & limits', '查看用量与额度', inline=True)
+                     + '</a></p></section>')
     technical = ['<p class="slot-meta">'
         + bi(
             (about + " · " if about else "") + "machine " + machine,
@@ -3057,6 +3225,7 @@ def _slot_card(
                 ),
                 slot_id=slot["id"],
                 since=max(slot.get("claimed_at") or 0, slot.get("account_switched_at") or 0),
+                include_quota=False,
             )
         ]
         if not own:
@@ -3064,8 +3233,8 @@ def _slot_card(
             usage.append(
                 _relay_usage(report.get("relay"), heard, now, cfg.heartbeat_max_age_s, since=since)
             )
-        parts.append(_slot_disclosure('Usage & limits', '用量与额度', ''.join(usage),
-                                      'slot-usage'))
+        parts.append(_slot_disclosure('Measured usage & sign-in', '观测用量与登录状态',
+                                      ''.join(usage), 'slot-usage'))
     if slot["state"] in CAN_SIGN_IN:
         for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
             if rule in flagged:
@@ -3540,7 +3709,7 @@ def _relay_usage(raw: Any, heard: Any, now: float, max_age: float, *, since: flo
 
 
 def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: bool = True,
-            slot_id: Optional[str] = None, since: float = 0) -> str:
+            slot_id: Optional[str] = None, since: float = 0, include_quota: bool = True) -> str:
     """The bound account and observed usage, with the same readiness conditions."""
     if not fresh:
         return _notice(
@@ -3700,7 +3869,7 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
             )
         )
     quota = report.get("quota") or {}
-    bars, _ = _quota_panel(quota, now, since)
+    bars = _quota_panel(quota, now, since)[0] if include_quota else ''
     usage = report.get("usage") or {}
     spent = ""
     if usage:
@@ -3732,7 +3901,8 @@ def _in_use(report: Mapping[str, Any], now: float, refresh: str = "", *, fresh: 
                     f' {escape(span_zh)}</div>'
                 ),
             )
-    bars += refresh
+    if include_quota:
+        bars += refresh
     halves = [
         f'<div class="usage-{name}"'
         + (f' id="slot-{escape(slot_id)}-quota" data-fleet-readonly'
@@ -4085,7 +4255,7 @@ def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
 
 
 def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
-                   now: float) -> str:
+                   now: float, *, usage_page: bool = False) -> str:
     """Read account quota now, keeping the same protected action."""
     read = (report.get("quota") or {}).get("checked_at")
     acknowledgement = (report.get("quota") or {}).get("refresh")
@@ -4124,6 +4294,8 @@ def _quota_refresh(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str
     return (failed + latest + '<div class="refresh"><span class="small muted">'
             + label(when + "every five minutes", when_zh + "每五分钟读取一次", inline=True)
             + '</span>' + _form(f"/account/slots/{escape(slot['id'])}/quota", csrf, "Refresh",
+                               '<input type="hidden" name="usage_page" value="1">'
+                               if usage_page else '',
                                partial="quota")
             + '</div>')
 

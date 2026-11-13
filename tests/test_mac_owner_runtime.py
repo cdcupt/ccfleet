@@ -229,6 +229,7 @@ def test_mac_owner_payload_does_not_scan_history_or_report_identity_secrets(owne
                         ({"logged_in": True}, "2.1.0"))
     monkeypatch.setattr(mac_owner_agent, "credential_facts", lambda *a: dict(credential))
     monkeypatch.setattr(mac_owner_agent, "maintain_native", lambda *a: {"state": "current"})
+    monkeypatch.setattr(mac_owner_agent, "quota_report", lambda *a, **k: {})
     fake_metrics = SimpleNamespace(report=lambda *a: {}, validate_report=lambda value: value)
     monkeypatch.setattr(mac_owner_agent, "sibling", lambda name:
                         mac_policy if name == "mac_policy" else fake_metrics if name == "relay_metrics"
