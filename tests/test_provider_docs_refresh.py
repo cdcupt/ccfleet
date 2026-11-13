@@ -38,5 +38,8 @@ def test_devin_ready_card_does_not_require_an_unrelated_claude_login(language):
     projected = bilingual.project_html(html, language)
     assert 'data-state="claimed"' in projected  # Authentication state is not falsified.
     assert ('Devin ready' if language == 'en' else 'Devin 已就绪') in projected
-    assert '<details class="provider-other">' in projected
-    assert ('Anthropic sign-in (optional)' if language == 'en' else 'Anthropic 登录（可选）') in projected
+    assert 'class="slot-disclosure slot-account" open' in projected
+    assert ('Claude account' if language == 'en' else 'Claude 账号') in projected
+    assert ('Anthropic sign-in (optional)' if language == 'en' else 'Anthropic 登录（可选）') not in projected
+    assert ('Your Devin connection is configured separately.' if language == 'en' else
+            'Devin 连接单独配置。') in projected

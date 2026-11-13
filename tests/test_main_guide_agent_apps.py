@@ -31,7 +31,7 @@ def test_main_guide_app_setup_is_visible_and_linked_from_its_intro(language, opt
     links = flow.inside(navigation, "a")
     targets = [bilingual.route_target(element.attrs["href"])[0] for element in links]
     assert targets == ["/docs/guide#" + anchor
-                       for anchor in ("setup", "agent-apps", "local-work", "slot-care")]
+                       for anchor in ("setup", "add-slot", "model-connections", "agent-apps", "local-work", "slot-care")]
     assert all(target.split("#", 1)[1] in page.ids for target in targets)
     link = links[1]
     assert all(parent.tag != "details" for parent in link.parents)

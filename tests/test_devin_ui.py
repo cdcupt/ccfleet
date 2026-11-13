@@ -78,10 +78,10 @@ def test_setup_is_guidance_not_a_fake_login_action(context):
 def test_unconfigured_slot_shows_honest_assisted_setup(context, state):
     context.slot["state"] = state
     document = Document(render(context))
-    assert "Set up Devin" in document.text and "设置 Devin" in document.text
+    assert "Add Devin (optional)" in document.text and "添加 Devin（可选）" in document.text
     assert "Ask the operator to enable it for this slot" in document.text
-    assert "Add Devin (optional)" not in document.text
-    assert not any(tag == "details" for tag, _ in document.tags)
+    disclosures = [attrs for tag, attrs in document.tags if tag == "details"]
+    assert len(disclosures) == 1 and "open" not in disclosures[0]
     assert not any(tag in {"form", "input", "button", "script"} for tag, _ in document.tags)
 
 

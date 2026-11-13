@@ -427,8 +427,8 @@ def validate_heartbeat(payload: Any, node_id: str, *,
         result["network"] = network
     # Only a shared machine carries these, and only when it says it is one, so
     # every ordinary node's stored heartbeat keeps exactly the shape it had.
-    if payload.get("mode") == MACHINE_MODE:
-        result["mode"] = MACHINE_MODE
+    if payload.get("mode") in (MACHINE_MODE, "private_owner"):
+        result["mode"] = payload["mode"]
         result["slots"] = _slots(payload.get("slots"), time.time() if now is None else now)
     # Whether the OS asked for a reboot. A strict bool or nothing: "yes", 1 or a
     # string from an agent that got it wrong is not a reboot anybody asked for.

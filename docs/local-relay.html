@@ -79,26 +79,51 @@ existing pairing. Setup does not automatically revoke an Anthropic credential.
 Revoke an old setup-token yourself only if it is no longer used anywhere else.
 Install-only (omit <code>--setup</code>), manual <code>ccfleet login</code>, and legacy <code>--migrate</code> remain
 compatibility options, not extra steps in the normal setup flow.</p>
-<h3 id="choosing-a-slot">Choose which slot to use</h3>
-<p>Update once, then choose a slot. Think of <code>use</code> as choosing the door
-your next request walks through:</p>
+<h3 id="choosing-a-slot">New slot, same computer</h3>
+<p>One valid pairing can authorize the slots owned by the same Fleet account.
+After claiming another slot, complete its own Claude sign-in. Keep your existing
+computer pairing and add the new slot to the connection; rerunning the installer
+alone does not select a newly claimed slot. The examples below use slot-1234 and
+slot-5678; replace them with the names on Your slots.</p>
+<p>To use only the new slot:</p>
 <pre><code class="language-bash">ccfleet update
 ccfleet list --remote
-ccfleet use erik-1
+ccfleet gateway setup --slots slot-5678 --provider anthropic
+ccfleet local --check
 ccfleet local
 </code></pre>
-<p><code>ccfleet use erik-1</code> remembers that choice for future local launches.
-Choose <code>erik-2</code> instead to use its configured Devin connection. Your actual
-slot names appear in the list. Before starting Claude, Fleet prints the selected
-slot, provider and connection type. A one-time <code>ccfleet local --slot NAME</code>
-overrides the saved choice for that launch.</p>
-<p>Choosing a slot does not change its website settings or log you into a different
-provider. If the chosen paired Claude slot is outside your saved HTTPS endpoint,
-the automatic connection uses that slot's Claude bridge after checking the endpoint's
-current selection. A failed authorization or an unavailable selected route stops the
-launch. <code>--transport gateway</code> always requires the chosen slot to be included
-in that endpoint. Without an explicit local choice, the website's endpoint pool
-continues to control routing.</p>
+<p><code>list --remote</code> discovers slots; it does not configure them.
+<code>gateway setup --slots</code> saves the complete selected list and, after readiness
+succeeds, chooses that configured pool for future local launches. A released or
+revoked pairing cannot authorize setup: use <code>ccfleet login</code> with a fresh
+code from a ready slot only when you need a new pairing.</p>
+<h3 id="pool-routing">Keep sessions together with ordered backups</h3>
+<p>For slot-1234 first and slot-5678 second, while keeping each conversation on its
+selected account, choose sticky routing:</p>
+<pre><code class="language-bash">ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky --provider anthropic
+ccfleet use --pool
+ccfleet gateway status
+ccfleet local --check
+ccfleet local
+</code></pre>
+<p><code>--routing sticky</code> starts a new conversation with the first eligible slot
+and remembers the slot that starts a normal response. For every request to check
+priority order again, use <code>--routing priority</code> instead. Only confirmed
+safe failures can try a selected backup; an uncertain sent request is not replayed.</p>
+<p><code>ccfleet use --pool</code> clears a saved fixed-slot override without deleting
+pairings or keys. With multiple selected slots, <code>local --check</code> should
+show <code>configured slot pool</code>. The list shows saved routing and pairing
+information, not which slot is serving an individual conversation.</p>
+<p>To deliberately fix future launches to one already configured slot, run
+<code>ccfleet use slot-1234</code>. A one-time
+<code>ccfleet local --slot slot-1234</code> pins only that launch. Both fixed choices
+disable backup switching for that launch. Start a new local launch after changing
+connections; existing launches keep their previous connection key.</p>
+<p>Choosing a slot does not sign you into a different provider. If a chosen paired
+Claude slot is outside the saved HTTPS connection, the automatic route can use its
+Claude bridge after checking the endpoint. <code>--transport gateway</code> requires
+the chosen slot to be selected for that endpoint. An authorization or readiness
+failure stops the launch.</p>
 <h2 id="migrating-from-live-folders-or-snapshots">Migrating from live folders or snapshots</h2>
 <p>The previous release ran Claude on the slot with a background live mount of local
 files. That is no longer the primary workflow. Closing its terminal did <strong>not</strong>
@@ -142,8 +167,8 @@ with <code>ccfleet update</code>; existing pairing and local history are preserv
 <tr><td><code>ccfleet local -c</code> / <code>--continue</code></td><td>Continue the latest conversation in this directory.</td></tr>
 <tr><td><code>ccfleet local -r</code> / <code>--resume [NAME_OR_ID]</code></td><td>Open native history or choose a saved conversation.</td></tr>
 <tr><td><code>ccfleet local --permission-mode plan</code></td><td>Native permissions; <code>--mode</code> remains an alias.</td></tr>
-<tr><td><code>ccfleet local --slot A --project PATH</code></td><td>Fleet-specific: select an already configured slot and the local working directory.</td></tr>
-<tr><td><code>ccfleet list --remote</code></td><td>Fetch current own-slot names from the server; plain <code>ccfleet list</code> shows saved pairings.</td></tr>
+<tr><td><code>ccfleet local --slot slot-1234 --project PATH</code></td><td>Fleet-specific: select an already configured slot and the local working directory.</td></tr>
+<tr><td><code>ccfleet list --remote</code></td><td>Fetch current own-slot names from the server; plain <code>ccfleet list</code> shows saved routing and pairings.</td></tr>
 </tbody></table></div>
 <p>For a verified own Devin slot, follow <a href="https://ccfleet.io/docs/guide#devin-cli">the CLI provider-selection recipe</a>: refresh the remote slot list, authorize with a working pairing, then choose exactly one Devin slot with <code>--provider devin</code>.</p>
 <p>Other supported native Claude options go after <code>--</code>, such as
@@ -175,6 +200,12 @@ model-request capacity. Busy requests may wait up to ten seconds before receivin
 a structured overload response and a three-second retry hint; rejected requests
 are not forwarded or replayed. The WebSocket TLS stream uses one nonblocking
 I/O owner with bounded buffers and explicit cancellation.</p>
+<p>Updated slot relays allow up to ten minutes to receive a progressing request body,
+while stopping uploads that receive no bytes for sixty seconds. Metadata still has
+a sixty-second deadline, and upload time counts toward the fifteen-minute overall
+request budget. The 64 MiB wire limit remains a size ceiling, not a promise that
+every connection can upload that much within the time budget. These bounds do not
+replay a failed request or change its assigned account.</p>
 <p>If an older client reports an empty <code>503</code> while multiple agents are running,
 stop its retry loop, run <code>ccfleet update</code>, and reopen the same conversation
 with <code>ccfleet local --continue</code>. Update preserves pairing and local history.

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Optional
 
-from . import gateway_providers, wallet_access
+from . import gateway_providers, names, wallet_access
 from . import slots as slotstates
 from .bilingual import bi, label
 from .store import StoreError
@@ -49,7 +49,9 @@ def _csrf(token: str) -> str:
 
 
 def _selectable(held: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return [slot for slot in held if slot.get("kind") == slotstates.MACHINE_SLOT
+    return [slot for slot in held
+            if (slot.get("kind") == slotstates.MACHINE_SLOT
+                or slot.get("inference_enabled") is True)
             and slot.get("state") in (slotstates.CLAIMING, slotstates.CLAIMED,
                                      slotstates.ACTIVE)]
 
@@ -65,7 +67,7 @@ def _choices(held: list[Mapping[str, Any]], selected: list[str],
     }
     for slot in _selectable(held):
         identifier = str(slot["id"])
-        name = str(slot.get("name") or identifier)
+        name = names.display(slot)
         state = (("Devin ready", "Devin 已就绪")
                  if identifier in native_ready and slot["state"] == slotstates.CLAIMED
                  else states[slot["state"]])
@@ -341,9 +343,15 @@ def panel(
             "requests and replies, including selected file excerpts and tool results. "
             "Your Claude account credential "
             "remains on its slot.</p>"
-            "<p>For several slots, use <code>ccfleet gateway setup --slots first-slot "
-            "backup-slot --routing sticky</code>. Replace the example names with yours. "
-            "Use <code>ccfleet local --slot first-slot</code> to pin one selected slot "
+            "<p>For several slots, use <code>ccfleet gateway setup --slots slot-1234 "
+            "slot-5678 --provider anthropic --routing sticky</code>. "
+            "Replace the example names with yours. "
+            "The first slot is preferred for a new conversation; later requests stay "
+            "with that conversation's slot while it remains available. Use "
+            "<code>--routing priority</code> to follow the order on each request. "
+            "Run <code>ccfleet use --pool</code> to clear an older fixed-slot choice, "
+            "then <code>ccfleet local --check</code> to confirm the effective policy. "
+            "Use <code>ccfleet local --slot slot-1234</code> to pin one selected slot "
             "for a launch, with no automatic switch to another account.</p>"
             "<p>A released or reclaimed slot needs its endpoint selection saved again "
             "before its new account can be used.</p>",
@@ -353,9 +361,13 @@ def panel(
             "<p>HTTPS 会加密传输过程，但我们的网关在转发时能够读取模型请求和回复，"
             "包括所选的文件片段和工具结果。"
             "你的 Claude 账号登录凭据仍保留在对应槽位上。</p>"
-            "<p>选择多个槽位可以用 <code>ccfleet gateway setup --slots first-slot "
-            "backup-slot --routing sticky</code>，请换成自己的槽位名。"
-            "<code>ccfleet local --slot first-slot</code> 会让这次启动只用所选的一个槽位，"
+            "<p>选择多个槽位可以用 <code>ccfleet gateway setup --slots slot-1234 "
+            "slot-5678 --provider anthropic --routing sticky</code>，请换成自己的槽位名。"
+            "新会话优先使用第一个槽位，后续请求在它可用时保持同一个槽位；"
+            "使用 <code>--routing priority</code> 则每次请求都按顺序选择。"
+            "运行 <code>ccfleet use --pool</code> 清除之前固定的槽位，再用 "
+            "<code>ccfleet local --check</code> 确认实际路由策略。"
+            "<code>ccfleet local --slot slot-1234</code> 会让这次启动只用所选的一个槽位，"
             "不会自动切换到其他账号。</p>"
             "<p>槽位释放后重新领取，需要再次保存它的连接选择，才能使用这次领取后的账号。</p>",
         )
@@ -441,9 +453,7 @@ border-radius:12px;background:var(--inset)}
 
 
 def selected_slots(store: Any, account_id: str, form: Mapping[str, str]) -> list[str]:
-    held = {slot["id"]: slot for slot in store.list_slots(held_by=account_id)
-            if slot.get("kind") == slotstates.MACHINE_SLOT and slot.get("state") in (
-                slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)}
+    held = {slot["id"]: slot for slot in _selectable(store.list_slots(held_by=account_id))}
     choices = []
     for field, value in form.items():
         if not field.startswith('slot.') or value == '':

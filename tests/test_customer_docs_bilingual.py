@@ -77,23 +77,23 @@ def test_slot_choice_and_safe_switching_are_explained_in_both_languages():
     source = customer_docs.guide(Config())
     copy = LanguageCopy(source)
     for phrase in (
-        "Owning B does not add it automatically",
+        "Owning slot-5678 does not add it automatically",
         "Priority",
         "Sticky",
         "Once public response headers are sent",
         "up to 24 hours",
         "not two live accounts",
-        "Connect Claude",
+        "Advanced connections",
     ):
         assert phrase in copy.text("en")
     for phrase in (
-        "即使你还持有 B，也不会自动使用它",
+        "即使你还持有 slot-5678，也不会自动使用它",
         "按优先级选择",
         "保持会话账号",
         "即使屏幕还没出现文字",
         "最多保留 24 小时",
         "并非两个真实账号的线上实测",
-        "我的槽位 → 连接 Claude",
+        "我的槽位 → 高级连接设置",
     ):
         assert phrase in copy.text("zh-Hans")
     assert "API endpoints" not in copy.text("en")
@@ -109,7 +109,7 @@ def test_native_commands_stay_shared_and_website_is_an_alternative_to_cli():
     assert sum(code.count(install) for code in codes) == 1
     assert (
         sum(
-            code.count("ccfleet gateway setup --slots A B --routing sticky --replace")
+            code.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky")
             for code in codes
         )
         == 1
@@ -130,7 +130,7 @@ def test_command_reference_explains_native_aliases_and_fleet_only_controls_in_bo
         "ccfleet update", "ccfleet upgrade", "ccfleet -v", "ccfleet --version",
         "ccfleet version --json", "ccfleet local -c", "--continue", "ccfleet local -r",
         "--resume [NAME_OR_ID]", "ccfleet local --permission-mode plan",
-        "ccfleet local --slot A --project PATH", "ccfleet local -- --verbose",
+        "ccfleet local --slot slot-1234 --project PATH", "ccfleet local -- --verbose",
         "ccfleet list --remote",
     )
     for language in ("en", "zh"):
@@ -152,9 +152,9 @@ def test_command_reference_explains_native_aliases_and_fleet_only_controls_in_bo
 def test_devin_cli_recipe_distinguishes_pairing_authorization_current_slot_and_provider():
     source = customer_docs.guide(Config())
     assert "devin-cli" in Document(source).ids
-    recipe = ("ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n"
-              "ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n"
-              "ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 "
+    recipe = ("ccfleet update\nccfleet list --remote --slot slot-1234\n"
+              "ccfleet gateway setup --slot slot-1234 --slots slot-5678 --provider devin\n"
+              "ccfleet local --transport gateway --slot slot-5678 --model claude-opus-5-5 "
             "--effort max --new -- --safe-mode")
     assert recipe in Document(source).pre_codes
     for language in ("en", "zh"):

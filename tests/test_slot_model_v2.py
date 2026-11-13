@@ -153,7 +153,8 @@ def test_the_name_stays_through_the_wipe_and_goes_when_it_completes(store):
     store.apply_slot_report("pool-1", [{"unix_user": "slot01", "present": False}], now=NOW + 60)
     slot = store.get_slot("pool-1")
     assert slot["state"] == slots.FREE and slot["name"] is None
-    assert names.display(slot) == "pool-1"
+    assert names.valid_neutral_name(names.display(slot))
+    assert slot["id"] == "pool-1"
 
 
 def test_a_slot_freed_by_the_operator_loses_its_name_too(store):
@@ -476,7 +477,7 @@ def live_shaped(path):
     con.close()
 
 
-def test_the_live_database_opens_unchanged(tmp_path):
+def test_the_live_database_keeps_identities_while_normalizing_empty_labels(tmp_path):
     path = str(tmp_path / "live.db")
     live_shaped(path)
     st = Store(path)
@@ -485,7 +486,8 @@ def test_the_live_database_opens_unchanged(tmp_path):
         assert set(by_id) == {"erik-2", "pool-1"}
         assert all(s["kind"] == slots.MACHINE_SLOT for s in by_id.values())
         assert all(s["name"] is None for s in by_id.values()), "names come with claims"
-        assert [names.display(s) for s in st.list_slots()] == ["erik-2", "pool-1"]
+        assert names.display(by_id["erik-2"]) == "erik-2"
+        assert names.valid_neutral_name(names.display(by_id["pool-1"]))
         assert by_id["erik-2"]["state"] == slots.ACTIVE and by_id["erik-2"]["held_by"] == "uerik"
         erik = st.get_account("uerik")
         assert erik["slot_quota"] == 1 and erik["handle"] is None

@@ -30,6 +30,7 @@ from . import (
     gateway_ui,
     machine_health,
     oauth,
+    private_owner,
     reference_docs,
     sessions,
     statuspage,
@@ -1070,7 +1071,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                             "modes": ["sticky", "priority"], "slots": [
                 {"id": s["id"], "name": s.get("name") or s["id"], "state": s["state"],
                  "providers": ["anthropic", "devin"] if s["id"] in native else ["anthropic"]}
-                for s in slots if s["kind"] == slotstates.MACHINE_SLOT
+                for s in slots if (s["kind"] == slotstates.MACHINE_SLOT
+                                  or s.get("inference_enabled") is True)
                 and s["state"] in (slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)]})
 
         def _gateway_enroll(self, *, revoke: bool = False) -> None:
@@ -1671,6 +1673,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(400, {"error": str(exc)})
                 return
             now = time.time()
+            private = node.get("private_owner") is not None
+            if private != (payload.get("mode") == "private_owner"):
+                self._json(400, {"error": "heartbeat mode does not match this node"})
+                return
+            if private:
+                # This owner's computer never accepts managed lifecycle actions.
+                events = ctx.monitor.record_heartbeat(node, payload, now)
+                self._json(200, {"ok": True, "pinned_version": "", "desired": {},
+                    "private_owner_access": ctx.store.private_owner_access(
+                        node["id"], ctx.cfg.gateway_ssh_public_key if ctx.gateway.enabled else ""),
+                    "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
+                    "events": len(events)})
+                return
             self._record_login((payload.get("reconcile") or {}).get("login"),
                                node["id"], now)
             # Before the alerts are evaluated and before the reply is built, so
@@ -1794,9 +1809,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             who = self._identity()
             if who is None:
                 return False                       # already answered 401
+            node = ctx.store.get_node(node_id)
+            if node is not None and node.get("private_owner"):
+                account, _ = self._signed_in()
+                if (not who.is_admin or account is None or account.get("role") != "admin"
+                        or account["id"] != node["private_owner"]["account_id"]):
+                    self._json(403, {"error": "this account cannot manage that node"})
+                    return False
             if who.is_admin:
                 return True
-            node = ctx.store.get_node(node_id)
             if action in self.OWNER_ACTIONS and node is not None and node["owner"] == who.owner:
                 return True
             # Their credentials were fine; the action is not theirs to take.
@@ -1830,6 +1851,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     # Slots and the people who hold them are the operator's alone.
                     if not self._require_admin():
                         return
+                    if parts[1] in ("machine", "slot"):
+                        selected = (ctx.store.get_node(parts[2]) if parts[1] == "machine"
+                                    else ctx.store.get_slot(parts[2]))
+                        if selected is not None and selected.get("private_owner"):
+                            node_id = (selected["id"] if parts[1] == "machine"
+                                       else selected["node_id"])
+                            if not self._may_act_on(node_id, parts[3]):
+                                return
                     if parts[1] == "account" and parts[3] == "credit":
                         if not ctx.cfg.usd_slot_credit_enabled:
                             self._json(404, {"error": "not found"})
@@ -1949,16 +1978,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- views ---------------------------------------------------------
 
+        def _operator_view(self):
+            account, _ = self._signed_in()
+            owner = account["id"] if account and account.get("role") == "admin" else ""
+            return private_owner.OperatorView(ctx.store, owner)
+
         def _visible_nodes(self, who: Identity) -> list[dict[str, Any]]:
-            nodes = ctx.store.list_nodes()
+            nodes = self._operator_view().list_nodes()
             if who.is_admin:
                 return nodes
-            return [n for n in nodes if n.get("owner") == who.owner]
+            return [n for n in nodes if n.get("owner") == who.owner and not n.get("private_owner")]
 
         def _scope_alerts(self, alerts: list[dict[str, Any]],
                           who: Identity) -> list[dict[str, Any]]:
-            if who.is_admin:
-                return alerts
             mine = {n["id"] for n in self._visible_nodes(who)}
             return [a for a in alerts if a.get("node_id") in mine]
 
@@ -1982,7 +2014,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                     self._scope_alerts(ctx.store.open_alerts(), who),
                                     now, ctx.cfg, csrf_token(ctx.cfg), who,
                                     logins=logins,
-                                    extra=(consoleslots.section(ctx.store, csrf_token(ctx.cfg),
+                                    extra=(consoleslots.section(
+                                        self._operator_view(), csrf_token(ctx.cfg),
                                                                 now, cfg=ctx.cfg,
                                                                 credit_actor=bool(
                                                                     self._database_admin_actor()))
@@ -1994,7 +2027,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             network = (ctx.traffic_observer.snapshot(now)
                        if ctx.traffic_observer is not None else None)
             summary = traffic.controller_summary(ctx.store, ctx.cfg, now, network_report=network)
-            enabled = {node["id"] for node in ctx.store.list_nodes() if node.get("enabled")}
+            enabled = {node["id"] for node in self._operator_view().list_nodes()
+                       if node.get("enabled")}
             readings = [(slot["id"], slot.get("name") or slot["id"],
                          traffic.slot_summary(ctx.store, ctx.cfg, slot, now, include_unheld=True))
                         for slot in ctx.store.list_slots()
