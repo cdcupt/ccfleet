@@ -165,9 +165,7 @@ def test_new_macbook_can_pair_without_a_previous_endpoint(private):
     enable(store)
     # No prior laptop or service key. Explicit web setup admits the service for one heartbeat.
     assert store.gateway_public_keys("mac-private", public_key(3)) == []
-    slot, route, gen, _ = store.gemini_setup_start(
-        "operator", "new", "12345", "gemini-test"
-    )
+    slot, route, gen, _ = store.gemini_setup_start("operator", "new", "12345", "gemini-test")
     assert store.gateway_public_keys(slot["id"], public_key(3)) == [public_key(3)]
     flow = {"key": "new", "route": route, "generation": gen}
     receipt = {**route, "credential_fp": "a" * 64}
@@ -175,17 +173,24 @@ def test_new_macbook_can_pair_without_a_previous_endpoint(private):
     paired = store.register_cli_device(code, public_key(7), "MacBook", now=1001)
     with pytest.raises(ValueError):
         store.register_cli_device(code, public_key(9), "Second", now=1002)
-    key = store.create_gateway_key("operator", "MacBook", [slot["id"]], now=1003,
-                                   pairing_device_id=paired["device_id"])
-    target, = store.api_model_targets(key["id"], key["generation"])
+    key = store.create_gateway_key(
+        "operator", "MacBook", [slot["id"]], now=1003, pairing_device_id=paired["device_id"]
+    )
+    (target,) = store.api_model_targets(key["id"], key["generation"])
     assert target["provider"] == "gemini" and target["slot_id"] == slot["id"]
-    second_key = store.create_gateway_key("operator", "Another endpoint", [slot["id"]], now=1003,
-                                          pairing_device_id=paired["device_id"])
+    second_key = store.create_gateway_key(
+        "operator",
+        "Another endpoint",
+        [slot["id"]],
+        now=1003,
+        pairing_device_id=paired["device_id"],
+    )
     assert not store.api_model_targets(second_key["id"], second_key["generation"])
     plain = store.request_cli_pairing(slot["id"], "operator", now=1004)
     other = store.register_cli_device(plain, public_key(6), "Plain", now=1005)
-    unrelated = store.create_gateway_key("operator", "Plain", [slot["id"]], now=1006,
-                                         pairing_device_id=other["device_id"])
+    unrelated = store.create_gateway_key(
+        "operator", "Plain", [slot["id"]], now=1006, pairing_device_id=other["device_id"]
+    )
     assert not store.api_model_targets(unrelated["id"], unrelated["generation"])
     expiring = store.gemini_setup_continue("operator", flow, receipt, now=1007)
     with pytest.raises(ValueError):
@@ -194,3 +199,24 @@ def test_new_macbook_can_pair_without_a_previous_endpoint(private):
     store.gemini_setup_disconnect("operator", route["binding_id"])
     with pytest.raises(ValueError):
         store.register_cli_device(fresh, public_key(8), "Disconnected", now=1009)
+
+
+def test_disconnect_requires_exact_mac_binding():
+    pytest.importorskip("cryptography")
+    vault = Vault()
+    r = {
+        "provider": "openai",
+        "model": "gpt-test",
+        "binding_id": "a" * 32,
+        "claim_id": "b" * 32,
+        "account_fp": "c" * 64,
+    }
+    mac.save_profile(r, "synthetic-mac-credential", vault)
+    with pytest.raises(ValueError, match="binding changed"):
+        crypto.action(
+            mac,
+            vault,
+            {"action": "forget", "nonce": "d" * 32, "reservation": {**r, "provider": "gemini"}},
+            100,
+        )
+    assert vault.get_password(mac.SERVICE, r["binding_id"])

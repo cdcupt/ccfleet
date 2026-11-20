@@ -94,6 +94,9 @@ def action(api, store, request, now):
     existing = store.get_password(api.SERVICE, binding)
     if mode == "forget":
         if existing:
+            saved = json.loads(existing)
+            if {k: saved.get(k) for k in api.contract.RESERVATION} != reservation:
+                raise ValueError("Mac binding changed")
             store.delete_password(api.SERVICE, binding)
         pending = store.get_password(WRAP_SERVICE, PENDING)
         if pending and json.loads(pending)["reservation"] == reservation:
