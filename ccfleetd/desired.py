@@ -203,9 +203,10 @@ def _slot_block(slot: Mapping[str, Any],
         # Service authentication is a distinct privilege and never turns into
         # a CLI device key. Send a revocation even on an ineligible lifecycle.
         safe_keys = []
+        api_granted = slot.get("state") == "claimed" and slot.get("api_model_granted") is True
         eligible = (slot.get("kind") == "machine"
                     and (slot.get("state") == "active"
-                         or block.get("devin_gateway", {}).get("keys"))
+                         or api_granted or block.get("devin_gateway", {}).get("keys"))
                     and block.get("inference_allowed") is True
                     and not (pending and pending.get("kind") in ("login", "switch")))
         if eligible and isinstance(gateway_keys, list) and len(gateway_keys) <= 1:
@@ -214,6 +215,8 @@ def _slot_block(slot: Mapping[str, Any],
                 if normalized and normalized not in block.get("ssh_public_keys", ()):
                     safe_keys.append(normalized)
         block["ssh_gateway_public_keys"] = safe_keys
+        if api_granted and safe_keys:
+            block["api_model_granted"] = True
     # A read of its usage asked for now; the slot tries it once, and an agent
     # from before this reads it on its own schedule.
     wanted = slot.get("quota_wanted_at")
