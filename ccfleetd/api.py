@@ -28,6 +28,7 @@ from . import (
     gateway,
     gateway_providers,
     gateway_ui,
+    gemini_setup,
     machine_health,
     oauth,
     private_owner,
@@ -97,6 +98,10 @@ HTML_HEADERS = {
                                 f"{trial_routes.COPY_COMMAND_CSP}; "
                                 "connect-src 'self'"),
 }
+GEMINI_HEADERS = {**HTML_HEADERS, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                  "Content-Security-Policy": HTML_HEADERS["Content-Security-Policy"].replace(
+                      "script-src ", "script-src " + gemini_setup.SCRIPT_CSP + " ")
+                  + "; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"}
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 
 
@@ -468,7 +473,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _html_page_route(self) -> bool:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
-            current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
+            current = {"/", "/slots", "/account", gemini_setup.PATH, "/account/available",
+                       "/privacy", "/status",
                        "/account/usage",
                        "/account/purchase", "/account/renew", "/account/topup",
                        "/account/devin-trial",
@@ -915,7 +921,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # page, which offers sign-in, rather than an error.
                 self._redirect("/account")
                 return
-            form = self._form(strict=path in {
+            form = self._form(strict=path in gemini_setup.ACTIONS or path in {
                 "/account/purchase", "/account/renew", "/account/topup",
                 "/account/subscribe", "/account/subscriptions", "/account/subscriptions/portal",
                 "/account/subscriptions/cancel", "/account/subscriptions/resume",
@@ -924,6 +930,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             if not self._csrf_ok(form, session_id):
                 self._json(403, {"error": "bad or missing csrf token"})
+                return
+            if path in gemini_setup.ACTIONS:
+                if ctx.cfg.broker_only or not ctx.gateway.enabled:
+                    self._json(404, {"error": "not found"})
+                    return
+                try:
+                    outcome = gemini_setup.act(ctx.store, ctx.cfg, account, session_id,
+                        path.rsplit("/", 1)[1], form, time.time())
+                except PermissionError:
+                    self._json(404, {"error": "not found"})
+                    return
+                if outcome.location:
+                    self._redirect(outcome.location)
+                else:
+                    self._send(outcome.status, outcome.body.encode("utf-8"), GEMINI_HEADERS)
                 return
             if path == "/account/topup":
                 outcome = stripe_routes.start(ctx.billing, ctx.cfg, account, form, time.time())
@@ -1140,6 +1161,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     selected,
                     value.get("mode", "sticky"), now=time.time(),
                     provider=value.get("provider", "anthropic"),
+                    pairing_device_id=device["device_id"],
                     allow_devin=bool(ctx.cfg.gateway_ready
                         and ctx.cfg.gateway_devin_enabled is True and runtime is not None),
                     provider_runtime=runtime)
@@ -1312,6 +1334,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self._page_route("GET")
             if (path is None or self._legacy_site_redirect()
                     or self._legacy_language_redirect()):
+                return
+            if path == gemini_setup.PATH:
+                if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:
+                    self._json(404, {"error": "not found"})
+                    return
+                account, session_id = self._signed_in()
+                if account is None:
+                    self._redirect("/account")
+                    return
+                try:
+                    outcome = gemini_setup.page(ctx.store, ctx.cfg, account, session_id)
+                except PermissionError:
+                    self._json(404, {"error": "not found"})
+                    return
+                self._send(outcome.status, outcome.body.encode("utf-8"), GEMINI_HEADERS)
                 return
             if path == "/v1/models":
                 if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:

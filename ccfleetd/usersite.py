@@ -3041,12 +3041,16 @@ def _slot_card(
                 + '<p>' + label("Operating cost: ", "运行成本：", inline=True)
                 + escape(cost) + '</p>' + machine_line + warning
                 + '<p class="muted">' + label(
-                    "This is your own computer. Sign-in and maintenance happen on the Mac; "
+                    "This is your own computer. Claude sign-in and maintenance happen on the Mac; "
                     "it is never offered for rent or wiped by Fleet.",
-                    "这是你的自有电脑，登录和维护在 Mac 本机进行；"
+                    "这是你的自有电脑，Claude 登录和维护在 Mac 本机进行；"
                     "Fleet 不会出租或清除它。", inline=True)
                 + '</p>' + _slot_connect(slot, report, csrf, cfg, None, authorizer,
                     connected=connected, paid_access=paid_access)
+                + ('<p><a class="btn" href="/account/gemini">'
+                   + label("Set up Gemini", "设置 Gemini", inline=True) + '</a></p>'
+                   if cfg.gateway_ready and slot.get("inference_enabled") is True
+                   and paid_access else '')
                 + _cli_access(slot, node, cli_devices or [], csrf, now,
                     account_devices=account_devices, authorizer=authorizer,
                     paid_access=paid_access,

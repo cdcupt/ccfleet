@@ -67,12 +67,19 @@ def enrollment(conn, key_id, slot_id):
 
 def reserve(conn, key_id, slot_id, provider, scope, model):
     key, slot = enrollment(conn, key_id, slot_id)
+    return reserve_on_slot(conn, key["account_id"], slot["gateway_claim_id"],
+                           provider, scope, model)
+
+
+def reserve_on_slot(conn, owner, claim_id, provider, scope, model):
     receipt = {"provider": provider, "account_fp": contract.account_fingerprint(provider, scope),
-               "model": model, "claim_id": slot["gateway_claim_id"], "binding_id": uuid.uuid4().hex}
+               "model": model, "claim_id": claim_id, "binding_id": uuid.uuid4().hex}
     contract.validate(receipt, credential=False)
     previous = conn.execute("SELECT * FROM api_model_bindings WHERE claim_id=? AND provider=?",
                             (receipt["claim_id"], provider)).fetchone()
     if previous:
+        if previous["credential_fp"] == "disconnecting:" + previous["id"]:
+            raise ValueError("finish disconnecting Gemini before reserving this slot")
         receipt["binding_id"] = previous["id"]
         if any(previous[k] != receipt[k] for k in ("account_fp", "model")):
             raise ValueError("remove the previous provider binding before replacing it")
@@ -81,7 +88,7 @@ def reserve(conn, key_id, slot_id, provider, scope, model):
         conn.execute("INSERT INTO api_model_bindings "
                      "(id,owner_account_id,provider,model,claim_id,account_fp) "
                      "VALUES (?,?,?,?,?,?)",
-                     (receipt["binding_id"], key["account_id"], provider, model,
+                     (receipt["binding_id"], owner, provider, model,
                       receipt["claim_id"], receipt["account_fp"]))
     except sqlite3.IntegrityError:
         raise ValueError("the provider account already has an assigned slot") from None
@@ -91,9 +98,16 @@ def reserve(conn, key_id, slot_id, provider, scope, model):
 def grant(conn, key_id, slot_id, receipt):
     contract.validate(receipt)
     key, slot = enrollment(conn, key_id, slot_id)
+    confirm_receipt(conn, key["account_id"], slot["gateway_claim_id"], receipt)
+    conn.execute("INSERT OR REPLACE INTO api_model_grants VALUES (?,?,?)",
+                 (receipt["binding_id"], key_id, key["generation"]))
+
+
+def confirm_receipt(conn, owner, claim_id, receipt):
+    contract.validate(receipt)
     binding = conn.execute("SELECT * FROM api_model_bindings WHERE id=? AND owner_account_id=?",
-                           (receipt["binding_id"], key["account_id"])).fetchone()
-    if (not binding or slot["gateway_claim_id"] != receipt["claim_id"]
+                           (receipt["binding_id"], owner)).fetchone()
+    if (not binding or claim_id != receipt["claim_id"]
             or any(binding[k] != receipt[k] for k in contract.RESERVATION if k != "binding_id")
             or binding["credential_fp"] not in (None, receipt["credential_fp"])):
         raise ValueError("reserve the current rental and enroll its matching credential")
@@ -102,8 +116,6 @@ def grant(conn, key_id, slot_id, receipt):
                      (receipt["credential_fp"], binding["id"]))
     except sqlite3.IntegrityError:
         raise ValueError("the provider key already has an assigned slot") from None
-    conn.execute("INSERT OR REPLACE INTO api_model_grants VALUES (?,?,?)",
-                 (binding["id"], key_id, key["generation"]))
 
 
 def targets(conn, key_id, generation):

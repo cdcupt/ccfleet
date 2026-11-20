@@ -411,6 +411,7 @@ def test_a_sign_in_or_request_left_under_the_new_name_is_dropped_not_adopted(st)
 # that a table added later with a node_id or slot_id column fails the test below
 # until the renames are taught about it.
 NEITHER = {
+    ("cli_pairings", "api_model_binding_id"), ("cli_devices", "api_model_binding_id"),
     ("api_model_bindings", "id"), ("api_model_bindings", "owner_account_id"),
     ("api_model_bindings", "claim_id"), ("api_model_grants", "binding_id"),
     ("api_model_grants", "key_id"),("accounts", "id"), ("payments", "id"), ("payments", "account_id"),

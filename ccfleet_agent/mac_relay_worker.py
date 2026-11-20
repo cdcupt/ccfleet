@@ -61,7 +61,14 @@ def run(role: str) -> int:
     policy = sibling("mac_policy")
     home = Path(policy.authenticated_owner().pw_dir)
     if role == "--api-model":
-        return sibling("mac_api_model").run(home)
+        api = sibling("mac_api_model")
+        relay = api.sibling("api_model_relay")
+        signal.alarm(relay.wire.INPUT_TIMEOUT)
+        meta = relay.wire.read_metadata(sys.stdin.buffer)
+        if meta["operation"] == "gemini-web":
+            signal.alarm(15)
+            return api.sibling("mac_gemini_web").handle(api, home, meta, relay, sys.stdout.buffer)
+        return api.run(home, initial=meta)
     if role == "--status":
         print(json.dumps(status_snapshot(home), sort_keys=True))
         return 0
