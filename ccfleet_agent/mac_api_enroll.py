@@ -23,10 +23,17 @@ def controller(host, args, receipt=None):
     cmd = ["docker", "exec", "-i", "ccfleet", "ccfleetd", "api-model", *args]
     data = json.dumps(receipt).encode() if receipt else b""
     last = None
-    for interface in (None, "en0"):
-        ssh = ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
-        if interface:
-            ssh.extend(["-B", interface])
+    home = Path(api.policy.authenticated_owner().pw_dir)
+    connector = api.policy.directory(home) / "transport" / "ccfleet_tunnel_connect.py"
+    routes = [[], ["-B", "en0"]]
+    if connector.is_file():
+        # The operator-installed reverse tunnel already uses this failover connector.
+        proxy = shlex.join(["/usr/bin/python3", "-I", "-B", str(connector)])
+        proxy += " --host %h --port %p"
+        routes.insert(0, ["-o", "ProxyUseFdpass=yes", "-o", "ProxyCommand=" + proxy])
+    for options in routes:
+        ssh = ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+               "-o", "ConnectTimeout=10", *options]
         last = subprocess.run([*ssh, host, shlex.join(cmd)], input=data, capture_output=True,
                               timeout=25)
         if last.returncode == 0:
