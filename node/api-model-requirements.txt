@@ -1,0 +1,3 @@
+# The Messages streaming adapter imports HTTP helpers from the proxy extra.
+# Only the Python SDK runs on the slot.
+litellm[proxy]==1.110.2

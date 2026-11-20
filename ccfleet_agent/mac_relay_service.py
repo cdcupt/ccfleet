@@ -62,6 +62,11 @@ def cleanup_worker(process: subprocess.Popen) -> tuple[Optional[int], bool]:
 
 
 def worker_command(role: bytes, descriptor: int, lease: int) -> list[str]:
+    if role == b"A":
+        root = Path(__file__).absolute().parent
+        return [str(root.parent / "api-model-venv/bin/python"), "-I", "-B",
+                str(root / "mac_relay_worker.py"), "--api-model", "--status-fd", str(descriptor),
+                "--lease-fd", str(lease)]
     action = {b"D": "--device", b"G": "--gateway", b"S": "--status"}.get(role)
     if action is None:
         raise ServiceError("invalid private relay role")
@@ -73,7 +78,7 @@ def worker_command(role: bytes, descriptor: int, lease: int) -> list[str]:
 class RelayService:
     def __init__(self, home: Path, *, max_workers: int = 8, max_pending: int = 8,
                  admission_timeout: float = 10, worker_timeout: float = 905,
-                 status_timeout: float = 12):
+                 status_timeout: float = 12, api_models: bool = False):
         if (type(max_workers) is not int or not 1 <= max_workers <= 8
                 or type(max_pending) is not int or not 0 <= max_pending <= 8
                 or not 0 < admission_timeout <= 10 or not 0 < worker_timeout <= 905
@@ -81,7 +86,10 @@ class RelayService:
             raise ServiceError("invalid private relay resource bounds")
         self.home = Path(home)
         self.owner = policy.authenticated_owner(self.home)
-        self.path = wire.socket_path(self.home)
+        self.path = wire.socket_path(self.home, b"A" if api_models else b"G")
+        self.roles = {b"A"} if api_models else wire.ROLES
+        self.lock_name = "api-model-service.lock" if api_models else LOCK_NAME
+        self.quarantine_name = "api-model-quarantine.json" if api_models else QUARANTINE
         self.workers = threading.BoundedSemaphore(max_workers)
         self.capacity = threading.BoundedSemaphore(max_workers + max_pending)
         self.admission_timeout = admission_timeout
@@ -104,12 +112,13 @@ class RelayService:
         self.base = policy.open_directory(policy.directory(self.home), private=True)
         try:
             try:
-                os.stat(QUARANTINE, dir_fd=self.base, follow_symlinks=False)
+                os.stat(self.quarantine_name, dir_fd=self.base, follow_symlinks=False)
             except FileNotFoundError:
                 pass
             else:
                 raise ServiceError("private relay cleanup requires operator review")
-            self.lock = os.open(LOCK_NAME, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+            self.lock = os.open(self.lock_name,
+                                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
                                 0o600, dir_fd=self.base)
             info = os.fstat(self.lock)
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != self.owner.pw_uid
@@ -117,7 +126,7 @@ class RelayService:
                 raise ServiceError("private relay instance lock is unsafe")
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
-                previous = os.stat(wire.SOCKET_NAME, dir_fd=self.base, follow_symlinks=False)
+                previous = os.stat(self.path.name, dir_fd=self.base, follow_symlinks=False)
             except FileNotFoundError:
                 previous = None
             if previous is not None:
@@ -135,18 +144,18 @@ class RelayService:
                     raise ServiceError("another private relay service is listening")
                 finally:
                     probe.close()
-                current = os.stat(wire.SOCKET_NAME, dir_fd=self.base, follow_symlinks=False)
+                current = os.stat(self.path.name, dir_fd=self.base, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) != (previous.st_dev, previous.st_ino):
                     raise ServiceError("private relay socket changed during startup")
-                os.unlink(wire.SOCKET_NAME, dir_fd=self.base)
+                os.unlink(self.path.name, dir_fd=self.base)
             self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             previous_mask = os.umask(0o177)
             try:
                 self.listener.bind(str(self.path))
             finally:
                 os.umask(previous_mask)
-            os.chmod(wire.SOCKET_NAME, 0o600, dir_fd=self.base, follow_symlinks=False)
-            info = os.stat(wire.SOCKET_NAME, dir_fd=self.base, follow_symlinks=False)
+            os.chmod(self.path.name, 0o600, dir_fd=self.base, follow_symlinks=False)
+            info = os.stat(self.path.name, dir_fd=self.base, follow_symlinks=False)
             self.socket_identity = info.st_dev, info.st_ino
             self.listener.listen(16)
             self.listener.settimeout(0.25)
@@ -158,7 +167,7 @@ class RelayService:
     def _quarantine(self):
         self.quarantined = True
         try:
-            policy.write_json(self.home, QUARANTINE, {
+            policy.write_json(self.home, self.quarantine_name, {
                 "version": 1, "observed_at": time.time(), "reason": "worker_cleanup_unconfirmed"})
             self.quarantine_persisted = True
         except (OSError, ValueError):
@@ -311,7 +320,7 @@ class RelayService:
         try:
             conn.settimeout(3)
             role = conn.recv(1)
-            if role not in wire.ROLES:
+            if role not in self.roles:
                 return
             if role != b"S":
                 try:
@@ -405,9 +414,9 @@ class RelayService:
             return False
         if self.base is not None and self.socket_identity is not None:
             try:
-                info = os.stat(wire.SOCKET_NAME, dir_fd=self.base, follow_symlinks=False)
+                info = os.stat(self.path.name, dir_fd=self.base, follow_symlinks=False)
                 if (info.st_dev, info.st_ino) == self.socket_identity:
-                    os.unlink(wire.SOCKET_NAME, dir_fd=self.base)
+                    os.unlink(self.path.name, dir_fd=self.base)
             except FileNotFoundError:
                 pass
         for descriptor in (self.lock, self.base):
@@ -418,7 +427,8 @@ class RelayService:
 
 
 def main(argv=None):
-    if list(sys.argv[1:] if argv is None else argv) or sys.platform != "darwin":
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args not in ([], ["--api-models"]) or sys.platform != "darwin":
         return 2
     service = None
     try:
@@ -426,7 +436,7 @@ def main(argv=None):
         home = Path(owner.pw_dir)
         if Path.home() != home or os.environ.get("CLAUDE_CONFIG_DIR"):
             raise ServiceError("private relay requires its native default home")
-        service = RelayService(home).start()
+        service = RelayService(home, api_models=bool(args)).start()
         for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(number, lambda *_args: service.closed.set())
         service.serve()

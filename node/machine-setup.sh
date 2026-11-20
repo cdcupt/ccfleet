@@ -217,6 +217,9 @@ fetch ccfleet_agent/inference_client.py "$LIB_DIR/ccfleet_agent/inference_client
 fetch ccfleet_agent/compatibility.py "$LIB_DIR/ccfleet_agent/compatibility.py" 644
 fetch ccfleet_agent/agent.py    "$LIB_DIR/ccfleet_agent/agent.py" 644
 fetch ccfleet_agent/machine.py  "$LIB_DIR/ccfleet_agent/machine.py" 644
+fetch node/api-model-requirements.txt "$LIB_DIR/api-model-requirements.txt" 644
+fetch ccfleet_agent/api_model_contract.py "$LIB_DIR/ccfleet_agent/api_model_contract.py" 644
+fetch ccfleet_agent/api_model_relay.py "$LIB_DIR/ccfleet_agent/api_model_relay.py" 644
 fetch ccfleet_agent/local_relay.py "$LIB_DIR/ccfleet_agent/local_relay.py" 644
 # Files alone grant nothing: the native path separately requires an operator
 # profile, a dedicated verifier principal and a fresh per-key root grant.

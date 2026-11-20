@@ -23,7 +23,7 @@ from typing import Any
 
 from ccfleet_agent import inference_client as wire
 
-from . import cli_access, gateway_providers
+from . import api_model_routes, cli_access, gateway_providers
 
 NATIVE_MESSAGE_PATHS = frozenset({"/v1/messages", "/v1/messages?beta=true"})
 
@@ -317,9 +317,25 @@ class NativeSSHAttempt(SSHAttempt):
         super().start(headers, body, path=path, before_model_send=before_model_send)
 
 
+class ApiModelAttempt(SSHAttempt):
+    """The slot checks the selected claim, account, model and credential before admission."""
+
+    def _remote_command(self):
+        return "ccfleet-api-model-v1"
+
+    def _status_fields(self):
+        return {"operation": "status", "route": {
+            field: self.target[field] for field in api_model_routes.FIELDS}}
+
+    def _ready_body(self):
+        return {**super()._ready_body(), "route": self._status_fields()["route"]}
+
+
 def transport_attempt(target, cfg):
     """Dispatch only from a server-owned provider snapshot; legacy defaults stay put."""
     provider = target.get("provider", gateway_providers.ANTHROPIC)
+    if provider in api_model_routes.ALIASES:
+        return ApiModelAttempt(target, cfg)
     if provider == gateway_providers.DEVIN:
         return NativeSSHAttempt(target, cfg)
     if provider != gateway_providers.ANTHROPIC:

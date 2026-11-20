@@ -410,7 +410,10 @@ def test_a_sign_in_or_request_left_under_the_new_name_is_dropped_not_adopted(st)
 # Columns named like an id that hold neither a node's id nor a slot's. Listed so
 # that a table added later with a node_id or slot_id column fails the test below
 # until the renames are taught about it.
-NEITHER = {("accounts", "id"), ("payments", "id"), ("payments", "account_id"),
+NEITHER = {
+    ("api_model_bindings", "id"), ("api_model_bindings", "owner_account_id"),
+    ("api_model_bindings", "claim_id"), ("api_model_grants", "binding_id"),
+    ("api_model_grants", "key_id"),("accounts", "id"), ("payments", "id"), ("payments", "account_id"),
            ("sessions", "account_id"), ("heartbeats", "id"), ("alerts", "id"),
            ("outages", "id"), ("outage_emails", "outage_id"),
            ("outage_emails", "account_id"), ("cli_pairings", "account_id"),

@@ -28,6 +28,7 @@ except ImportError:
     _spec.loader.exec_module(mac_policy)
 
 SOCKET_NAME = "relay.sock"
+API_SOCKET = "api-model.sock"
 CHUNK = 64 * 1024
 BUFFER = 256 * 1024
 HEADER = struct.Struct("!cI")
@@ -65,24 +66,25 @@ def require_peer(sock: socket.socket, uid: int) -> None:
         raise RelayClientError("private relay peer identity did not match")
 
 
-def socket_path(home: Path) -> Path:
-    return mac_policy.directory(home) / SOCKET_NAME
+def socket_path(home: Path, role: bytes = b"G") -> Path:
+    return mac_policy.directory(home) / (API_SOCKET if role == b"A" else SOCKET_NAME)
 
 
 def connect(home: Path, role: bytes, timeout: float = 12) -> socket.socket:
-    if role not in ROLES:
+    if role not in ROLES and role != b"A":
         raise RelayClientError("unsupported private relay role")
     owner = mac_policy.authenticated_owner(home)
     directory = mac_policy.open_directory(mac_policy.directory(home), private=True)
     sock = None
     try:
-        info = os.stat(SOCKET_NAME, dir_fd=directory, follow_symlinks=False)
+        path = socket_path(home, role)
+        info = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
         if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != owner.pw_uid
                 or stat.S_IMODE(info.st_mode) != 0o600):
             raise RelayClientError("private relay socket is unsafe")
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout)
-        sock.connect(str(socket_path(home)))
+        sock.connect(str(path))
         require_peer(sock, owner.pw_uid)
         sock.sendall(role)
         answer = sock.recv(1)
@@ -168,7 +170,7 @@ def _error(role: bytes, status_code: int, output_fd: int) -> None:
                 "headers": {"content-type": "application/json"}}
     if status_code == 503:
         metadata["headers"]["retry-after"] = "3"
-    if role == b"G":
+    if role in (b"G", b"A"):
         metadata["retryable"] = True
     body = {"type": "error", "error": {"type": "ccfleet_relay_error",
             "message": "The private Mac relay service is unavailable; no request was replayed."}}
@@ -281,7 +283,7 @@ def pump(sock: socket.socket, *, input_fd: int = 0, output_fd: int = 1,
 
 def forward(role: bytes, *, home: Optional[Path] = None, input_fd: int = 0,
             output_fd: int = 1) -> int:
-    if role not in (b"D", b"G"):
+    if role not in (b"D", b"G", b"A"):
         return 2
     try:
         selected = Path(mac_policy.authenticated_owner(home).pw_dir)

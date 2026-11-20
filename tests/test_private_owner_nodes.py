@@ -459,3 +459,16 @@ def test_private_duplicate_warning_redacts_other_private_owner_identity(private,
     assert "another private node" in alerts[0]["message"]
     assert "private-other-admin" not in json.dumps(alerts)
     assert "othernative" not in json.dumps(alerts)
+
+
+def test_private_mac_api_route_checks_owner_and_revokes_on_disable(private):
+    store, _ = private
+    enable(store)
+    key = endpoint(store)
+    reservation = store.reserve_api_model(key["id"], "mac-private", "gemini", "123456", "gemini-test")
+    store.grant_api_model(key["id"], "mac-private", {**reservation, "credential_fp": "a"*64})
+    target, = store.api_model_targets(key["id"], key["generation"])
+    assert target["slot_id"] == "mac-private" and target["provider"] == "gemini"
+    store.set_private_owner_inference("mac-private", "operator", False, now=NOW)
+    assert not store.api_model_targets(key["id"], key["generation"])
+    assert not store._conn.execute("SELECT 1 FROM api_model_bindings").fetchone()

@@ -719,7 +719,8 @@ def wanted_slots(desired: Mapping[str, Any]) -> list[dict[str, Any]]:
             # Malformed service intent revokes the service privilege while
             # preserving independently validated ordinary device keys.
             gateway_keys = normalize_gateway_public_keys(entry.get("ssh_gateway_public_keys"))
-            safe = ((state == "active" or item.get("devin_gateway", {}).get("keys"))
+            api_granted = state == "claimed" and entry.get("api_model_granted") is True
+            safe = ((state == "active" or api_granted or item.get("devin_gateway", {}).get("keys"))
                     and item.get("inference_allowed") is True
                     and not (login and login.get("kind") in ("login", "switch")))
             device_keys = item.get("ssh_public_keys", [])

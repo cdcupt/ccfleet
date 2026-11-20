@@ -14,6 +14,9 @@ if [ "${1:-}" = --gateway-only ]; then
     ccfleet-gateway-v1)
       exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/local_relay.py" \
         --gateway-protocol-v1 ;;
+    ccfleet-api-model-v1)
+      exec "${BASH_SOURCE[0]%/*}/api-model-venv/bin/python" -I \
+        "${BASH_SOURCE[0]%/*}/ccfleet_agent/api_model_relay.py" serve ;;
     ccfleet-devin-gateway-v1)
       exec /usr/bin/python3 -I "${BASH_SOURCE[0]%/*}/ccfleet_agent/devin_relay.py" \
         --gateway-protocol-v1 ;;
