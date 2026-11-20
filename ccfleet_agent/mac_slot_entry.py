@@ -23,9 +23,10 @@ def sibling(name: str):
 def main(argv: Optional[list[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     gateway = args == ["--gateway-only"]
+    api = gateway and os.environ.get("SSH_ORIGINAL_COMMAND") == "ccfleet-api-model-v1"
     command = "ccfleet-gateway-v1" if gateway else "ccfleet-inference-v1"
     if (sys.platform != "darwin" or args not in ([], ["--gateway-only"])
-            or os.environ.get("SSH_ORIGINAL_COMMAND") != command
+            or (not api and os.environ.get("SSH_ORIGINAL_COMMAND") != command)
             or sys.stdin.isatty() or sys.stdout.isatty()):
         print("unsupported private owner inference request", file=sys.stderr)
         return 2
@@ -36,7 +37,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         os.close(directory)
         policy.require_enabled(Path(owner.pw_dir))
         client = sibling("mac_relay_client")
-        return client.forward(b"G" if gateway else b"D", home=Path(owner.pw_dir))
+        return client.forward(b"A" if api else b"G" if gateway else b"D", home=Path(owner.pw_dir))
     except (OSError, ValueError):
         print("private owner inference is unavailable", file=sys.stderr)
         return 2

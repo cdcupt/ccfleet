@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 CONFIG_PARTS = (".config", "ccfleet", "private-owner")
 FILES = frozenset({"policy.json", "agent.json", "grants.json", "maintenance.json",
-                   "relay-quarantine.json"})
+                   "relay-quarantine.json", "api-model-quarantine.json"})
 MAX_BYTES = 64 * 1024
 GRANT_TTL = 180
 LEASE_CLOCK_FORMAT = "system-monotonic-v1"
@@ -137,7 +137,8 @@ def read_json(home: Path, name: str) -> dict[str, Any]:
 
 
 def write_json(home: Path, name: str, value: dict[str, Any]) -> None:
-    if name not in {"grants.json", "maintenance.json", "relay-quarantine.json"}:
+    if name not in {"grants.json", "maintenance.json", "relay-quarantine.json",
+                    "api-model-quarantine.json"}:
         raise MacPolicyError("private owner file is not writable by this agent")
     raw = json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
     if len(raw) > MAX_BYTES:

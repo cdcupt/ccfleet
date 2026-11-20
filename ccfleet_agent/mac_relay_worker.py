@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 def sibling(name):
-    if name not in {"mac_policy", "mac_credentials", "local_relay"}:
+    if name not in {"mac_api_model", "mac_policy", "mac_credentials", "local_relay"}:
         raise ValueError("unsupported GUI relay worker module")
     spec = importlib.util.spec_from_file_location(
         "ccfleet_gui_worker_" + name, Path(__file__).with_name(name + ".py"))
@@ -56,10 +56,12 @@ def status_snapshot(home: Path) -> dict:
 
 
 def run(role: str) -> int:
-    if sys.platform != "darwin" or role not in ("--device", "--gateway", "--status"):
+    if sys.platform != "darwin" or role not in ("--device", "--gateway", "--status", "--api-model"):
         return 2
     policy = sibling("mac_policy")
     home = Path(policy.authenticated_owner().pw_dir)
+    if role == "--api-model":
+        return sibling("mac_api_model").run(home)
     if role == "--status":
         print(json.dumps(status_snapshot(home), sort_keys=True))
         return 0
@@ -94,7 +96,7 @@ def main(argv=None) -> int:
     global _RESULT_PUBLISHED, _LEASE_FD, _WATCH_STARTED
     _RESULT_PUBLISHED = _WATCH_STARTED = False
     args = list(sys.argv[1:] if argv is None else argv)
-    if (len(args) != 5 or args[0] not in ("--device", "--gateway", "--status")
+    if (len(args) != 5 or args[0] not in ("--device", "--gateway", "--status", "--api-model")
             or args[1] != "--status-fd" or not args[2].isdigit()
             or args[3] != "--lease-fd" or not args[4].isdigit()):
         return 2

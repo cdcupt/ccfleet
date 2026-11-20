@@ -500,3 +500,35 @@ os._exit(code)
     start()
     assert client.status(owner[0]) == {'available': True, 'expires_in_seconds': 3600,
                                       'binding_matches': True, 'policy_enabled': False}
+
+
+def test_api_socket_is_separate_and_worker_uses_dedicated_interpreter(tmp_path, monkeypatch):
+    from ccfleet_agent import mac_relay_client as client
+    from ccfleet_agent import mac_relay_service as service
+    monkeypatch.setattr(client.mac_policy, "directory", lambda home: tmp_path)
+    assert client.socket_path(tmp_path, b"A") == tmp_path / "api-model.sock"
+    assert client.socket_path(tmp_path, b"G") == tmp_path / "relay.sock"
+    argv = service.worker_command(b"A", 12, 13)
+    assert argv[0].endswith("/api-model-venv/bin/python")
+    assert argv[-5:] == ["--api-model", "--status-fd", "12", "--lease-fd", "13"]
+
+
+def test_private_api_keychain_binds_every_receipt_field_and_returns_no_key():
+    from ccfleet_agent import mac_api_model as mac
+    class Store:
+        items = {}
+        def set_password(self, service, account, value):
+            self.items[service, account] = value
+        def get_password(self, service, account):
+            return self.items.get((service, account))
+
+    vault = Store()
+    res = {"provider": "gemini", "model": "gemini-test", "claim_id": "a"*32,
+           "account_fp": "b"*64, "binding_id": "c"*32}
+    secret = "synthetic-local-only"
+    receipt = mac.save_profile(res, secret, vault)
+    assert secret not in str(receipt)
+    assert mac.read_profile(receipt, vault)["api_key"] == secret
+    for field in ("model", "claim_id", "credential_fp", "binding_id"):
+        with pytest.raises(ValueError):
+            mac.read_profile({**receipt, field: "d"*len(receipt[field])}, vault)

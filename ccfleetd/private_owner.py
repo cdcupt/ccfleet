@@ -60,6 +60,8 @@ def invalidate(conn, node_id: str) -> None:
     """Rotate grants without touching the owner's Mac, login, history, or money."""
     for row in conn.execute("SELECT id FROM slots WHERE node_id=?", (node_id,)).fetchall():
         slot_id = row["id"]
+        conn.execute("DELETE FROM api_model_bindings WHERE claim_id IN "
+                     "(SELECT gateway_claim_id FROM slots WHERE id=?)", (slot_id,))
         conn.execute("DELETE FROM cli_pairings WHERE slot_id=?", (slot_id,))
         conn.execute("DELETE FROM cli_devices WHERE slot_id=?", (slot_id,))
         conn.execute(

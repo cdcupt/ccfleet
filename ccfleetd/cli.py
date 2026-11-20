@@ -38,6 +38,7 @@ def _parser() -> argparse.ArgumentParser:
 
     routes = sub.add_parser("api-model", help="manage an experimental slot-bound API model"
                             ).add_subparsers(dest="action", required=True)
+    routes.add_parser("endpoints", help="list single-slot connection IDs").add_argument("slot")
     reserve = routes.add_parser("reserve", help="assign a provider account before entering its key")
     reserve.add_argument("key_id")
     reserve.add_argument("slot")
@@ -626,7 +627,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         store = Store(cfg.db_path)
         try:
             if args.command == "api-model":
-                if args.action == "reserve":
+                if args.action == "endpoints":
+                    slot = store.get_slot(args.slot)
+                    if not slot or not slot["held_by"]:
+                        raise StoreError("select a held slot")
+                    print(json.dumps([{k: row[k] for k in ("id", "name", "last_seen_at")}
+                                      for row in store.list_gateway_keys(slot["held_by"])
+                                      if row["slot_ids"] == [args.slot]]))
+                elif args.action == "reserve":
                     reservation = store.reserve_api_model(args.key_id, args.slot, args.provider,
                                                           args.scope, args.model)
                     print(json.dumps(reservation))
