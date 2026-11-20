@@ -104,9 +104,12 @@ def events(stream):
 
 @pytest.mark.parametrize("provider,model", [("openai", "gpt-5.4"), ("gemini", "gemini-2.5-flash")])
 def test_real_adapter_translates_tools_and_results(provider, model, upstream, adapter):
-    history = [{"role": "user", "content": "Write the requested file"}]
+    history = [{"role": "user", "content": "Write the requested file"},
+               {"role": "system", "content": [{"type": "text", "text": "Keep the edit local."}]}]
     profile = {"provider": provider, "model": model}
-    request = {"model": relay.ALIASES[provider], "system": "System instructions", "messages": history,
+    request = {"model": relay.ALIASES[provider], "messages": history,
+               "system": [{"type": "text", "text": "System instructions",
+                           "cache_control": {"type": "ephemeral"}}],
                "max_tokens": 512, "tools": [TOOL], "stream": True, "metadata": {"user_id": "PRIVATE"},
                "thinking": {"type": "adaptive", "display": "omitted"}, "output_config": {"effort": "high"},
                "context_management": relay.KEEP_THINKING}
@@ -132,6 +135,7 @@ def test_real_adapter_translates_tools_and_results(provider, model, upstream, ad
         assert all(body.get("store") is False for _, body in upstream.requests)
     assert len(upstream.requests) == 2
     assert all(name == provider for name, _ in upstream.requests)
+    assert all("Keep the edit local." in json.dumps(body) for _, body in upstream.requests)
     assert "PRIVATE" not in json.dumps(upstream.requests)
     assert "The local file was written." in json.dumps(upstream.requests[-1])
 

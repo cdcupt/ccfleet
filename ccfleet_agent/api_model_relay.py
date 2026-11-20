@@ -32,7 +32,7 @@ contract = sibling("api_model_contract")
 ALIASES = contract.ALIASES
 FIELDS = {"messages", "max_tokens", "model", "system", "tools", "tool_choice", "stop_sequences",
           "stream", "temperature", "top_k", "top_p", "thinking", "output_config",
-          "context_management", "metadata"}
+          "context_management", "cache_control", "metadata"}
 KEEP_THINKING = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
 
 
@@ -78,7 +78,7 @@ def load_profile(home, expected):
     return profile
 
 
-def check_blocks(blocks, *, history=False):
+def prepare_blocks(blocks, *, history=False):
     if isinstance(blocks, str):
         return
     if not isinstance(blocks, list):
@@ -86,6 +86,8 @@ def check_blocks(blocks, *, history=False):
     for b in blocks:
         if not isinstance(b, dict):
             raise ValueError("invalid block")
+        # Anthropic cache breakpoints must not create separately billed Gemini cache resources.
+        b.pop("cache_control", None)
         kind = b.get("type")
         if kind == "text" and isinstance(b.get("text"), str):
             continue
@@ -93,7 +95,7 @@ def check_blocks(blocks, *, history=False):
             if isinstance(b.get("name"), str) and isinstance(b.get("id"), str):
                 continue
         if history and kind == "tool_result" and isinstance(b.get("tool_use_id"), str):
-            check_blocks(b.get("content", ""))
+            prepare_blocks(b.get("content", ""))
             continue
         if history and kind in ("thinking", "redacted_thinking"):
             continue
@@ -107,12 +109,13 @@ def model_request(raw, profile):
             or type(value.get("stream", False)) is not bool
             or not isinstance(value.get("messages"), list) or not value["messages"]):
         raise ValueError("unsupported API model request")
-    check_blocks(value.get("system", ""))
+    value.pop("cache_control", None)
+    prepare_blocks(value.get("system", ""))
     for message in value["messages"]:
         if (not isinstance(message, dict) or set(message) != {"role", "content"}
-                or message["role"] not in ("user", "assistant")):
+                or message["role"] not in ("user", "assistant", "system")):
             raise ValueError("unsupported message")
-        check_blocks(message["content"], history=True)
+        prepare_blocks(message["content"], history=message["role"] != "system")
         if isinstance(message["content"], list):
             # Preserve the Responses adapter's encrypted reasoning for stateless tool
             # continuations. Foreign reasoning blocks don't belong in the next provider's call.
@@ -134,6 +137,7 @@ def model_request(raw, profile):
             raise ValueError("use client-executed tools on this route")
         # The API adapters receive the actual schemas for all local tools.
         tool.pop("defer_loading", None)
+        tool.pop("cache_control", None)
     if value.pop("context_management", KEEP_THINKING) != KEEP_THINKING:
         raise ValueError("unsupported context edits")
     options = value.get("output_config", {})
