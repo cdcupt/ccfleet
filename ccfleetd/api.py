@@ -129,7 +129,7 @@ def access_log_route(target: Any) -> str:
                 "/api/nodes", "/api/alerts", "/api/heartbeat", "/api/cli/status",
                 "/api/cli/connect", "/api/cli/register", "/api/cli/revoke",
                 "/account/claim", "/account/outage-emails", "/actions/node/add",
-                "/v1/messages", "/v1/messages/count_tokens", "/api/cli/gateway",
+                "/v1/models", "/v1/messages", "/v1/messages/count_tokens", "/api/cli/gateway",
                 "/api/cli/gateway/options", "/api/cli/gateway/revoke", "/api/gateway/status",
                 "/account/gateway/create", "/account/gateway/update", "/account/gateway/revoke",
                 "/account/devin-trial", "/account/devin-trial/create",
@@ -1184,6 +1184,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             safe["provider"] = key["provider"]
             safe["bridge_contract"] = (gateway_providers.NATIVE_AGENT_CONTRACT
                 if key["provider"] == "devin" else gateway_providers.BRIDGE_CONTRACT)
+            if "api_models" in result:
+                safe["api_models"] = result["api_models"]
             self._json(200, safe)
 
         def _cli_register(self) -> None:
@@ -1310,6 +1312,29 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             path = self._page_route("GET")
             if (path is None or self._legacy_site_redirect()
                     or self._legacy_language_redirect()):
+                return
+            if path == "/v1/models":
+                if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:
+                    self._json(404, {"error": "model catalog unavailable"})
+                    return
+                key = gateway.authenticate(self.headers, ctx.store, now=time.time(), touch=False)
+                if key is None:
+                    self._json(401, {"error": "endpoint is not authorized"})
+                    return
+                pins = self.headers.get_all("X-CCFleet-Slot", [])
+                if len(pins) > 1 or (pins and pins[0] not in key["slot_ids"]):
+                    self._json(403, {"error": "slot is not selected for this endpoint"})
+                    return
+                rows = ctx.gateway.api_models(key, pins[0] if pins else "")
+                if any(not pins or target["slot_id"] == pins[0]
+                       for target in ctx.gateway._new_targets(key)):
+                    rows.insert(0, {"type": "model", "id": "claude-opus-5-5",
+                                    "display_name": "Devin" if key["provider"] == "devin"
+                                    else "Claude Opus"})
+                self._json(200, {"data": rows, "has_more": False,
+                                 "first_id": rows[0]["id"] if rows else None,
+                                 "last_id": rows[-1]["id"] if rows else None},
+                           {"Cache-Control": "no-store"})
                 return
             if path in ("/api/cli/gateway/options", "/api/gateway/status"):
                 if not self._product_site() or ctx.cfg.broker_only:
@@ -1745,6 +1770,10 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             native_runtime = gateway_providers.runtime_expectations(ctx.cfg)
             native_enabled = bool(ctx.gateway.enabled and ctx.cfg.gateway_devin_enabled is True
                                   and native_runtime is not None)
+            if ctx.gateway.enabled:
+                for slot in slots:
+                    if ctx.store.claimed_api_slot(slot):
+                        slot["api_model_granted"] = True
             self._json(200, {
                 "ok": True,
                 # Kept for agents predating the desired block; same value, new home.

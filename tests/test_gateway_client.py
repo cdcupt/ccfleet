@@ -558,3 +558,17 @@ def test_saved_choice_cannot_move_to_another_endpoint_with_same_slot_id(client, 
     monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: pytest.fail("wrong endpoint contacted"))
     assert invoke(client, "--check") == 2
     assert not client.calls
+
+
+@pytest.mark.parametrize("provider,label", [("anthropic", "Claude"), ("devin", "Devin")])
+def test_native_picker_has_three_explicit_model_routes(client, monkeypatch, provider, label):
+    profile(client, slot_ids=["slot-one"], provider=provider)
+    status(client, monkeypatch, provider=provider,
+           api_models=[{"id": "fleet-gpt"}, {"id": "fleet-gemini"}])
+    assert invoke(client) == 0
+    settings = client.calls[0][3]
+    assert settings["modelPicker"] == {"replaceBuiltInOptions": True, "options": [
+        {"model": "opus", "label": label + " · subscription"},
+        {"model": "fleet-gpt", "label": "GPT · API"},
+        {"model": "fleet-gemini", "label": "Gemini · API"},
+    ]}

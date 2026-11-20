@@ -20,7 +20,7 @@ from typing import Any
 from ccfleet_agent import inference_client as wire
 from ccfleet_agent import local_relay
 
-from . import gateway_providers, native_preflight, throughput, wallet_access
+from . import api_model_routes, gateway_providers, native_preflight, throughput, wallet_access
 from .gateway_transport import NATIVE_MESSAGE_PATHS, GatewayTransportError, transport_attempt
 
 PATHS = wire.PATHS
@@ -272,6 +272,9 @@ class GatewayRuntime:
                 "provider_runtime": gateway_providers.runtime_expectations(self.cfg)}
 
     def _store_targets(self, key):
+        if key.get("provider") in api_model_routes.ALIASES:
+            return [target for target in self.store.api_model_targets(key["id"], key["generation"])
+                    if target["provider"] == key["provider"]]
         return self.store.gateway_targets(key, **self._provider_options(key))
 
     def _paid_access(self, key, target) -> bool:
@@ -288,6 +291,9 @@ class GatewayRuntime:
     def _route_identity(key, target):
         """A native snapshot cannot inherit health, affinity or cooldown after rebinding."""
         legacy = (target["slot_id"], target["claim_generation"])
+        if target.get("provider") in api_model_routes.ALIASES:
+            return (*legacy, target["binding_id"], key["id"], key["generation"])
+
         if target.get("provider", gateway_providers.ANTHROPIC) != gateway_providers.DEVIN:
             return legacy
         return (*legacy, gateway_providers.DEVIN, key["id"], key["generation"],
@@ -319,6 +325,14 @@ class GatewayRuntime:
         return {**target, "_native_context": {"binding": binding, "runtime": runtime,
                                                "request_id": os.urandom(16).hex()}}
 
+    def api_models(self, key, pinned=""):
+        return [{"id": api_model_routes.ALIASES[target["provider"]],
+                 "display_name": api_model_routes.LABELS[target["provider"]] + " · "
+                                 + target["model"],
+                 "type": "model"}
+                for target in self.store.api_model_targets(key["id"], key["generation"])
+                if (not pinned or target["slot_id"] == pinned) and self._paid_access(key, target)]
+
     def status(self, key, pinned: str = "") -> dict[str, Any]:
         """Bounded, read-only slot readiness; this never sends a model POST."""
         raw_targets = self._store_targets(key)
@@ -327,24 +341,31 @@ class GatewayRuntime:
         targets = [target for target in raw_targets if self._paid_access(key, target)]
         if pinned:
             targets = [target for target in targets if target["slot_id"] == pinned]
+        extras = [target for target in self.store.api_model_targets(key["id"], key["generation"])
+                  if (not pinned or target["slot_id"] == pinned) and self._paid_access(key, target)]
         ready = {}
         deadline = self.clock() + 8
 
         def probe(target):
-            identity = self._health_identity(key, target)
+            api = target.get("provider") in api_model_routes.ALIASES
+            route_key = {**key, "provider": target["provider"]} if api else key
+            identity = self._health_identity(route_key, target)
+            route_id = target["provider"] if api else target["slot_id"]
             with self.lock:
                 cached = self.health.get(identity)
                 if cached and cached[1] > self.clock():
-                    return target["slot_id"], cached[0] and self._authorized(key, target)
-            if self.clock() >= deadline or not self._authorized(key, target):
-                return target["slot_id"], False
+                    return (api, route_id), (cached[0]
+                                             and self._authorized(route_key, target))
+            if self.clock() >= deadline or not self._authorized(route_key, target):
+                return (api, route_id), False
             attempt = timer = None
             try:
-                attempt = self.transport_factory(self._transport_target(key, target), self.cfg)
+                transport_target = self._transport_target(route_key, target)
+                attempt = self.transport_factory(transport_target, self.cfg)
                 timer = threading.Timer(max(0.01, deadline-self.clock()), attempt.close)
                 timer.daemon = True
                 timer.start()
-                available = bool(attempt.check()) and self._authorized(key, target)
+                available = bool(attempt.check()) and self._authorized(route_key, target)
             except Exception:
                 available = False
             finally:
@@ -355,23 +376,26 @@ class GatewayRuntime:
             with self.lock:
                 self._cache_put(self.health, identity,
                                 (available, self.clock() + (10 if available else 5)))
-            return target["slot_id"], available
+            return (api, route_id), available
 
         if self._reserve(key["id"], 0):
             try:
                 with ThreadPoolExecutor(max_workers=4) as executor:
-                    ready = dict(executor.map(probe, targets))
+                    ready = dict(executor.map(probe, [*targets, *extras]))
             finally:
                 self._release(key["id"], 0)
         held = {slot["id"]: slot for slot in self.store.list_slots(held_by=key["account_id"])}
         ids = [pinned] if pinned else key["slot_ids"]
         rows = [{"id": identifier, "name": held[identifier].get("name") or identifier,
-                 "state": held[identifier]["state"], "ready": ready.get(identifier, False)}
+                 "state": held[identifier]["state"], "ready": ready.get((False, identifier), False)}
                 for identifier in ids if identifier in held]
         result = {"ready": any(row["ready"] for row in rows), "mode": key["mode"],
                 "base_url": self.cfg.public_url, "slots": rows,
                 "key": {name: key[name] for name in
                         ("id", "name", "slot_ids", "mode", "generation")}}
+        if extras:
+            result["api_models"] = self.api_models(key, pinned)
+            result["ready"] |= any(ready.get((True, t["provider"]), False) for t in extras)
         if not result["ready"] and any(paused):
             result.update({"billing_paused": True, "detail": next(item for item in paused if item)})
         return result
@@ -411,6 +435,8 @@ class GatewayRuntime:
         if self.stopping.is_set():
             return False
         try:
+            if key.get("provider") in api_model_routes.ALIASES:
+                return (target in self._store_targets(key) and not self._paid_reason(key, target))
             active = self.store.gateway_request_is_active(
                 key["id"], key["generation"], target["slot_id"], target["claim_generation"],
                 **self._provider_options(key))
@@ -497,10 +523,6 @@ class GatewayRuntime:
         if pinned and pinned not in key["slot_ids"]:
             model_error(handler, 403, "That slot is not selected for this endpoint.")
             return
-        if (key.get("provider", gateway_providers.ANTHROPIC) == gateway_providers.DEVIN
-                and handler.path not in NATIVE_MESSAGE_PATHS):
-            model_error(handler, 501, "Token counting is not available for the native agent.")
-            return
         admission = self._admit(handler, key["id"], size)
         if admission:
             if admission != "disconnected":
@@ -530,10 +552,24 @@ class GatewayRuntime:
                     raise ValueError("not an object")
                 if "metadata" in value and not isinstance(value["metadata"], (dict, type(None))):
                     raise ValueError("metadata")
-                session = self._session_key(key, session_id(handler.headers, value))
+                session = session_id(handler.headers, value)
                 model = value.get("model", "")
                 if not isinstance(model, str) or len(model) > 256:
                     raise ValueError("model")
+                if model.startswith("fleet-"):
+                    provider = next((p for p, alias in api_model_routes.ALIASES.items()
+                                     if model == alias), None)
+                    if provider is None:
+                        model_error(handler, 400, "Unknown Fleet model.")
+                        return
+                    key = {**key, "provider": provider}
+                    handler._gateway_native_no_retry = True
+                if (key.get("provider") in (*api_model_routes.ALIASES, gateway_providers.DEVIN)
+                        and handler.path not in NATIVE_MESSAGE_PATHS):
+                    model_error(handler, 501, "Token counting is unavailable for this route.")
+                    return
+                session = ("" if key.get("provider") in api_model_routes.ALIASES
+                           else self._session_key(key, session))
                 model_key = hashlib.sha256(model.encode()).hexdigest()
                 for field in wire.IDENTITY_FIELDS:
                     value.pop(field, None)
@@ -562,7 +598,8 @@ class GatewayRuntime:
             self._release(key["id"], size)
 
     def _forward(self, handler, key, session, pinned, model_key, headers, body) -> None:
-        handler._gateway_native_no_retry = key.get("provider") == gateway_providers.DEVIN
+        handler._gateway_native_no_retry = key.get("provider") in (*api_model_routes.ALIASES,
+                                                                 gateway_providers.DEVIN)
         targets = self._targets(key, session, pinned, model_key)
         if not targets:
             paused = [self._paid_reason(key, target) for target in self._store_targets(key)
@@ -651,6 +688,9 @@ class GatewayRuntime:
                                     and error["message"].startswith("prompt is too long"))
                     except (ValueError, TypeError, AttributeError):
                         overflow = False
+                    if status == 401 and target.get("provider") in api_model_routes.ALIASES:
+                        model_error(handler, 401, "The assigned provider rejected its API key.")
+                        return
                     safe = BytesIO()
                     local_relay.send_upstream_error(
                         safe, status, reply["headers"], overflow=overflow)
@@ -665,7 +705,7 @@ class GatewayRuntime:
                         # Native SSE is emitted after generation and cleanup;
                         # its delivery span is not a live generation interval.
                         and key.get("provider", gateway_providers.ANTHROPIC)
-                        != gateway_providers.DEVIN
+                        == gateway_providers.ANTHROPIC
                         and 200 <= status < 300
                         and reply["headers"].get("content-type") == "text/event-stream"):
                     with contextlib.suppress(Exception):

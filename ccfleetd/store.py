@@ -32,6 +32,7 @@ from ccfleet_agent.relay_metrics import (
 )
 
 from . import (
+    api_model_routes,
     claude_versions,
     cli_access,
     credential_health,
@@ -639,7 +640,8 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
         with self._lock:
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA)
+            self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA
+                                     + api_model_routes.SCHEMA)
             self._add_missing_columns("private_owner_nodes", {
                 "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
             })
@@ -3077,6 +3079,42 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
 
     # -- public Messages gateway ----------------------------------------
 
+    def reserve_api_model(self, key_id, slot_id, provider, scope, model):
+        with self._write_txn() as conn:
+            try:
+                return api_model_routes.reserve(conn, key_id, slot_id, provider, scope, model)
+            except ValueError as exc:
+                raise StoreError(str(exc)) from exc
+
+    def grant_api_model(self, key_id, slot_id, receipt):
+        with self._write_txn() as conn:
+            try:
+                api_model_routes.grant(conn, key_id, slot_id, receipt)
+            except ValueError as exc:
+                raise StoreError(str(exc)) from exc
+
+    def remove_api_model(self, slot_id, provider, claim_id):
+        with self._write_txn() as conn:
+            return conn.execute(
+                "DELETE FROM api_model_bindings WHERE provider=? AND claim_id=? AND EXISTS "
+                "(SELECT 1 FROM slots WHERE id=? AND gateway_claim_id=?)",
+                (provider, claim_id, slot_id, claim_id)).rowcount > 0
+
+    def claimed_api_slot(self, slot):
+        """Allow service-key installation before an independent Claude sign-in."""
+        if slot["state"] != slotstates.CLAIMED:
+            return False
+        with self._lock:
+            return self._conn.execute(
+                "SELECT 1 FROM api_model_bindings b JOIN api_model_grants g ON g.binding_id=b.id "
+                "JOIN gateway_keys k ON k.id=g.key_id AND k.generation=g.key_generation "
+                "WHERE b.claim_id=? AND b.owner_account_id=? AND k.revoked_at IS NULL LIMIT 1",
+                (slot["gateway_claim_id"], slot["held_by"])).fetchone() is not None
+
+    def api_model_targets(self, key_id, generation):
+        with self._lock:
+            return api_model_routes.targets(self._conn, key_id, generation)
+
     @staticmethod
     def _provider_binding(row: sqlite3.Row) -> dict[str, Any]:
         value = dict(row)
@@ -3577,6 +3615,9 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
             keys = self._conn.execute("SELECT * FROM gateway_keys WHERE account_id = ? "
                                       "AND revoked_at IS NULL", (slot["held_by"],)).fetchall()
             for key in keys:
+                if any(t["slot_id"] == slot_id for t in api_model_routes.targets(
+                        self._conn, key["id"], key["generation"])):
+                    return [normalized]
                 if any(target["slot_id"] == slot_id
                        for target in self._gateway_targets(self._conn, key,
                            allow_devin=allow_devin, provider_runtime=provider_runtime, now=now)):
@@ -3754,6 +3795,8 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
             "WHERE id = ? AND state = ?",
             (slotstates.FREE, now, pool_name, slot_id, slotstates.RELEASING))
         if cur.rowcount > 0:
+            conn.execute("DELETE FROM api_model_bindings WHERE claim_id=?",
+                         (row["gateway_claim_id"],))
             slot_subscriptions.retire_released(conn, slot_id, now)
             # Nor their update: the next holder starts on the machine's pin.
             conn.execute("DELETE FROM claude_updates WHERE slot_id = ?", (slot_id,))
