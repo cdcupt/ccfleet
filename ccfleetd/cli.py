@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -34,6 +35,23 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("serve", help="run the HTTP server and the periodic checks")
     sub.add_parser("check", help="evaluate every node once and print transitions")
     sub.add_parser("alert-test", help="send a test message through the configured notifier")
+
+    routes = sub.add_parser("api-model", help="manage an experimental slot-bound API model"
+                            ).add_subparsers(dest="action", required=True)
+    reserve = routes.add_parser("reserve", help="assign a provider account before entering its key")
+    reserve.add_argument("key_id")
+    reserve.add_argument("slot")
+    reserve.add_argument("provider", choices=("openai", "gemini"))
+    reserve.add_argument("scope", help="verified OpenAI organization ID or Google project number")
+    reserve.add_argument("model")
+    grant = routes.add_parser("grant", help="authorize a single-slot endpoint using a receipt")
+    grant.add_argument("key_id", help="Fleet connection ID")
+    grant.add_argument("slot")
+    grant.add_argument("receipt", type=argparse.FileType("r"), help="slot enrollment receipt")
+    remove = routes.add_parser("remove", help="remove this rental's binding and all its grants")
+    remove.add_argument("slot")
+    remove.add_argument("provider", choices=("openai", "gemini"))
+    remove.add_argument("claim_id")
 
     node = sub.add_parser("node", help="manage nodes").add_subparsers(dest="node_command",
                                                                        required=True)
@@ -570,6 +588,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             cfg = Config(**{**cfg.__dict__, "db_path": args.db})
         store = Store(cfg.db_path)
         try:
+            if args.command == "api-model":
+                if args.action == "reserve":
+                    reservation = store.reserve_api_model(args.key_id, args.slot, args.provider,
+                                                          args.scope, args.model)
+                    print(json.dumps(reservation))
+                elif args.action == "grant":
+                    with args.receipt as stream:
+                        try:
+                            receipt = json.loads(stream.read(4097))
+                        except (ValueError, UnicodeError) as exc:
+                            raise StoreError("invalid enrollment receipt") from exc
+                    store.grant_api_model(args.key_id, args.slot, receipt)
+                    print("API model enabled for this endpoint.")
+                elif not store.remove_api_model(args.slot, args.provider, args.claim_id):
+                    raise StoreError("no matching API model binding")
+                return EXIT_OK
             if args.command == "node":
                 return _node_command(args, store, cfg)
             if args.command == "user":

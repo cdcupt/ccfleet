@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.10"
+CLIENT_VERSION = "0.2.11"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -2457,6 +2457,23 @@ def native_settings(env: dict[str, str], base_url: str, secret: str, *,
     return {"env": pinned, "apiKeyHelper": ""}
 
 
+def add_api_models(settings: dict[str, Any], route: dict[str, Any]) -> None:
+    models = route.get("answer", {}).get("api_models", [])
+    if not models:
+        return
+    names = {"fleet-gpt": "GPT", "fleet-gemini": "Gemini"}
+    if (not isinstance(models, list) or len(models) > len(names)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                   or row["id"] not in names for row in models)
+            or len({row["id"] for row in models}) != len(models)):
+        raise CliError("gateway returned an invalid API model catalog")
+    base = "Devin" if route["provider"] == "devin" else "Claude"
+    options = [{"model": "opus", "label": base + " · subscription"}]
+    options.extend({"model": row["id"], "label": names[row["id"]] + " · API"}
+                   for row in models)
+    settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": options}
+
+
 def native_proxy_exclusions(env: dict[str, str], project: Path, extra: list[str]) -> None:
     """Retain native settings.env proxy exclusions before pinning loopback bypass."""
     sources = {"user", "project", "local"}
@@ -2684,6 +2701,7 @@ def cmd_local(args: argparse.Namespace) -> int:
             env, gateway["base_url"] if gateway else bridge.base_url,
             gateway["secret"] if gateway else bridge.secret, bare="--bare" in options,
             slot_id=gateway_slot if gateway else "")
+        add_api_models(settings, route)
         with os.fdopen(descriptor, "w") as stream:
             descriptor = -1
             os.fchmod(stream.fileno(), 0o600)
@@ -3012,6 +3030,7 @@ def cmd_external_claude(args: argparse.Namespace) -> int:
             native_proxy_exclusions(env, Path.cwd(), forwarded)
             pinned = native_settings(env, gateway["base_url"], gateway["secret"],
                                      bare=bare, slot_id=profile["slot_id"])
+            add_api_models(pinned, route)
             env.update(native_choices)
             settings = _launcher_merge(settings, pinned)
             fd, filename = tempfile.mkstemp(prefix=".launcher-settings-", suffix=".json",

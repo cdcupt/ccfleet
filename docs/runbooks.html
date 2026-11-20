@@ -933,4 +933,20 @@ diagnostics. The new policy does not rewrite historical files.</p>
 <p>Re-read the pages quoted in <code>docs/compliance.html</code>; Anthropic's terms and the
 gateway requirements change. Check <code>claude --version</code> against the pin on every
 node and upgrade in stages.</p>
-</main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>
+<section id="api-model-enrollment"><h2>Enroll a slot-bound API model</h2>
+<p>This opt-in feature needs the updated gateway, node scripts and laptop launcher. Use a single-slot Fleet connection whose default provider is Claude or Devin. The API slot may be another provisioned slot held by the same owner. Verify the upstream scope in the provider console before reserving it. Use the OpenAI organization ID for GPT and the Google Cloud project number that owns the Gemini API key. Fleet enforces uniqueness using that operator-verified scope and separately pins the specific credential. An API key alone cannot establish account identity.</p>
+<ol><li>On the controller, reserve the scope before entering the provider key anywhere. Substitute the existing connection ID, slot ID, verified scope and an available model. Keep the resulting reservation JSON for the slot. For Gemini use <code>gemini</code> as the provider.</li></ol>
+<pre><code>ccfleetd api-model reserve KEY_ID SLOT_ID openai ORG_ID MODEL_ID &gt; reservation.json</code></pre>
+<ol start="2"><li>On the assigned node, install the adapter once into a root-owned virtual environment beside the slot entry script. Use Python 3.12 and the requirements from the same Fleet revision. On nodes with a managed egress proxy, authorize <code>api.openai.com</code> or <code>generativelanguage.googleapis.com</code> as appropriate. The existing local inference policy must allow the slot.</li></ol>
+<pre><code>cd /usr/local/lib/ccfleet
+sudo python3.12 -m venv api-model-venv
+sudo api-model-venv/bin/python -m pip install -r api-model-requirements.txt</code></pre>
+<ol start="3"><li>Transfer the reservation to the assigned slot. Run enrollment interactively as the slot’s Unix user. Enter the provider API key at the hidden prompt. The key stays in a mode-0600 file in that user’s home. Transfer only the resulting receipt JSON back to the controller.</li></ol>
+<pre><code>python3 -I /usr/local/lib/ccfleet/ccfleet_agent/api_model_relay.py enroll reservation.json &gt; receipt.json
+# On the controller
+ccfleetd api-model grant KEY_ID SLOT_ID receipt.json</code></pre>
+<ol start="4"><li>Repeat for the other provider. Start the updated <code>ccfleet local --transport gateway</code> client and open <code>/model</code>. Use a gateway connection without a slot pin to see grants on separate slots. Explicit <code>--slot</code> limits all requests to that slot. On Claude Code versions before 2.1.242, use <code>--model fleet-gpt</code> or <code>--model fleet-gemini</code> at launch.</li>
+<li>When removing or moving a provider, use the claim ID in the reservation to remove its binding. Revoke the old upstream key and remove the old slot credential before enrolling a replacement. A completed slot wipe removes the binding and the user’s home. Editing the endpoint invalidates existing grants; grant again for the new selection.</li></ol>
+<pre><code>ccfleetd api-model remove SLOT_ID openai CLAIM_ID</code></pre>
+<p>The model API runs on the slot. Its SDK translates Messages and tool calls for each provider. The next selected provider receives the supplied visible history. The API routes discard foreign private reasoning, retain OpenAI’s encrypted reasoning for stateless OpenAI tool continuations, and reject media and server-executed tools. SDK retries are disabled. ChatGPT and Google AI consumer subscriptions are separate from this API-billed integration.</p>
+</section></main></div><footer>Canonical HTML documentation. Content and historical verification limits are preserved. Opens offline; external source links require a connection.</footer></div></body></html>
