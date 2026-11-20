@@ -38,6 +38,7 @@ from . import (
     credential_health,
     gateway_access,
     gateway_providers,
+    gemini_setup_store,
     names,
     offers,
     payments,
@@ -621,7 +622,8 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreMixin,
+class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMixin,
+            private_owner.PrivateOwnerStoreMixin,
             slot_subscriptions.SlotSubscriptionStoreMixin,
             wallet_topups.TopupStoreMixin):
     """Thread-safe wrapper around one SQLite connection."""
@@ -656,6 +658,9 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
             # exists, so a database written before these columns existed keeps
             # the old shape. Add them here rather than asking anyone to migrate
             # by hand; both are defaulted, so old rows stay valid.
+            self._add_missing_columns("api_model_bindings", {"web_access_until": "REAL"})
+            self._add_missing_columns("cli_pairings", {"api_model_binding_id": "TEXT"})
+            self._add_missing_columns("cli_devices", {"api_model_binding_id": "TEXT"})
             self._add_missing_columns("nodes", {
                 # When a device token was last handed over for this node. The
                 # time only — the credential itself lives in `logins` for the
@@ -2907,37 +2912,41 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
     def request_cli_pairing(self, slot_id: str, account_id: str, *, now: float,
                             admit: Optional[Callable[[Mapping[str, Any]], bool]] = None) -> str:
         """Mint a ten-minute, single-use code for one held, ready slot."""
-        token = cli_access.PAIR_PREFIX + secrets.token_urlsafe(32)
         with self._write_txn() as conn:
-            row = self._held(conn, slot_id, account_id)
-            if row["state"] != slotstates.ACTIVE:
-                raise StoreError(f"{slot_id} can connect once it is signed in and in use")
-            if not private_owner.slot_allowed(conn, slot_id, account_id):
-                raise StoreError("CLI pairing is not enabled for this slot")
-            if admit is not None:
-                current = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-                if not callable(admit) or admit(dict(current)) is not True:
-                    raise StoreError("renew this slot before connecting a computer")
-            endpoint = conn.execute(
-                "SELECT access_host, access_port, ssh_host_key FROM nodes WHERE id = ?",
-                (row["node_id"],)).fetchone()
-            if (endpoint is None or not endpoint["access_host"]
-                    or not endpoint["ssh_host_key"]):
-                raise StoreError(f"{slot_id} is not ready for CLI access")
-            active = int(conn.execute(
-                "SELECT COUNT(*) AS n FROM cli_devices WHERE slot_id = ? "
-                "AND account_id = ? AND revoked_at IS NULL",
-                (slot_id, account_id)).fetchone()["n"])
-            if active >= cli_access.MAX_DEVICES_PER_SLOT:
-                raise StoreError(f"{slot_id} already has {active} connected devices; "
-                                 "remove one before adding another")
-            conn.execute("DELETE FROM cli_pairings WHERE expires_at <= ?", (now,))
-            conn.execute(
-                "INSERT INTO cli_pairings "
-                "(token_hash, slot_id, account_id, created_at, expires_at) "
-                "VALUES (?,?,?,?,?)",
-                (cli_access.token_hash(token), slot_id, account_id, now,
-                 now + cli_access.PAIRING_TTL_S))
+            return self._mint_cli_pairing(conn, slot_id, account_id, now=now, admit=admit)
+
+    def _mint_cli_pairing(self, conn, slot_id, account_id, *, now, admit=None,
+                          model_binding=None):
+        token = cli_access.PAIR_PREFIX + secrets.token_urlsafe(32)
+        row = self._held(conn, slot_id, account_id)
+        if row["state"] != slotstates.ACTIVE:
+            raise StoreError(f"{slot_id} can connect once it is signed in and in use")
+        if not private_owner.slot_allowed(conn, slot_id, account_id):
+            raise StoreError("CLI pairing is not enabled for this slot")
+        if admit is not None:
+            current = conn.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+            if not callable(admit) or admit(dict(current)) is not True:
+                raise StoreError("renew this slot before connecting a computer")
+        endpoint = conn.execute(
+            "SELECT access_host, access_port, ssh_host_key FROM nodes WHERE id = ?",
+            (row["node_id"],)).fetchone()
+        if (endpoint is None or not endpoint["access_host"]
+                or not endpoint["ssh_host_key"]):
+            raise StoreError(f"{slot_id} is not ready for CLI access")
+        active = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM cli_devices WHERE slot_id = ? "
+            "AND account_id = ? AND revoked_at IS NULL",
+            (slot_id, account_id)).fetchone()["n"])
+        if active >= cli_access.MAX_DEVICES_PER_SLOT:
+            raise StoreError(f"{slot_id} already has {active} connected devices; "
+                             "remove one before adding another")
+        conn.execute("DELETE FROM cli_pairings WHERE expires_at <= ?", (now,))
+        conn.execute(
+            "INSERT INTO cli_pairings "
+            "(token_hash, slot_id, account_id, created_at, expires_at, api_model_binding_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (cli_access.token_hash(token), slot_id, account_id, now,
+             now + cli_access.PAIRING_TTL_S, model_binding))
         return token
 
     def register_cli_device(self, pairing_token: str, public_key: str,
@@ -2959,6 +2968,7 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
         with self._write_txn() as conn:
             row = conn.execute(
                 "SELECT p.token_hash, p.slot_id, p.account_id, p.expires_at, "
+                "p.api_model_binding_id, "
                 "s.node_id, s.unix_user, "
                 "s.name, s.state, s.held_by, n.enabled, n.access_host, n.access_port, "
                 "n.ssh_host_key FROM cli_pairings p "
@@ -2978,6 +2988,9 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
                 raise StoreError("that slot is no longer available to this account")
             if not private_owner.slot_allowed(conn, row["slot_id"], row["account_id"]):
                 raise StoreError("that slot is not authorized for inference")
+            if row["api_model_binding_id"] and not self._paired_api_binding(
+                    conn, row["api_model_binding_id"], row["slot_id"], row["account_id"]):
+                raise StoreError("Gemini enrollment changed; request a new pairing code")
             if not row["access_host"] or not row["ssh_host_key"]:
                 raise StoreError("that slot is not ready for CLI access")
             active = int(conn.execute(
@@ -2988,10 +3001,12 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
                 raise StoreError("this slot has too many connected devices")
             conn.execute(
                 "INSERT INTO cli_devices "
-                "(id, slot_id, account_id, token_hash, public_key, name, created_at) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "(id, slot_id, account_id, token_hash, public_key, name, created_at, "
+                "api_model_binding_id) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (device_id, row["slot_id"], row["account_id"],
-                 cli_access.token_hash(secret), normalized, device_name, now))
+                 cli_access.token_hash(secret), normalized, device_name, now,
+                 row["api_model_binding_id"]))
             answer = dict(row)
         return {**answer, "device_id": device_id, "device_token": secret,
                 "public_key": normalized}
@@ -3331,9 +3346,18 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
             claims[slot_id] = row["gateway_claim_id"]
         return selected, claims
 
+    @staticmethod
+    def _paired_api_binding(conn, binding_id, slot_id, owner):
+        return conn.execute(
+            "SELECT b.id FROM api_model_bindings b JOIN slots s ON s.gateway_claim_id=b.claim_id "
+            "WHERE b.id=? AND b.owner_account_id=? AND s.id=? AND s.held_by=? "
+            "AND b.provider='gemini' AND length(b.credential_fp)=64",
+            (binding_id, owner, slot_id, owner)).fetchone()
+
     def create_gateway_key(self, account_id: str, name: str, slot_ids: list[str],
                            mode: str = "sticky", *, now: float,
                            provider: str = "anthropic", allow_devin: bool = False,
+                           pairing_device_id: Optional[str] = None,
                            provider_runtime: Optional[Mapping[str, Any]] = None
                            ) -> dict[str, Any]:
         """Mint one API credential for an ordered pool of the holder's slots."""
@@ -3355,6 +3379,22 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
                 "claim_bindings, mode, created_at, provider) VALUES (?,?,?,?,?,?,?,?,?)",
                 (key_id, account_id, gateway_access.token_hash(secret), normalized_name,
                  json.dumps(selected), json.dumps(claims), mode, now, provider))
+            if pairing_device_id is not None:
+                device = conn.execute(
+                    "SELECT slot_id,api_model_binding_id FROM cli_devices WHERE id=? "
+                    "AND account_id=? AND revoked_at IS NULL", (pairing_device_id, account_id)
+                ).fetchone()
+                if device is None:
+                    raise StoreError("paired device authorization changed")
+                if (device["api_model_binding_id"] and selected == [device["slot_id"]]
+                        and provider == "anthropic"):
+                    if not self._paired_api_binding(conn, device["api_model_binding_id"],
+                                                    selected[0], account_id):
+                        raise StoreError("Gemini authorization changed; get a new pairing code")
+                    conn.execute("INSERT INTO api_model_grants VALUES (?,?,1)",
+                                 (device["api_model_binding_id"], key_id))
+                    conn.execute("UPDATE cli_devices SET api_model_binding_id=NULL WHERE id=?",
+                                 (pairing_device_id,))
             row = conn.execute("SELECT * FROM gateway_keys WHERE id = ?", (key_id,)).fetchone()
             answer = self._gateway_key_summary(row)
         return {**answer, "key_token": secret}
@@ -3612,6 +3652,16 @@ class Store(usage_ledger.UsageLedgerStoreMixin, private_owner.PrivateOwnerStoreM
                                       (slot_id,)).fetchone()
             if slot is None or not slot["held_by"]:
                 return []
+            # A private Mac can receive its first dashboard enrollment before any computer
+            # has a gateway key. The owner opens this brief window explicitly.
+            if private_owner.eligible(self._conn, slot_id, slot["held_by"]):
+                pending = self._conn.execute(
+                    "SELECT 1 FROM api_model_bindings b JOIN slots s ON s.gateway_claim_id="
+                    "b.claim_id WHERE s.id=? AND b.owner_account_id=? AND b.provider='gemini' "
+                    "AND b.web_access_until>?",
+                    (slot_id, slot["held_by"], time.time() if now is None else now)).fetchone()
+                if pending:
+                    return [normalized]
             keys = self._conn.execute("SELECT * FROM gateway_keys WHERE account_id = ? "
                                       "AND revoked_at IS NULL", (slot["held_by"],)).fetchall()
             for key in keys:

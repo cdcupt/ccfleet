@@ -191,11 +191,12 @@ async def respond(out, value, secret, create):
     wire.write_chunk(out, b"")
 
 
-def serve(inp, out, home, create, *, after_body=lambda: None, authorize=None, load=load_profile):
+def serve(inp, out, home, create, *, after_body=lambda: None, authorize=None, load=load_profile,
+          initial=None):
     authorize = wire.require_enabled if authorize is None else authorize
     out = wire._GatewayOutput(out)
     try:
-        status = wire.read_metadata(inp)
+        status = wire.read_metadata(inp) if initial is None else initial
         if set(status) != {"version", "operation", "route"} or status["operation"] != "status":
             raise ValueError("invalid readiness")
         authorize()

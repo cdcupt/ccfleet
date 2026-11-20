@@ -9,7 +9,8 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 CURRENT_PAGES = frozenset({
-    '/', '/slots', '/account', '/account/usage', '/account/available', '/account/purchase',
+    '/', '/slots', '/account', '/account/gemini',
+    '/account/usage', '/account/available', '/account/purchase',
     '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
     '/privacy', '/status', '/docs', '/docs/guide',
@@ -31,7 +32,9 @@ ADMIN_ACTIONS = {
 }
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
-POST_PAGES = frozenset({'/account/devin-trial/create', '/account/devin-trial/revoke',
+POST_PAGES = frozenset({'/account/gemini/start', '/account/gemini/finish',
+                       '/account/gemini/disconnect',
+                       '/account/devin-trial/create', '/account/devin-trial/revoke',
                        '/account/claim', '/account/outage-emails', '/auth/signout',
                        '/account/purchase', '/account/renew', '/account/topup',
                        '/account/subscribe', '/account/subscriptions/portal',

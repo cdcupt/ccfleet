@@ -59,7 +59,7 @@ def read_profile(expected, store):
     return value
 
 
-def run(home):
+def run(home, *, initial=None):
     authorize(home)
     relay = sibling("api_model_relay")
     os.chdir("/")
@@ -90,7 +90,8 @@ def run(home):
     try:
         return relay.serve(sys.stdin.buffer, output, home, litellm.anthropic.messages.acreate,
                            after_body=after_body, authorize=lambda: authorize(home),
-                           load=lambda _home, expected: read_profile(expected, store))
+                           load=lambda _home, expected: read_profile(expected, store),
+                           initial=initial)
     finally:
         done.set()
         signal.alarm(0)
