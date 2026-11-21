@@ -26,6 +26,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CCFLEET_HOME", str(personal / ".config/ccfleet"))
     cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
     scope = cli["cmd_local"].__globals__
+    monkeypatch.setitem(scope, "prepare_agent", lambda name: scope["find_local_claude"]())
     device = {"device_id": "device", "slot_id": "slot", "slot_name": "slot-name",
               "key": str(personal / "private.key"), "known_hosts": str(personal / "pin"),
               "host_alias": "slot-host", "user": "slot01"}
@@ -61,7 +62,7 @@ def client(tmp_path, monkeypatch):
 
 
 def invoke(client, *flags):
-    return client.cli["main"](["local", "--project", str(client.home), *flags])
+    return client.cli["main"](["claude", "--project", str(client.home), *flags])
 
 
 def test_local_home_runs_native_cli_without_mount_or_snapshot(client, monkeypatch):
@@ -181,7 +182,7 @@ def test_separate_routes_cannot_silently_bypass_slot(client, flag):
 
 
 def test_check_does_not_touch_selected_path_or_start_native(client):
-    assert client.cli["main"](["local", "--project", str(client.home / "missing"), "--check"]) == 0
+    assert client.cli["main"](["claude", "--project", str(client.home / "missing"), "--check"]) == 0
     assert client.events == ["checked"] and not client.calls
 
 

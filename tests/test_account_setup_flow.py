@@ -136,7 +136,7 @@ def test_setup_precedes_launch_with_distinct_own_authorizer_and_Devin_target(set
     assert commands == [
         "ccfleet update",
         "ccfleet gateway setup --slot alice-claude --slots alice-devin --provider devin",
-        "ccfleet local --transport gateway --slot alice-devin --model claude-opus-5-5 "
+        "ccfleet claude --transport gateway --slot alice-devin --model claude-opus-5-5 "
         "--effort max --new -- --safe-mode",
     ]
     assert "bob-private" not in source and "Bob private key" not in source
@@ -196,7 +196,7 @@ def test_Devin_only_account_explains_manual_fallback_without_fake_pairing(setup_
     page = Flow(rendered(c, language))
     guide = connection(page)
     assert not page.inside(guide, "form") and not page.inside(guide, "code")
-    assert "ccfleet gateway setup" not in guide.text and "ccfleet local" not in guide.text
+    assert "ccfleet gateway setup" not in guide.text and "ccfleet claude" not in guide.text
     assert any(element.attrs.get("href", "").endswith("/account#gateway")
                for element in page.inside(guide, "a"))
     assert ("assisted Fleet CLI setup" if language == "en" else "需要协助设置 Fleet CLI") in guide.text
@@ -220,7 +220,7 @@ def test_unready_Devin_does_not_advertise_ready_launch_commands(setup_context, f
     assert devin_ui.native_state(c.store, c.cfg, c.account, c.store.get_slot("devin"), now=now) != "ready"
     page = Flow(rendered(c, now=now))
     assert not page.find("details", data_slot_connect="devin")
-    assert "ccfleet local --transport gateway --slot alice-devin" not in rendered(c, now=now)
+    assert "ccfleet claude --transport gateway --slot alice-devin" not in rendered(c, now=now)
     if fault != "no-binding":
         card = page.find("div", id="slot-devin")[0]
         assert "Devin needs a check" in page.inside(card, "h2")[0].text

@@ -543,8 +543,8 @@ def _demo() -> str:
             "订阅。</p>",
         )
         + bi(
-            '<p class="rc on">CC Fleet CLI is ready: run <strong>ccfleet local</strong>.</p>',
-            '<p class="rc on">CC Fleet CLI 已就绪，运行 <strong>ccfleet local</strong> '
+            '<p class="rc on">CC Fleet CLI is ready: run <strong>ccfleet claude</strong>.</p>',
+            '<p class="rc on">CC Fleet CLI 已就绪，运行 <strong>ccfleet claude</strong> '
             "即可开始。</p>",
         )
         + '<div class="demo-usage">'
@@ -924,10 +924,10 @@ def _model_connections(cfg: Config, *, framed: bool = True) -> str:
         "--slots A B --routing priority --replace\nccfleet gateway setup --slots A B "
         "--routing sticky --replace</code></pre>"
         + bi(
-            "<p>For one launch, <code>ccfleet local --slot A</code> pins a slot already "
+            "<p>For one launch, <code>ccfleet claude --slot A</code> pins a slot already "
             "selected for that connection and disables backup switching for that launch. "
             "It cannot add an unselected slot or someone else&#x27;s account.</p>",
-            "<p>只想让这次启动固定使用 A，可以运行 <code>ccfleet local --slot A</code>。A "
+            "<p>只想让这次启动固定使用 A，可以运行 <code>ccfleet claude --slot A</code>。A "
             "必须已经在这个连接的选择范围内；固定后，这次启动不会切到备选槽位，也不能借此使"
             "用未选中的槽位或其他用户的账号。</p>",
         )
@@ -1084,13 +1084,11 @@ def _version_choices() -> str:
             "启动器和连接辅助程序。这不会更新电脑或槽位上的 Claude Code。</p>",
         )
         + bi(
-            "<p><strong>Claude Code on your computer:</strong> update your original local "
-            "installation separately, outside a CC Fleet session. Existing sessions keep "
-            "the process they started; open a new local session to use an updated "
-            "executable.</p>",
-            "<p><strong>电脑上的 Claude Code：</strong>在 CC Fleet "
-            "会话之外，单独更新原版的本地安装。已经打开的会话继续使用原进程，更新后打开新的"
-            "本地会话才使用新版。</p>",
+            "<p><strong>Claude Code on your computer:</strong> each <code>ccfleet claude</code> "
+            "launch checks Anthropic’s latest release and installs or updates the local "
+            "executable before starting the session.</p>",
+            "<p><strong>电脑上的 Claude Code：</strong>每次运行 <code>ccfleet claude</code> 时，"
+            "都会检查 Anthropic 的最新版本，在会话开始前安装或更新本地程序。</p>",
         )
         + bi(
             '<p><strong>Claude Code on your slot:</strong> open <a href="/account">Your '
@@ -1126,16 +1124,16 @@ def _client_command_reference() -> str:
         ('<code>ccfleet -v</code> / <code>ccfleet --version</code>',
          'Show the Fleet version; ccfleet version --json gives the detailed report.',
          '显示 Fleet 版本；ccfleet version --json 提供详细安装报告。'),
-        ('<code>ccfleet local -c</code> / <code>--continue</code>',
+        ('<code>ccfleet claude -c</code> / <code>--continue</code>',
          'Continue the last native Claude conversation in this directory.',
          '继续当前目录最近的原生 Claude 会话。'),
-        ('<code>ccfleet local -r</code> / <code>--resume [NAME_OR_ID]</code>',
+        ('<code>ccfleet claude -r</code> / <code>--resume [NAME_OR_ID]</code>',
          'Open native history, or resume a conversation by name or ID.',
          '打开原生历史，或按名称、ID 恢复会话。'),
-        ('<code>ccfleet local --permission-mode plan</code>',
+        ('<code>ccfleet claude --permission-mode plan</code>',
          'Choose native permissions; --mode remains an alias.',
          '选择原生权限模式；--mode 仍为兼容别名。'),
-        ('<code>ccfleet local --slot A --project PATH</code>',
+        ('<code>ccfleet claude --slot A --project PATH</code>',
          'Fleet-specific: pin an already selected slot and choose the local working directory.',
          'Fleet 专用：固定使用已选中的槽位，并指定本地工作目录。'),
         ('<code>ccfleet list --remote</code>',
@@ -1164,11 +1162,11 @@ def _client_command_reference() -> str:
         + '</tbody></table></div>'
         + bi(
             '<p>Put other supported Claude options after <code>--</code>, for example '
-            '<code>ccfleet local -- --verbose</code>. Fleet still protects routing and '
+            '<code>ccfleet claude -- --verbose</code>. Fleet still protects routing and '
             'authentication options. The separate <code>--next</code> trial remains fixed '
             'at 0.2.6 with its original command set.</p>',
             '<p>其他受支持的 Claude 选项放在 <code>--</code> 后，例如 '
-            '<code>ccfleet local -- --verbose</code>。Fleet 仍会保护路由与认证选项。'
+            '<code>ccfleet claude -- --verbose</code>。Fleet 仍会保护路由与认证选项。'
             '独立的 <code>--next</code> 试用版仍固定为 0.2.6，命令保持原样。</p>',
         )
     )
@@ -1198,7 +1196,7 @@ def _devin_cli_connection() -> str:
         )
         + '<pre><code>ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n'
         'ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n'
-        'ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 '
+        'ccfleet claude --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 '
         '--effort max --new -- --safe-mode</code></pre>'
         + bi(
             '<p>Devin requires exactly one verified slot of your own. This setup saves '
@@ -1260,7 +1258,7 @@ def _client_tools() -> str:
             "会话中输入。它检查安装和槽位是否就绪，不扫描项目、不启动 Claude "
             "会话，也不调用模型。</p>",
         )
-        + "<pre><code>ccfleet local --check\nccfleet status --json\nccfleet doctor "
+        + "<pre><code>ccfleet claude --check\nccfleet status --json\nccfleet doctor "
         "--privacy --json --export ./ccfleet-support.json</code></pre>"
         + bi(
             "<p>Doctor separates installation, pairing, connection and account-health "
@@ -1275,10 +1273,10 @@ def _client_tools() -> str:
             "然有效的配对。</p>",
         )
         + bi(
-            "<p>For an optional basic response check, open <code>ccfleet local</code> and "
+            "<p>For an optional basic response check, open <code>ccfleet claude</code> and "
             "paste this prompt. It makes a model request and may use your plan "
             "allowance:</p>",
-            "<p>如需额外检查基本回复，打开 <code>ccfleet local</code>，粘贴下面的提示。它会"
+            "<p>如需额外检查基本回复，打开 <code>ccfleet claude</code>，粘贴下面的提示。它会"
             "调用模型，并可能消耗订阅额度：</p>",
         )
         + bi(
@@ -1561,8 +1559,8 @@ def guide(
         + '<div class="card" id="setup">'
         + bi("<h2>Install, check, then start</h2>", "<h2>安装、检查，然后开始</h2>")
         + "<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/la"
-        "ptop/install.sh | bash -s -- --setup\n\ncd ~/code/my-project\nccfleet local "
-        "--check\nccfleet local</code></pre>"
+        "ptop/install.sh | bash -s -- --setup\n\ncd ~/code/my-project\nccfleet claude "
+        "--check\nccfleet claude</code></pre>"
         + bi(
             "<p>Open a new terminal after installation if the command is not found. Setup "
             "preserves pairing, configuration and slot sign-in, verifies its digest-pinned "
@@ -1575,14 +1573,14 @@ def guide(
         )
         + bi(
             "<p>When gateway access is enabled, setup saves a separate private connection "
-            "key and the HTTPS address. <code>ccfleet local</code> launches original "
+            "key and the HTTPS address. <code>ccfleet claude</code> launches original "
             "Claude Code on your computer. Files, tools, settings and history run locally; "
             "supported model requests go through the gateway and your selected own slot. "
             "If this computer is already paired but has no gateway configuration, run "
             "<code>ccfleet gateway setup</code>. Installing the client alone does not "
             "enable a slot that the operator has not activated.</p>",
             "<p>网关开放时，安装会保存独立的私有连接密钥和 HTTPS 地址。<code>ccfleet "
-            "local</code> 在你的电脑上启动原版 Claude Code，文件、工具、设置和历史在本地；"
+            "claude</code> 在你的电脑上启动原版 Claude Code，文件、工具、设置和历史在本地；"
             "支持的模型请求经过网关和你选中的自己的槽位。已配对但还没有网关配置的电脑，运行"
             " <code>ccfleet gateway setup</code> 即可。单独安装客户端不会自动开通运营者尚未"
             "启用的槽位。</p>",
@@ -1592,37 +1590,37 @@ def guide(
         + '<div class="card" id="local-work">'
         + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
         + bi(
-            "<p><code>ccfleet local</code> launches the original local Claude CLI. It does "
+            "<p><code>ccfleet claude</code> launches the original local Claude CLI. It does "
             "not upload a project, mount your filesystem on the slot, or require "
             "push/pull. There are no CC Fleet filesystem count/size caps or Git-ignore "
             "filters. Use <code>cd</code> or <code>--project PATH</code> to choose where "
             "you work.</p>",
-            "<p><code>ccfleet local</code> 启动原版本地 Claude Code，不上传整个项目、不把文"
+            "<p><code>ccfleet claude</code> 启动原版本地 Claude Code，不上传整个项目、不把文"
             "件系统挂载到槽位，也不需要 push/pull。CC Fleet 不对本地文件数量、大小或 "
             "Git-ignore 另设限制。先 <code>cd</code> 进入项目，或用 <code>--project "
             "PATH</code> 指定目录。</p>",
         )
         + _prompt_example(
-            "ccfleet local --new --name work\n"
-            "ccfleet local --new --name research --permission-mode plan "
+            "ccfleet claude --new --name work\n"
+            "ccfleet claude --new --name research --permission-mode plan "
             "--model opus --effort high\n"
-            "ccfleet local --resume\n"
-            "ccfleet local --resume work\n"
-            "ccfleet local --continue\n"
-            "ccfleet local --resume work --fork-session\n"
-            'ccfleet local --print "Summarize this project"',
+            "ccfleet claude --resume\n"
+            "ccfleet claude --resume work\n"
+            "ccfleet claude --continue\n"
+            "ccfleet claude --resume work --fork-session\n"
+            'ccfleet claude --print "Summarize this project"',
             "Summarize this project",
             "总结这个项目",
         )
         + bi(
-            "<p>Running <code>ccfleet local</code> again starts a new conversation; "
+            "<p>Running <code>ccfleet claude</code> again starts a new conversation; "
             "<code>--new</code> makes that choice explicit. Existing history is kept. "
             "<code>--resume</code> uses Claude&#x27;s native history picker or an ID/name; "
             "<code>--continue</code> selects the last local conversation for this "
             "directory. Quit with <code>/exit</code> and resume later. Native Claude "
             "settings/history, including an existing <code>CLAUDE_CONFIG_DIR</code>, stay "
             "on this computer.</p>",
-            "<p>再次运行 <code>ccfleet local</code> 会新建会话，<code>--new</code> "
+            "<p>再次运行 <code>ccfleet claude</code> 会新建会话，<code>--new</code> "
             "明确表示新建；已有历史保留。<code>--resume</code> 打开原生历史选择器，或按 "
             "ID/名称恢复；<code>--continue</code> 继续当前目录最近的本地会话。使用 "
             "<code>/exit</code> 退出，以后再恢复。原生 Claude 设置与历史，包括已有的 "
@@ -1966,15 +1964,14 @@ def how_it_works(
         + bi("<h2>Updates, outages and returning a slot</h2>", "<h2>更新、故障与归还</h2>")
         + bi(
             "<p>Local Claude updates separately from the slot and the Fleet client. "
-            "Automatic updates are disabled during a CC Fleet launch; update your local "
-            "Claude installation separately, outside that session. Machine security "
+            "CCFleet checks the latest local Claude release before launch. Machine security "
             "updates install daily; necessary reboots are scheduled by the operator. Check "
             '<a href="/status">Status</a> for website and machine availability, and '
             'the <a href="/status#performance">fleet performance panel</a> for combined '
             "relay measurements. It shows average upstream timing and transfer completion "
             "when enough users contribute data, without listing individual accounts.</p>",
             "<p>电脑上的 Claude、槽位上的 Claude 和 Fleet 客户端分别更新。CC Fleet "
-            "启动期间关闭 Claude 自动更新，请在会话外单独更新本地安装。机器每天安装安全更新"
+            "每次启动代理前会检查并更新本地 Claude。机器每天安装安全更新"
             '，需要重启时由运营者安排。网站和机器是否在线，可以查看<a href="/status">服务状'
             '态</a>；<a href="/status#performance">整体性能面板</a>汇总转发统计。'
             "达到参与用户和样本数量要求后，展示上游平均时长及传输完成率，不列出单个账号。</p>",

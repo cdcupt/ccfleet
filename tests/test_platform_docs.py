@@ -23,9 +23,9 @@ def test_current_cli_reference_keeps_update_and_native_aliases_separate_from_fix
         document = read_document(ROOT / relative)
         text = document.text
         for command in ("ccfleet update", "ccfleet upgrade", "ccfleet -v", "ccfleet --version",
-                        "ccfleet local -c", "ccfleet local -r",
-                        "ccfleet local --permission-mode plan", "--mode",
-                        "ccfleet local --slot A --project PATH", "ccfleet local -- --verbose"):
+                        "ccfleet claude -c", "ccfleet claude -r",
+                        "ccfleet claude --permission-mode plan", "--mode",
+                        "ccfleet claude --slot A --project PATH", "ccfleet claude -- --verbose"):
             assert command in text, (relative, command)
         assert "0.2.7" in text
     runbook = read_document(ROOT / "docs/runbooks.html").text
@@ -37,7 +37,7 @@ def test_current_cli_reference_keeps_update_and_native_aliases_separate_from_fix
     gateway = read_document(ROOT / "docs/public-gateway.html")
     assert ("ccfleet update\nccfleet list --remote --slot PAIRED_SLOT\n"
             "ccfleet gateway setup --slot PAIRED_SLOT --slots DEVIN_SLOT --provider devin\n"
-            "ccfleet local --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 "
+            "ccfleet claude --transport gateway --slot DEVIN_SLOT --model claude-opus-5-5 "
             "--effort max --new -- --safe-mode") in gateway.pre_codes
     history = gateway.text
     assert "Recorded on October 11, 2026:" in history
@@ -124,7 +124,7 @@ def test_badge_addition_keeps_pairing_and_reauthentication_csrf_forms():
             form = re.search(rf'<form[^>]+action="/account/slots/s1/{action}".*?</form>', body)
             assert form and label in form[0]
             assert 'name="csrf" value="CSRF_SYNTHETIC"' in form[0]
-        assert "<code>ccfleet local</code>" in body
+        assert "<code>ccfleet claude</code>" in body
     finally:
         store.close()
 
@@ -169,7 +169,7 @@ def test_documented_new_command_examples_are_accepted_by_the_real_parser():
         "version",
         "update",
         "jobs",
-        "local",
+        "claude",
     } <= commands
     assert any(args.command == "update" and args.rollback for args in parsed)
     assert any(

@@ -92,7 +92,7 @@ def test_compact_guidance_is_localized_without_duplicate_setup_commands(context,
     document = Document(source)
     assert document.text.count("Devin 已就绪" if language == "zh" else "Devin ready") == 1
     assert "ccfleet gateway setup" not in document.text
-    assert "ccfleet local" not in document.text
+    assert "ccfleet claude" not in document.text
     assert "Your Devin account is verified for this slot" not in document.text
     assert all(language in attrs.get("lang", language) for tag, attrs in document.tags
                if "lang" in attrs)

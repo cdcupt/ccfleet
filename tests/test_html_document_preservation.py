@@ -133,12 +133,12 @@ def canonical_pages():
 def test_visible_parser_ignores_hidden_script_style_and_template_claims():
     source = ("<html><head><title>Hidden title</title><style>.x{content:'unsafe claim'}</style>"
               "</head><body><script>privacy = 'unsafe claim';</script>"
-              "<template>unsafe claim</template><p>Visible <code>ccfleet local</code>.</p>"
+              "<template>unsafe claim</template><p>Visible <code>ccfleet claude</code>.</p>"
               "<pre><code>&lt;script&gt;literal, not executable&lt;/script&gt; &amp;&amp; run"
               "</code></pre></body></html>")
     page = Document(source)
     assert "unsafe claim" not in page.text and "Hidden title" not in page.text
-    assert "Visible ccfleet local." in page.text
+    assert "Visible ccfleet claude." in page.text
     assert "<script>literal, not executable</script> && run" in page.codes
     assert page.code_elements == []
 
@@ -229,17 +229,18 @@ def test_full_shell_commands_survive_as_literal_escaped_code(relative, commands)
 
 # Baselines were captured before the 2026-09-30 HTML conversion. Strict counts
 # and hashes protect literal commands and diagrams during format-only edits.
+# 2026-11-21: current CLI examples now use the claude command.
 # Intentional current-document updates are reviewed and dated below; historical
 # snapshots retain their original conversion baselines.
 @pytest.mark.parametrize("relative,count,digest", [
     # 2026-10-18: add the signed side-by-side canonical-domain client example.
-    ("README.html", 14, "f6cb0e80c00ecdf245ca2a0ba8e3c64fb976647d6482c8d74164ff3c1275e451"),
+    ("README.html", 14, "bb2269ad1985f2014e2ef50804249c199077f949e45da63838fef4f09bb41c0b"),
     ("gateway/README.html", 2, "05a5875a4103537bf322ea6a96eaf76efd2d1b47bdaa9da8d1ec89921a9feb69"),
     ("docs/compliance.html", 1, "2ded188e10c277d7ba59ba03370ff9b307bcae82bf0704dba331489a5a70208d"),
     ("docs/design.html", 4, "7f419e01e1cc8c555781096ad52e2c6b3cdb122d828a16e0801be29e047efb2b"),
     # 2026-10-21: add the update/list/use/local example; all 11 earlier blocks are unchanged.
-    ("docs/local-relay.html", 12, "4da6ea1d7f2b8b96d53bfbb25f838984d8abbda8ffc30c9f67ef2e537806d7aa"),
-    ("docs/project-workspaces.html", 3, "4ffcd619921bc03a4b1a8e660378d00f67b01746ceb7b34ee10553917c4538e0"),
+    ("docs/local-relay.html", 12, "fb6910092c632ca1cf97d7316323f64d555efc20022e09e2b7e518dc3246640a"),
+    ("docs/project-workspaces.html", 3, "317c27a538029b692b4cdaaa520af134b11b819b743c0933d632331887b3e6a8"),
     ("docs/tunnel.html", 8, "d5068c44dd70fc6f7dc50e6ffd9d8abae4f0fb160ab3917aedd732558743e492"),
 ])
 def test_document_code_blocks_match_reviewed_snapshots(relative, count, digest):
