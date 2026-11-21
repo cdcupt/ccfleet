@@ -146,7 +146,7 @@ def test_unknown_command_rejects_without_exposing_internal_commands(tmp_path, pa
 
 
 def test_invalid_option_choice_still_lists_valid_native_modes(client, tmp_path):
-    result = _isolated_cli(["local", "--permission-mode", "__invalid_mode__"],
+    result = _isolated_cli(["claude", "--permission-mode", "__invalid_mode__"],
                            tmp_path / "invalid-mode")
     assert result.returncode == 2 and "invalid choice" in result.stderr
     assert result.stdout == ""
@@ -235,7 +235,7 @@ def test_root_version_never_loads_helpers_or_launches_native(client, monkeypatch
     (["-r", "work"], "resume", "work"),
 ])
 def test_local_history_shortcuts_parse_as_native_options(client, arguments, field, value):
-    parsed = client.cli["parser"]().parse_args(["local", *arguments])
+    parsed = client.cli["parser"]().parse_args(["claude", *arguments])
     assert getattr(parsed, field) == value
     assert parsed.claude_args == []
 
@@ -331,7 +331,7 @@ def test_malformed_or_unselected_status_slots_fail_before_local_launch(
 
     monkeypatch.setitem(client.scope, "api_json", api)
     before = _snapshot(client.personal)
-    assert client.cli["main"](["local", "--slot", "one", "--check"]) == 2
+    assert client.cli["main"](["claude", "--slot", "one", "--check"]) == 2
     assert len(calls) == 1
     output = capsys.readouterr()
     assert "invalid selected-slot list" in output.err

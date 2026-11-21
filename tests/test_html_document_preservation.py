@@ -133,12 +133,12 @@ def canonical_pages():
 def test_visible_parser_ignores_hidden_script_style_and_template_claims():
     source = ("<html><head><title>Hidden title</title><style>.x{content:'unsafe claim'}</style>"
               "</head><body><script>privacy = 'unsafe claim';</script>"
-              "<template>unsafe claim</template><p>Visible <code>ccfleet local</code>.</p>"
+              "<template>unsafe claim</template><p>Visible <code>ccfleet claude</code>.</p>"
               "<pre><code>&lt;script&gt;literal, not executable&lt;/script&gt; &amp;&amp; run"
               "</code></pre></body></html>")
     page = Document(source)
     assert "unsafe claim" not in page.text and "Hidden title" not in page.text
-    assert "Visible ccfleet local." in page.text
+    assert "Visible ccfleet claude." in page.text
     assert "<script>literal, not executable</script> && run" in page.codes
     assert page.code_elements == []
 

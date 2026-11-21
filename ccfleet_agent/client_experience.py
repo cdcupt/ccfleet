@@ -14,6 +14,7 @@ import io
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import select
@@ -22,6 +23,8 @@ import signal
 import stat
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -535,6 +538,154 @@ def _check(code: str, version: str = "") -> dict[str, str]:
     return item
 
 
+def _maintenance_env() -> dict[str, str]:
+    # Run vendor maintenance outside the checkout and without Fleet/model credentials.
+    paths = [p for p in os.environ.get("PATH", os.defpath).split(os.pathsep)
+             if os.path.isabs(p)]
+    return {"PATH": os.pathsep.join(paths), "HOME": str(Path.home()), "TERM": "dumb",
+            "LANG": "C", **{k: os.environ[k] for k in ("DISABLE_UPDATES",) if k in os.environ}}
+
+
+def _vendor_download(url: str, target: Path, limit: int, env: dict[str, str],
+                     *, timeout: int = 25) -> None:
+    curl = shutil.which("curl", path=os.defpath)
+    if curl is None:
+        raise ExperienceError("curl is required to check the agent release")
+    subprocess.run([curl, "--disable", "--proto", "=https", "--proto-redir", "=https",
+                    "--tlsv1.2", "--fail", "--silent", "--show-error", "--location",
+                    "--connect-timeout", "8", "--max-time", str(timeout),
+                    "--max-filesize", str(limit),
+                    "--output", str(target), url], env=env, cwd=target.parent,
+                   stdin=subprocess.DEVNULL, check=True, timeout=timeout + 5)
+    if not 0 < target.stat().st_size <= limit:
+        raise ExperienceError("the vendor returned an invalid release file")
+
+
+def _latest_agent(agent: str, stage: Path, env: dict[str, str]) -> str:
+    if agent == "claude":
+        url = "https://downloads.claude.ai/claude-code-releases/latest"
+    else:
+        arch = {"arm64": "arm64", "x86_64": "amd64"}.get(platform.machine())
+        if sys.platform != "darwin" or arch is None:
+            raise ExperienceError("local Antigravity requires an Intel or Apple Silicon Mac")
+        url = ("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"
+               f"/manifests/darwin_{arch}.json")
+    path = stage / "release"
+    _vendor_download(url, path, 16384, env)
+    raw = path.read_text().strip()
+    version = raw if agent == "claude" else json.loads(raw)["version"]
+    if not isinstance(version, str) or not VERSION.fullmatch(version):
+        raise ExperienceError("the vendor returned an invalid agent release version")
+    return version
+
+
+def _verify_google_binary(path: Path) -> None:
+    subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-R",
+                    '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
+                    path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, check=True, timeout=30)
+
+
+def _install_google(stage: Path, env: dict[str, str]) -> None:
+    manifest = json.loads((stage / "release").read_bytes())
+    url = manifest.get("url")
+    digest = manifest.get("sha512")
+    if (not isinstance(url, str) or not re.fullmatch(
+            r"https://storage\.googleapis\.com/antigravity-public/antigravity-cli/"
+            r"[A-Za-z0-9._/-]+\.tar\.gz", url) or "/../" in url
+            or not isinstance(digest, str) or not re.fullmatch("[0-9a-fA-F]{128}", digest)):
+        raise ExperienceError("Google returned an unrecognized native CLI archive")
+    archive = stage / "native.tar.gz"
+    _vendor_download(url, archive, 256 * 1024**2, env, timeout=180)
+    checksum = hashlib.sha512()
+    with archive.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            checksum.update(block)
+    if checksum.hexdigest() != digest.lower():
+        raise ExperienceError("Google CLI archive checksum mismatch")
+    target = Path.home() / ".local/bin/agy"
+    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as binary:
+        staged = Path(binary.name)
+    try:
+        with tarfile.open(archive, "r:gz") as package:
+            members = [m for m in package if m.name in ("antigravity", "./antigravity")]
+            if len(members) != 1 or not members[0].isfile() or not 0 < members[0].size < 1024**3:
+                raise ExperienceError("Google CLI archive lacks the expected executable")
+            with package.extractfile(members[0]) as src, staged.open("wb") as dest:
+                shutil.copyfileobj(src, dest, 1024 * 1024)
+                dest.flush()
+                os.fsync(dest.fileno())
+        os.chmod(staged, 0o755)
+        _verify_google_binary(staged)
+        os.link(staged, target)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _installed_agent_version(binary: str, stage: Path, env: dict[str, str]) -> tuple:
+    result = subprocess.run([binary, "--version"], capture_output=True, cwd=stage, env=env,
+                            stdin=subprocess.DEVNULL, check=True, timeout=15)
+    version = re.match(rb"^([0-9]+)\.([0-9]+)\.([0-9]+)(?:\s|$)", result.stdout.strip())
+    if not version:
+        raise ExperienceError("the installed agent did not report a release version")
+    return tuple(int(x) for x in version.groups())
+
+
+def prepare_agent(agent: str, state: Path, find: Callable[[], Optional[str]]) -> str:
+    """Check at every real launch. Never update on help, diagnostics, or pairing."""
+    if agent not in ("claude", "agy"):
+        raise ExperienceError("unknown agent")
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = os.open(state / (agent + "-update.lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        env = _maintenance_env()
+        with tempfile.TemporaryDirectory(prefix="ccfleet-agent-") as raw:
+            stage = Path(raw)
+            target = _latest_agent(agent, stage, env)
+            required = tuple(map(int, target.split(".")))
+            binary = find()
+            if binary and agent == "agy":
+                _verify_google_binary(Path(binary))
+            if binary and _installed_agent_version(binary, stage, env) >= required:
+                return binary
+            if agent == "claude" and env.get("DISABLE_UPDATES") in ("1", "true"):
+                raise ExperienceError("Claude updates are disabled by local policy")
+            print(f"Installing {agent} {target}…" if not binary else
+                  f"Updating {agent} to {target}…", file=sys.stderr, flush=True)
+            command = None
+            if not binary and agent == "agy":
+                _install_google(stage, env)
+            elif not binary:
+                script = stage / "install.sh"
+                url = "https://claude.ai/install.sh"
+                _vendor_download(url, script, 1024 * 1024, env)
+                subprocess.run(["/bin/bash", "-n", script], env=env, cwd=stage, check=True)
+                command = ["/bin/bash", str(script), "latest"]
+            elif agent == "claude" and Path(binary).resolve().is_relative_to(
+                    Path.home() / ".local/share/claude/versions"):
+                command = [binary, "install", "latest"]
+            else:
+                # The native updater selects the installation's package manager when applicable.
+                command = [binary, "update"]
+            if command:
+                subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
+                               stdout=sys.stderr, check=True, timeout=240)
+            binary = find()
+            if binary and agent == "agy":
+                _verify_google_binary(Path(binary))
+            if binary and _installed_agent_version(binary, stage, env) >= required:
+                return binary
+            raise ExperienceError(f"{agent} {target} is unavailable after the vendor update")
+    except (OSError, KeyError, json.JSONDecodeError, tarfile.TarError,
+            subprocess.SubprocessError) as exc:
+        raise ExperienceError(f"could not verify or install the latest {agent}: "
+                              "check the vendor connection and installation permissions") from exc
+    finally:
+        os.close(lock)
+
+
 def native_version(binary: str, timeout: float = 5) -> str:
     """Bounded native --version; no stdout/stderr or environment is returned."""
     env = {
@@ -943,7 +1094,7 @@ def menu(
 ) -> int:
     """One explicit action, never silently change legacy command defaults."""
     if not (sys.stdin.isatty() if is_tty is None else is_tty):
-        raise ExperienceError("the menu needs a terminal; use ccfleet local or ccfleet doctor")
+        raise ExperienceError("the menu needs a terminal; use ccfleet claude or ccfleet doctor")
     workspace_option = "\n7. Open CCFleet Workspace in Ghostty" if "workspace" in callbacks else ""
     output_fn(
         "CC Fleet: local Claude uses this computer's files and your selected model route.\n"

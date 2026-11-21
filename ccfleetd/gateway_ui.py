@@ -343,7 +343,7 @@ def panel(
             "remains on its slot.</p>"
             "<p>For several slots, use <code>ccfleet gateway setup --slots first-slot "
             "backup-slot --routing sticky</code>. Replace the example names with yours. "
-            "Use <code>ccfleet local --slot first-slot</code> to pin one selected slot "
+            "Use <code>ccfleet claude --slot first-slot</code> to pin one selected slot "
             "for a launch, with no automatic switch to another account.</p>"
             "<p>A released or reclaimed slot needs its endpoint selection saved again "
             "before its new account can be used.</p>",
@@ -355,7 +355,7 @@ def panel(
             "你的 Claude 账号登录凭据仍保留在对应槽位上。</p>"
             "<p>选择多个槽位可以用 <code>ccfleet gateway setup --slots first-slot "
             "backup-slot --routing sticky</code>，请换成自己的槽位名。"
-            "<code>ccfleet local --slot first-slot</code> 会让这次启动只用所选的一个槽位，"
+            "<code>ccfleet claude --slot first-slot</code> 会让这次启动只用所选的一个槽位，"
             "不会自动切换到其他账号。</p>"
             "<p>槽位释放后重新领取，需要再次保存它的连接选择，才能使用这次领取后的账号。</p>",
         )
@@ -533,11 +533,11 @@ def act(store: Any, cfg: Any, account: Mapping[str, Any], path: str,
                  '<p>On an already paired computer, <code>ccfleet gateway setup</code> '
                  'creates or reuses its own key without printing it to your terminal. '
                  'It does not import the website key shown above. Then run '
-                 '<code>ccfleet local</code>.</p>',
+                 '<code>ccfleet claude</code>.</p>',
                  api_paths_zh +
                  '<p>已配对的电脑可以用 <code>ccfleet gateway setup</code> 创建或复用'
                  '命令行自己的密钥，密钥不会打印到终端。它不会导入上方的网页密钥。'
-                 '完成后运行 <code>ccfleet local</code>。</p>')
+                 '完成后运行 <code>ccfleet claude</code>。</p>')
             + '</details><p><a href="/account#gateway">'
             + label("Back to connections", "返回连接管理", inline=True) + '</a></p></div>')
     return usersite.Outcome(200, body=usersite._shell("Save your connection key", body,

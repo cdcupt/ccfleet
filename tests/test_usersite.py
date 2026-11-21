@@ -424,7 +424,7 @@ def test_a_signed_in_slot_shows_its_windows_and_a_way_in(site):
     shown = erik.page()
     assert "In use" in shown and "Max plan" in shown
     assert "CC Fleet CLI" in shown and "claude.ai/code" not in shown
-    assert "<code>ccfleet local</code>" in shown
+    assert "<code>ccfleet claude</code>" in shown
     assert "Claude Code runs on your computer" in shown
     assert "native Devin CLI for model replies" in shown
     assert "Where your data goes" in shown
