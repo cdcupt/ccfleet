@@ -85,7 +85,7 @@ def main():
     secret = json.loads(existing)["api_key"] if existing else getpass.getpass("Gemini API key: ")
     receipt = api.save_profile(reservation, secret, store)
     controller(args.controller, ["grant", key_id, node, "-"], receipt)
-    print("Gemini is enrolled. On the MacBook, start ccfleet local and select Gemini in /model.")
+    print("Gemini is enrolled. On the MacBook, start ccfleet claude and select Gemini in /model.")
     return 0
 
 

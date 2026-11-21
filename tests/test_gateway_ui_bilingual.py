@@ -119,7 +119,7 @@ def test_advanced_connections_start_closed_and_keep_setup_secondary(context, wit
     assert "Use the steps on your slot card" in html
     assert "首次使用，请按槽位卡片上的步骤操作" in html
     assert "Saved connection keys" in html and "已保存的连接密钥" in html
-    assert "ccfleet local</code></pre>" not in html
+    assert "ccfleet claude</code></pre>" not in html
 
 
 def test_untrusted_names_identifiers_and_address_are_escaped(context):

@@ -47,7 +47,7 @@ def command(preflight, arguments, *, prompt=PROMPT, local=False):
     platform = preflight.platform
     before = platform.cli["config_path"]().read_bytes()
     history = preflight.history.read_bytes()
-    prefix = ["local", "--background", "--print", prompt] if local else [
+    prefix = ["claude", "--background", "--print", prompt] if local else [
         "jobs", "start", "--prompt", prompt]
     result = invoke(platform, *prefix, "--project", str(platform.home), *arguments)
     assert platform.cli["config_path"]().read_bytes() == before

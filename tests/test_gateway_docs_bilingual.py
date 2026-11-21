@@ -53,7 +53,7 @@ def test_shared_runnable_examples_do_not_duplicate_or_expose_operator_configurat
     )
     assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky") == 1
     assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing priority") == 1
-    assert commands.count("ccfleet local --slot slot-1234") == 1
+    assert commands.count("ccfleet claude --slot slot-1234") == 1
     assert commands.count("https://ccfleet.io/v1/messages") == 1
     assert "YOUR_MATCHING_PUBLIC_KEY" not in commands
     assert "CCFLEET_GATEWAY_SSH" not in commands

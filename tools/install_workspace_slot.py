@@ -1,4 +1,5 @@
 """Enable the signed-in Mac owner's Antigravity workspace service on an enrolled slot."""
+import hashlib
 import os
 import plistlib
 import subprocess
@@ -29,7 +30,7 @@ def install():
                     home / ".local/bin/agy"], check=True)
     source = Path(__file__).resolve().parents[1] / "ccfleet_agent"
     components = {root / name: (source / name).read_bytes() for name in (
-        "antigravity_entry.py", "antigravity_slot.py", "workspace_io.py")}
+        "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py", "workspace_io.py")}
     destination = agents / (LABEL + ".plist")
     components[destination] = plistlib.dumps({
         "Label": LABEL, "ProgramArguments": ["/usr/bin/python3", "-I", "-B",
@@ -38,11 +39,21 @@ def install():
         "ThrottleInterval": 15, "LimitLoadToSessionType": "Aqua",
         "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null",
     })
+    upgrades = {}
     for path, data in components.items():
-        if path.is_symlink() or (path.exists() and path.read_bytes() != data):
-            raise ValueError(f"existing component differs; review the installed version: {path}")
-    for path, data in components.items():
-        if path.exists():
+        if path.is_symlink():
+            raise ValueError(f"review the linked workspace component: {path}")
+        if path.exists() and path.read_bytes() != data:
+            previous = hashlib.sha256(path.read_bytes()).hexdigest()
+            if (path.name == "antigravity_entry.py"
+                    and previous == ("ae173ac4ff3092367de9cb8f71b781e301c6cf1"
+                                     "92ce6a66a580ae8a7205d3fac")):
+                upgrades[path] = previous
+            else:
+                raise ValueError(f"review the existing workspace component: {path}")
+    # The new forced entry imports the preview helper; install its dependency first.
+    for path, data in sorted(components.items(), key=lambda item: item[0] in upgrades):
+        if path.exists() and path not in upgrades:
             continue
         with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temp:
             tmp = Path(temp.name)
@@ -50,7 +61,12 @@ def install():
                 temp.write(data)
                 temp.flush()
                 os.fsync(temp.fileno())
-                os.link(tmp, path)
+                if path in upgrades:
+                    if hashlib.sha256(path.read_bytes()).hexdigest() != upgrades[path]:
+                        raise ValueError("workspace component changed during installation")
+                    os.replace(tmp, path)
+                else:
+                    os.link(tmp, path)
             finally:
                 tmp.unlink(missing_ok=True)
     domain = "gui/" + str(os.getuid())

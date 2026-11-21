@@ -60,12 +60,12 @@ def test_preferences_new_sessions_only_and_explicit_overrides(platform, capsys):
     assert invoke(platform, "preferences", "set", "--project", str(platform.home),
                   "--model", "sonnet", "--effort", "high", "--mode", "plan") == 0
     assert json.loads(capsys.readouterr().out) == {"model": "sonnet", "effort": "high", "mode": "plan"}
-    assert invoke(platform, "local", "--project", str(platform.home)) == 0
+    assert invoke(platform, "claude", "--project", str(platform.home)) == 0
     command = platform.calls[-1][0]
     assert command[command.index("--model") + 1] == "sonnet"
     assert command[command.index("--effort") + 1] == "high"
     assert command[command.index("--permission-mode") + 1] == "plan"
-    assert invoke(platform, "local", "--project", str(platform.home), "--model", "opus",
+    assert invoke(platform, "claude", "--project", str(platform.home), "--model", "opus",
                   "--effort", "low", "--mode", "acceptEdits") == 0
     command = platform.calls[-1][0]
     assert command[command.index("--model") + 1] == "opus"
@@ -78,14 +78,14 @@ def test_preferences_new_sessions_only_and_explicit_overrides(platform, capsys):
                                     ["--", "--resume=work"], ["--", "--continue"]])
 def test_saved_defaults_do_not_overwrite_resumed_native_modes(platform, flags):
     preferences(platform).set(platform.home, {"model": "sonnet", "effort": "low", "mode": "plan"})
-    assert invoke(platform, "local", "--project", str(platform.home), *flags) == 0
+    assert invoke(platform, "claude", "--project", str(platform.home), *flags) == 0
     command = platform.calls[-1][0]
     assert not {"--model", "--effort", "--permission-mode", "--dangerously-skip-permissions"} & set(command)
 
 
 def test_preferences_do_not_override_explicit_native_options(platform):
     preferences(platform).set(platform.home, {"model": "sonnet", "effort": "high", "mode": "plan"})
-    assert invoke(platform, "local", "--project", str(platform.home), "--", "--model", "opus",
+    assert invoke(platform, "claude", "--project", str(platform.home), "--", "--model", "opus",
                   "--effort", "low", "--permission-mode", "acceptEdits") == 0
     command = platform.calls[-1][0]
     assert command.count("--model") == command.count("--effort") == command.count("--permission-mode") == 1
@@ -168,7 +168,7 @@ def test_snapshot_is_explicit_legacy_recovery_not_local_launch(platform, monkeyp
     assert help_exit.value.code == 0
     help_text = capsys.readouterr().out
     assert "Legacy snapshot recovery" in help_text
-    assert "ccfleet local" in help_text
+    assert "ccfleet claude" in help_text
 
 
 def test_help_describes_local_background_and_explicit_remote(platform, capsys):
@@ -177,7 +177,7 @@ def test_help_describes_local_background_and_explicit_remote(platform, capsys):
     text = capsys.readouterr().out
     assert "Local Claude Code" in text and "remote Claude" in text
     with pytest.raises(SystemExit):
-        invoke(platform, "local", "--help")
+        invoke(platform, "claude", "--help")
     text = " ".join(capsys.readouterr().out.split())
     assert "--background" in text and "terminal exits" in text
 
@@ -295,7 +295,7 @@ def job_capture(platform, monkeypatch):
 
 
 @pytest.mark.parametrize("arguments", [["jobs", "start", "--prompt", PROMPT],
-                                       ["local", "--background", "--print", PROMPT]])
+                                       ["claude", "--background", "--print", PROMPT]])
 def test_background_jobs_keep_prompt_local_and_supervisor_argv_clean(platform, job_capture,
                                                                    arguments, capsys):
     started, _ = job_capture
@@ -345,13 +345,13 @@ def test_background_never_implicitly_authorizes_migration(platform, job_capture,
 
 
 def test_native_bg_flag_remains_rejected_not_mistaken_for_managed_background(platform):
-    assert invoke(platform, "local", "--project", str(platform.home), "--", "--bg") == 2
+    assert invoke(platform, "claude", "--project", str(platform.home), "--", "--bg") == 2
     assert not platform.calls
 
 
 def test_background_interactive_without_prompt_is_refused(platform, job_capture):
     started, _ = job_capture
-    assert invoke(platform, "local", "--background", "--project", str(platform.home)) == 2
+    assert invoke(platform, "claude", "--background", "--project", str(platform.home)) == 2
     assert not started and not platform.calls
 
 
@@ -626,6 +626,6 @@ def test_transport_master_is_closed_if_bridge_initialization_fails(platform, mon
 
     monkeypatch.setitem(platform.scope, "inference_client", lambda: SimpleNamespace(
         TransportSession=Transport, Bridge=fail))
-    assert invoke(platform, "local", "--reuse-transport") == 2
+    assert invoke(platform, "claude", "--reuse-transport") == 2
     assert events == ["started", "closed"]
     assert not platform.calls

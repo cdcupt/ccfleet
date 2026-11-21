@@ -2339,7 +2339,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
         [
             (
                 (
-                    "<code>ccfleet local</code> runs the original Claude "
+                    "<code>ccfleet claude</code> runs the original Claude "
                     "CLI, tools, files, settings and "
                     "conversation history on your computer. It does not "
                     "upload your whole project. File "
@@ -2347,7 +2347,7 @@ def privacy_page(cfg: Config, viewer: Optional[Viewer] = None) -> str:
                     "model context are sent with model requests."
                 ),
                 (
-                    "<code>ccfleet local</code> 在本机运行原版 Claude "
+                    "<code>ccfleet claude</code> 在本机运行原版 Claude "
                     "CLI，文件、工具、设置和会话历史留在电脑上。"
                     "不会上传整个项目，但选作模型上下文的文件片段、"
                     "提示词和工具结果会随请求发送。"
@@ -2947,7 +2947,7 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
         # this command. Let that computer use its own saved authorization.
         setup = ('ccfleet gateway setup --slots ' + target
                  + ' --provider ' + provider)
-        launch = ('ccfleet local --transport gateway --slot ' + target
+        launch = ('ccfleet claude --transport gateway --slot ' + target
                   + (' --model claude-opus-5-5 --effort max' if provider == 'devin' else '')
                   + ' --new' + (' -- --safe-mode' if provider == 'devin' else ''))
         pair = ('<details class="connect-first-time"><summary>'
@@ -3937,7 +3937,7 @@ def _ways_to_use(_report: Mapping[str, Any]) -> str:
             '<div class="way"><b>Claude Code CLI</b>'
             + _notice(
                 (
-                    'Run <code>ccfleet local</code> on your computer. '
+                    'Run <code>ccfleet claude</code> on your computer. '
                     'Claude Code runs its tools '
                     'and reads your files locally. When it needs a model '
                     'reply, it sends the '
@@ -3947,7 +3947,7 @@ def _ways_to_use(_report: Mapping[str, Any]) -> str:
                     'the reply to your computer.'
                 ),
                 (
-                    '在电脑上运行 <code>ccfleet local</code>。Claude '
+                    '在电脑上运行 <code>ccfleet claude</code>。Claude '
                     'Code 在本机运行工具、读取文件；'
                     '需要模型回复时，把选定的上下文通过 HTTPS 发给 '
                     'Fleet。Fleet 选择你指定的槽位，'
@@ -4219,11 +4219,11 @@ def _cli_access(slot: Mapping[str, Any], node: Mapping[str, Any],
                 'CLI access is being prepared for this slot.'
             ), "正在为槽位准备电脑接入。", inline=True) + '</span>'
     introduction = _blocks(
-        '<p class="small muted"><code>ccfleet local</code> runs Claude Code on your '
+        '<p class="small muted"><code>ccfleet claude</code> runs Claude Code on your '
         'computer and sends supported model requests through this slot. The device '
         'access key is not your Claude credential.</p>', [
             (
-                '<code>ccfleet local</code> 在本机运行 Claude Code，'
+                '<code>ccfleet claude</code> 在本机运行 Claude Code，'
                 '受支持的模型请求使用这个槽位。'
                 '电脑访问密钥不是你的 Claude 凭据。'
             ),
@@ -4511,7 +4511,7 @@ def cli_pairing_page(slot: Mapping[str, Any], token: str, viewer: Optional[Viewe
         + label(
             ("3. Connect Claude and open your project"), "3. 连接 Claude 并打开项目", inline=True
         )
-        + "</h2><pre>ccfleet gateway setup\ncd /path/to/your-project\nccfleet local</pre>"
+        + "</h2><pre>ccfleet gateway setup\ncd /path/to/your-project\nccfleet claude</pre>"
         + _notice(
             (
                 "Open a new terminal first so PATH changes take "

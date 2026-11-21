@@ -289,7 +289,7 @@ def pairing_result(code, slot, keys, binding, grants, viewer, script):
     )
 
 WORKSPACE_DOWNLOAD = (
-    "https://github.com/cdcupt/ccfleet/releases/download/workspace-mac-v1.0.0/CCFleet-Workspace.zip"
+    "https://github.com/cdcupt/ccfleet/releases/download/workspace-mac-v1.0.1/CCFleet-Workspace.zip"
 )
 
 
@@ -316,7 +316,10 @@ def workspace_panel(csrf, ready):
             + tr("Antigravity subscription", "Antigravity 订阅") + '</h2><p>' + instructions
             + '</p><p><a href="' + WORKSPACE_DOWNLOAD + '">'
             + tr("Download CCFleet Workspace for Mac", "下载 Mac 版 CCFleet Workspace")
-            + '</a></p>' + form + '</section>')
+            + '</a></p><p><code>ccfleet gemini --preview</code> '
+            + tr("uses this pairing for a synthetic native CLI test on your MacBook.",
+                 "使用此配对在 MacBook 上验证原生终端的文件读写，不消耗订阅额度或 API 费用。")
+            + '</p>' + form + '</section>')
 
 
 def workspace_result(code, slot, keys, binding, grants, viewer, script):

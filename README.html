@@ -54,7 +54,7 @@ of the holder's own slots; their credentials and subscription limits remain sepa
 <p><strong>Hosting update (2026-10-12):</strong> the production website, gateway and broker
 now run on DMIT. Public URLs and existing device pairings are unchanged. The
 server and broker names below describe their roles, independent of hosting provider.</p>
-<p>The primary command, <code>ccfleet local</code>, runs the original Claude Code CLI on the
+<p>The primary command, <code>ccfleet claude</code>, runs the original Claude Code CLI on the
 user's computer. Files, tools, settings and conversation history stay in their
 native local locations. With a saved gateway, the current signed Fleet client sends
 supported model requests directly over HTTPS using a separate Fleet connection key:
@@ -70,7 +70,7 @@ only its own bound account in the paid private-slot route; its Claude credential
 or gateway. This route starts no local HTTP listener and uses no laptop-side SSH.
 See <a href="docs/public-gateway.html">the current gateway guide</a> for account selection,
 safe failover, connection-key management and privacy.</p>
-<p><code>ccfleet local --transport bridge</code> retains the earlier local loopback bridge
+<p><code>ccfleet claude --transport bridge</code> retains the earlier local loopback bridge
 and pinned inner SSH carried through the WebSocket broker. Only that bridge and
 the remote-terminal compatibility path keep model content encrypted through the
 broker. Plain <code>ccfleet</code> remains a remote-terminal command with remote files and
@@ -121,36 +121,36 @@ PATH. Legacy <code>ccfleet-connect</code> cleanup happens only after readiness s
 It does not automatically revoke an Anthropic credential: revoke an old
 setup-token yourself only if it is no longer used anywhere else.</p>
 <p>An already paired computer without a saved gateway can run
-<code>ccfleet gateway setup</code>. A saved gateway is the default for <code>ccfleet local</code>;
+<code>ccfleet gateway setup</code>. A saved gateway is the default for <code>ccfleet claude</code>;
 a failed gateway readiness check does not silently start the bridge. Use
-<code>ccfleet local --transport bridge</code> only when choosing the compatibility route.</p>
+<code>ccfleet claude --transport bridge</code> only when choosing the compatibility route.</p>
 <p>Optional <code>--name &quot;Personal Mac&quot;</code> labels a new device; <code>--slot SLOT</code> chooses an
 existing pairing. Install-only (omit <code>--setup</code>), manual <code>ccfleet login</code>, and
 legacy <code>--migrate</code> remain compatibility options. No SSH command or slot Claude
 credential needs to be entered locally.</p>
-<p><code>ccfleet start</code> offers local new/continue/resume choices; <code>ccfleet local</code> remains
+<p><code>ccfleet start</code> offers local new/continue/resume choices; <code>ccfleet claude</code> remains
 the direct launch command. Bare <code>ccfleet</code> has not changed meaning: it still opens
 the remote terminal. <code>ccfleet remote</code> is the explicit remote alias.</p>
 <h2 id="native-local-files-sessions-and-settings">Native local files, sessions and settings</h2>
-<p><code>ccfleet local</code> does not upload or mount a folder and adds no filesystem count,
+<p><code>ccfleet claude</code> does not upload or mount a folder and adds no filesystem count,
 size or Git-ignore filters. <code>cd ~</code> works too. The working directory is not a
 sandbox: original Claude's native permissions govern local file and tool access.
 New conversations default to <code>bypassPermissions</code>, Opus and max effort, so local
 tools can modify, delete or transmit data without individual approval prompts.</p>
-<pre><code class="language-bash">ccfleet local --check
-ccfleet local --new --name work
-ccfleet local --new --name research --permission-mode plan --model opus --effort high
-ccfleet local --resume
-ccfleet local --resume work
-ccfleet local --continue
-ccfleet local --resume work --fork-session
-ccfleet local --print &quot;Summarize this project&quot;
+<pre><code class="language-bash">ccfleet claude --check
+ccfleet claude --new --name work
+ccfleet claude --new --name research --permission-mode plan --model opus --effort high
+ccfleet claude --resume
+ccfleet claude --resume work
+ccfleet claude --continue
+ccfleet claude --resume work --fork-session
+ccfleet claude --print &quot;Summarize this project&quot;
 ccfleet sessions
 ccfleet preferences set --model opus --effort high --permission-mode plan
 ccfleet preferences show
 ccfleet preferences clear
 </code></pre>
-<p>Running plain <code>ccfleet local</code> again starts a fresh conversation in the current
+<p>Running plain <code>ccfleet claude</code> again starts a fresh conversation in the current
 directory; it does not automatically resume the previous one. Use <code>--continue</code>
 for the latest conversation in that directory, or <code>--resume</code> for the history
 picker. Existing history is kept. A second terminal opens an independent local
@@ -170,15 +170,15 @@ rewrite existing conversations or synchronize history between computers.</p>
 <div class="table-scroll" role="region" aria-label="Scrollable table" tabindex="0"><table><thead><tr><th>Fleet command</th><th>Meaning</th></tr></thead><tbody>
 <tr><td><code>ccfleet update</code> (alias: <code>ccfleet upgrade</code>)</td><td>Install a verified signed Fleet release; add <code>--rollback</code> to restore the previous client.</td></tr>
 <tr><td><code>ccfleet -v</code> or <code>ccfleet --version</code></td><td>Show the Fleet version. <code>ccfleet version --json</code> gives the detailed installation report.</td></tr>
-<tr><td><code>ccfleet local -c</code> or <code>--continue</code></td><td>Continue the last native Claude conversation in this directory.</td></tr>
-<tr><td><code>ccfleet local -r</code> or <code>--resume [NAME_OR_ID]</code></td><td>Open native history, or resume the named conversation.</td></tr>
-<tr><td><code>ccfleet local --permission-mode plan</code></td><td>Choose native permissions; <code>--mode</code> remains an alias.</td></tr>
-<tr><td><code>ccfleet local --slot slot-1234 --project PATH</code></td><td>Fleet-specific: pin one already selected slot and choose the local working directory.</td></tr>
+<tr><td><code>ccfleet claude -c</code> or <code>--continue</code></td><td>Continue the last native Claude conversation in this directory.</td></tr>
+<tr><td><code>ccfleet claude -r</code> or <code>--resume [NAME_OR_ID]</code></td><td>Open native history, or resume the named conversation.</td></tr>
+<tr><td><code>ccfleet claude --permission-mode plan</code></td><td>Choose native permissions; <code>--mode</code> remains an alias.</td></tr>
+<tr><td><code>ccfleet claude --slot slot-1234 --project PATH</code></td><td>Fleet-specific: pin one already selected slot and choose the local working directory.</td></tr>
 <tr><td><code>ccfleet list --remote</code></td><td>Fetch current own-slot names from the server; plain <code>ccfleet list</code> shows saved pairings.</td></tr>
 </tbody></table></div>
 <p>For a verified own Devin slot, follow <a href="https://ccfleet.io/docs/guide#devin-cli">the CLI provider-selection recipe</a>: refresh the remote slot list, authorize with a working pairing, then choose exactly one Devin slot with <code>--provider devin</code>.</p>
 <p>Put other supported Claude options after <code>--</code>, for example
-<code>ccfleet local -- --verbose</code>. Fleet still protects routing and authentication
+<code>ccfleet claude -- --verbose</code>. Fleet still protects routing and authentication
 options. Updating Fleet does not update Claude Code or the operator-managed Devin runtime.</p></section>
 <section id="new-domain"><h2>Use the new address with your existing account</h2>
 <p>Signed Fleet client 0.2.6 uses <strong>https://ccfleet.io</strong> for HTTPS and secure WebSocket connections. Existing standard old-domain profiles use the new address without replacing saved keys, pairings, slot choices or provider settings. Existing 0.2.5 processes keep working through the compatibility address.</p>
@@ -211,7 +211,7 @@ ccfleet jobs status JOB_ID
 ccfleet jobs logs JOB_ID
 ccfleet jobs stop JOB_ID
 # Equivalent supervised launch:
-ccfleet local --background --print &quot;Summarize this project&quot;
+ccfleet claude --background --print &quot;Summarize this project&quot;
 </code></pre>
 <p>These are managed <strong>local print-mode jobs</strong>, not native detached <code>--bg</code>, remote
 agents or interactive attachable sessions. Jobs use the configured default model
@@ -233,7 +233,7 @@ selected model route and authentication, clears conflicting provider/auth overri
 and disables supported optional telemetry without permanently editing native
 settings. Gateway launches use the saved HTTPS URL and Fleet connection key;
 explicit bridge launches use the loopback endpoint and launch-scoped nonce.</p>
-<p>The previous live-folder mount is retired. <code>ccfleet local --disconnect</code> remains
+<p>The previous live-folder mount is retired. <code>ccfleet claude --disconnect</code> remains
 an explicit cleanup action for it; <code>--reset-link</code> is retired. Earlier snapshot
 commands are only for recovery. See <a href="docs/local-relay.html">local relay and migration</a>
 for shutdown-error recovery and a safe local-file check, and

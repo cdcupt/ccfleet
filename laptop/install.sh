@@ -750,19 +750,18 @@ PY
   else
     printf 'Client is ready at %s, but PATH setup is incomplete.\n' "$DEST/ccfleet" >&2
     printf 'Add the install directory to your shell PATH manually, or invoke that absolute client path.\n' >&2
-    printf 'Then open a new terminal in your project and run the client with: local\n' >&2
+    printf 'Then open a new terminal in your project and run the client with: claude\n' >&2
     exit 1
   fi
   # Ghostty users get a Finder launcher during ordinary Mac setup. This optional
   # companion has its own release, authenticated by the Fleet release signer.
   if [ "$(uname -s)" = Darwin ] && [ -d "/Applications/Ghostty.app" ] &&
-     [ "$URL" = https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet ] &&
-     [ ! -e "$HOME/Applications/CCFleet Workspace.app" ]; then
+     [ "$URL" = https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet ]; then
     if ! "$DEST/ccfleet" workspace --install-only; then
       printf '%s\n' 'Workspace app installation did not finish. Your Claude setup is ready.' >&2
     fi
   fi
-  printf '\nSetup complete. Open a new terminal, then:\n  cd /path/to/your-project\n  ccfleet local\n'
+  printf '\nSetup complete. Open a new terminal, then:\n  cd /path/to/your-project\n  ccfleet claude\n'
   printf 'No project files were uploaded and no Claude session was started.\n'
   printf 'If the old setup-token was only for CC Fleet, revoke it in your Anthropic account.\n'
   exit 0

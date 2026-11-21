@@ -215,7 +215,7 @@ def test_the_connect_commands_the_pages_quote_are_ones_the_client_has():
         for line in block.splitlines():
             if line.startswith("ccfleet "):
                 checked.append(parser.parse_args(shlex.split(line)[1:]))
-    assert {"local", "gateway", "start", "sessions", "update", "doctor", "launcher"} <= {
+    assert {"claude", "gateway", "start", "sessions", "update", "doctor", "launcher"} <= {
         command.command for command in checked
     }
     assert "/model" in page.text and "/effort" in page.text
@@ -242,9 +242,9 @@ def test_the_guide_matches_the_session_defaults_and_native_controls():
 
     root = Path(__file__).parents[1]
     parser = runpy.run_path(str(root / "laptop/ccfleet"), run_name="defaults_docs")["parser"]()
-    parsed = parser.parse_args(["local"])
+    parsed = parser.parse_args(["claude"])
     guide = visible_html(render("/docs/guide"))
-    assert parsed.command == "local"
+    assert parsed.command == "claude"
     for phrase in ("bypassPermissions", "Opus", "max effort", "/model", "/effort"):
         assert phrase in guide
     assert "CLAUDE_CODE_EFFORT_LEVEL" not in guide
@@ -305,8 +305,8 @@ def test_how_it_works_scopes_local_execution_and_gateway_outages():
         "configured gateway",
         "eligible slot",
         "outage reports an error",
-        "Automatic updates are disabled during a CC Fleet launch",
-        "update your local Claude installation separately",
+        "before launch",
+        "latest local Claude release",
     ):
         assert phrase in page
     assert "persistent remote" not in page and "--transport bridge" not in page

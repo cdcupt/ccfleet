@@ -128,9 +128,9 @@ def test_command_reference_explains_native_aliases_and_fleet_only_controls_in_bo
     assert "command-reference" in document.ids
     commands = (
         "ccfleet update", "ccfleet upgrade", "ccfleet -v", "ccfleet --version",
-        "ccfleet version --json", "ccfleet local -c", "--continue", "ccfleet local -r",
-        "--resume [NAME_OR_ID]", "ccfleet local --permission-mode plan",
-        "ccfleet local --slot slot-1234 --project PATH", "ccfleet local -- --verbose",
+        "ccfleet version --json", "ccfleet claude -c", "--continue", "ccfleet claude -r",
+        "--resume [NAME_OR_ID]", "ccfleet claude --permission-mode plan",
+        "ccfleet claude --slot slot-1234 --project PATH", "ccfleet claude -- --verbose",
         "ccfleet list --remote",
     )
     for language in ("en", "zh"):
@@ -154,7 +154,7 @@ def test_devin_cli_recipe_distinguishes_pairing_authorization_current_slot_and_p
     assert "devin-cli" in Document(source).ids
     recipe = ("ccfleet update\nccfleet list --remote --slot slot-1234\n"
               "ccfleet gateway setup --slot slot-1234 --slots slot-5678 --provider devin\n"
-              "ccfleet local --transport gateway --slot slot-5678 --model claude-opus-5-5 "
+              "ccfleet claude --transport gateway --slot slot-5678 --model claude-opus-5-5 "
             "--effort max --new -- --safe-mode")
     assert recipe in Document(source).pre_codes
     for language in ("en", "zh"):

@@ -26,8 +26,8 @@ def build(output: Path, identity: str = "-") -> None:
             shutil.copyfile(root / "ccfleet_agent" / (name + ".py"), pkg / (name + ".py"))
         config = app / "Contents/Info.plist"
         values = plistlib.loads(config.read_bytes())
-        values.update(CFBundleIdentifier="io.ccfleet.workspace", CFBundleShortVersionString="1.0.0",
-                      CFBundleVersion="1", LSMinimumSystemVersion="12.0")
+        values.update(CFBundleIdentifier="io.ccfleet.workspace", CFBundleShortVersionString="1.0.1",
+                      CFBundleVersion="2", LSMinimumSystemVersion="12.0")
         config.write_bytes(plistlib.dumps(values))
         subprocess.run(["/usr/bin/codesign", "--force", "--sign", identity, app], check=True)
         subprocess.run(["/usr/bin/codesign", "--verify", "--strict", app], check=True)
