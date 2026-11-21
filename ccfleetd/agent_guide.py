@@ -93,15 +93,15 @@ ROWS = (
       "goose 目前指引 Gemini 用户使用 Google API 或 Vertex。"),
      (("goose", "https://github.com/aaif-goose/goose/blob/main/documentation/docs/guides/cli-providers.md"),
       ("OpenHands", "https://docs.openhands.dev/openhands/usage/llms/llms"))),
-    ("Conductor · Superset",
-     ("Conductor supports Claude Code with an existing Pro or Max account. Superset can "
+    ("Conductor · Paradev (Superset)",
+     ("Conductor supports Claude Code with an existing Pro or Max account. Paradev can "
       "run the official CLI inside a project worktree.",
-      "Conductor 支持 Claude Pro 或 Max 登录。Superset 可在项目工作树中运行官方 CLI。"),
-     ("Superset lists Antigravity CLI as a supported terminal agent. In Conductor, "
+      "Conductor 支持 Claude Pro 或 Max 登录。Paradev 可在项目工作树中运行官方 CLI。"),
+     ("Paradev lists Antigravity CLI as a supported terminal agent. In Conductor, "
       "we found no documented Antigravity subscription integration.",
-      "Superset 列出对 Antigravity CLI 终端代理的支持。尚未找到 Conductor 官方订阅接入说明。"),
+      "Paradev 列出对 Antigravity CLI 终端代理的支持。尚未找到 Conductor 官方订阅接入说明。"),
      (("Conductor", "https://www.conductor.build/docs/reference/harnesses/claude-code"),
-      ("Superset", "https://github.com/superset-sh/superset"))),
+      ("Paradev", "https://docs.paradev.com/supported-agents"))),
     ("Hermes Agent",
      ("Hermes flags extra usage charges for its Anthropic OAuth option. Do not count "
       "that option as included Claude quota.",
