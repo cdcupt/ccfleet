@@ -9,14 +9,14 @@ import json
 import re
 import threading
 import uuid
-from html import escape
 
 from . import gemini_setup_store as data
+from . import gemini_setup_ui as ui
 from .bilingual import label
 from .gateway_transport import ApiModelAttempt, response_metadata
 from .gateway_transport import wire as protocol
 
-PATH = "/account/gemini"
+PATH = ui.PATH
 ACTIONS = {PATH + "/" + action for action in ("start", "finish", "disconnect")}
 CAPACITY = threading.BoundedSemaphore(4)
 
@@ -139,118 +139,26 @@ def verify_flow(token, session, cfg, now):
     return flow
 
 
-def hidden(name, value):
-    return '<input type="hidden" name="' + name + '" value="' + escape(value, quote=True) + '">'
-
-
-def form(action, csrf, content, button):
-    return (
-        f'<form method="post" action="{PATH}/{action}">'
-        + hidden("csrf", csrf)
-        + content
-        + '<button type="submit">'
-        + button
-        + "</button></form>"
-    )
-
-
 def page(store, cfg, account, session, *, note="", status=200, secret_form=""):
     from . import usersite
 
     viewer = usersite.viewer_for(account, session, cfg, store)
     slot, keys, binding, grants = store.gemini_setup_state(account["id"])
-    title = label("Gemini on your Mac", "在 Mac 上使用 Gemini", inline=True)
-    content = (
-        '<section class="card"><h1>'
-        + title
-        + "</h1><p>"
-        + escape(slot["name"] or slot["id"])
-        + "</p>"
-    )
-    if note:
-        content += '<p role="status">' + note + "</p>"
     if secret_form:
-        content += secret_form
+        main = ui.panel(ui.tr("Save your API key", "保存 API 密钥"), secret_form)
     else:
-        if binding:
-            content += (
-                "<p>"
-                + label("Model", "模型", inline=True)
-                + " · "
-                + escape(binding["model"])
-                + "</p>"
-            )
-            if grants:
-                content += (
-                    "<p>"
-                    + label("Connected computers", "已连接的电脑", inline=True)
-                    + " · "
-                    + ", ".join(escape(keys[k]["name"]) for k in keys if k in grants)
-                    + "</p>"
-                )
+        fields = ""
         if not binding or not data.retiring(binding):
-            options = "".join(
-                '<option value="'
-                + escape(k, quote=True)
-                + '">'
-                + escape(v["name"])
-                + " · "
-                + escape(k[:9])
-                + "</option>"
-                for k, v in keys.items()
-            )
-            options = (
-                '<option value="new" data-copy-en="New MacBook · get a pairing code" '
-                'data-copy-zh="新电脑 · 获取配对码">New MacBook · get a pairing code</option>'
-                + options
-            )
-            fields = (
-                "<label>"
-                + label("Computer connection", "电脑连接", inline=True)
-                + '<select name="key">'
-                + options
-                + "</select></label>"
-            )
-            if not binding:
-                fields += (
-                    "<label>"
-                    + label(
-                        "Google Cloud project number that owns the API key",
-                        "API 密钥所属的 Google Cloud 项目编号",
-                        inline=True,
-                    )
-                    + '<input required inputmode="numeric" name="project" pattern="[1-9][0-9]*"'
-                    ' maxlength="30"></label>'
-                    + "<label>"
-                    + label("Gemini model ID", "Gemini 模型 ID", inline=True)
-                    + '<input required name="model" '
-                    'pattern="gemini-[A-Za-z0-9._\\-]+" maxlength="95"></label>'
-                )
-            content += form(
-                "start", viewer.csrf, fields, label("Connect Gemini", "连接 Gemini", inline=True)
-            )
+            fields = ui.setup_form(viewer.csrf, keys, binding)
         if binding:
-            content += form(
-                "disconnect",
-                viewer.csrf,
-                hidden("binding", binding["id"])
-                + '<label><input type="checkbox" required name="confirm" value="1">'
-                + label(
-                    "Remove Gemini from this slot and its linked computers.",
-                    "从此槽位及关联电脑移除 Gemini。",
-                    inline=True,
-                )
-                + "</label>",
-                label("Disconnect Gemini", "断开 Gemini", inline=True),
-            )
-    content += (
-        '<p><a href="/account#slot-'
-        + escape(slot["id"], quote=True)
-        + '">'
-        + label("Back to my slot", "返回我的槽位", inline=True)
-        + "</a></p></section>"
-    )
-    return usersite.Outcome(status, body=usersite._shell("Gemini", content, viewer=viewer))
+            fields += ui.disconnect_form(viewer.csrf, binding)
+        main = ui.panel(ui.tr("Computer connection", "电脑连接"), fields)
+    body = ui.shell(ui.tr("Gemini API connection", "Gemini API 连接"), ui.tr(
+        "Connect Gemini to local Claude Code. Usage is billed to your Google Cloud project.",
+        "为本地 Claude Code 连接 Gemini API。用量计入你的 Google Cloud 项目。"),
+        main, ui.slot_panel(slot, keys, binding, grants), viewer, note=note,
+        back="/account#slot-" + slot["id"])
+    return usersite.Outcome(status, body=body)
 
 
 def act(store, cfg, account, session, action, fields, now, transport=None):
@@ -323,43 +231,8 @@ def act(store, cfg, account, session, action, fields, now, transport=None):
                     r"[A-Za-z0-9_-]{400,900}", answer["public_key"]
                 ):
                     raise Unavailable("invalid public key")
-                opened = (
-                    "<p>"
-                    + label(
-                        "Your browser encrypts the key for your Mac. "
-                        "Usage goes to your Google Cloud project.",
-                        "浏览器会为 Mac mini 加密密钥。Gemini API 用量计入所选 Google Cloud 项目。",
-                        inline=True,
-                    )
-                    + "</p>"
-                    + f'<form method="post" id="gemini-credential" action="{PATH}/finish"'
-                    + f' data-nonce="{flow["nonce"]}" data-pub="{answer["public_key"]}">'
-                    + hidden("csrf", csrf)
-                    + hidden("flow", sign_flow(flow, session, cfg))
-                    + hidden("envelope", "")
-                    + "<label>"
-                    + label("Gemini API key", "Gemini API 密钥", inline=True)
-                    + '<input type="password" required minlength="16" maxlength="2048" '
-                    'id="gemini-key" autocomplete="off"></label>'
-                    + '<p id="crypto-required">'
-                    + label(
-                        "Use a browser with JavaScript and encrypted connection support.",
-                        "请使用支持 JavaScript 和安全连接的浏览器。",
-                        inline=True,
-                    )
-                    + "</p>"
-                    + '<button disabled type="submit">'
-                    + label("Save on my Mac", "保存到我的 Mac", inline=True)
-                    + '</button><p role="alert" hidden>'
-                    + label(
-                        "Encryption failed. Reopen setup and try again.",
-                        "加密失败，请重新打开设置再试。",
-                        inline=True,
-                    )
-                    + "</p></form><script>"
-                    + SCRIPT
-                    + "</script>"
-                )
+                opened = ui.credential_form(csrf, sign_flow(flow, session, cfg), flow["nonce"],
+                                            answer["public_key"], SCRIPT)
                 return page(store, cfg, account, session, secret_form=opened)
         else:
             raise data.SetupError("unknown action")
@@ -368,35 +241,8 @@ def act(store, cfg, account, session, action, fields, now, transport=None):
         result = store.gemini_setup_continue(owner, flow, answer["receipt"], now=now)
         if flow["key"] == "new":
             viewer = usersite.viewer_for(account, session, cfg, store)
-            content = (
-                '<section class="card"><h1>'
-                + label("Your Gemini pairing code", "Gemini 配对码", inline=True)
-                + "</h1><p>"
-                + label(
-                    "Paste this code into the Fleet pairing prompt on your MacBook. "
-                    "It works once and expires in 10 minutes.",
-                    "在 MacBook 的 Fleet 配对提示中粘贴此码。配对码仅可使用一次，10 分钟后过期。",
-                    inline=True,
-                )
-                + '</p><pre class="token" id="gemini-code">'
-                + escape(result)
-                + '</pre><button type="button" id="gemini-copy" hidden>'
-                + label("Copy code", "复制配对码", inline=True)
-                + '</button><span id="copy-status" role="status"></span>'
-                + "<p>"
-                + label(
-                    "After pairing, choose Gemini · API in Claude Code’s /model menu.",
-                    "完成配对后，在 Claude Code 的 /model 菜单选择 Gemini · API。",
-                    inline=True,
-                )
-                + '</p><a href="/account/gemini">'
-                + label("Back to Gemini", "返回 Gemini", inline=True)
-                + "</a></section>"
-                + "<script>"
-                + SCRIPT
-                + "</script>"
-            )
-            return usersite.Outcome(200, body=usersite._shell("Gemini", content, viewer=viewer))
+            state = store.gemini_setup_state(owner)
+            return usersite.Outcome(200, body=ui.pairing_result(result, *state, viewer, SCRIPT))
         return ok()
     except Unavailable:
         return page(

@@ -220,3 +220,17 @@ def test_disconnect_requires_exact_mac_binding():
             100,
         )
     assert vault.get_password(mac.SERVICE, r["binding_id"])
+
+
+def test_client_picker_distinguishes_new_computers_from_saved_connection_names():
+    from ccfleetd import bilingual, gemini_setup_ui
+
+    keys = {"g123456": {"name": "This computer"}, "g345678": {"name": "This computer"}}
+    form = gemini_setup_ui.setup_form("fixture", keys, None)
+    for lang, new, saved in (("en", "Pair a new computer", "Saved connection"),
+                             ("zh", "配对新电脑", "已有连接")):
+        html = bilingual.project_html(form, lang, "/account/gemini")
+        assert new in html and saved + " · This computer · 123456" in html
+        assert 'for="gm-client"' in html and 'id="gm-client"' in html
+        for name in ("gm-project", "gm-model"):
+            assert f'for="{name}"' in html and f'aria-describedby="{name}-hint"' in html
