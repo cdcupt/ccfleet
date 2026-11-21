@@ -31,7 +31,7 @@ def test_main_guide_app_setup_is_visible_and_linked_from_its_intro(language, opt
     links = flow.inside(navigation, "a")
     targets = [bilingual.route_target(element.attrs["href"])[0] for element in links]
     assert targets == ["/docs/guide#" + anchor
-                       for anchor in ("setup", "add-slot", "model-connections", "agent-apps", "local-work", "slot-care")]
+                       for anchor in ("setup", "add-slot", "model-connections", "agent-compatibility", "agent-apps", "local-work", "slot-care")]
     assert all(target.split("#", 1)[1] in page.ids for target in targets)
     link = links[1]
     assert all(parent.tag != "details" for parent in link.parents)
@@ -41,7 +41,7 @@ def test_main_guide_app_setup_is_visible_and_linked_from_its_intro(language, opt
     assert section.attrs["aria-labelledby"] == "agent-apps-title"
     assert not page.duplicate_ids
     assert all(link[1:] in page.ids for link in page.links if link.startswith("#"))
-    assert any(bilingual.route_target(link)[0] == DETAILS for link in page.links)
+    assert any(target and target[0] == DETAILS for target in map(bilingual.route_target, page.links))
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])
@@ -92,3 +92,21 @@ def test_localized_public_guide_serves_the_app_setup(one_site, language, heading
     page = Document(body)
     assert ("h2", heading) in page.headings
     assert RECIPE in page.pre_codes and "agent-apps" in page.ids
+
+@pytest.mark.parametrize("language,planned,other", [
+    ("en", "planned and unavailable today", "目前仍在规划中"),
+    ("zh", "目前仍在规划中", "planned and unavailable today"),
+])
+def test_subscription_guide_separates_fleet_from_publisher_support(language, planned, other):
+    flow = Flow(rendered(language))
+    section, = flow.find("section", id="agent-compatibility")
+    assert planned in section.text and other not in section.text
+    rows = flow.inside(section, "tr")
+    assert {cell.text for cell in flow.inside(rows[0], "th")} == (
+        {"Tool", "Claude subscription", "Antigravity subscription", "Sources"} if language == "en"
+        else {"工具", "Claude 订阅", "Antigravity 订阅", "资料"})
+    tools = {flow.inside(row, "th")[0].text for row in rows[1:]}
+    assert {"T3 Code", "Pi", "Zed", "OpenCode · Kilo Code", "Cline", "Codex"} <= tools
+    for row in rows[1:]:
+        assert len(flow.inside(row, "td")) == 3
+        assert flow.inside(row, "a")

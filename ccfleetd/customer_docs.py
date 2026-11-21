@@ -16,14 +16,14 @@ from collections.abc import Mapping
 from html import escape
 from typing import Any, Callable, Optional
 
-from . import pricing, statuspage
+from . import agent_guide, pricing, statuspage
 from .bilingual import bi, label
 from .config import Config
 from .render import _quota_panel
 from .usersite import NAV, Viewer, _shell, public_usage_panel
 
 #: When these pages last changed in substance. Change it with the words.
-DOCS_UPDATED = "2026-11-08"
+DOCS_UPDATED = "2026-11-21"
 
 DOCS_CSS = """
 /* A docs page's title block. */
@@ -1509,6 +1509,7 @@ def _guide_navigation() -> str:
     links = (("setup", "First computer", "首次连接电脑"),
              ("add-slot", "Add another slot", "添加另一个槽位"),
              ("model-connections", "Sticky & priority", "会话保持与优先级"),
+             ("agent-compatibility", "Claude & Gemini by tool", "各工具订阅支持"),
              ("agent-apps", "Orca, Herdr & T3 Code", "Orca、Herdr 与 T3 Code"),
              ("local-work", "Files & conversations", "文件与会话"),
              ("slot-care", "Slot care", "管理槽位"))
@@ -1828,6 +1829,7 @@ def guide(
         + "</div>"
         + _additional_slot_setup()
         + _model_connections(cfg)
+        + agent_guide.section()
         + _agent_app_guide()
         + '<div class="card" id="local-work">'
         + bi("<h2>Your local files and conversations</h2>", "<h2>本地文件与会话</h2>")
