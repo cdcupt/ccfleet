@@ -104,7 +104,7 @@ def slot_panel(slot, keys, binding, grants):
     elif binding and binding["credential_fp"]:
         status = tr("API key saved", "密钥已保存")
     metadata = row(tr("Host", "主机"), escape(slot["name"] or slot["id"]))
-    metadata += row(tr("Credential status", "凭据状态"), status)
+    metadata += row(tr("API credential status", "API 凭据状态"), status)
     if binding:
         metadata += row(tr("Model", "当前模型"), escape(binding["model"]))
     if grants:
@@ -114,7 +114,8 @@ def slot_panel(slot, keys, binding, grants):
             + "".join("<li>" + escape(v["name"]) + "</li>" for k, v in keys.items() if k in grants)
             + "</ul>",
         )
-    metadata += row(tr("Key storage", "密钥保存在"), tr("Mac login Keychain", "Mac 登录钥匙串"))
+    metadata += row(tr("API key storage", "API 密钥保存在"),
+                    tr("Mac login Keychain", "Mac 登录钥匙串"))
     return (
         '<aside class="gm-panel"><div class="gm-metahead"><span aria-hidden="true" '
         'class="gm-device"></span><h2>'
@@ -286,3 +287,50 @@ def pairing_result(code, slot, keys, binding, grants, viewer, script):
         back=PATH,
         back_label=tr("Gemini setup", "Gemini 设置"),
     )
+
+WORKSPACE_DOWNLOAD = (
+    "https://github.com/cdcupt/ccfleet/releases/download/workspace-mac-v1.0.0/CCFleet-Workspace.zip"
+)
+
+
+def workspace_panel(csrf, ready):
+    instructions = tr("Open CCFleet Workspace from Applications or download it below. "
+                      "Your private slot runs Google’s "
+                      "Antigravity CLI. Workspace file saves and test runs ask for approval on "
+                      "the connecting Mac. Requested file contents and test output go to the "
+                      "agent on your slot.", "在应用程序中打开 CCFleet Workspace，也可从下方下载。"
+                      "专属槽位运行 Google 的 "
+                      "Antigravity CLI；保存本地文件和运行测试时，会在当前 Mac 上请求确认。"
+                      "请求的文件内容和测试输出将发送到槽位上的代理。")
+    form = ('<form method="post" action="/account/gemini/workspace">' + hidden("csrf", csrf)
+            + '<label class="gm-check"><input type="checkbox" required name="trust" value="1">'
+            + tr("I trust this computer to operate Antigravity under my Mac slot login, "
+                 "including the CLI’s built-in tools on that Mac.",
+                 "我信任这台电脑以槽位登录身份使用 Antigravity 及该 Mac 的 CLI 内置工具。")
+            + '</label><div class="gm-actions"><button class="primary" type="submit">'
+            + tr("Create Antigravity pairing code", "创建 Antigravity 配对码")
+            + '</button></div></form>') if ready else (
+                '<p role="status">' + tr("The Antigravity workspace service is offline.",
+                                         "Antigravity 工作区服务当前不在线。") + '</p>')
+    return ('<section class="gm-panel" id="subscription"><h2>'
+            + tr("Antigravity subscription", "Antigravity 订阅") + '</h2><p>' + instructions
+            + '</p><p><a href="' + WORKSPACE_DOWNLOAD + '">'
+            + tr("Download CCFleet Workspace for Mac", "下载 Mac 版 CCFleet Workspace")
+            + '</a></p>' + form + '</section>')
+
+
+def workspace_result(code, slot, keys, binding, grants, viewer, script):
+    content = ('<p>' + tr("Open CCFleet Workspace on your MacBook, choose a project and "
+                          "Antigravity, then paste the code in Ghostty within 10 minutes.",
+                          "在 MacBook 打开 CCFleet Workspace，选择项目和 Antigravity，"
+                          "然后在 10 分钟内将此一次性配对码粘贴到 Ghostty。")
+               + '</p><pre class="gm-code" id="gemini-code">' + escape("agy1-" + code)
+               + '</pre><button type="button" id="gemini-copy" hidden>'
+               + tr("Copy code", "复制配对码") + '</button><p><a href="' + WORKSPACE_DOWNLOAD + '">'
+               + tr("Download the Mac launcher", "下载 Mac 启动器") + '</a></p><script>'
+               + script + '</script>')
+    return shell(tr("Connect your local project", "连接本地项目"),
+                 tr("The Google sign-in stays on your private Mac slot.",
+                    "Google 登录凭据保存在你的专属 Mac 槽位。"),
+                 panel(tr("Antigravity pairing code", "Antigravity 配对码"), content),
+                 slot_panel(slot, keys, binding, grants), viewer, back=PATH)

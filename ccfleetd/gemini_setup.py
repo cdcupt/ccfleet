@@ -8,6 +8,7 @@ import hmac
 import json
 import re
 import threading
+import time
 import uuid
 
 from . import gemini_setup_store as data
@@ -17,7 +18,7 @@ from .gateway_transport import ApiModelAttempt, response_metadata
 from .gateway_transport import wire as protocol
 
 PATH = ui.PATH
-ACTIONS = {PATH + "/" + action for action in ("start", "finish", "disconnect")}
+ACTIONS = {PATH + "/" + action for action in ("start", "finish", "disconnect", "workspace")}
 CAPACITY = threading.BoundedSemaphore(4)
 
 # The input containing the actual key has no form name. A browser without this
@@ -152,10 +153,12 @@ def page(store, cfg, account, session, *, note="", status=200, secret_form=""):
             fields = ui.setup_form(viewer.csrf, keys, binding)
         if binding:
             fields += ui.disconnect_form(viewer.csrf, binding)
-        main = ui.panel(ui.tr("Computer connection", "电脑连接"), fields)
-    body = ui.shell(ui.tr("Gemini API connection", "Gemini API 连接"), ui.tr(
-        "Connect Gemini to local Claude Code. Usage is billed to your Google Cloud project.",
-        "为本地 Claude Code 连接 Gemini API。用量计入你的 Google Cloud 项目。"),
+        main = ui.workspace_panel(viewer.csrf, store.antigravity_ready(slot["id"], now=time.time()))
+        main += ui.panel(ui.tr("Gemini API for Claude Code", "用于 Claude Code 的 Gemini API"),
+                         fields)
+    body = ui.shell(ui.tr("Gemini connections", "Gemini 连接"), ui.tr(
+        "Use Antigravity in Ghostty, or connect Gemini API billing to local Claude Code.",
+        "可在 Ghostty 使用 Antigravity 订阅，或为本地 Claude Code 配置单独计费的 Gemini API。"),
         main, ui.slot_panel(slot, keys, binding, grants), viewer, note=note,
         back="/account#slot-" + slot["id"])
     return usersite.Outcome(status, body=body)
@@ -172,6 +175,13 @@ def act(store, cfg, account, session, action, fields, now, transport=None):
         return usersite.Outcome(303, location=PATH)
 
     try:
+        if action == "workspace":
+            if fields != {"csrf": csrf, "trust": "1"}:
+                raise data.SetupError("trusted computer approval required")
+            state = store.gemini_setup_state(owner)
+            code = store.antigravity_pairing(owner, now=now)
+            viewer = usersite.viewer_for(account, session, cfg, store)
+            return usersite.Outcome(200, body=ui.workspace_result(code, *state, viewer, SCRIPT))
         if action == "disconnect":
             if set(fields) != {"csrf", "binding", "confirm"} or fields["confirm"] != "1":
                 raise data.SetupError("confirmation required")

@@ -12,6 +12,16 @@ from collections.abc import Mapping
 from typing import Any, Optional
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agy_hosts (
+    node_id TEXT PRIMARY KEY REFERENCES private_owner_nodes(node_id) ON DELETE CASCADE,
+    seen_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agy_pairings (
+    token_hash TEXT PRIMARY KEY REFERENCES cli_pairings(token_hash) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS agy_devices (
+    device_id TEXT PRIMARY KEY REFERENCES cli_devices(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS private_owner_nodes (
     node_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL UNIQUE,
@@ -229,8 +239,30 @@ class PrivateOwnerStoreMixin:
                 (int(enabled), now, node_id),
             )
 
+    def antigravity_ready(self, node_id: str, *, now: float) -> bool:
+        with self._lock:
+            return self._conn.execute("SELECT 1 FROM agy_hosts WHERE node_id=? "
+                                      "AND seen_at BETWEEN ? AND ?", (node_id, now-180, now)
+                                      ).fetchone() is not None
+
+    def antigravity_pairing(self, owner: str, *, now: float) -> str:
+        """Only a private Mac's current administrator may grant an interactive session."""
+        from . import cli_access
+        from .store import StoreError
+
+        with self._write_txn() as conn:
+            node = conn.execute("SELECT node_id FROM private_owner_nodes WHERE account_id=?",
+                                (owner,)).fetchone()
+            if node is None or not eligible(conn, node["node_id"], owner):
+                raise StoreError("a ready private Mac owned by this account is required")
+            if not self.antigravity_ready(node["node_id"], now=now):
+                raise StoreError("the Antigravity workspace service is offline")
+            code = self._mint_cli_pairing(conn, node["node_id"], owner, now=now)
+            conn.execute("INSERT INTO agy_pairings VALUES (?)", (cli_access.token_hash(code),))
+            return code
+
     def private_owner_access(
-        self, node_id: str, gateway_public_key: str = ""
+        self, node_id: str, gateway_public_key: str = "", *, workspace_at: Optional[float] = None
     ) -> Optional[dict[str, Any]]:
         """Fixed public-key grants only; no remote commands or account management."""
         with self._write_txn() as conn:
@@ -242,11 +274,26 @@ class PrivateOwnerStoreMixin:
             if row is None:
                 return None
             allowed = slot_allowed(conn, row["id"], row["account_id"])
+            workspace_keys = []
+            if allowed:
+                workspace_keys = [r[0] for r in conn.execute(
+                    "SELECT d.public_key FROM cli_devices d JOIN agy_devices w ON w.device_id=d.id "
+                    "WHERE d.slot_id=? AND d.account_id=? AND d.revoked_at IS NULL "
+                    "ORDER BY d.public_key", (row["id"], row["account_id"]))]
+            devices = self.cli_public_keys(row["id"]) if allowed else []
+            if workspace_at is not None and allowed:
+                conn.execute("INSERT INTO agy_hosts VALUES (?,?) ON CONFLICT(node_id) "
+                             "DO UPDATE SET seen_at=excluded.seen_at", (node_id, workspace_at))
+            else:
+                conn.execute("DELETE FROM agy_hosts WHERE node_id=?", (node_id,))
+                devices = [key for key in devices if key not in workspace_keys]
+                workspace_keys = []
             return {
+                **({"workspace_public_keys": workspace_keys} if workspace_keys else {}),
                 "version": 1,
                 "unix_user": row["unix_user"],
                 "enabled": allowed,
-                "device_public_keys": self.cli_public_keys(row["id"]) if allowed else [],
+                "device_public_keys": devices,
                 "gateway_public_keys": self.gateway_public_keys(row["id"], gateway_public_key)
                 if allowed and gateway_public_key
                 else [],

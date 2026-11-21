@@ -433,6 +433,19 @@ def post_heartbeat(cfg: dict, payload: dict) -> tuple[int, dict]:
                                      data=json.dumps(payload, separators=(",", ":")).encode(),
                                      headers={"Content-Type": "application/json",
                                               "Authorization": "Bearer " + cfg["node_token"]})
+    # Only a Mac with a locally installed workspace service may receive interactive keys.
+    home = Path.home()
+    endpoint = home / ".config/ccfleet/private-owner/workspace.sock"
+    if endpoint.is_socket() and os.access(home / ".local/bin/agy", os.X_OK):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.settimeout(.7)
+                probe.connect(str(endpoint))
+                probe.sendall(b"P")
+                if probe.recv(1) == b"Y":
+                    request.add_header("X-CCFleet-Workspace", "1")
+        except OSError:
+            pass
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
         with opener.open(request, timeout=10) as response:

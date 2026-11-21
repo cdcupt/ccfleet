@@ -35,7 +35,7 @@ ADMIN_ACTIONS = {
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
 POST_PAGES = frozenset({'/account/gemini/start', '/account/gemini/finish',
-                       '/account/gemini/disconnect',
+                       '/account/gemini/disconnect', '/account/gemini/workspace',
                        '/account/devin-trial/create', '/account/devin-trial/revoke',
                        '/account/claim', '/account/outage-emails', '/auth/signout',
                        '/account/purchase', '/account/renew', '/account/topup',
