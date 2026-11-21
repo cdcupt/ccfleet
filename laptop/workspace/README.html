@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>CCFleet Workspace for Mac</title>
+<main>
+<h1>CCFleet Workspace for Mac</h1>
+<p>Open <strong>CCFleet Workspace</strong> in Finder on the Mac that holds your project.
+Choose a folder, then Antigravity and any test recipe you want to allow. During the first
+session, copy the single-use code from your private slot’s subscription panel and paste
+it at the Ghostty prompt. Later sessions reuse that computer’s workspace pairing.
+<a href="https://ccfleet.io/en/account/gemini#subscription">Open subscription setup</a>.</p>
+<p>The official Google CLI runs in the slot owner’s macOS login session. Its built-in
+file and shell tools act on the slot. Ask it to use <strong>ccfleet-local-project</strong>
+for the selected project. The workspace tools send requested file contents and test
+output through the encrypted session to the agent. You approve saves, new folders and
+each test run on your computer. Test programs run with a temporary home, project-local
+write access and networking disabled. Project tools support UTF-8 files up to 192 KiB
+and skip sensitive or generated paths such as <code>.git</code>, <code>.env</code> and
+<code>node_modules</code>. Remove the workspace device under the slot's connected
+computers to revoke access.</p>
+<h2>Enable another private Mac slot</h2>
+<p>The slot must be enrolled to its current administrator. Install Google's official
+CLI under <code>~/.local/bin/agy</code>, complete Google's own sign-in on the slot,
+and deploy the workspace-capable CCFleet controller and Mac owner agent. From the
+matching source checkout, run the following in the slot owner's macOS login session.</p>
+<pre><code>/usr/bin/python3 tools/install_workspace_slot.py</code></pre>
+<p>The installer verifies the Google binary and starts a user LaunchAgent. The controller
+offers pairing after the next successful owner heartbeat. Existing device pairings retain
+their existing access. Each new subscription pairing has its own restricted device key.
+The private slot handles one interactive workspace session at a time.</p>
+</main></html>
