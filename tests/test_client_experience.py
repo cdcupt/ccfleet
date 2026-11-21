@@ -677,3 +677,11 @@ def test_native_version_timeout_is_bounded(tmp_path):
     binary.chmod(0o700)
     with pytest.raises(subprocess.TimeoutExpired):
         ux.native_version(str(binary), timeout=0.1)
+
+
+def test_workspace_menu_uses_explicit_local_mac_callback(tmp_path):
+    events = []
+    result = ux.menu({"workspace": lambda: events.append("opened") or 0},
+                     project=tmp_path, input_fn=lambda _: "7",
+                     output_fn=lambda _: None, is_tty=True)
+    assert result == 0 and events == ["opened"]
