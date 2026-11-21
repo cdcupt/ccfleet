@@ -562,18 +562,11 @@ def _vendor_download(url: str, target: Path, limit: int, env: dict[str, str],
 
 
 def _latest_agent(agent: str, stage: Path, env: dict[str, str]) -> str:
-    if agent == "claude":
-        url = "https://downloads.claude.ai/claude-code-releases/latest"
-    else:
-        arch = {"arm64": "arm64", "x86_64": "amd64"}.get(platform.machine())
-        if sys.platform != "darwin" or arch is None:
-            raise ExperienceError("local Antigravity requires an Intel or Apple Silicon Mac")
-        url = ("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"
-               f"/manifests/darwin_{arch}.json")
+    if agent != "claude":
+        raise ExperienceError("Antigravity release checks require the paired CCFleet slot")
     path = stage / "release"
-    _vendor_download(url, path, 16384, env)
-    raw = path.read_text().strip()
-    version = raw if agent == "claude" else json.loads(raw)["version"]
+    _vendor_download("https://downloads.claude.ai/claude-code-releases/latest", path, 16384, env)
+    version = path.read_text().strip()
     if not isinstance(version, str) or not VERSION.fullmatch(version):
         raise ExperienceError("the vendor returned an invalid agent release version")
     return version
@@ -581,46 +574,151 @@ def _latest_agent(agent: str, stage: Path, env: dict[str, str]) -> str:
 
 def _verify_google_binary(path: Path) -> None:
     subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "-R",
-                    '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
+                    ('=identifier "cli" and anchor apple generic and '
+                     'certificate leaf[subject.OU] = "EQHXZ8M8AV"'),
                     path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL, check=True, timeout=30)
 
 
-def _install_google(stage: Path, env: dict[str, str]) -> None:
-    manifest = json.loads((stage / "release").read_bytes())
-    url = manifest.get("url")
-    digest = manifest.get("sha512")
-    if (not isinstance(url, str) or not re.fullmatch(
-            r"https://storage\.googleapis\.com/antigravity-public/antigravity-cli/"
-            r"[A-Za-z0-9._/-]+\.tar\.gz", url) or "/../" in url
-            or not isinstance(digest, str) or not re.fullmatch("[0-9a-fA-F]{128}", digest)):
-        raise ExperienceError("Google returned an unrecognized native CLI archive")
-    archive = stage / "native.tar.gz"
-    _vendor_download(url, archive, 256 * 1024**2, env, timeout=180)
+def slot_artifact(command, request, dest, limit, timeout):
+    """Receive a bounded artifact from the paired slot."""
+    message = json.dumps({"v": 1, **request}, separators=(",", ":")).encode() + b"\n"
+    start = time.monotonic()
+    while True:
+        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, start_new_session=True, bufsize=0)
+        try:
+            try:
+                proc.stdin.write(message)
+            except BrokenPipeError:
+                pass
+            proc.stdin.close()
+            deadline = time.monotonic() + timeout
+            size = 0
+            with dest.open("wb") as output:
+                while True:
+                    left = deadline - time.monotonic()
+                    if left <= 0 or not select.select([proc.stdout], [], [], left)[0]:
+                        raise ExperienceError("timed out waiting for the paired slot release")
+                    data = os.read(proc.stdout.fileno(), min(256 * 1024, limit + 1 - size))
+                    if not data:
+                        break
+                    size += len(data)
+                    if size > limit:
+                        raise ExperienceError("the slot returned an oversized artifact")
+                    output.write(data)
+            status = proc.wait(timeout=max(.1, deadline-time.monotonic()))
+            if status == 0 and size:
+                return
+            if status != 255 or size or time.monotonic()-start >= 100:
+                raise ExperienceError("the private slot could not supply the requested release; "
+                                      "check its workspace service and internet connection")
+        finally:
+            if proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            proc.stdout.close()
+            if not proc.stdin.closed:
+                proc.stdin.close()
+        # A newly paired key is installed by the next private-owner heartbeat.
+        time.sleep(2)
+
+
+def _google_version(binary: Path, stage: Path) -> tuple:
+    # Even a version probe must not use the laptop login, updater, or external network.
+    _verify_google_binary(binary)
+    exe = binary.resolve(strict=True)
+    profile = ('(version 1)(allow default)(deny network*)(deny file-write*)'
+               '(deny file-read* (subpath (param "USERHOME")))'
+               '(allow file-read* (literal (param "EXE")) (subpath (param "STAGE")))'
+               '(allow file-write* (subpath (param "STAGE")) (literal "/dev/null"))'
+               '(deny mach-lookup (global-name "com.apple.securityd") '
+               '(global-name "com.apple.secd"))')
+    command = ["/usr/bin/sandbox-exec", "-D", "USERHOME="+str(Path.home().resolve()), "-D",
+               "EXE="+str(exe), "-D", "STAGE="+str(stage.resolve()), "-p", profile, str(exe),
+               "--version"]
+    result = subprocess.run(command, cwd=stage, stdin=subprocess.DEVNULL, capture_output=True,
+                            check=True, timeout=15, env={"PATH": os.defpath, "HOME": str(stage),
+                            "TMPDIR": str(stage), "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
+                            "LANG": "C", "TERM": "dumb"})
+    version = re.fullmatch(rb"([0-9]+)\.([0-9]+)\.([0-9]+)", result.stdout.strip())
+    if not version:
+        raise ExperienceError("the signed Google CLI did not report a release version")
+    return tuple(int(x) for x in version.groups())
+
+
+def _install_google(archive, digest, target, version, stage, replaced):
     checksum = hashlib.sha512()
     with archive.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             checksum.update(block)
-    if checksum.hexdigest() != digest.lower():
+    if checksum.hexdigest() != digest:
         raise ExperienceError("Google CLI archive checksum mismatch")
-    target = Path.home() / ".local/bin/agy"
     target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as binary:
         staged = Path(binary.name)
     try:
         with tarfile.open(archive, "r:gz") as package:
-            members = [m for m in package if m.name in ("antigravity", "./antigravity")]
-            if len(members) != 1 or not members[0].isfile() or not 0 < members[0].size < 1024**3:
+            member = package.next()
+            if (member is None or member.name not in ("antigravity", "./antigravity")
+                    or not member.isfile() or not 0 < member.size < 1024**3):
                 raise ExperienceError("Google CLI archive lacks the expected executable")
-            with package.extractfile(members[0]) as src, staged.open("wb") as dest:
+            with package.extractfile(member) as src, staged.open("wb") as dest:
                 shutil.copyfileobj(src, dest, 1024 * 1024)
                 dest.flush()
                 os.fsync(dest.fileno())
+            if package.next() is not None:
+                raise ExperienceError("Google CLI archive contains unexpected additional files")
         os.chmod(staged, 0o755)
-        _verify_google_binary(staged)
-        os.link(staged, target)
+        if _google_version(staged, stage) != version:
+            raise ExperienceError("the signed Google binary does not match the slot release")
+        if replaced is None:
+            os.link(staged, target)
+        else:
+            current = target.lstat()
+            if (not os.path.samestat(replaced, current)
+                    or replaced.st_ctime_ns != current.st_ctime_ns):
+                raise ExperienceError("the existing CLI changed before installation")
+            os.replace(staged, target)
     finally:
         staged.unlink(missing_ok=True)
+
+
+def _slot_google(state, find, command, stage):
+    arch = {"arm64": "arm64", "x86_64": "amd64"}.get(platform.machine())
+    if sys.platform != "darwin" or arch is None or not command:
+        raise ExperienceError("Antigravity needs a paired private Mac and a supported local Mac")
+    path = stage / "release.json"
+    slot_artifact(command, {"op": "manifest", "arch": arch}, path, 16384, 40)
+    manifest = json.loads(path.read_bytes())
+    if (not isinstance(manifest, dict) or set(manifest) != {"arch", "version", "sha512"}
+            or manifest["arch"] != arch or not isinstance(manifest["version"], str)
+            or not VERSION.fullmatch(manifest["version"]) or not isinstance(manifest["sha512"], str)
+            or not re.fullmatch(r"[0-9a-f]{128}", manifest["sha512"])):
+        raise ExperienceError("the slot supplied invalid release metadata")
+    version = tuple(map(int, manifest["version"].split(".")))
+    managed = state / "runtime" / "agy"
+    default = Path.home() / ".local/bin/agy"
+    installed = find()
+    candidates = [p for p in (managed, Path(installed) if installed else None) if p and p.is_file()]
+    for candidate in candidates:
+        if _google_version(candidate, stage) >= version:
+            return str(candidate)
+    # Upgrade our ordinary per-user binary; keep package-manager executables and symlinks intact.
+    use_default = (not installed or Path(installed) == default) and not default.is_symlink()
+    target = default if use_default else managed
+    replaced = target.lstat() if target.exists() else None
+    if replaced and (not stat.S_ISREG(replaced.st_mode) or replaced.st_uid != os.getuid()
+                     or replaced.st_nlink != 1 or replaced.st_mode & 0o022):
+        raise ExperienceError("the existing Antigravity installation cannot be replaced safely")
+    print(f"Installing Google-signed agy {manifest['version']} through your private slot…",
+          file=sys.stderr, flush=True)
+    archive = stage / "native.tar.gz"
+    slot_artifact(command, {"op": "archive", "arch": arch, "sha512": manifest["sha512"]},
+                  archive, 256 * 1024**2, 420)
+    _install_google(archive, manifest["sha512"], target, version, stage, replaced)
+    return str(target)
 
 
 def _installed_agent_version(binary: str, stage: Path, env: dict[str, str]) -> tuple:
@@ -632,7 +730,8 @@ def _installed_agent_version(binary: str, stage: Path, env: dict[str, str]) -> t
     return tuple(int(x) for x in version.groups())
 
 
-def prepare_agent(agent: str, state: Path, find: Callable[[], Optional[str]]) -> str:
+def prepare_agent(agent: str, state: Path, find: Callable[[], Optional[str]],
+                  *, slot_command=None) -> str:
     """Check at every real launch. Never update on help, diagnostics, or pairing."""
     if agent not in ("claude", "agy"):
         raise ExperienceError("unknown agent")
@@ -643,21 +742,18 @@ def prepare_agent(agent: str, state: Path, find: Callable[[], Optional[str]]) ->
         env = _maintenance_env()
         with tempfile.TemporaryDirectory(prefix="ccfleet-agent-") as raw:
             stage = Path(raw)
+            if agent == "agy":
+                return _slot_google(state, find, slot_command, stage)
             target = _latest_agent(agent, stage, env)
             required = tuple(map(int, target.split(".")))
             binary = find()
-            if binary and agent == "agy":
-                _verify_google_binary(Path(binary))
             if binary and _installed_agent_version(binary, stage, env) >= required:
                 return binary
             if agent == "claude" and env.get("DISABLE_UPDATES") in ("1", "true"):
                 raise ExperienceError("Claude updates are disabled by local policy")
             print(f"Installing {agent} {target}…" if not binary else
                   f"Updating {agent} to {target}…", file=sys.stderr, flush=True)
-            command = None
-            if not binary and agent == "agy":
-                _install_google(stage, env)
-            elif not binary:
+            if not binary:
                 script = stage / "install.sh"
                 url = "https://claude.ai/install.sh"
                 _vendor_download(url, script, 1024 * 1024, env)
@@ -669,17 +765,16 @@ def prepare_agent(agent: str, state: Path, find: Callable[[], Optional[str]]) ->
             else:
                 # The native updater selects the installation's package manager when applicable.
                 command = [binary, "update"]
-            if command:
-                subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
-                               stdout=sys.stderr, check=True, timeout=240)
+            subprocess.run(command, cwd=stage, env=env, stdin=subprocess.DEVNULL,
+                           stdout=sys.stderr, check=True, timeout=240)
             binary = find()
-            if binary and agent == "agy":
-                _verify_google_binary(Path(binary))
             if binary and _installed_agent_version(binary, stage, env) >= required:
                 return binary
             raise ExperienceError(f"{agent} {target} is unavailable after the vendor update")
     except (OSError, KeyError, json.JSONDecodeError, tarfile.TarError,
             subprocess.SubprocessError) as exc:
+        if agent == "agy":
+            raise ExperienceError("unable to verify the release from your slot") from exc
         raise ExperienceError(f"could not verify or install the latest {agent}: "
                               "check the vendor connection and installation permissions") from exc
     finally:

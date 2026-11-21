@@ -4,15 +4,24 @@ import os
 import re
 import signal
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
 # The private owner installs these fixed sibling modules in a protected directory.
 if __package__:
-    from . import antigravity_slot, gemini_preview, mac_policy, mac_relay_client, workspace_io
+    from . import (
+        antigravity_slot,
+        gemini_distribution,
+        gemini_preview,
+        mac_policy,
+        mac_relay_client,
+        workspace_io,
+    )
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import antigravity_slot
+    import gemini_distribution
     import gemini_preview
     import mac_policy
     import mac_relay_client
@@ -27,11 +36,23 @@ def main():
         or os.isatty(1)
         or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[1])
         or os.environ.get("SSH_ORIGINAL_COMMAND")
-        not in ("ccfleet-antigravity-v1", "ccfleet-gemini-preview-v1")
+        not in ("ccfleet-antigravity-v1", "ccfleet-gemini-preview-v1", "ccfleet-gemini-release-v1")
     ):
         return 2
     home = Path(mac_policy.authenticated_owner().pw_dir)
     mac_policy.require_enabled(home)
+    if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-release-v1":
+        def expired(*_):
+            raise TimeoutError("private release request expired")
+
+        signal.signal(signal.SIGALRM, expired)
+        signal.alarm(480)
+        return gemini_distribution.serve(
+            sys.stdin.buffer,
+            sys.stdout.buffer,
+            home,
+            lambda: antigravity_slot.permitted(home, bytes.fromhex(sys.argv[1])),
+        )
     if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-preview-v1":
         signal.alarm(100)
         fingerprint = bytes.fromhex(sys.argv[1])
@@ -53,6 +74,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError, EOFError):
+    except (OSError, ValueError, EOFError, subprocess.SubprocessError):
         print("Antigravity workspace connection unavailable.", file=sys.stderr)
         sys.exit(2)
