@@ -42,10 +42,10 @@ def test_add_slot_and_pool_recipes_are_runnable_and_distinguish_discovery_from_s
     single_slot = (
         "ccfleet update\nccfleet list --remote\n"
         "ccfleet gateway setup --slots slot-5678 --provider anthropic\n"
-        "ccfleet local --check\nccfleet local"
+        "ccfleet claude --check\nccfleet claude"
     )
     assert single_slot in parsed.pre_codes
-    assert "ccfleet use --pool\nccfleet gateway status\nccfleet local --check\nccfleet local" in parsed.pre_codes
+    assert "ccfleet use --pool\nccfleet gateway status\nccfleet claude --check\nccfleet claude" in parsed.pre_codes
     modes = {}
     for block in parsed.pre_codes:
         for line in block.splitlines():
@@ -81,7 +81,7 @@ def test_canonical_gateway_reference_has_the_same_onboarding_and_pool_controls(l
     assert {"add-slot", "choose"} <= parsed.ids
     assert not parsed.duplicate_ids
     assert ("Advanced connections" if language == "en" else "高级连接设置") in parsed.text
-    assert "ccfleet use --pool\nccfleet gateway status\nccfleet local --check\nccfleet local" in parsed.pre_codes
+    assert "ccfleet use --pool\nccfleet gateway status\nccfleet claude --check\nccfleet claude" in parsed.pre_codes
     commands = "\n".join(parsed.pre_codes)
     assert "ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky" in commands
     assert "ccfleet gateway setup --slots slot-1234 slot-5678 --routing priority" in commands

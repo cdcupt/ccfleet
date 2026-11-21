@@ -80,7 +80,7 @@ def connected(client, monkeypatch):
 
 
 def launch(state, *flags, folder=None):
-    return state.cli["main"](["local", "--project", str(folder or state.folder), *flags])
+    return state.cli["main"](["claude", "--project", str(folder or state.folder), *flags])
 
 
 def record(state, folder=None):
@@ -292,7 +292,7 @@ def test_live_and_legacy_snapshot_commands_dispatch_separately(client, monkeypat
     monkeypatch.setitem(scope, "cmd_local", lambda args: seen.append(("live", args.command)) or 0)
     monkeypatch.setitem(scope, "cmd_snapshot", lambda args: seen.append(("snapshot", args.command)) or 0)
     monkeypatch.setitem(scope, "cmd_project", lambda args: seen.append(("legacy", args.command)) or 0)
-    assert cli["main"](["local"]) == 0
+    assert cli["main"](["claude"]) == 0
     assert cli["main"](["snapshot"]) == 0
     assert cli["main"](["project", "status"]) == 0
-    assert seen == [("live", "local"), ("snapshot", "snapshot"), ("legacy", "project")]
+    assert seen == [("live", "claude"), ("snapshot", "snapshot"), ("legacy", "project")]

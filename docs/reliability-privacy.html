@@ -32,7 +32,7 @@ HTTPS gateway</a>: original local Claude sends supported model requests to the
 gateway, which reaches a selected own slot through restricted, host-pinned SSH.
 The gateway can read model messages and replies; the slot's Claude credential
 stays on the slot. This default path starts no local HTTP listener or laptop-side
-SSH. The explicit <code>ccfleet local --transport bridge</code> and remote-terminal
+SSH. The explicit <code>ccfleet claude --transport bridge</code> and remote-terminal
 compatibility paths retain the earlier inner SSH encryption through the broker.</p>
 <h2 id="1-identity-minimization-not-captured-identity-replay">1. Identity minimization, not captured-identity replay</h2>
 <p>The gateway and slot relay allowlist semantic request headers and remove

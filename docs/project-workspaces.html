@@ -24,7 +24,7 @@ footer{border-top:1px solid var(--line);margin-top:42px;padding-top:20px;font-si
 @media(max-width:760px){.shell{padding:20px 16px 44px}main{padding:24px 20px;border-radius:14px}.layout{display:block}.contents{position:static;max-height:none;margin:0 0 26px;padding-bottom:20px;border-bottom:1px solid var(--line)}h1{font-size:32px}.doc-nav{gap:10px}.doc-nav>.language-control{margin-inline-start:0}}
 @media print{.doc-nav,.contents,footer{display:none}.layout{display:block}.shell{max-width:none;padding:0}body{background:#fff}main{border:0;padding:0;border-radius:0}pre{white-space:pre-wrap}table{min-width:0}.table-scroll{overflow:visible}a{color:inherit}}
 </style></head><body><div class="shell"><nav class="doc-nav" aria-label="Document library"><a href="index.html">HTML library</a><a href="../README.html">CC Fleet overview</a><a href="https://ccfleet.io/docs/guide">Current user guide</a></nav><p class="eyebrow">Historical / compatibility reference</p><div class="layout"><aside class="contents"><details open><summary>On this page</summary><nav aria-label="Contents"><ol><li class="level-2"><a href="#stop-earlier-live-folder-access-deliberately">Stop earlier live-folder access deliberately</a></li><li class="level-2"><a href="#recover-old-snapshots-without-overwriting-current-work">Recover old snapshots without overwriting current work</a></li><li class="level-2"><a href="#keep-each-history-where-it-belongs">Keep each history where it belongs</a></li></ol></nav></details></aside><main><h1 id="retired-remote-workspaces-migration-and-recovery">Retired remote workspaces: migration and recovery</h1>
-<p>The live-folder and selected-snapshot designs previously used by <code>ccfleet local</code>
+<p>The live-folder and selected-snapshot designs previously used by <code>ccfleet claude</code>
 are no longer the primary workflow. The current command runs original Claude
 Code, its tools, files and native history <strong>locally</strong>, with supported model
 requests relayed through the assigned slot.</p>
@@ -40,7 +40,7 @@ Finish pending work first, or explicitly approve cancellation in the controlling
 terminal. <code>--yes</code> authorizes that cancellation in a script. Ordinary remote tmux
 sessions are not part of this targeted cleanup.</p>
 <p>To request legacy cleanup directly, from the earlier connected folder:</p>
-<pre><code class="language-bash">ccfleet local --disconnect
+<pre><code class="language-bash">ccfleet claude --disconnect
 </code></pre>
 <p>Use <code>--project PATH</code> when needed. This action ends the old mount and its associated
 sessions; it does not delete local files or native/preview history. If the slot is
@@ -66,7 +66,7 @@ original local Claude client can access. The new primary workflow uses neither
 snapshots nor a filesystem mount, and needs no push/pull step.</p>
 <h2 id="keep-each-history-where-it-belongs">Keep each history where it belongs</h2>
 <p>The current launcher uses native local history/settings by default.
-<code>ccfleet local --legacy-history --resume</code> selects the earlier per-slot local-relay
+<code>ccfleet claude --legacy-history --resume</code> selects the earlier per-slot local-relay
 preview profile without copying, deleting or importing it. Remote tmux/live-folder
 history remains on the slot and is not automatically imported locally.</p>
 <p>Plain <code>ccfleet</code> continues to open the ordinary remote terminal and remote

@@ -93,12 +93,12 @@ stay on the slot.</p>
 <p>This current-client check is separate from the historical hosted-terminal
 instructions below. The current signed Fleet client uses its saved HTTPS
 gateway configuration by default; the bridge remains a legacy transport. Run
-<code>ccfleet local --check</code> in your normal terminal, not inside Claude.</p>
+<code>ccfleet claude --check</code> in your normal terminal, not inside Claude.</p>
 <p>It checks local Claude executable availability and the configured gateway or
 legacy bridge's slot readiness.
 It does not scan projects, start a Claude session or make a model request.
 Readiness is not proof that Anthropic will accept the next request.</p>
-<p>For an optional basic response check, open <code>ccfleet local</code> and paste:</p>
+<p>For an optional basic response check, open <code>ccfleet claude</code> and paste:</p>
 <blockquote><p>Do not use tools, read files, or inspect my system or network.<br>
 Reply only: <code>CCFLEET_OK</code></p></blockquote>
 <p>The optional prompt makes a model request and may use your plan allowance.
@@ -261,7 +261,7 @@ or an SSH command.</li>
 <tr><td><code>ccfleet</code></td><td>Open or resume the active slot.</td></tr>
 <tr><td><code>ccfleet login</code></td><td>Pair this computer with a code from the slot page.</td></tr>
 <tr><td><code>ccfleet list</code></td><td>Show saved slots and mark your local choice with a star. Use <code>--remote</code> to check your current slots online.</td></tr>
-<tr><td><code>ccfleet use NAME</code></td><td>Remember the slot for your next <code>ccfleet local</code> launch. Fleet shows the actual slot and provider before starting.</td></tr>
+<tr><td><code>ccfleet use NAME</code></td><td>Remember the slot for your next <code>ccfleet claude</code> launch. Fleet shows the actual slot and provider before starting.</td></tr>
 <tr><td><code>ccfleet logout</code></td><td>Revoke this computer and remove its local key.</td></tr>
 <tr><td><code>ccfleet new NAME --model MODEL --effort LEVEL --mode MODE</code></td><td>Start a separate named session.</td></tr>
 <tr><td><code>ccfleet attach --session NAME</code></td><td>Resume a named session.</td></tr>

@@ -628,7 +628,7 @@ def test_setup_reuses_ready_pairing_without_calling_login_and_then_cleans_legacy
     assert result.returncode == 0, result.stderr
     assert calls == ["client:setup --name computer", "old:--remove"]
     assert "Setup complete" in result.stdout
-    assert "ccfleet local" in result.stdout
+    assert "ccfleet claude" in result.stdout
     assert "No project files were uploaded and no Claude session was started" in result.stdout
     assert str(dest) in (tmp_path / "home/.zshrc").read_text()
 

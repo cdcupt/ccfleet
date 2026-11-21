@@ -25,8 +25,8 @@ def test_guide_keeps_one_setup_command_and_reuses_existing_pairing():
         "keeps an existing pairing",
         "Only if asked",
         "fresh pairing code",
-        "ccfleet local --check",
-        "ccfleet local",
+        "ccfleet claude --check",
+        "ccfleet claude",
         "make no model request",
         "upload no project files",
     ):
@@ -82,12 +82,12 @@ def test_primary_workflow_is_native_local_without_mount_or_filesystem_product_ca
 def test_native_session_controls_and_local_permission_defaults_are_documented():
     text = visible(guide(Config()))
     for command in (
-        "ccfleet local --new --name work",
-        "ccfleet local --resume",
-        "ccfleet local --resume work",
-        "ccfleet local --continue",
-        "ccfleet local --resume work --fork-session",
-        'ccfleet local --print "Summarize this project"',
+        "ccfleet claude --new --name work",
+        "ccfleet claude --resume",
+        "ccfleet claude --resume work",
+        "ccfleet claude --continue",
+        "ccfleet claude --resume work --fork-session",
+        'ccfleet claude --print "Summarize this project"',
         "--permission-mode plan --model opus --effort high",
     ):
         assert command in text

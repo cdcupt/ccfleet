@@ -3,7 +3,8 @@ set -eu
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd -- "$2"
 if [[ "$1" == 'Claude Code' ]]; then
-  exec ccfleet local --project "$PWD"
+  if ! ccfleet claude --help >/dev/null 2>&1; then ccfleet update; fi
+  exec ccfleet claude --project "$PWD"
 fi
 flags=()
 if [[ "$1" == 'Pair Antigravity again' ]]; then flags+=(--pair); fi

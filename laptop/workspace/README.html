@@ -16,6 +16,14 @@ write access and networking disabled. Project tools support UTF-8 files up to 19
 and skip sensitive or generated paths such as <code>.git</code>, <code>.env</code> and
 <code>node_modules</code>. Remove the workspace device under the slot's connected
 computers to revoke access.</p>
+<h2>Use the local command line</h2>
+<p>Run <code>ccfleet claude</code> in your project for Claude Code. The native
+<code>ccfleet gemini --preview</code> command starts Antigravity on the client Mac
+and sends model requests through the encrypted Fleet transport to its assigned slot.
+The slot uses a deterministic test response until a supported subscription endpoint is
+available. The preview exercises a disposable file in the selected project's directory
+without consuming model quota. The Finder launcher's interactive Antigravity mode
+runs on the private slot. Each native CLI launch checks its vendor release.</p>
 <h2>Enable another private Mac slot</h2>
 <p>The slot must be enrolled to its current administrator. Install Google's official
 CLI under <code>~/.local/bin/agy</code>, complete Google's own sign-in on the slot,

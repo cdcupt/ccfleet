@@ -18,6 +18,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CCFLEET_HOME", str(tmp_path / "ccfleet"))
     loaded = runpy.run_path(str(ROOT / "laptop/ccfleet"))
     scope = loaded["cmd_local"].__globals__
+    monkeypatch.setitem(scope, "prepare_agent", lambda name: scope["find_local_claude"]())
     device = {"device_id": "device", "device_token": "synthetic-device-token",
               "server": "https://fleet.invalid", "slot_id": "slot-one", "slot_name": "one"}
     loaded["save_config"]({"devices": {"device": device}, "active": "device"})
@@ -53,7 +54,7 @@ def status(client, monkeypatch, **changes):
 
 
 def invoke(client, *flags):
-    return client.loaded["main"](["local", "--project", str(client.project), *flags])
+    return client.loaded["main"](["claude", "--project", str(client.project), *flags])
 
 
 def test_gateway_launch_uses_remote_https_no_bridge_and_removes_secret_settings(client, monkeypatch, capsys):
