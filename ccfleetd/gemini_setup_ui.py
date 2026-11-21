@@ -104,7 +104,7 @@ def slot_panel(slot, keys, binding, grants):
     elif binding and binding["credential_fp"]:
         status = tr("API key saved", "密钥已保存")
     metadata = row(tr("Host", "主机"), escape(slot["name"] or slot["id"]))
-    metadata += row(tr("Credential status", "凭据状态"), status)
+    metadata += row(tr("API credential status", "API 凭据状态"), status)
     if binding:
         metadata += row(tr("Model", "当前模型"), escape(binding["model"]))
     if grants:
@@ -114,7 +114,8 @@ def slot_panel(slot, keys, binding, grants):
             + "".join("<li>" + escape(v["name"]) + "</li>" for k, v in keys.items() if k in grants)
             + "</ul>",
         )
-    metadata += row(tr("Key storage", "密钥保存在"), tr("Mac login Keychain", "Mac 登录钥匙串"))
+    metadata += row(tr("API key storage", "API 密钥保存在"),
+                    tr("Mac login Keychain", "Mac 登录钥匙串"))
     return (
         '<aside class="gm-panel"><div class="gm-metahead"><span aria-hidden="true" '
         'class="gm-device"></span><h2>'
@@ -296,9 +297,11 @@ def workspace_panel(csrf, ready):
     instructions = tr("Open CCFleet Workspace from Applications or download it below. "
                       "Your private slot runs Google’s "
                       "Antigravity CLI. Workspace file saves and test runs ask for approval on "
-                      "the connecting Mac.", "在应用程序中打开 CCFleet Workspace，也可从下方下载。"
+                      "the connecting Mac. Requested file contents and test output go to the "
+                      "agent on your slot.", "在应用程序中打开 CCFleet Workspace，也可从下方下载。"
                       "专属槽位运行 Google 的 "
-                      "Antigravity CLI；保存本地文件和运行测试时，会在当前 Mac 上请求确认。")
+                      "Antigravity CLI；保存本地文件和运行测试时，会在当前 Mac 上请求确认。"
+                      "请求的文件内容和测试输出将发送到槽位上的代理。")
     form = ('<form method="post" action="/account/gemini/workspace">' + hidden("csrf", csrf)
             + '<label class="gm-check"><input type="checkbox" required name="trust" value="1">'
             + tr("I trust this computer to operate Antigravity under my Mac slot login, "
