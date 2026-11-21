@@ -98,3 +98,12 @@ def test_meta_refresh_follows_navigation_language_policy_but_switch_links_stay_e
     assert f'href="{prefix}{path}"' in result
     assert f'action="{prefix}/auth/signout"' in result
     assert f'href="/en{path}" data-language-link="en"' in result
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_relative_archived_document_link_keeps_its_canonical_path(language):
+    source = '<a href="runbooks.html#gateway-request-bursts">Operator guide</a>'
+    target = '/docs/library/docs/platform-comparison.html'
+    result = bilingual.project_html(source, language, target)
+    assert 'href="/docs/library/docs/runbooks.html#gateway-request-bursts"' in result
+    assert bilingual.route_target(f'/{language}/docs/library/docs/runbooks.html') is None

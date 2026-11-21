@@ -8,6 +8,8 @@ from html import escape
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+from . import reference_docs
+
 CURRENT_PAGES = frozenset({
     '/', '/slots', '/account', '/account/gemini',
     '/account/usage', '/account/available', '/account/purchase',
@@ -149,6 +151,10 @@ def localized_url(url: str, language: str, canonical_target: str = '/',
             return url
         path = urlsplit(routed[0]).path
         if not (_page(path) or _form(path) or path == '/auth/google/start'):
+            # Archived documents have one canonical route. A relative link served
+            # from a localized page otherwise inherits the /en or /zh prefix.
+            if not original.path.startswith('/') and reference_docs.relative_path(path):
+                return urlunsplit(('', '', path, resolved.query, resolved.fragment))
             return url
         query = [(key, value) for key, value in parse_qsl(resolved.query, keep_blank_values=True)
                  if key != 'lang']

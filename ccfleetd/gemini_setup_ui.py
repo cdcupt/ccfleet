@@ -22,7 +22,7 @@ gap:22px;align-items:start}.gm-grid>*{min-width:0}
 .gemini-page .gm-panel{background:var(--panel);border:1px solid var(--rule);
 border-radius:var(--radius);box-shadow:var(--shadow);padding:clamp(20px,3vw,32px)}
 .gemini-page .gm-panel h2{font-size:20px;line-height:1.4;margin:0 0 20px}
-.gm-form{display:grid;gap:20px;margin:0}.gm-field{display:grid;gap:7px;min-width:0}
+.gm-form{display:grid;gap:20px;margin:0}.gm-field{display:grid;align-content:start;gap:7px;min-width:0}
 .gemini-page .gm-field label{margin:0;color:var(--ink);font-size:14px;font-weight:650}
 .gemini-page .gm-field :is(input,select){display:block;width:100%;min-width:0;
 min-height:46px;border:1px solid var(--rule);border-radius:9px;background:var(--panel);
@@ -30,7 +30,8 @@ color:var(--ink);font:inherit;font-size:16px;line-height:1.4;padding:11px 12px}
 .gemini-page .gm-field :is(input,select):focus-visible{outline:2px solid var(--acc);
 outline-offset:2px}.gm-field input::placeholder{color:var(--muted)}
 .gm-help,.gm-secondary{font-size:13px;line-height:1.6;color:var(--muted)}
-.gm-help{margin:0}.gm-pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.gm-help{margin:0}.gm-pair{display:grid;align-items:start;gap:16px;
+grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr))}
 .gm-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:2px 0 0;
 padding-top:18px;border-top:1px solid var(--rule-soft)}
 .gemini-page .gm-actions button{min-height:44px;padding:10px 18px}
