@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from ccfleet_agent.model_usage import LABELS, MODELS_URL, PRICING_URL
+from ccfleet_agent.model_usage import LABELS, MODEL_KEYS, MODELS_URL, PRICING_URL
 from ccfleetd import bilingual, customer_docs, usage, usersite
 from ccfleetd.config import Config
 from tests.test_customer_docs import ADMIN, _serve
@@ -68,7 +68,7 @@ def test_known_estimate_mask_model_subtotals_and_coverage_are_visible_on_homepag
     assert "Reported-model price matched: 4 of 4" in text
     assert "Cache field coverage: read 1/2 · write 2/2" in text
     assert "No measurement means no numeric rank" in text
-    assert "not a Claude Pro/Max bill" in text
+    assert "not a Claude subscription bill" in text
     assert "Haiku 5.5 has no reported-model estimate" in text
     assert "cache write $5 (5 minutes)" in text
     assert "not anonymity" in text
@@ -136,7 +136,7 @@ def test_renderer_bounds_rows_and_expanded_model_rows():
     report["omitted_entries"] = 50
     page = shown(report)
     assert page.count('scope="row"') == 50
-    assert page.count('<span class="usage-model-name">Claude ') == 50 * 16
+    assert page.count('<span class="usage-model-name">Claude ') == 50 * len(MODEL_KEYS)
     assert "50 further entries omitted" in Document(page).text
 
 
@@ -147,7 +147,7 @@ def test_chinese_is_complete_and_the_homepage_has_separate_language_views():
     text = Document(chinese).text
     for phrase in ("观测用量排行", "模型明细", "已计价 Token", "API 估值", "部分覆盖",
                    "上报模型计价已匹配", "缓存字段覆盖：读取 1／2 · 写入 2／2", "这不等于匿名",
-                   "不是 Claude Pro/Max 账单", "提示长度计价档位"):
+                   "不是 Claude 订阅账单", "提示长度计价档位"):
         assert phrase in text
     assert 'data-language-link="both"' not in english + chinese
 

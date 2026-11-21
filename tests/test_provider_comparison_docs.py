@@ -153,6 +153,8 @@ def test_public_evidence_fixture_preserves_pinned_inputs_and_reproducible_blende
     assert evidence["model"] == "claude-opus-5.5"
     assert evidence["period_weeks"] == 4
     assert evidence["baseline_plan"] == "claude-max-20x"
+    assert evidence["applicability"] == "historical-pre-ultra"
+    assert evidence["applicability_reviewed_on"] == "2026-10-30"
     shares = evidence["workload_share"]
     assert shares == {"cache_read": Decimal(".97"), "cache_write_5m": Decimal(".025"),
                       "output": Decimal(".005")}
@@ -297,6 +299,9 @@ def test_cross_source_periods_api_budget_and_model_limitations_are_explicit(rend
         assert re.search(r"不代表.{0,20}(?:相同|同样).{0,20}质量", text)
         assert re.search(r"不是官方.{0,20}token", text)
     assert "october 29" in text if language == "en" else "10 月 29 日" in text
+    assert "historical max 20x" in text if language == "en" else "历史 max 20x" in text
+    assert "do not establish its current allowance" in text if language == "en" else (
+        "不能用来确定当前 ultra 额度" in text)
 
 
 def test_matched_estimate_scope_and_primary_method_are_visible_in_each_language(rendered):
@@ -378,7 +383,7 @@ def test_devin_rows_are_bold_and_tinted_without_changing_the_cost_direction(rend
 def test_current_monthly_plan_prices_are_not_replaced_by_historical_study_prices(rendered):
     _, _, _, root = rendered
     expected = {
-        "claude": [("Pro", 20), ("Max 5x", 100), ("Max 20x", 200)],
+        "claude": [("Pro", 20), ("Max", 100), ("Ultra", 200)],
         "openai": [("Plus", 20), ("Pro", 100), ("Pro", 200), ("Pro", 500)],
         "devin": [("Pro", 20), ("Max", 200)],
     }

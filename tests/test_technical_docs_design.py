@@ -70,14 +70,18 @@ def test_technical_guide_keeps_architecture_evidence_and_sources_visible(languag
     source = bilingual.project_html((ROOT / "docs/platform-comparison.html").read_text(),
                                     language, COMPARISON)
     page = Document(source)
-    assert {"architecture", "verification", "routing", "host-comparison", "sources"} <= page.ids
+    assert {"architecture", "verification", "routing", "host-comparison", "agent-apps",
+            "sources"} <= page.ids
     for _, attrs, parents in Placement(source).elements:
-        if attrs.get("id") in {"architecture", "verification", "sources"}:
+        if attrs.get("id") in {"architecture", "verification", "agent-apps", "sources"}:
             assert all(tag != "details" for tag, _ in parents)
     assert source.index('id="architecture"') < source.index('id="verification"')
     assert source.index('id="verification"') < source.index('id="host-comparison"')
     assert not page.duplicate_ids
-    assert len(page.tables) == 1
+    table_sections = [next((attrs.get("id") for tag, attrs in reversed(parents)
+                            if tag == "section"), None) for parents in page.tables]
+    assert table_sections == ["host-comparison", "agent-apps"]
+    assert all(tag != "details" for parents in page.tables for tag, _ in parents)
     assert any("1494f6b0646188bbdab622ddd4321627df328c7c/ccfleetd/gateway.py" in link
                for link in page.links)
     if language == "en":
@@ -97,6 +101,35 @@ def test_current_customer_documents_hide_competitor_names_and_identifying_urls()
              (ROOT / "docs/index.html").read_text()]
     for source in pages:
         assert not re.search(r"CC\s*Host|cchost[.]ai", source, re.I)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_platform_guide_leads_with_fleet_and_keeps_devin_details_optional(language):
+    source = bilingual.project_html((ROOT / "docs/platform-comparison.html").read_text(),
+                                    language, COMPARISON)
+    elements = Placement(source).elements
+    hero = re.search(r'<header class="hero">.*?</header>', source, re.S).group()
+    assert "Devin" not in Document(hero).text
+    primary = next(attrs for tag, attrs, _ in Placement(hero).elements
+                   if tag == "a" and attrs.get("class") == "button primary")
+    assert bilingual.route_target(primary["href"])[0] == COMPARISON + "#architecture"
+    core = ("architecture", "routing", "parallel-agents", "verification", "host-comparison")
+    positions = [source.index(f'id="{name}"') for name in core]
+    assert positions == sorted(positions)
+    assert positions[-1] < source.index('id="optional-integrations"')
+    optional = {"devin-overview", "private-devin", "devin-tool-loop",
+                "devin-trial-design", "devin-trial-clocks", "devin-pilot"}
+    for tag, attrs, parents in elements:
+        if attrs.get("id") in core:
+            assert all(parent_tag != "details" for parent_tag, _ in parents)
+        if attrs.get("id") in optional:
+            disclosure = [parent for parent_tag, parent in parents
+                          if parent_tag == "details"
+                          and parent.get("class") == "integration-details"]
+            assert len(disclosure) == 1 and "open" not in disclosure[0]
+        if tag == "a" and any(parent.get("class") == "section-nav" for _, parent in parents):
+            assert not any(attrs.get("href", "").endswith("#" + name) for name in optional)
+    assert optional <= Document(source).ids
 
 
 @pytest.mark.parametrize("language", ["en", "zh"])

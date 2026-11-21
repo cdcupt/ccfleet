@@ -277,7 +277,7 @@ def test_public_inventory_omits_disabled_offers_but_keeps_an_enabled_outage(stor
     fleet(store, ages=(20, 30, 400))
     store.set_node_offer('pool-8', host_brand='VisibleHost', ip_brand='VisibleIP', ip_type='isp',
                          hosting=offers.Cost('4.70', 'USD'), ip=offers.Cost('5', 'USD'))
-    store.add_node('retired-private', 'private-owner', now=NOW)
+    store.add_node('retired-private', 'secret-owner-assertion', now=NOW)
     store.add_slot('retired-slot', 'retired-private', 'private-user', now=NOW)
     store.set_node_offer('retired-private', host_brand='RetiredHost', ip_brand='RetiredIP',
                          ip_type='residential', hosting=offers.Cost('7.13', 'USD'),
@@ -294,7 +294,7 @@ def test_public_inventory_omits_disabled_offers_but_keeps_an_enabled_outage(stor
     assert 'VisibleHost / VisibleIP' in shown(outage) and '$11.70' in outage
     assert ('Down' if language == 'en' else '离线') in shown(outage)
     assert all(secret not in raw for secret in ('RetiredHost', 'RetiredIP', 'retired-private',
-                                                'private-owner', 'private-user', 'retired-slot',
+                                                'secret-owner-assertion', 'private-user', 'retired-slot',
                                                 '4.70', '7.13', '5.40', 'hosting_cost'))
     assert store.get_node('retired-private') is not None
 

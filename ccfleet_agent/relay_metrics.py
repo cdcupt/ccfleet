@@ -53,6 +53,8 @@ USAGE_EVENT_BYTES = 64 * 1024
 USAGE_JSON_BYTES = 256 * 1024
 MAX_USAGE_TOKENS = 10**9
 OPTIONAL_BLOCKS = {"token_usage", "model_usage", "stream_output"}
+# Daily attribution is a report extension only; persisted buckets stay unchanged.
+REPORT_OPTIONAL_BLOCKS = OPTIONAL_BLOCKS | {"usage_days"}
 MAX_MODELS = 16
 MIN_STREAM_MS = 100
 STREAM_KEYS = {"samples", "output_tokens", "stream_ms"}
@@ -202,6 +204,71 @@ def _blocks(raw: dict[str, Any], successes: int) -> dict[str, Any]:
     if "stream_output" in raw:
         result["stream_output"] = _stream_output(raw["stream_output"], usage)
     return result
+
+
+def _merge_models(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Use the existing bounded public-model folding for every aggregate view."""
+    eligible = samples = 0
+    models: dict[str, dict[str, Any]] = {}
+    for block in blocks:
+        eligible += block["eligible"]
+        samples += block["samples"]
+        for row in block["models"]:
+            target = models.setdefault(row["model"], {"model": row["model"],
+                                       **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)})
+            for key in MODEL_ROW_KEYS - {"model"}:
+                target[key] += row[key]
+    if len(models) > MAX_MODELS:
+        keep = set(sorted(key for key in models if key != "other")[:MAX_MODELS - 1])
+        other = {"model": "other", **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)}
+        for key in list(models):
+            if key not in keep:
+                folded = models.pop(key)
+                for field in MODEL_ROW_KEYS - {"model"}:
+                    other[field] += folded[field]
+        models["other"] = other
+    return {"eligible": eligible, "samples": samples,
+            "models": sorted(models.values(), key=lambda row: row["model"])}
+
+
+def _usage_days(raw: Any, now: float, successes: int,
+                blocks: dict[str, Any]) -> dict[str, Any]:
+    if (not isinstance(raw, dict) or len(raw) > WINDOW_DAYS
+            or "token_usage" not in blocks):
+        raise MetricsError("invalid daily token usage")
+    today = int(now // DAY_SECONDS)
+    days, seen = {}, set()
+    totals = dict.fromkeys(USAGE_KEYS, 0)
+    daily_successes = 0
+    model_blocks = []
+    for day, value in raw.items():
+        if (not isinstance(day, str) or re.fullmatch(r"0|[1-9][0-9]{0,6}", day) is None
+                or not 0 <= today - int(day) < WINDOW_DAYS or int(day) in seen):
+            raise MetricsError("invalid daily usage date")
+        seen.add(int(day))
+        if (not isinstance(value, dict)
+                or set(value) - {"model_usage"} != {"success", "token_usage"}
+                or not _counter(value["success"])):
+            raise MetricsError("invalid daily usage fields")
+        usage = _usage(value["token_usage"], value["success"])
+        clean = {"success": value["success"], "token_usage": usage}
+        for key in totals:
+            totals[key] += usage[key]
+        daily_successes += value["success"]
+        if "model_usage" in value:
+            clean["model_usage"] = _model_usage(value["model_usage"], usage)
+            model_blocks.append(clean["model_usage"])
+        days[day] = clean
+    # Older buckets may contain successful transfers without any token block.
+    # Those dates remain absent; they must not become invented zero-usage days.
+    if daily_successes > successes or totals != blocks["token_usage"]:
+        raise MetricsError("daily usage does not match aggregate coverage")
+    if model_blocks and "model_usage" not in blocks:
+        raise MetricsError("daily model coverage does not match aggregate coverage")
+    if ("model_usage" in blocks
+            and _model_usage(_merge_models(model_blocks), totals) != blocks["model_usage"]):
+        raise MetricsError("daily models do not match aggregate usage")
+    return {day: days[day] for day in sorted(days, key=int)}
 
 
 class StreamOutputCollector:
@@ -846,27 +913,24 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
     timings = {key: {"count": 0, "sum": 0.0, "max": 0.0} for key in TIMINGS}
     usage = dict.fromkeys(USAGE_KEYS, 0)
     has_usage = False
-    models: dict[str, dict[str, Any]] = {}
-    model_eligible = model_samples = 0
-    has_models = False
+    model_blocks = []
+    usage_days = {}
     stream_output = dict.fromkeys(STREAM_KEYS, 0)
     has_stream = False
-    for bucket in state["buckets"].values():
+    for day, bucket in state["buckets"].items():
         for key in COUNTERS:
             result[key] += bucket["counts"][key]
         if "token_usage" in bucket:
             has_usage = True
+            daily = {"success": bucket["counts"]["success"],
+                     "token_usage": bucket["token_usage"]}
+            if "model_usage" in bucket:
+                daily["model_usage"] = bucket["model_usage"]
+            usage_days[day] = daily
             for key, value in bucket["token_usage"].items():
                 usage[key] += value
         if "model_usage" in bucket:
-            has_models = True
-            model_eligible += bucket["model_usage"]["eligible"]
-            model_samples += bucket["model_usage"]["samples"]
-            for row in bucket["model_usage"]["models"]:
-                target = models.setdefault(row["model"], {"model": row["model"],
-                                           **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)})
-                for key in MODEL_ROW_KEYS - {"model"}:
-                    target[key] += row[key]
+            model_blocks.append(bucket["model_usage"])
         if "stream_output" in bucket:
             has_stream = True
             for key, value in bucket["stream_output"].items():
@@ -891,18 +955,9 @@ def _summary(state: dict[str, Any], now: float) -> dict[str, Any]:
     }
     if has_usage:
         result["token_usage"] = usage
-    if has_models:
-        if len(models) > MAX_MODELS:
-            keep = set(sorted(key for key in models if key != "other")[:MAX_MODELS - 1])
-            other = {"model": "other", **dict.fromkeys(MODEL_ROW_KEYS - {"model"}, 0)}
-            for key in list(models):
-                if key not in keep:
-                    folded = models.pop(key)
-                    for field in MODEL_ROW_KEYS - {"model"}:
-                        other[field] += folded[field]
-            models["other"] = other
-        result["model_usage"] = {"eligible": model_eligible, "samples": model_samples,
-                                 "models": list(models.values())}
+        result["usage_days"] = usage_days
+    if model_blocks:
+        result["model_usage"] = _merge_models(model_blocks)
     if has_stream:
         result["stream_output"] = stream_output
     return validate_report(result)
@@ -934,7 +989,7 @@ def validate_report(raw: Any) -> dict[str, Any]:
     """Reject unexpected/private fields and detach numeric totals/public model labels."""
     if (
         not isinstance(raw, dict)
-        or set(raw) - OPTIONAL_BLOCKS != SUMMARY_KEYS
+        or set(raw) - REPORT_OPTIONAL_BLOCKS != SUMMARY_KEYS
         or type(raw["version"]) is not int
         or raw["version"] != 1
         or type(raw["window_days"]) is not int
@@ -970,6 +1025,9 @@ def validate_report(raw: Any) -> dict[str, Any]:
             "mean": float(sample["mean"]),
             "max": float(sample["max"]),
         }
+    blocks = _blocks(raw, counts["success"])
+    daily = ({"usage_days": _usage_days(raw["usage_days"], now, counts["success"], blocks)}
+             if "usage_days" in raw else {})
     return {
         "version": 1,
         "observed_at": now,
@@ -977,5 +1035,6 @@ def validate_report(raw: Any) -> dict[str, Any]:
         **counts,
         "last_success_at": float(success) if success is not None else None,
         "latencies": latencies,
-        **_blocks(raw, counts["success"]),
+        **blocks,
+        **daily,
     }

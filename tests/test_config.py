@@ -8,6 +8,33 @@ def test_defaults_when_env_empty():
     assert (cfg.bind_host, cfg.bind_port) == ("127.0.0.1", 8110)
     assert cfg.heartbeat_max_age_s == 900
     assert cfg.telegram_enabled is False
+    assert (cfg.gateway_max_queued, cfg.gateway_max_queued_per_key,
+            cfg.gateway_queue_timeout_s) == (16, 8, 30)
+
+
+def test_gateway_queue_settings_are_configurable_and_can_be_disabled():
+    cfg = Config.from_env({"CCFLEET_GATEWAY_MAX_QUEUED": "4",
+                           "CCFLEET_GATEWAY_MAX_QUEUED_PER_KEY": "2",
+                           "CCFLEET_GATEWAY_QUEUE_TIMEOUT_S": "0"})
+    assert (cfg.gateway_max_queued, cfg.gateway_max_queued_per_key,
+            cfg.gateway_queue_timeout_s) == (4, 2, 0)
+
+
+def test_low_connection_limit_keeps_existing_configuration_valid():
+    assert Config.from_env({"CCFLEET_GATEWAY_MAX_CONNECTIONS": "8"}).gateway_max_connections == 8
+
+
+@pytest.mark.parametrize("settings", [
+    {"CCFLEET_GATEWAY_MAX_QUEUED": "0"},
+    {"CCFLEET_GATEWAY_MAX_QUEUED": "65"},
+    {"CCFLEET_GATEWAY_MAX_QUEUED_PER_KEY": "0"},
+    {"CCFLEET_GATEWAY_MAX_QUEUED_PER_KEY": "17"},
+    {"CCFLEET_GATEWAY_QUEUE_TIMEOUT_S": "-1"},
+    {"CCFLEET_GATEWAY_QUEUE_TIMEOUT_S": "61"},
+])
+def test_gateway_queue_settings_are_bounded(settings):
+    with pytest.raises(ConfigError):
+        Config.from_env(settings)
 
 
 def test_env_overrides_and_bind_parsing():

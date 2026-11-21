@@ -135,7 +135,7 @@ def test_setup_precedes_launch_with_distinct_own_authorizer_and_Devin_target(set
     commands = [element.text for element in page.inside(connection(page), "code")]
     assert commands == [
         "ccfleet update",
-        "ccfleet gateway setup --slot alice-claude --slots alice-devin --provider devin",
+        "ccfleet gateway setup --slots alice-devin --provider devin",
         "ccfleet local --transport gateway --slot alice-devin --model claude-opus-5-5 "
         "--effort max --new -- --safe-mode",
     ]
@@ -225,10 +225,10 @@ def test_unready_Devin_does_not_advertise_ready_launch_commands(setup_context, f
         card = page.find("div", id="slot-devin")[0]
         assert "Devin needs a check" in page.inside(card, "h2")[0].text
         assert "Ready to sign in" not in page.inside(card, "h2")[0].text
-        assert "Finish signing in to Claude" not in card.text
-        optional = [item for item in page.inside(card, "details")
-                    if item.has_class("provider-other")]
-        assert len(optional) == 1 and "open" not in optional[0].attrs
+        account = [item for item in page.inside(card, "details")
+                   if item.has_class("slot-account")]
+        assert len(account) == 1 and "open" in account[0].attrs
+        assert "Anthropic sign-in (optional)" not in rendered(c, now=now)
 
 
 def test_machine_health_remains_visible_without_opening_settings(setup_context):

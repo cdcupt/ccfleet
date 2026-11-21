@@ -134,11 +134,15 @@ def test_no_refresh_without_a_form_token_or_a_single_slot():
     assert render._quota_refresh({"slot_id": None}, NOW - 60, NOW, "tok") == ""
 
 
-def test_somebodys_own_node_offers_no_refresh(site):  # noqa: F811
+def test_somebodys_own_node_offers_no_refresh(site, monkeypatch):  # noqa: F811
     store, sign_in, _ = site
-    erik = sign_in(quota=1)
-    store.add_node("erik-1", "erik", now=time.time())
-    store.hold_owner_node("erik-1", erik.account["id"], now=time.time())
+    held_at = time.time() - 120
+    # The reading below belongs to the current holder, after ownership began.
+    with monkeypatch.context() as clock:
+        clock.setattr(time, "time", lambda: held_at)
+        erik = sign_in(quota=1)
+        store.add_node("erik-1", "erik", now=time.time())
+        store.hold_owner_node("erik-1", erik.account["id"], now=time.time())
     store.insert_heartbeat("erik-1", time.time(), {
         "node_id": "erik-1", "credentials": {"present": True, "logged_in": True},
         "quota": {"week": {"used_pct": 30}, "checked_at": time.time() - 90}})
@@ -154,11 +158,16 @@ def test_a_read_is_under_way_until_answered_or_five_minutes_on(wanted, read, rea
     assert render.quota_reading(wanted, read, NOW) is reading
 
 
-def test_the_holders_page_offers_a_refresh_and_then_says_it_is_reading(site):  # noqa: F811
+def test_the_holders_page_offers_a_refresh_and_then_says_it_is_reading(
+        site, monkeypatch):  # noqa: F811
     store, sign_in, _ = site
-    machine(store, users=("slot01",))
-    erik = sign_in(quota=1)
-    slot = claimed(store, erik)
+    claimed_at = time.time() - 120
+    # Exercise a cached reading from this claim, rather than the previous holder.
+    with monkeypatch.context() as clock:
+        clock.setattr(time, "time", lambda: claimed_at)
+        machine(store, users=("slot01",))
+        erik = sign_in(quota=1)
+        slot = claimed(store, erik)
     report(store, "m1", [{"unix_user": slot["unix_user"], "present": True,
                           "credentials": {"logged_in": True},
                           "quota": {"week": {"used_pct": 30}, "checked_at": time.time() - 90}}])
@@ -184,7 +193,7 @@ def test_a_slot_not_read_yet_can_ask_for_its_first_reading(site):  # noqa: F811
                           "credentials": {"logged_in": True}}])
     page = erik.page()
     assert "Current quota is unavailable" in page
-    assert "This does not mean quota remains" in page
+    assert "Missing data does not mean quota remains" in page
     assert f'action="/account/slots/{slot["id"]}/quota"' in page
 
 

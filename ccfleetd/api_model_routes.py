@@ -11,6 +11,8 @@ import uuid
 
 from ccfleet_agent import api_model_contract as contract
 
+from . import private_owner
+
 ALIASES = contract.ALIASES
 LABELS = {"openai": "GPT", "gemini": "Gemini"}
 SCHEMA = """
@@ -46,7 +48,7 @@ def enrollment(conn, key_id, slot_id):
     key = conn.execute("SELECT * FROM gateway_keys WHERE id=? AND revoked_at IS NULL",
                        (key_id,)).fetchone()
     slot = conn.execute("SELECT * FROM slots WHERE id=?", (slot_id,)).fetchone()
-    if (not key or not slot or slot["kind"] != "machine"
+    if (not key or not slot or not private_owner.slot_allowed(conn, slot_id, key["account_id"])
             or slot["state"] not in ("claimed", "active")
             or slot["held_by"] != key["account_id"]
             or len(json.loads(key["slot_ids"])) != 1):
@@ -55,7 +57,8 @@ def enrollment(conn, key_id, slot_id):
     selected = json.loads(key["slot_ids"])[0]
     base = conn.execute("SELECT gateway_claim_id, held_by, state FROM slots WHERE id=?",
                         (selected,)).fetchone()
-    if (not base or base["held_by"] != key["account_id"]
+    if (not base or not private_owner.slot_allowed(conn, selected, key["account_id"])
+            or base["held_by"] != key["account_id"]
             or base["state"] not in ("claimed", "active")
             or json.loads(key["claim_bindings"]).get(selected) != base["gateway_claim_id"]):
         raise ValueError("the base endpoint rental has changed")
@@ -64,12 +67,19 @@ def enrollment(conn, key_id, slot_id):
 
 def reserve(conn, key_id, slot_id, provider, scope, model):
     key, slot = enrollment(conn, key_id, slot_id)
+    return reserve_on_slot(conn, key["account_id"], slot["gateway_claim_id"],
+                           provider, scope, model)
+
+
+def reserve_on_slot(conn, owner, claim_id, provider, scope, model):
     receipt = {"provider": provider, "account_fp": contract.account_fingerprint(provider, scope),
-               "model": model, "claim_id": slot["gateway_claim_id"], "binding_id": uuid.uuid4().hex}
+               "model": model, "claim_id": claim_id, "binding_id": uuid.uuid4().hex}
     contract.validate(receipt, credential=False)
     previous = conn.execute("SELECT * FROM api_model_bindings WHERE claim_id=? AND provider=?",
                             (receipt["claim_id"], provider)).fetchone()
     if previous:
+        if previous["credential_fp"] == "disconnecting:" + previous["id"]:
+            raise ValueError("finish disconnecting Gemini before reserving this slot")
         receipt["binding_id"] = previous["id"]
         if any(previous[k] != receipt[k] for k in ("account_fp", "model")):
             raise ValueError("remove the previous provider binding before replacing it")
@@ -78,7 +88,7 @@ def reserve(conn, key_id, slot_id, provider, scope, model):
         conn.execute("INSERT INTO api_model_bindings "
                      "(id,owner_account_id,provider,model,claim_id,account_fp) "
                      "VALUES (?,?,?,?,?,?)",
-                     (receipt["binding_id"], key["account_id"], provider, model,
+                     (receipt["binding_id"], owner, provider, model,
                       receipt["claim_id"], receipt["account_fp"]))
     except sqlite3.IntegrityError:
         raise ValueError("the provider account already has an assigned slot") from None
@@ -88,9 +98,16 @@ def reserve(conn, key_id, slot_id, provider, scope, model):
 def grant(conn, key_id, slot_id, receipt):
     contract.validate(receipt)
     key, slot = enrollment(conn, key_id, slot_id)
+    confirm_receipt(conn, key["account_id"], slot["gateway_claim_id"], receipt)
+    conn.execute("INSERT OR REPLACE INTO api_model_grants VALUES (?,?,?)",
+                 (receipt["binding_id"], key_id, key["generation"]))
+
+
+def confirm_receipt(conn, owner, claim_id, receipt):
+    contract.validate(receipt)
     binding = conn.execute("SELECT * FROM api_model_bindings WHERE id=? AND owner_account_id=?",
-                           (receipt["binding_id"], key["account_id"])).fetchone()
-    if (not binding or slot["gateway_claim_id"] != receipt["claim_id"]
+                           (receipt["binding_id"], owner)).fetchone()
+    if (not binding or claim_id != receipt["claim_id"]
             or any(binding[k] != receipt[k] for k in contract.RESERVATION if k != "binding_id")
             or binding["credential_fp"] not in (None, receipt["credential_fp"])):
         raise ValueError("reserve the current rental and enroll its matching credential")
@@ -99,13 +116,12 @@ def grant(conn, key_id, slot_id, receipt):
                      (receipt["credential_fp"], binding["id"]))
     except sqlite3.IntegrityError:
         raise ValueError("the provider key already has an assigned slot") from None
-    conn.execute("INSERT OR REPLACE INTO api_model_grants VALUES (?,?,?)",
-                 (binding["id"], key_id, key["generation"]))
 
 
 def targets(conn, key_id, generation):
     rows = conn.execute("""
         SELECT b.id AS binding_id,b.provider,b.model,b.claim_id,b.account_fp,b.credential_fp,
+               b.owner_account_id,
                s.id AS slot_id,s.node_id,s.unix_user,s.gateway_generation AS claim_generation,
                n.access_host,n.access_port,n.ssh_host_key,k.slot_ids,k.claim_bindings
         FROM gateway_keys k JOIN api_model_grants g
@@ -113,7 +129,7 @@ def targets(conn, key_id, generation):
         JOIN api_model_bindings b ON b.id=g.binding_id AND b.owner_account_id=k.account_id
         JOIN slots s ON s.gateway_claim_id=b.claim_id AND s.held_by=k.account_id
         JOIN nodes n ON n.id=s.node_id
-        WHERE k.id=? AND k.generation=? AND k.revoked_at IS NULL AND s.kind='machine'
+        WHERE k.id=? AND k.generation=? AND k.revoked_at IS NULL AND s.kind IN ('machine','owner')
           AND s.state IN ('claimed','active') AND n.enabled=1
           AND n.access_host!='' AND n.ssh_host_key!=''
           AND NOT EXISTS (SELECT 1 FROM logins l WHERE l.node_id='slot:' || s.id
@@ -125,10 +141,15 @@ def targets(conn, key_id, generation):
         return []
     slots = json.loads(rows[0]["slot_ids"])
     claims = json.loads(rows[0]["claim_bindings"])
-    if len(slots) != 1 or not conn.execute(
+    if (len(slots) != 1
+            or not private_owner.slot_allowed(conn, slots[0], rows[0]["owner_account_id"])):
+        return []
+    if not conn.execute(
             "SELECT 1 FROM slots s JOIN gateway_keys k ON k.account_id=s.held_by "
             "WHERE k.id=? AND s.id=? AND s.gateway_claim_id=? AND s.state IN ('claimed','active')",
             (key_id, slots[0], claims.get(slots[0]))).fetchone():
         return []
-    return [{k: row[k] for k in row.keys() if k not in ("slot_ids", "claim_bindings")}
-            for row in rows]
+    internal = {"slot_ids", "claim_bindings", "owner_account_id"}
+    return [{k: row[k] for k in row.keys() if k not in internal}
+            for row in rows
+            if private_owner.slot_allowed(conn, row["slot_id"], row["owner_account_id"])]

@@ -87,6 +87,9 @@ def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
 
 #: Beyond any moment a usage window could reset at, in seconds since 1970.
 MAX_INSTANT = 1e11
+# Wire schema shared with the standalone native quota reader. Raw scope labels
+# never enter a heartbeat or an authenticated client response.
+QUOTA_MODEL_FAMILIES = ("fable", "opus", "sonnet", "haiku", "mythos")
 QUOTA_REFRESH_OUTCOMES = frozenset({
     "quota_read", "native_refreshed", "native_refresh_not_due", "native_auth_rejected",
     "native_login_expired", "native_network_error", "native_rate_limited", "native_timeout",
@@ -97,23 +100,37 @@ QUOTA_REFRESH_OUTCOMES = frozenset({
 def _quota(section: Mapping[str, Any]) -> dict[str, Any]:
     """Subscription windows, as /usage on the node reported them.
 
-    A percentage and a human reset string per window, nothing else. These come
-    from Claude Code reporting on itself, not from any usage endpoint.
+    Native aggregate and finite model-family windows, with numeric percentages
+    and reset times. These come from Claude Code's own screen or bound cache.
     """
-    out: dict[str, Any] = {}
-    for name in ("session", "week"):
-        window = section.get(name)
+    def clean_window(window: Any) -> Optional[dict[str, Any]]:
         if not isinstance(window, Mapping):
-            continue
+            return None
         used = _num(window.get("used_pct"))
         if used is None or not 0 <= used <= 100:
-            continue
-        out[name] = {"used_pct": used, "resets": _str(window.get("resets"), 40)}
+            return None
+        clean = {"used_pct": used, "resets": _str(window.get("resets"), 40)}
         # The moment itself, from Claude Code's own saved reading; a node that
         # sends nonsense here gets the words above placed instead.
         at = _num(window.get("resets_at"))
         if at is not None and 0 < at < MAX_INSTANT:
-            out[name]["resets_at"] = at
+            clean["resets_at"] = at
+        return clean
+
+    out: dict[str, Any] = {}
+    for name in ("session", "week"):
+        window = clean_window(section.get(name))
+        if window is not None:
+            out[name] = window
+    models = section.get("models")
+    if isinstance(models, Mapping):
+        clean_models = {}
+        for name in QUOTA_MODEL_FAMILIES:
+            window = clean_window(models.get(name))
+            if window is not None:
+                clean_models[name] = window
+        if clean_models:
+            out["models"] = clean_models
     checked = _num(section.get("checked_at"))
     if checked is not None:
         out["checked_at"] = checked
@@ -188,7 +205,7 @@ def _slot_credentials(section: Mapping[str, Any]) -> dict[str, Any]:
         "logged_in": _bool_or_none(section.get("logged_in")),
         "auth_method": _str(section.get("auth_method"), 40),
         "subscription_type": _str(section.get("subscription_type"), 40),
-        # The account's rate-limit tier, which tells Max 5x from Max 20x (see
+        # The account's rate-limit tier, which distinguishes legacy Max tiers (see
         # plans.label). The agent always sent it; the server dropped it.
         "plan": _str(section.get("plan"), 40),
         "expires_at": _num(section.get("expires_at")),
@@ -427,8 +444,8 @@ def validate_heartbeat(payload: Any, node_id: str, *,
         result["network"] = network
     # Only a shared machine carries these, and only when it says it is one, so
     # every ordinary node's stored heartbeat keeps exactly the shape it had.
-    if payload.get("mode") == MACHINE_MODE:
-        result["mode"] = MACHINE_MODE
+    if payload.get("mode") in (MACHINE_MODE, "private_owner"):
+        result["mode"] = payload["mode"]
         result["slots"] = _slots(payload.get("slots"), time.time() if now is None else now)
     # Whether the OS asked for a reboot. A strict bool or nothing: "yes", 1 or a
     # string from an agent that got it wrong is not a reboot anybody asked for.

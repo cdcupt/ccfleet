@@ -113,7 +113,8 @@ def test_headers_and_scope_copy_distinguish_the_reference_and_actual_model_detai
     chinese = show(snapshot(), "zh")
     assert "Recorded tokens" in english.shown(english.words)
     assert "已计价 Token" in chinese.shown(chinese.words)
-    assert "Recorded usage used for the common reference" in english.details()
+    assert "Tokens used to calculate this ranking" in english.details()
+    assert "comparison score in dollars" in english.details()
     assert "Reported-model API estimate" in english.details()
     assert "2.15B" in english.main()
 

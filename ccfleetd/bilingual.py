@@ -8,16 +8,21 @@ from html import escape
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+from . import reference_docs
+
 CURRENT_PAGES = frozenset({
-    '/', '/slots', '/account', '/account/available', '/account/purchase', '/account/renew',
+    '/', '/slots', '/account', '/account/gemini',
+    '/account/usage', '/account/available', '/account/purchase',
+    '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
     '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
     '/docs/library/docs/devin.html',
+    '/docs/library/docs/devin-trial-foundation.html',
     '/docs/library/docs/platform-comparison.html',
 })
-ADMIN_PAGES = frozenset({'/admin', '/auth/basic'})
+ADMIN_PAGES = frozenset({'/admin', '/admin/usage', '/auth/basic'})
 ADMIN_ACTIONS = {
     'node': frozenset({'enable', 'disable', 'rc-on', 'rc-off', 'pin', 'login-start',
                        'token-start', 'login-code', 'login-cancel', 'token-show',
@@ -29,7 +34,9 @@ ADMIN_ACTIONS = {
 }
 SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli',
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
-POST_PAGES = frozenset({'/account/devin-trial/create', '/account/devin-trial/revoke',
+POST_PAGES = frozenset({'/account/gemini/start', '/account/gemini/finish',
+                       '/account/gemini/disconnect', '/account/gemini/workspace',
+                       '/account/devin-trial/create', '/account/devin-trial/revoke',
                        '/account/claim', '/account/outage-emails', '/auth/signout',
                        '/account/purchase', '/account/renew', '/account/topup',
                        '/account/subscribe', '/account/subscriptions/portal',
@@ -40,11 +47,14 @@ POST_PAGES = frozenset({'/account/devin-trial/create', '/account/devin-trial/rev
 VOID = frozenset({'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
                   'meta', 'param', 'source', 'track', 'wbr'})
 TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', '/account': '我的槽位',
-             '/account/available': '可用槽位',
+             '/account/available': '可用槽位', '/account/usage': '用量与额度',
              '/account/purchase': '确认购买槽位', '/account/renew': '续费槽位',
              '/account/devin-trial': 'Devin 试用',
              '/account/devin-trial/create': 'Devin 试用',
              '/account/devin-trial/revoke': 'Devin 试用', '/account/topup': '充值',
+             '/account/gemini': 'Gemini API 连接', '/account/gemini/start': 'Gemini API 设置',
+             '/account/gemini/finish': 'Gemini API 连接',
+             '/account/gemini/disconnect': 'Gemini API 连接',
              '/account/subscribe': '确认月租',
              '/account/subscriptions': '月租管理',
              '/privacy': '隐私说明', '/status': '服务状态', '/docs/guide': '使用指南',
@@ -53,8 +63,10 @@ TITLES_ZH = {'/': 'CC Fleet', '/docs': 'CC Fleet', '/slots': '槽位与价格', 
              '/docs/library/docs/index.html': '文档',
              '/docs/library/docs/public-gateway.html': 'HTTPS 接入指南',
              '/docs/library/docs/devin.html': '为什么评估 Devin',
+             '/docs/library/docs/devin-trial-foundation.html': 'Devin 试用技术设计',
              '/docs/library/docs/platform-comparison.html': 'CC Fleet 架构与验证',
-             '/admin': 'Fleet 管理后台', '/auth/basic': '管理员登录',
+             '/admin': 'Fleet 管理后台', '/admin/usage': '账号用量与额度',
+             '/auth/basic': '管理员登录',
              '/account/gateway/create': '连接密钥'}
 
 
@@ -139,6 +151,10 @@ def localized_url(url: str, language: str, canonical_target: str = '/',
             return url
         path = urlsplit(routed[0]).path
         if not (_page(path) or _form(path) or path == '/auth/google/start'):
+            # Archived documents have one canonical route. A relative link served
+            # from a localized page otherwise inherits the /en or /zh prefix.
+            if not original.path.startswith('/') and reference_docs.relative_path(path):
+                return urlunsplit(('', '', path, resolved.query, resolved.fragment))
             return url
         query = [(key, value) for key, value in parse_qsl(resolved.query, keep_blank_values=True)
                  if key != 'lang']

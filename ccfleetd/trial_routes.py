@@ -12,12 +12,14 @@ import logging
 import shlex
 import socket
 import threading
+import time
 
 from ccfleet_agent import devin_relay
 
+from . import devin_trial as trial_limits
 from . import gateway, usersite
 from .bilingual import bi, label
-from .devin_trial import MAX_REQUEST_BYTES
+from .devin_trial import MAX_REQUEST_BYTES, MAX_STEP_S
 from .trial_runtime import TrialUnavailable
 from .trial_worker_transport import MODEL
 
@@ -182,14 +184,18 @@ def guide():
             "not another customer&#x27;s private slot. Provider credentials are never given to "
             "visitors; local tools and history stay on your computer, while included model "
             "context is sent to Fleet and Devin.</p><p>The daily allowance is "
-            "100,000 per account "
-            "and 1,000,000 shared, reset at 00:00 UTC. Fully metered usage is "
+            "1,000,000 tokens per account "
+            "and 10,000,000 tokens shared, reset at 00:00 UTC. Fully metered usage is "
             "charged as reported; "
-            "if only native cache-read metering is missing, up to 20,000 units "
+            "if only native cache-read metering is missing, up to 20,000 tokens of allowance "
             "stay conservatively "
             "held for that turn (or the larger known subtotal). This is not an "
             "exact token or USD "
-            "hard cap. One global active turn, twenty turns/twenty reserved minutes per day; "
+            "hard cap. One global active turn; daily per-account caps are "
+            f"{trial_limits.DAILY_REQUESTS:,} model turns and "
+            f"{trial_limits.DAILY_RUNTIME_S // 60:,} reserved runtime minutes. Shared caps are "
+            f"{trial_limits.GLOBAL_DAILY_REQUESTS:,} turns and "
+            f"{trial_limits.GLOBAL_DAILY_RUNTIME_S // 60:,} reserved minutes; "
             "a busy worker asks you to wait. Unknown execution or cleanup pauses new work. "
             "Paid private slots and their own-provider subscriptions remain separate.</p>",
             '<p>显示<a href="/account/devin-trial"'
@@ -198,10 +204,14 @@ def guide():
             "然后在本地 Claude Code 终端粘贴命令。无需购买槽位或登录 Devin。试用使用独立的 Fleet "
             "管理工作进程，不会借用其他用户的私人槽位，也不会将服务商凭证交给访客。"
             "本地工具及历史留在你的电脑，包含在模型请求中的内容会发送给 Fleet 和 Devin。</p>"
-            '<p>每日每账号额度为 100,000，所有用户共享 1,000,00'
-            '0，UTC 零点重置。完整计量按已报告用量结算；'
-            "只缺少原生缓存读取计量时，每轮保守保留最多 20,000 单位，已知部分更大则保留更多。"
-            "这不是精确 token 或美元硬上限。全局同时仅一轮，每日最多二十轮、预留二十分钟；"
+            '<p>每日每账号额度为 1,000,000 token，所有用户共享 10,000,000 token，'
+            'UTC 零点重置。完整计量按已报告用量结算；'
+            "只缺少原生缓存读取计量时，每轮保守保留最多 20,000 token 额度，已知部分更大则保留更多。"
+            "这不是精确 token 或美元硬上限。全局同时仅一轮。每日每账号最多 "
+            f"{trial_limits.DAILY_REQUESTS:,} 轮、"
+            f"预留 {trial_limits.DAILY_RUNTIME_S // 60:,} 分钟；"
+            f"全局共享 {trial_limits.GLOBAL_DAILY_REQUESTS:,} 轮、"
+            f"{trial_limits.GLOBAL_DAILY_RUNTIME_S // 60:,} 分钟；"
             "忙碌时请稍候。执行或清理不确定时暂停。付费私人槽位及自有服务商订阅仍独立使用。</p>",
         )
         + "</section>"
@@ -247,7 +257,8 @@ def _trial_setup(cfg, csrf, token):
         '<form method="post" action="' + PAGE + '/create">'
         '<input type="hidden" name="csrf" value="' + html.escape(csrf, quote=True)
         + '"><button class="btn primary trial-primary" type="submit">'
-        + label("Create / replace trial key", "创建或更换试用密钥", inline=True)
+        + label("Replace trial key" if token else "Create / replace trial key",
+                "更换试用密钥" if token else "创建或更换试用密钥", inline=True)
         + "</button></form>"
     )
     setup = (
@@ -257,15 +268,18 @@ def _trial_setup(cfg, csrf, token):
         + "</h2><p>"
         + label("Use a terminal on your own computer.", "请在自己的电脑终端中操作。", inline=True)
         + '</p></div><ol class="trial-steps"><li class="trial-step"><h3>'
-        + label("Create your trial key", "创建试用密钥", inline=True) + "</h3><p>"
+        + label("Your trial key is ready" if token else "Create your trial key",
+                "试用密钥已就绪" if token else "创建试用密钥", inline=True) + "</h3><p>"
         + label(
             "Think of this as a temporary pass. It lets Claude Code use your Fleet trial.",
             "把密钥当作一张临时通行证，让本机 Claude Code 使用你的 Fleet 试用额度。",
             inline=True,
         ) + "</p>" + create_form + '<p class="trial-key-note">'
         + label(
-            "A replacement immediately stops the old key from working. Keys last 30 days.",
-            "更换后，旧密钥会立即失效。密钥有效期为 30 天。", inline=True,
+            "Use the command below while its key is valid. Replace only when needed: "
+            "a replacement immediately stops the old command from working. Keys last 30 days.",
+            "密钥有效时可一直使用下方命令。仅在需要时更换：更换后，旧命令会立即失效。"
+            "密钥有效期为 30 天。", inline=True,
         ) + '</p></li><li class="trial-step"><h3>'
         + label("Copy your launch command", "复制启动命令", inline=True) + "</h3>"
     )
@@ -279,7 +293,10 @@ def _trial_setup(cfg, csrf, token):
         ):
             command += name + "=" + MODEL + " "
         command += (
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 claude --model " + MODEL + " --effort max"
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 ENABLE_TOOL_SEARCH=false "
+            "CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 CLAUDE_CODE_DISABLE_THINKING=1 "
+            "claude --model " + MODEL + " --effort max "
+            "--permission-mode bypassPermissions --disallowedTools WebSearch,WebFetch"
         )
         setup += (
             "<p>" + label(
@@ -293,9 +310,10 @@ def _trial_setup(cfg, csrf, token):
             '<p class="trial-copy-feedback" id="trial-copy-feedback" role="status" '
             'aria-live="polite"></p><p class="trial-key-note">'
             + label(
-                "Shown once: save this command before leaving this page or switching language. "
+                "This command stays available here when you sign in, until the key expires "
+                "or is replaced. "
                 "Keep it private. This is a Fleet trial key, never a provider credential.",
-                "仅显示一次：离开本页或切换语言前，请先保存命令并妥善保管。"
+                "登录后可随时在本页复制命令，刷新或切换语言不会丢失，直到密钥过期或被更换。请妥善保管。"
                 "它仅是 Fleet 试用密钥，不是服务商凭证。", inline=True,
             ) + "</p>"
         )
@@ -304,13 +322,48 @@ def _trial_setup(cfg, csrf, token):
             '<div class="trial-placeholder"><p>' + label(
                 "Your command will appear here after you create a key. "
                 "Already saved a command? You can keep using it until its key expires "
-                "or is replaced.",
-                "创建密钥后，命令会显示在这里。已保存过命令？只要密钥未过期或被更换，便可继续使用。",
+                "or is replaced. Older keys cannot be redisplayed; replace an older key once "
+                "to keep its new command available here.",
+                "创建密钥后，命令会显示在这里。已保存过命令？只要密钥未过期或被更换，便可继续使用。"
+                "旧版密钥无法重新显示；更换一次后，新命令便可一直在此复制。",
                 inline=True,
+            ) + "</p><p>" + label(
+                "To update a saved command, keep its private key. Add ",
+                "更新已保存的命令时，请保留原有私密密钥。把 ", inline=True,
+            ) + '<code>ENABLE_TOOL_SEARCH=false CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 '
+            'CLAUDE_CODE_DISABLE_THINKING=1</code>' + label(
+                " before ", " 放在 ", inline=True,
+            ) + '<code>claude</code>' + label(
+                " and append ", " 之前，并在启动选项末尾添加 ", inline=True,
+            ) + '<code>--permission-mode bypassPermissions '
+            '--disallowedTools WebSearch,WebFetch</code>' + label(
+                ". You do not need a replacement key.",
+                "。无需更换密钥。", inline=True,
             ) + "</p></div>"
         )
     setup += (
-        '</li><li class="trial-step"><h3>'
+        '<p class="trial-key-note">' + label(
+            "This launch loads your project instructions, compatible MCP servers and plugins. "
+            "Local coding tools run without approval prompts. Add --safe-mode to temporarily "
+            "disable customizations when troubleshooting. Your saved settings stay unchanged. "
+            "Claude Code may ask you to accept bypass mode on its first launch.",
+            "此启动方式会加载项目指令、兼容的 MCP 服务及插件。"
+            "本地编程工具无需逐次批准即可运行。排查问题时可添加 --safe-mode 暂时关闭自定义配置，"
+            "已保存的设置不会改变。"
+            "首次启动时，Claude Code 可能要求确认绕过权限模式。", inline=True,
+        ) + '</p>'
+        '<p class="trial-key-note">' + label(
+            "Devin can use its native web search for current public information. "
+            "Claude's hosted WebSearch and WebFetch remain disabled; compatible local or MCP "
+            "tools can fetch pages. If an older conversation contains "
+            "unsupported web-tool history, start a new conversation with this command.",
+            "Devin 可使用其原生网页搜索获取最新公开信息。"
+            "Claude 托管的 WebSearch 和 WebFetch 仍关闭；兼容的本地或 MCP 工具可抓取网页。"
+            "若旧对话含有不支持的网页工具历史，"
+            "请用此命令开启新对话。", inline=True,
+        ) + '</p><p><a href="/docs/library/docs/devin-trial-foundation.html">'
+        + label("How the trial works, explained simply", "试用工作原理通俗说明", inline=True)
+        + '</a></p></li><li class="trial-step"><h3>'
         + label("Paste, launch, and ask something small", "粘贴启动，先问一个小问题", inline=True)
         + "</h3><p>" + label(
             "Open Terminal on macOS or Linux, or a WSL terminal on Windows. "
@@ -332,8 +385,11 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
     if account is None:
         return 200, usersite._signed_out(cfg).replace("next=/account", "next=/account/devin-trial")
     csrf = usersite.csrf_for(session_id, cfg.cookie_secret)
+    created = bool(token)
     try:
         allowance = runtime.allowance(account)
+        if not token and not revoked:
+            token = runtime.launch_key(account)
     except Exception:
         return 403, usersite._shell(
             "Devin trial",
@@ -342,6 +398,8 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
                 "请先使用已验证的 Google 账号登录 Fleet。",
             ),
         )
+    token_limit = allowance["token_limit"]
+    global_limit = allowance["global_token_limit"]
     reset = dt.datetime.fromtimestamp(allowance["resets_at"], dt.timezone.utc).isoformat()
     body = (
         '<div class="trial-page"><a class="trial-back" href="/account">← '
@@ -363,10 +421,11 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
     body += (
         "<p>"
         + label(
-            f"Daily trial allowance: {allowance['available_tokens']:,} available of 100,000. "
-            "All users share 1,000,000 allowance units per UTC day.",
-            f"每日试用额度：可用 {allowance['available_tokens']:,}，每人每日总额 100,000；"
-            "所有用户共享每日 1,000,000 额度单位。",
+            f"Daily trial allowance: {allowance['available_tokens']:,} tokens available of "
+            f"{token_limit:,}. All users share {global_limit:,} tokens per UTC day.",
+            f"每日试用额度：可用 {allowance['available_tokens']:,} token，"
+            f"每人每日总额 {token_limit:,}；"
+            f"所有用户共享每日 {global_limit:,} token。",
             inline=True,
         )
         + "</p><p>"
@@ -375,13 +434,13 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
         label(
             f"Fully metered reported tokens: {allowance['reported_tokens']:,}. "
             f"Reserved allowance: {allowance['reserved_tokens']:,}, including "
-            f"{allowance['unmeasured_reserved_tokens']:,} held for a missing cache-read meter. "
+            f"{allowance['unmeasured_reserved_tokens']:,} held for incomplete usage records. "
             "Those partial readings report at least "
             f"{allowance['partial_reported_tokens']:,} tokens; "
             "they are included in the hold, not added twice.",
             f"完整计量的已报告 token：{allowance['reported_tokens']:,}。"
             f"已预留额度 {allowance['reserved_tokens']:,}，其中 "
-            f"{allowance['unmeasured_reserved_tokens']:,} 因缓存读取计量缺失而保守保留；"
+            f"{allowance['unmeasured_reserved_tokens']:,} 因用量记录不完整而保守保留；"
             f"这些不完整读数至少报告 {allowance['partial_reported_tokens']:,} token，"
             "已包含在保留额度中，不重复相加。",
             inline=True,
@@ -398,26 +457,41 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
     )
     body += bi(
         "<p>One active turn globally. If busy, wait a few seconds and submit again; "
-        "no idle session holds the worker. At most 20 turns and 20 reserved runtime minutes "
-        "per person and globally per UTC day; each native turn has at most 120 seconds of "
-        "generation and reserves 160 seconds of runtime. Reserved runtime can reach the daily "
-        "time limit before the request cap. Keep requests short (192 KiB including "
-        "tools/history). Before each turn "
-        "we reserve up to 20,000 remaining allowance units. Complete input, output, cache-read "
+        "no idle session holds the worker. At most "
+        f"{allowance['request_limit']:,} turns and {allowance['runtime_limit_seconds'] // 60:,} "
+        "reserved runtime minutes per person and "
+        f"{allowance['global_request_limit']:,} turns and "
+        f"{allowance['global_runtime_limit_seconds'] // 60:,} minutes shared per UTC day; "
+        "each native turn has at most 300 seconds of "
+        "generation and reserves 340 seconds of runtime. After confirmed cleanup and settlement, "
+        "unused reserved seconds are returned; quick replies use their elapsed time. "
+        "A tool handoff and its continuation count as separate model turns; unsupported requests "
+        "rejected before execution do not reserve model runtime. "
+        "Requests can contain up to 2 MiB including "
+        "tools/history. Before each turn "
+        "we reserve up to 20,000 remaining tokens of allowance. Complete input, output, cache-read "
         "and cache-creation usage settles the actual total, including overshoot.</p>"
-        "<p>If Devin omits only the cache-read meter after a verified, fully cleaned-up reply, "
-        "the whole reservation stays held until UTC reset (more if the known subtotal exceeds "
-        "it). It is not a claim about actual usage. Other unknown usage, model identity, lost "
+        "<p>A missing cache-read meter after a verified reply, or a cleaned timeout with verified "
+        "model identity and partial usage records, retains the whole token reservation "
+        "(more if the known subtotal exceeds it). The trial remains available; the hold is "
+        "not a claim about actual usage and is never automatically refunded. Other unknown "
+        "usage, model identity, lost "
         "execution or cleanup pauses new work. An in-flight turn can exceed its reservation; "
         "this is admission accounting, not a precise generation, vendor quota "
         "or USD hard cap.</p>",
         "<p>全局同时仅处理一轮；忙碌时请稍等再提交，空闲会话不会占用工作进程。"
-        "每人及全局每日均最多 20 轮、预留 20 分钟运行时间；每轮原生生成最多 120 秒，"
-        "预留 160 秒运行时间。预留运行时间可能先达到每日上限。"
-        "请求（含工具及历史）最多 192 KiB。每轮先预留最多 20,000 剩余额度单位，"
+        f"每人每日最多 {allowance['request_limit']:,} 轮、"
+        f"预留 {allowance['runtime_limit_seconds'] // 60:,} 分钟运行时间；"
+        f"全局共享 {allowance['global_request_limit']:,} 轮、"
+        f"{allowance['global_runtime_limit_seconds'] // 60:,} 分钟。每轮原生生成最多 300 秒，"
+        "预留 340 秒运行时间。确认清理及结算后退还未用的预留秒数，快速回复按实际经过时间计入。"
+        "工具交接和后续回复分别计为模型轮次；"
+        "执行前被拒绝的不支持请求不会预留模型运行时间。"
+        "请求（含工具及历史）最多 2 MiB。每轮先预留最多 20,000 剩余 token 额度，"
         "完整的输入、输出、缓存读取及创建用量按实际总数结算，超额也完整计算。</p>"
-        "<p>若已验证模型且整轮清理完成，但 Devin 只缺少缓存读取计量，则整笔预留额度保留至 UTC "
-        "零点（已知部分超出预留时保留更多）；这不代表实际 token 用量。其他用量、身份、执行或清理"
+        "<p>若已验证回复仅缺缓存读取计量，或超时后已验证模型、拥有部分用量记录且全部清理完成，"
+        "则保留整笔 token 预留（已知部分超出时保留更多），试用仍可继续。保留额度不代表实际用量，"
+        "也不会自动退还。其他用量、身份、执行或清理"
         '不确定时暂停新任务。进行中的一轮可能超额；这是准入计量，不是精确生成、'
         '服务商配额或美元硬上限。</p>',
     )
@@ -430,8 +504,25 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
             "更换密钥无法恢复服务，请稍后再试。", tone="paused",
         )
     elif (
+        allowance["remaining_runtime_seconds"] < allowance["turn_reservation_seconds"]
+        or allowance["global_remaining_runtime_seconds"] < allowance["turn_reservation_seconds"]
+    ):
+        introduction += _trial_status(
+            "Today's trial runtime cannot fit another turn", "今日剩余运行时间不足以开始下一轮",
+            f"Each model turn reserves {allowance['turn_reservation_seconds']:,} seconds. "
+            f"Your runtime remaining: {allowance['remaining_runtime_seconds']:,} seconds; "
+            f"shared remaining: {allowance['global_remaining_runtime_seconds']:,} seconds. "
+            "Resets at 00:00 UTC. Remaining tokens do not override the time limit.",
+            f"每轮模型请求预留 {allowance['turn_reservation_seconds']:,} 秒。"
+            f"个人剩余 {allowance['remaining_runtime_seconds']:,} 秒；"
+            f"全局共享剩余 {allowance['global_remaining_runtime_seconds']:,} 秒。"
+            "UTC 00:00 重置；即使还有 token，也仍需遵守时间限制。", tone="paused",
+        )
+    elif (
         allowance["available_tokens"] <= 0 or allowance["global_available_tokens"] <= 0
         or allowance["remaining_requests"] <= 0
+        or allowance["remaining_global_requests"] <= 0
+        or allowance["remaining_leases"] <= 0 or allowance["remaining_global_leases"] <= 0
     ):
         introduction += _trial_status(
             "Today's trial limit has been reached", "今日试用额度已用完",
@@ -447,7 +538,7 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
             "请刷新本页查看试用状态。如果没有收到启动命令，可在准备好保存时更换密钥。",
             tone="paused", alert=True,
         )
-    elif token:
+    elif created:
         introduction += _trial_status(
             "Trial key created", "试用密钥已创建",
             "Your previous key, if any, has been replaced. Copy and save the command in step 2.",
@@ -460,28 +551,47 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
             "Create a new key whenever you want to return.",
             "使用旧密钥的命令已无法发起试用请求。想再次试用时，可创建新密钥。", tone="success",
         )
-    available = max(0, min(allowance["available_tokens"], 100000))
+    available = max(0, min(allowance["available_tokens"], token_limit))
+    estimate = f"US${available * 0.20 / 1_000_000:,.2f}–US${available * 20 / 1_000_000:,.2f}"
     aside = (
         '<aside><section class="trial-panel trial-allowance" aria-labelledby="trial-budget-title">'
         '<p class="trial-eyebrow" id="trial-budget-title">'
         + label("Your daily allowance", "你的每日额度", inline=True)
         + '</p><h2>' + f"{available:,}" + '</h2><p class="trial-budget">'
-        + label("of 100,000 units available", "可用额度 / 每日 100,000 单位", inline=True)
-        + '</p><meter min="0" max="100000" value="' + str(available)
+        + label(f"tokens available / {token_limit:,} per day",
+                f"可用 token / 每日 {token_limit:,}", inline=True)
+        + '</p><p class="trial-budget">'
+        + label(f"≈ {estimate} API value", f"≈ {estimate} API 等价值", inline=True)
+        + '</p><meter min="0" max="' + str(token_limit) + '" value="' + str(available)
         + '" aria-label="Daily trial allowance available" '
         'data-aria-label-en="Daily trial allowance available" '
         'data-aria-label-zh="每日可用试用额度">'
-        + str(available) + ' / 100000</meter><dl class="trial-budget-notes"><div><dt>'
-        + label("Reported usage", "已报告用量", inline=True) + "</dt><dd>"
+        + str(available) + ' / ' + str(token_limit)
+        + '</meter><dl class="trial-budget-notes"><div><dt>'
+        + label("Reported tokens", "已报告 token", inline=True) + "</dt><dd>"
         + f"{allowance['reported_tokens']:,}" + "</dd></div><div><dt>"
-        + label("Held for accounting", "计量预留", inline=True) + "</dt><dd>"
+        + label("Tokens held for accounting", "计量预留 token 额度", inline=True) + "</dt><dd>"
         + f"{allowance['reserved_tokens']:,}" + "</dd></div><div><dt>"
-        + label("Request cap remaining", "剩余请求上限", inline=True) + "</dt><dd>"
-        + str(allowance["remaining_requests"]) + '</dd></div></dl><p class="trial-reset">'
+        + label("Full-length turns covered now", "当前可覆盖的完整时限轮次", inline=True)
+        + "</dt><dd>" + str(allowance["remaining_turns"]) + "</dd></div><div><dt>"
+        + label("Your runtime remaining", "个人剩余运行时间", inline=True) + "</dt><dd>"
+        + label(f"{allowance['remaining_runtime_seconds']:,} seconds",
+                f"{allowance['remaining_runtime_seconds']:,} 秒", inline=True)
+        + "</dd></div><div><dt>"
+        + label("Shared runtime remaining", "全局共享剩余运行时间", inline=True) + "</dt><dd>"
+        + label(f"{allowance['global_remaining_runtime_seconds']:,} seconds",
+                f"{allowance['global_remaining_runtime_seconds']:,} 秒", inline=True)
+        + '</dd></div></dl><p class="trial-reset">'
+        + label(f"Each model turn reserves {allowance['turn_reservation_seconds']:,} seconds.",
+                f"每轮模型请求预留 {allowance['turn_reservation_seconds']:,} 秒。", inline=True)
+        + "<br>"
         + label("Resets every day at 00:00 UTC.", "每天 UTC 00:00 重置。", inline=True)
-        + "<br>" + label("All users share 1,000,000 units per day.",
-                                 "所有用户共享每日 1,000,000 单位。", inline=True)
-        + '</p></section><div class="trial-side-note"><strong>'
+        + "<br>" + label(f"All users share {global_limit:,} tokens per day.",
+                                 f"所有用户共享每日 {global_limit:,} token。", inline=True)
+        + '</p><p class="trial-reset">' + label(
+            'Estimated API value depends on input, cache and output mix. This trial is free.',
+            'API 等价值按输入、缓存及输出比例变化。试用免费。', inline=True,
+        ) + '</p></section><div class="trial-side-note"><strong>'
         + label("Keep your first task small", "先从小任务开始", inline=True)
         + "</strong><p>" + label(
             "Each reply has up to 2 minutes to generate. Keep conversations short; "
@@ -489,6 +599,17 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
             "每轮最多生成 2 分钟。请保持对话简短；过长的历史或过大的工具列表可能超出限制。",
             inline=True,
         ) + "</p></div></aside>"
+    )
+    body += bi(
+        '<p>The API-equivalent estimate uses <a href="https://platform.claude.com/docs/en/about-claude/pricing">'
+        'Opus 5.5 Standard API list prices</a>: US$0.20 per million cache-read tokens to '
+        'US$20 per million output tokens; uncached input is US$4 per million. '
+        'It is a range for the available token allowance, not cash credit or your Devin bill. '
+        'Unmeasured holds are budget reservations, not measured token use.</p>',
+        '<p>API 等价值按 <a href="https://platform.claude.com/docs/en/about-claude/pricing">'
+        'Opus 5.5 标准 API 标价</a>估算：每百万缓存读取 token 为 US$0.20，输出 token 为 US$20，'
+        '未缓存输入为 US$4。此范围对应可用 token 额度，不是现金余额或 Devin 账单。'
+        '未计量的预留是额度占用，不代表实测 token 用量。</p>',
     )
     details = (
         '<details class="trial-details"><summary>'
@@ -540,8 +661,10 @@ def handle(runtime, handler):
         ):
             raise TrialUnavailable("invalid_trial_request_framing", 400)
         size = int(lengths[0])
-        if not 0 < size <= MAX_REQUEST_BYTES:
-            raise TrialUnavailable("trial_context_too_large", 413)
+        if not size:
+            raise TrialUnavailable("invalid_trial_request_framing", 400)
+        if size > MAX_REQUEST_BYTES:
+            raise TrialUnavailable("trial_context_too_large", 400)
         auth, keys = (
             handler.headers.get_all("Authorization", []),
             handler.headers.get_all("x-api-key", []),
@@ -586,23 +709,49 @@ def handle(runtime, handler):
             return
         handler._trial_busy = error.code in {"trial_busy", "trial_request_rate_limit"}
         messages = {
+            "trial_key_expired_or_revoked": "Your Fleet trial key has expired or was replaced. "
+            "Open your Fleet trial page and copy the current launch command. "
+            "Claude /login does not restore a Fleet trial key.",
             "trial_worker_unavailable": "The trial worker is temporarily unavailable. "
             "No model request was sent. Wait a moment and try again.",
             "trial_busy": "The trial worker is busy. Wait a few seconds and submit again.",
             "trial_request_rate_limit": "Too many trial requests. Wait a few seconds.",
             "daily_limit_reached": "Your daily trial allowance or turn/time limit is used. "
             "It resets at 00:00 UTC.",
-            "global_daily_limit_reached": "The shared daily trial allowance or twenty-turn "
-            "limit is used. It resets at 00:00 UTC.",
+            "global_daily_limit_reached": "The shared daily trial token, turn or request "
+            "allowance is used up. It resets at 00:00 UTC.",
+            "runtime_reservation_limit": "The daily trial runtime allowance cannot fit "
+            f"another {MAX_STEP_S}-second reservation. It resets at 00:00 UTC. "
+            "Remaining tokens do not override this time limit.",
+            "lease_time_limit": "Not enough time remains before the UTC daily reset "
+            "to start a full trial turn. Try again after 00:00 UTC.",
             "trial_paused": "The trial is paused while an unconfirmed turn is checked.",
+            "trial_turn_timed_out": "Devin reached the five-minute turn limit. Its worker was "
+            "cleaned up and a token hold was retained for incomplete usage. The trial remains "
+            "available. You can send a new request; this request was not retried.",
             "trial_result_unconfirmed_do_not_retry": "The trial result could not be verified. "
             "Do not retry automatically.",
-            "trial_context_too_large": "Trial requests including tools/history may use at most "
-            "192 KiB. Start a smaller conversation.",
+            "trial_context_too_large": "prompt is too long: this Devin trial accepts at most "
+            "2 MiB of request JSON including tools and history. Reduce tools or start a "
+            "smaller conversation. No model request was sent.",
             "trial_requires_supported_opus_5_5_request": "Use claude-opus-5-5 and supported "
             "native-compatible request features.",
         }
-        gateway.model_error(handler, error.status, messages.get(error.code, error.code))
+        gateway.model_error(handler, error.status, messages.get(error.code, error.code),
+                            code=error.code if error.code == "trial_context_too_large" else "")
+        if error.code == "trial_context_too_large" and size <= 2 * MAX_REQUEST_BYTES:
+            # Deliver the rejection without a TCP reset while an ordinary
+            # client is still sending its body. Drain only a bounded, already
+            # framed oversize request; never parse it or reserve a model turn.
+            deadline, remaining = time.monotonic() + 2, size
+            with contextlib.suppress(OSError, EOFError, TimeoutError):
+                handler.wfile.flush()
+                while remaining and time.monotonic() < deadline:
+                    handler.connection.settimeout(max(0.001, deadline - time.monotonic()))
+                    chunk = handler.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
     except (ValueError, OSError, EOFError, RecursionError):
         gateway.model_error(handler, 400, "The trial request could not be confirmed.")
     except Exception:

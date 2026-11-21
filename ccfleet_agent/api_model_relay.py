@@ -191,14 +191,16 @@ async def respond(out, value, secret, create):
     wire.write_chunk(out, b"")
 
 
-def serve(inp, out, home, create, *, after_body=lambda: None):
+def serve(inp, out, home, create, *, after_body=lambda: None, authorize=None, load=load_profile,
+          initial=None):
+    authorize = wire.require_enabled if authorize is None else authorize
     out = wire._GatewayOutput(out)
     try:
-        status = wire.read_metadata(inp)
+        status = wire.read_metadata(inp) if initial is None else initial
         if set(status) != {"version", "operation", "route"} or status["operation"] != "status":
             raise ValueError("invalid readiness")
-        profile = load_profile(home, status["route"])
-        wire.require_enabled()
+        authorize()
+        profile = load(home, status["route"])
         wire.write_metadata(out, 200, {"content-type": "application/json"})
         wire.write_chunk(out, json.dumps({"ready": True, "protocol": 2,
                                          "route": status["route"]}).encode())
@@ -208,8 +210,8 @@ def serve(inp, out, home, create, *, after_body=lambda: None):
             raise wire.RelayError(501, "token counting is unavailable")
         value = model_request(wire.read_exact(inp, size), profile)
         after_body()
-        wire.require_enabled()
-        profile = load_profile(home, status["route"])
+        authorize()
+        profile = load(home, status["route"])
         asyncio.run(respond(out, value, profile["api_key"], create))
         return 0
     except (EOFError, BrokenPipeError):

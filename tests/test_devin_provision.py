@@ -127,7 +127,9 @@ def catalogue_rejection(profile):
     return value
 
 
-@pytest.mark.parametrize("elapsed,attempts", [(19, 2), (20, 2), (21, 1)])
+@pytest.mark.parametrize("elapsed,attempts", [
+    (19, 2), (20, 2), (21.5, 2), (25, 2), (70, 2), (70.001, 1),
+])
 def test_early_clean_catalogue_rejection_gets_only_one_full_fresh_child_retry(
         profile, caplog, elapsed, attempts):
     now = [0.0]
@@ -150,10 +152,14 @@ def test_early_clean_catalogue_rejection_gets_only_one_full_fresh_child_retry(
             assert p.metadata_failure_reason(captured.value) == "native_models_list_rejected"
     assert len(profile.calls) == attempts
     assert profile.calls[0][1]["timeout"] == 90
+    first_request = json.loads(profile.calls[0][1]["input_text"])
+    assert first_request.pop("acquisition_timeout_s") == 60
     if attempts == 2:
         assert profile.calls[1][1]["timeout"] == 90 - elapsed
         assert profile.calls[0][0] == profile.calls[1][0]
-        assert profile.calls[0][1]["input_text"] == profile.calls[1][1]["input_text"]
+        second_request = json.loads(profile.calls[1][1]["input_text"])
+        assert second_request.pop("acquisition_timeout_s") == min(60, 80 - elapsed)
+        assert first_request == second_request
     assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
     assert [record.message for record in caplog.records] == (
         ["native metadata catalogue verification retry"] if attempts == 2 else [])
@@ -316,7 +322,7 @@ def test_budget_drop_during_second_snapshot_copy_prevents_spawn_and_removes_unla
     def sync(fd):
         copies.append(fd)
         if len(copies) == 2:
-            now[0] = 21
+            now[0] = 70.001
 
     def spawn(argv, **kwargs):
         profile.spawn(argv, **kwargs)
@@ -329,6 +335,27 @@ def test_budget_drop_during_second_snapshot_copy_prevents_spawn_and_removes_unla
     assert len(profile.calls) == 1 and len(copies) == 2
     assert p.metadata_failure_reason(captured.value) == "native_models_list_rejected"
     assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+def test_first_snapshot_cannot_launch_without_minimum_acquisition_and_cleanup_room(
+        profile, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(p.os, "fsync", lambda _: now.__setitem__(0, 70.001))
+    with pytest.raises(p.ProvisionError) as captured:
+        profile.collect(monotonic=lambda: now[0])
+    assert p.metadata_failure_reason(captured.value) == "native_metadata_timeout"
+    assert not profile.calls
+    assert not (Path(profile.verifier.pw_dir) / ".local/share/devin/credentials.toml").exists()
+
+
+def test_parent_setup_time_shortens_first_child_without_extending_hard_deadline(
+        profile, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(p.os, "fsync", lambda _: now.__setitem__(0, 25))
+    assert profile.collect(monotonic=lambda: now[0])["reason"] == "verified"
+    request = json.loads(profile.calls[0][1]["input_text"])
+    assert request["acquisition_timeout_s"] == 55
+    assert profile.calls[0][1]["timeout"] == 65
 
 
 @pytest.mark.parametrize("failure", ["exception", "missing-result"])

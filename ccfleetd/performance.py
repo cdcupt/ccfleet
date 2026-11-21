@@ -215,7 +215,8 @@ def summary(store: Any, cfg: Any, now: float) -> dict[str, Any]:
         "throughput": None,
     }
     nodes = {node["id"] for node in store.list_nodes()
-             if isinstance(node, Mapping) and isinstance(node.get("id"), str)
+             if isinstance(node, Mapping) and not node.get("private_owner")
+             and isinstance(node.get("id"), str)
              and type(node.get("enabled")) in (bool, int) and node["enabled"] == 1}
     latest = store.latest_heartbeats()
     reports: list[dict[str, Any]] = []

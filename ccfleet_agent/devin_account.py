@@ -48,6 +48,7 @@ MAX_STATUS_LINES = 128
 # One shared budget covers setup, both fixed metadata commands, and the one
 # known status retry. The parent also covers imports, final pins, and cleanup.
 METADATA_ACQUISITION_TIMEOUT_S = 60
+MIN_METADATA_ACQUISITION_TIMEOUT_S = 10
 METADATA_CHILD_TIMEOUT_S = 90
 METADATA_TERMINATE_GRACE_S = 0.05
 METADATA_PROCESS_EXIT_TIMEOUT_S = 2
@@ -529,8 +530,17 @@ def _models_present(raw, uid):
         raise AccountError("native_model_catalog_unverified") from None
 
 
+def _acquisition_timeout(value):
+    if (type(value) not in (int, float)
+            or not MIN_METADATA_ACQUISITION_TIMEOUT_S <= value <= METADATA_ACQUISITION_TIMEOUT_S
+            or not math.isfinite(value)):
+        raise AccountError("invalid_metadata_registration")
+    return value
+
+
 def collect_readiness(config, binding, source_profile, *, runtime, authorize,
-                      popen_factory=None, cancel_event=None, clock=time.monotonic, now=time.time):
+                      popen_factory=None, cancel_event=None, clock=time.monotonic, now=time.time,
+                      acquisition_timeout_s=METADATA_ACQUISITION_TIMEOUT_S):
     """Collect live metadata only, with a fresh temporary credential-only HOME.
 
     Source profile must be root-owned and hash pinned. NativeConfig pins all
@@ -539,6 +549,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
     not execute. A real metadata command needs an explicit Popen factory.
     Private credential_sha256 is only a change guard and never account identity.
     """
+    acquisition_timeout_s = _acquisition_timeout(acquisition_timeout_s)
     runtime = _runtime(runtime)
     if type(config) is not native.NativeConfig or type(binding) is not native.OwnershipBinding:
         raise AccountError("root_native_config_required")
@@ -574,7 +585,7 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
         return source, original_home, state, data
 
     started_at = clock()
-    deadline = started_at + METADATA_ACQUISITION_TIMEOUT_S
+    deadline = started_at + acquisition_timeout_s
     try:
         source, original_home, state, data = validate()
         capabilities = dict(source["capabilities"])
@@ -672,6 +683,10 @@ def collect_readiness(config, binding, source_profile, *, runtime, authorize,
             shutil.rmtree(home)
         if not cleanup:
             account, reason = None, "native_metadata_cleanup_unconfirmed"
+    # Validation, credential rechecks and cleanup belong to the same soft
+    # acquisition budget. Never emit GOOD after those steps exhausted it.
+    if account is not None and clock() >= deadline:
+        account, reason = None, "native_metadata_timeout"
     checked = _instant(now())
     report = {**runtime, "account_fp": account, "identity_verified": account is not None,
               "capabilities": capabilities, "observed_at": checked}
@@ -739,10 +754,15 @@ def main(argv=None, *, stdin=None, stdout=None, popen_factory=None):
         payload = _read_request(sys.stdin.buffer if stdin is None else stdin)
         fields = {"config_path", "config_sha256", "source_profile_path", "source_profile_sha256",
                   "runtime", "binding"}
-        if (not isinstance(payload, dict) or set(payload) != fields
+        if (not isinstance(payload, dict) or set(payload) not in (
+                fields, fields | {"acquisition_timeout_s"})
                 or any(not isinstance(payload[name], str) or not _DIGEST.fullmatch(payload[name])
                        for name in ("config_sha256", "source_profile_sha256"))):
             raise AccountError("invalid_metadata_registration")
+        # Old parents omit this field. New parents may shorten, never extend,
+        # the fixed metadata-only budget to leave time under their hard limit.
+        acquisition_timeout_s = _acquisition_timeout(
+            payload.get("acquisition_timeout_s", METADATA_ACQUISITION_TIMEOUT_S))
         config = native.NativeConfig.load(payload["config_path"],
                                          expected_sha256=payload["config_sha256"])
         source = SubjectSourceProfile.load(payload["source_profile_path"],
@@ -761,6 +781,7 @@ def main(argv=None, *, stdin=None, stdout=None, popen_factory=None):
         collection_started = True
         result = collect_readiness(config, binding, source, runtime=payload["runtime"],
             authorize=authorized, cancel_event=cancelled,
+            acquisition_timeout_s=acquisition_timeout_s,
             popen_factory=subprocess.Popen if popen_factory is None else popen_factory)
         value = {"report": result.report, "credential_sha256": result.credential_sha256,
                  "checked_at": result.checked_at, "reason": result.reason,

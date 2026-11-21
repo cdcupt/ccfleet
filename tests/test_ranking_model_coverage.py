@@ -110,6 +110,65 @@ def test_unknown_response_model_has_a_distinct_visible_status():
     assert "20 replies have an unrecognized or ambiguous model." in Document(rendered(report)).text
 
 
+def test_fable_52_collection_prices_new_replies_without_relabeling_saved_unknowns(tmp_path):
+    numbers = {"input_tokens": 10, "output_tokens": 20,
+               "cache_read_input_tokens": 30, "cache_creation_input_tokens": 40}
+    relay_metrics.record(tmp_path, BOUND, "success", {}, NOW, usage_eligible=True,
+                         usage=numbers, model_eligible=True, public_model="other")
+    observer = relay_metrics.UsageCollector("application/json")
+    observer.feed(json.dumps({"type": "message", "model": "claude-fable-5-2-20261109",
+                              "stop_reason": "end_turn", "usage": numbers,
+                              "content": [{"type": "text", "text": "PRIVATE_REPLY"}]}).encode())
+    collected = observer.finish()
+    assert observer.public_model == "claude-fable-5-2"
+    relay_metrics.record(tmp_path, BOUND, "success", {}, NOW, usage_eligible=True,
+                         usage=collected, model_eligible=True, public_model=observer.public_model)
+    report = measure(fleet_of([relay_metrics.report(tmp_path, BOUND, NOW)]))
+    row = report["entries"][0]
+    models = {model["model"]: model for model in row["models"]}
+    assert models["other"]["samples"] == models["claude-fable-5-2"]["samples"] == 1
+    assert models["other"]["estimated_usd"] is None
+    assert models["claude-fable-5-2"]["estimated_usd"] == pytest.approx(.001286)
+    assert row["tokens"]["total_tokens"] == 200
+    assert row["unknown_model_samples"] == row["identified_model_samples"] == 1
+    source = rendered(report)
+    assert 'usage-family-fable' in source and 'usage-family-other' in source
+    assert "Claude Fable 5.2" in Document(source).text
+    assert "cannot be reliably reassigned to Fable" in Document(source).text
+    assert "PRIVATE_REPLY" not in source and "20261109" not in source
+
+
+@pytest.mark.parametrize("language,calculation,unknown", [
+    ("en", "Tokens used to calculate this ranking", "Model not identified"),
+    ("zh", "本次排行采用的 Token 用量", "模型未识别"),
+])
+def test_visible_family_totals_separate_fable_versions_other_models_and_unknowns(
+        language, calculation, unknown):
+    fleet = fleet_of([reading(model="claude-fable-5-1"),
+                      reading(model="claude-fable-5-2", input_tokens=200),
+                      reading(model="claude-opus-5-5", output=100),
+                      reading(model="other")], ["same"] * 4)
+    report = measure(fleet)
+    source = rendered(report, language)
+    families = source.split('<div class="usage-family-summary">', 1)[1].split('</div>', 1)[0]
+    assert families.index("Fable") < families.index("Opus") < families.index(unknown)
+    assert 'title="760 tokens"' in families if language == "en" else 'title="760 Token"' in families
+    assert "Claude Fable 5.1" in source and "Claude Fable 5.2" in source
+    assert calculation in Document(source).text
+    assert source.index('class="usage-family-summary"') < source.index('<details class="usage-model-detail">')
+    assert "Other / unknown" not in source
+
+
+def test_family_summary_ignores_untrusted_labels_and_missing_counts():
+    reading_ = {"models": [{"model": "private-model", "label": "PRIVATE_LABEL", "samples": 1,
+                            "tokens": {"total_tokens": 100}},
+                           {"model": "claude-fable-5-2", "samples": True,
+                            "tokens": {"total_tokens": 100}},
+                           {"model": "claude-opus-5-5", "samples": 1,
+                            "tokens": {"total_tokens": None}}]}
+    assert usersite._public_usage_families(reading_) == ""
+
+
 @pytest.mark.parametrize("value", [None, True, -1, "27", 28])
 def test_invalid_model_coverage_is_unavailable_not_zero_or_fabricated(value):
     report = measure(fleet_of([reading(samples=27, model=None)]))

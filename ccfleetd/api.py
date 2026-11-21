@@ -28,8 +28,10 @@ from . import (
     gateway,
     gateway_providers,
     gateway_ui,
+    gemini_setup,
     machine_health,
     oauth,
+    private_owner,
     reference_docs,
     sessions,
     statuspage,
@@ -71,6 +73,7 @@ from .render import (
     render_add_result,
     render_dashboard,
     render_token_result,
+    render_usage_dashboard,
 )
 from .store import Store, StoreError, slot_login_key
 
@@ -95,6 +98,10 @@ HTML_HEADERS = {
                                 f"{trial_routes.COPY_COMMAND_CSP}; "
                                 "connect-src 'self'"),
 }
+GEMINI_HEADERS = {**HTML_HEADERS, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                  "Content-Security-Policy": HTML_HEADERS["Content-Security-Policy"].replace(
+                      "script-src ", "script-src " + gemini_setup.SCRIPT_CSP + " ")
+                  + "; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"}
 JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
 
 
@@ -116,6 +123,7 @@ def access_log_route(target: Any) -> str:
     except ValueError:
         return "unknown_route"
     if path in {"/", "/healthz", "/slots", "/account", "/account/available", "/privacy", "/status",
+                "/account/usage", "/admin/usage",
                 "/account/purchase", "/account/renew", "/account/topup",
                 "/account/subscribe", "/account/subscriptions",
                 "/account/subscriptions/portal", "/account/subscriptions/cancel",
@@ -465,7 +473,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
         def _html_page_route(self) -> bool:
             """Current public UI and form results; historical files stay unchanged."""
             path = urllib.parse.urlsplit(getattr(self, "_page_target", self.path)).path
-            current = {"/", "/slots", "/account", "/account/available", "/privacy", "/status",
+            current = {"/", "/slots", "/account", gemini_setup.PATH, "/account/available",
+                       "/privacy", "/status",
+                       "/account/usage",
                        "/account/purchase", "/account/renew", "/account/topup",
                        "/account/devin-trial",
                 "/account/subscribe", "/account/subscriptions",
@@ -475,6 +485,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                        "/docs/library/", "/docs/library/docs/index.html",
                        "/docs/library/docs/public-gateway.html",
                        "/docs/library/docs/devin.html",
+                       "/docs/library/docs/devin-trial-foundation.html",
                        "/docs/library/docs/platform-comparison.html"}
             return (path.rstrip("/") in ADMIN_PAGES or admin_form(path)
                     or path in current or customer_docs.page_for(path) is not None
@@ -910,7 +921,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 # page, which offers sign-in, rather than an error.
                 self._redirect("/account")
                 return
-            form = self._form(strict=path in {
+            form = self._form(strict=path in gemini_setup.ACTIONS or path in {
                 "/account/purchase", "/account/renew", "/account/topup",
                 "/account/subscribe", "/account/subscriptions", "/account/subscriptions/portal",
                 "/account/subscriptions/cancel", "/account/subscriptions/resume",
@@ -919,6 +930,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 return
             if not self._csrf_ok(form, session_id):
                 self._json(403, {"error": "bad or missing csrf token"})
+                return
+            if path in gemini_setup.ACTIONS:
+                if ctx.cfg.broker_only or not ctx.gateway.enabled:
+                    self._json(404, {"error": "not found"})
+                    return
+                try:
+                    outcome = gemini_setup.act(ctx.store, ctx.cfg, account, session_id,
+                        path.rsplit("/", 1)[1], form, time.time())
+                except PermissionError:
+                    self._json(404, {"error": "not found"})
+                    return
+                if outcome.location:
+                    self._redirect(outcome.location)
+                else:
+                    self._send(outcome.status, outcome.body.encode("utf-8"), GEMINI_HEADERS)
                 return
             if path == "/account/topup":
                 outcome = stripe_routes.start(ctx.billing, ctx.cfg, account, form, time.time())
@@ -938,11 +964,16 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 outcome = usersite.act(ctx.store, ctx.cfg, account, path, form, time.time(),
                                        session_id)
             if outcome.location:
+                location = outcome.location
+                if (form.get("usage_page") == "1"
+                        and re.fullmatch(r"/account/slots/[A-Za-z0-9_.:-]+/quota", path)
+                        and location.startswith("/account?")):
+                    location = "/account/usage" + location[len("/account"):]
                 if (self.headers.get("X-Fleet-Partial") == "1"
                         and partial_account_action(path)):
-                    self._json(200, {"location": self._page_location(outcome.location)})
+                    self._json(200, {"location": self._page_location(location)})
                 else:
-                    self._redirect(outcome.location)
+                    self._redirect(location)
             else:
                 self._send(outcome.status, outcome.body.encode("utf-8"),
                            {**HTML_HEADERS, "Cache-Control": "no-store"})
@@ -1050,6 +1081,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             token = (_prefixed_bearer(values[0], cli_access.DEVICE_PREFIX)
                      if len(values) == 1 else None)
             device = ctx.store.resolve_cli_device(token or "", now=time.time(), touch=False)
+            if device and device.get("workspace_only"):
+                device = None
             if device is None:
                 self._json(401, {"error": "device is not authorized"})
             return device
@@ -1069,7 +1102,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                             "modes": ["sticky", "priority"], "slots": [
                 {"id": s["id"], "name": s.get("name") or s["id"], "state": s["state"],
                  "providers": ["anthropic", "devin"] if s["id"] in native else ["anthropic"]}
-                for s in slots if s["kind"] == slotstates.MACHINE_SLOT
+                for s in slots if (s["kind"] == slotstates.MACHINE_SLOT
+                                  or s.get("inference_enabled") is True)
                 and s["state"] in (slotstates.CLAIMING, slotstates.CLAIMED, slotstates.ACTIVE)]})
 
         def _gateway_enroll(self, *, revoke: bool = False) -> None:
@@ -1129,6 +1163,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     selected,
                     value.get("mode", "sticky"), now=time.time(),
                     provider=value.get("provider", "anthropic"),
+                    pairing_device_id=device["device_id"],
                     allow_devin=bool(ctx.cfg.gateway_ready
                         and ctx.cfg.gateway_devin_enabled is True and runtime is not None),
                     provider_runtime=runtime)
@@ -1211,6 +1246,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 device = ctx.store.register_cli_device(
                     token, str(supplied.get("public_key") or ""),
                     str(supplied.get("device_name") or ""), now=time.time(),
+                    workspace_pairing=supplied.get("purpose") == "antigravity-workspace",
                     admit=admit)
             except StoreError as exc:
                 self._json(403 if payment_failure else 400,
@@ -1221,6 +1257,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 "version": 1,
                 "device_id": device["device_id"],
                 "device_token": device["device_token"],
+                **({"workspace_only": True} if device.get("workspace_only") else {}),
                 "endpoint": f"{ws_scheme}://{public.netloc}/api/cli/connect",
                 "slot_id": device["slot_id"],
                 "slot_name": device["name"] or device["slot_id"],
@@ -1302,6 +1339,21 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if (path is None or self._legacy_site_redirect()
                     or self._legacy_language_redirect()):
                 return
+            if path == gemini_setup.PATH:
+                if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:
+                    self._json(404, {"error": "not found"})
+                    return
+                account, session_id = self._signed_in()
+                if account is None:
+                    self._redirect("/account")
+                    return
+                try:
+                    outcome = gemini_setup.page(ctx.store, ctx.cfg, account, session_id)
+                except PermissionError:
+                    self._json(404, {"error": "not found"})
+                    return
+                self._send(outcome.status, outcome.body.encode("utf-8"), GEMINI_HEADERS)
+                return
             if path == "/v1/models":
                 if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:
                     self._json(404, {"error": "model catalog unavailable"})
@@ -1379,12 +1431,13 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             if path == "/api/cli/connect":
                 self._cli_connect()
                 return
-            admin_only = (path in ("/api/nodes", "/api/alerts", "/auth/basic")
+            admin_only = (path in ("/api/nodes", "/api/alerts", "/auth/basic", "/admin/usage")
                           or path.rstrip("/") == CONSOLE_PATH)
             if path == "/healthz":
                 self._json(200, {"ok": True})
             elif (admin_only and not self._admin_site()) or (
-                    (path in ("/slots", "/account", "/account/available", "/account/purchase",
+                    (path in ("/slots", "/account", "/account/usage", "/account/available",
+                              "/account/purchase",
                               "/account/renew", "/account/topup", "/privacy", "/status")
                      or customer_docs.page_for(path))
                     and not self._product_site()):
@@ -1417,6 +1470,18 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._send(200, usersite.page(ctx.store, ctx.cfg, account, session_id,
                     time.time(), note, topup_ready=stripe_routes.enabled(
                         ctx.billing, ctx.cfg)).encode("utf-8"),
+                           HTML_HEADERS)
+            elif path == "/account/usage":
+                account, session_id = self._signed_in()
+                try:
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query,
+                                                   max_num_fields=16)
+                except ValueError:
+                    self._json(400, {"error": "too many query fields"})
+                    return
+                note = query.get("note", [""])[0]
+                self._send(200, usersite.usage_page(
+                    ctx.store, ctx.cfg, account, session_id, time.time(), note).encode("utf-8"),
                            HTML_HEADERS)
             elif path == trial_routes.PAGE:
                 if not self._product_site() or ctx.cfg.broker_only:
@@ -1496,11 +1561,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     self._redirect(CONSOLE_PATH)
                     return
                 self._docs_page(customer_docs.overview)
-            elif path.rstrip("/") == CONSOLE_PATH:
+            elif path.rstrip("/") == CONSOLE_PATH or path == "/admin/usage":
                 who = (identify(self.headers.get("Authorization"), ctx.cfg, ctx.store)
                        or self._operator_session())
                 if who is None:
                     self._console_door()
+                elif path == "/admin/usage":
+                    self._send(200, render_usage_dashboard(
+                        self._rows(who), time.time(), ctx.cfg, csrf_token(ctx.cfg), who,
+                        corner=self._console_corner()).encode("utf-8"), HTML_HEADERS)
                 else:
                     self._send(200, self._dashboard(who).encode("utf-8"), HTML_HEADERS)
             elif path == "/api/nodes":
@@ -1695,6 +1764,22 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 self._json(400, {"error": str(exc)})
                 return
             now = time.time()
+            private = node.get("private_owner") is not None
+            if private != (payload.get("mode") == "private_owner"):
+                self._json(400, {"error": "heartbeat mode does not match this node"})
+                return
+            if private:
+                # This owner's computer never accepts managed lifecycle actions.
+                events = ctx.monitor.record_heartbeat(node, payload, now)
+                self._json(200, {"ok": True, "pinned_version": "", "desired": {},
+                    "private_owner_access": ctx.store.private_owner_access(
+                        node["id"], ctx.cfg.gateway_ssh_public_key if ctx.gateway.enabled else "",
+                        workspace_at=(now if self.headers.get("X-CCFleet-Workspace") == "1"
+                                      else None)),
+                    "private_owner_quota": ctx.store.private_owner_quota(node["id"]),
+                    "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
+                    "events": len(events)})
+                return
             self._record_login((payload.get("reconcile") or {}).get("login"),
                                node["id"], now)
             # Before the alerts are evaluated and before the reply is built, so
@@ -1822,9 +1907,15 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             who = self._identity()
             if who is None:
                 return False                       # already answered 401
+            node = ctx.store.get_node(node_id)
+            if node is not None and node.get("private_owner"):
+                account, _ = self._signed_in()
+                if (not who.is_admin or account is None or account.get("role") != "admin"
+                        or account["id"] != node["private_owner"]["account_id"]):
+                    self._json(403, {"error": "this account cannot manage that node"})
+                    return False
             if who.is_admin:
                 return True
-            node = ctx.store.get_node(node_id)
             if action in self.OWNER_ACTIONS and node is not None and node["owner"] == who.owner:
                 return True
             # Their credentials were fine; the action is not theirs to take.
@@ -1858,6 +1949,14 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                     # Slots and the people who hold them are the operator's alone.
                     if not self._require_admin():
                         return
+                    if parts[1] in ("machine", "slot"):
+                        selected = (ctx.store.get_node(parts[2]) if parts[1] == "machine"
+                                    else ctx.store.get_slot(parts[2]))
+                        if selected is not None and selected.get("private_owner"):
+                            node_id = (selected["id"] if parts[1] == "machine"
+                                       else selected["node_id"])
+                            if not self._may_act_on(node_id, parts[3]):
+                                return
                     if parts[1] == "account" and parts[3] == "credit":
                         if not ctx.cfg.usd_slot_credit_enabled:
                             self._json(404, {"error": "not found"})
@@ -1875,14 +1974,17 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                         return
                     anchor = consoleslots.act(ctx.store, parts[1], parts[2], parts[3],
                                               form, time.time(), by=who.label)
+                    destination = ("/admin/usage" if form.get("usage_page") == "1"
+                                   and parts[1] == "slot" and parts[3] == "quota"
+                                   else CONSOLE_PATH)
                     if anchor is None:
                         self._json(404, {"error": "not found"})
                     elif (self.headers.get("X-Fleet-Partial") == "1"
                           and parts[1] == "slot" and parts[3] == "quota"):
                         self._json(200, {"location": self._page_location(
-                            f"{CONSOLE_PATH}#{anchor}")})
+                            f"{destination}#{anchor}")})
                     else:
-                        self._redirect(f"{CONSOLE_PATH}#{anchor}")
+                        self._redirect(f"{destination}#{anchor}")
                 else:
                     self._json(404, {"error": "not found"})
             except StoreError as exc:
@@ -1977,16 +2079,19 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
 
         # -- views ---------------------------------------------------------
 
+        def _operator_view(self):
+            account, _ = self._signed_in()
+            owner = account["id"] if account and account.get("role") == "admin" else ""
+            return private_owner.OperatorView(ctx.store, owner)
+
         def _visible_nodes(self, who: Identity) -> list[dict[str, Any]]:
-            nodes = ctx.store.list_nodes()
+            nodes = self._operator_view().list_nodes()
             if who.is_admin:
                 return nodes
-            return [n for n in nodes if n.get("owner") == who.owner]
+            return [n for n in nodes if n.get("owner") == who.owner and not n.get("private_owner")]
 
         def _scope_alerts(self, alerts: list[dict[str, Any]],
                           who: Identity) -> list[dict[str, Any]]:
-            if who.is_admin:
-                return alerts
             mine = {n["id"] for n in self._visible_nodes(who)}
             return [a for a in alerts if a.get("node_id") in mine]
 
@@ -2010,7 +2115,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                                     self._scope_alerts(ctx.store.open_alerts(), who),
                                     now, ctx.cfg, csrf_token(ctx.cfg), who,
                                     logins=logins,
-                                    extra=(consoleslots.section(ctx.store, csrf_token(ctx.cfg),
+                                    extra=(consoleslots.section(
+                                        self._operator_view(), csrf_token(ctx.cfg),
                                                                 now, cfg=ctx.cfg,
                                                                 credit_actor=bool(
                                                                     self._database_admin_actor()))
@@ -2022,7 +2128,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             network = (ctx.traffic_observer.snapshot(now)
                        if ctx.traffic_observer is not None else None)
             summary = traffic.controller_summary(ctx.store, ctx.cfg, now, network_report=network)
-            enabled = {node["id"] for node in ctx.store.list_nodes() if node.get("enabled")}
+            enabled = {node["id"] for node in self._operator_view().list_nodes()
+                       if node.get("enabled")}
             readings = [(slot["id"], slot.get("name") or slot["id"],
                          traffic.slot_summary(ctx.store, ctx.cfg, slot, now, include_unheld=True))
                         for slot in ctx.store.list_slots()

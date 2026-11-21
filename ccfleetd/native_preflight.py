@@ -115,12 +115,12 @@ class RequestRejected(ValueError):
         super().__init__(self.message)
 
 
-def validate(body, *, request_models, effort):
+def validate(body, *, request_models, effort, context_limit=None):
     """Pure preflight shared with the independently fixed trial contract."""
     try:
         body = visible_history(body)
         clean = native.validate_native_request(body, request_models=request_models, effort=effort)
-        native.native_context(clean)
+        native.native_context(clean, limit=context_limit)
         return clean
     except native.NativeError as error:
         code = error.code

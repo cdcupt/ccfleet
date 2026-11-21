@@ -1059,7 +1059,8 @@ USAGE_PANE = """\
 def test_parse_quota_reads_both_windows_off_the_usage_screen():
     got = agent.parse_quota(USAGE_PANE)
     assert got == {"session": {"used_pct": 3, "resets": "7:50pm (UTC)"},
-                   "week": {"used_pct": 15, "resets": "Sep 23, 3pm (UTC)"}}
+                   "week": {"used_pct": 15, "resets": "Sep 23, 3pm (UTC)"},
+                   "models": {"opus": {"used_pct": 8, "resets": "Sep 23, 3pm (UTC)"}}}
 
 
 def test_parse_quota_survives_a_screen_it_does_not_recognise():

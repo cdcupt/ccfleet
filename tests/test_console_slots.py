@@ -345,7 +345,9 @@ def test_a_confirmed_free_pool_slot_says_its_neutral_name_alone(console):
     card = slots_card(call("GET", "/admin").body)
     row = row_of(card, "m2")
     primary = on_the_row(row)
-    assert 'row-name">pool-1</span>' in primary and 'class="sub"' not in primary
+    alias = store.get_slot("m2-01")["pool_name"]
+    assert f'row-name">{alias}</span>' in primary and 'class="sub"' not in primary
+    assert alias.startswith("slot-")
     assert "on m2" not in text(primary)
     assert '<code class="code-wrap">m2</code>' in under_manage(row)
     assert '<code class="code-wrap">m2-01</code>' in under_manage(row)
@@ -360,7 +362,9 @@ def test_a_reserved_free_pool_label_keeps_its_warning_and_management_details(con
     store.reserve_machine("erik-2", account["id"])
     row = row_of(slots_card(call("GET", "/admin").body), "erik-2")
     primary, manage = on_the_row(row), under_manage(row)
-    assert 'row-name">pool-1</span>' in primary and 'class="sub"' not in primary
+    alias = store.get_slot("erik-2-01")["pool_name"]
+    assert f'row-name">{alias}</span>' in primary and 'class="sub"' not in primary
+    assert alias.startswith("slot-")
     assert '<span class="pill warn">reserved</span>' in primary
     visible = text("<div " + primary)
     assert "erik-2" not in visible and account["email"] not in visible
@@ -978,7 +982,8 @@ def test_alerts_are_pills_on_the_row_they_are_about(console):
     # The machine's own, about no slot: the Alerts card says it, not a row.
     store.open_alert("m1", "account_elsewhere", "critical", "about the machine itself", now)
     card = slots_card(call("GET", "/admin").body)
-    first, second = on_the_row(by_name(card)["pool-1"]), on_the_row(by_name(card)["pool-2"])
+    first = on_the_row(by_name(card)[store.get_slot("m1-01")["pool_name"]])
+    second = on_the_row(by_name(card)[store.get_slot("m1-02")["pool_name"]])
     assert '<span class="pill critical">account elsewhere</span>' in first
     assert '<span class="pill warn">slot provision failed</span>' in first
     assert '<span class="pill critical">slot wipe failed</span>' in second

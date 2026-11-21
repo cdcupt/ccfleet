@@ -38,18 +38,20 @@ def test_runtime_verified_clean_cache_only_missing_holds20k_and_releases_for_nex
     assert allowance["paused"] is False and allowance["reported_tokens"] == 0
     assert allowance["partial_reported_tokens"] == 16
     assert allowance["unmeasured_reserved_tokens"] == allowance["reserved_tokens"] == 20000
-    assert allowance["available_tokens"] == 80000 and allowance["global_available_tokens"] == 980000
+    assert allowance["available_tokens"] == 980_000
+    assert allowance["global_available_tokens"] == 9_980_000
     assert trial.runtime.turn(b, body())[0]["content"]
     assert trial.runtime.allowance(trial.bob)["unmeasured_reserved_tokens"] == 20000
     for _ in range(4):
         trial.runtime.turn(a, body())
-    with pytest.raises(trial_runtime.TrialUnavailable, match="daily_limit_reached"):
-        trial.runtime.turn(a, body())
-    assert trial.runtime.allowance(trial.alice)["available_tokens"] == 0
-    assert trial.runtime.allowance(trial.alice)["partial_reported_tokens"] == 80
+    # Five conservative 20k holds no longer exhaust the expanded daily budget.
+    # Existing independent runtime/turn limits remain covered separately.
+    assert trial.runtime.turn(a, body())[0]["content"]
+    assert trial.runtime.allowance(trial.alice)["available_tokens"] == 880_000
+    assert trial.runtime.allowance(trial.alice)["partial_reported_tokens"] == 96
 
 
-@pytest.mark.parametrize("known", [0, 1234, 25000, 100001])
+@pytest.mark.parametrize("known", [0, 1234, 25000, 1_000_001])
 def test_durable_partial_marker_no_replay_and_known_overshoot_charged_in_full(tmp_path, known):
     path = tmp_path / "ledger"
     db = sqlite3.connect(path)
@@ -66,7 +68,7 @@ def test_durable_partial_marker_no_replay_and_known_overshoot_charged_in_full(tm
     value = book.allowance(A)
     assert value.unmeasured_reserved_tokens == value.reserved_tokens == expected
     assert value.partial_reported_tokens == known and value.reported_tokens == 0
-    assert value.available_tokens == max(0, 100000 - expected) and value.paused is False
+    assert value.available_tokens == max(0, value.token_limit - expected) and value.paused is False
     old = tuple(db.execute("SELECT * FROM devin_trial_unmeasured").fetchone())
     assert (
         book.finish_step(A, lease, permit, cleanup_confirmed=True, usage=partial).code
@@ -93,7 +95,7 @@ def test_durable_partial_marker_no_replay_and_known_overshoot_charged_in_full(tm
         reopened = t.TrialLedger(db, enabled=True, clock=lambda: DAY + 2)
         assert reopened.allowance(A).unmeasured_reserved_tokens == expected
         tomorrow = t.TrialLedger(db, enabled=True, clock=lambda: DAY + 86401)
-        assert tomorrow.allowance(A).available_tokens == 100000
+        assert tomorrow.allowance(A).available_tokens == 1_000_000
         assert tomorrow.allowance(A).unmeasured_reserved_tokens == 0
         assert tuple(db.execute("SELECT * FROM devin_trial_unmeasured").fetchone()) == old
     finally:
@@ -181,11 +183,11 @@ def test_only_exact_trusted_partial_type_can_settle(usage):
         db.close()
 
 
-def test_hard_global_twenty_turn_cap_even_complete_zero_usage_cannot_be_bypassed():
+def test_hard_global200_turn_cap_even_complete_zero_usage_cannot_be_bypassed():
     db = sqlite3.connect(":memory:")
     try:
         book = t.TrialLedger(db, enabled=True, clock=lambda: DAY + 1)
-        for index in range(20):
+        for index in range(200):
             who = t.VerifiedAccount("account" + str(index), True)
             lease = book.admit(who).lease
             permit = book.start_step(who, lease, request=b"{}", seconds=60).step
@@ -199,7 +201,7 @@ def test_hard_global_twenty_turn_cap_even_complete_zero_usage_cannot_be_bypassed
         assert book.admit(A).code == "global_daily_limit_reached"
         assert db.execute(
             "SELECT requests,runtime_seconds FROM devin_trial_global_days"
-        ).fetchone() == (20, 1200)
+        ).fetchone() == (200, 12000)
     finally:
         db.close()
 
@@ -242,7 +244,7 @@ def test_unsent_refund_is_foreign_safe_idempotent_and_closed_before_expiry_tick(
             book.finish_unsent(A, lease, step, model_started=False, cleanup_confirmed=True).code
             == "invalid_unsent_receipt"
         )
-        assert not book.allowance(A).paused and book.allowance(A).remaining_requests == 20
+        assert not book.allowance(A).paused and book.allowance(A).remaining_requests == 200
         assert book.admit(B).code == "admitted"
     finally:
         db.close()

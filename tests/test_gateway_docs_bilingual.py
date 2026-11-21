@@ -51,9 +51,9 @@ def test_shared_runnable_examples_do_not_duplicate_or_expose_operator_configurat
         )
         == 1
     )
-    assert commands.count("ccfleet gateway setup --slots A B --routing sticky --replace") == 1
-    assert commands.count("ccfleet gateway setup --slots A B --routing priority --replace") == 1
-    assert commands.count("ccfleet local --slot A") == 1
+    assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky") == 1
+    assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing priority") == 1
+    assert commands.count("ccfleet local --slot slot-1234") == 1
     assert commands.count("https://ccfleet.io/v1/messages") == 1
     assert "YOUR_MATCHING_PUBLIC_KEY" not in commands
     assert "CCFLEET_GATEWAY_SSH" not in commands
@@ -69,7 +69,7 @@ def test_account_choices_and_saved_url_are_explained_without_adding_accounts():
         "Fixed",
         "Priority",
         "Sticky",
-        "does not add B automatically",
+        "does not add slot-5678 automatically",
         "up to 24 hours",
         "does not start a local HTTP server",
         "not the slot's Claude credential",
@@ -207,13 +207,13 @@ def test_public_usage_ranking_explains_masking_coverage_and_api_equivalent_estim
                    "matching priced tokens from model-aware observations", "Full emails and account IDs are never published",
                    "masked member code", "Each dollar value covers the full measured token count",
                    "Masking is not anonymity", "five-minute cache writes $5",
-                   "not a Claude Pro/Max bill", "native, bridge and gateway model calls",
+                   "not a Claude subscription bill", "native, bridge and gateway model calls",
                    "no HTTPS migration or model call is needed"):
         assert phrase.lower() in english.lower()
     for phrase in ("公开的观测用量排行", "统一按 Opus 5.5 API 参考价格折算排名", "不把缺失数量补成零",
                    "已有经验证的汇总 Token", "带模型信息观测中匹配的已计价 Token", "绝不展示完整邮箱或账号 ID",
                    "遮盖的用户编号", "没有观测时不显示数字排名",
-                   "遮盖不等于匿名", "五分钟缓存写入 $5", "不是 Claude Pro/Max 账单",
+                   "遮盖不等于匿名", "五分钟缓存写入 $5", "不是 Claude 订阅账单",
                    "原生、桥接与网关模型调用", "不需要迁移到 HTTPS"):
         assert phrase in chinese
 

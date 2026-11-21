@@ -23,7 +23,7 @@ from .credential_health import (
     renewal_warning,
     sign_in_reason,
 )
-from .heartbeat import relay_report
+from .heartbeat import QUOTA_MODEL_FAMILIES, relay_report
 
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9]+)?\Z")
 
@@ -34,23 +34,37 @@ def quota_observation(quota: Any, slot: Mapping[str, Any], now: float) -> dict[s
         return {}
     checked = quota.get("checked_at")
     since = max((value for value in (slot.get("claimed_at"), slot.get("account_switched_at"))
-                 if type(value) in (int, float) and math.isfinite(value)), default=0)
-    if (type(checked) not in (int, float) or not math.isfinite(checked)
-            or not 0 < checked <= now + 60 or checked < since):
+                 if type(value) in (int, float) and 0 < value < 1e11), default=0)
+    if (type(checked) not in (int, float) or not 0 < checked < 1e11
+            or checked > now + 60 or checked < since):
         return {}
+    def clean_window(window: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(window, Mapping):
+            return None
+        used = window.get("used_pct")
+        if type(used) not in (int, float) or not 0 <= used <= 100:
+            return None
+        entry = {"used_pct": used}
+        reset = window.get("resets_at")
+        if (type(reset) in (int, float)
+                and checked <= reset <= now + 8 * 24 * 60 * 60):
+            entry["resets_at"] = reset
+        return entry
+
     clean: dict[str, Any] = {}
     for name in ("session", "week"):
-        window = quota.get(name)
-        if not isinstance(window, Mapping):
-            continue
-        used = window.get("used_pct")
-        if type(used) not in (int, float) or not math.isfinite(used) or not 0 <= used <= 100:
-            continue
-        clean[name] = {"used_pct": used}
-        reset = window.get("resets_at")
-        if (type(reset) in (int, float) and math.isfinite(reset)
-                and checked <= reset <= now + 8 * 24 * 60 * 60):
-            clean[name]["resets_at"] = reset
+        window = clean_window(quota.get(name))
+        if window is not None:
+            clean[name] = window
+    models = quota.get("models")
+    if isinstance(models, Mapping):
+        cleaned = {}
+        for name in QUOTA_MODEL_FAMILIES:
+            window = clean_window(models.get(name))
+            if window is not None:
+                cleaned[name] = window
+        if cleaned:
+            clean["models"] = cleaned
     return {"checked_at": checked, **clean} if clean else {}
 
 
