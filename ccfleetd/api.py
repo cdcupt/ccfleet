@@ -1081,6 +1081,8 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             token = (_prefixed_bearer(values[0], cli_access.DEVICE_PREFIX)
                      if len(values) == 1 else None)
             device = ctx.store.resolve_cli_device(token or "", now=time.time(), touch=False)
+            if device and device.get("workspace_only"):
+                device = None
             if device is None:
                 self._json(401, {"error": "device is not authorized"})
             return device
@@ -1244,6 +1246,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 device = ctx.store.register_cli_device(
                     token, str(supplied.get("public_key") or ""),
                     str(supplied.get("device_name") or ""), now=time.time(),
+                    workspace_pairing=supplied.get("purpose") == "antigravity-workspace",
                     admit=admit)
             except StoreError as exc:
                 self._json(403 if payment_failure else 400,
@@ -1254,6 +1257,7 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 "version": 1,
                 "device_id": device["device_id"],
                 "device_token": device["device_token"],
+                **({"workspace_only": True} if device.get("workspace_only") else {}),
                 "endpoint": f"{ws_scheme}://{public.netloc}/api/cli/connect",
                 "slot_id": device["slot_id"],
                 "slot_name": device["name"] or device["slot_id"],
@@ -1769,7 +1773,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 events = ctx.monitor.record_heartbeat(node, payload, now)
                 self._json(200, {"ok": True, "pinned_version": "", "desired": {},
                     "private_owner_access": ctx.store.private_owner_access(
-                        node["id"], ctx.cfg.gateway_ssh_public_key if ctx.gateway.enabled else ""),
+                        node["id"], ctx.cfg.gateway_ssh_public_key if ctx.gateway.enabled else "",
+                        workspace_at=(now if self.headers.get("X-CCFleet-Workspace") == "1"
+                                      else None)),
                     "private_owner_quota": ctx.store.private_owner_quota(node["id"]),
                     "open_alerts": [a["rule"] for a in ctx.store.open_alerts(node["id"])],
                     "events": len(events)})

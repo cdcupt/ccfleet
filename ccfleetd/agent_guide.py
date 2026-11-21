@@ -199,14 +199,16 @@ def section() -> str:
         + bi('<p><strong>Gemini with an Antigravity subscription today.</strong> '
              'Open your project in Ghostty or another terminal and start Antigravity CLI there. '
              'You can also choose its official '
-             'agent in a supported editor below. A terminal connected to a remote slot works '
-             'on that slot’s files. The proposed CCFleet connection for edits and approved '
-             'tests in a selected local folder is planned and unavailable today. Each provider '
-             'account stays on one Fleet slot. Gemini API setup uses separate billing.</p>',
+             'agent in a supported editor below. On an enabled private Mac slot, use '
+             '<a href="/account/gemini#subscription">CCFleet Workspace in Ghostty</a> to keep '
+             'the Google login on the slot and access a selected MacBook project. Workspace tools '
+             'ask before saving files or running a chosen test locally. The CLI’s built-in tools '
+             'run on the slot. Gemini API billing is separate.</p>',
              '<p><strong>使用 Antigravity 订阅</strong>在本机 Ghostty 或其他终端打开项目，'
-             '启动 Antigravity CLI，或在下表支持的编辑器中选择官方代理。远程连接槽位时，'
-             '终端操作的是槽位上的文件。通过 CCFleet 修改指定本地目录并在本机运行经批准的测试，'
-             '目前仍在规划中。每个服务商账号固定在一个 Fleet 槽位。Gemini API 单独计费。</p>')
+             '启动 Antigravity CLI，也可选择下表中的官方代理。已启用工作区的专属 Mac 槽位可通过 '
+             '<a href="/account/gemini#subscription">Ghostty 中的 CCFleet Workspace</a> '
+             '使用 MacBook 上指定的项目。Google 登录保留在槽位。工作区工具在本机保存文件或运行'
+             '所选测试前请求确认。CLI 内置工具在槽位上运行。Gemini API 单独计费。</p>')
         + bi('<p>Checked November 21, 2026 against publisher documentation. The table covers '
              'widely used editors, command-line agents and Fleet launcher apps. Each cell '
              'describes the named mode. Fleet checks cover the three launchers above.</p>',

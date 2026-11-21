@@ -753,6 +753,34 @@ PY
     printf 'Then open a new terminal in your project and run the client with: local\n' >&2
     exit 1
   fi
+  # Ghostty users get a Finder launcher during ordinary Mac setup. This optional
+  # companion has its own release, authenticated by the Fleet release signer.
+  if [ "$(uname -s)" = Darwin ] && [ -d "/Applications/Ghostty.app" ] &&
+     [ "$URL" = https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/ccfleet ] &&
+     [ ! -e "$HOME/Applications/CCFleet Workspace.app" ]; then
+    if ! (
+      set -eu
+      app_dir="$HOME/Applications"
+      mkdir -p "$app_dir" || exit 1
+      tmp_app="$(mktemp -d "$app_dir/.ccfleet-workspace.XXXXXXXX")" || exit 1
+      trap 'rm -rf "$tmp_app"' EXIT
+      base_url='https://github.com/cdcupt/ccfleet/releases/download/workspace-mac-v1.0.0'
+      curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 45 \
+        "$base_url/CCFleet-Workspace.zip" -o "$tmp_app/workspace.zip" || exit 1
+      curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 20 \
+        "$base_url/CCFleet-Workspace.zip.sig" -o "$tmp_app/workspace.sig" || exit 1
+      printf '%s\n' 'ccfleet-workspace ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn' > "$tmp_app/signers" || exit 1
+      /usr/bin/ssh-keygen -Y verify -f "$tmp_app/signers" -I ccfleet-workspace \
+        -n ccfleet-workspace-mac-v1 -s "$tmp_app/workspace.sig" < "$tmp_app/workspace.zip" || exit 1
+      /usr/bin/ditto -x -k "$tmp_app/workspace.zip" "$tmp_app/app" || exit 1
+      /usr/bin/codesign --verify --strict "$tmp_app/app/CCFleet Workspace.app" || exit 1
+      python3 -I -c 'import os,sys; os.rename(sys.argv[1], sys.argv[2])' \
+        "$tmp_app/app/CCFleet Workspace.app" "$app_dir/CCFleet Workspace.app" || exit 1
+      printf '%s\n' 'CCFleet Workspace is ready in your Applications folder.'
+    ); then
+      printf '%s\n' 'Workspace app installation did not finish. Your Claude setup is ready.' >&2
+    fi
+  fi
   printf '\nSetup complete. Open a new terminal, then:\n  cd /path/to/your-project\n  ccfleet local\n'
   printf 'No project files were uploaded and no Claude session was started.\n'
   printf 'If the old setup-token was only for CC Fleet, revoke it in your Anthropic account.\n'

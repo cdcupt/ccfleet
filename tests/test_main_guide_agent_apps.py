@@ -94,8 +94,8 @@ def test_localized_public_guide_serves_the_app_setup(one_site, language, heading
     assert RECIPE in page.pre_codes and "agent-apps" in page.ids
 
 @pytest.mark.parametrize("language,planned,other", [
-    ("en", "planned and unavailable today", "目前仍在规划中"),
-    ("zh", "目前仍在规划中", "planned and unavailable today"),
+    ("en", "enabled private Mac slot", "已启用工作区的专属 Mac 槽位"),
+    ("zh", "已启用工作区的专属 Mac 槽位", "enabled private Mac slot"),
 ])
 def test_subscription_guide_separates_fleet_from_publisher_support(language, planned, other):
     flow = Flow(rendered(language))

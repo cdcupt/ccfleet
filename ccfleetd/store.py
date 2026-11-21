@@ -2951,6 +2951,7 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
 
     def register_cli_device(self, pairing_token: str, public_key: str,
                             device_name: str, *, now: float,
+                            workspace_pairing: bool = False,
                             admit: Optional[Callable[[Mapping[str, Any]], bool]] = None
                             ) -> dict[str, Any]:
         """Consume a pairing code and return the new device secret once."""
@@ -2980,6 +2981,12 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
                 raise StoreError("renew this slot before connecting a computer")
             # Single-use even when it expired or the slot changed while the
             # page was open: a retry starts with a fresh code.
+            workspace = conn.execute("SELECT 1 FROM agy_pairings WHERE token_hash=?",
+                                     (digest,)).fetchone() is not None
+            if workspace != workspace_pairing:
+                raise StoreError("use the pairing code for this client")
+            if workspace and not private_owner.eligible(conn, row["slot_id"], row["account_id"]):
+                raise StoreError("private Mac workspace permission expired")
             conn.execute("DELETE FROM cli_pairings WHERE token_hash = ?", (digest,))
             if row["expires_at"] <= now:
                 raise StoreError("that pairing code expired; create another from your slot")
@@ -3007,7 +3014,19 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
                 (device_id, row["slot_id"], row["account_id"],
                  cli_access.token_hash(secret), normalized, device_name, now,
                  row["api_model_binding_id"]))
+            if workspace:
+                # Another pairing must never gain interactive authority by reusing this key.
+                if conn.execute("SELECT count(*) FROM cli_devices WHERE public_key=? "
+                                "AND revoked_at IS NULL", (normalized,)).fetchone()[0] != 1:
+                    raise StoreError("a fresh device key is required for this permission")
+                conn.execute("INSERT INTO agy_devices VALUES (?)", (device_id,))
+            elif conn.execute("SELECT 1 FROM agy_devices w JOIN cli_devices d ON d.id=w.device_id "
+                              "WHERE public_key=? AND revoked_at IS NULL",
+                              (normalized,)).fetchone():
+                raise StoreError("this key already belongs to an interactive device")
             answer = dict(row)
+            if workspace:
+                answer["workspace_only"] = True
         return {**answer, "device_id": device_id, "device_token": secret,
                 "public_key": normalized}
 
@@ -3064,6 +3083,9 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
             if touch:
                 conn.execute("UPDATE cli_devices SET last_seen_at = ? WHERE id = ?",
                              (now, row["device_id"]))
+            if conn.execute("SELECT 1 FROM agy_devices WHERE device_id=?",
+                            (row["device_id"],)).fetchone():
+                return {**dict(row), "workspace_only": True}
             return dict(row)
 
     def cli_device_is_active(self, device_id: str) -> bool:

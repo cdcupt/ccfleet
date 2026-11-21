@@ -64,7 +64,7 @@ def _key(value: Any) -> str:
 
 
 def validate_snapshot(value: Any) -> dict[str, Any]:
-    _require(isinstance(value, dict) and set(value) == FIELDS,
+    _require(isinstance(value, dict) and set(value) in (FIELDS, FIELDS | {"workspace_public_keys"}),
              "invalid private-owner access fields")
     _require(type(value["version"]) is int and value["version"] == 1
              and type(value["enabled"]) is bool, "invalid private-owner access version or state")
@@ -83,6 +83,15 @@ def validate_snapshot(value: Any) -> dict[str, Any]:
                  "duplicate private-owner public key")
         all_keys.update(keys)
         result[name] = sorted(keys)
+    if "workspace_public_keys" in value:
+        selected = value["workspace_public_keys"]
+        _require(isinstance(selected, list) and len(selected) <= MAX_DEVICE_KEYS,
+                 "invalid interactive device grants")
+        workspace = [_key(k) for k in selected]
+        _require(len(set(workspace)) == len(workspace)
+                 and set(workspace) <= set(result["device_public_keys"]),
+                 "invalid interactive device key")
+        result["workspace_public_keys"] = sorted(workspace)
     return result
 
 
@@ -125,7 +134,12 @@ def _render(raw: bytes, snapshot: dict[str, Any], entrypoint: Path) -> bytes:
     command = "/usr/bin/python3 -I -B " + str(entrypoint)
     lines = [BEGIN]
     for key in devices:
-        lines.append(f'restrict,command="{command}" {key} ccfleet-private-owner-device'.encode())
+        entry = command
+        if key in snapshot.get("workspace_public_keys", ()):
+            identity = hashlib.sha256(key.encode("ascii")).hexdigest()
+            entry = "/usr/bin/python3 -I -B " + str(entrypoint.with_name("antigravity_entry.py"))
+            entry += " " + identity
+        lines.append(f'restrict,command="{entry}" {key} ccfleet-private-owner-device'.encode())
     for key in gateways:
         line = (f'restrict,command="{command} --gateway-only" '
                 f'{key} ccfleet-private-owner-gateway')
