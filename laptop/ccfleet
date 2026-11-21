@@ -1367,12 +1367,12 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 
 PREVIEW_REVISION = "cd27097d3a76f636adebac94c3e4c6c09c26a05d"
-PREVIEW_SHA256 = "429d6efdb57e1c265f6ee8debd69d166d4f27fd7735b55f7e40b48868c9e70b9"
+PREVIEW_COMPONENT_HASH = "429d6efdb57e1c265f6ee8debd69d166d4f27fd7735b55f7e40b48868c9e70b9"
 
 
 def preview_helper():
     try:
-        return packaged_helper("gemini_preview", PREVIEW_SHA256)
+        return packaged_helper("gemini_preview", PREVIEW_COMPONENT_HASH)
     except CliError:
         pass
     release = client_release()
@@ -1382,13 +1382,13 @@ def preview_helper():
         release._owned(os.fstat(directory), directory=True)
     finally:
         os.close(directory)
-    cached = root / (PREVIEW_SHA256 + ".py")
+    cached = root / (PREVIEW_COMPONENT_HASH + ".py")
     try:
         raw = release._read(cached, 128 * 1024)
     except FileNotFoundError:
         url = release.RAW_BASE + PREVIEW_REVISION + "/ccfleet_agent/gemini_preview.py"
         raw = release.download(url, 128 * 1024)
-        if hashlib.sha256(raw).hexdigest() != PREVIEW_SHA256:
+        if hashlib.sha256(raw).hexdigest() != PREVIEW_COMPONENT_HASH:
             raise CliError("Gemini preview component checksum mismatch")
         with tempfile.NamedTemporaryFile(dir=root, delete=False) as temp:
             name = Path(temp.name)
@@ -1400,7 +1400,7 @@ def preview_helper():
                 os.replace(name, cached)
             finally:
                 name.unlink(missing_ok=True)
-    if hashlib.sha256(raw).hexdigest() != PREVIEW_SHA256:
+    if hashlib.sha256(raw).hexdigest() != PREVIEW_COMPONENT_HASH:
         raise CliError("installed Gemini preview component failed verification")
     spec = importlib.util.spec_from_file_location("_ccfleet_gemini_preview", cached)
     if spec is None:

@@ -229,17 +229,18 @@ def test_full_shell_commands_survive_as_literal_escaped_code(relative, commands)
 
 # Baselines were captured before the 2026-09-30 HTML conversion. Strict counts
 # and hashes protect literal commands and diagrams during format-only edits.
+# 2026-11-21: current CLI examples now use the claude command.
 # Intentional current-document updates are reviewed and dated below; historical
 # snapshots retain their original conversion baselines.
 @pytest.mark.parametrize("relative,count,digest", [
     # 2026-11-08: use slot-1234 consistently in the existing operator examples.
-    ("README.html", 14, "814504ceedca3b60567bf52c67b9bc85d0e35d58f63dd0e0e8b0b2ee4228d4bf"),
+    ("README.html", 14, "c864e75b9d51518cc038daaee15e8c35bf0334bffe1f4086ddb4a8d28c0fb6a4"),
     ("gateway/README.html", 2, "05a5875a4103537bf322ea6a96eaf76efd2d1b47bdaa9da8d1ec89921a9feb69"),
     ("docs/compliance.html", 1, "2ded188e10c277d7ba59ba03370ff9b307bcae82bf0704dba331489a5a70208d"),
     ("docs/design.html", 4, "7f419e01e1cc8c555781096ad52e2c6b3cdb122d828a16e0801be29e047efb2b"),
     # 2026-11-08: replace fixed-slot example with new-slot and ordered sticky-pool recipes.
-    ("docs/local-relay.html", 13, "4bdaadada6e1d290a382ddea073746c8028b9799c3302a62db14d3fd3c0f6470"),
-    ("docs/project-workspaces.html", 3, "4ffcd619921bc03a4b1a8e660378d00f67b01746ceb7b34ee10553917c4538e0"),
+    ("docs/local-relay.html", 13, "30a87c829d063c2041f92b372221f4b030d6b0a4a9ca17e4c0ae7eef3d43b83c"),
+    ("docs/project-workspaces.html", 3, "317c27a538029b692b4cdaaa520af134b11b819b743c0933d632331887b3e6a8"),
     ("docs/tunnel.html", 8, "d5068c44dd70fc6f7dc50e6ffd9d8abae4f0fb160ab3917aedd732558743e492"),
 ])
 def test_document_code_blocks_match_reviewed_snapshots(relative, count, digest):
