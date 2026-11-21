@@ -177,13 +177,23 @@ mcp.wait()
     )
     agent.chmod(0o700)
     program = (
-        "import socket,sys; from pathlib import Path; from ccfleet_agent.antigravity_slot "
+        "import socket,sys; from pathlib import Path; "
+        "sys.path.insert(0,sys.argv[4]); from ccfleet_agent.antigravity_slot "
         "import session; session(socket.socket(fileno=int(sys.argv[1])),Path(sys.argv[2]),"
         "Path(sys.argv[3]),lambda:True)"
     )
     laptop, slot = socket.socketpair()
     process = subprocess.Popen(
-        [sys.executable, "-c", program, str(slot.fileno()), str(remote), str(agent)],
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            program,
+            str(slot.fileno()),
+            str(remote),
+            str(agent),
+            str(Path(__file__).resolve().parents[1]),
+        ],
         pass_fds=(slot.fileno(),),
     )
     slot.close()
@@ -226,7 +236,7 @@ def test_project_test_runner_cannot_write_to_sibling_project(tmp_path):
     root.mkdir()
     (tmp_path / "outside.txt").write_text("original")
     runner = root / "go"
-    runner.write_text('#!/bin/sh\n/bin/echo changed > ../outside.txt\n')
+    runner.write_text("#!/bin/sh\n/bin/echo changed > ../outside.txt\n")
     runner.chmod(0o700)
     workspace = Workspace(root, lambda *_: True, "go", test_path=str(root))
     try:
