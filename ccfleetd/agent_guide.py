@@ -222,12 +222,12 @@ def section() -> str:
              'plug-in or a matching model name alone does not establish subscription access. '
              '<a href="https://antigravity.google/docs/faq">Google FAQ</a> · '
              '<a href="https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals">'
-             'Gemini CLI migration</a> · <a href="https://code.claude.com/docs/en/legal-and-compliance">'
+             'Gemini CLI deprecation notice</a> · <a href="https://code.claude.com/docs/en/legal-and-compliance">'
              'Anthropic authentication policy</a></p>',
              '<p>使用个人 Google 订阅时，请选择官方 Antigravity 代理。Google 已于 2026 年 6 月'
              '停止旧版 Gemini CLI 的个人登录。仅凭社区插件或同名模型无法确认是否使用订阅额度。'
              '<a href="https://antigravity.google/docs/faq">Google 常见问题</a> · '
              '<a href="https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals">'
-             'Gemini CLI 迁移说明</a> · <a href="https://code.claude.com/docs/en/legal-and-compliance">'
+             'Gemini CLI 停用公告</a> · <a href="https://code.claude.com/docs/en/legal-and-compliance">'
              'Anthropic 认证政策</a></p>') + '</section>'
     )
