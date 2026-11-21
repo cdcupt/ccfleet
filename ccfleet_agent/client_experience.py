@@ -944,14 +944,18 @@ def menu(
     """One explicit action, never silently change legacy command defaults."""
     if not (sys.stdin.isatty() if is_tty is None else is_tty):
         raise ExperienceError("the menu needs a terminal; use ccfleet local or ccfleet doctor")
+    workspace_option = "\n7. Open CCFleet Workspace in Ghostty" if "workspace" in callbacks else ""
     output_fn(
         "CC Fleet: local Claude uses this computer's files and your selected model route.\n"
         "1. New local conversation\n2. Continue this folder's last conversation\n"
         "3. Native local resume picker\n4. Remote terminal (slot files)\n"
-        "5. This project's new-session preferences\n6. Diagnose connection\n0. Quit"
+        "5. This project's new-session preferences\n6. Diagnose connection"
+        + workspace_option + "\n0. Quit"
     )
     try:
-        choice = input_fn("Choose [1-6, 0]: ").strip()
+        choice = input_fn("Choose [1-7, 0]: " if workspace_option else "Choose [1-6, 0]: ").strip()
+        if choice == "7" and workspace_option:
+            return callbacks["workspace"]()
         if choice == "0":
             return 0
         if choice in ("1", "2", "3"):
