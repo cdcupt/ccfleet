@@ -279,8 +279,8 @@ def test_how_it_works_scopes_local_execution_and_gateway_outages():
         "configured gateway",
         "eligible slot",
         "outage reports an error",
-        "Automatic updates are disabled during a CC Fleet launch",
-        "update your local Claude installation separately",
+        "before launch",
+        "latest local Claude release",
     ):
         assert phrase in page
     assert "persistent remote" not in page and "--transport bridge" not in page

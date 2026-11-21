@@ -1084,13 +1084,11 @@ def _version_choices() -> str:
             "启动器和连接辅助程序。这不会更新电脑或槽位上的 Claude Code。</p>",
         )
         + bi(
-            "<p><strong>Claude Code on your computer:</strong> update your original local "
-            "installation separately, outside a CC Fleet session. Existing sessions keep "
-            "the process they started; open a new local session to use an updated "
-            "executable.</p>",
-            "<p><strong>电脑上的 Claude Code：</strong>在 CC Fleet "
-            "会话之外，单独更新原版的本地安装。已经打开的会话继续使用原进程，更新后打开新的"
-            "本地会话才使用新版。</p>",
+            "<p><strong>Claude Code on your computer:</strong> each <code>ccfleet claude</code> "
+            "launch checks Anthropic’s latest release and installs or updates the local "
+            "executable before starting the session.</p>",
+            "<p><strong>电脑上的 Claude Code：</strong>每次运行 <code>ccfleet claude</code> 时，"
+            "都会检查 Anthropic 的最新版本，在会话开始前安装或更新本地程序。</p>",
         )
         + bi(
             '<p><strong>Claude Code on your slot:</strong> open <a href="/account">Your '
@@ -1966,15 +1964,14 @@ def how_it_works(
         + bi("<h2>Updates, outages and returning a slot</h2>", "<h2>更新、故障与归还</h2>")
         + bi(
             "<p>Local Claude updates separately from the slot and the Fleet client. "
-            "Automatic updates are disabled during a CC Fleet launch; update your local "
-            "Claude installation separately, outside that session. Machine security "
+            "CCFleet checks the latest local Claude release before launch. Machine security "
             "updates install daily; necessary reboots are scheduled by the operator. Check "
             '<a href="/status">Status</a> for website and machine availability, and '
             'the <a href="/status#performance">fleet performance panel</a> for combined '
             "relay measurements. It shows average upstream timing and transfer completion "
             "when enough users contribute data, without listing individual accounts.</p>",
             "<p>电脑上的 Claude、槽位上的 Claude 和 Fleet 客户端分别更新。CC Fleet "
-            "启动期间关闭 Claude 自动更新，请在会话外单独更新本地安装。机器每天安装安全更新"
+            "每次启动代理前会检查并更新本地 Claude。机器每天安装安全更新"
             '，需要重启时由运营者安排。网站和机器是否在线，可以查看<a href="/status">服务状'
             '态</a>；<a href="/status#performance">整体性能面板</a>汇总转发统计。'
             "达到参与用户和样本数量要求后，展示上游平均时长及传输完成率，不列出单个账号。</p>",
