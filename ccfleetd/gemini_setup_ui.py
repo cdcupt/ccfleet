@@ -323,10 +323,14 @@ def workspace_panel(csrf, ready):
 
 
 def workspace_result(code, slot, keys, binding, grants, viewer, script):
-    content = ('<p>' + tr("Open CCFleet Workspace on your MacBook, choose a project and "
-                          "Antigravity, then paste the code in Ghostty within 10 minutes.",
-                          "在 MacBook 打开 CCFleet Workspace，选择项目和 Antigravity，"
-                          "然后在 10 分钟内将此一次性配对码粘贴到 Ghostty。")
+    content = ('<p>' + tr("For the native CLI preview, open a terminal in your MacBook project:",
+                          "要测试本机原生 CLI，请在 MacBook 项目目录打开终端：")
+               + '</p><pre><code>ccfleet gemini --preview</code></pre><p>'
+               + tr("Paste the code at the hidden prompt within 10 minutes. The preview verifies "
+                    "a local edit using synthetic responses. For the interactive slot-hosted "
+                    "session, open CCFleet Workspace and choose Antigravity.",
+                    "在 10 分钟内将配对码粘贴到隐藏输入提示。预览使用模拟响应验证本机编辑。"
+                    "需要在槽位上运行交互式会话时，请打开 CCFleet Workspace 并选择 Antigravity。")
                + '</p><pre class="gm-code" id="gemini-code">' + escape("agy1-" + code)
                + '</pre><button type="button" id="gemini-copy" hidden>'
                + tr("Copy code", "复制配对码") + '</button><p><a href="' + WORKSPACE_DOWNLOAD + '">'
