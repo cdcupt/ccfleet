@@ -11,6 +11,7 @@ from . import stripe_checkout, wallet
 from .bilingual import label
 
 CSS = """
+.wallet-review>h1{margin:0 0 16px;font-size:clamp(23px,3vw,30px);line-height:1.3}
 body.site:has(.wallet-topup-page) .topbar .doc-nav{display:none}
 .wallet-ui{min-width:0;max-width:100%;margin:20px 0;padding:20px;
 border:1px solid var(--rule-soft);border-radius:14px;background:var(--panel)}
@@ -319,8 +320,8 @@ def _confirmation(*, title: tuple[str, str], target_html: str, expected_cents: i
         controls = ('<button class="btn" type="button" disabled>'
                     + label("Not enough credit", "余额不足", inline=True)
                     + '</button><p class="wallet-muted">' + message + '</p>')
-    return ('<section class="wallet-ui wallet-review"><h2>' + label(*title, inline=True)
-            + '</h2><p class="wallet-target">' + target_html + '</p>' + summary
+    return ('<section class="wallet-ui wallet-review"><h1>' + label(*title, inline=True)
+            + '</h1><p class="wallet-target">' + target_html + '</p>' + summary
             + _month() + extra + '<div class="wallet-actions">' + controls + '</div></section>')
 
 
