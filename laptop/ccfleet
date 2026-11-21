@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.13"
+CLIENT_VERSION = "0.2.14"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -66,7 +66,7 @@ PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1d
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
 INFERENCE_CLIENT_SHA256 = "8ee72d4c67dcb6098c585d472b10409842c9728007694312e7df44fc033c2f2a"
-CLIENT_EXPERIENCE_SHA256 = "e01a2b2662c144c7304700653d369f75c6da79595a40af670a61a6826972308d"
+CLIENT_EXPERIENCE_SHA256 = "b60d83221b712d7c0efb30cab3066d90d0c870ea3f59baaf7006ef7b0fda8175"
 LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
 CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
 SETUP_WAIT_SECONDS = 180
@@ -171,15 +171,19 @@ def canonical_runtime_url(value: str) -> str:
 
 
 def api_json(url: str, token: str, payload: Optional[dict[str, Any]] = None,
-             method: str = "POST", *, timeout: float = 20) -> dict[str, Any]:
+             method: str = "POST", *, timeout: float = 20, fleet_only: bool = False) -> dict[str, Any]:
     url = canonical_runtime_url(url)
+    if fleet_only and url not in (DEFAULT_SERVER + "/api/cli/register",
+                                  DEFAULT_SERVER + "/api/cli/revoke"):
+        raise CliError("workspace pairing requires the ccfleet.io origin")
+    handlers = [urllib.request.ProxyHandler({}), _NoRedirect()] if fleet_only else [_NoRedirect()]
     body = json.dumps(payload).encode() if payload is not None else b""
     request = urllib.request.Request(
         url, data=body, method=method,
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": "application/json", "Accept": "application/json"})
     try:
-        with urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
+        with urllib.request.build_opener(*handlers).open(request, timeout=timeout) as response:
             result = json.loads(response.read(256 * 1024).decode())
     except urllib.error.HTTPError as exc:
         try:
@@ -608,6 +612,9 @@ def prompt_pairing_code() -> str:
 
 def cmd_login(args: argparse.Namespace) -> int:
     server = args.server.rstrip("/")
+    direct = {"fleet_only": True} if getattr(args, "fleet_only", False) else {}
+    if direct and server != DEFAULT_SERVER:
+        raise CliError("workspace pairing requires ccfleet.io")
     parsed_server = urllib.parse.urlsplit(server)
     local_http = (parsed_server.scheme == "http"
                   and parsed_server.hostname in ("127.0.0.1", "::1", "localhost"))
@@ -628,13 +635,15 @@ def cmd_login(args: argparse.Namespace) -> int:
             {"public_key": public_key,
              "device_name": args.name or "computer",
              **({"purpose": "antigravity-workspace"}
-                if getattr(args, "workspace_pairing", False) else {})})
+                if getattr(args, "workspace_pairing", False) else {})}, **direct)
         if bool(answer.get("workspace_only")) != bool(getattr(args, "workspace_pairing", False)):
             raise CliError("pairing is for a different client")
         needed = ("device_id", "device_token", "endpoint", "slot_id", "slot_name",
                   "user", "host_key")
         if any(not isinstance(answer.get(key), str) or not answer[key] for key in needed):
             raise CliError("ccfleet returned an incomplete device configuration")
+        if direct and answer["endpoint"] != "wss://ccfleet.io/api/cli/connect":
+            raise CliError("workspace pairing returned a different connection origin")
         device_id = answer["device_id"]
         final_key = home() / f"id_{device_id}"
         known_hosts = home() / f"known_hosts_{device_id}"
@@ -673,7 +682,7 @@ def cmd_login(args: argparse.Namespace) -> int:
     except BaseException:
         if answer is not None:
             try:
-                api_json(server + "/api/cli/revoke", answer.get("device_token", ""), {})
+                api_json(server + "/api/cli/revoke", answer.get("device_token", ""), {}, **direct)
             except (CliError, TypeError):
                 pass
         for path in (key_path, public_path, final_key, known_hosts):
@@ -683,7 +692,7 @@ def cmd_login(args: argparse.Namespace) -> int:
     for old in old_profiles:
         try:
             api_json(str(old.get("server") or server) + "/api/cli/revoke",
-                     str(old.get("device_token") or ""), {})
+                     str(old.get("device_token") or ""), {}, **direct)
         except CliError:
             pass
         for field in ("key", "known_hosts"):
@@ -1193,17 +1202,28 @@ def _proxy_stream(sock: socket.socket, initial: bytes = b"", *,
             sock.close()
 
 
-def proxy(device: dict[str, Any]) -> int:
+def _fleet_workspace_device(device):
+    if (device.get("server") != DEFAULT_SERVER
+            or device.get("endpoint") != "wss://ccfleet.io/api/cli/connect"):
+        raise CliError("the Gemini workspace requires a ccfleet.io private Mac pairing")
+
+
+def proxy(device: dict[str, Any], *, fleet_only: bool = False) -> int:
+    if fleet_only:
+        _fleet_workspace_device(device)
     sock, initial = open_websocket(device["endpoint"], device["device_token"])
     return _proxy_stream(sock, initial)
 
 
-def ssh_transport_command(device: dict[str, Any], *, tty: bool) -> list[str]:
+def ssh_transport_command(device: dict[str, Any], *, tty: bool, fleet_only: bool = False) -> list[str]:
     if shutil.which("ssh") is None:
         raise CliError("OpenSSH is required (missing ssh)")
     executable = str(Path(__file__).resolve())
     proxy_command = (f"{shlex.quote(sys.executable)} -I {shlex.quote(executable)} "
                      f"proxy --device {shlex.quote(device['device_id'])}")
+    if fleet_only:
+        _fleet_workspace_device(device)
+        proxy_command += " --fleet-only"
     return [
         "ssh", "-tt" if tty else "-T", "-F", "/dev/null",
         "-o", f"ProxyCommand={proxy_command}",
@@ -1366,11 +1386,10 @@ PREVIOUS_WORKSPACE_HASH = "364d3cc60bbf74ab34ed88a623f7e1fada9ce77158fc210f56ec6
 WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa2224992452e80b7cb91ffe"
 
 
-PREVIEW_REVISION = "cd27097d3a76f636adebac94c3e4c6c09c26a05d"
-PREVIEW_COMPONENT_HASH = "429d6efdb57e1c265f6ee8debd69d166d4f27fd7735b55f7e40b48868c9e70b9"
+PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
 
 
-def preview_helper():
+def preview_helper(slot_command):
     try:
         return packaged_helper("gemini_preview", PREVIEW_COMPONENT_HASH)
     except CliError:
@@ -1386,8 +1405,11 @@ def preview_helper():
     try:
         raw = release._read(cached, 128 * 1024)
     except FileNotFoundError:
-        url = release.RAW_BASE + PREVIEW_REVISION + "/ccfleet_agent/gemini_preview.py"
-        raw = release.download(url, 128 * 1024)
+        with tempfile.TemporaryDirectory(dir=root) as stage:
+            downloaded = Path(stage) / "helper.py"
+            client_experience().slot_artifact(slot_command, {"op": "helper"}, downloaded,
+                                              128 * 1024, 20)
+            raw = downloaded.read_bytes()
         if hashlib.sha256(raw).hexdigest() != PREVIEW_COMPONENT_HASH:
             raise CliError("Gemini preview component checksum mismatch")
         with tempfile.NamedTemporaryFile(dir=root, delete=False) as temp:
@@ -1433,18 +1455,20 @@ def cmd_gemini(args: argparse.Namespace) -> int:
             if not code.startswith("agy1-ccf_pair_"):
                 raise CliError("use an Antigravity subscription pairing code")
             cmd_login(argparse.Namespace(server=DEFAULT_SERVER, code=code[5:],
-                                         name="Antigravity workspace", workspace_pairing=True))
+                                         name="Antigravity workspace", workspace_pairing=True, fleet_only=True))
         device = choose_device(load_config(), args.slot)
-        if (device["server"] != DEFAULT_SERVER
-                or device["endpoint"] != "wss://ccfleet.io/api/cli/connect"):
-            raise CliError("the Gemini preview requires a ccfleet.io private Mac pairing")
+        _fleet_workspace_device(device)
         print("Native Gemini gateway preview: local agy will read and edit a disposable file "
               "inside your project. The slot returns synthetic responses. No live model call "
               "or API charge.", flush=True)
-        agent = prepare_agent("agy")
-        command = [*ssh_transport_command(device, tty=False), "ccfleet-gemini-preview-v1"]
+        transport = ssh_transport_command(device, tty=False, fleet_only=True)
+        release_command = [*transport, "ccfleet-gemini-release-v1"]
+        helper = preview_helper(release_command)
+        agent = client_experience().prepare_agent("agy", home(), lambda: installed_agent("agy"),
+                                                  slot_command=release_command)
+        command = [*transport, "ccfleet-gemini-preview-v1"]
         try:
-            preview_helper().run(agent, project, command)
+            helper.run(agent, project, command)
         except (EOFError, subprocess.TimeoutExpired) as exc:
             raise CliError("native preview was interrupted before the local edit was verified") from exc
         print("Verified a native local agy edit through your assigned slot. Preview files removed.")
@@ -3864,6 +3888,7 @@ def parser() -> argparse.ArgumentParser:
     logout.add_argument("--local-only", action="store_true", help=argparse.SUPPRESS)
     hidden = sub.add_parser("proxy", help=argparse.SUPPRESS)
     hidden.add_argument("--device", required=True)
+    hidden.add_argument("--fleet-only", action="store_true", help=argparse.SUPPRESS)
     resident = sub.add_parser("live-serve", help=argparse.SUPPRESS)
     resident.add_argument("--project-id", required=True)
     # argparse otherwise prints suppressed subcommands as '==SUPPRESS=='.
@@ -3943,7 +3968,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.command == "logout":
             return cmd_logout(args)
         if args.command == "proxy":
-            return proxy(choose_device(load_config(), args.device))
+            device = choose_device(load_config(), args.device)
+            if args.fleet_only:
+                return proxy(device, fleet_only=True)
+            return proxy(device)
         if args.command == "live-serve":
             return cmd_live_serve(args)
         raise CliError("unknown command")

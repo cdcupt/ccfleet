@@ -23,7 +23,12 @@ and sends model requests through the encrypted Fleet transport to its assigned s
 The slot uses a deterministic test response until a supported subscription endpoint is
 available. The preview exercises a disposable file in the selected project's directory
 without consuming model quota. The Finder launcher's interactive Antigravity mode
-runs on the private slot. Each native CLI launch checks its vendor release.</p>
+runs on the private slot. During a native Gemini launch the mini checks Google's
+public release and supplies the CLI archive and preview component over the paired CCFleet
+connection. The MacBook verifies the archive checksum, Google signature and binary version
+before installation. Its version probe runs offline and its preview process can use only
+loopback networking. CCFleet's own signed installer and update channel are separate GitHub
+downloads. Live personal-subscription model forwarding remains unavailable.</p>
 <h2>Enable another private Mac slot</h2>
 <p>The slot must be enrolled to its current administrator. Install Google's official
 CLI under <code>~/.local/bin/agy</code>, complete Google's own sign-in on the slot,

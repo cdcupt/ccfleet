@@ -25,13 +25,12 @@ def test_public_commands_and_replacement(capsys, monkeypatch):
     assert "No API billing" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("name", ["agy", "claude"])
+@pytest.mark.parametrize("name", ["claude"])
 def test_up_to_date_launch_checks_vendor_each_time(name, tmp_path, monkeypatch):
     checks = []
     monkeypatch.setattr(
         experience, "_latest_agent", lambda agent, stage, env: (checks.append(agent), "1.2.3")[1]
     )
-    monkeypatch.setattr(experience, "_verify_google_binary", lambda _: None)
     monkeypatch.setattr(experience, "_installed_agent_version", lambda *args: (1, 2, 3))
     monkeypatch.setattr(experience.subprocess, "run", lambda *a, **kw: pytest.fail("reinstall"))
     for _ in range(2):
@@ -40,7 +39,7 @@ def test_up_to_date_launch_checks_vendor_each_time(name, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("installed", [True, False])
-@pytest.mark.parametrize("name", ["agy", "claude"])
+@pytest.mark.parametrize("name", ["claude"])
 def test_install_or_upgrade_then_verify(name, installed, tmp_path, monkeypatch):
     actions = []
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-only")
@@ -50,10 +49,6 @@ def test_install_or_upgrade_then_verify(name, installed, tmp_path, monkeypatch):
         return "2.0.0"
 
     monkeypatch.setattr(experience, "_latest_agent", latest)
-    monkeypatch.setattr(experience, "_verify_google_binary", lambda _: None)
-    monkeypatch.setattr(
-        experience, "_install_google", lambda *args: actions.append("google archive")
-    )
     monkeypatch.setattr(experience, "_vendor_download", lambda url, *args: actions.append(url))
     monkeypatch.setattr(experience.subprocess, "run", lambda cmd, **kw: actions.append(cmd))
     versions = iter([(1, 0, 0), (2, 0, 0)] if installed else [(2, 0, 0)])
@@ -62,8 +57,6 @@ def test_install_or_upgrade_then_verify(name, installed, tmp_path, monkeypatch):
     assert experience.prepare_agent(name, tmp_path, lambda: next(binaries)) == "/fixture/native"
     if installed:
         assert actions == [["/fixture/native", "update"]]
-    elif name == "agy":
-        assert actions == ["google archive"]
     else:
         assert actions[0] == "https://claude.ai/install.sh" and actions[-1][-1] == "latest"
 

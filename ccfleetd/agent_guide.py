@@ -201,11 +201,14 @@ def section() -> str:
              '<code>ccfleet gemini --preview</code> starts local Antigravity and verifies '
              'a native file read and edit in a disposable subfolder through your private slot. '
              'The slot supplies synthetic responses. Live subscription inference is unavailable. '
-             'Each launch checks the selected agent’s latest official release.</p>',
+             'The mini checks Google’s public release catalog and supplies the verified CLI '
+             'through CCFleet. The MacBook uses its Fleet pairing and keeps a temporary '
+             'agent profile with no personal Google login.</p>',
              '<p><strong>本地终端命令。</strong>在项目中用 <code>ccfleet claude</code> 启动 '
              'Claude Code。macOS 上的 <code>ccfleet gemini --preview</code> 会启动本地 '
              'Antigravity，通过专属槽位在临时子目录中验证原生文件读写。槽位返回模拟响应，'
-             '暂未开放订阅模型推理。每次启动都会检查所选代理的最新官方版本。</p>')
+             '暂未开放订阅模型推理。槽位查询 Google 官方版本，并经 CCFleet 提供已验证的程序。'
+             'MacBook 使用 Fleet 配对与临时代理配置，无需个人 Google 登录。</p>')
         + bi('<p><strong>Gemini with an Antigravity subscription today.</strong> '
              'Open your project in Ghostty or another terminal and start Antigravity CLI there. '
              'You can also choose its official '

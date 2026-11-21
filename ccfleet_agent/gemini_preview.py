@@ -291,6 +291,7 @@ def run(binary, project, transport_command):
 (allow network-outbound (remote ip "localhost:*"))
 (deny file-read* file-write* (subpath (param "USERHOME")) (subpath (param "PROJECT")))
 (deny file-write*)
+(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.secd"))
 (allow file-read* file-write* (subpath (param "TESTROOT")) (subpath (param "FIXTURE")))
 (allow file-write* (literal "/dev/null") (literal "/dev/tty"))
 """
