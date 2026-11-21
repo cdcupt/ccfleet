@@ -1,0 +1,20 @@
+{
+  "gateway": "sujoshua/agy-gateway",
+  "commit": "9f3e671ad0e4c1b48d4ac7ee4ce095816a37ee25",
+  "official_cli": "agy 1.5.14",
+  "scope": "Two isolated processes on one Mac. The gateway HTTP handler and tool bridge were built from the pinned source. The upstream was a scripted ACP agent. The run used no Google sign-in or live model and made no production CCFleet connection.",
+  "upstream_stock_tests_passed": [
+    "TestToolLoop",
+    "TestStreamingToolLoop"
+  ],
+  "gateway_defaults": "HTTP 400 on max_completion_tokens",
+  "documented_unsupported_sampling_parameter_mode": {
+    "consecutive_passes": 3,
+    "read_result_returned": true,
+    "edit_verified_on_client_disk": true,
+    "final_response_delivered": true,
+    "gateway_denied_direct_file_read": true
+  },
+  "production_changes": false,
+  "date": "2026-11-21"
+}

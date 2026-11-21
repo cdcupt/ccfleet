@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Native Antigravity file-tool interoperability</title>
+<main>
+<h1>Native Antigravity file-tool interoperability</h1>
+<p>This opt-in macOS test checks whether the official Antigravity CLI can read and edit
+a local file through the OpenAI-compatible HTTP handler in
+<a href="https://github.com/sujoshua/agy-gateway/tree/9f3e671ad0e4c1b48d4ac7ee4ce095816a37ee25">agy-gateway</a>.
+The gateway and CLI run on one Mac in separate sandboxes. The gateway has permission to learn
+the file contents only from the client’s tool response. The upstream ACP agent is scripted.</p>
+<h2>Reproduce the check</h2>
+<p>On a Mac with Python 3.9+, Git, Go 1.27.3+, and the official agy 1.5.14 CLI,
+run the following from the CCFleet checkout. Use <code>--go</code> and
+<code>--agy</code> to specify executable paths when needed.</p>
+<pre><code>python3 tools/agy_gateway_interop/check.py</code></pre>
+<p>Setup fetches the pinned public gateway source and its Go dependencies. The
+build then runs offline. During the test both processes use temporary homes, a
+fixture credential, and loopback networking. The test does not open a CCFleet
+production connection or submit a Google model request.</p>
+<h2>What passed</h2>
+<p>With default gateway settings, the native client received HTTP 400 because
+it sends <code>max_completion_tokens</code>. With the gateway’s documented
+compatibility setting, three consecutive runs returned the file’s random marker,
+performed a local edit, and delivered the final response. The gateway ignores
+the unsupported output-token limit in this mode.
+<a href="result.json">Recorded results</a>.</p>
+<p>This establishes client-tool compatibility. Consumer-subscription model serving
+through CCFleet remains unavailable. <a href="https://discuss.ai.google.dev/t/an-acp-service-compliance-question/200200/2">Google’s guidance on ACP usage</a>.</p>
+</main></html>
