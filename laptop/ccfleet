@@ -1361,8 +1361,9 @@ def gateway_diagnostic_context(slot: str = "") -> Optional[dict[str, Any]]:
             "eligible_count": eligible}
 
 
-WORKSPACE_ARCHIVE_HASH = "190efd936c13c28e6cb7aa6e4b14b05afdd89e48c8b04aecb6bde30ab99544ae"
-WORKSPACE_EXECUTABLE_HASH = "364d3cc60bbf74ab34ed88a623f7e1fada9ce77158fc210f56ec67aaa9f0cb5a"
+WORKSPACE_ARCHIVE_HASH = "6ed82fad9790eca3e3293d7b6c93201ad6b58094ef8d9665d514ef29a67e1ad9"
+PREVIOUS_WORKSPACE_HASH = "364d3cc60bbf74ab34ed88a623f7e1fada9ce77158fc210f56ec67aaa9f0cb5a"
+WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa2224992452e80b7cb91ffe"
 
 
 PREVIEW_REVISION = "cd27097d3a76f636adebac94c3e4c6c09c26a05d"
@@ -1463,19 +1464,23 @@ def cmd_workspace(*, install_only: bool = False) -> int:
     apps.mkdir(mode=0o755, exist_ok=True)
     app = apps / "CCFleet Workspace.app"
 
-    def verified(bundle):
+    def verified(bundle, permitted=(WORKSPACE_EXECUTABLE_HASH,)):
         binary = bundle / "Contents" / "MacOS" / "applet"
         if (bundle.is_symlink() or not binary.is_file() or binary.stat().st_size > 4 * 1024**2
-                or hashlib.sha256(binary.read_bytes()).hexdigest() != WORKSPACE_EXECUTABLE_HASH):
+                or hashlib.sha256(binary.read_bytes()).hexdigest() not in permitted):
             raise CliError("the existing Workspace app does not match this release")
         subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "--all-architectures", bundle],
                        check=True, stderr=subprocess.DEVNULL, timeout=20)
 
-    if not app.exists() and not app.is_symlink():
+    previous = False
+    if app.exists() or app.is_symlink():
+        verified(app, (WORKSPACE_EXECUTABLE_HASH, PREVIOUS_WORKSPACE_HASH))
+        previous = hashlib.sha256((app / "Contents/MacOS/applet").read_bytes()).hexdigest() == PREVIOUS_WORKSPACE_HASH
+    if previous or not app.exists():
         with tempfile.TemporaryDirectory(prefix=".ccfleet-workspace-", dir=apps) as raw:
             stage = Path(raw)
             url = ("https://github.com/cdcupt/ccfleet/releases/download/"
-                   "workspace-mac-v1.0.0/CCFleet-Workspace.zip")
+                   "workspace-mac-v1.0.1/CCFleet-Workspace.zip")
             for suffix, limit in (("", 4 * 1024**2), (".sig", 8192)):
                 subprocess.run(["/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https",
                                 "--tlsv1.2", "-fsSL", "--max-time", "45",
@@ -1493,10 +1498,21 @@ def cmd_workspace(*, install_only: bool = False) -> int:
                                check=True, timeout=15)
             subprocess.run(["/usr/bin/ditto", "-x", "-k", archive, stage], check=True, timeout=30)
             verified(stage / app.name)
-            try:
-                os.rename(stage / app.name, app)
-            except FileExistsError:
-                pass
+            if previous:
+                import ctypes
+                verified(app, (PREVIOUS_WORKSPACE_HASH,))
+                # Swap complete directories atomically. Stage cleanup removes only the old verified app.
+                lib = ctypes.CDLL(None, use_errno=True)
+                swap = lib.renamex_np
+                swap.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+                swap.restype = ctypes.c_int
+                if swap(os.fsencode(stage / app.name), os.fsencode(app), 2) != 0:
+                    raise OSError(ctypes.get_errno(), "could not replace the previous Workspace app")
+            else:
+                try:
+                    os.rename(stage / app.name, app)
+                except FileExistsError:
+                    pass
     verified(app)
     if install_only:
         print("CCFleet Workspace is ready in your Applications folder.")
