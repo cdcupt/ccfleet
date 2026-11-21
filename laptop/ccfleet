@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.11"
+CLIENT_VERSION = "0.2.12"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -66,7 +66,7 @@ PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1d
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
 INFERENCE_CLIENT_SHA256 = "8ee72d4c67dcb6098c585d472b10409842c9728007694312e7df44fc033c2f2a"
-CLIENT_EXPERIENCE_SHA256 = "623beb9f40aa00417c0776e4676de786dbd92dd4b663cbf22434a6c8c638fe16"
+CLIENT_EXPERIENCE_SHA256 = "18c403171261008c86ae4675cef66b76c9b3850cd7cff4c9a72a37a05973bad2"
 LOCAL_JOBS_SHA256 = "a00588580834ad6e539210b8a8e149dcb26935493403f06a76a43af8945bee81"
 CLIENT_RELEASE_SHA256 = "506918f1aa924701eefd797b3d14fee742735b71123f341413d70dff2fcdcc76"
 SETUP_WAIT_SECONDS = 180
@@ -1356,6 +1356,59 @@ def gateway_diagnostic_context(slot: str = "") -> Optional[dict[str, Any]]:
             "eligible_count": eligible}
 
 
+WORKSPACE_ARCHIVE_HASH = "190efd936c13c28e6cb7aa6e4b14b05afdd89e48c8b04aecb6bde30ab99544ae"
+WORKSPACE_EXECUTABLE_HASH = "364d3cc60bbf74ab34ed88a623f7e1fada9ce77158fc210f56ec67aaa9f0cb5a"
+
+
+def cmd_workspace(*, install_only: bool = False) -> int:
+    """Install the pinned companion without replacing any pre-existing app."""
+    if sys.platform != "darwin":
+        raise CliError("CCFleet Workspace requires macOS and Ghostty")
+    apps = Path.home() / "Applications"
+    apps.mkdir(mode=0o755, exist_ok=True)
+    app = apps / "CCFleet Workspace.app"
+
+    def verified(bundle):
+        binary = bundle / "Contents" / "MacOS" / "applet"
+        if (bundle.is_symlink() or not binary.is_file() or binary.stat().st_size > 4 * 1024**2
+                or hashlib.sha256(binary.read_bytes()).hexdigest() != WORKSPACE_EXECUTABLE_HASH):
+            raise CliError("the existing Workspace app does not match this release")
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "--all-architectures", bundle],
+                       check=True, stderr=subprocess.DEVNULL, timeout=20)
+
+    if not app.exists() and not app.is_symlink():
+        with tempfile.TemporaryDirectory(prefix=".ccfleet-workspace-", dir=apps) as raw:
+            stage = Path(raw)
+            url = ("https://github.com/cdcupt/ccfleet/releases/download/"
+                   "workspace-mac-v1.0.0/CCFleet-Workspace.zip")
+            for suffix, limit in (("", 4 * 1024**2), (".sig", 8192)):
+                subprocess.run(["/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https",
+                                "--tlsv1.2", "-fsSL", "--max-time", "45",
+                                "--max-filesize", str(limit), "-o", stage / ("app.zip" + suffix),
+                                url + suffix], check=True, timeout=50)
+            archive = stage / "app.zip"
+            if hashlib.sha256(archive.read_bytes()).hexdigest() != WORKSPACE_ARCHIVE_HASH:
+                raise CliError("workspace download did not match the signed client")
+            signers = stage / "signers"
+            signers.write_text("ccfleet-workspace " + RELEASE_PUBLIC_KEY + "\n")
+            with archive.open("rb") as incoming:
+                subprocess.run(["/usr/bin/ssh-keygen", "-Y", "verify", "-f", signers, "-I",
+                                "ccfleet-workspace", "-n", "ccfleet-workspace-mac-v1", "-s",
+                                stage / "app.zip.sig"], stdin=incoming, stdout=subprocess.DEVNULL,
+                               check=True, timeout=15)
+            subprocess.run(["/usr/bin/ditto", "-x", "-k", archive, stage], check=True, timeout=30)
+            verified(stage / app.name)
+            try:
+                os.rename(stage / app.name, app)
+            except FileExistsError:
+                pass
+    verified(app)
+    if install_only:
+        print("CCFleet Workspace is ready in your Applications folder.")
+        return 0
+    return subprocess.call(["/usr/bin/open", app])
+
+
 def experience_callbacks() -> dict[str, Any]:
     def launch_local(values: dict[str, Any]) -> int:
         return cmd_local(_local_options(values))
@@ -1368,7 +1421,8 @@ def experience_callbacks() -> dict[str, Any]:
         vars(args).update(values)
         return cmd_attach(args)
 
-    return {"load_config": load_config, "choose_device": local_paired_device,
+    return {**({"workspace": cmd_workspace} if sys.platform == "darwin" else {}),
+            "load_config": load_config, "choose_device": local_paired_device,
             "find_local_claude": find_local_claude, "check_managed_route": check_managed_route,
             "check_inference": check_inference, "device_context": device_context,
             "gateway_context": gateway_diagnostic_context,
@@ -3583,6 +3637,9 @@ def parser() -> argparse.ArgumentParser:
                    help="legacy snapshot recovery; see ccfleet project",
                    description="Legacy snapshot recovery; local Claude now uses ccfleet local.",
                    epilog="Snapshot recovery is separate from local Claude sessions.")
+    workspace = sub.add_parser("workspace", help="open the Mac project and agent picker in Ghostty")
+    workspace.add_argument("--install-only", action="store_true",
+                           help="install the signed Finder launcher without opening it")
     start = sub.add_parser("start", aliases=["menu"], help="guided local session launcher")
     start.add_argument("action", nargs="?", choices=("menu", "new", "continue", "resume"),
                        default="menu")
@@ -3720,6 +3777,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_launcher_create(args)
         if args.command == "__external-claude":
             return cmd_external_claude(args)
+        if args.command == "workspace":
+            return cmd_workspace(install_only=args.install_only)
         if args.command in ("start", "menu"):
             return cmd_start(args)
         if args.command == "sessions":
