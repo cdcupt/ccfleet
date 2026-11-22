@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.16"
+CLIENT_VERSION = "0.2.17"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -1388,7 +1388,7 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
 WORKSPACE_TOOLS_HASH = "0d981a56e278249c174cdad7e010313456a67d4f263f2fa2ad585efd8ce4ddb0"
-EDITOR_CLIENT_HASH = "1d1f6fcc92b94136ba525d8c87d3dc1d1828cbe0a72d3a9519507e29e9d34bf8"
+EDITOR_CLIENT_HASH = "5bbe2e808877f25e1be746e94111fb7b3c1551b9c3c45ba8bcde0352ddb12906"
 
 
 def slot_component(name, digest, operation, slot_command):

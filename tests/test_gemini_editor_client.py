@@ -397,3 +397,77 @@ def test_cold_component_on_old_slot_reports_required_update(tmp_path, monkeypatc
     with pytest.raises(cli["CliError"], match="update its CCFleet slot service"):
         cli["slot_component"]("workspace_tools", "1" * 64, "workspace-tools", ["paired-slot"])
     assert not list((tmp_path / "editor-components").glob("*.py"))
+
+
+def menu_session(editor, answers, frames, monkeypatch):
+    sent = []
+    replies = iter(frames)
+    inputs = iter(answers)
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    channel = SimpleNamespace(send=sent.append, receive=lambda **_: next(replies))
+    ui.session(channel, editor)
+    assert next(inputs, None) is None
+    assert next(replies, None) is None
+    return sent
+
+
+def test_help_model_picker_and_command_typos_stay_out_of_chat(project, monkeypatch, capsys):
+    _, editor = project
+    flash, pro = "gemini-flash-low", "gemini-pro-high"
+    sent = menu_session(editor, [
+        "/help", "/modle", "/test", "/model", "", "/model", "2", "/model", "",
+        "/model " + pro, "/model unknown", "/model 0", "/model 3",
+        "/model " + flash, "/model 2", "/model " + flash,
+        "/example/project/app.py please review", "/quit",
+    ], [
+        {"type": "ready", "model": flash, "models": [flash, pro]},
+        {"type": "model", "model": pro},
+        {"type": "model", "model": pro, "error": "private slot diagnostic"},
+        {"type": "model", "model": flash},
+        {"type": "end", "reason": "end_turn"},
+    ], monkeypatch)
+    assert sent == [
+        {"type": "open", "version": 1}, {"type": "set_model", "model": pro},
+        {"type": "set_model", "model": flash},
+        {"type": "set_model", "model": flash},
+        {"type": "prompt", "text": "/example/project/app.py please review"}, {"type": "close"},
+    ]
+    out = capsys.readouterr().out
+    assert all(command in out for command in ("/help", "/model <number or ID>", "/test off", "/quit"))
+    assert "Unknown command /modle" in out
+    assert f"1. {flash} (current)" in out and f"2. {pro} (current)" in out
+    assert f"Switched to {pro}." in out and f"Using {pro}." in out
+    assert out.count(f"Switched to {flash}.") == 1 and "private slot diagnostic" not in out
+
+
+def test_model_on_an_older_slot_keeps_working_conversation(project, monkeypatch, capsys):
+    _, editor = project
+    sent = menu_session(editor, ["/help", "/model", "/model 2", "hello", "/exit"], [
+        {"type": "ready", "model": "gemini-flash"},
+        {"type": "end", "reason": "end_turn"},
+    ], monkeypatch)
+    assert sent == [{"type": "open", "version": 1}, {"type": "prompt", "text": "hello"},
+                    {"type": "close"}]
+    out = capsys.readouterr().out
+    assert "gemini-flash" in out and "Update the private Mac slot service" in out
+
+
+@pytest.mark.parametrize("catalog", [
+    [], "gemini-flash", ["gemini-pro"], ["gemini-flash", "gemini-flash"],
+    ["gemini-flash", "gemini-invalid\x1b"], ["gemini-flash", {}],
+])
+def test_model_metadata_is_checked_before_rendering(project, monkeypatch, catalog):
+    _, editor = project
+    with pytest.raises(ValueError, match="invalid Gemini model list"):
+        menu_session(editor, [], [{"type": "ready", "model": "gemini-flash", "models": catalog}],
+                     monkeypatch)
+
+
+def test_model_picker_refuses_unconfirmed_model(project, monkeypatch, capsys):
+    _, editor = project
+    with pytest.raises(ValueError, match="did not confirm"):
+        menu_session(editor, ["/model 2"], [
+            {"type": "ready", "model": "gemini-a", "models": ["gemini-a", "gemini-b"]},
+            {"type": "text", "text": "private response"},
+        ], monkeypatch)
+    assert "private response" not in capsys.readouterr().out
