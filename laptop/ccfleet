@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.17"
+CLIENT_VERSION = "0.2.18"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -1387,8 +1387,9 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
-WORKSPACE_TOOLS_HASH = "0d981a56e278249c174cdad7e010313456a67d4f263f2fa2ad585efd8ce4ddb0"
+WORKSPACE_TOOLS_HASH = "a25cae8d7ef75f66b194cac2f61b3547ebf94afd6452620bad3f06a985f68c70"
 EDITOR_CLIENT_HASH = "5bbe2e808877f25e1be746e94111fb7b3c1551b9c3c45ba8bcde0352ddb12906"
+ACP_CLIENT_HASH = "a5177386f6ca96f4c89e0c2157a7867114125f62b75d0db71363738cd6841ddd"
 
 
 def slot_component(name, digest, operation, slot_command):
@@ -1450,18 +1451,35 @@ def preview_helper(slot_command):
 
 
 def cmd_gemini(args: argparse.Namespace) -> int:
-    if not args.preview and not (sys.stdin.isatty() and sys.stdout.isatty()):
+    acp = getattr(args, "acp", False)
+    runner = getattr(args, "test", None)
+    test_folder = getattr(args, "test_folder", None)
+    if acp and args.pair:
+        raise CliError("pair this Mac first with ccfleet gemini --pair, then reconnect T3")
+    if acp and args.project != ".":
+        raise CliError("T3 selects its local project when it opens an ACP session")
+    if test_folder is not None:
+        if not acp or not runner:
+            raise CliError("--test-folder requires --acp and a local --test runner")
+        if not test_folder or Path(test_folder).is_absolute() or ".." in Path(test_folder).parts:
+            raise CliError("--test-folder must be relative to the local project")
+    if not acp and not args.preview and not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise CliError("open an interactive terminal to use Gemini")
     if sys.platform != "darwin":
         raise CliError("the Gemini local editor currently requires macOS")
-    if args.preview and getattr(args, "test", None):
+    if args.preview and runner:
         raise CliError("--test is available in an interactive Gemini session")
-    project = selected_project(args.project) if args.preview else existing_directory(args.project)
+    if not acp:
+        project = selected_project(args.project) if args.preview else existing_directory(args.project)
     original = os.environ.get("CCFLEET_HOME")
     root = home().absolute()
     try:
         os.environ["CCFLEET_HOME"] = str(root / "antigravity-workspace")
         if args.pair or not load_config()["devices"]:
+            if acp:
+                raise CliError("this Mac has no Gemini workspace pairing. In a terminal, run "
+                               "ccfleet gemini --pair with a code from "
+                               "https://ccfleet.io/account/gemini#subscription, then reconnect T3")
             if not sys.stdin.isatty():
                 raise CliError("open a terminal to paste the Antigravity pairing code")
             print("Create the private Mac pairing code at "
@@ -1481,8 +1499,13 @@ def cmd_gemini(args: argparse.Namespace) -> int:
             tools = slot_component("workspace_tools", WORKSPACE_TOOLS_HASH, "workspace-tools",
                                    release_command)
             command = [*transport, "ccfleet-gemini-editor-v1"]
+            if acp:
+                adapter = slot_component("gemini_acp_client", ACP_CLIENT_HASH, "acp-client",
+                                         release_command)
+                return adapter.run(command, project_environment(), editor, tools, project_files(),
+                                   fleet_home=root, test=runner, test_folder=test_folder)
             editor.run(project, command, project_environment(), tools, project_files(),
-                       getattr(args, "test", None), fleet_home=root)
+                       runner, fleet_home=root)
             return 0
         print("Native Gemini gateway preview: local agy will read and edit a disposable file "
               "inside your project. The slot returns synthetic responses. No live model call "
@@ -3811,13 +3834,23 @@ def parser() -> argparse.ArgumentParser:
                    help="legacy snapshot recovery; see ccfleet project",
                    description="Legacy snapshot recovery; local Claude now uses ccfleet claude.",
                    epilog="Snapshot recovery is separate from local Claude sessions.")
-    gemini = sub.add_parser("gemini", help="use Gemini through your private slot in this local project")
-    gemini.add_argument("--preview", action="store_true", help="verify a synthetic edit without model billing")
+    gemini = sub.add_parser("gemini", help="use Gemini through your private slot in this local project",
+                            epilog="In T3 Code, select the local environment and open Settings > "
+                                   "Providers > Add provider > Show more > Local ACP command. "
+                                   "Use ccfleet or its installed absolute path as the executable. "
+                                   "Add gemini and --acp as separate arguments. Choose Supervised "
+                                   "to review local file changes and test runs.")
+    gemini_mode = gemini.add_mutually_exclusive_group()
+    gemini_mode.add_argument("--acp", action="store_true",
+                             help="serve T3 Code's Local ACP command over stdin and stdout")
+    gemini_mode.add_argument("--preview", action="store_true",
+                             help="verify a synthetic edit without model billing")
     gemini.add_argument("--project", default=".", help="local project (default: current directory)")
     gemini.add_argument("--slot", default="", help="one paired private Mac slot")
     gemini.add_argument("--pair", action="store_true", help="pair a computer using a fresh code")
     gemini.add_argument("--test", choices=("npm", "pytest", "go", "cargo"),
                         help="enable this local test command with approval before every run")
+    gemini.add_argument("--test-folder", help="project-relative directory for the ACP test runner")
     workspace = sub.add_parser("workspace", help="open the Mac project and agent picker in Ghostty")
     workspace.add_argument("--install-only", action="store_true",
                            help="install the signed Finder launcher without opening it")
