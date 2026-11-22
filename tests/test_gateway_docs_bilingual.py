@@ -45,12 +45,9 @@ def test_current_guide_navigation_and_anchors_are_self_contained(language):
 
 def test_shared_runnable_examples_do_not_duplicate_or_expose_operator_configuration():
     commands = "\n".join(Document(GUIDE.read_text()).pre_codes)
-    assert (
-        commands.count(
-            "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh"
-        )
-        == 1
-    )
+    installer = "curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/laptop/install.sh"
+    assert commands.count(installer + " | bash -s -- --setup") == 1
+    assert commands.count(installer + ' | bash\nexport PATH="$HOME/.local/bin:$PATH"') == 1
     assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing sticky") == 1
     assert commands.count("ccfleet gateway setup --slots slot-1234 slot-5678 --routing priority") == 1
     assert commands.count("ccfleet claude --slot slot-1234") == 1
@@ -268,3 +265,15 @@ def test_documentation_index_names_actual_pilot_and_manual_setup(language):
     assert "兼容性尚待验证" not in document.text
     assert any(link.endswith("devin.html#connect") for link in document.links)
     assert any(link.endswith("devin.html#prices") for link in document.links)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_gemini_subscription_guide_separates_pairing_from_the_t3_provider(language):
+    title = '<section id="gemini-subscription">'
+    source = GUIDE.read_text().split(title, 1)[1].split("</section>", 1)[0]
+    page = Document(bilingual.project_html(source, language, TARGET))
+    assert "ccfleet update\nccfleet pair gemini" in page.pre_codes
+    assert any("laptop/install.sh | bash\n" in code for code in page.pre_codes)
+    assert {"ccfleet", "gemini", "--acp", "ccfleet gemini"} <= set(page.codes)
+    assert "Local ACP command" in page.text and "Supervised" in page.text
+    assert f"https://ccfleet.io/{language}/account/gemini#subscription" in page.links

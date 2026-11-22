@@ -4,7 +4,7 @@
 <h1>CCFleet Workspace for Mac</h1>
 <p>Open <strong>CCFleet Workspace</strong> in Finder on the Mac that holds your project.
 Choose a folder, then Antigravity and any test recipe you want to allow. During the first
-session, copy the single-use code from your private slot’s subscription panel and paste
+session, open <strong>Workspace app or older CLI</strong> in your slot’s Gemini settings, create a one-time code and paste
 it at the Ghostty prompt. Later sessions reuse that computer’s workspace pairing.
 <a href="https://ccfleet.io/en/account/gemini#subscription">Open subscription setup</a>.</p>
 <p>The official Google CLI runs in the slot owner’s macOS login session. Its built-in
@@ -14,21 +14,10 @@ output through the encrypted session to the agent. You approve saves, new folder
 each test run on your computer. Test programs run with a temporary home, project-local
 write access and networking disabled. Project tools support UTF-8 files up to 192 KiB
 and skip sensitive or generated paths such as <code>.git</code>, <code>.env</code> and
-<code>node_modules</code>. Remove the workspace device under the slot's connected
-computers to revoke access.</p>
-<h2>Use the local command line</h2>
-<p>Run <code>ccfleet claude</code> in your project for Claude Code. The native
-<code>ccfleet gemini --preview</code> command starts Antigravity on the client Mac
-and sends model requests through the encrypted Fleet transport to its assigned slot.
-The slot uses a deterministic test response until a supported subscription endpoint is
-available. The preview exercises a disposable file in the selected project's directory
-without consuming model quota. The Finder launcher's interactive Antigravity mode
-runs on the private slot. During a native Gemini launch the mini checks Google's
-public release and supplies the CLI archive and preview component over the paired CCFleet
-connection. The MacBook verifies the archive checksum, Google signature and binary version
-before installation. Its version probe runs offline and its preview process can use only
-loopback networking. CCFleet's own signed installer and update channel are separate GitHub
-downloads. Live personal-subscription model forwarding remains unavailable.</p>
+<code>node_modules</code>. To revoke access, remove that computer in Gemini settings.</p>
+<h2>Use T3 Code or the terminal</h2>
+<p>For T3 Code on your project Mac, run <code>ccfleet update</code> and <code>ccfleet pair gemini</code>. At the prompt, paste the reusable setup code from Gemini settings. Select <strong>Local ACP command</strong> in T3 and enter <code>ccfleet</code> with separate <code>gemini</code> and <code>--acp</code> arguments. <a href="../../docs/public-gateway.html#gemini-subscription">Full T3 Code setup</a>.</p>
+<p>Run <code>ccfleet gemini</code> from the project directory for a terminal chat using the same pairing. Both clients use the Google sign-in on your private slot. The optional <code>ccfleet gemini --preview</code> runs a synthetic local file-edit check.</p>
 <h2>Enable another private Mac slot</h2>
 <p>The slot must be enrolled to its current administrator. Install Google's official
 CLI under <code>~/.local/bin/agy</code>, complete Google's own sign-in on the slot,
