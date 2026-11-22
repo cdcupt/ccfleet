@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import select
+import shlex
 import signal
 import socket
 import socketserver
@@ -22,12 +23,24 @@ import time
 from pathlib import Path
 
 if __package__:
-    from . import antigravity_slot, gemini_preview, mac_policy, mac_relay_client
-    from . import project_files, workspace_io, workspace_tools
+    from . import (
+        antigravity_slot,
+        gemini_preview,
+        mac_policy,
+        mac_relay_client,
+        project_files,
+        workspace_io,
+        workspace_tools,
+    )
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import antigravity_slot, gemini_preview, mac_policy, mac_relay_client
-    import project_files, workspace_io, workspace_tools
+    import antigravity_slot
+    import gemini_preview
+    import mac_policy
+    import mac_relay_client
+    import project_files
+    import workspace_io
+    import workspace_tools
 
 SOCKET = "gemini-editor.sock"
 MAX_TEXT = workspace_tools.LIMIT
@@ -38,10 +51,20 @@ GUIDE = (
     "You are the user's interactive CCFleet project editor. The project is on the "
     "connecting computer. Use client_view_file, client_edit_file and client_create_file "
     "with absolute paths in the current project. Use ccfleetlocal list_project, "
-    "make_project_directory and test_project for local directories and tests. The slot's "
+    "make_project_directory and test_project for local directories and tests. These are lazy "
+    "tools: invoke call_mcp_tool with ServerName=ccfleetlocal, ToolName=test_project, Arguments={} "
+    "for tests. For list_project or make_project_directory use Arguments with the relative path. "
+    "The slot's "
     "filesystem, shell and terminal are outside this project. If a client operation fails "
     "or the user declines it, explain why and wait for the user's next instruction.\n\n"
 )
+
+
+LOGIN_NEEDED = (
+    "Open CCFleet Gemini Sign In in the private Mac owner's Applications folder, then reconnect."
+)
+UNAVAILABLE = "The Gemini editor is unavailable on the private Mac. Reopen it to try again."
+BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 
 
 class EditorError(ValueError):
@@ -57,7 +80,7 @@ def text_value(value, limit=MAX_TEXT):
 def relative_path(root, path):
     if not isinstance(path, str) or not path.startswith(str(root) + "/"):
         raise ValueError("outside the client project")
-    return project_files._path(path[len(str(root)) + 1:])
+    return project_files._path(path[len(str(root)) + 1 :])
 
 
 def json_line(stream):
@@ -104,7 +127,7 @@ class Device:
         try:
             while not self.closed.is_set():
                 self.messages.put_nowait(gemini_preview.receive(self.input))
-        except (OSError, EOFError, ValueError, queue.Full):
+        except (OSError, EOFError, ValueError, RecursionError, queue.Full):
             self.abort()
 
     def _watch(self):
@@ -157,7 +180,11 @@ class Device:
             self.next_id += 1
             self.send({"type": "request", "id": self.next_id, "op": op, **fields})
             reply = self.receive(600)
-            if reply.get("type") != "response" or type(reply.get("id")) != int or reply["id"] != self.next_id:
+            if (
+                reply.get("type") != "response"
+                or type(reply.get("id")) is not int
+                or reply["id"] != self.next_id
+            ):
                 raise EditorError("The workspace returned an unexpected editor response.")
             if set(reply) == {"type", "id", "error"}:
                 raise ValueError("workspace declined or could not complete this operation")
@@ -179,15 +206,21 @@ def mcp_request(device, msg):
         version = params.get("protocolVersion")
         if version not in ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"):
             version = "2025-11-25"
-        result = {"protocolVersion": version, "serverInfo": {"name": MCP_NAME, "version": "1"},
-                  "capabilities": {"tools": {}}}
+        result = {
+            "protocolVersion": version,
+            "serverInfo": {"name": MCP_NAME, "version": "1"},
+            "capabilities": {"tools": {}},
+        }
     elif method == "tools/list":
         result = {"tools": [t for t in workspace_tools.TOOLS if t["name"] in MCP_TOOLS]}
     elif method == "ping":
         result = {}
     elif method in ("resources/list", "resources/templates/list", "prompts/list"):
-        key = {"resources/list": "resources", "resources/templates/list": "resourceTemplates",
-               "prompts/list": "prompts"}[method]
+        key = {
+            "resources/list": "resources",
+            "resources/templates/list": "resourceTemplates",
+            "prompts/list": "prompts",
+        }[method]
         result = {key: []}
     elif method == "tools/call":
         try:
@@ -199,7 +232,11 @@ def mcp_request(device, msg):
                 if args:
                     raise ValueError("custom test commands are not supported")
                 data = device.request("test")
-                if not isinstance(data, dict) or set(data) != {"exit", "output"} or type(data["exit"]) != int:
+                if (
+                    not isinstance(data, dict)
+                    or set(data) != {"exit", "output"}
+                    or type(data["exit"]) is not int
+                ):
                     raise ValueError("invalid test response")
                 text_value(data["output"])
             elif name == "list_project":
@@ -207,7 +244,11 @@ def mcp_request(device, msg):
                 if path != ".":
                     project_files._path(path)
                 data = device.request("list", path=path)
-                if not isinstance(data, list) or len(data) > 1500 or any(not isinstance(p, str) for p in data):
+                if (
+                    not isinstance(data, list)
+                    or len(data) > 1500
+                    or any(not isinstance(p, str) for p in data)
+                ):
                     raise ValueError("invalid directory response")
             else:
                 path = project_files._path(args.get("path"))
@@ -216,7 +257,10 @@ def mcp_request(device, msg):
                     raise ValueError("directory unavailable")
             result = {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}]}
         except (ValueError, OSError, KeyError, TypeError):
-            result = {"isError": True, "content": [{"type": "text", "text": "Client operation declined or unavailable."}]}
+            result = {
+                "isError": True,
+                "content": [{"type": "text", "text": "Client operation declined or unavailable."}],
+            }
     else:
         return {**reply, "error": {"code": -32601, "message": "Method not found"}}
     return {**reply, "result": result}
@@ -233,8 +277,11 @@ class ProjectHandler(socketserver.StreamRequestHandler):
             while True:
                 msg = json_line(self.rfile)
                 if msg.get("method") == "tools/call" and not self.server.turn.is_set():
-                    reply = {"jsonrpc": "2.0", "id": msg.get("id"),
-                             "error": {"code": -32600, "message": "No interactive prompt is active"}}
+                    reply = {
+                        "jsonrpc": "2.0",
+                        "id": msg.get("id"),
+                        "error": {"code": -32600, "message": "No interactive prompt is active"},
+                    }
                 else:
                     reply = mcp_request(self.server.device, msg)
                 if reply is not None:
@@ -243,20 +290,31 @@ class ProjectHandler(socketserver.StreamRequestHandler):
             return
 
 
-GOOGLE_HOSTS = frozenset({
-    "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com", "oauth2.googleapis.com",
-    "antigravity-pa.googleapis.com", "antigravity-unleash.goog", "businessaicode.googleapis.com",
-})
+GOOGLE_HOSTS = frozenset(
+    {
+        "cloudcode-pa.googleapis.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "oauth2.googleapis.com",
+        "antigravity-pa.googleapis.com",
+        "antigravity-unleash.goog",
+        "businessaicode.googleapis.com",
+    }
+)
 
 
 class GoogleConnection(socketserver.StreamRequestHandler):
     """Relay opaque Google TLS only; all provider credentials remain inside its signed binary."""
+
     def handle(self):
         try:
             self.request.settimeout(12)
             first = self.rfile.readline(512).split()
-            if (len(first) != 3 or first[0] != b"CONNECT" or first[2] not in (b"HTTP/1.0", b"HTTP/1.1")
-                    or first[1].decode("ascii") not in {host + ":443" for host in GOOGLE_HOSTS}):
+            if (
+                len(first) != 3
+                or first[0] != b"CONNECT"
+                or first[2] not in (b"HTTP/1.0", b"HTTP/1.1")
+                or first[1].decode("ascii") not in {host + ":443" for host in GOOGLE_HOSTS}
+            ):
                 self.wfile.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 return
             for _ in range(32):
@@ -290,17 +348,38 @@ class GoogleProxy(socketserver.ThreadingTCPServer):
 
 def _sandbox(agent, home, session):
     return [
-        "/usr/bin/sandbox-exec", "-D", "HOME_DIR=" + str(home),
-        "-D", "PROJECT=" + str(session),
-        "-D", "PYTHON=" + str(Path(sys.executable).resolve()),
-        "-D", "PYTHON_APP=" + str(Path(sys.executable).resolve().parent.parent /
-                                  "Resources/Python.app/Contents/MacOS/Python"),
-        "-D", "EXE=" + str(agent), "-D", "HELPER=" + str(agent.with_name("localharness_external")),
-        "-D", "GEMINI_ROOT=" + str(home / ".gemini"), "-D", "LIBRARY=" + str(home / "Library"),
-        "-D", "KEYCHAINS=" + str(home / "Library/Keychains"),
-        "-D", "PREFS=" + str(home / "Library/Preferences"),
-        "-D", "ACP_PROFILE=" + str(home / ".gemini/antigravity-acp"),
-        "-p", SANDBOX, str(agent),
+        "/usr/bin/sandbox-exec",
+        "-D",
+        "HOME_DIR=" + str(home),
+        "-D",
+        "PROJECT=" + str(session),
+        "-D",
+        "PYTHON=" + str(Path(sys.executable).resolve()),
+        "-D",
+        "PYTHON_APP="
+        + str(
+            Path(sys.executable).resolve().parent.parent
+            / "Resources/Python.app/Contents/MacOS/Python"
+        ),
+        "-D",
+        "EXE=" + str(agent),
+        "-D",
+        "HELPER=" + str(agent.with_name("localharness_external")),
+        "-D",
+        "LIBRARY=" + str(home / "Library"),
+        "-D",
+        "KEYCHAINS=" + str(home / "Library/Keychains"),
+        "-D",
+        "GUARDS=" + str(session / "home/.gemini/config"),
+        "-D",
+        "PROFILE_HOME=" + str(session / "home"),
+        "-D",
+        "PROFILE_GEMINI=" + str(session / "home/.gemini"),
+        "-D",
+        "PREF=" + str(home / "Library/Preferences/com.apple.security.plist"),
+        "-p",
+        SANDBOX,
+        str(agent),
     ]
 
 
@@ -309,19 +388,23 @@ def _sandbox(agent, home, session):
 SANDBOX = """
 (version 1)
 (allow default)
+(deny file-write*)
 (deny file-read* file-write* (subpath "/Users") (subpath (param "HOME_DIR"))
     (subpath "/Volumes") (subpath "/private/tmp"))
 (allow file-read* (literal (param "EXE")) (literal (param "HELPER"))
     (literal "/Users") (literal "/private/tmp") (literal (param "HOME_DIR"))
-    (literal (param "GEMINI_ROOT")) (literal (param "LIBRARY")) (subpath (param "PREFS")))
+    (literal (param "LIBRARY")) (literal (param "PREF")))
 (allow file-read* file-write* (subpath (param "KEYCHAINS")))
-(allow file-read* file-write* (subpath (param "PROJECT")) (subpath (param "ACP_PROFILE")))
+(allow file-read* file-write* (subpath (param "PROJECT")) (literal "/dev/null"))
+(deny file-write* (subpath (param "GUARDS")) (literal (param "PROJECT"))
+    (literal (param "PROFILE_HOME")) (literal (param "PROFILE_GEMINI")))
 (deny network*)
 (allow network-bind network-inbound (local ip "localhost:*"))
 (allow network-outbound (remote ip "localhost:*") (remote unix-socket (subpath (param "PROJECT"))))
 (deny process-exec)
 (allow process-exec (literal (param "EXE")) (literal (param "HELPER"))
-    (literal "/usr/bin/security") (literal "/usr/bin/python3") (literal (param "PYTHON")) (literal (param "PYTHON_APP")))
+    (literal "/usr/bin/security") (literal "/usr/bin/python3")
+    (literal (param "PYTHON")) (literal (param "PYTHON_APP")))
 """
 
 
@@ -341,7 +424,7 @@ class Agent:
         try:
             while True:
                 self.messages.put(json_line(self.process.stdout))
-        except (OSError, EOFError, ValueError):
+        except (OSError, EOFError, ValueError, RecursionError):
             self.messages.put(None)
 
     def _permission(self, params):
@@ -353,10 +436,15 @@ class Agent:
                 # Local writes and tests are independently approved again on the client.
                 approved = True
             elif tool.get("kind") == "edit" and tool.get("title") in (
-                "Run client_edit_file?", "Run client_create_file?"
+                "Run client_edit_file?",
+                "Run client_create_file?",
             ):
                 content = tool.get("content")
-                if isinstance(content, list) and len(content) == 1 and content[0].get("type") == "diff":
+                if (
+                    isinstance(content, list)
+                    and len(content) == 1
+                    and content[0].get("type") == "diff"
+                ):
                     path = relative_path(self.root, content[0].get("path"))
                     text = text_value(content[0].get("newText"))
                     self.approvals.pop(path, None)
@@ -366,9 +454,19 @@ class Agent:
                             raise ValueError("too many pending edits")
                         self.approvals[path] = hashlib.sha256(text.encode()).digest()
         kind = "allow_once" if approved else "reject_once"
-        option = next((o.get("optionId") for o in params.get("options", [])
-                       if isinstance(o, dict) and o.get("kind") == kind), None)
-        return {"outcome": {"outcome": "selected", "optionId": option} if option else {"outcome": "cancelled"}}
+        option = next(
+            (
+                o.get("optionId")
+                for o in params.get("options", [])
+                if isinstance(o, dict) and o.get("kind") == kind
+            ),
+            None,
+        )
+        return {
+            "outcome": {"outcome": "selected", "optionId": option}
+            if option
+            else {"outcome": "cancelled"}
+        }
 
     def callback(self, method, params):
         if self.sid is None or params.get("sessionId") != self.sid or not self.device:
@@ -382,12 +480,21 @@ class Agent:
             text = text_value(self.device.request("read", path=path))
             start = params.get("line", 1)
             limit = params.get("limit")
-            if type(start) != int or start < 1 or limit is not None and (type(limit) != int or limit < 0):
+            if (
+                type(start) is not int
+                or start < 1
+                or limit is not None
+                and (type(limit) is not int or limit < 0)
+            ):
                 raise ValueError("invalid line range")
             if start == 1 and limit is None:
                 return {"content": text}
             lines = text.splitlines(keepends=True)
-            return {"content": "".join(lines[start-1: start-1+limit if limit is not None else None])}
+            return {
+                "content": "".join(
+                    lines[start - 1 : start - 1 + limit if limit is not None else None]
+                )
+            }
         if method == "fs/write_text_file":
             text = text_value(params.get("content"))
             if self.approvals.pop(path, None) != hashlib.sha256(text.encode()).digest():
@@ -399,13 +506,18 @@ class Agent:
 
     def rpc(self, method, params, timeout=90):
         self.seq += 1
-        send_line(self.process.stdin, {"jsonrpc": "2.0", "id": self.seq, "method": method, "params": params})
+        send_line(
+            self.process.stdin,
+            {"jsonrpc": "2.0", "id": self.seq, "method": method, "params": params},
+        )
         until = time.monotonic() + timeout
         while True:
             try:
                 msg = self.messages.get(timeout=max(0.001, until - time.monotonic()))
             except queue.Empty:
-                raise EditorError("The Gemini slot timed out. Reopen the editor to continue.") from None
+                raise EditorError(
+                    "The Gemini slot timed out. Reopen the editor to continue."
+                ) from None
             if time.monotonic() > until:
                 raise EditorError("The Gemini slot timed out. Reopen the editor to continue.")
             if msg is None:
@@ -415,15 +527,19 @@ class Agent:
                     raise ValueError("unexpected agent response")
                 if "error" in msg:
                     if method == "session/new" and msg["error"].get("code") == -32000:
-                        raise EditorError("Open CCFleet Gemini Sign In in the private Mac owner's Applications folder, then reconnect.")
+                        raise EditorError(LOGIN_NEEDED)
                     raise EditorError("The Google editor could not complete this request.")
                 if not isinstance(msg.get("result"), dict):
                     raise ValueError("invalid agent response")
                 return msg["result"]
             p = msg.get("params", {})
             if "id" not in msg:
-                if (self.active.is_set() and msg["method"] == "session/update"
-                        and p.get("sessionId") == self.sid and isinstance(p.get("update"), dict)):
+                if (
+                    self.active.is_set()
+                    and msg["method"] == "session/update"
+                    and p.get("sessionId") == self.sid
+                    and isinstance(p.get("update"), dict)
+                ):
                     update = p["update"]
                     if update.get("sessionUpdate") == "agent_message_chunk":
                         content = update.get("content", {})
@@ -434,14 +550,29 @@ class Agent:
                 answer = self.callback(msg["method"], p)
                 reply = {"result": answer}
             except (ValueError, KeyError, TypeError):
-                reply = {"error": {"code": -32602, "message": "Client operation declined or unavailable."}}
+                reply = {
+                    "error": {
+                        "code": -32602,
+                        "message": "Client operation declined or unavailable.",
+                    }
+                }
             send_line(self.process.stdin, {"jsonrpc": "2.0", "id": msg["id"], **reply})
 
     def initialize(self):
-        result = self.rpc("initialize", {"protocolVersion": 1, "clientInfo": {"name": "ccfleet-project-editor", "version": "1"},
-                                         "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}}})
-        if result.get("protocolVersion") != 1 or "oauth-personal" not in [m.get("id") for m in result.get("authMethods", [])]:
-            raise EditorError("The installed Google editor agent is incompatible. Update CCFleet on the slot.")
+        result = self.rpc(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientInfo": {"name": "ccfleet-project-editor", "version": "1"},
+                "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}},
+            },
+        )
+        if result.get("protocolVersion") != 1 or "oauth-personal" not in [
+            m.get("id") for m in result.get("authMethods", [])
+        ]:
+            raise EditorError(
+                "The installed Google editor agent is incompatible. Update CCFleet on the slot."
+            )
 
     def session(self, project, mcp):
         result = self.rpc("session/new", {"cwd": str(project), "mcpServers": mcp})
@@ -449,11 +580,18 @@ class Agent:
         if not isinstance(self.sid, str) or not self.sid:
             raise ValueError("invalid session")
         models = result.get("models", {})
-        offered = [m.get("modelId") for m in models.get("availableModels", []) if isinstance(m, dict)]
-        gemini = [m for m in offered if isinstance(m, str) and re.fullmatch(r"gemini-[a-z0-9.-]{1,80}", m)]
+        offered = [
+            m.get("modelId") for m in models.get("availableModels", []) if isinstance(m, dict)
+        ]
+        gemini = [
+            m for m in offered if isinstance(m, str) and re.fullmatch(r"gemini-[a-z0-9.-]{1,80}", m)
+        ]
         if not gemini:
             raise EditorError("The signed-in Google account has no available Gemini editor model.")
-        model = next((m for m in ("gemini-3.8-flash-low", models.get("currentModelId")) if m in gemini), gemini[0])
+        model = next(
+            (m for m in ("gemini-3.8-flash-low", models.get("currentModelId")) if m in gemini),
+            gemini[0],
+        )
         self.rpc("session/set_model", {"sessionId": self.sid, "modelId": model})
         return model
 
@@ -461,13 +599,26 @@ class Agent:
 def environment(home, scratch):
     # The mini is the only Google client. Never pass an API key, Vertex project,
     # alternate base URL, inherited proxy, browser or executable search path.
-    return {"HOME": str(home), "TMPDIR": str(scratch), "PATH": "/usr/bin:/bin",
-            "LANG": "en_US.UTF-8", "TERM": "dumb", "AGY_CLI_DISABLE_AUTO_UPDATE": "true"}
+    return {
+        "HOME": str(home),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "en_US.UTF-8",
+        "TERM": "dumb",
+        "AGY_CLI_DISABLE_AUTO_UPDATE": "true",
+    }
 
 
 def _start_agent(argv, env, project):
-    return subprocess.Popen(argv, cwd=project, env=env, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    return subprocess.Popen(
+        argv,
+        cwd=project,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def stop_agent(proc):
@@ -494,15 +645,19 @@ def require_personal(home):
         fd = os.open(settings, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as src:
             info = os.fstat(fd)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o022 or info.st_size > 1024 * 1024):
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o022
+                or info.st_size > 1024 * 1024
+            ):
                 raise ValueError()
             value = json.load(src)
         if value.get("auth", {}).get("type") == "oauth-personal":
             return
     except (OSError, ValueError, AttributeError):
         pass
-    raise EditorError("Open CCFleet Gemini Sign In in the private Mac owner's Applications folder, then reconnect.")
+    raise EditorError(LOGIN_NEEDED)
 
 
 # Only this fixed program may be registered as an MCP stdio server by an editor session.
@@ -524,18 +679,81 @@ with s.makefile('rb') as src:
 """
 
 
+# Google's standalone agent loads these documented global hooks from its disposable
+# HOME. A command hook is fixed by the slot; its executable, configuration and code
+# are read-only to the Google process. Nothing in the client project is executed here.
+TOOL_POLICY = """import json, sys
+try:
+    tool = json.load(sys.stdin)["toolCall"]
+    name = tool["name"]
+    allowed = {"client_view_file", "client_create_file", "client_edit_file"}
+    mcp = {"list_project", "make_project_directory", "test_project"}
+    permitted = name in allowed
+    if name == "call_mcp_tool" or name in mcp:
+        args = tool.get("args", {})
+        actual = args.get("ToolName")
+        permitted = (args.get("ServerName") == "ccfleetlocal" and actual in mcp
+                     and name in ("call_mcp_tool", actual))
+except (ValueError, AttributeError, KeyError, TypeError):
+    permitted = False
+print(json.dumps({"decision": "allow" if permitted else "deny",
+                  "reason": "This session uses the connected computer's editor tools."}))
+"""
+
+
+def session_profile(home, session):
+    # Google uses the current macOS Keychain for the existing personal sign-in. Only
+    # its standard OS location is linked; no credential is read or copied by CCFleet.
+    profile = session / "home"
+    library = profile / "Library"
+    library.mkdir(mode=0o700, parents=True)
+    (library / "Keychains").symlink_to(home / "Library/Keychains", target_is_directory=True)
+    cfg = profile / ".gemini/config"
+    cfg.mkdir(mode=0o700, parents=True)
+    acp = cfg.parent / "antigravity-acp"
+    acp.mkdir(mode=0o700)
+    (acp / "settings.json").write_text(json.dumps({"auth": {"type": "oauth-personal"}}))
+    hook = cfg / "editor-policy.py"
+    hook.write_text(TOOL_POLICY)
+    command = shlex.join(["/usr/bin/python3", "-I", "-B", str(hook)])
+    hooks = {
+        "ccfleet-editor": {
+            "enabled": True,
+            "PreToolUse": [{"hooks": [{"type": "command", "command": command, "timeout": 5}]}],
+        }
+    }
+    (cfg / "hooks.json").write_text(json.dumps(hooks))
+    return profile
+
+
 def run_editor(home, device, binary, session):
+    profile = session_profile(home, session)
     project = session / "project"
     project.mkdir(mode=0o700)
     path = session / "m.sock"
-    mcp = [{"name": MCP_NAME, "command": "/usr/bin/python3",
-            "args": ["-I", "-B", "-c", MCP_STDIO, str(path)], "env": []}]
-    with ProjectMCP(str(path), ProjectHandler) as service, GoogleProxy(("127.0.0.1", 0), GoogleConnection) as google:
+    mcp = [
+        {
+            "name": MCP_NAME,
+            "command": "/usr/bin/python3",
+            "args": ["-I", "-B", "-c", MCP_STDIO, str(path)],
+            "env": [],
+        }
+    ]
+    with (
+        ProjectMCP(str(path), ProjectHandler) as service,
+        GoogleProxy(("127.0.0.1", 0), GoogleConnection) as google,
+    ):
         os.chmod(path, 0o600)
-        env = environment(home, session)
+        env = environment(profile, session)
         proxy = "http://127.0.0.1:" + str(google.server_address[1])
-        env.update(HTTPS_PROXY=proxy, HTTP_PROXY=proxy, https_proxy=proxy, http_proxy=proxy,
-                   NO_PROXY="127.0.0.1,localhost,::1", no_proxy="127.0.0.1,localhost,::1")
+        env.update(
+            HTTPS_PROXY=proxy,
+            HTTP_PROXY=proxy,
+            https_proxy=proxy,
+            http_proxy=proxy,
+            NO_PROXY="127.0.0.1,localhost,::1",
+            no_proxy="127.0.0.1,localhost,::1",
+        )
         proc = _start_agent(_sandbox(binary, home, session), env, project)
         threading.Thread(target=google.serve_forever, daemon=True).start()
         device.attach(proc)
@@ -559,9 +777,14 @@ def run_editor(home, device, binary, session):
                         raise EditorError("Enter a project request to start a turn.")
                     agent.active.set()
                     try:
-                        response = agent.rpc("session/prompt", {
-                            "sessionId": agent.sid, "prompt": [{"type": "text", "text": GUIDE + prompt}],
-                        }, timeout=900)
+                        response = agent.rpc(
+                            "session/prompt",
+                            {
+                                "sessionId": agent.sid,
+                                "prompt": [{"type": "text", "text": GUIDE + prompt}],
+                            },
+                            timeout=900,
+                        )
                     finally:
                         agent.active.clear()
                         agent.approvals.clear()
@@ -585,8 +808,10 @@ def worker(fd):
         fingerprint = sock.recv(32, socket.MSG_WAITALL)
         if len(fingerprint) != 32:
             return 2
+
         def authorized():
             return antigravity_slot.permitted(home, fingerprint)
+
         if not authorized():
             return 2
         sock.settimeout(None)
@@ -594,18 +819,24 @@ def worker(fd):
         device.start()
         try:
             opening = device.receive(15)
-            if opening != {"type": "open", "version": 1} or type(opening["version"]) != int:
+            if opening != {"type": "open", "version": 1} or type(opening["version"]) is not int:
                 raise EditorError("Update your CCFleet client to open the Gemini editor.")
             require_personal(home)
             binary = runtime(home)
             if not device.closed.is_set() and authorized():
-                with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="ccfleet-editor-") as tmp:
+                with tempfile.TemporaryDirectory(
+                    dir="/private/tmp", prefix="ccfleet-editor-"
+                ) as tmp:
                     run_editor(home, device, binary, Path(tmp))
             return 0
         except (OSError, ValueError, KeyError, subprocess.SubprocessError, EOFError) as exc:
             with contextlib.suppress(OSError, EOFError):
-                device.send({"type": "error", "message": str(exc) if isinstance(exc, EditorError)
-                             else "The Gemini editor is unavailable on the private Mac. Reopen it to try again."})
+                device.send(
+                    {
+                        "type": "error",
+                        "message": str(exc) if isinstance(exc, EditorError) else UNAVAILABLE,
+                    }
+                )
             return 2
         finally:
             device.abort()
@@ -643,16 +874,29 @@ def serve():
                             continue
                         conn.settimeout(None)
                         if child is not None and child.poll() is None:
-                            # Consume the fingerprint before closing, so a client sees the busy response.
+                            # Read the fingerprint before returning the busy error.
                             conn.settimeout(2)
                             conn.recv(32, socket.MSG_WAITALL)
                             with conn.makefile("wb") as stream:
-                                gemini_preview.send(stream, {"type": "error", "message":
-                                    "Another Gemini editor is using this slot. Close it and reconnect."})
+                                gemini_preview.send(
+                                    stream,
+                                    {
+                                        "type": "error",
+                                        "message": BUSY,
+                                    },
+                                )
                             continue
                         child = subprocess.Popen(
-                            [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "worker", str(conn.fileno())],
-                            pass_fds=(conn.fileno(),))
+                            [
+                                sys.executable,
+                                "-I",
+                                "-B",
+                                str(Path(__file__).resolve()),
+                                "worker",
+                                str(conn.fileno()),
+                            ],
+                            pass_fds=(conn.fileno(),),
+                        )
                     except (OSError, ValueError):
                         continue
 

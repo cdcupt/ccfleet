@@ -64,7 +64,8 @@ def install():
     components = {root / name: (source / name).read_bytes() for name in (
         "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py",
         "gemini_distribution.py", "workspace_io.py", "gemini_editor_distribution.py",
-        "gemini_editor_slot.py", "gemini_editor_client.py", "project_files.py", "workspace_tools.py")}
+        "gemini_editor_slot.py", "gemini_editor_client.py",
+        "project_files.py", "workspace_tools.py")}
     units = {LABEL: "antigravity_slot.py", EDITOR_LABEL: "gemini_editor_slot.py"}
     for label, service in units.items():
         components[agents / (label + ".plist")] = plistlib.dumps({
@@ -128,7 +129,7 @@ def install():
         if state.returncode:
             subprocess.run(["/bin/launchctl", "bootstrap", domain, agents / (label + ".plist")],
                            check=True)
-    print("Antigravity workspace services installed. For personal Google sign-in, open " + str(launcher))
+    print(f"Antigravity workspace services installed. For personal Google sign-in, open {launcher}")
 
 
 if __name__ == "__main__":

@@ -30,4 +30,4 @@ if __name__ == "__main__":
         subprocess.run(["/usr/bin/osascript", "-e",
                         'display alert "Gemini sign-in could not finish" message '
                         '"Open this app on your enrolled Mac slot and complete Google sign-in."'])
-        raise SystemExit(1)
+        raise SystemExit(1) from None

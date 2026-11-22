@@ -30,7 +30,10 @@ PLATFORMS = {
     "arm64": ("darwin-aarch64", "123a16d5c40a8ac99e20f01a62b68dd860fd96b1c528dfb8eaa37ca8733d4845"),
     "x86_64": ("darwin-x86_64", "92addb5580577b5356d35484d72d1a113d9c5312ad766bcb304983aa8e3fbb06"),
 }
-IDENTITIES = {"agy_acp_server.par": "agy_acp_server", "localharness_external": "localharness_external"}
+IDENTITIES = {
+    "agy_acp_server.par": "agy_acp_server",
+    "localharness_external": "localharness_external",
+}
 MAX_BINARY = 256 * 1024 * 1024
 BINARY = "agy_acp_server.par"
 
@@ -114,7 +117,8 @@ def _extract(archive, folder, expected):
 def _installed(root, arch):
     return sorted(
         ((p.name.removesuffix("-" + arch), p) for p in root.iterdir()
-         if p.name.endswith("-" + arch) and _version(p.name.removesuffix("-" + arch)) >= _version(BASELINE)),
+         if p.name.endswith("-" + arch)
+         and _version(p.name.removesuffix("-" + arch)) >= _version(BASELINE)),
         key=lambda item: _version(item[0]), reverse=True,
     )
 
