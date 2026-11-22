@@ -195,11 +195,30 @@ def test_offline_version_probe_blocks_network_and_uses_temporary_home(tmp_path, 
     monkeypatch.setattr(ux, "_verify_google_binary", lambda _: None)
     assert ux._google_version(spy, stage) == (1, 2, 3)
 
-@pytest.mark.parametrize(("op", "filename"), [("editor-client", "gemini_editor_client.py"),
-                                             ("workspace-tools", "workspace_tools.py")])
-def test_approved_slot_distributes_exact_public_editor_components(tmp_path, monkeypatch, op, filename):
+@pytest.mark.parametrize("op", ["workspace-tools", "editor-client"])
+def test_approved_slot_distributes_both_editor_generations(tmp_path, monkeypatch, op):
+    old = b"previous public component"
+    current = b"current public component"
+    name, _ = dist.LEGACY_EDITOR_SOURCES[op]
+    previous_pin = hashlib.sha256(old).hexdigest()
+    current_pin = hashlib.sha256(current).hexdigest()
+    monkeypatch.setitem(dist.LEGACY_EDITOR_SOURCES, op, (name, previous_pin))
     monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
-    (tmp_path / filename).write_bytes(b"public editor component")
-    monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected vendor request"))
-    assert invoke(tmp_path, {"op": op}) == (0, b"public editor component")
-    assert invoke(tmp_path, {"op": op}, lambda: False) == (2, b"")
+    monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected upstream request"))
+    (tmp_path / name).write_bytes(old)
+    snapshot = tmp_path / dist.editor_snapshot(name)
+    snapshot.write_bytes(current)
+    for fields, expected in (({"op": op}, old), ({"op": op, "sha256": previous_pin}, old),
+                             ({"op": op, "sha256": current_pin}, current)):
+        assert invoke(tmp_path, fields) == (0, expected)
+        assert invoke(tmp_path, fields, lambda: False) == (2, b"")
+        authorized = iter([True, False])
+        assert invoke(tmp_path, fields, authorized.__next__) == (2, b"")
+    for digest in ("0" * 64, "../path", None):
+        assert invoke(tmp_path, {"op": op, "sha256": digest}) == (2, b"")
+    assert invoke(tmp_path, {"op": op, "sha256": current_pin, "path": "another.py"}) == (2, b"")
+    snapshot.unlink()
+    snapshot.symlink_to(tmp_path / name)
+    assert invoke(tmp_path, {"op": op, "sha256": current_pin}) == (2, b"")
+    (tmp_path / name).write_bytes(current)
+    assert invoke(tmp_path, {"op": op}) == (2, b"")

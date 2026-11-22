@@ -18,6 +18,52 @@ ARCHES = ("arm64", "amd64")
 MAX_ARCHIVE = 256 * 1024**2
 BLOCK = 256 * 1024
 
+EDITOR_LIMIT = 128 * 1024
+# Unversioned callers use these exact 0.2.15 sources. Never overwrite their filenames.
+LEGACY_EDITOR_SOURCES = {
+    "editor-client": (
+        "gemini_editor_client.py",
+        "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0",
+    ),
+    "workspace-tools": (
+        "workspace_tools.py",
+        "55153b8a796d059c3fd9b5b3f96247ed843d067ff7c7d5d910e6e6a95fc639f3",
+    ),
+}
+
+
+def editor_snapshot(filename):
+    return filename.removesuffix(".py") + "-0.2.16.py"
+
+
+def _editor_bytes(op, request):
+    filename, legacy = LEGACY_EDITOR_SOURCES[op]
+    if set(request) == {"v", "op"}:
+        expected = legacy
+    elif set(request) == {"v", "op", "sha256"} and isinstance(request["sha256"], str):
+        expected = request["sha256"]
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            return None
+    else:
+        return None
+    if expected != legacy:
+        filename = editor_snapshot(filename)
+    # The requested digest selects only between these two locally installed public files.
+    return pinned_editor_file(Path(__file__).with_name(filename), expected)
+
+
+def pinned_editor_file(path, expected):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= EDITOR_LIMIT:
+            return None
+        raw = source.read(EDITOR_LIMIT + 1)
+    return raw if len(raw) == info.st_size and hashlib.sha256(raw).hexdigest() == expected else None
+
 
 class ArtifactUnavailable(ValueError):
     """Vendor response could not supply the requested artifact."""
@@ -167,14 +213,17 @@ def serve(inp, out, home, authorize):
         return 2
     # These exact public sources are pinned by the signed client. Untrusted requests
     # cannot choose a path or add credentials, query parameters or a download URL.
-    components = {
-        "helper": "gemini_preview.py",
-        "editor-client": "gemini_editor_client.py",
-        "workspace-tools": "workspace_tools.py",
-    }
-    if set(q) == {"v", "op"} and isinstance(q["op"], str) and q["op"] in components:
-        data = Path(__file__).with_name(components[q["op"]]).read_bytes()
-        if not 0 < len(data) <= 128 * 1024:
+    op = q.get("op")
+    if isinstance(op, str) and op in LEGACY_EDITOR_SOURCES:
+        data = _editor_bytes(op, q)
+        if data is None or not authorize():
+            return 2
+        out.write(data)
+        out.flush()
+        return 0
+    if set(q) == {"v", "op"} and op == "helper":
+        data = Path(__file__).with_name("gemini_preview.py").read_bytes()
+        if not 0 < len(data) <= EDITOR_LIMIT:
             return 2
         out.write(data)
         out.flush()

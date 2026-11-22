@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.15"
+CLIENT_VERSION = "0.2.16"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -1387,8 +1387,8 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
-WORKSPACE_TOOLS_HASH = "55153b8a796d059c3fd9b5b3f96247ed843d067ff7c7d5d910e6e6a95fc639f3"
-EDITOR_CLIENT_HASH = "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0"
+WORKSPACE_TOOLS_HASH = "0d981a56e278249c174cdad7e010313456a67d4f263f2fa2ad585efd8ce4ddb0"
+EDITOR_CLIENT_HASH = "1d1f6fcc92b94136ba525d8c87d3dc1d1828cbe0a72d3a9519507e29e9d34bf8"
 
 
 def slot_component(name, digest, operation, slot_command):
@@ -1410,10 +1410,18 @@ def slot_component(name, digest, operation, slot_command):
         with tempfile.TemporaryDirectory(dir=root) as stage:
             downloaded = Path(stage) / "helper.py"
             try:
-                client_experience().slot_artifact(slot_command, {"op": operation}, downloaded,
+                request = {"op": operation}
+                if operation != "helper":
+                    request["sha256"] = digest
+                client_experience().slot_artifact(slot_command, request, downloaded,
                                                   128 * 1024, 20)
             except subprocess.TimeoutExpired as exc:
                 raise CliError("timed out retrieving the Gemini component from the slot") from exc
+            except ValueError as exc:
+                if operation == "helper":
+                    raise
+                raise CliError("could not retrieve the required Gemini editor component; check "
+                               "the private Mac connection and update its CCFleet slot service") from exc
             raw = downloaded.read_bytes()
         if hashlib.sha256(raw).hexdigest() != digest:
             raise CliError("Gemini component checksum mismatch; update the paired slot service")
@@ -1443,14 +1451,14 @@ def preview_helper(slot_command):
 
 def cmd_gemini(args: argparse.Namespace) -> int:
     if not args.preview and not (sys.stdin.isatty() and sys.stdout.isatty()):
-        raise CliError("open an interactive terminal in your project to use Gemini")
+        raise CliError("open an interactive terminal to use Gemini")
     if sys.platform != "darwin":
         raise CliError("the Gemini local editor currently requires macOS")
     if args.preview and getattr(args, "test", None):
         raise CliError("--test is available in an interactive Gemini session")
-    project = selected_project(args.project)
+    project = selected_project(args.project) if args.preview else existing_directory(args.project)
     original = os.environ.get("CCFLEET_HOME")
-    root = home()
+    root = home().absolute()
     try:
         os.environ["CCFLEET_HOME"] = str(root / "antigravity-workspace")
         if args.pair or not load_config()["devices"]:
@@ -1474,7 +1482,7 @@ def cmd_gemini(args: argparse.Namespace) -> int:
                                    release_command)
             command = [*transport, "ccfleet-gemini-editor-v1"]
             editor.run(project, command, project_environment(), tools, project_files(),
-                       getattr(args, "test", None))
+                       getattr(args, "test", None), fleet_home=root)
             return 0
         print("Native Gemini gateway preview: local agy will read and edit a disposable file "
               "inside your project. The slot returns synthetic responses. No live model call "
@@ -1931,11 +1939,16 @@ def project_lock():
         os.close(fd)
 
 
-def selected_project(raw: str) -> Path:
+def existing_directory(raw: str) -> Path:
     path = Path(raw).expanduser().resolve(strict=True)
-    personal = Path.home().resolve()
     if not path.is_dir():
         raise CliError("--project must be an existing directory")
+    return path
+
+
+def selected_project(raw: str) -> Path:
+    path = existing_directory(raw)
+    personal = Path.home().resolve()
     if path == Path(path.anchor) or personal == path or personal.is_relative_to(path):
         raise CliError("select a project directory, not your home or a filesystem root")
     sensitive = (".ssh", ".aws", ".azure", ".config", ".claude", ".codex", ".agents",

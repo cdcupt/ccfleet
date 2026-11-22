@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import json
 import os
+import pwd
 import select
 import shutil
 import signal
@@ -14,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 LIMIT = 192 * 1024
@@ -94,13 +96,72 @@ TOOLS = [
 ]
 
 
+PRIVATE_COMPONENTS = frozenset({
+    ".git", ".ssh", ".aws", ".azure", ".config", ".claude", ".codex", ".agents", ".gemini",
+    ".gnupg", ".kube", ".password-store", ".ccfleet",
+})
+
+
+def _fold_path(path):
+    # macOS user volumes commonly compare names case- and normalization-insensitively.
+    return Path(unicodedata.normalize("NFD", str(path)).casefold())
+
+
+def _identity(path):
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+class PrivateFolders:
+    """Apply the editor's protected locations to targets, independent of its starting folder."""
+
+    def __init__(self, fleet_home):
+        homes = {Path.home().resolve(), Path(pwd.getpwuid(os.getuid()).pw_dir)}
+        names = PRIVATE_COMPONENTS | {"Library", ".local/share", ".local/lib/ccfleet-owner"}
+        locations = {personal / name for personal in homes for name in names}
+        locations.update((Path(fleet_home).absolute(), Path("/Library/Keychains")))
+        for p in tuple(locations):
+            # A broken optional credential-directory link must not prevent editor startup.
+            with contextlib.suppress(OSError, RuntimeError):
+                locations.add(p.resolve())
+        self.locations = tuple(sorted(locations))
+        self.names = {_fold_path(p) for p in self.locations}
+        # File identities also cover macOS firmlinks and alternate names for mounted volumes.
+        self.identities = {v for p in self.locations if (v := _identity(p)) is not None}
+        parents = {parent for p in self.locations for parent in p.parents}
+        self.broad_dirs = {v for p in parents if (v := _identity(p)) is not None}
+
+    def blocked(self, path):
+        folded = _fold_path(path)
+        if PRIVATE_COMPONENTS.intersection(folded.parts) or self.names.intersection(
+                (folded, *folded.parents)):
+            return True
+        return any(_identity(p) in self.identities for p in (path, *path.parents))
+
+    def blocked_entry(self, path, info):
+        # The containing directory has already passed the complete ancestry check.
+        folded = _fold_path(path)
+        return (folded.name in PRIVATE_COMPONENTS or folded in self.names
+                or (info.st_dev, info.st_ino) in self.identities)
+
+    def test_allowed(self, path):
+        return (not os.path.ismount(path) and _identity(path) not in self.broad_dirs
+                and not self.blocked(path))
+
+
 class Workspace:
-    def __init__(self, path, approve, command=None, *, test_path=None, file_tools=None):
+    def __init__(self, path, approve, command=None, *, test_path=None, file_tools=None,
+                 private_folders=None):
         if file_tools is None:
             from . import project_files as file_tools
         self.files = file_tools
         self.path = Path(path).resolve(strict=True)
-        if self.path == Path(self.path.anchor) or self.path in (Path.home(), *Path.home().parents):
+        self.private_folders = private_folders
+        self.test_relative = "."
+        if private_folders is None and self.path in (Path.home(), *Path.home().parents):
             raise ValueError("choose a project folder below a home or volume root")
         self.root_fd = self.files._open_root(self.path)
         self.approve = approve
@@ -114,8 +175,25 @@ class Workspace:
         if not os.path.samestat(os.fstat(self.root_fd), self.path.stat()):
             raise ValueError("the selected folder moved; reopen it")
 
+    def _guard(self, relative):
+        if self.private_folders and self.private_folders.blocked(self.path / relative):
+            raise ValueError("this personal data or CCFleet configuration path is protected")
+
+    def test_directory(self, relative=None):
+        requested = self.test_relative if relative is None else relative
+        if requested != ".":
+            self.files._path(requested)
+        directory = self.path / requested
+        if self.private_folders and not self.private_folders.test_allowed(directory):
+            return None
+        # Opening the full directory again also rejects a target replaced by a symlink.
+        fd = self.files._open_root(directory)
+        os.close(fd)
+        return directory
+
     def _list(self, path):
         sentinel = (self.files._path(path) + "/" if path != "." else "") + "entry"
+        self._guard(path)
         with self.files._parent(self.root_fd, sentinel) as fd:
             if fd is None:
                 raise ValueError("directory unavailable")
@@ -128,6 +206,9 @@ class Workspace:
                         self.files._path(entry.name)
                         info = entry.stat(follow_symlinks=False)
                     except (OSError, ValueError):
+                        continue
+                    if self.private_folders and self.private_folders.blocked_entry(
+                            self.path / path / entry.name, info):
                         continue
                     if stat.S_ISDIR(info.st_mode):
                         entries.append(entry.name + "/")
@@ -170,9 +251,18 @@ class Workspace:
         return {"saved": path, "sha256": hashlib.sha256(encoded).hexdigest()}
 
     def _test(self):
-        if not self.command or not self.approve("Run local tests", " ".join(self.command)):
+        directory = self.test_directory()
+        if directory is None:
+            raise ValueError("select the test project's subfolder with /test")
+        identity = directory.stat()
+        details = " ".join(self.command or ())
+        if self.test_relative != ".":
+            details += " in " + self.test_relative
+        if not self.command or not self.approve("Run local tests", details):
             raise ValueError("local tests were not enabled or approved")
         self._check()
+        if self.test_directory() != directory or not os.path.samestat(identity, directory.stat()):
+            raise ValueError("the local test directory changed; select it again")
         executable = shutil.which(self.command[0], path=self.test_path)
         if not executable:
             raise ValueError("the selected test runner is not installed")
@@ -186,20 +276,21 @@ class Workspace:
                 "CI": "1",
                 "TERM": "dumb",
             }
-            command = (
-                "/usr/bin/sandbox-exec",
-                "-D",
-                "PROJECT=" + str(self.path),
-                "-D",
-                "SCRATCH=" + scratch,
-                "-p",
-                TEST_SANDBOX,
-                executable,
-                *self.command[1:],
-            )
+            params = ["-D", "PROJECT=" + str(directory), "-D", "SCRATCH=" + scratch]
+            profile = TEST_SANDBOX
+            if self.private_folders:
+                # Runtime/toolchain read permissions must not grant access to credentials.
+                denied = []
+                for i, path in enumerate(self.private_folders.locations):
+                    key = f"PRIVATE_{i}"
+                    params.extend(("-D", key + "=" + str(path)))
+                    denied.append(f'(subpath (param "{key}"))')
+                profile += "\n(deny file-read-data file-write* " + " ".join(denied) + ")"
+            command = ["/usr/bin/sandbox-exec", *params, "-p", profile,
+                       executable, *self.command[1:]]
             process = subprocess.Popen(
                 command,
-                cwd=self.path,
+                cwd=directory,
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -241,6 +332,7 @@ class Workspace:
         if name == "list_project":
             return self._list(args.get("path", "."))
         path = self.files._path(args["path"])
+        self._guard(path)
         if name == "make_project_directory":
             if not self.approve("Create directory", path):
                 raise ValueError("creation declined")
@@ -260,7 +352,9 @@ class Workspace:
     def read_optional(self, path):
         """A missing file can be created. Unsafe or unreadable files must never look missing."""
         self._check()
-        item = self.files._read(self.root_fd, self.files._path(path))
+        path = self.files._path(path)
+        self._guard(path)
+        item = self.files._read(self.root_fd, path)
         if item is None:
             return None
         if len(item["data"]) > LIMIT * 4 // 3:
