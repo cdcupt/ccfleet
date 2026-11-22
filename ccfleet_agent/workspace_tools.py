@@ -154,12 +154,13 @@ class PrivateFolders:
 
 class Workspace:
     def __init__(self, path, approve, command=None, *, test_path=None, file_tools=None,
-                 private_folders=None):
+                 private_folders=None, cancelled=None):
         if file_tools is None:
             from . import project_files as file_tools
         self.files = file_tools
         self.path = Path(path).resolve(strict=True)
         self.private_folders = private_folders
+        self.cancelled = cancelled
         self.test_relative = "."
         if private_folders is None and self.path in (Path.home(), *Path.home().parents):
             raise ValueError("choose a project folder below a home or volume root")
@@ -299,13 +300,22 @@ class Workspace:
             )
             output = bytearray()
             deadline = time.monotonic() + 90
+            stream_open = True
             try:
                 while time.monotonic() < deadline:
+                    if self.cancelled and self.cancelled():
+                        raise ValueError("local test cancelled")
+                    if not stream_open:
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.1)
+                        continue
                     if not select.select([process.stdout], [], [], 0.25)[0]:
                         continue
                     part = os.read(process.stdout.fileno(), 32768)
                     if not part:
-                        break
+                        stream_open = False
+                        continue
                     output.extend(part)
                     del output[:-16384]
                 code = process.wait(timeout=max(0, deadline - time.monotonic()))

@@ -16,8 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("editor_running", [False, True])
+@pytest.mark.parametrize("old_worker", [False, True])
 def test_install_preserves_existing_job_and_finder_launches_only_owner_login(
-    tmp_path, monkeypatch, editor_running
+    tmp_path, monkeypatch, editor_running, old_worker
 ):
     home = tmp_path / "owner"
     runtime = home / ".local/lib/ccfleet-owner" / ("c" * 40) / "ccfleet_agent"
@@ -35,9 +36,10 @@ def test_install_preserves_existing_job_and_finder_launches_only_owner_login(
         pytest.skip("installer requires a login user")
     old = {}
     history = []
-    for version, revision, _ in dist.EDITOR_HISTORY:
+    for version, revision, historical_pins in dist.EDITOR_HISTORY:
         pins = {}
-        for op, name in dist.EDITOR_FILES.items():
+        for op in historical_pins:
+            name = dist.EDITOR_FILES[op]
             raw = f"public {version} {name}".encode()
             snapshot = dist.editor_snapshot(name, version)
             path = runtime / snapshot
@@ -60,13 +62,25 @@ def test_install_preserves_existing_job_and_finder_launches_only_owner_login(
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(subprocess, "run", command)
     app = runpy.run_path(str(ROOT / "tools/install_workspace_slot.py"))
-    old_code = b"# worker already serving a connection\n"
+    prior = b"# predecessor for an in-flight request\n"
+    old_dist = runtime / "gemini_distribution.py"
+    old_dist.write_bytes(prior)
+    monkeypatch.setitem(app["PREDECESSORS"], old_dist.name, {hashlib.sha256(prior).hexdigest()})
     worker = runtime / "gemini_editor_slot.py"
-    worker.write_bytes(old_code)
-    monkeypatch.setitem(app["PREDECESSORS"], worker.name, {hashlib.sha256(old_code).hexdigest()})
-    with worker.open("rb") as active_worker:
+    original_worker = ((ROOT / "ccfleet_agent" / worker.name).read_bytes() if not old_worker
+                       else b"# previously supported worker version\n")
+    worker.write_bytes(original_worker)
+    if old_worker:
+        monkeypatch.setitem(app["PREDECESSORS"], worker.name,
+                            {hashlib.sha256(original_worker).hexdigest()})
+    worker_inode = worker.stat().st_ino
+    with old_dist.open("rb") as active_request, worker.open("rb") as active_worker:
         app["install"]()
-        assert active_worker.read() == old_code
+        assert active_request.read() == prior
+        assert active_worker.read() == original_worker
+    if not old_worker:
+        assert worker.stat().st_ino == worker_inode
+    assert old_dist.read_bytes() == (ROOT / "ccfleet_agent" / old_dist.name).read_bytes()
     for snapshot, (raw, inode, mtime) in old.items():
         path = runtime / snapshot
         assert (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) == (raw, inode, mtime)
