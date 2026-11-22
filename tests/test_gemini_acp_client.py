@@ -351,3 +351,33 @@ acp.run([sys.executable,'-I','-c',sys.argv[3],sys.argv[2]+'/wire',sys.argv[2]+'/
             proc.wait()
         for stream in (proc.stdin,proc.stdout,proc.stderr):
             stream.close()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="uses the Mac local project test sandbox")
+def test_local_project_runner_requires_one_time_permission(tmp_path, monkeypatch):
+    import shutil
+
+    trusted_path = "/opt/homebrew/bin:/usr/bin:/bin"
+    if not shutil.which("npm", path=trusted_path):
+        pytest.skip("npm is unavailable")
+    monkeypatch.setenv("PATH", trusted_path)
+    h = Harness(tmp_path, test="npm")
+    (h.project / "package.json").write_text(json.dumps({"scripts": {"test": "node check.cjs"}}))
+    (h.project / "check.cjs").write_text("require('node:fs').writeFileSync('checked.txt','ok'); console.log('RESULT-FROM-PROJECT')")
+    try:
+        sid = h.open()
+        assert h.recv(h.prompt(sid, "test"), lambda _: "decline")["result"]["stopReason"] == "end_turn"
+        assert not (h.project / "checked.txt").exists()
+
+        def approve(msg):
+            tc = msg["params"]["toolCall"]
+            assert tc["kind"] == "execute" and tc["title"].endswith("npm test")
+            assert tc["locations"] == [{"path": str(h.project)}]
+            return "allow"
+        assert h.recv(h.prompt(sid, "test"), approve)["result"]["stopReason"] == "end_turn"
+        assert (h.project / "checked.txt").read_text() == "ok"
+        wire = [json.loads(line) for line in h.log.read_text().splitlines()]
+        result = [v["result"] for v in wire if isinstance(v.get("result"), dict)]
+        assert result[-1]["exit"] == 0 and "RESULT-FROM-PROJECT" in result[-1]["output"]
+    finally:
+        h.close()
