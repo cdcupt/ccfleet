@@ -197,14 +197,14 @@ def test_offline_version_probe_blocks_network_and_uses_temporary_home(tmp_path, 
 
 @pytest.mark.parametrize("op", ["workspace-tools", "editor-client"])
 def test_approved_slot_distributes_all_signed_editor_generations(tmp_path, monkeypatch, op):
-    generations = (b"first public component", b"second public component", b"current component")
+    versions = [version for version, _, _ in dist.EDITOR_HISTORY] + [dist.EDITOR_VERSION]
+    generations = [(version + " " + op).encode("ascii") for version in versions]
     pins = [hashlib.sha256(component).hexdigest() for component in generations]
     name = dist.EDITOR_FILES[op]
     history = [(v, revision, {op: pin}) for (v, revision, _), pin in zip(dist.EDITOR_HISTORY, pins)]
     monkeypatch.setattr(dist, "EDITOR_HISTORY", history)
     monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
     monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected upstream request"))
-    versions = [v for v, _, _ in history] + [dist.EDITOR_VERSION]
     for component, version in zip(generations, versions):
         (tmp_path / dist.editor_snapshot(name, version)).write_bytes(component)
     assert invoke(tmp_path, {"op": op}) == (0, generations[0])
@@ -223,3 +223,20 @@ def test_approved_slot_distributes_all_signed_editor_generations(tmp_path, monke
     assert invoke(tmp_path, {"op": op, "sha256": pins[-1]}) == (2, b"")
     (tmp_path / name).write_bytes(generations[-1])
     assert invoke(tmp_path, {"op": op}) == (2, b"")
+
+
+def test_acp_component_requires_its_own_signed_digest(tmp_path, monkeypatch):
+    op = "acp-client"
+    name = dist.EDITOR_FILES[op]
+    content = b"verified T3 helper fixture"
+    pin = hashlib.sha256(content).hexdigest()
+    monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
+    monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected network request"))
+    assert all(op not in pins for _, _, pins in dist.EDITOR_HISTORY)
+    (tmp_path / dist.editor_snapshot(name)).write_bytes(content)
+    assert invoke(tmp_path, {"op": op, "sha256": pin}) == (0, content)
+    for request in ({"op": op}, {"op": op, "sha256": "0" * 64},
+                    {"op": op, "sha256": pin, "path": name},
+                    {"op": "editor-client", "sha256": pin}):
+        assert invoke(tmp_path, request) == (2, b"")
+    assert invoke(tmp_path, {"op": op, "sha256": pin}, iter([True, False]).__next__) == (2, b"")

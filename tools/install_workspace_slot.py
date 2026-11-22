@@ -21,6 +21,7 @@ PREDECESSORS = {
         "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
     },
     "gemini_distribution.py": {
+        "cad07805383d75038973e8bdff335f83cb73e5b168ffa48c40127229bee90d30",
         "419f4e4ac9aa724e19fade30c71ab6fa764e7d52164632476e8bea755ae4556a",
         "67ff27fc244194d0f7e752d828befc848b31f7f0e6f8576e7a6476baa8b58c5f",
         "7e70e1cc368469fbd940e573b7028b463f9d271b1ebd9cb2b5b427ce53785cab",
@@ -119,6 +120,8 @@ def install():
         "gemini_editor_slot.py", "project_files.py")}
     for op, name in dist.EDITOR_FILES.items():
         for version, revision, pins in dist.EDITOR_HISTORY:
+            if op not in pins:
+                continue  # This component was first shipped in a later signed client.
             target = root / dist.editor_snapshot(name, version)
             components[target] = historical_editor_source(
                 dist, source, target, name, revision, pins[op])
