@@ -381,3 +381,75 @@ def test_local_project_runner_requires_one_time_permission(tmp_path, monkeypatch
         assert result[-1]["exit"] == 0 and "RESULT-FROM-PROJECT" in result[-1]["output"]
     finally:
         h.close()
+
+
+def admission_slot(host, errors):
+    """Record child ownership; leave a refused peer running until its own SSH is reaped."""
+    attempts = host.root / "attempts"
+    inserted = """
+attempts=log.parent/'attempts'
+with attempts.open('a') as f:f.write(str(os.getpid())+'\\n')
+index=len(attempts.read_text().splitlines())-1
+errors=json.loads(sys.argv[3])
+if index<len(errors):
+    put({'type':'error','message':errors[index]})
+    time.sleep(20)
+    sys.exit(2)
+"""
+    host.bridge.command[4] = SLOT.replace('run.write_text(str(os.getpid()))', inserted)
+    host.bridge.command.append(json.dumps(errors))
+    return attempts
+
+
+def test_busy_discovery_retries_only_before_open_and_default_is_not_a_model(host, monkeypatch):
+    monkeypatch.setattr(acp, "BUSY_RETRY_DELAY", .01)
+    attempts = admission_slot(host, [acp.SLOT_BUSY])
+    sid = host.open()
+    pids = list(map(int, attempts.read_text().splitlines()))
+    assert len(pids) == 2
+    with pytest.raises(ProcessLookupError):
+        os.kill(pids[0], 0)
+    # Both supported ACP model methods can receive T3's default placeholder.
+    assert host.recv(host.send("session/set_config_option", {
+        "sessionId": sid, "configId": "model", "value": "default",
+    }))["result"]["configOptions"][0]["currentValue"] == "gemini-test-low"
+    assert host.recv(host.send("session/set_model", {"sessionId": sid, "modelId": "default"}))["result"] == {}
+    assert "default" not in host.bridge.session.models
+    assert host.recv(host.prompt(sid, "sent once"))["result"]["stopReason"] == "end_turn"
+    assert [json.loads(s)["type"] for s in host.log.read_text().splitlines()] == ["open", "open", "prompt"]
+
+
+@pytest.mark.parametrize("message,is_busy", [
+    (acp.SLOT_BUSY, True), ("Grant revoked", False),
+    ("Another Gemini editor is using this slot, but unrecognized error", False),
+    ("Sign in to the Antigravity editor", False),
+])
+def test_busy_exhaustion_and_nonretryable_open_errors(host, monkeypatch, message, is_busy):
+    monkeypatch.setattr(acp, "BUSY_RETRY_WINDOW", .14)
+    monkeypatch.setattr(acp, "BUSY_RETRY_DELAY", .01)
+    attempts = admission_slot(host, [message] * 32)
+    host.recv(host.send("initialize", {"protocolVersion": 1}))
+    reply = host.recv(host.send("session/new", {"cwd": str(host.project)}))
+    assert ("using your slot" in reply["error"]["message"]) == is_busy
+    pids = list(map(int, attempts.read_text().splitlines()))
+    assert (1 < len(pids) < 12) if is_busy else len(pids) == 1
+    for pid in pids:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    assert host.bridge.session is None
+
+
+def test_disconnecting_editor_ends_busy_backoff(host, monkeypatch):
+    import time
+
+    attempts = admission_slot(host, [acp.SLOT_BUSY] * 8)
+    monkeypatch.setattr(acp, "BUSY_RETRY_DELAY", 3)
+    host.recv(host.send("initialize", {"protocolVersion": 1}))
+    host.send("session/new", {"cwd": str(host.project)})
+    until = time.monotonic() + 4
+    while not attempts.exists() and time.monotonic() < until:
+        time.sleep(.01)
+    assert attempts.exists()
+    host.close()
+    assert len(attempts.read_text().splitlines()) == 1
+    assert not host.bridge.worker.is_alive()

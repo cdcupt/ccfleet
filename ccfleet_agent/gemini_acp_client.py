@@ -19,6 +19,9 @@ from urllib.parse import unquote, urlsplit
 
 VERSION = "0.2.18"
 MAX_RECORD = 4 * 1024 * 1024
+SLOT_BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
+BUSY_RETRY_WINDOW = 10.0
+BUSY_RETRY_DELAY = 0.4
 ALLOW = {"optionId": "allow", "kind": "allow_once", "name": "Allow once"}
 DECLINE = {"optionId": "decline", "kind": "reject_once", "name": "Decline"}
 
@@ -104,11 +107,7 @@ class Session:
         self.writing = None
         self.local_tool = None
 
-    def open(self):
-        if self.host.test_folder:
-            if self.workspace.test_directory(self.host.test_folder) is None:
-                raise invalid("Choose an ordinary local test subfolder.")
-            self.workspace.test_relative = self.host.test_folder
+    def _open_channel(self):
         # Only the launcher chooses this fixed command and environment. ACP mcpServers, _meta,
         # shell arguments and environment from the selected project are never sent to the slot.
         with self.lock:
@@ -118,21 +117,41 @@ class Session:
                 self.host.command, cwd="/", env=self.host.environment, stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
             )
-        self.channel = self.host.editor.Channel(self.process)
+            self.channel = self.host.editor.Channel(self.process)
         self.channel.send({"type": "open", "version": 1})
-        try:
-            ready = self.channel.receive(timeout=420)
-        except ValueError as exc:
-            # Only these fixed instructions are safe to expose to the editor.
-            reason = str(exc)
-            if reason.startswith("Another Gemini editor is using this slot"):
+        return self.channel.receive(timeout=420)
+
+    def open(self):
+        if self.host.test_folder:
+            if self.workspace.test_directory(self.host.test_folder) is None:
+                raise invalid("Choose an ordinary local test subfolder.")
+            self.workspace.test_relative = self.host.test_folder
+        # A short-lived T3 model-discovery session may overlap the first actual thread.
+        # Retry only admission explicitly refused as busy, before any prompt can be sent.
+        deadline = None
+        delay = BUSY_RETRY_DELAY
+        while True:
+            try:
+                ready = self._open_channel()
+                break
+            except ValueError as exc:
+                reason = str(exc)
+                if ("CCFleet Gemini Sign In" in reason
+                        or reason.startswith("Sign in to the Antigravity")):
+                    raise RpcError(-32000, "Open CCFleet Gemini Sign In on your private Mac, "
+                                   "then start a new thread.") from None
+                if reason != SLOT_BUSY:
+                    raise
+            self._retire_channel(graceful=False)
+            now = time.monotonic()
+            if deadline is None:
+                deadline = now + BUSY_RETRY_WINDOW
+            if now + delay > deadline:
                 raise RpcError(-32000, "Another Gemini session is using your slot. "
-                               "Close it before opening a new T3 Gemini thread.") from None
-            if ("CCFleet Gemini Sign In" in reason
-                    or reason.startswith("Sign in to the Antigravity")):
-                raise RpcError(-32000, "Open CCFleet Gemini Sign In on your private Mac, "
-                               "then start a new thread.") from None
-            raise
+                               "Close it before opening a new T3 Gemini thread.")
+            if self.cancelled.wait(delay):
+                raise EOFError
+            delay = min(1.5, delay * 2)
         self.current = ready.get("model")
         if ready.get("type") != "ready" or not isinstance(self.current, str):
             raise ValueError("Invalid Gemini session.")
@@ -155,30 +174,42 @@ class Session:
         )
 
     def interrupt(self):
-        self.cancelled.set()
         with self.lock:
+            if self.cancelled.is_set():
+                return
+            self.cancelled.set()
             if self.process and self.process.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.process.pid, signal.SIGTERM)
 
-    def close(self):
-        if self.process:
-            if self.process.poll() is None and not self.cancelled.is_set():
+    def _retire_channel(self, *, graceful):
+        with self.lock:
+            proc, channel = self.process, self.channel
+            already_signalled = self.cancelled.is_set()
+            self.process = self.channel = None
+        if proc is None:
+            return
+        if proc.poll() is None and not already_signalled:
+            if graceful:
                 with contextlib.suppress(OSError, ValueError):
-                    self.channel.send({"type": "close"})
-            try:
-                self.process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self.interrupt()
-                try:
-                    self.process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(self.process.pid, signal.SIGKILL)
-                    self.process.wait()
-            with contextlib.suppress(OSError):
-                self.process.stdin.close()
-            self.process.stdout.close()
+                    channel.send({"type": "close"})
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=1)
+            if proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+        with contextlib.suppress(OSError):
+            proc.stdin.close()
+        proc.stdout.close()
+
+    def close(self):
+        self._retire_channel(graceful=True)
         self.workspace.close()
 
     def update(self, event, **fields):
@@ -195,6 +226,9 @@ class Session:
                  "options": [{"name": m, "value": m} for m in self.models]}]
 
     def select_model(self, model):
+        # T3 may send its placeholder before the user selects one of the advertised models.
+        if model == "default":
+            model = self.current
         if model not in self.models:
             raise invalid("Choose a Gemini model offered by this slot.")
         if model != self.current:
