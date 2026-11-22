@@ -39,6 +39,7 @@ from . import (
     compatibility,
     devin_ui,
     gateway_ui,
+    gemini_setup_ui,
     names,
     oauth,
     offer_ui,
@@ -1543,7 +1544,8 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     # asked for on this page, for each slot's Claude Code row.
     channels = store.get_channel_versions()
     updates = {s["id"]: store.get_claude_update(s["id"]) or {} for s in held}
-    cli_devices = {s["id"]: store.list_cli_devices(s["id"], held_by=account["id"])
+    cli_devices = {s["id"]: [device for device in store.list_cli_devices(
+                       s["id"], held_by=account["id"]) if not device.get("workspace_only")]
                    for s in held}
     csrf = csrf_for(session_id, cfg.cookie_secret)
     quota = int(account.get("slot_quota") or 0)
@@ -1632,6 +1634,9 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
     paired_ids = {device["slot_id"] for device in account_devices}
     authorizer = next((s for s in pairing_slots if s["id"] in paired_ids),
                       pairing_slots[0] if pairing_slots else None)
+    gemini_links = {s["id"]: gemini_setup_ui.account_link(
+        store.antigravity_pairing_status(s["id"], account["id"], now=now))
+        for s in pairing_slots if cfg.gateway_ready and s.get("private_owner")}
     cards = "".join(_slot_card(s, nodes.get(s["node_id"]) or {}, latest.get(s["node_id"]),
                                logins[s["id"]], csrf, cfg, now, flagged[s["id"]],
                                updates[s["id"]], channels, cli_devices[s["id"]],
@@ -1640,6 +1645,7 @@ def page(store: Store, cfg: Config, account: Optional[Mapping[str, Any]],
                                devin_html=devin_ui.native_details(store, cfg, account, s, now=now),
                                authorizer=authorizer,
                                account_devices=account_devices,
+                               gemini_link=gemini_links.get(s["id"], ""),
                                payment_end=financial[s["id"]][0], paid_access=financial[s["id"]][1],
                                recurring=s["id"] in recurring_slots,
                                traffic_html=traffic_ui.slot_panel(traffic.slot_summary(
@@ -3015,6 +3021,7 @@ def _slot_card(
     devin_html: str = "",
     authorizer: Optional[Mapping[str, Any]] = None,
     account_devices: Optional[list[Mapping[str, Any]]] = None,
+    gemini_link: str = "",
     payment_end: Optional[float] = None,
     paid_access: bool = True,
     recurring: bool = False,
@@ -3047,10 +3054,8 @@ def _slot_card(
                     "Fleet 不会出租或清除它。", inline=True)
                 + '</p>' + _slot_connect(slot, report, csrf, cfg, None, authorizer,
                     connected=connected, paid_access=paid_access)
-                + ('<p><a class="btn" href="/account/gemini">'
-                   + label("Set up Gemini", "设置 Gemini", inline=True) + '</a></p>'
-                   if cfg.gateway_ready and slot.get("inference_enabled") is True
-                   and paid_access else '')
+                + '<div id="slot-' + escape(slot["id"]) + '-gemini" data-fleet-readonly>'
+                + gemini_link + '</div>'
                 + _cli_access(slot, node, cli_devices or [], csrf, now,
                     account_devices=account_devices, authorizer=authorizer,
                     paid_access=paid_access,

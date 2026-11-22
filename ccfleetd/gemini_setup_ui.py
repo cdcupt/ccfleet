@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from html import escape
 
-from . import gemini_setup_store
+from . import gemini_setup_store, resets
 from .bilingual import label
 
 PATH = "/account/gemini"
@@ -98,7 +98,7 @@ def slot_panel(slot, keys, binding, grants):
     def row(title, value):
         return "<div><dt>" + title + "</dt><dd>" + value + "</dd></div>"
 
-    status = tr("Awaiting API key", "待保存密钥")
+    status = tr("No API key configured", "未配置 API 密钥")
     if binding and gemini_setup_store.retiring(binding):
         status = tr("Removal pending", "等待移除")
     elif binding and binding["credential_fp"]:
@@ -127,8 +127,8 @@ def slot_panel(slot, keys, binding, grants):
         '<a href="https://antigravity.google/docs/install?tab=cli" '
         'target="_blank" rel="noopener noreferrer">'
         + tr(
-            "Using a Google AI subscription? Sign in with Antigravity.",
-            "使用 Google AI 订阅？查看 Antigravity 登录方式。",
+            "Antigravity sign-in instructions for the slot Mac",
+            "查看槽位 Mac 的 Antigravity 登录说明",
         )
         + "</a></p></aside>"
     )
@@ -293,51 +293,157 @@ WORKSPACE_DOWNLOAD = (
 )
 
 
-def workspace_panel(csrf, ready):
-    instructions = tr("Open CCFleet Workspace from Applications or download it below. "
-                      "Your private slot runs Google’s "
-                      "Antigravity CLI. Workspace file saves and test runs ask for approval on "
-                      "the connecting Mac. Requested file contents and test output go to the "
-                      "agent on your slot.", "在应用程序中打开 CCFleet Workspace，也可从下方下载。"
-                      "专属槽位运行 Google 的 "
-                      "Antigravity CLI；保存本地文件和运行测试时，会在当前 Mac 上请求确认。"
-                      "请求的文件内容和测试输出将发送到槽位上的代理。")
-    form = ('<form method="post" action="/account/gemini/workspace">' + hidden("csrf", csrf)
+def pairing_summary(pairing):
+    count = len(pairing["devices"])
+    if count:
+        summary = tr(f"{count} paired computer" + ("s" if count != 1 else ""),
+                     f"已配对 {count} 台电脑")
+    else:
+        summary = tr("No paired computers", "尚无已配对的电脑")
+    if pairing["enrollment_id"]:
+        summary += " · " + tr("Reusable setup code active", "可重复使用的配对码已启用")
+    pending = pairing["pending_count"]
+    if pending:
+        summary += " · " + tr(f"{pending} unused one-time code" + ("s" if pending != 1 else ""),
+                              f"{pending} 个待使用的一次性配对码")
+    return summary
+
+
+def account_link(pairing):
+    if pairing["devices"]:
+        action = tr("Manage Gemini", "管理 Gemini")
+    elif pairing["enrollment_id"] or pairing["pending_count"]:
+        action = tr("Finish pairing", "完成配对")
+    else:
+        action = tr("Pair a computer", "配对电脑")
+    return ('<p><strong>Gemini</strong> · ' + pairing_summary(pairing)
+            + '</p><p><a class="btn" href="' + PATH + '#subscription">' + action + '</a></p>')
+
+
+def workspace_form(csrf, fields, consent, action):
+    return ('<form method="post" action="/account/gemini/workspace">' + hidden("csrf", csrf)
+            + ''.join(hidden(key, value) for key, value in fields.items())
             + '<label class="gm-check"><input type="checkbox" required name="trust" value="1">'
-            + tr("I trust this computer to operate Antigravity under my Mac slot login, "
-                 "including the CLI’s built-in tools on that Mac.",
-                 "我信任这台电脑以槽位登录身份使用 Antigravity 及该 Mac 的 CLI 内置工具。")
+            + consent
             + '</label><div class="gm-actions"><button class="primary" type="submit">'
-            + tr("Create Antigravity pairing code", "创建 Antigravity 配对码")
-            + '</button></div></form>') if ready else (
-                '<p role="status">' + tr("The Antigravity workspace service is offline.",
-                                         "Antigravity 工作区服务当前不在线。") + '</p>')
+            + action + '</button></div></form>')
+
+
+def reusable_controls(csrf, enrollment_id, ready):
+    consent = tr("I authorize anyone holding this code to pair computers and use Antigravity "
+                 "and its tools on my slot Mac until I replace or disable the code.",
+                 "我授权持有此码的人配对电脑并使用槽位 Mac 上的 Antigravity 及其工具，"
+                 "直至我更换或停用此码。")
+    if not enrollment_id:
+        return (workspace_form(csrf, {"operation": "create"}, consent,
+                               tr("Create reusable setup code", "创建可重复使用的配对码"))
+                if ready else "")
+    revision = {"enrollment_id": enrollment_id}
+    replace = (workspace_form(csrf, {**revision, "operation": "replace"}, consent,
+                              tr("Replace setup code", "更换配对码")) if ready else "")
+    disable = workspace_form(csrf, {**revision, "operation": "disable"},
+                             tr("I want to stop new pairings with this code.",
+                                "我要禁止使用此码继续配对新电脑。"),
+                             tr("Disable setup code", "停用配对码"))
+    return ('<details class="gm-disconnect"><summary>'
+            + tr("Replace or disable the code", "更换或停用配对码") + '</summary><p>'
+            + tr("If you lost the code, replace it to get a new one. Replacing or disabling "
+                 "the code preserves existing computer connections.",
+                 "如已丢失配对码，可更换以获取新码。更换或停用配对码后，已配对的电脑仍可使用。")
+            + '</p>' + replace + disable + '</details>')
+
+
+def workspace_devices(csrf, slot_id, pairing):
+    from . import usersite
+
+    if not pairing["devices"]:
+        return ""
+    rows = []
+    for device in pairing["devices"]:
+        stamp = escape(resets.iso(device["created_at"]))
+        remove = usersite._form(f"/account/slots/{slot_id}/cli-revoke", csrf, "Remove",
+                                hidden("device_id", device["id"]), "quiet")
+        rows.append('<li><b>' + escape(device["name"]) + '</b> · ' + tr("Paired", "配对时间")
+                    + f' <time datetime="{stamp}" data-local>{stamp}</time> ' + remove + '</li>')
+    warning = ('<p class="gm-secondary">' + tr(
+        "When removing a computer that holds a copy of your setup code, replace or disable "
+        "the code too. Otherwise that computer can pair again.",
+        "若移除的电脑保存了配对码，请同时更换或停用此码，否则该电脑仍可再次配对。") + '</p>'
+        if pairing["enrollment_id"] else "")
+    return '<ul>' + ''.join(rows) + '</ul>' + warning
+
+
+def workspace_panel(csrf, ready, pairing, slot_id):
+    offline = ('' if ready else '<p role="status">'
+               + tr("The Antigravity workspace service is offline.",
+                    "Antigravity 工作区服务当前不在线。") + '</p>')
+    legacy_form = (workspace_form(csrf, {}, tr(
+        "I trust one computer to use Antigravity and its tools on my slot Mac.",
+        "我信任一台电脑使用槽位 Mac 上的 Antigravity 及其工具。"),
+        tr("Create one-time code", "创建一次性配对码")) if ready else "")
+    pending = ('<p>' + tr("If you already have an unused one-time code, paste it on the Mac "
+                          "you’re pairing within 10 minutes of creation.",
+                          "如已有未使用的一次性配对码，请在创建后 10 分钟内在待配对 Mac 上粘贴。")
+               + '</p>') if pairing["pending_count"] else ''
     return ('<section class="gm-panel" id="subscription"><h2>'
-            + tr("Antigravity subscription", "Antigravity 订阅") + '</h2><p>' + instructions
-            + '</p><p><a href="' + WORKSPACE_DOWNLOAD + '">'
+            + tr("Antigravity subscription", "Antigravity 订阅") + '</h2><p><strong>'
+            + pairing_summary(pairing) + '</strong></p>'
+            + workspace_devices(csrf, slot_id, pairing) + offline + '<p>'
+            + tr("Sign in to Google once on the slot Mac. Each trusted Mac uses the same "
+                 "setup code to pair with Gemini, including Macs already paired with Claude. "
+                 "The subscription needs no API key.",
+                 "只需在槽位 Mac 上登录一次 Google。每台受信任的 Mac 都可用同一个码配对 Gemini，"
+                 "已配对 Claude 的 Mac 也一样。使用订阅无需 API 密钥。")
+            + '</p><h3>' + tr("Pair a Mac", "配对 Mac") + '</h3><p>'
+            + tr("On each new Mac, update CCFleet, then paste your saved setup code "
+                 "at the pairing prompt.",
+                 "在每台新 Mac 上先更新 CCFleet，再按配对提示粘贴已保存的配对码。")
+            + '</p><pre><code>ccfleet update\nccfleet pair gemini</code></pre><p>'
+            + tr("On a paired Mac, open your Gemini connection in T3 or run",
+                 "在已配对的 Mac 上，在 T3 中打开 Gemini 连接，或运行")
+            + ' <code>ccfleet gemini</code>.</p>' + pending
+            + reusable_controls(csrf, pairing["enrollment_id"], ready)
+            + '<details class="gm-disconnect"><summary>'
+            + tr("Workspace app or older CLI", "Workspace 应用或旧版 CLI") + '</summary><p>'
+            + tr("These clients use a one-time code valid for 10 minutes.",
+                 "这些客户端使用一次性配对码，有效期为 10 分钟。")
+            + '</p>' + legacy_form + '<p><a href="' + WORKSPACE_DOWNLOAD + '">'
             + tr("Download CCFleet Workspace for Mac", "下载 Mac 版 CCFleet Workspace")
-            + '</a></p><p><code>ccfleet gemini --preview</code> '
-            + tr("uses this pairing for a synthetic native CLI test on your MacBook.",
-                 "使用此配对在 MacBook 上验证原生终端的文件读写，不消耗订阅额度或 API 费用。")
-            + '</p>' + form + '</section>')
+            + '</a></p></details><p class="gm-secondary">'
+            + tr("The slot receives requested file contents and test output. "
+                 "File changes and test runs ask for approval on the local Mac.",
+                 "槽位会收到按需读取的文件内容和测试输出。修改文件和运行测试前，"
+                 "会在本地 Mac 上请求确认。")
+            + '</p></section>')
 
 
-def workspace_result(code, slot, keys, binding, grants, viewer, script):
-    content = ('<p>' + tr("For the native CLI preview, open a terminal in your MacBook project:",
-                          "要测试本机原生 CLI，请在 MacBook 项目目录打开终端：")
-               + '</p><pre><code>ccfleet gemini --preview</code></pre><p>'
-               + tr("Paste the code at the hidden prompt within 10 minutes. The preview verifies "
-                    "a local edit using synthetic responses. For the interactive slot-hosted "
-                    "session, open CCFleet Workspace and choose Antigravity.",
-                    "在 10 分钟内将配对码粘贴到隐藏输入提示。预览使用模拟响应验证本机编辑。"
-                    "需要在槽位上运行交互式会话时，请打开 CCFleet Workspace 并选择 Antigravity。")
-               + '</p><pre class="gm-code" id="gemini-code">' + escape("agy1-" + code)
-               + '</pre><button type="button" id="gemini-copy" hidden>'
-               + tr("Copy code", "复制配对码") + '</button><p><a href="' + WORKSPACE_DOWNLOAD + '">'
-               + tr("Download the Mac launcher", "下载 Mac 启动器") + '</a></p><script>'
-               + script + '</script>')
+def workspace_result(code, slot, keys, binding, grants, viewer, script, *, reusable):
+    if reusable:
+        title = tr("Reusable Gemini setup code", "可重复使用的 Gemini 配对码")
+        instructions = tr("Save this code in your password manager now. It’s shown only once. "
+                          "On each Mac you trust, update CCFleet and paste the same code "
+                          "at the prompt. After pairing, open your Gemini connection in T3.",
+                          "请立即将配对码保存到密码管理器，此码只显示一次。"
+                          "在每台受信任的 Mac 上更新 CCFleet，再按提示粘贴同一个码。"
+                          "配对后可在 T3 中打开 Gemini 连接。")
+        command = "ccfleet update\nccfleet pair gemini"
+        download = ""
+    else:
+        title = tr("One-time Antigravity pairing code", "Antigravity 一次性配对码")
+        instructions = tr("On the Mac you’re pairing, open a terminal and run this command. "
+                          "Paste the code at the prompt within 10 minutes.",
+                          "在待配对 Mac 上打开终端并运行此命令，然后在 10 分钟内按提示粘贴配对码。")
+        command = "ccfleet gemini"
+        download = ('<p><a href="' + WORKSPACE_DOWNLOAD + '">'
+                    + tr("Download the Mac launcher", "下载 Mac 启动器") + '</a></p>')
+    content = ('<p>' + instructions + '</p><pre><code>' + command + '</code></pre>'
+               + '<pre class="gm-code" id="gemini-code">' + escape("agy1-" + code)
+               + '</pre><div class="gm-copy-line"><button type="button" id="gemini-copy" hidden>'
+               + tr("Copy code", "复制配对码") + '</button><span id="copy-status" role="status">'
+               + '</span></div>' + download + '<script>' + script + '</script>')
     return shell(tr("Connect your local project", "连接本地项目"),
                  tr("The Google sign-in stays on your private Mac slot.",
                     "Google 登录凭据保存在你的专属 Mac 槽位。"),
-                 panel(tr("Antigravity pairing code", "Antigravity 配对码"), content),
-                 slot_panel(slot, keys, binding, grants), viewer, back=PATH)
+                 panel(title, content),
+                 slot_panel(slot, keys, binding, grants), viewer, back=PATH + "#subscription",
+                 back_label=tr("Gemini connections", "Gemini 连接"))

@@ -1,6 +1,7 @@
 """Browser-to-Mac credential enrollment without sending a provider key to Fleet."""
 
 import json
+import re
 from html.parser import HTMLParser
 
 import pytest
@@ -234,3 +235,122 @@ def test_client_picker_distinguishes_new_computers_from_saved_connection_names()
         assert 'for="gm-client"' in html and 'id="gm-client"' in html
         for name in ("gm-project", "gm-model"):
             assert f'for="{name}"' in html and f'aria-describedby="{name}-hint"' in html
+
+
+def test_subscription_account_labels_follow_pairing_state(private):
+    from ccfleetd import bilingual, usersite
+    from tests.test_gateway_access import public_key
+    from tests.test_private_owner_nodes import NOW
+
+    store, _ = private
+    enable(store)
+    owner = store.get_account("operator")
+    cfg = Config(cookie_secret="fixture", public_url="https://fleet.example",
+                 gateway_enabled=True, gateway_ssh_key_path="/test", gateway_ssh_public_key="test")
+
+    def card(lang, at=NOW, account=owner):
+        html = bilingual.project_html(usersite.page(store, cfg, account, "session", at),
+                                      lang, "/account")
+        match = re.search(r'id="slot-mac-private-gemini"[^>]*>(.*?)</div>', html, re.S)
+        return match[1] if match else ""
+
+    def labels(english, chinese, at=NOW):
+        for lang, words in (("en", english), ("zh", chinese)):
+            rendered = card(lang, at)
+            assert all(word in rendered for word in words)
+            prefix = "/zh" if lang == "zh" else ""
+            assert f'href="{prefix}/account/gemini#subscription"' in rendered
+
+    # Claude enrollment alone must not count as a Gemini pairing.
+    store.register_cli_device(store.request_cli_pairing("mac-private", "operator", now=NOW),
+                              public_key(1), "Claude", now=NOW)
+    labels(("No paired computers", "Pair a computer"), ("尚无已配对的电脑", "配对电脑"))
+    assert not card("en", account=store.get_account("other-admin"))
+    store.private_owner_access("mac-private", workspace_at=NOW)
+    first = store.antigravity_pairing("operator", now=NOW)
+    second = store.antigravity_pairing("operator", now=NOW)
+    labels(("2 unused one-time codes", "Finish pairing"), ("2 个待使用的一次性配对码", "完成配对"))
+    paired = store.register_cli_device(first, public_key(2), "Laptop", now=NOW,
+                                       workspace_pairing=True)
+    labels(("1 paired computer", "1 unused one-time code", "Manage Gemini"),
+           ("已配对 1 台电脑", "1 个待使用的一次性配对码", "管理 Gemini"))
+    assert second not in card("en")
+    reusable = store.set_antigravity_enrollment("operator", expected_id="", now=NOW)
+    store.register_cli_device(reusable, public_key(3), "Desk", now=NOW, workspace_pairing=True)
+    labels(("2 paired computers", "Reusable setup code active", "Manage Gemini"),
+           ("已配对 2 台电脑", "可重复使用的配对码已启用", "管理 Gemini"))
+    assert reusable not in card("en")
+    store.revoke_cli_device("mac-private", paired["device_id"], held_by="operator")
+    labels(("1 paired computer", "Reusable setup code active"),
+           ("已配对 1 台电脑", "可重复使用的配对码已启用"), at=NOW + 601)
+    assert "unused one-time code" not in card("en", NOW + 601)
+    store.set_private_owner_inference("mac-private", "operator", False, now=NOW + 601)
+    assert not card("en")
+
+
+def test_manage_reusable_subscription_code_via_web(private, monkeypatch):
+    from ccfleetd import bilingual, usersite
+    from tests.test_gateway_access import public_key
+    from tests.test_private_owner_nodes import NOW
+
+    store, _ = private
+    enable(store)
+    store.private_owner_access("mac-private", workspace_at=NOW)
+    monkeypatch.setattr(ui.time, "time", lambda: NOW)
+    cfg = Config(cookie_secret="fake-cookie-secret", public_url="https://fleet.example",
+                 gateway_enabled=True, gateway_ssh_key_path="/test", gateway_ssh_public_key="test")
+    owner = store.get_account("operator")
+    csrf = usersite.csrf_for("session", cfg.cookie_secret)
+
+    def setup():
+        return ui.page(store, cfg, owner, "session").body
+
+    def post(operation, **fields):
+        return ui.act(store, cfg, owner, "session", "workspace",
+                      {"operation": operation, "csrf": csrf, **fields}, NOW)
+
+    def issued(result):
+        assert result.status == 200
+        return re.search(r'id="gemini-code">agy1-(ccf_enroll_[\w-]+)</pre>', result.body)[1]
+
+    assert post("create").status == 409
+    assert post("create", trust="1", enrollment_id="").status == 409
+    created = post("create", trust="1")
+    code = issued(created)
+    for lang, text in (("en", "password manager"), ("zh", "密码管理器")):
+        receipt = bilingual.project_html(created.body, lang, "/account/gemini/workspace")
+        assert text in receipt and "ccfleet pair gemini" in receipt
+        assert "agy1-" + code in receipt and 'id="copy-status"' in receipt
+    assert post("create", trust="1").status == 409
+    body = setup()
+    current = Form(body).values["enrollment_id"]
+    for lang, text in (("en", "Reusable setup code active"), ("zh", "可重复使用的配对码已启用")):
+        html = bilingual.project_html(body, lang, "/account/gemini")
+        assert text in html and code not in html
+        assert "ccfleet pair gemini" in html and "ccfleet gemini --preview" not in html
+        assert 'value="create"' not in html
+        assert 'value="replace"' in html and 'value="disable"' in html
+    paired = store.register_cli_device(code, public_key(4), "<personal>", now=NOW,
+                                       workspace_pairing=True)
+    assert "&lt;personal&gt;" in setup() and "<personal>" not in setup()
+    assert f'name="device_id" value="{paired["device_id"]}"' in setup()
+    assert 'action="/account/slots/mac-private/cli-revoke"' in setup()
+    account = usersite.page(store, cfg, owner, "session", NOW)
+    assert "Use a connected computer" not in account
+    assert paired["device_id"] not in account
+    assert post("replace", trust="1").status == 409
+    assert post("replace", enrollment_id=current).status == 409
+    replacement = issued(post("replace", trust="1", enrollment_id=current))
+    assert replacement != code and replacement not in setup()
+    assert post("replace", trust="1", enrollment_id=current).status == 409
+    assert post("disable", trust="1", enrollment_id=current).status == 409
+    current = Form(setup()).values["enrollment_id"]
+    store.private_owner_access("mac-private")  # An offline slot can still close enrollment.
+    assert 'value="replace"' not in setup()
+    disabled = post("disable", trust="1", enrollment_id=current)
+    assert disabled.status == 303 and disabled.location == "/account/gemini#subscription"
+    assert "1 paired computer" in setup() and 'value="disable"' not in setup()
+    assert "Reusable setup code active" not in setup()
+    remove = usersite.act(store, cfg, owner, "/account/slots/mac-private/cli-revoke",
+                          {"csrf": csrf, "device_id": paired["device_id"]}, NOW, "session")
+    assert remove.status == 303 and "No paired computers" in setup()

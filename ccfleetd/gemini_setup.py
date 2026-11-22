@@ -153,12 +153,16 @@ def page(store, cfg, account, session, *, note="", status=200, secret_form=""):
             fields = ui.setup_form(viewer.csrf, keys, binding)
         if binding:
             fields += ui.disconnect_form(viewer.csrf, binding)
-        main = ui.workspace_panel(viewer.csrf, store.antigravity_ready(slot["id"], now=time.time()))
+        now = time.time()
+        pairing = store.antigravity_pairing_status(slot["id"], account["id"], now=now)
+        main = ui.workspace_panel(viewer.csrf, store.antigravity_ready(slot["id"], now=now),
+                                  pairing, slot["id"])
         main += ui.panel(ui.tr("Gemini API for Claude Code", "用于 Claude Code 的 Gemini API"),
                          fields)
     body = ui.shell(ui.tr("Gemini connections", "Gemini 连接"), ui.tr(
-        "Use Antigravity in Ghostty, or connect Gemini API billing to local Claude Code.",
-        "可在 Ghostty 使用 Antigravity 订阅，或为本地 Claude Code 配置单独计费的 Gemini API。"),
+        "Use your Antigravity subscription through your private Mac slot, "
+        "or manage a separately billed Gemini API connection.",
+        "通过专属 Mac 槽位使用 Antigravity 订阅，也可管理单独计费的 Gemini API 连接。"),
         main, ui.slot_panel(slot, keys, binding, grants), viewer, note=note,
         back="/account#slot-" + slot["id"])
     return usersite.Outcome(status, body=body)
@@ -176,12 +180,27 @@ def act(store, cfg, account, session, action, fields, now, transport=None):
 
     try:
         if action == "workspace":
-            if fields != {"csrf": csrf, "trust": "1"}:
-                raise data.SetupError("trusted computer approval required")
             state = store.gemini_setup_state(owner)
-            code = store.antigravity_pairing(owner, now=now)
+            operation = fields.get("operation")
+            reusable = operation in ("create", "replace")
+            approved = {"csrf": csrf, "trust": "1"}
+            if operation is None and fields == approved:
+                code = store.antigravity_pairing(owner, now=now)
+            elif operation == "create" and fields == {**approved, "operation": "create"}:
+                code = store.set_antigravity_enrollment(owner, expected_id="", now=now)
+            elif (operation in ("replace", "disable") and fields.get("enrollment_id")
+                  and fields == {**approved, "operation": operation,
+                                 "enrollment_id": fields["enrollment_id"]}):
+                if operation == "disable":
+                    store.revoke_antigravity_enrollment(owner, fields["enrollment_id"])
+                    return usersite.Outcome(303, location=PATH + "#subscription")
+                code = store.set_antigravity_enrollment(owner, expected_id=fields["enrollment_id"],
+                                                        now=now)
+            else:
+                raise data.SetupError("pairing approval required")
             viewer = usersite.viewer_for(account, session, cfg, store)
-            return usersite.Outcome(200, body=ui.workspace_result(code, *state, viewer, SCRIPT))
+            return usersite.Outcome(200, body=ui.workspace_result(code, *state, viewer, SCRIPT,
+                                                                  reusable=reusable))
         if action == "disconnect":
             if set(fields) != {"csrf", "binding", "confirm"} or fields["confirm"] != "1":
                 raise data.SetupError("confirmation required")
@@ -268,6 +287,10 @@ def act(store, cfg, account, session, action, fields, now, transport=None):
             ),
         )
     except (ValueError, KeyError, TypeError):
+        if action == "workspace":
+            return page(store, cfg, account, session, status=409, note=ui.tr(
+                "Pairing settings could not be changed. Check the current code status below.",
+                "未能更改配对设置。请查看下方的配对码状态。"))
         return page(
             store,
             cfg,
