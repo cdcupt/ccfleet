@@ -7,6 +7,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import select
 import signal
 import struct
@@ -244,13 +245,67 @@ def turn(channel, editor, prompt):
         channel.send(reply)
 
 
+COMMAND_HELP = """Gemini commands
+  /help                      Show these commands
+  /model                     Show the current model and open the model picker
+  /model <number or ID>      Select a model for this conversation
+  /test                      Show the current test command
+  /test <runner> [subfolder] Choose pytest, npm, go or cargo for local tests
+  /test off                  Disable local tests
+  /exit or /quit             Close this session
+
+Type a message to talk to Gemini."""
+MODEL_ID = re.compile(r"gemini-[a-z0-9.-]{1,80}\Z")
+
+
+def model_command(channel, current, models, choice):
+    if models is None:
+        print(f"Current model: {terminal_text(current)}")
+        print("Update the private Mac slot service to enable model selection.")
+        return current
+    if not choice:
+        print("Available Gemini models")
+        for number, model in enumerate(models, 1):
+            selected = " (current)" if model == current else ""
+            print(f"  {number}. {model}{selected}")
+        try:
+            choice = input("Model number or ID (Enter to keep): ").strip()
+        except EOFError:
+            return current
+        if not choice:
+            return current
+    target = next((model for index, model in enumerate(models, 1) if choice == str(index)), choice)
+    if target not in models:
+        print("Choose a listed model ID or number. Use /model to see the available models.")
+        return current
+    if target == current:
+        print(f"Using {current}.")
+        return current
+    channel.send({"type": "set_model", "model": target})
+    reply = channel.receive()
+    active = reply.get("model")
+    if reply.get("type") != "model" or active not in models:
+        raise ValueError("the slot did not confirm the active Gemini model")
+    if "error" in reply or active != target:
+        print(f"The slot could not apply the selection. Using {active}.")
+    else:
+        print(f"Switched to {active}.")
+    return active
+
+
 def session(channel, editor):
     channel.send({"type": "open", "version": 1})
     # A cold slot verifies the registry, downloads the agent and authenticates the session.
     ready = channel.receive(timeout=420)
     if ready.get("type") != "ready" or not isinstance(ready.get("model"), str):
         raise ValueError("the private slot did not open a Gemini editor session")
-    print(f"Gemini · {terminal_text(ready['model'])} · {terminal_text(str(editor.workspace.path))}")
+    current = ready["model"]
+    models = ready.get("models")
+    if models is not None and (not isinstance(models, list) or current not in models
+                               or any(not isinstance(m, str) or not MODEL_ID.fullmatch(m)
+                                      for m in models) or len(set(models)) != len(models)):
+        raise ValueError("the private slot returned an invalid Gemini model list")
+    print(f"Gemini · {terminal_text(current)} · {terminal_text(str(editor.workspace.path))}")
     print("Gemini reads requested project files through your slot. Edits and local tests "
           "ask for approval. Type /help for commands.")
     while True:
@@ -258,14 +313,26 @@ def session(channel, editor):
             prompt = input("\nYou › ").strip()
         except EOFError:
             prompt = "/exit"
-        if prompt in ("/exit", "/quit"):
+        if not prompt:
+            continue
+        parts = prompt.split(maxsplit=1)
+        command = parts[0]
+        argument = parts[1] if len(parts) == 2 else ""
+        if command in ("/exit", "/quit"):
+            if argument:
+                print(f"Use {command} by itself to disconnect.")
+                continue
             channel.send({"type": "close"})
             return
-        if prompt == "/help":
-            print("Type a message, /test to select local tests, or /exit to disconnect.")
-        elif prompt == "/test" or prompt.startswith("/test "):
-            editor.test_command(prompt)
-        elif prompt:
+        if command == "/help":
+            print(COMMAND_HELP)
+        elif command == "/model":
+            current = model_command(channel, current, models, argument)
+        elif command == "/test":
+            editor.test_command("/test " + argument)
+        elif re.fullmatch(r"/[a-zA-Z][a-zA-Z0-9_-]*", command):
+            print(f"Unknown command {command}. Type /help for the available commands.")
+        else:
             if len(prompt.encode("utf-8")) > MAX_PROMPT:
                 print("The message is too long. Please shorten it.")
                 continue

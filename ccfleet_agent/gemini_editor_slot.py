@@ -46,6 +46,7 @@ SOCKET = "gemini-editor.sock"
 MAX_TEXT = workspace_tools.LIMIT
 ACP_LIMIT = 4 * 1024 * 1024
 MCP_NAME = "ccfleetlocal"
+MAX_MODELS = 128
 MCP_TOOLS = {"list_project": "list", "make_project_directory": "mkdir", "test_project": "test"}
 GUIDE = (
     "You are the user's interactive CCFleet project editor. The project is on the "
@@ -69,6 +70,10 @@ BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 
 class EditorError(ValueError):
     """Fixed user-facing error. Never include a credential, provider payload or host path."""
+
+
+class ModelUnavailable(EditorError):
+    """A rejected selection leaves the current editor session usable."""
 
 
 def text_value(value, limit=MAX_TEXT):
@@ -193,7 +198,20 @@ class Device:
             return reply["result"]
 
 
-def mcp_request(device, msg):
+def listing_path(path, project):
+    """Map directory spellings inside the agent’s virtual project to client-relative names."""
+    if not isinstance(path, str) or len(path) > project_files.MAX_PATH_BYTES + len(str(project)):
+        raise ValueError("invalid directory")
+    requested = Path(path)
+    if requested.is_absolute():
+        if project is None or not requested.is_relative_to(project):
+            raise ValueError("outside the client project")
+        requested = requested.relative_to(project)
+    relative = requested.as_posix()
+    return "." if relative == "." else project_files._path(relative)
+
+
+def mcp_request(device, msg, project=None):
     """Only the selected MacBook project exposes these three tools."""
     if msg.get("jsonrpc") != "2.0" or "id" not in msg or "method" not in msg:
         return None
@@ -240,9 +258,7 @@ def mcp_request(device, msg):
                     raise ValueError("invalid test response")
                 text_value(data["output"])
             elif name == "list_project":
-                path = args.get("path", ".")
-                if path != ".":
-                    project_files._path(path)
+                path = listing_path(args.get("path", "."), project)
                 data = device.request("list", path=path)
                 if (
                     not isinstance(data, list)
@@ -257,10 +273,13 @@ def mcp_request(device, msg):
                     raise ValueError("directory unavailable")
             result = {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}]}
         except (ValueError, OSError, KeyError, TypeError):
-            result = {
-                "isError": True,
-                "content": [{"type": "text", "text": "Client operation declined or unavailable."}],
-            }
+            reason = (
+                "Directory listing unavailable. Use . for the project or a readable "
+                "project-relative subfolder."
+                if name == "list_project"
+                else "Client operation declined or unavailable."
+            )
+            result = {"isError": True, "content": [{"type": "text", "text": reason}]}
     else:
         return {**reply, "error": {"code": -32601, "message": "Method not found"}}
     return {**reply, "result": result}
@@ -283,7 +302,7 @@ class ProjectHandler(socketserver.StreamRequestHandler):
                         "error": {"code": -32600, "message": "No interactive prompt is active"},
                     }
                 else:
-                    reply = mcp_request(self.server.device, msg)
+                    reply = mcp_request(self.server.device, msg, self.server.project)
                 if reply is not None:
                     send_line(self.wfile, reply)
         except (EOFError, OSError, ValueError):
@@ -414,6 +433,8 @@ class Agent:
         self.device = device
         self.root = root
         self.sid = None
+        self.model = None
+        self.models = []
         self.approvals = {}
         self.active = threading.Event()
         self.messages = queue.Queue(maxsize=64)
@@ -526,8 +547,13 @@ class Agent:
                 if msg.get("id") != self.seq:
                     raise ValueError("unexpected agent response")
                 if "error" in msg:
-                    if method == "session/new" and msg["error"].get("code") == -32000:
+                    error = msg["error"]
+                    if not isinstance(error, dict) or type(error.get("code")) is not int:
+                        raise ValueError("invalid agent error")
+                    if method == "session/new" and error["code"] == -32000:
                         raise EditorError(LOGIN_NEEDED)
+                    if method == "session/set_model":
+                        raise ModelUnavailable("The Google editor declined the model change.")
                     raise EditorError("The Google editor could not complete this request.")
                 if not isinstance(msg.get("result"), dict):
                     raise ValueError("invalid agent response")
@@ -580,20 +606,30 @@ class Agent:
         if not isinstance(self.sid, str) or not self.sid:
             raise ValueError("invalid session")
         models = result.get("models", {})
-        offered = [
-            m.get("modelId") for m in models.get("availableModels", []) if isinstance(m, dict)
-        ]
-        gemini = [
-            m for m in offered if isinstance(m, str) and re.fullmatch(r"gemini-[a-z0-9.-]{1,80}", m)
-        ]
-        if not gemini:
+        available = models.get("availableModels") if isinstance(models, dict) else None
+        if not isinstance(available, list):
+            raise ValueError("invalid agent model catalog")
+        ids = (entry.get("modelId") for entry in available if isinstance(entry, dict))
+        self.models = list(
+            dict.fromkeys(
+                model
+                for model in ids
+                if isinstance(model, str) and re.fullmatch(r"gemini-[a-z0-9.-]{1,80}", model)
+            )
+        )[:MAX_MODELS]
+        if not self.models:
             raise EditorError("The signed-in Google account has no available Gemini editor model.")
-        model = next(
-            (m for m in ("gemini-3.8-flash-low", models.get("currentModelId")) if m in gemini),
-            gemini[0],
-        )
-        self.rpc("session/set_model", {"sessionId": self.sid, "modelId": model})
-        return model
+        preferred = ("gemini-3.8-flash-low", models.get("currentModelId"))
+        self.model = None
+        self.select_model(next((m for m in preferred if m in self.models), self.models[0]))
+        return self.model
+
+    def select_model(self, model):
+        if not isinstance(model, str) or model not in self.models:
+            raise ModelUnavailable("Choose a Gemini model offered by this slot.")
+        if model != self.model:
+            self.rpc("session/set_model", {"sessionId": self.sid, "modelId": model})
+            self.model = model
 
 
 def environment(home, scratch):
@@ -726,6 +762,44 @@ def session_profile(home, session):
     return profile
 
 
+def interact(agent, device):
+    device.send({"type": "ready", "model": agent.model, "models": agent.models})
+    while True:
+        msg = device.receive(3600)
+        if msg == {"type": "close"}:
+            return
+        if set(msg) == {"type", "model"} and msg["type"] == "set_model":
+            try:
+                agent.select_model(msg["model"])
+            except ModelUnavailable as exc:
+                device.send({"type": "model", "model": agent.model, "error": str(exc)})
+            else:
+                device.send({"type": "model", "model": agent.model})
+            continue
+        if set(msg) != {"type", "text"} or msg.get("type") != "prompt":
+            raise EditorError("The workspace sent an unexpected message.")
+        prompt = text_value(msg["text"], 65536)
+        if not prompt.strip():
+            raise EditorError("Enter a project request to start a turn.")
+        agent.active.set()
+        try:
+            response = agent.rpc(
+                "session/prompt",
+                {
+                    "sessionId": agent.sid,
+                    "prompt": [{"type": "text", "text": GUIDE + prompt}],
+                },
+                timeout=900,
+            )
+        finally:
+            agent.active.clear()
+            agent.approvals.clear()
+        reason = response.get("stopReason")
+        if not isinstance(reason, str) or not re.fullmatch(r"[a-z_]{1,48}", reason):
+            raise EditorError("The Gemini editor returned an incomplete turn.")
+        device.send({"type": "end", "reason": reason})
+
+
 def run_editor(home, device, binary, session):
     profile = session_profile(home, session)
     project = session / "project"
@@ -760,38 +834,13 @@ def run_editor(home, device, binary, session):
         try:
             agent = Agent(proc, device, project)
             service.device = device
+            service.project = project
             service.turn = agent.active
             threading.Thread(target=service.serve_forever, daemon=True).start()
             try:
                 agent.initialize()
-                model = agent.session(project, mcp)
-                device.send({"type": "ready", "model": model})
-                while True:
-                    msg = device.receive(3600)
-                    if msg == {"type": "close"}:
-                        return
-                    if set(msg) != {"type", "text"} or msg.get("type") != "prompt":
-                        raise EditorError("The workspace sent an unexpected message.")
-                    prompt = text_value(msg["text"], 65536)
-                    if not prompt.strip():
-                        raise EditorError("Enter a project request to start a turn.")
-                    agent.active.set()
-                    try:
-                        response = agent.rpc(
-                            "session/prompt",
-                            {
-                                "sessionId": agent.sid,
-                                "prompt": [{"type": "text", "text": GUIDE + prompt}],
-                            },
-                            timeout=900,
-                        )
-                    finally:
-                        agent.active.clear()
-                        agent.approvals.clear()
-                    reason = response.get("stopReason")
-                    if not isinstance(reason, str) or not re.fullmatch(r"[a-z_]{1,48}", reason):
-                        raise EditorError("The Gemini editor returned an incomplete turn.")
-                    device.send({"type": "end", "reason": reason})
+                agent.session(project, mcp)
+                interact(agent, device)
             finally:
                 service.shutdown()
         finally:

@@ -15,7 +15,10 @@ from ccfleet_agent import gemini_distribution as dist
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_install_preserves_existing_job_and_finder_launches_only_owner_login(tmp_path, monkeypatch):
+@pytest.mark.parametrize("editor_running", [False, True])
+def test_install_preserves_existing_job_and_finder_launches_only_owner_login(
+    tmp_path, monkeypatch, editor_running
+):
     home = tmp_path / "owner"
     runtime = home / ".local/lib/ccfleet-owner" / ("c" * 40) / "ccfleet_agent"
     agents = home / "Library/LaunchAgents"
@@ -30,18 +33,23 @@ def test_install_preserves_existing_job_and_finder_launches_only_owner_login(tmp
     # Exercise the owner-only checks even under root-based Linux CI.
     if os.getuid() == 0:
         pytest.skip("installer requires a login user")
-    # An enrolled 0.2.15 slot still has its original helper files. Even a
-    # request already open while installing may read these names until it exits.
     old = {}
-    for op, (name, _) in list(dist.LEGACY_EDITOR_SOURCES.items()):
-        raw = ("previous " + name).encode()
-        path = runtime / name
-        path.write_bytes(raw)
-        old[name] = (raw, path.stat().st_ino, path.stat().st_mtime_ns)
-        monkeypatch.setitem(dist.LEGACY_EDITOR_SOURCES, op,
-                            (name, hashlib.sha256(raw).hexdigest()))
+    history = []
+    for version, revision, _ in dist.EDITOR_HISTORY:
+        pins = {}
+        for op, name in dist.EDITOR_FILES.items():
+            raw = f"public {version} {name}".encode()
+            snapshot = dist.editor_snapshot(name, version)
+            path = runtime / snapshot
+            path.write_bytes(raw)
+            old[snapshot] = (raw, path.stat().st_ino, path.stat().st_mtime_ns)
+            pins[op] = hashlib.sha256(raw).hexdigest()
+        history.append((version, revision, pins))
+    monkeypatch.setattr(dist, "EDITOR_HISTORY", history)
     calls = []
     loaded = {"io.ccfleet.private-owner-workspace"}
+    if editor_running:
+        loaded.add("io.ccfleet.private-owner-gemini-editor")
     def command(argv, **kw):
         calls.append(list(argv))
         if argv[0] == "/bin/launchctl":
@@ -52,16 +60,23 @@ def test_install_preserves_existing_job_and_finder_launches_only_owner_login(tmp
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(subprocess, "run", command)
     app = runpy.run_path(str(ROOT / "tools/install_workspace_slot.py"))
-    app["install"]()
-    for name, (raw, inode, mtime) in old.items():
-        path = runtime / name
+    old_code = b"# worker already serving a connection\n"
+    worker = runtime / "gemini_editor_slot.py"
+    worker.write_bytes(old_code)
+    monkeypatch.setitem(app["PREDECESSORS"], worker.name, {hashlib.sha256(old_code).hexdigest()})
+    with worker.open("rb") as active_worker:
+        app["install"]()
+        assert active_worker.read() == old_code
+    for snapshot, (raw, inode, mtime) in old.items():
+        path = runtime / snapshot
         assert (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) == (raw, inode, mtime)
+    for name in dist.EDITOR_FILES.values():
         assert (runtime / dist.editor_snapshot(name)).read_bytes() == (ROOT / "ccfleet_agent" / name).read_bytes()
     for name in ("gemini_editor_distribution.py", "gemini_editor_slot.py", "project_files.py"):
         assert (runtime / name).read_bytes() == (ROOT / "ccfleet_agent" / name).read_bytes()
     # The new services are independent and the original is neither unloaded nor restarted.
     unit = agents / "io.ccfleet.private-owner-gemini-editor.plist"
-    assert [c[3] for c in calls if c[0:2] == ["/bin/launchctl", "bootstrap"]] == [unit]
+    assert [c[3] for c in calls if c[0:2] == ["/bin/launchctl", "bootstrap"]] == ([] if editor_running else [unit])
     mtime = (runtime / "antigravity_entry.py").stat().st_mtime_ns
     calls.clear()
     app["install"]()
@@ -91,18 +106,20 @@ def test_fresh_editor_install_recovers_only_pinned_public_sources(tmp_path, monk
     raw = b"old workspace fixture"
     wanted = hashlib.sha256(raw).hexdigest()
     (source / name).write_bytes(b"updated workspace fixture")
-    fetch = app["legacy_editor_source"]
+    fetch = app["historical_editor_source"]
+    version, revision, _ = dist.EDITOR_HISTORY[-1]
+    destination = target / dist.editor_snapshot(name, version)
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs:
                         SimpleNamespace(returncode=0, stdout=raw))
     monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected network request"))
-    assert fetch(dist, source, target, name, wanted) == raw
+    assert fetch(dist, source, destination, name, revision, wanted) == raw
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs:
                         SimpleNamespace(returncode=1, stdout=b""))
     def archive(url, path, limit, timeout):
         assert url == ("https://raw.githubusercontent.com/cdcupt/ccfleet/"
-                       + app["FIRST_EDITOR_REVISION"] + "/ccfleet_agent/workspace_tools.py")
+                       + revision + "/ccfleet_agent/workspace_tools.py")
         path.write_bytes(raw)
     monkeypatch.setattr(dist, "_fetch", archive)
-    assert fetch(dist, source, target, name, wanted) == raw
+    assert fetch(dist, source, destination, name, revision, wanted) == raw
     with pytest.raises(ValueError, match="checksum"):
-        fetch(dist, source, target, name, "0" * 64)
+        fetch(dist, source, destination, name, revision, "0" * 64)

@@ -11,6 +11,29 @@ LABEL = "io.ccfleet.private-owner-workspace"
 EDITOR_LABEL = "io.ccfleet.private-owner-gemini-editor"
 
 
+PREDECESSORS = {
+    "antigravity_entry.py": {
+        "ae173ac4ff3092367de9cb8f71b781e301c6cf192ce6a66a580ae8a7205d3fac",
+        "fa617a5d93bf2074d92f13a94ee3c5fb07b938fe30ee24262d9a2725359192db",
+        "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
+    },
+    "gemini_editor_slot.py": {
+        "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
+    },
+    "gemini_distribution.py": {
+        "419f4e4ac9aa724e19fade30c71ab6fa764e7d52164632476e8bea755ae4556a",
+        "67ff27fc244194d0f7e752d828befc848b31f7f0e6f8576e7a6476baa8b58c5f",
+        "7e70e1cc368469fbd940e573b7028b463f9d271b1ebd9cb2b5b427ce53785cab",
+    },
+    "workspace_tools.py": {
+        "7536b0e948c2716c33bf88dfa2a6eb519ecbbde3466884c300dcddb8b9d8cd97",
+    },
+    "gemini_preview.py": {
+        "429d6efdb57e1c265f6ee8debd69d166d4f27fd7735b55f7e40b48868c9e70b9",
+    },
+}
+
+
 def signin_app(home):
     apps = home / "Applications"
     apps.mkdir(mode=0o700, exist_ok=True)
@@ -42,17 +65,13 @@ def signin_app(home):
     return target
 
 
-# Normal fresh installs may be from a source archive or a shallow checkout. Recover
-# the exact public bytes expected by 0.2.15 without storing a second source tree.
-FIRST_EDITOR_REVISION = "ee147f63c559f4f8deb9e5962501412168edf27e"
-
-
-def legacy_editor_source(dist, source, root, filename, digest):
-    for path in (root / filename, source / filename):
+def historical_editor_source(dist, source, target, filename, revision, digest):
+    # Prefer existing bytes on upgrades, then Git, then a pinned archive source.
+    for path in (target, source / filename):
         data = dist.pinned_editor_file(path, digest)
         if data is not None:
             return data
-    git_path = f"{FIRST_EDITOR_REVISION}:ccfleet_agent/{filename}"
+    git_path = f"{revision}:ccfleet_agent/{filename}"
     git = subprocess.run(
         ["/usr/bin/git", "-C", str(source.parent), "cat-file", "blob", git_path],
         env={"PATH": os.defpath, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -61,7 +80,7 @@ def legacy_editor_source(dist, source, root, filename, digest):
     )
     if git.returncode == 0 and hashlib.sha256(git.stdout).hexdigest() == digest:
         return git.stdout
-    url = (f"https://raw.githubusercontent.com/cdcupt/ccfleet/{FIRST_EDITOR_REVISION}/"
+    url = (f"https://raw.githubusercontent.com/cdcupt/ccfleet/{revision}/"
            f"ccfleet_agent/{filename}")
     with tempfile.TemporaryDirectory() as stage:
         path = Path(stage) / filename
@@ -98,8 +117,11 @@ def install():
         "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py",
         "gemini_distribution.py", "workspace_io.py", "gemini_editor_distribution.py",
         "gemini_editor_slot.py", "project_files.py")}
-    for name, digest in dist.LEGACY_EDITOR_SOURCES.values():
-        components[root / name] = legacy_editor_source(dist, source, root, name, digest)
+    for op, name in dist.EDITOR_FILES.items():
+        for version, revision, pins in dist.EDITOR_HISTORY:
+            target = root / dist.editor_snapshot(name, version)
+            components[target] = historical_editor_source(
+                dist, source, target, name, revision, pins[op])
         components[root / dist.editor_snapshot(name)] = (source / name).read_bytes()
     units = {LABEL: "antigravity_slot.py", EDITOR_LABEL: "gemini_editor_slot.py"}
     for label, service in units.items():
@@ -116,29 +138,14 @@ def install():
             raise ValueError(f"review the linked workspace component: {path}")
         if path.exists() and path.read_bytes() != data:
             previous = hashlib.sha256(path.read_bytes()).hexdigest()
-            predecessors = {
-                "antigravity_entry.py": {
-                    "ae173ac4ff3092367de9cb8f71b781e301c6cf192ce6a66a580ae8a7205d3fac",
-                    "fa617a5d93bf2074d92f13a94ee3c5fb07b938fe30ee24262d9a2725359192db",
-                    "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
-                },
-                "gemini_distribution.py": {
-                    "67ff27fc244194d0f7e752d828befc848b31f7f0e6f8576e7a6476baa8b58c5f",
-                    "7e70e1cc368469fbd940e573b7028b463f9d271b1ebd9cb2b5b427ce53785cab",
-                },
-                "workspace_tools.py": {
-                    "7536b0e948c2716c33bf88dfa2a6eb519ecbbde3466884c300dcddb8b9d8cd97",
-                },
-                "gemini_preview.py": {
-                    "429d6efdb57e1c265f6ee8debd69d166d4f27fd7735b55f7e40b48868c9e70b9",
-                },
-            }
-            if previous in predecessors.get(path.name, ()):
+            if previous in PREDECESSORS.get(path.name, ()):
                 upgrades[path] = previous
             else:
                 raise ValueError(f"review the existing workspace component: {path}")
-    # Install the snapshots before the new distributor. Switch the forced entry last.
-    activation_order = {"gemini_distribution.py": 1, "antigravity_entry.py": 2}
+    # The running service spawns the current worker file per connection. Install
+    # its dependencies and client snapshots before exposing the updated protocol.
+    activation_order = {"gemini_editor_slot.py": 1, "gemini_distribution.py": 2,
+                        "antigravity_entry.py": 3}
     ordered = sorted(components, key=lambda path: activation_order.get(path.name, 0))
     for path in ordered:
         data = components[path]

@@ -1,7 +1,9 @@
 """Slot-side interactive editor contract and isolation boundaries."""
 
 import hashlib
+import io
 import json
+import queue
 import socket
 import threading
 from unittest.mock import Mock
@@ -120,6 +122,149 @@ def test_only_gemini_selected(agent):
     ]
     with pytest.raises(slot.EditorError):
         agent.session(agent.root, [])
+
+
+def test_model_menu_uses_one_acp_session_and_no_inference_for_commands(agent):
+    agent.active.clear()
+    agent.seq = 0
+    agent.process = Mock(stdin=io.BytesIO())
+    agent.messages = queue.Queue()
+    model_a, model_b = "gemini-test-low", "gemini-test-high"
+    offered = [
+        {"modelId": model_a, "name": "Not sent", "_meta": {"account": "private"}},
+        {"modelId": "claude-private"},
+        {"modelId": model_b},
+        {"modelId": model_a},
+        {"modelId": "gemini-invalid\nid"},
+        {"modelId": None},
+    ]
+    for msg in [
+        {
+            "id": 1,
+            "result": {
+                "sessionId": "same",
+                "models": {"currentModelId": model_a, "availableModels": offered},
+            },
+        },
+        {"id": 2, "result": {}},
+        {"id": 3, "error": {"code": -32602, "message": "private error from upstream"}},
+        {"id": 4, "result": {}},
+        {"id": 5, "result": {"stopReason": "end_turn"}},
+    ]:
+        agent.messages.put(msg)
+
+    agent.session(agent.root, [])
+    agent.device.receive.side_effect = [
+        {"type": "set_model", "model": model_a},
+        {"type": "set_model", "model": "claude-private"},
+        {"type": "set_model", "model": model_b},
+        {"type": "set_model", "model": model_b},
+        {"type": "prompt", "text": "A new user message"},
+        {"type": "close"},
+    ]
+    slot.interact(agent, agent.device)
+
+    replies = [c.args[0] for c in agent.device.send.call_args_list]
+    assert replies == [
+        {"type": "ready", "model": model_a, "models": [model_a, model_b]},
+        {"type": "model", "model": model_a},
+        {"type": "model", "model": model_a, "error": "Choose a Gemini model offered by this slot."},
+        {
+            "type": "model",
+            "model": model_a,
+            "error": "The Google editor declined the model change.",
+        },
+        {"type": "model", "model": model_b},
+        {"type": "end", "reason": "end_turn"},
+    ]
+    sent = [json.loads(b) for b in agent.process.stdin.getvalue().splitlines()]
+    assert [m["method"] for m in sent] == [
+        "session/new",
+        "session/set_model",
+        "session/set_model",
+        "session/set_model",
+        "session/prompt",
+    ]
+    assert [m["params"]["sessionId"] for m in sent[1:]] == ["same"] * 4
+    assert [m["params"]["modelId"] for m in sent[1:-1]] == [model_a, model_b, model_b]
+    assert agent.model == model_b
+    agent.device.request.assert_not_called()
+
+
+def test_switch_without_upstream_confirmation_terminates_session(agent):
+    agent.model = "gemini-a"
+    agent.models = ["gemini-a", "gemini-b"]
+    agent.device.receive.return_value = {"type": "set_model", "model": "gemini-b"}
+    agent.seq = 0
+    agent.messages = Mock()
+    agent.messages.get.side_effect = queue.Empty()
+    agent.process = Mock(stdin=io.BytesIO())
+
+    with pytest.raises(slot.EditorError, match="timed out"):
+        slot.interact(agent, agent.device)
+    agent.device.send.assert_called_once_with(
+        {"type": "ready", "model": "gemini-a", "models": ["gemini-a", "gemini-b"]}
+    )
+    agent.device.request.assert_not_called()
+
+
+def test_model_catalog_is_bounded(agent):
+    agent.rpc = Mock(
+        side_effect=[
+            {
+                "sessionId": "s",
+                "models": {
+                    "availableModels": [
+                        {"modelId": f"gemini-{i}"} for i in range(slot.MAX_MODELS + 20)
+                    ]
+                },
+            },
+            {},
+        ]
+    )
+    agent.session(agent.root, [])
+    assert len(agent.models) == slot.MAX_MODELS
+    assert agent.model == "gemini-0"
+
+
+@pytest.mark.parametrize(
+    ("name", "wanted"),
+    [
+        (".", "."),
+        ("./", "."),
+        ("./src/", "src"),
+        ("/virtual/project/", "."),
+        ("/virtual/project/src/", "src"),
+        ("/virtual/project-other", None),
+        ("/Users/example", None),
+        ("/virtual/project/../project", None),
+        ("../other", None),
+        ("src/.git/", None),
+        (1, None),
+    ],
+)
+def test_list_project_accepts_virtual_project_paths_only(name, wanted):
+    from pathlib import Path
+
+    device = Mock()
+    device.request.return_value = ["sample.txt"]
+    reply = slot.mcp_request(
+        device,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "list_project", "arguments": {"path": name}},
+        },
+        Path("/virtual/project"),
+    )["result"]
+    if wanted is None:
+        device.request.assert_not_called()
+        assert reply["isError"]
+        assert "project-relative" in reply["content"][0]["text"]
+    else:
+        device.request.assert_called_once_with("list", path=wanted)
+        assert json.loads(reply["content"][0]["text"]) == ["sample.txt"]
 
 
 def test_mcp_discovery_and_test_boundary():
