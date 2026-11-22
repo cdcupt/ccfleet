@@ -227,3 +227,18 @@ def test_start_and_transport_errors_do_not_echo_private_stderr(project, capfd):
     with pytest.raises(ValueError, match="connection closed"):
         ui.run(root, fail, dict(os.environ), workspace_tools, project_files)
     assert "private slot detail" not in capfd.readouterr().err
+
+
+def test_incomplete_turn_reason_is_visible_and_local_approval_expires(project, capsys):
+    _, ed = project
+    assert call(ed, "approve", path="pending", content="new")
+    reasons = iter(("max_tokens", "cancelled", "refusal", "private/slot/path", "end_turn"))
+    channel = SimpleNamespace(send=lambda _msg: None,
+                              receive=lambda: {"type": "end", "reason": next(reasons)})
+    for expected in ("token limit reached", "cancelled", "request declined", "interrupted"):
+        ui.turn(channel, ed, "continue")
+        output = capsys.readouterr().out
+        assert expected in output and "private/slot/path" not in output
+        assert ed.approval is None
+    ui.turn(channel, ed, "continue again")
+    assert capsys.readouterr().out == "\n"

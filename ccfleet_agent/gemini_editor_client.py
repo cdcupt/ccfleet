@@ -194,7 +194,16 @@ def turn(channel, editor, prompt):
         kind = message.get("type")
         if kind == "end" and isinstance(message.get("reason"), str):
             editor.approval = None
-            print()
+            reason = message["reason"]
+            if reason == "end_turn":
+                print()
+            else:
+                # Unknown provider reasons must never render untrusted diagnostics.
+                reasons = {"cancelled": "cancelled", "refusal": "request declined",
+                           "refused": "request declined", "max_tokens": "token limit reached",
+                           "max_turn_requests": "request limit reached"}
+                print(f"\nGemini stopped this turn ({reasons.get(reason, 'interrupted')}). "
+                      "You can send another message.")
             return
         if kind == "text" and isinstance(message.get("text"), str):
             print(terminal_text(message["text"]), end="", flush=True)
