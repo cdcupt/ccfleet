@@ -13,6 +13,7 @@ import pytest
 
 from ccfleetd import (
     api,
+    cli_access,
     gateway_ui,
     heartbeat,
     offer_ui,
@@ -134,6 +135,54 @@ def test_only_bound_administrator_can_pair_and_select_private_owner(private):
     assert store.cli_device_is_active(paired["device_id"])
     assert store.gateway_request_is_active(key["id"], key["generation"], "mac-private",
                                            target["claim_generation"], now=NOW + 1)
+
+
+def test_antigravity_pairing_status_tracks_issued_consumed_expired_and_revoked(private):
+    store, _ = private
+    enable(store)
+    store.private_owner_access("mac-private", workspace_at=NOW)
+
+    def status_at(when):
+        return store.antigravity_pairing_status("mac-private", "operator", now=when)
+
+    empty = {"devices": [], "pending_count": 0, "pending_until": None, "enrollment_id": None}
+    device(store)
+    store.request_cli_pairing("mac-private", "operator", now=NOW)
+    assert status_at(NOW) == empty
+
+    first = store.antigravity_pairing("operator", now=NOW)
+    store.antigravity_pairing("operator", now=NOW + 1)
+    deadline = NOW + 1 + cli_access.PAIRING_TTL_S
+    assert status_at(NOW + 1) == {**empty, "pending_count": 2, "pending_until": deadline}
+    workspace = store.register_cli_device(
+        first, public_key(5), "Local Mac", now=NOW + 2, workspace_pairing=True
+    )
+    store.resolve_cli_device(workspace["device_token"], now=NOW + 3)
+    paired = [{"id": workspace["device_id"], "name": "Local Mac", "created_at": NOW + 2,
+               "last_seen_at": NOW + 3}]
+    assert status_at(NOW + 3) == {
+        **empty, "devices": paired, "pending_count": 1, "pending_until": deadline
+    }
+    assert store.antigravity_pairing_status("mac-private", "other-admin", now=NOW + 3) == empty
+    assert store.antigravity_pairing_status("different-slot", "operator", now=NOW + 3) == empty
+    assert status_at(deadline) == {**empty, "devices": paired}
+
+    store.revoke_cli_device("mac-private", workspace["device_id"], held_by="operator")
+    assert status_at(deadline) == empty
+
+
+def test_each_antigravity_computer_remains_paired_independently(private):
+    store, _ = private
+    enable(store)
+    store.private_owner_access("mac-private", workspace_at=NOW)
+    for key, name in ((5, "First Mac"), (6, "Second Mac")):
+        code = store.antigravity_pairing("operator", now=NOW + key)
+        store.register_cli_device(code, public_key(key), name, now=NOW + key, workspace_pairing=True)
+    result = store.antigravity_pairing_status("mac-private", "operator", now=NOW + 7)
+    assert result["pending_count"] == 0 and result["pending_until"] is None
+    assert [device["name"] for device in result["devices"]] == ["Second Mac", "First Mac"]
+    store.set_account_role("operator", "user")
+    assert not store.antigravity_pairing_status("mac-private", "operator", now=NOW + 7)["devices"]
 
 
 @pytest.mark.parametrize("change", ["disable", "demote", "raw-role-change", "raw-owner-change"])

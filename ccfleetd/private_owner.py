@@ -22,6 +22,14 @@ CREATE TABLE IF NOT EXISTS agy_pairings (
 CREATE TABLE IF NOT EXISTS agy_devices (
     device_id TEXT PRIMARY KEY REFERENCES cli_devices(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS agy_enrollments (
+    slot_id TEXT PRIMARY KEY REFERENCES private_owner_nodes(node_id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    claim_id TEXT NOT NULL,
+    claim_generation INTEGER NOT NULL,
+    id TEXT NOT NULL UNIQUE,
+    token_hash TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS private_owner_nodes (
     node_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL UNIQUE,
@@ -32,6 +40,24 @@ CREATE TABLE IF NOT EXISTS private_owner_nodes (
     updated_at REAL NOT NULL
 );
 """
+
+_CURRENT_ENROLLMENT = (
+    " FROM agy_enrollments e JOIN slots s ON s.id=e.slot_id AND s.held_by=e.account_id"
+    " AND s.gateway_claim_id=e.claim_id AND s.gateway_generation=e.claim_generation "
+)
+
+ENROLLMENT_GRANT = (
+    "SELECT e.token_hash,e.slot_id,e.account_id,NULL AS expires_at,NULL AS api_model_binding_id,"
+    "1 AS workspace" + _CURRENT_ENROLLMENT + "WHERE e.token_hash=?"
+)
+
+
+def _enrollment_id(conn, slot_id: str, owner: str) -> Optional[str]:
+    row = conn.execute(
+        "SELECT e.id" + _CURRENT_ENROLLMENT + "WHERE e.slot_id=? AND e.account_id=?",
+        (slot_id, owner),
+    ).fetchone()
+    return row["id"] if row else None
 
 
 def eligible(conn, node_id: str, account_id: str) -> bool:
@@ -68,6 +94,7 @@ def slot_allowed(conn, slot_id: str, account_id: str) -> bool:
 
 def invalidate(conn, node_id: str) -> None:
     """Rotate grants without touching the owner's Mac, login, history, or money."""
+    conn.execute("DELETE FROM agy_enrollments WHERE slot_id=?", (node_id,))
     for row in conn.execute("SELECT id FROM slots WHERE node_id=?", (node_id,)).fetchall():
         slot_id = row["id"]
         conn.execute("DELETE FROM api_model_bindings WHERE claim_id IN "
@@ -245,19 +272,95 @@ class PrivateOwnerStoreMixin:
                                       "AND seen_at BETWEEN ? AND ?", (node_id, now-180, now)
                                       ).fetchone() is not None
 
+    def antigravity_pairing_status(
+        self, slot_id: str, account_id: str, *, now: float
+    ) -> dict[str, Any]:
+        """Summarize this owner's workspace grants independently of Mac availability."""
+        with self._lock:
+            conn = self._conn
+            if not eligible(conn, slot_id, account_id):
+                return {"devices": [], "pending_count": 0, "pending_until": None,
+                        "enrollment_id": None}
+            enrollment_id = _enrollment_id(conn, slot_id, account_id)
+            rows = conn.execute(
+                "WITH pending AS ("
+                " SELECT COUNT(*) AS pending_count, MAX(p.expires_at) AS pending_until"
+                " FROM cli_pairings p JOIN agy_pairings w ON w.token_hash=p.token_hash"
+                " WHERE p.slot_id=:slot AND p.account_id=:owner AND p.expires_at>:now"
+                "), devices AS ("
+                " SELECT d.id,d.name,d.created_at,d.last_seen_at FROM cli_devices d"
+                " JOIN agy_devices w ON w.device_id=d.id"
+                " WHERE d.slot_id=:slot AND d.account_id=:owner AND d.revoked_at IS NULL"
+                ") SELECT * FROM pending LEFT JOIN devices ON 1"
+                " ORDER BY devices.created_at DESC, devices.name",
+                {"slot": slot_id, "owner": account_id, "now": now},
+            ).fetchall()
+        return {
+            "devices": [
+                {key: row[key] for key in ("id", "name", "created_at", "last_seen_at")}
+                for row in rows if row["id"] is not None
+            ],
+            "pending_count": rows[0]["pending_count"],
+            "pending_until": rows[0]["pending_until"],
+            "enrollment_id": enrollment_id,
+        }
+
+    @staticmethod
+    def _antigravity_owner_slot(conn, owner):
+        from .store import StoreError
+
+        slot = conn.execute(
+            "SELECT s.id,s.gateway_claim_id,s.gateway_generation FROM private_owner_nodes p "
+            "JOIN slots s ON s.id=p.node_id WHERE p.account_id=?", (owner,),
+        ).fetchone()
+        if slot is None or not eligible(conn, slot["id"], owner):
+            raise StoreError("a ready private Mac owned by this account is required")
+        return slot
+
+    def set_antigravity_enrollment(self, owner: str, *, expected_id: str, now: float) -> str:
+        """Create or replace one reusable code, revealing its secret only on this response."""
+        from . import cli_access
+        from .store import StoreError
+
+        with self._write_txn() as conn:
+            slot = self._antigravity_owner_slot(conn, owner)
+            if not self.antigravity_ready(slot["id"], now=now):
+                raise StoreError("the Antigravity workspace service is offline")
+            if expected_id != (_enrollment_id(conn, slot["id"], owner) or ""):
+                raise StoreError("the Gemini enrollment code changed; refresh the page")
+            code = cli_access.GEMINI_ENROLL_PREFIX + secrets.token_urlsafe(32)
+            conn.execute("DELETE FROM agy_enrollments WHERE slot_id=?", (slot["id"],))
+            conn.execute(
+                "INSERT INTO agy_enrollments(slot_id,account_id,claim_id,claim_generation,id,"
+                "token_hash) VALUES (?,?,?,?,?,?)",
+                (slot["id"], owner, slot["gateway_claim_id"], slot["gateway_generation"],
+                 secrets.token_hex(16), cli_access.token_hash(code)),
+            )
+            return code
+
+    def revoke_antigravity_enrollment(self, owner: str, enrollment_id: str) -> None:
+        """Stop new registrations without touching any computer's existing credentials."""
+        from .store import StoreError
+
+        with self._write_txn() as conn:
+            slot = self._antigravity_owner_slot(conn, owner)
+            removed = conn.execute(
+                "DELETE FROM agy_enrollments WHERE slot_id=? AND account_id=? AND id=?",
+                (slot["id"], owner, enrollment_id),
+            ).rowcount
+            if not removed:
+                raise StoreError("the Gemini enrollment code changed; refresh the page")
+
     def antigravity_pairing(self, owner: str, *, now: float) -> str:
         """Only a private Mac's current administrator may grant an interactive session."""
         from . import cli_access
         from .store import StoreError
 
         with self._write_txn() as conn:
-            node = conn.execute("SELECT node_id FROM private_owner_nodes WHERE account_id=?",
-                                (owner,)).fetchone()
-            if node is None or not eligible(conn, node["node_id"], owner):
-                raise StoreError("a ready private Mac owned by this account is required")
-            if not self.antigravity_ready(node["node_id"], now=now):
+            slot = self._antigravity_owner_slot(conn, owner)
+            if not self.antigravity_ready(slot["id"], now=now):
                 raise StoreError("the Antigravity workspace service is offline")
-            code = self._mint_cli_pairing(conn, node["node_id"], owner, now=now)
+            code = self._mint_cli_pairing(conn, slot["id"], owner, now=now)
             conn.execute("INSERT INTO agy_pairings VALUES (?)", (cli_access.token_hash(code),))
             return code
 

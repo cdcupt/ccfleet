@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.18"
+CLIENT_VERSION = "0.2.19"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -592,7 +592,7 @@ def generate_key() -> tuple[Path, str]:
     return path, path.with_suffix(".pub").read_text().strip()
 
 
-def prompt_pairing_code() -> str:
+def prompt_pairing_code(prompt: str = "Pairing code from your slot page: ") -> str:
     message = "Run setup in an interactive terminal to enter a hidden pairing code."
     try:
         # stdin is the installation script when invoked with curl | bash.
@@ -605,7 +605,7 @@ def prompt_pairing_code() -> str:
             os.close(descriptor)
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
-            return getpass.getpass("Pairing code from your slot page: ").strip()
+            return getpass.getpass(prompt).strip()
     except (OSError, EOFError, getpass.GetPassWarning) as exc:
         raise CliError(message) from exc
 
@@ -621,7 +621,9 @@ def cmd_login(args: argparse.Namespace) -> int:
     if parsed_server.scheme != "https" and not local_http:
         raise CliError("--server must use https:// (http:// is allowed only on localhost)")
     pairing = args.code or prompt_pairing_code()
-    if not pairing.startswith("ccf_pair_"):
+    workspace_pairing = bool(getattr(args, "workspace_pairing", False))
+    prefixes = ("ccf_pair_", "ccf_enroll_") if direct and workspace_pairing else ("ccf_pair_",)
+    if not pairing.startswith(prefixes):
         raise CliError("that does not look like a ccfleet pairing code")
     key_path, public_key = generate_key()
     public_path = key_path.with_suffix(".pub")
@@ -1450,12 +1452,53 @@ def preview_helper(slot_command):
     return slot_component("gemini_preview", PREVIEW_COMPONENT_HASH, "helper", slot_command)
 
 
+@contextlib.contextmanager
+def gemini_profile():
+    root = home().absolute()
+    original = os.environ.get("CCFLEET_HOME")
+    try:
+        os.environ["CCFLEET_HOME"] = str(root / "antigravity-workspace")
+        yield root
+    finally:
+        if original is None:
+            os.environ.pop("CCFLEET_HOME", None)
+        else:
+            os.environ["CCFLEET_HOME"] = original
+
+
+def pair_gemini(*, replace: bool, name: str) -> None:
+    with project_lock("pairing"):
+        config = load_config()
+        if config["devices"] and not replace:
+            device = choose_device(config)
+            _fleet_workspace_device(device)
+            print(f"A Gemini pairing for {device['slot_name']} is already saved on this Mac.")
+            return
+        print("Use your Gemini setup code from https://ccfleet.io/account/gemini#subscription",
+              flush=True)
+        code = prompt_pairing_code("Paste your Gemini setup code (hidden): ")
+        if not code.startswith(("agy1-ccf_enroll_", "agy1-ccf_pair_")):
+            raise CliError("use a Gemini setup code or an Antigravity one-time pairing code")
+        cmd_login(argparse.Namespace(server=DEFAULT_SERVER, code=code[5:], name=name,
+                                     workspace_pairing=True, fleet_only=True))
+
+
+def cmd_pair_gemini(args: argparse.Namespace) -> int:
+    if sys.platform != "darwin":
+        raise CliError("the Gemini workspace currently requires macOS")
+    with gemini_profile():
+        pair_gemini(replace=args.replace, name=args.name)
+    print("In T3 Code, choose Local ACP command and set the executable to ccfleet "
+          "with gemini and --acp as separate arguments.")
+    return 0
+
+
 def cmd_gemini(args: argparse.Namespace) -> int:
     acp = getattr(args, "acp", False)
     runner = getattr(args, "test", None)
     test_folder = getattr(args, "test_folder", None)
     if acp and args.pair:
-        raise CliError("pair this Mac first with ccfleet gemini --pair, then reconnect T3")
+        raise CliError("pair this Mac first with ccfleet pair gemini, then reconnect T3")
     if acp and args.project != ".":
         raise CliError("T3 selects its local project when it opens an ACP session")
     if test_folder is not None:
@@ -1471,24 +1514,12 @@ def cmd_gemini(args: argparse.Namespace) -> int:
         raise CliError("--test is available in an interactive Gemini session")
     if not acp:
         project = selected_project(args.project) if args.preview else existing_directory(args.project)
-    original = os.environ.get("CCFLEET_HOME")
-    root = home().absolute()
-    try:
-        os.environ["CCFLEET_HOME"] = str(root / "antigravity-workspace")
+    with gemini_profile() as root:
         if args.pair or not load_config()["devices"]:
             if acp:
                 raise CliError("this Mac has no Gemini workspace pairing. In a terminal, run "
-                               "ccfleet gemini --pair with a code from "
-                               "https://ccfleet.io/account/gemini#subscription, then reconnect T3")
-            if not sys.stdin.isatty():
-                raise CliError("open a terminal to paste the Antigravity pairing code")
-            print("Create the private Mac pairing code at "
-                  "https://ccfleet.io/account/gemini#subscription", flush=True)
-            code = getpass.getpass("Paste the Antigravity connection code: ").strip()
-            if not code.startswith("agy1-ccf_pair_"):
-                raise CliError("use an Antigravity subscription pairing code")
-            cmd_login(argparse.Namespace(server=DEFAULT_SERVER, code=code[5:],
-                                         name="Antigravity workspace", workspace_pairing=True, fleet_only=True))
+                               "ccfleet pair gemini, then reconnect T3")
+            pair_gemini(replace=args.pair, name="Antigravity workspace")
         device = choose_device(load_config(), args.slot)
         _fleet_workspace_device(device)
         transport = ssh_transport_command(device, tty=False, fleet_only=True)
@@ -1520,11 +1551,6 @@ def cmd_gemini(args: argparse.Namespace) -> int:
             raise CliError("native preview was interrupted before the local edit was verified") from exc
         print("Verified a native local agy edit through your assigned slot. Preview files removed.")
         return 0
-    finally:
-        if original is None:
-            os.environ.pop("CCFLEET_HOME", None)
-        else:
-            os.environ["CCFLEET_HOME"] = original
 
 
 def cmd_workspace(*, install_only: bool = False) -> int:
@@ -1948,15 +1974,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 @contextlib.contextmanager
-def project_lock():
+def project_lock(operation: str = "project"):
     ensure_home()
-    path = home() / "projects.lock"
+    path = home() / (operation + "s.lock")
     fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise CliError("another project operation is running on this computer") from exc
+            raise CliError(f"another {operation} operation is running on this computer") from exc
         yield
     finally:
         os.close(fd)
@@ -3834,6 +3860,13 @@ def parser() -> argparse.ArgumentParser:
                    help="legacy snapshot recovery; see ccfleet project",
                    description="Legacy snapshot recovery; local Claude now uses ccfleet claude.",
                    epilog="Snapshot recovery is separate from local Claude sessions.")
+    pair = sub.add_parser("pair", help="pair this computer for an editor")
+    providers = pair.add_subparsers(dest="provider", required=True)
+    pair_gem = providers.add_parser("gemini", help="pair Gemini for T3 Code or the terminal")
+    pair_gem.add_argument("--name", default="Antigravity workspace",
+                          help="computer label on CCFleet")
+    pair_gem.add_argument("--replace", action="store_true",
+                          help="pair again, replacing this Mac's saved device for the same slot")
     gemini = sub.add_parser("gemini", help="use Gemini through your private slot in this local project",
                             epilog="In T3 Code, select the local environment and open Settings > "
                                    "Providers > Add provider > Show more > Local ACP command. "
@@ -3992,6 +4025,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_launcher_create(args)
         if args.command == "__external-claude":
             return cmd_external_claude(args)
+        if args.command == "pair":
+            return cmd_pair_gemini(args)
         if args.command == "gemini":
             return cmd_gemini(args)
         if args.command == "workspace":
