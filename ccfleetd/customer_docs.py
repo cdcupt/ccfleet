@@ -1556,6 +1556,14 @@ def guide(
             '不要求先通过已登录 Claude 的槽位进行配对。'
             '<a href="/docs/library/docs/devin.html#prices">订阅价格对比</a>。</p>',
         )
+        + bi(
+            '<p>Using T3 Code with a private Mac slot on ccfleet.io? '
+            '<a href="/docs/library/docs/public-gateway.html#gemini-subscription">'
+            'Pair your Mac for Gemini</a>.</p>',
+            '<p>在 T3 Code 中使用 ccfleet.io 上的专属 Mac 槽位？'
+            '<a href="/docs/library/docs/public-gateway.html#gemini-subscription">'
+            '为 Gemini 配对本机 Mac</a>。</p>',
+        )
         + '<div class="card" id="setup">'
         + bi("<h2>Install, check, then start</h2>", "<h2>安装、检查，然后开始</h2>")
         + "<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/la"
