@@ -16,8 +16,6 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import project_files as files
-
 LIMIT = 192 * 1024
 COMMANDS = {
     "pytest": ("python3", "-m", "pytest"),
@@ -97,11 +95,14 @@ TOOLS = [
 
 
 class Workspace:
-    def __init__(self, path, approve, command=None, *, test_path=None):
+    def __init__(self, path, approve, command=None, *, test_path=None, file_tools=None):
+        if file_tools is None:
+            from . import project_files as file_tools
+        self.files = file_tools
         self.path = Path(path).resolve(strict=True)
         if self.path == Path(self.path.anchor) or self.path in (Path.home(), *Path.home().parents):
             raise ValueError("choose a project folder below a home or volume root")
-        self.root_fd = files._open_root(self.path)
+        self.root_fd = self.files._open_root(self.path)
         self.approve = approve
         self.command = COMMANDS[command] if command else None
         self.test_path = test_path or os.environ.get("PATH", os.defpath)
@@ -114,8 +115,8 @@ class Workspace:
             raise ValueError("the selected folder moved; reopen it")
 
     def _list(self, path):
-        sentinel = (files._path(path) + "/" if path != "." else "") + "entry"
-        with files._parent(self.root_fd, sentinel) as fd:
+        sentinel = (self.files._path(path) + "/" if path != "." else "") + "entry"
+        with self.files._parent(self.root_fd, sentinel) as fd:
             if fd is None:
                 raise ValueError("directory unavailable")
             entries = []
@@ -124,7 +125,7 @@ class Workspace:
                     if len(entries) >= 1500:
                         raise ValueError("directory too large; open a subfolder")
                     try:
-                        files._path(entry.name)
+                        self.files._path(entry.name)
                         info = entry.stat(follow_symlinks=False)
                     except (OSError, ValueError):
                         continue
@@ -139,11 +140,11 @@ class Workspace:
         if len(encoded) > LIMIT or not self.approve("Save file", path):
             raise ValueError("save declined or file too large")
         self._check()
-        with files._parent(self.root_fd, path, create=False) as parent:
+        with self.files._parent(self.root_fd, path, create=False) as parent:
             if parent is None:
                 raise ValueError("choose an existing parent directory")
             name = path.rsplit("/", 1)[-1]
-            existing = files._read(self.root_fd, path)
+            existing = self.files._read(self.root_fd, path)
             if expected != (existing["sha256"] if existing else "new"):
                 raise ValueError("file changed; read it again")
             # Stage beside the destination. Refuse to overwrite an unobserved new file.
@@ -158,7 +159,7 @@ class Workspace:
                     f.flush()
                     os.fsync(f.fileno())
                 if existing:
-                    if files._read(self.root_fd, path) != existing:
+                    if self.files._read(self.root_fd, path) != existing:
                         raise ValueError("file changed; read it again")
                     os.replace(temp, name, src_dir_fd=parent, dst_dir_fd=parent)
                 else:
@@ -239,21 +240,31 @@ class Workspace:
             return self._test()
         if name == "list_project":
             return self._list(args.get("path", "."))
-        path = files._path(args["path"])
+        path = self.files._path(args["path"])
         if name == "make_project_directory":
             if not self.approve("Create directory", path):
                 raise ValueError("creation declined")
             self._check()
-            with files._parent(self.root_fd, path) as parent:
+            with self.files._parent(self.root_fd, path) as parent:
                 if parent is None:
                     raise ValueError("choose an existing parent directory")
                 os.mkdir(path.rsplit("/", 1)[-1], 0o700, dir_fd=parent)
             return {"created": path}
         if name == "save_project":
             return self._save(path, args["text"], args["expected"])
-        item = files._read(self.root_fd, path)
-        if not item or len(item["data"]) > (LIMIT * 4 // 3):
-            raise ValueError("file unavailable or too large")
+        item = self.read_optional(path)
+        if item is None:
+            raise ValueError("file unavailable")
+        return item
+
+    def read_optional(self, path):
+        """A missing file can be created. Unsafe or unreadable files must never look missing."""
+        self._check()
+        item = self.files._read(self.root_fd, self.files._path(path))
+        if item is None:
+            return None
+        if len(item["data"]) > LIMIT * 4 // 3:
+            raise ValueError("file too large for an editor operation")
         return {"text": base64.b64decode(item["data"]).decode("utf-8"), "sha256": item["sha256"]}
 
     def rpc(self, msg):
