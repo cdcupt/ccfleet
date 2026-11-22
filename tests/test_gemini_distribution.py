@@ -196,29 +196,30 @@ def test_offline_version_probe_blocks_network_and_uses_temporary_home(tmp_path, 
     assert ux._google_version(spy, stage) == (1, 2, 3)
 
 @pytest.mark.parametrize("op", ["workspace-tools", "editor-client"])
-def test_approved_slot_distributes_both_editor_generations(tmp_path, monkeypatch, op):
-    old = b"previous public component"
-    current = b"current public component"
-    name, _ = dist.LEGACY_EDITOR_SOURCES[op]
-    previous_pin = hashlib.sha256(old).hexdigest()
-    current_pin = hashlib.sha256(current).hexdigest()
-    monkeypatch.setitem(dist.LEGACY_EDITOR_SOURCES, op, (name, previous_pin))
+def test_approved_slot_distributes_all_signed_editor_generations(tmp_path, monkeypatch, op):
+    generations = (b"first public component", b"second public component", b"current component")
+    pins = [hashlib.sha256(component).hexdigest() for component in generations]
+    name = dist.EDITOR_FILES[op]
+    history = [(v, revision, {op: pin}) for (v, revision, _), pin in zip(dist.EDITOR_HISTORY, pins)]
+    monkeypatch.setattr(dist, "EDITOR_HISTORY", history)
     monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
     monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected upstream request"))
-    (tmp_path / name).write_bytes(old)
-    snapshot = tmp_path / dist.editor_snapshot(name)
-    snapshot.write_bytes(current)
-    for fields, expected in (({"op": op}, old), ({"op": op, "sha256": previous_pin}, old),
-                             ({"op": op, "sha256": current_pin}, current)):
+    versions = [v for v, _, _ in history] + [dist.EDITOR_VERSION]
+    for component, version in zip(generations, versions):
+        (tmp_path / dist.editor_snapshot(name, version)).write_bytes(component)
+    assert invoke(tmp_path, {"op": op}) == (0, generations[0])
+    for pin, expected in zip(pins, generations):
+        fields = {"op": op, "sha256": pin}
         assert invoke(tmp_path, fields) == (0, expected)
         assert invoke(tmp_path, fields, lambda: False) == (2, b"")
         authorized = iter([True, False])
         assert invoke(tmp_path, fields, authorized.__next__) == (2, b"")
     for digest in ("0" * 64, "../path", None):
         assert invoke(tmp_path, {"op": op, "sha256": digest}) == (2, b"")
-    assert invoke(tmp_path, {"op": op, "sha256": current_pin, "path": "another.py"}) == (2, b"")
+    assert invoke(tmp_path, {"op": op, "sha256": pins[-1], "path": "another.py"}) == (2, b"")
+    snapshot = tmp_path / dist.editor_snapshot(name)
     snapshot.unlink()
     snapshot.symlink_to(tmp_path / name)
-    assert invoke(tmp_path, {"op": op, "sha256": current_pin}) == (2, b"")
-    (tmp_path / name).write_bytes(current)
+    assert invoke(tmp_path, {"op": op, "sha256": pins[-1]}) == (2, b"")
+    (tmp_path / name).write_bytes(generations[-1])
     assert invoke(tmp_path, {"op": op}) == (2, b"")

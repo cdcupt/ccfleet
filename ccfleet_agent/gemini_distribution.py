@@ -19,36 +19,40 @@ MAX_ARCHIVE = 256 * 1024**2
 BLOCK = 256 * 1024
 
 EDITOR_LIMIT = 128 * 1024
-# Unversioned callers use these exact 0.2.15 sources. Never overwrite their filenames.
-LEGACY_EDITOR_SOURCES = {
-    "editor-client": (
-        "gemini_editor_client.py",
-        "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0",
-    ),
-    "workspace-tools": (
-        "workspace_tools.py",
-        "55153b8a796d059c3fd9b5b3f96247ed843d067ff7c7d5d910e6e6a95fc639f3",
-    ),
-}
+# These public snapshots remain available to installed clients. Sources are pinned
+# for fresh slots that do not already have older helpers on disk.
+EDITOR_FILES = {"editor-client": "gemini_editor_client.py", "workspace-tools": "workspace_tools.py"}
+EDITOR_VERSION = "0.2.17"
+EDITOR_HISTORY = (
+    ("0.2.15", "ee147f63c559f4f8deb9e5962501412168edf27e", {
+        "editor-client": "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0",
+        "workspace-tools": "55153b8a796d059c3fd9b5b3f96247ed843d067ff7c7d5d910e6e6a95fc639f3",
+    }),
+    ("0.2.16", "4b093ba94033a41c86f0716b9a24482ff7b88da2", {
+        "editor-client": "1d1f6fcc92b94136ba525d8c87d3dc1d1828cbe0a72d3a9519507e29e9d34bf8",
+        "workspace-tools": "0d981a56e278249c174cdad7e010313456a67d4f263f2fa2ad585efd8ce4ddb0",
+    }),
+)
 
 
-def editor_snapshot(filename):
-    return filename.removesuffix(".py") + "-0.2.16.py"
+def editor_snapshot(filename, version=EDITOR_VERSION):
+    if version == "0.2.15":
+        return filename  # Keep the original names intact for in-flight readers.
+    return filename.removesuffix(".py") + f"-{version}.py"
 
 
 def _editor_bytes(op, request):
-    filename, legacy = LEGACY_EDITOR_SOURCES[op]
     if set(request) == {"v", "op"}:
-        expected = legacy
+        expected = EDITOR_HISTORY[0][2][op]
     elif set(request) == {"v", "op", "sha256"} and isinstance(request["sha256"], str):
         expected = request["sha256"]
         if not re.fullmatch(r"[0-9a-f]{64}", expected):
             return None
     else:
         return None
-    if expected != legacy:
-        filename = editor_snapshot(filename)
-    # The requested digest selects only between these two locally installed public files.
+    # Only server-selected versions and component names may form a disk path.
+    version = next((v for v, _, pins in EDITOR_HISTORY if pins[op] == expected), EDITOR_VERSION)
+    filename = editor_snapshot(EDITOR_FILES[op], version)
     return pinned_editor_file(Path(__file__).with_name(filename), expected)
 
 
@@ -214,7 +218,7 @@ def serve(inp, out, home, authorize):
     # These exact public sources are pinned by the signed client. Untrusted requests
     # cannot choose a path or add credentials, query parameters or a download URL.
     op = q.get("op")
-    if isinstance(op, str) and op in LEGACY_EDITOR_SOURCES:
+    if isinstance(op, str) and op in EDITOR_FILES:
         data = _editor_bytes(op, q)
         if data is None or not authorize():
             return 2
