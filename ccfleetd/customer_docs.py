@@ -1507,8 +1507,9 @@ def _guide_navigation() -> str:
     links = (("setup", "First computer", "首次连接电脑"),
              ("add-slot", "Add another slot", "添加另一个槽位"),
              ("model-connections", "Sticky & priority", "会话保持与优先级"),
+             ("t3-gemini", "Gemini in T3 Code", "在 T3 Code 中使用 Gemini"),
              ("agent-compatibility", "Claude & Gemini by tool", "各工具订阅支持"),
-             ("agent-apps", "Orca, Herdr & T3 Code", "Orca、Herdr 与 T3 Code"),
+             ("agent-apps", "Claude in agent apps", "在代理应用中使用 Claude"),
              ("local-work", "Files & conversations", "文件与会话"),
              ("slot-care", "Slot care", "管理槽位"))
 
@@ -1525,7 +1526,8 @@ def _agent_app_guide() -> str:
     return (
         '<section class="card" id="agent-apps" aria-labelledby="agent-apps-title">'
         '<h2 id="agent-apps-title">'
-        + label("Use Orca, Herdr or T3 Code", "使用 Orca、Herdr 或 T3 Code", inline=True)
+        + label("Use Claude in Orca, Herdr or T3 Code", "在 Orca、Herdr 或 T3 Code 中使用 Claude",
+                inline=True)
         + '</h2>'
         + bi(
             '<p>Use the app’s <strong>Claude</strong> integration with Fleet 0.2.9 or later. '
@@ -1608,12 +1610,12 @@ def _agent_app_guide() -> str:
             '其原版可执行程序或安装器。</p>',
         )
         + bi(
-            '<p>Controlled launcher, terminal and signed-client checks passed. Full app/model '
+            '<p>Claude launcher, terminal and signed-client checks passed. Full Claude app/model '
             'sessions remain unverified. Start with a small test session, including any '
             'automatic title or helper requests you use. '
             '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
             'Detailed app settings, compatibility limits and verification scope</a>.</p>',
-            '<p>受控启动器、终端和签名客户端检查已通过；完整的应用／模型会话仍未验证。'
+            '<p>Claude 启动器、终端和签名客户端检查已通过。完整的 Claude 应用／模型会话仍未验证。'
             '请先进行一个小型测试会话，也检查自己会用到的自动标题或辅助请求。'
             '<a href="/docs/library/docs/platform-comparison.html#agent-apps">'
             '查看详细应用设置、兼容性限制与验证范围</a>。</p>',
@@ -1827,6 +1829,7 @@ def guide(
         + "</div>"
         + _additional_slot_setup()
         + _model_connections(cfg)
+        + agent_guide.t3_gemini()
         + agent_guide.section()
         + _agent_app_guide()
         + '<div class="card" id="local-work">'

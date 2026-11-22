@@ -313,6 +313,10 @@ def test_manage_reusable_subscription_code_via_web(private, monkeypatch):
         assert result.status == 200
         return re.search(r'id="gemini-code">agy1-(ccf_enroll_[\w-]+)</pre>', result.body)[1]
 
+    for lang, disclosure, once in (("en", "may reach Google", "new code is shown once"),
+                                   ("zh", "可能作为模型上下文发送给 Google", "新配对码只显示一次")):
+        html = bilingual.project_html(setup(), lang, "/account/gemini")
+        assert html.index(disclosure) < html.index(once) < html.index('value="create"')
     assert post("create").status == 409
     assert post("create", trust="1", enrollment_id="").status == 409
     created = post("create", trust="1")
@@ -333,7 +337,7 @@ def test_manage_reusable_subscription_code_via_web(private, monkeypatch):
         assert ("Select the local environment" if lang == "en" else "选择本地环境") in html
         assert ("one argument per row" if lang == "en" else "每行一个") in html
         assert ("a distinct name" if lang == "en" else "不同名称") in html
-        assert ("saved local profile" if lang == "en" else "本机已保存配对") in html
+        assert ("saved local profile" if lang == "en" else "本机已有配对记录") in html
         for detail in ("Settings → Providers → Add provider → Show more → Local ACP command",
                        "<code>command -v ccfleet</code>", "CCFleet Gemini", "Supervised",
                        '<code>ccfleet pair gemini --name "Work MacBook"</code>',

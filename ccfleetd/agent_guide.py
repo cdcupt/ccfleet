@@ -9,12 +9,13 @@ ROWS = (
     ("T3 Code",
      ("Choose the Claude provider. Fleet launcher setup is documented below.",
       "选择 Claude 服务商。下方有 Fleet 启动器的设置步骤。"),
-     ("Choose Antigravity in Settings → Providers on the environment running the project. "
-      "T3 manages a separate Google sign-in for the official agent.",
-      "在运行项目的环境中，打开 Settings → Providers，选择 Antigravity。"
-      "T3 为官方代理单独管理 Google 登录。"),
-     (("Claude", "https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-claude.md"),
-      ("Antigravity", "https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-antigravity.md"))),
+     ("On your Mac, pair with CCFleet and choose Local ACP command in T3. "
+      "The Antigravity agent uses the Google sign-in on your private slot.",
+      "在 Mac 上与 CCFleet 配对，在 T3 中选择 Local ACP command。"
+      "Antigravity 代理使用专属槽位上的 Google 登录。"),
+     (("CCFleet", "#t3-gemini"),
+      ("T3 ACP", "https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-acp.md"),
+      ("Claude", "https://github.com/pingdotgg/t3code/blob/main/docs/user/providers-claude.md"))),
     ("Pi",
      ("Pi lists an Anthropic API credential. Community subscription extensions exist. "
       "CCFleet has no verified Pi subscription setup.",
@@ -177,6 +178,78 @@ def _row(name, claude, gemini, sources):
             + '</td><td>' + links + '</td></tr>')
 
 
+def t3_provider_steps() -> str:
+    """The same local provider setup appears in the public guide and the account receipt."""
+    menu = "<strong>Settings → Providers → Add provider → Show more → Local ACP command</strong>"
+    return ('<ol><li>'
+            + bi('Select the local environment in T3 Code, then open ' + menu + '.',
+                 '在 T3 Code 中选择本地环境，然后打开 ' + menu + '。',
+                 inline=True)
+            + '</li><li>'
+            + bi('Name the provider <strong>CCFleet Gemini</strong>. Set the executable to '
+                 '<code>ccfleet</code>. If T3 cannot find it, use the absolute path printed by '
+                 '<code>command -v ccfleet</code>.',
+                 '将服务商命名为 <strong>CCFleet Gemini</strong>，可执行文件填写 '
+                 '<code>ccfleet</code>。如果 T3 找不到它，改填 <code>command -v ccfleet</code> '
+                 '输出的绝对路径。', inline=True)
+            + '</li><li>'
+            + label("Enter one argument per row, in this order.", "按顺序填写参数，每行一个。",
+                    inline=True)
+            + '<ol><li><code>gemini</code></li><li><code>--acp</code></li></ol></li><li>'
+            + bi('Save the provider. Open your local project and start a thread with '
+                 '<strong>CCFleet Gemini</strong>. Choose <strong>Supervised</strong> to approve '
+                 'each file edit and each enabled test run before it executes on your Mac.',
+                 '保存服务商，打开本地项目，用 <strong>CCFleet Gemini</strong> 新建对话。'
+                 '选择 <strong>Supervised</strong> 后，文件修改和已启用的本地测试'
+                 '都需经你逐次确认后才会执行。',
+                 inline=True)
+            + '</li></ol>')
+
+
+def t3_gemini() -> str:
+    return (
+        '<section class="card" id="t3-gemini" aria-labelledby="t3-gemini-title">'
+        '<h2 id="t3-gemini-title">'
+        + label("Use Gemini in T3 Code on your Mac", "在 Mac 上通过 T3 Code 使用 Gemini",
+                inline=True)
+        + '</h2>'
+        + bi('<p>T3 opens the project on your Mac. CCFleet connects T3 to Antigravity on your '
+             'private Mac slot, where your Google account is signed in. This uses your '
+             'Antigravity subscription. Requested file contents and test output go to the slot '
+             'and may reach Google as model context.</p>',
+             '<p>T3 打开的是这台 Mac 上的项目。CCFleet 将 T3 连接到专属 Mac 槽位上的 Antigravity，'
+             '使用槽位上已登录的 Google 账号和 Antigravity 订阅。槽位收到的文件内容和测试输出'
+             '也可能作为模型上下文发送给 Google。</p>')
+        + '<h3>' + label("Pair each Mac once", "每台 Mac 只需配对一次", inline=True) + '</h3>'
+        + bi('<p>Use your saved Gemini setup code. To create your first code, open '
+             '<a href="/account/gemini#subscription">Gemini settings</a>, choose '
+             '<strong>Create reusable setup code</strong> and save it in your password manager. '
+             'The code is shown only once. On each trusted Mac, run these commands and paste it '
+             'at the hidden prompt. This also applies to a Mac already paired with Claude.</p>',
+             '<p>请使用已保存的 Gemini 配对码。首次创建时，打开 '
+             '<a href="/account/gemini#subscription">'
+             'Gemini 设置</a>，选择<strong>创建可重复使用的配对码</strong>，'
+             '并将它保存在密码管理器中。配对码仅显示一次。'
+             '在每台受信任的 Mac 上运行以下命令，按提示粘贴同一个码（输入不会显示）。'
+             '已配对 Claude 的 Mac 也需要这一步。</p>')
+        + '<details id="t3-install"><summary>'
+        + label("Install CCFleet on a new Mac", "在新 Mac 上安装 CCFleet", inline=True)
+        + '</summary>'
+        + bi('<p>If the terminal cannot find <code>ccfleet</code>, install the client and add '
+             'its directory to this terminal’s search path.</p>',
+             '<p>如果终端找不到 <code>ccfleet</code>，请安装客户端，并将其目录加入当前终端的'
+             '命令搜索路径。</p>')
+        + '<pre><code>curl -fsSL https://raw.githubusercontent.com/cdcupt/ccfleet/main/'
+          'laptop/install.sh | bash\nexport PATH="$HOME/.local/bin:$PATH"</code></pre></details>'
+        + '<pre><code>ccfleet update\nccfleet pair gemini</code></pre>'
+        + bi('<p>Pairing returns you to the terminal. Each Mac gets its own connection, '
+             'which you can remove from the Gemini account page.</p>',
+             '<p>配对完成后会返回终端。每台 Mac 都有独立的连接，可在 Gemini 页面单独移除。</p>')
+        + '<h3>' + label("Set up T3 Code once", "首次配置 T3 Code", inline=True) + '</h3>'
+        + t3_provider_steps() + '</section>'
+    )
+
+
 def section() -> str:
     columns = (("Tool", "工具"), ("Claude subscription", "Claude 订阅"),
                ("Antigravity subscription", "Antigravity 订阅"), ("Sources", "资料"))
@@ -196,50 +269,32 @@ def section() -> str:
              '打开项目。本地 Claude Code 通过 CCFleet 使用分配给你的 Claude 槽位。'
              'Orca、Herdr 和 T3 有<a href="#agent-apps">Fleet 启动器设置说明</a>。'
              '启动器检查已通过，三款应用的完整会话尚未逐一验证。</p>')
-        + bi('<p><strong>Native terminal commands.</strong> In your project, run '
-             '<code>ccfleet claude</code> for Claude Code. On macOS, '
-             '<code>ccfleet gemini --preview</code> starts local Antigravity and verifies '
-             'a native file read and edit in a disposable subfolder through your private slot. '
-             'The slot supplies synthetic responses. Live subscription inference is unavailable. '
-             'The mini checks Google’s public release catalog and supplies the verified CLI '
-             'through CCFleet. The MacBook uses its Fleet pairing and keeps a temporary '
-             'agent profile with no personal Google login.</p>',
-             '<p><strong>本地终端命令。</strong>在项目中用 <code>ccfleet claude</code> 启动 '
-             'Claude Code。macOS 上的 <code>ccfleet gemini --preview</code> 会启动本地 '
-             'Antigravity，通过专属槽位在临时子目录中验证原生文件读写。槽位返回模拟响应，'
-             '暂未开放订阅模型推理。槽位查询 Google 官方版本，并经 CCFleet 提供已验证的程序。'
-             'MacBook 使用 Fleet 配对与临时代理配置，无需个人 Google 登录。</p>')
-        + bi('<p><strong>Gemini with an Antigravity subscription today.</strong> '
-             'Open your project in Ghostty or another terminal and start Antigravity CLI there. '
-             'You can also choose its official '
-             'agent in a supported editor below. On an enabled private Mac slot, use '
-             '<a href="/account/gemini#subscription">CCFleet Workspace in Ghostty</a> to keep '
-             'the Google login on the slot and access a selected MacBook project. Workspace tools '
-             'ask before saving files or running a chosen test locally. The CLI’s built-in tools '
-             'run on the slot. Gemini API billing is separate.</p>',
-             '<p><strong>使用 Antigravity 订阅</strong>在本机 Ghostty 或其他终端打开项目，'
-             '启动 Antigravity CLI，也可选择下表中的官方代理。已启用工作区的专属 Mac 槽位可通过 '
-             '<a href="/account/gemini#subscription">Ghostty 中的 CCFleet Workspace</a> '
-             '使用 MacBook 上指定的项目。Google 登录保留在槽位。工作区工具在本机保存文件或运行'
-             '所选测试前请求确认。CLI 内置工具在槽位上运行。Gemini API 单独计费。</p>')
-        + bi('<p>Checked November 21, 2026 against publisher documentation. The table covers '
-             'widely used editors, command-line agents and Fleet launcher apps. Each cell '
-             'describes the named mode. Fleet checks cover the three launchers above.</p>',
-             '<p>2026 年 11 月 21 日核对了各方官方文档。下表收录常见编辑器、命令行代理和支持 '
-             'Fleet 启动器的应用。Fleet 检查仅涵盖上文三款应用的启动器。</p>')
+        + bi('<p><strong>Gemini on CCFleet.</strong> On a paired Mac, '
+             '<a href="#t3-gemini">open your local project in T3 Code</a> or run '
+             '<code>ccfleet gemini</code> in the project directory for a terminal chat. '
+             'Both use the Antigravity subscription on your private Mac slot.</p>',
+             '<p><strong>通过 CCFleet 使用 Gemini</strong>在已配对的 Mac 上，'
+             '<a href="#t3-gemini">用 T3 Code 打开本地项目</a>，或在项目目录运行 '
+             '<code>ccfleet gemini</code> 开始终端对话。两种方式都使用专属 Mac 槽位上的 '
+             'Antigravity 订阅。</p>')
+        + bi('<p>The table also lists sign-in options that tool publishers document for their '
+             'own agents. Those entries identify where the agent runs and which plan it uses. '
+             'Publisher documentation checked November 21, 2026.</p>',
+             '<p>下表也列出各工具官方文档为自家代理提供的登录方式，说明代理在哪里运行、'
+             '使用哪个套餐。各工具官方文档核对日期为 2026 年 11 月 21 日。</p>')
         + '<div class="doc-table-scroll" role="region" tabindex="0" '
         'aria-labelledby="agent-compatibility-title">'
         '<table><thead><tr>' + ''.join('<th scope="col">' + label(*titles, inline=True) + '</th>'
                                        for titles in columns)
         + '</tr></thead><tbody>' + ''.join(_row(*row) for row in ROWS) + '</tbody></table></div>'
-        + bi('<p>For a personal Google plan, pick the official Antigravity agent. Google '
-             'retired personal sign-in in the older Gemini CLI in June 2026. A community '
+        + bi('<p>For direct Google sign-in on your computer, use the official Antigravity agent. '
+             'Google retired personal sign-in in the older Gemini CLI in June 2026. A community '
              'plug-in or a matching model name alone does not establish subscription access. '
              '<a href="https://antigravity.google/docs/faq">Google FAQ</a> · '
              '<a href="https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals">'
              'Gemini CLI deprecation notice</a> · <a href="https://code.claude.com/docs/en/legal-and-compliance">'
              'Anthropic authentication policy</a></p>',
-             '<p>使用个人 Google 订阅时，请选择官方 Antigravity 代理。Google 已于 2026 年 6 月'
+             '<p>如需在本机直接登录 Google，请使用官方 Antigravity 代理。Google 已于 2026 年 6 月'
              '停止旧版 Gemini CLI 的个人登录。仅凭社区插件或同名模型无法确认是否使用订阅额度。'
              '<a href="https://antigravity.google/docs/faq">Google 常见问题</a> · '
              '<a href="https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals">'

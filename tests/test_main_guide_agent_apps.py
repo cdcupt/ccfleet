@@ -31,7 +31,7 @@ def test_main_guide_app_setup_is_visible_and_linked_from_its_intro(language, opt
     links = flow.inside(navigation, "a")
     targets = [bilingual.route_target(element.attrs["href"])[0] for element in links]
     assert targets == ["/docs/guide#" + anchor
-                       for anchor in ("setup", "add-slot", "model-connections", "agent-compatibility", "agent-apps", "local-work", "slot-care")]
+                       for anchor in ("setup", "add-slot", "model-connections", "t3-gemini", "agent-compatibility", "agent-apps", "local-work", "slot-care")]
     assert all(target.split("#", 1)[1] in page.ids for target in targets)
     link = links[1]
     assert all(parent.tag != "details" for parent in link.parents)
@@ -67,11 +67,11 @@ def test_each_app_has_configuration_on_the_main_page_not_only_a_library_link(lan
 @pytest.mark.parametrize("language,required,omitted", [
     ("en", ("One launcher, one selected slot.", "does not switch this launcher’s Fleet slot",
             "adds no default model, effort level or permission bypass", "Codex keeps its own connection",
-            "Herdr TUI is separate", "Full app/model sessions remain unverified"),
-     "完整的应用／模型会话仍未验证"),
+            "Herdr TUI is separate", "Full Claude app/model sessions remain unverified"),
+     "完整的 Claude 应用／模型会话仍未验证"),
     ("zh", ("一个启动器固定一个槽位", "不会切换此启动器的 Fleet 槽位", "不会额外指定默认模型",
-            "Codex 仍使用自己的连接", "Herdr TUI 与桌面应用是不同程序", "完整的应用／模型会话仍未验证"),
-     "Full app/model sessions remain unverified"),
+            "Codex 仍使用自己的连接", "Herdr TUI 与桌面应用是不同程序", "完整的 Claude 应用／模型会话仍未验证"),
+     "Full Claude app/model sessions remain unverified"),
 ])
 def test_main_guide_preserves_account_and_verification_boundaries(language, required, omitted):
     flow = Flow(rendered(language))
@@ -83,8 +83,8 @@ def test_main_guide_preserves_account_and_verification_boundaries(language, requ
 
 
 @pytest.mark.parametrize("language,heading", [
-    ("en", "Use Orca, Herdr or T3 Code"),
-    ("zh", "使用 Orca、Herdr 或 T3 Code"),
+    ("en", "Use Claude in Orca, Herdr or T3 Code"),
+    ("zh", "在 Orca、Herdr 或 T3 Code 中使用 Claude"),
 ])
 def test_localized_public_guide_serves_the_app_setup(one_site, language, heading):
     code, body = one_site(f"/{language}/docs/guide")
@@ -94,8 +94,8 @@ def test_localized_public_guide_serves_the_app_setup(one_site, language, heading
     assert RECIPE in page.pre_codes and "agent-apps" in page.ids
 
 @pytest.mark.parametrize("language,planned,other", [
-    ("en", "enabled private Mac slot", "已启用工作区的专属 Mac 槽位"),
-    ("zh", "已启用工作区的专属 Mac 槽位", "enabled private Mac slot"),
+    ("en", "Both use the Antigravity subscription", "两种方式都使用专属 Mac 槽位"),
+    ("zh", "两种方式都使用专属 Mac 槽位", "Both use the Antigravity subscription"),
 ])
 def test_subscription_guide_separates_fleet_from_publisher_support(language, planned, other):
     flow = Flow(rendered(language))
@@ -110,3 +110,20 @@ def test_subscription_guide_separates_fleet_from_publisher_support(language, pla
     for row in rows[1:]:
         assert len(flow.inside(row, "td")) == 3
         assert flow.inside(row, "a")
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_t3_subscription_recipe_matches_the_account_provider_steps(language):
+    from ccfleetd import gemini_setup_ui
+
+    html = rendered(language)
+    flow = Flow(html)
+    section, = flow.find("section", id="t3-gemini")
+    assert "ccfleet update\nccfleet pair gemini" in Document(html).pre_codes
+    links = [bilingual.route_target(e.attrs["href"]) for e in flow.inside(section, "a")]
+    assert any(link and link[0] == "/account/gemini#subscription" for link in links)
+    setup = bilingual.project_html(gemini_setup_ui.t3_setup(), language, "/account/gemini")
+    for source in (section.text, normalized(Flow(setup).find("details")[0].text)):
+        assert "Local ACP command" in source and "command -v ccfleet" in source
+        assert "gemini" in source and "--acp" in source and "Supervised" in source
+    assert "--preview" not in section.text and "ANTHROPIC_BASE_URL" not in section.text

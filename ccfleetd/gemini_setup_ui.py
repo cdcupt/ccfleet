@@ -1,12 +1,12 @@
-"""Bilingual presentation for the private Mac's Gemini API connection."""
+"""Bilingual setup for the private Mac's Gemini subscription and API connections."""
 
 from __future__ import annotations
 
 from collections import Counter
 from html import escape
 
-from . import gemini_setup_store, resets
-from .bilingual import label
+from . import agent_guide, gemini_setup_store, resets
+from .bilingual import bi, label
 
 PATH = "/account/gemini"
 
@@ -49,6 +49,8 @@ font-size:15px;overflow-wrap:anywhere}.gm-meta ul{padding-left:18px;margin:0}
 .gm-note{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn);
 border-radius:10px;padding:12px 15px;margin:0 0 18px}
 .gm-disconnect{margin-top:20px;border-top:1px solid var(--rule);padding-top:16px}
+.gm-panel form:has(.gm-check input:invalid) .gm-actions button.primary{
+background:var(--panel);border-color:var(--rule);color:var(--ink)}
 .gm-disconnect summary{cursor:pointer;color:var(--muted);font-weight:600;font-size:14px}
 .gm-disconnect form{display:grid;gap:12px;margin-top:14px}
 .gemini-page .gm-check{display:flex;align-items:flex-start;gap:10px;color:var(--ink);
@@ -61,7 +63,8 @@ background:var(--acc-soft);color:var(--ink);user-select:all}
 .gm-copy-line button{min-height:44px}.gm-copy-line [role=status]{color:var(--ok)}
 .gm-next{margin:18px 0 0;color:var(--muted);font-size:14px}
 .gemini-page [hidden]{display:none!important}
-@media(max-width:760px){.gm-grid{grid-template-columns:minmax(0,1fr);gap:16px}
+@media(max-width:760px){.gemini-page #subscription{scroll-margin-top:min(16rem,50vh)}
+.gm-grid{grid-template-columns:minmax(0,1fr);gap:16px}
 .site .page.gemini-page{padding-block:16px 40px}.gm-header{margin:10px 0 20px}}
 @media(max-width:560px){.gm-pair{grid-template-columns:minmax(0,1fr);gap:18px}
 .gm-actions button,.gm-copy-line button{width:100%}}
@@ -146,7 +149,8 @@ def shell(title, description, main, sidebar, viewer, *, note="", back="/account"
     if note:
         body += '<p class="gm-note" role="status">' + note + "</p>"
     body += '<div class="gm-grid"><div>' + main + "</div>" + sidebar + "</div>"
-    return usersite._shell("Gemini API", body, extra_css=CSS, width="gemini-page", viewer=viewer)
+    return usersite._shell("Gemini connections", body, extra_css=CSS, width="gemini-page",
+                          viewer=viewer)
 
 
 def setup_form(csrf, keys, binding):
@@ -330,26 +334,30 @@ def workspace_form(csrf, fields, consent, action):
 
 
 def reusable_controls(csrf, enrollment_id, ready):
-    consent = tr("I authorize anyone holding this code to pair computers and use Antigravity "
-                 "and its tools on my slot Mac until I replace or disable the code.",
-                 "我授权持有此码的人配对电脑并使用槽位 Mac 上的 Antigravity 及其工具，"
-                 "直至我更换或停用此码。")
+    consent = tr("I authorize anyone with this code to pair a Mac and access Antigravity "
+                 "and its tools on my slot.", "我授权任何持有此码的人配对 Mac，"
+                 "并使用我槽位上的 Antigravity 及其工具。")
+    save = '<p>' + tr("The new code is shown once. Save it in your password manager.",
+                      "新配对码只显示一次，请将它保存在密码管理器中。") + '</p>'
+    scope = tr("Replacing or disabling the code stops future pairings with it. "
+               "Remove a paired Mac individually to end its access.",
+               "更换或停用配对码后，旧码不能再用于新配对。若要撤销已配对 Mac 的访问权限，"
+               "请单独移除该设备。")
     if not enrollment_id:
-        return (workspace_form(csrf, {"operation": "create"}, consent,
-                               tr("Create reusable setup code", "创建可重复使用的配对码"))
-                if ready else "")
+        return ('<p>' + scope + '</p>' + save + workspace_form(
+                csrf, {"operation": "create"}, consent,
+                tr("Create reusable setup code", "创建可重复使用的配对码")) if ready else "")
     revision = {"enrollment_id": enrollment_id}
-    replace = (workspace_form(csrf, {**revision, "operation": "replace"}, consent,
-                              tr("Replace setup code", "更换配对码")) if ready else "")
+    replace = (save + workspace_form(csrf, {**revision, "operation": "replace"}, consent,
+                                     tr("Replace setup code", "更换配对码")) if ready else "")
     disable = workspace_form(csrf, {**revision, "operation": "disable"},
                              tr("I want to stop new pairings with this code.",
                                 "我要禁止使用此码继续配对新电脑。"),
                              tr("Disable setup code", "停用配对码"))
     return ('<details class="gm-disconnect"><summary>'
             + tr("Replace or disable the code", "更换或停用配对码") + '</summary><p>'
-            + tr("If you lost the code, replace it to get a new one. Replacing or disabling "
-                 "the code preserves existing computer connections.",
-                 "如已丢失配对码，可更换以获取新码。更换或停用配对码后，已配对的电脑仍可使用。")
+            + tr("If you lost your setup code, replace it to get a new one.",
+                 "如已丢失配对码，可更换配对码以获取新码。") + ' ' + scope
             + '</p>' + replace + disable + '</details>')
 
 
@@ -382,30 +390,15 @@ def pairing_help():
             + tr("If you removed this Mac on the website, the usual pairing command still "
                  "reports its saved local profile. To reconnect it, run this command and "
                  "paste your current setup code.",
-                 "如果你已在网站上移除这台 Mac，普通配对命令仍会提示本机已保存配对。"
+                 "如果你已在网站上移除这台 Mac，常规配对命令仍会提示本机已有配对记录。"
                  "要重新连接，请运行以下命令并按提示粘贴当前有效的配对码。")
             + '</p><pre><code>ccfleet pair gemini --replace</code></pre></details>')
 
 
 def t3_setup():
     return ('<details class="gm-disconnect"><summary>'
-            + tr("Add Gemini to T3 Code", "在 T3 Code 中添加 Gemini") + '</summary><ol><li>'
-            + tr("Select the local environment on your paired Mac. Open",
-                 "在已配对的 Mac 上选择本地环境，然后打开")
-            + ' <b>Settings → Providers → Add provider → Show more → Local ACP command</b>.</li>'
-            + '<li>' + tr("Name the provider CCFleet Gemini. For the executable, enter",
-                          "将服务商命名为 CCFleet Gemini。可执行文件填写")
-            + ' <code>ccfleet</code>. '
-            + tr("If T3 can’t find it on PATH, paste the absolute path printed by",
-                 "如果 T3 无法从 PATH 中找到该命令，请填写以下命令输出的绝对路径")
-            + ' <code>command -v ccfleet</code>.</li><li>'
-            + tr("Add one argument per row, in this order.", "按以下顺序添加参数，每行一个。")
-            + '<ol><li><code>gemini</code></li><li><code>--acp</code></li></ol></li><li>'
-            + tr("Save the provider. Open your local project and start a thread with CCFleet "
-                 "Gemini. Choose Supervised in the thread permissions to approve edits and tests.",
-                 "保存服务商。在本地项目中使用 CCFleet Gemini 新建对话，"
-                 "在对话权限中选择 Supervised，即可逐项批准文件修改和测试。")
-            + '</li></ol></details>')
+            + tr("Add Gemini to T3 Code", "在 T3 Code 中添加 Gemini") + '</summary>'
+            + agent_guide.t3_provider_steps() + '</details>')
 
 
 def workspace_panel(csrf, ready, pairing, slot_id):
@@ -423,33 +416,41 @@ def workspace_panel(csrf, ready, pairing, slot_id):
     return ('<section class="gm-panel" id="subscription"><h2>'
             + tr("Antigravity subscription", "Antigravity 订阅") + '</h2><p><strong>'
             + pairing_summary(pairing) + '</strong></p>'
-            + workspace_devices(csrf, slot_id, pairing) + offline + '<p>'
-            + tr("Sign in to Google once on the slot Mac. Each trusted Mac uses the same "
-                 "setup code to pair with Gemini, including Macs already paired with Claude. "
-                 "The subscription needs no API key.",
-                 "只需在槽位 Mac 上登录一次 Google。每台受信任的 Mac 都可用同一个码配对 Gemini，"
-                 "已配对 Claude 的 Mac 也一样。使用订阅无需 API 密钥。")
-            + '</p><h3>' + tr("Pair a Mac", "配对 Mac") + '</h3><p>'
-            + tr("On each new Mac, update CCFleet, then paste your saved setup code "
-                 "at the pairing prompt.",
-                 "在每台新 Mac 上先更新 CCFleet，再按配对提示粘贴已保存的配对码。")
-            + '</p><pre><code>ccfleet update\nccfleet pair gemini</code></pre><p>'
-            + tr("On a paired Mac, open your Gemini connection in T3 or run",
-                 "在已配对的 Mac 上，在 T3 中打开 Gemini 连接，或运行")
-            + ' <code>ccfleet gemini</code>.</p>' + pending
+            + offline + '<p>'
+            + tr("Open your project in T3 Code on your Mac. CCFleet connects it to Antigravity "
+                 "on your private Mac slot. Sign in to Google on the slot. Your subscription "
+                 "covers the model calls without a Gemini API key.",
+                 "在这台 Mac 的 T3 Code 中打开项目。CCFleet 会连接专属 Mac 槽位上的 Antigravity。"
+                 "只需在槽位登录 Google，模型调用使用订阅额度，无需 Gemini API 密钥。")
+            + '</p><p class="gm-secondary">'
+            + tr("The slot receives requested file contents and test output. These may reach "
+                 "Google as model context.", "槽位会收到按需读取的文件内容和测试输出。"
+                 "这些内容也可能作为模型上下文发送给 Google。")
+            + '</p>'
             + reusable_controls(csrf, pairing["enrollment_id"], ready)
-            + pairing_help()
+            + '<h3>' + tr("Pair each Mac once", "每台 Mac 只需配对一次") + '</h3><p>'
+            + tr("Run these commands on each trusted Mac, including one already paired with "
+                 "Claude. Paste your saved setup code at the hidden prompt. Pairing returns "
+                 "you to the terminal.",
+                 "在每台受信任的 Mac 上运行以下命令，已配对 Claude 的 Mac 也需要这一步。"
+                 "按提示粘贴保存的配对码（输入不会显示）。配对完成后会返回终端。")
+            + '</p><pre><code>ccfleet update\nccfleet pair gemini</code></pre>'
+            + '<p><a href="/docs/guide#t3-install">'
+            + tr("Install CCFleet on a new Mac", "在新 Mac 上安装 CCFleet") + '</a></p>'
             + t3_setup()
+            + bi('<p>If T3 is already configured, open your project and choose CCFleet Gemini. '
+                 'For a terminal chat, run <code>ccfleet gemini</code>.</p>',
+                 '<p>如果 T3 已配置，打开项目并选择 CCFleet Gemini 即可。'
+                 '若要在终端中对话，可运行 <code>ccfleet gemini</code>。</p>')
+            + pending + pairing_help()
+            + workspace_devices(csrf, slot_id, pairing)
             + '<details class="gm-disconnect"><summary>'
             + tr("Workspace app or older CLI", "Workspace 应用或旧版 CLI") + '</summary><p>'
             + tr("These clients use a one-time code valid for 10 minutes.",
                  "这些客户端使用一次性配对码，有效期为 10 分钟。")
             + '</p>' + legacy_form + '<p><a href="' + WORKSPACE_DOWNLOAD + '">'
             + tr("Download CCFleet Workspace for Mac", "下载 Mac 版 CCFleet Workspace")
-            + '</a></p></details><p class="gm-secondary">'
-            + tr("The slot receives requested file contents and test output from the local Mac.",
-                 "槽位会收到本地 Mac 按需提供的文件内容和测试输出。")
-            + '</p></section>')
+            + '</a></p></details></section>')
 
 
 def workspace_result(code, slot, keys, binding, grants, viewer, script, *, reusable):
