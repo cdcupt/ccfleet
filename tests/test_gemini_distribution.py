@@ -56,6 +56,10 @@ def test_slot_is_fixed_release_source_and_caches_verified_archives(tmp_path, mon
     [
         {"op": "manifest", "arch": "arm64", "url": "https://other.invalid"},
         {"op": "helper", "token": "synthetic"},
+        {"op": "editor-client", "path": "/tmp/other"},
+        {"op": "workspace-tools", "arch": "arm64"},
+        {"op": "../../unknown"},
+        {"op": []},
         {"op": "manifest", "arch": "linux"},
         {"op": "archive", "arch": "amd64", "sha512": "bad"},
     ],
@@ -190,3 +194,12 @@ def test_offline_version_probe_blocks_network_and_uses_temporary_home(tmp_path, 
     spy.chmod(0o700)
     monkeypatch.setattr(ux, "_verify_google_binary", lambda _: None)
     assert ux._google_version(spy, stage) == (1, 2, 3)
+
+@pytest.mark.parametrize(("op", "filename"), [("editor-client", "gemini_editor_client.py"),
+                                             ("workspace-tools", "workspace_tools.py")])
+def test_approved_slot_distributes_exact_public_editor_components(tmp_path, monkeypatch, op, filename):
+    monkeypatch.setattr(dist, "__file__", str(tmp_path / "gemini_distribution.py"))
+    (tmp_path / filename).write_bytes(b"public editor component")
+    monkeypatch.setattr(dist, "_fetch", lambda *_: pytest.fail("unexpected vendor request"))
+    assert invoke(tmp_path, {"op": op}) == (0, b"public editor component")
+    assert invoke(tmp_path, {"op": op}, lambda: False) == (2, b"")

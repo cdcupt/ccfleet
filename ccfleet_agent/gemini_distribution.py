@@ -19,6 +19,10 @@ MAX_ARCHIVE = 256 * 1024**2
 BLOCK = 256 * 1024
 
 
+class ArtifactUnavailable(ValueError):
+    """Vendor response could not supply the requested artifact."""
+
+
 def _fetch(url, dest, limit, timeout):
     # The slot supplies the entire URL and request configuration. Never carry caller headers,
     # credentials, user agent, proxy settings or curl configuration into this download.
@@ -56,7 +60,7 @@ def _fetch(url, dest, limit, timeout):
         check=True,
     )
     if p.stdout != b"200" or not 0 < dest.stat().st_size <= limit:
-        raise ValueError("vendor artifact unavailable")
+        raise ArtifactUnavailable("vendor artifact unavailable")
 
 
 def _manifest(arch, stage):
@@ -161,9 +165,15 @@ def serve(inp, out, home, authorize):
     q = json.loads(raw)
     if not isinstance(q, dict) or type(q.get("v")) is not int or q["v"] != 1:
         return 2
-    if q == {"v": 1, "op": "helper"}:
-        # This single public source is separately pinned by the signed MacBook client.
-        data = Path(__file__).with_name("gemini_preview.py").read_bytes()
+    # These exact public sources are pinned by the signed client. Untrusted requests
+    # cannot choose a path or add credentials, query parameters or a download URL.
+    components = {
+        "helper": "gemini_preview.py",
+        "editor-client": "gemini_editor_client.py",
+        "workspace-tools": "workspace_tools.py",
+    }
+    if set(q) == {"v", "op"} and isinstance(q["op"], str) and q["op"] in components:
+        data = Path(__file__).with_name(components[q["op"]]).read_bytes()
         if not 0 < len(data) <= 128 * 1024:
             return 2
         out.write(data)
