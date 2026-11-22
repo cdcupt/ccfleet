@@ -21,8 +21,12 @@ BLOCK = 256 * 1024
 EDITOR_LIMIT = 128 * 1024
 # These public snapshots remain available to installed clients. Sources are pinned
 # for fresh slots that do not already have older helpers on disk.
-EDITOR_FILES = {"editor-client": "gemini_editor_client.py", "workspace-tools": "workspace_tools.py"}
-EDITOR_VERSION = "0.2.17"
+EDITOR_FILES = {
+    "editor-client": "gemini_editor_client.py",
+    "workspace-tools": "workspace_tools.py",
+    "acp-client": "gemini_acp_client.py",
+}
+EDITOR_VERSION = "0.2.18"
 EDITOR_HISTORY = (
     ("0.2.15", "ee147f63c559f4f8deb9e5962501412168edf27e", {
         "editor-client": "0a5afe3d72241511cea9581b3e5bcb2278ead352d0f9f5da375d70f4fb2daad0",
@@ -30,6 +34,10 @@ EDITOR_HISTORY = (
     }),
     ("0.2.16", "4b093ba94033a41c86f0716b9a24482ff7b88da2", {
         "editor-client": "1d1f6fcc92b94136ba525d8c87d3dc1d1828cbe0a72d3a9519507e29e9d34bf8",
+        "workspace-tools": "0d981a56e278249c174cdad7e010313456a67d4f263f2fa2ad585efd8ce4ddb0",
+    }),
+    ("0.2.17", "7dd73257b9a3add782b0837ce1ec90744916499c", {
+        "editor-client": "5bbe2e808877f25e1be746e94111fb7b3c1551b9c3c45ba8bcde0352ddb12906",
         "workspace-tools": "0d981a56e278249c174cdad7e010313456a67d4f263f2fa2ad585efd8ce4ddb0",
     }),
 )
@@ -43,7 +51,9 @@ def editor_snapshot(filename, version=EDITOR_VERSION):
 
 def _editor_bytes(op, request):
     if set(request) == {"v", "op"}:
-        expected = EDITOR_HISTORY[0][2][op]
+        expected = EDITOR_HISTORY[0][2].get(op)
+        if expected is None:
+            return None
     elif set(request) == {"v", "op", "sha256"} and isinstance(request["sha256"], str):
         expected = request["sha256"]
         if not re.fullmatch(r"[0-9a-f]{64}", expected):
@@ -51,7 +61,7 @@ def _editor_bytes(op, request):
     else:
         return None
     # Only server-selected versions and component names may form a disk path.
-    version = next((v for v, _, pins in EDITOR_HISTORY if pins[op] == expected), EDITOR_VERSION)
+    version = next((v for v, _, pins in EDITOR_HISTORY if pins.get(op) == expected), EDITOR_VERSION)
     filename = editor_snapshot(EDITOR_FILES[op], version)
     return pinned_editor_file(Path(__file__).with_name(filename), expected)
 
