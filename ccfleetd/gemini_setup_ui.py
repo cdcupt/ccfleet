@@ -373,6 +373,27 @@ def workspace_devices(csrf, slot_id, pairing):
     return '<ul>' + ''.join(rows) + '</ul>' + warning
 
 
+def t3_setup():
+    return ('<details class="gm-disconnect"><summary>'
+            + tr("Add Gemini to T3 Code", "在 T3 Code 中添加 Gemini") + '</summary><ol><li>'
+            + tr("Select the local environment on your paired Mac. Open",
+                 "在已配对的 Mac 上选择本地环境，然后打开")
+            + ' <b>Settings → Providers → Add provider → Show more → Local ACP command</b>.</li>'
+            + '<li>' + tr("Name the provider CCFleet Gemini. For the executable, enter",
+                          "将服务商命名为 CCFleet Gemini。可执行文件填写")
+            + ' <code>ccfleet</code>. '
+            + tr("If T3 can’t find it on PATH, paste the absolute path printed by",
+                 "如果 T3 无法从 PATH 中找到该命令，请填写以下命令输出的绝对路径")
+            + ' <code>command -v ccfleet</code>.</li><li>'
+            + tr("Add one argument per row, in this order.", "按以下顺序添加参数，每行一个。")
+            + '<ol><li><code>gemini</code></li><li><code>--acp</code></li></ol></li><li>'
+            + tr("Save the provider. Open your local project and start a thread with CCFleet "
+                 "Gemini. Choose Supervised in the thread permissions to approve edits and tests.",
+                 "保存服务商。在本地项目中使用 CCFleet Gemini 新建对话，"
+                 "在对话权限中选择 Supervised，即可逐项批准文件修改和测试。")
+            + '</li></ol></details>')
+
+
 def workspace_panel(csrf, ready, pairing, slot_id):
     offline = ('' if ready else '<p role="status">'
                + tr("The Antigravity workspace service is offline.",
@@ -403,6 +424,7 @@ def workspace_panel(csrf, ready, pairing, slot_id):
                  "在已配对的 Mac 上，在 T3 中打开 Gemini 连接，或运行")
             + ' <code>ccfleet gemini</code>.</p>' + pending
             + reusable_controls(csrf, pairing["enrollment_id"], ready)
+            + t3_setup()
             + '<details class="gm-disconnect"><summary>'
             + tr("Workspace app or older CLI", "Workspace 应用或旧版 CLI") + '</summary><p>'
             + tr("These clients use a one-time code valid for 10 minutes.",
@@ -410,10 +432,8 @@ def workspace_panel(csrf, ready, pairing, slot_id):
             + '</p>' + legacy_form + '<p><a href="' + WORKSPACE_DOWNLOAD + '">'
             + tr("Download CCFleet Workspace for Mac", "下载 Mac 版 CCFleet Workspace")
             + '</a></p></details><p class="gm-secondary">'
-            + tr("The slot receives requested file contents and test output. "
-                 "File changes and test runs ask for approval on the local Mac.",
-                 "槽位会收到按需读取的文件内容和测试输出。修改文件和运行测试前，"
-                 "会在本地 Mac 上请求确认。")
+            + tr("The slot receives requested file contents and test output from the local Mac.",
+                 "槽位会收到本地 Mac 按需提供的文件内容和测试输出。")
             + '</p></section>')
 
 
@@ -427,20 +447,20 @@ def workspace_result(code, slot, keys, binding, grants, viewer, script, *, reusa
                           "在每台受信任的 Mac 上更新 CCFleet，再按提示粘贴同一个码。"
                           "配对后可在 T3 中打开 Gemini 连接。")
         command = "ccfleet update\nccfleet pair gemini"
-        download = ""
+        followup = t3_setup()
     else:
         title = tr("One-time Antigravity pairing code", "Antigravity 一次性配对码")
         instructions = tr("On the Mac you’re pairing, open a terminal and run this command. "
                           "Paste the code at the prompt within 10 minutes.",
                           "在待配对 Mac 上打开终端并运行此命令，然后在 10 分钟内按提示粘贴配对码。")
         command = "ccfleet gemini"
-        download = ('<p><a href="' + WORKSPACE_DOWNLOAD + '">'
+        followup = ('<p><a href="' + WORKSPACE_DOWNLOAD + '">'
                     + tr("Download the Mac launcher", "下载 Mac 启动器") + '</a></p>')
     content = ('<p>' + instructions + '</p><pre><code>' + command + '</code></pre>'
                + '<pre class="gm-code" id="gemini-code">' + escape("agy1-" + code)
                + '</pre><div class="gm-copy-line"><button type="button" id="gemini-copy" hidden>'
                + tr("Copy code", "复制配对码") + '</button><span id="copy-status" role="status">'
-               + '</span></div>' + download + '<script>' + script + '</script>')
+               + '</span></div>' + followup + '<script>' + script + '</script>')
     return shell(tr("Connect your local project", "连接本地项目"),
                  tr("The Google sign-in stays on your private Mac slot.",
                     "Google 登录凭据保存在你的专属 Mac 槽位。"),

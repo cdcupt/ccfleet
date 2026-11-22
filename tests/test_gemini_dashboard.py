@@ -330,6 +330,12 @@ def test_manage_reusable_subscription_code_via_web(private, monkeypatch):
         assert "ccfleet pair gemini" in html and "ccfleet gemini --preview" not in html
         assert 'value="create"' not in html
         assert 'value="replace"' in html and 'value="disable"' in html
+        assert ("Select the local environment" if lang == "en" else "选择本地环境") in html
+        assert ("one argument per row" if lang == "en" else "每行一个") in html
+        for detail in ("Settings → Providers → Add provider → Show more → Local ACP command",
+                       "<code>command -v ccfleet</code>", "CCFleet Gemini", "Supervised",
+                       "<li><code>gemini</code></li><li><code>--acp</code></li>"):
+            assert detail in html
     paired = store.register_cli_device(code, public_key(4), "<personal>", now=NOW,
                                        workspace_pairing=True)
     assert "&lt;personal&gt;" in setup() and "<personal>" not in setup()
