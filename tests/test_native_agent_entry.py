@@ -22,7 +22,7 @@ def test_public_commands_and_replacement(capsys, monkeypatch):
     assert retired.value.code == 2 and "use ccfleet claude" in capsys.readouterr().err
     monkeypatch.setattr(cli["sys"].stdin, "isatty", lambda: False)
     assert cli["main"](["gemini"]) == 2
-    assert "No API billing" in capsys.readouterr().err
+    assert "interactive terminal" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("name", ["claude"])

@@ -36,11 +36,18 @@ def main():
         or os.isatty(1)
         or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[1])
         or os.environ.get("SSH_ORIGINAL_COMMAND")
-        not in ("ccfleet-antigravity-v1", "ccfleet-gemini-preview-v1", "ccfleet-gemini-release-v1")
+        not in ("ccfleet-antigravity-v1", "ccfleet-gemini-preview-v1", "ccfleet-gemini-release-v1",
+                "ccfleet-gemini-editor-v1")
     ):
         return 2
     home = Path(mac_policy.authenticated_owner().pw_dir)
     mac_policy.require_enabled(home)
+    if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-editor-v1":
+        if __package__:
+            from . import gemini_editor_slot
+        else:
+            import gemini_editor_slot
+        return gemini_editor_slot.relay(home, bytes.fromhex(sys.argv[1]))
     if os.environ["SSH_ORIGINAL_COMMAND"] == "ccfleet-gemini-release-v1":
         def expired(*_):
             raise TimeoutError("private release request expired")
