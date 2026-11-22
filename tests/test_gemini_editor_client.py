@@ -151,7 +151,9 @@ def test_slot_components_work_from_older_signed_release_layout(tmp_path, monkeyp
     def fetch(command, request, destination, *_):
         ops = {"editor-client": "gemini_editor_client", "workspace-tools": "workspace_tools"}
         assert command == ["paired-transport"]
-        destination.write_bytes((ROOT / "ccfleet_agent" / (ops[request["op"]] + ".py")).read_bytes())
+        raw = (ROOT / "ccfleet_agent" / (ops[request["op"]] + ".py")).read_bytes()
+        assert request == {"op": request["op"], "sha256": hashlib.sha256(raw).hexdigest()}
+        destination.write_bytes(raw)
     monkeypatch.setitem(scope, "packaged_helper", missing)
     from ccfleet_agent import client_release
     monkeypatch.setitem(scope, "client_release", lambda: client_release)
@@ -171,12 +173,20 @@ def test_safe_terminal_display():
     assert ui.terminal_text("X\x1b]52;foo\x07\r\u202e!") == "X\\x1b]52;foo\\x07\\r\\u202e!"
 
 
-def test_live_command_uses_existing_workspace_pairing_and_pinned_transport(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start", ["explicit", "home", "root", "sensitive"])
+def test_live_command_uses_existing_workspace_pairing_and_pinned_transport(tmp_path, monkeypatch, start):
     cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
     scope = cli["cmd_gemini"].__globals__
     old = tmp_path / "ccfleet-home"
-    project = tmp_path / "checkout"
-    project.mkdir()
+    personal = tmp_path / "home"
+    (personal / ".gemini").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(personal))
+    project = {"explicit": tmp_path / "checkout", "home": personal, "root": Path("/"),
+               "sensitive": personal / ".gemini"}[start]
+    if start == "explicit":
+        project.mkdir()
+    else:
+        monkeypatch.chdir(project)
     monkeypatch.setenv("CCFLEET_HOME", str(old))
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -199,7 +209,8 @@ def test_live_command_uses_existing_workspace_pairing_and_pinned_transport(tmp_p
     monkeypatch.setitem(scope, "client_experience", fail)
     monkeypatch.setitem(scope, "preview_helper", fail)
     calls = []
-    def launch(path, argv, env, tools, files, runner):
+    def launch(path, argv, env, tools, files, runner, *, fleet_home):
+        assert fleet_home == old
         assert path == project.resolve() and argv == ["approved-ssh", "ccfleet-gemini-editor-v1"]
         assert env["CCFLEET_HOME"] == str(old / "antigravity-workspace")
         assert not any(k.startswith(("GOOGLE_", "GEMINI_")) for k in env)
@@ -215,7 +226,8 @@ def test_live_command_uses_existing_workspace_pairing_and_pinned_transport(tmp_p
         assert op == "editor-client"
         return SimpleNamespace(run=launch)
     monkeypatch.setitem(scope, "slot_component", component)
-    assert cli["main"](["gemini", "--project", str(project), "--test", "npm"]) == 0
+    target = ["--project", str(project)] if start == "explicit" else []
+    assert cli["main"](["gemini", *target, "--test", "npm"]) == 0
     assert calls == ["launched"] and scope["home"]() == old
 
 
@@ -242,3 +254,146 @@ def test_incomplete_turn_reason_is_visible_and_local_approval_expires(project, c
         assert ed.approval is None
     ui.turn(channel, ed, "continue again")
     assert capsys.readouterr().out == "\n"
+
+
+@pytest.mark.parametrize("start", ["home", "parent", "root", "protected"])
+def test_editor_accepts_any_starting_directory(tmp_path, monkeypatch, start):
+    personal = tmp_path / "account"
+    private = personal / ".gemini"
+    private.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(personal))
+    chosen = {"home": personal, "parent": tmp_path, "root": Path("/"), "protected": private}[start]
+    ed = ui.Editor(chosen, workspace_tools, project_files)
+    try:
+        assert ed.workspace.path == chosen.resolve()
+        if start == "protected":
+            with pytest.raises(ValueError, match="protected"):
+                call(ed, "list", path=".")
+        else:
+            (personal / "notes.txt").write_text("original")
+            name = str((personal / "notes.txt").resolve().relative_to(chosen.resolve()))
+            assert call(ed, "read", path=name) == "original"
+            monkeypatch.setattr(ui, "confirm", lambda _: True)
+            assert call(ed, "approve", path=name, content="edited")
+            assert call(ed, "write", path=name, content="edited")
+            assert (personal / "notes.txt").read_text() == "edited"
+        if start != "protected":
+            with pytest.raises(ValueError, match="choose a project"):
+                workspace_tools.Workspace(chosen, lambda *_: False)
+    finally:
+        ed.workspace.close()
+
+
+def test_protected_operations_and_private_config_under_custom_path(tmp_path, monkeypatch):
+    personal = tmp_path / "user"
+    fleet = personal / "my-fleet"
+    project = personal / "source"
+    for d in (personal / "Library", personal / ".gemini", personal / ".local/share",
+              personal / ".kube", personal / ".gnupg", personal / ".password-store",
+              fleet, project, project / ".git"):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "record").write_text("private test data")
+    monkeypatch.setenv("HOME", str(personal))
+    monkeypatch.setattr(ui, "confirm", lambda _: pytest.fail("private path reached approval"))
+    for root in (personal, tmp_path, Path("/")):
+        ed = ui.Editor(root, workspace_tools, project_files, fleet_home=fleet)
+        prefix = str(personal.resolve().relative_to(root.resolve()))
+        try:
+            names = call(ed, "list", path=prefix)
+            assert "source/" in names and "my-fleet/" not in names and "Library/" not in names
+            assert ".gemini/" not in names and ".kube/" not in names
+            assert "share/" not in call(ed, "list", path=str(Path(prefix) / ".local"))
+            for protected in (".gemini", "LIBRARY", ".local/share", ".kube", ".gnupg",
+                              ".password-store", "my-fleet", "source/.git"):
+                name = str(Path(prefix) / protected)
+                with pytest.raises(ValueError):
+                    call(ed, "read", path=name + "/record")
+                with pytest.raises(ValueError):
+                    call(ed, "approve", path=name + "/new", content="unavailable")
+                with pytest.raises(ValueError):
+                    call(ed, "mkdir", path=name + "/dir")
+                with pytest.raises(ValueError):
+                    call(ed, "list", path=name)
+        finally:
+            ed.workspace.close()
+
+
+def test_test_subfolder_is_chosen_by_local_user(tmp_path, monkeypatch):
+    personal = tmp_path / "user"
+    project = personal / "my project"
+    project.mkdir(parents=True)
+    config = personal / "private-fleet"
+    config.mkdir()
+    monkeypatch.setenv("HOME", str(personal))
+    ed = ui.Editor(personal, workspace_tools, project_files, "npm", fleet_home=config)
+    try:
+        assert ed.workspace.test_directory() is None
+        with pytest.raises(ValueError, match="subfolder"):
+            ed.workspace.call("test_project", {})
+        answers = iter([""])
+        monkeypatch.setattr("builtins.input", lambda _: next(answers))
+        with pytest.raises(ValueError, match="not selected"):
+            call(ed, "test")
+        ed.test_command("/test npm private-fleet")
+        assert ed.workspace.test_directory() is None
+        (personal / "alias").symlink_to(project, target_is_directory=True)
+        ed.test_command("/test npm alias")
+        assert ed.workspace.test_directory() is None
+        ed.test_command("/test npm my project")
+        assert ed.workspace.test_directory() == project.resolve()
+        questions = []
+        monkeypatch.setattr(ui, "confirm", lambda message: questions.append(message) or False)
+        with pytest.raises(ValueError, match="approved"):
+            call(ed, "test")
+        assert questions == ["Run local tests on this Mac (npm test in my project)?"]
+        ed.test_command("/test off")
+        assert ed.workspace.command is None
+    finally:
+        ed.workspace.close()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="uses the macOS test sandbox")
+def test_approved_subfolder_test_cannot_read_sibling_credentials(tmp_path, monkeypatch):
+    personal = tmp_path / "home"
+    project = personal / "project"
+    private = personal / "private-fleet"
+    project.mkdir(parents=True)
+    private.mkdir()
+    secret = private / "synthetic"
+    secret.write_text("fixture")
+    runner = project / "go"
+    runner.write_text(
+        '#!/bin/sh\nif /bin/cat "$PWD/../private-fleet/synthetic" 2>/dev/null; '
+        'then exit 1; fi\n/bin/cat answer\n'
+    )
+    runner.chmod(0o700)
+    (project / "answer").write_text("verified")
+    monkeypatch.setenv("HOME", str(personal))
+    monkeypatch.setattr(ui, "confirm", lambda _: True)
+    ed = ui.Editor(personal, workspace_tools, project_files, "go", fleet_home=private)
+    try:
+        ed.workspace.test_path = str(project)
+        ed.test_command("/test go ./project")
+        result = call(ed, "test")
+        assert result == {"exit": 0, "output": "verified"}
+    finally:
+        ed.workspace.close()
+
+
+
+def test_cold_component_on_old_slot_reports_required_update(tmp_path, monkeypatch):
+    cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
+    scope = cli["slot_component"].__globals__
+    monkeypatch.setenv("CCFLEET_HOME", str(tmp_path))
+    def missing(*_):
+        raise cli["CliError"]("missing")
+    def old_slot(command, request, *_):
+        assert request == {"op": "workspace-tools", "sha256": "1" * 64}
+        raise ValueError("a 0.2.15 slot rejects digest requests")
+    from ccfleet_agent import client_release
+    monkeypatch.setitem(scope, "packaged_helper", missing)
+    monkeypatch.setitem(scope, "client_release", lambda: client_release)
+    monkeypatch.setitem(scope, "client_experience", lambda: SimpleNamespace(slot_artifact=old_slot))
+    with pytest.raises(cli["CliError"], match="update its CCFleet slot service"):
+        cli["slot_component"]("workspace_tools", "1" * 64, "workspace-tools", ["paired-slot"])
+    assert not list((tmp_path / "editor-components").glob("*.py"))
