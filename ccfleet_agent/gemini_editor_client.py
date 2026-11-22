@@ -167,7 +167,7 @@ class Channel:
             data.extend(part)
         return bytes(data)
 
-    def receive(self, timeout=300):
+    def receive(self, timeout=920):
         deadline = time.monotonic() + timeout
         size, = struct.unpack(">I", self._read(4, deadline))
         if not 0 < size <= MAX_FRAME:
@@ -216,7 +216,8 @@ def turn(channel, editor, prompt):
 
 def session(channel, editor):
     channel.send({"type": "open", "version": 1})
-    ready = channel.receive(timeout=180)
+    # A cold slot verifies the registry, downloads the agent and authenticates the session.
+    ready = channel.receive(timeout=420)
     if ready.get("type") != "ready" or not isinstance(ready.get("model"), str):
         raise ValueError("the private slot did not open a Gemini editor session")
     print(f"Gemini · {terminal_text(ready['model'])} · {terminal_text(str(editor.workspace.path))}")
@@ -245,8 +246,13 @@ def run(project, command, environment, tools, files, test=None):
     editor = Editor(project, tools, files, test)
     proc = None
     try:
-        proc = subprocess.Popen(command, cwd="/", env=environment, stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, start_new_session=True)
+        try:
+            proc = subprocess.Popen(command, cwd="/", env=environment, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+        except OSError as exc:
+            raise ValueError("could not start the CCFleet connection; check the local "
+                             "OpenSSH installation") from exc
         session(Channel(proc), editor)
     except (EOFError, BrokenPipeError) as exc:
         raise ValueError("the Gemini editor connection closed; check the private slot's "

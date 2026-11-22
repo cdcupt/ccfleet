@@ -217,3 +217,13 @@ def test_live_command_uses_existing_workspace_pairing_and_pinned_transport(tmp_p
     monkeypatch.setitem(scope, "slot_component", component)
     assert cli["main"](["gemini", "--project", str(project), "--test", "npm"]) == 0
     assert calls == ["launched"] and scope["home"]() == old
+
+
+def test_start_and_transport_errors_do_not_echo_private_stderr(project, capfd):
+    root, _ = project
+    with pytest.raises(ValueError, match="OpenSSH installation"):
+        ui.run(root, [str(root / "missing-ssh")], dict(os.environ), workspace_tools, project_files)
+    fail = [sys.executable, "-I", "-c", "import sys;print('private slot detail',file=sys.stderr)"]
+    with pytest.raises(ValueError, match="connection closed"):
+        ui.run(root, fail, dict(os.environ), workspace_tools, project_files)
+    assert "private slot detail" not in capfd.readouterr().err

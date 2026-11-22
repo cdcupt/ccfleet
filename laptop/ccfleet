@@ -1388,7 +1388,7 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
 WORKSPACE_TOOLS_HASH = "55153b8a796d059c3fd9b5b3f96247ed843d067ff7c7d5d910e6e6a95fc639f3"
-EDITOR_CLIENT_HASH = "3d5abc48154d1c01f9aa1f0ea9c99e5f1e00391ffc559b4d881437841ea454e3"
+EDITOR_CLIENT_HASH = "4910f13e646081e9060c16a52d2f359c84d4324e04252c7b81d20107a1f95ec5"
 
 
 def slot_component(name, digest, operation, slot_command):
@@ -1409,8 +1409,11 @@ def slot_component(name, digest, operation, slot_command):
     except FileNotFoundError:
         with tempfile.TemporaryDirectory(dir=root) as stage:
             downloaded = Path(stage) / "helper.py"
-            client_experience().slot_artifact(slot_command, {"op": operation}, downloaded,
-                                              128 * 1024, 20)
+            try:
+                client_experience().slot_artifact(slot_command, {"op": operation}, downloaded,
+                                                  128 * 1024, 20)
+            except subprocess.TimeoutExpired as exc:
+                raise CliError("timed out retrieving the Gemini component from the slot") from exc
             raw = downloaded.read_bytes()
         if hashlib.sha256(raw).hexdigest() != digest:
             raise CliError("Gemini component checksum mismatch; update the paired slot service")
