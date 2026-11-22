@@ -42,6 +42,18 @@ def status(store):
     return store.antigravity_pairing_status("mac-private", "operator", now=NOW)
 
 
+@pytest.mark.parametrize("rename", ["rename_node", "rename_slot"])
+def test_private_rename_cannot_move_an_enrollment_or_disconnect_its_computers(enabled, rename):
+    store = enabled
+    code = issue(store)
+    first = enroll(store, code, 4)
+    with pytest.raises(StoreError, match="private owner"):
+        getattr(store, rename)("mac-private", "renamed-private")
+    assert store.get_slot("renamed-private") is None
+    assert store.resolve_cli_device(first["device_token"], now=NOW)["slot_id"] == "mac-private"
+    assert enroll(store, code, 5)["slot_id"] == "mac-private"
+
+
 def test_reusable_code_rotation_and_revocation_preserve_each_devices_grant(enabled):
     store = enabled
     claude = device(store)

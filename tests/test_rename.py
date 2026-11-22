@@ -412,6 +412,7 @@ def test_a_sign_in_or_request_left_under_the_new_name_is_dropped_not_adopted(st)
 # until the renames are taught about it.
 NEITHER = {
     ("agy_devices", "device_id"),
+    ("agy_enrollments", "id"), ("agy_enrollments", "account_id"), ("agy_enrollments", "claim_id"),
     ("cli_pairings", "api_model_binding_id"), ("cli_devices", "api_model_binding_id"),
     ("api_model_bindings", "id"), ("api_model_bindings", "owner_account_id"),
     ("api_model_bindings", "claim_id"), ("api_model_grants", "binding_id"),
@@ -477,6 +478,7 @@ def test_every_id_column_in_the_schema_is_known_to_the_renames(st):
         ("slot_purchases", "node_id"), ("slot_purchases", "slot_id"),
         ("slot_subscription_orders", "node_id"), ("slot_subscription_orders", "slot_id"),
         ("private_owner_nodes", "node_id"), ("agy_hosts", "node_id"),
+        ("agy_enrollments", "slot_id"),
         ("usage_ledger_sources", "node_id"), ("usage_ledger_sources", "slot_id"),
     }
     assert not (snapshots & mutable or snapshots & NEITHER)

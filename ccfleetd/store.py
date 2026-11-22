@@ -1359,6 +1359,7 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
                                      ("slot_subscription_orders", "slot_id"),
                                      ("private_owner_nodes", "node_id"),
                                      ("agy_hosts", "node_id"),
+                                     ("agy_enrollments", "slot_id"),
                                      ("usage_ledger_sources", "node_id"),
                                      ("usage_ledger_sources", "slot_id"))
 
