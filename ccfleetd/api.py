@@ -1213,8 +1213,9 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
             self._json(200, safe)
 
         def _cli_register(self) -> None:
-            token = _prefixed_bearer(self.headers.get("Authorization"),
-                                     cli_access.PAIR_PREFIX)
+            header = self.headers.get("Authorization")
+            token = (_prefixed_bearer(header, cli_access.PAIR_PREFIX)
+                     or _prefixed_bearer(header, cli_access.GEMINI_ENROLL_PREFIX))
             if token is None:
                 self._json(401, {"error": "invalid pairing code"})
                 return

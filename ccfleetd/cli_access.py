@@ -22,6 +22,7 @@ import threading
 from typing import Callable, Optional
 
 PAIR_PREFIX = "ccf_pair_"
+GEMINI_ENROLL_PREFIX = "ccf_enroll_"
 DEVICE_PREFIX = "ccf_dev_"
 PAIRING_TTL_S = 10 * 60
 MAX_DEVICES_PER_SLOT = 10

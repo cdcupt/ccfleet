@@ -2955,8 +2955,11 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
                             workspace_pairing: bool = False,
                             admit: Optional[Callable[[Mapping[str, Any]], bool]] = None
                             ) -> dict[str, Any]:
-        """Consume a pairing code and return the new device secret once."""
-        if not cli_access.token_has_prefix(pairing_token, cli_access.PAIR_PREFIX):
+        """Register one device with a pairing code or reusable Gemini enrollment."""
+        reusable = cli_access.token_has_prefix(pairing_token, cli_access.GEMINI_ENROLL_PREFIX)
+        if reusable and not workspace_pairing:
+            raise StoreError("use the Gemini enrollment code for the Antigravity workspace")
+        if not reusable and not cli_access.token_has_prefix(pairing_token, cli_access.PAIR_PREFIX):
             raise StoreError("that pairing code is not valid")
         normalized = cli_access.normalize_public_key(public_key)
         if normalized is None:
@@ -2967,30 +2970,39 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
         digest = cli_access.token_hash(pairing_token)
         secret = cli_access.DEVICE_PREFIX + secrets.token_urlsafe(32)
         device_id = "d" + secrets.token_hex(8)
+        grant = private_owner.ENROLLMENT_GRANT if reusable else (
+            "SELECT p.token_hash,p.slot_id,p.account_id,p.expires_at,p.api_model_binding_id,"
+            "w.token_hash IS NOT NULL AS workspace FROM cli_pairings p "
+            "LEFT JOIN agy_pairings w ON w.token_hash=p.token_hash WHERE p.token_hash=?"
+        )
         with self._write_txn() as conn:
             row = conn.execute(
+                "WITH pairing AS (" + grant + ") "
                 "SELECT p.token_hash, p.slot_id, p.account_id, p.expires_at, "
-                "p.api_model_binding_id, "
+                "p.api_model_binding_id, p.workspace, "
                 "s.node_id, s.unix_user, "
                 "s.name, s.state, s.held_by, n.enabled, n.access_host, n.access_port, "
-                "n.ssh_host_key FROM cli_pairings p "
-                "JOIN slots s ON s.id = p.slot_id JOIN nodes n ON n.id = s.node_id "
-                "WHERE p.token_hash = ?", (digest,)).fetchone()
+                "n.ssh_host_key FROM pairing p "
+                "JOIN slots s ON s.id = p.slot_id JOIN nodes n ON n.id = s.node_id",
+                (digest,)).fetchone()
             if row is None or not hmac.compare_digest(row["token_hash"], digest):
+                if reusable:
+                    raise StoreError("that Gemini enrollment code is no longer valid")
                 raise StoreError("that pairing code is invalid or has already been used")
             if admit is not None and (not callable(admit) or admit(dict(row)) is not True):
                 raise StoreError("renew this slot before connecting a computer")
-            # Single-use even when it expired or the slot changed while the
-            # page was open: a retry starts with a fresh code.
-            workspace = conn.execute("SELECT 1 FROM agy_pairings WHERE token_hash=?",
-                                     (digest,)).fetchone() is not None
+            workspace = bool(row["workspace"])
             if workspace != workspace_pairing:
                 raise StoreError("use the pairing code for this client")
             if workspace and not private_owner.eligible(conn, row["slot_id"], row["account_id"]):
                 raise StoreError("private Mac workspace permission expired")
-            conn.execute("DELETE FROM cli_pairings WHERE token_hash = ?", (digest,))
-            if row["expires_at"] <= now:
-                raise StoreError("that pairing code expired; create another from your slot")
+            if reusable:
+                if not self.antigravity_ready(row["slot_id"], now=now):
+                    raise StoreError("the Antigravity workspace service is offline")
+            else:
+                conn.execute("DELETE FROM cli_pairings WHERE token_hash = ?", (digest,))
+                if row["expires_at"] <= now:
+                    raise StoreError("that pairing code expired; create another from your slot")
             if (row["state"] != slotstates.ACTIVE or row["held_by"] != row["account_id"]
                     or not row["enabled"]):
                 raise StoreError("that slot is no longer available to this account")
@@ -3026,6 +3038,9 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
                               (normalized,)).fetchone():
                 raise StoreError("this key already belongs to an interactive device")
             answer = dict(row)
+            del answer["workspace"]
+            if reusable:
+                del answer["token_hash"]
             if workspace:
                 answer["workspace_only"] = True
         return {**answer, "device_id": device_id, "device_token": secret,
@@ -3036,11 +3051,19 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
         with self._write_txn() as conn:
             self._held(conn, slot_id, held_by)
             rows = conn.execute(
-                "SELECT id, name, public_key, created_at, last_seen_at FROM cli_devices "
-                "WHERE slot_id = ? AND revoked_at IS NULL ORDER BY created_at",
+                "SELECT d.id,d.name,d.public_key,d.created_at,d.last_seen_at,"
+                "w.device_id IS NOT NULL AS workspace FROM cli_devices d "
+                "LEFT JOIN agy_devices w ON w.device_id=d.id "
+                "WHERE d.slot_id=? AND d.revoked_at IS NULL ORDER BY d.created_at",
                 (slot_id,)).fetchall()
-        return [{**dict(row), "fingerprint": cli_access.key_fingerprint(row["public_key"])}
-                for row in rows]
+        devices = []
+        for row in rows:
+            device = dict(row)
+            if device.pop("workspace"):
+                device["workspace_only"] = True
+            device["fingerprint"] = cli_access.key_fingerprint(device["public_key"])
+            devices.append(device)
+        return devices
 
     def revoke_cli_device(self, slot_id: str, device_id: str, *,
                           held_by: Optional[str] = None) -> bool:
