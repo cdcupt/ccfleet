@@ -373,6 +373,20 @@ def workspace_devices(csrf, slot_id, pairing):
     return '<ul>' + ''.join(rows) + '</ul>' + warning
 
 
+def pairing_help():
+    return ('<details class="gm-disconnect"><summary>'
+            + tr("Name a Mac or pair it again", "为 Mac 命名或重新配对") + '</summary><p>'
+            + tr("To recognize each Mac on this page, give it a distinct name when you first pair.",
+                 "首次配对时，可为每台 Mac 取不同名称，便于在此页识别。")
+            + '</p><pre><code>ccfleet pair gemini --name "Work MacBook"</code></pre><p>'
+            + tr("If you removed this Mac on the website, the usual pairing command still "
+                 "reports its saved local profile. To reconnect it, run this command and "
+                 "paste your current setup code.",
+                 "如果你已在网站上移除这台 Mac，普通配对命令仍会提示本机已保存配对。"
+                 "要重新连接，请运行以下命令并按提示粘贴当前有效的配对码。")
+            + '</p><pre><code>ccfleet pair gemini --replace</code></pre></details>')
+
+
 def t3_setup():
     return ('<details class="gm-disconnect"><summary>'
             + tr("Add Gemini to T3 Code", "在 T3 Code 中添加 Gemini") + '</summary><ol><li>'
@@ -424,6 +438,7 @@ def workspace_panel(csrf, ready, pairing, slot_id):
                  "在已配对的 Mac 上，在 T3 中打开 Gemini 连接，或运行")
             + ' <code>ccfleet gemini</code>.</p>' + pending
             + reusable_controls(csrf, pairing["enrollment_id"], ready)
+            + pairing_help()
             + t3_setup()
             + '<details class="gm-disconnect"><summary>'
             + tr("Workspace app or older CLI", "Workspace 应用或旧版 CLI") + '</summary><p>'
@@ -447,7 +462,7 @@ def workspace_result(code, slot, keys, binding, grants, viewer, script, *, reusa
                           "在每台受信任的 Mac 上更新 CCFleet，再按提示粘贴同一个码。"
                           "配对后可在 T3 中打开 Gemini 连接。")
         command = "ccfleet update\nccfleet pair gemini"
-        followup = t3_setup()
+        followup = pairing_help() + t3_setup()
     else:
         title = tr("One-time Antigravity pairing code", "Antigravity 一次性配对码")
         instructions = tr("On the Mac you’re pairing, open a terminal and run this command. "

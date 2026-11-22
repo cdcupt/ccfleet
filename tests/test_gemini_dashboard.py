@@ -332,8 +332,12 @@ def test_manage_reusable_subscription_code_via_web(private, monkeypatch):
         assert 'value="replace"' in html and 'value="disable"' in html
         assert ("Select the local environment" if lang == "en" else "选择本地环境") in html
         assert ("one argument per row" if lang == "en" else "每行一个") in html
+        assert ("a distinct name" if lang == "en" else "不同名称") in html
+        assert ("saved local profile" if lang == "en" else "本机已保存配对") in html
         for detail in ("Settings → Providers → Add provider → Show more → Local ACP command",
                        "<code>command -v ccfleet</code>", "CCFleet Gemini", "Supervised",
+                       '<code>ccfleet pair gemini --name "Work MacBook"</code>',
+                       "<code>ccfleet pair gemini --replace</code>",
                        "<li><code>gemini</code></li><li><code>--acp</code></li>"):
             assert detail in html
     paired = store.register_cli_device(code, public_key(4), "<personal>", now=NOW,
