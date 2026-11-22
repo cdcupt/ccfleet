@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.14"
+CLIENT_VERSION = "0.2.15"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -1387,60 +1387,64 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
+WORKSPACE_TOOLS_HASH = "55153b8a796d059c3fd9b5b3f96247ed843d067ff7c7d5d910e6e6a95fc639f3"
+EDITOR_CLIENT_HASH = "3d5abc48154d1c01f9aa1f0ea9c99e5f1e00391ffc559b4d881437841ea454e3"
 
 
-def preview_helper(slot_command):
+def slot_component(name, digest, operation, slot_command):
     try:
-        return packaged_helper("gemini_preview", PREVIEW_COMPONENT_HASH)
+        return packaged_helper(name, digest)
     except CliError:
         pass
     release = client_release()
-    root = home() / "native-preview"
+    root = home() / ("native-preview" if operation == "helper" else "editor-components")
     directory = release._directory(root, create=True)
     try:
         release._owned(os.fstat(directory), directory=True)
     finally:
         os.close(directory)
-    cached = root / (PREVIEW_COMPONENT_HASH + ".py")
+    cached = root / (digest + ".py")
     try:
         raw = release._read(cached, 128 * 1024)
     except FileNotFoundError:
         with tempfile.TemporaryDirectory(dir=root) as stage:
             downloaded = Path(stage) / "helper.py"
-            client_experience().slot_artifact(slot_command, {"op": "helper"}, downloaded,
+            client_experience().slot_artifact(slot_command, {"op": operation}, downloaded,
                                               128 * 1024, 20)
             raw = downloaded.read_bytes()
-        if hashlib.sha256(raw).hexdigest() != PREVIEW_COMPONENT_HASH:
-            raise CliError("Gemini preview component checksum mismatch")
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise CliError("Gemini component checksum mismatch; update the paired slot service")
         with tempfile.NamedTemporaryFile(dir=root, delete=False) as temp:
-            name = Path(temp.name)
+            staging_path = Path(temp.name)
             try:
                 temp.write(raw)
                 temp.flush()
                 os.fsync(temp.fileno())
-                os.chmod(name, 0o400)
-                os.replace(name, cached)
+                os.chmod(staging_path, 0o400)
+                os.replace(staging_path, cached)
             finally:
-                name.unlink(missing_ok=True)
-    if hashlib.sha256(raw).hexdigest() != PREVIEW_COMPONENT_HASH:
-        raise CliError("installed Gemini preview component failed verification")
-    spec = importlib.util.spec_from_file_location("_ccfleet_gemini_preview", cached)
+                staging_path.unlink(missing_ok=True)
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise CliError("installed Gemini component failed verification")
+    spec = importlib.util.spec_from_file_location("_ccfleet_" + name, cached)
     if spec is None:
-        raise CliError("Gemini preview component cannot be loaded")
+        raise CliError("Gemini component cannot be loaded")
     module = importlib.util.module_from_spec(spec)
     exec(compile(raw, str(cached), "exec"), module.__dict__)
     return module
 
 
+def preview_helper(slot_command):
+    return slot_component("gemini_preview", PREVIEW_COMPONENT_HASH, "helper", slot_command)
+
+
 def cmd_gemini(args: argparse.Namespace) -> int:
-    if not args.preview:
-        print("Gemini subscription model forwarding is not available. "
-              "Run ccfleet gemini --preview to verify a local file edit through your private "
-              "slot using synthetic responses. No API billing is used.", file=sys.stderr)
-        if not sys.stdin.isatty() or input("Run that preview now? [y/N] ").strip().lower() != "y":
-            return 2
+    if not args.preview and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise CliError("open an interactive terminal in your project to use Gemini")
     if sys.platform != "darwin":
-        raise CliError("the native Gemini preview currently requires macOS")
+        raise CliError("the Gemini local editor currently requires macOS")
+    if args.preview and getattr(args, "test", None):
+        raise CliError("--test is available in an interactive Gemini session")
     project = selected_project(args.project)
     original = os.environ.get("CCFLEET_HOME")
     root = home()
@@ -1458,11 +1462,20 @@ def cmd_gemini(args: argparse.Namespace) -> int:
                                          name="Antigravity workspace", workspace_pairing=True, fleet_only=True))
         device = choose_device(load_config(), args.slot)
         _fleet_workspace_device(device)
+        transport = ssh_transport_command(device, tty=False, fleet_only=True)
+        release_command = [*transport, "ccfleet-gemini-release-v1"]
+        if not args.preview:
+            editor = slot_component("gemini_editor_client", EDITOR_CLIENT_HASH, "editor-client",
+                                    release_command)
+            tools = slot_component("workspace_tools", WORKSPACE_TOOLS_HASH, "workspace-tools",
+                                   release_command)
+            command = [*transport, "ccfleet-gemini-editor-v1"]
+            editor.run(project, command, project_environment(), tools, project_files(),
+                       getattr(args, "test", None))
+            return 0
         print("Native Gemini gateway preview: local agy will read and edit a disposable file "
               "inside your project. The slot returns synthetic responses. No live model call "
               "or API charge.", flush=True)
-        transport = ssh_transport_command(device, tty=False, fleet_only=True)
-        release_command = [*transport, "ccfleet-gemini-release-v1"]
         helper = preview_helper(release_command)
         agent = client_experience().prepare_agent("agy", home(), lambda: installed_agent("agy"),
                                                   slot_command=release_command)
@@ -3782,11 +3795,13 @@ def parser() -> argparse.ArgumentParser:
                    help="legacy snapshot recovery; see ccfleet project",
                    description="Legacy snapshot recovery; local Claude now uses ccfleet claude.",
                    epilog="Snapshot recovery is separate from local Claude sessions.")
-    gemini = sub.add_parser("gemini", help="native local Antigravity subscription gateway preview")
+    gemini = sub.add_parser("gemini", help="use Gemini through your private slot in this local project")
     gemini.add_argument("--preview", action="store_true", help="verify a synthetic edit without model billing")
     gemini.add_argument("--project", default=".", help="local project (default: current directory)")
     gemini.add_argument("--slot", default="", help="one paired private Mac slot")
     gemini.add_argument("--pair", action="store_true", help="pair a computer using a fresh code")
+    gemini.add_argument("--test", choices=("npm", "pytest", "go", "cargo"),
+                        help="enable this local test command with approval before every run")
     workspace = sub.add_parser("workspace", help="open the Mac project and agent picker in Ghostty")
     workspace.add_argument("--install-only", action="store_true",
                            help="install the signed Finder launcher without opening it")
