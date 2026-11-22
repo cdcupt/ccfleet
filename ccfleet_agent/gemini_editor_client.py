@@ -15,6 +15,7 @@ import sys
 import termios
 import time
 import unicodedata
+from pathlib import Path
 
 MAX_FRAME = 4 * 1024 * 1024
 MAX_PROMPT = 64 * 1024
@@ -55,9 +56,11 @@ def show_patch(path, before, after):
 
 
 class Editor:
-    def __init__(self, project, tools, files, test=None):
+    def __init__(self, project, tools, files, test=None, *, fleet_home=None):
         self.tools = tools
-        self.workspace = tools.Workspace(project, self._confirm_workspace, test, file_tools=files)
+        private = tools.PrivateFolders(fleet_home or Path.home() / ".config" / "ccfleet")
+        self.workspace = tools.Workspace(project, self._confirm_workspace, test, file_tools=files,
+                                         private_folders=private)
         self.seen = {}
         self.approval = None
 
@@ -123,21 +126,39 @@ class Editor:
             return True
         if self.workspace.command is None:
             raise ValueError("tests are disabled; the user can enable a runner with /test")
+        if self.workspace.test_directory() is None:
+            folder = input("Which project subfolder should run the tests? (blank to skip) ").strip()
+            if not folder:
+                raise ValueError("local test folder was not selected")
+            folder = str(Path(folder))
+            if self.workspace.test_directory(folder) is None:
+                raise ValueError("choose a project subfolder for local tests")
+            self.workspace.test_relative = folder
         result = self.workspace.call("test_project", {})
         print(terminal_text(result["output"]), end="")
         print(f"\nLocal tests exited with {result['exit']}.", flush=True)
         return result
 
     def test_command(self, prompt):
-        name = prompt.removeprefix("/test").strip()
+        name, _, folder = prompt.removeprefix("/test").strip().partition(" ")
         if not name:
             active = " ".join(self.workspace.command) if self.workspace.command else "off"
             print(f"Current local test command: {active}. Use /test "
-                  + "|".join((*self.tools.COMMANDS, "off")) + ".")
-        elif name == "off":
+                  + "|".join((*self.tools.COMMANDS, "off")) + " [project subfolder].")
+        elif name == "off" and not folder:
             self.workspace.command = None
+            self.workspace.test_relative = "."
             print("Local tests disabled.")
         elif name in self.tools.COMMANDS:
+            folder = str(Path(folder.strip() or "."))
+            if folder != ".":
+                try:
+                    if self.workspace.test_directory(folder) is None:
+                        raise ValueError("choose a project subfolder")
+                except (OSError, ValueError):
+                    print("Choose an existing project subfolder for local tests.")
+                    return
+            self.workspace.test_relative = folder
             self.workspace.command = self.tools.COMMANDS[name]
             print("Local tests will ask before running " + " ".join(self.workspace.command) + ".")
         else:
@@ -251,8 +272,8 @@ def session(channel, editor):
             turn(channel, editor, prompt)
 
 
-def run(project, command, environment, tools, files, test=None):
-    editor = Editor(project, tools, files, test)
+def run(project, command, environment, tools, files, test=None, *, fleet_home=None):
+    editor = Editor(project, tools, files, test, fleet_home=fleet_home)
     proc = None
     try:
         try:

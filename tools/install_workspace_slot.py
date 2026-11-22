@@ -42,6 +42,36 @@ def signin_app(home):
     return target
 
 
+# Normal fresh installs may be from a source archive or a shallow checkout. Recover
+# the exact public bytes expected by 0.2.15 without storing a second source tree.
+FIRST_EDITOR_REVISION = "ee147f63c559f4f8deb9e5962501412168edf27e"
+
+
+def legacy_editor_source(dist, source, root, filename, digest):
+    for path in (root / filename, source / filename):
+        data = dist.pinned_editor_file(path, digest)
+        if data is not None:
+            return data
+    git_path = f"{FIRST_EDITOR_REVISION}:ccfleet_agent/{filename}"
+    git = subprocess.run(
+        ["/usr/bin/git", "-C", str(source.parent), "cat-file", "blob", git_path],
+        env={"PATH": os.defpath, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+             "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"},
+        capture_output=True, timeout=12,
+    )
+    if git.returncode == 0 and hashlib.sha256(git.stdout).hexdigest() == digest:
+        return git.stdout
+    url = (f"https://raw.githubusercontent.com/cdcupt/ccfleet/{FIRST_EDITOR_REVISION}/"
+           f"ccfleet_agent/{filename}")
+    with tempfile.TemporaryDirectory() as stage:
+        path = Path(stage) / filename
+        dist._fetch(url, path, dist.EDITOR_LIMIT, 25)
+        data = dist.pinned_editor_file(path, digest)
+    if data is None:
+        raise ValueError("previous signed client component checksum mismatch")
+    return data
+
+
 def install():
     if sys.platform != "darwin" or os.getuid() == 0:
         raise ValueError("run in the enrolled Mac owner's login session")
@@ -61,11 +91,16 @@ def install():
                     '=anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"',
                     home / ".local/bin/agy"], check=True)
     source = Path(__file__).resolve().parents[1] / "ccfleet_agent"
+    sys.path.insert(0, str(source.parent))
+    from ccfleet_agent import gemini_distribution as dist
+
     components = {root / name: (source / name).read_bytes() for name in (
         "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py",
         "gemini_distribution.py", "workspace_io.py", "gemini_editor_distribution.py",
-        "gemini_editor_slot.py", "gemini_editor_client.py",
-        "project_files.py", "workspace_tools.py")}
+        "gemini_editor_slot.py", "project_files.py")}
+    for name, digest in dist.LEGACY_EDITOR_SOURCES.values():
+        components[root / name] = legacy_editor_source(dist, source, root, name, digest)
+        components[root / dist.editor_snapshot(name)] = (source / name).read_bytes()
     units = {LABEL: "antigravity_slot.py", EDITOR_LABEL: "gemini_editor_slot.py"}
     for label, service in units.items():
         components[agents / (label + ".plist")] = plistlib.dumps({
@@ -88,6 +123,7 @@ def install():
                     "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
                 },
                 "gemini_distribution.py": {
+                    "67ff27fc244194d0f7e752d828befc848b31f7f0e6f8576e7a6476baa8b58c5f",
                     "7e70e1cc368469fbd940e573b7028b463f9d271b1ebd9cb2b5b427ce53785cab",
                 },
                 "workspace_tools.py": {
@@ -101,8 +137,9 @@ def install():
                 upgrades[path] = previous
             else:
                 raise ValueError(f"review the existing workspace component: {path}")
-    # The new forced entry imports the preview helper; install its dependency first.
-    ordered = sorted(components, key=lambda path: path.name == "antigravity_entry.py")
+    # Install the snapshots before the new distributor. Switch the forced entry last.
+    activation_order = {"gemini_distribution.py": 1, "antigravity_entry.py": 2}
+    ordered = sorted(components, key=lambda path: activation_order.get(path.name, 0))
     for path in ordered:
         data = components[path]
         if path.exists() and path not in upgrades:
