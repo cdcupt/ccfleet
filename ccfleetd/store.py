@@ -761,6 +761,9 @@ class Store(openrouter_billing.OpenRouterStore,
         # Allocate names under the database write lock, including when two
         # server/CLI Stores open an older database at the same time.
         with self._write_txn() as conn:
+            self._add_missing_columns("openrouter_requests", {
+                "wallet_exempt": "INTEGER NOT NULL DEFAULT 0 CHECK(wallet_exempt IN (0,1))",
+            })
             self._add_missing_columns("slots", {"pool_name": "TEXT"})
             self._add_missing_columns("nodes", {
                 "public_status_number": "INTEGER CHECK (public_status_number > 0)",

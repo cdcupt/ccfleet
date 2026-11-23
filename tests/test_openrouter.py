@@ -330,3 +330,31 @@ def test_recent_catalog_is_personal_deduplicated_and_limited_to_ten(router):
     fresh = json.loads(api(c, bob)[2])["data"]
     assert [r["id"] for r in fresh] == offered[:-1]
     assert not any(r["fleet_recent"] for r in fresh)
+
+
+def test_only_configured_admin_has_no_fleet_charge(router, provider):
+    calls, replies = provider
+    store = router.store
+    router.service.cfg = replace(router.service.cfg, openrouter_admin_account_id="admin")
+    admin_key = store.openrouter_key("admin")
+    regular_key = store.openrouter_key("alice")
+    assert json.loads(api(router, admin_key)[2])["fleet_billing"] == "admin_covered"
+    assert json.loads(api(router, regular_key)[2])["fleet_billing"] == "usage_plus_fee"
+    assert api(router, regular_key, payload(MODELS[0]))[0] == 402
+    replies.append((200, "application/json", b'{"type":"message","id":"gen-admin","usage":{"cost":1.0}}'))
+    assert api(router, admin_key, payload(MODELS[0]))[0] == 200
+    assert len(calls) == 1
+    [receipt] = store.openrouter_receipts("admin")
+    assert receipt["state"] == "settled" and Decimal(receipt["cost_usd"]) == 1
+    assert receipt["wallet_exempt"] and receipt["hold_cents"] == receipt["debit_cents"] == 0
+    assert Decimal(receipt["fee_usd"]) == 0 and store.wallet_balance("admin") == 0
+    page = router.browser("admin").call("GET", "/account/openrouter", headers=router.public)
+    assert "Fleet covers this admin account" in page.body and "$0.00" in page.body
+    store.set_account_role("alice", "admin")
+    assert api(router, regular_key, payload(MODELS[0]))[0] == 402
+    rid = store.openrouter_reserve("admin", admin_key, MODELS[0], 25, admin_account_id="admin")
+    store.set_account_role("admin", "user")
+    with pytest.raises(BillingError):
+        store.openrouter_submit(rid, "admin", admin_key)
+    store.openrouter_release(rid)
+    assert api(router, admin_key, payload(MODELS[0]))[0] == 402

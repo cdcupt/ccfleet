@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS openrouter_requests (
     generation_id TEXT UNIQUE,
     state TEXT NOT NULL CHECK(state IN ('held','submitted','settled','released')),
     hold_cents INTEGER NOT NULL,
+    wallet_exempt INTEGER NOT NULL DEFAULT 0 CHECK(wallet_exempt IN (0,1)),
     cost_usd TEXT,
     fee_usd TEXT,
     review_note TEXT,
@@ -74,7 +75,7 @@ class OpenRouterStore:
             ).fetchone()
         return row[0] if row else None
 
-    def openrouter_reserve(self, owner, token, model, cents):
+    def openrouter_reserve(self, owner, token, model, cents, *, admin_account_id=""):
         if type(cents) is not int or not 0 <= cents <= wallet.MAX_CENTS:
             raise BillingError("Invalid OpenRouter credit reservation.")
         with self._write_txn() as db:
@@ -82,13 +83,18 @@ class OpenRouterStore:
                 db, owner
             ):
                 raise BillingError("OpenRouter spending is unavailable for this account.")
+            exempt = owner == admin_account_id and db.execute(
+                "SELECT 1 FROM accounts WHERE id=? AND role='admin'", (owner,)
+            ).fetchone() is not None
+            if exempt:
+                cents = 0
             if self._wallet_balance(db, owner) < cents:
                 raise BillingError("Insufficient available Fleet credit for this request.")
             request_id = uuid.uuid4().hex
             db.execute(
                 "INSERT INTO openrouter_requests(id,account_id,model,created_at,state,"
-                "hold_cents) VALUES (?,?,?,?,'held',?)",
-                (request_id, owner, model, time.time(), cents),
+                "hold_cents,wallet_exempt) VALUES (?,?,?,?,'held',?,?)",
+                (request_id, owner, model, time.time(), cents, int(exempt)),
             )
         return request_id
 
@@ -98,7 +104,9 @@ class OpenRouterStore:
                 raise BillingError("OpenRouter spending is paused.")
             if not db.execute(
                 "UPDATE openrouter_requests SET state='submitted' WHERE id=? "
-                "AND account_id=? AND state='held' AND EXISTS "
+                "AND account_id=? AND state='held' AND (wallet_exempt=0 OR EXISTS (SELECT 1 "
+                "FROM accounts WHERE id=openrouter_requests.account_id AND role='admin')) "
+                "AND EXISTS "
                 "(SELECT 1 FROM openrouter_accounts WHERE account_id=? AND token_hash=?)",
                 (request_id, owner, owner, hashlib.sha256(token.encode()).hexdigest()),
             ).rowcount:
@@ -157,6 +165,10 @@ class OpenRouterStore:
                 return
             if row["state"] != "submitted":
                 raise BillingError("Conflicting OpenRouter settlement.")
+            if row["wallet_exempt"]:
+                db.execute("UPDATE openrouter_requests SET state='settled',cost_usd=?,"
+                           "fee_usd='0',debit_cents=0 WHERE id=?", (str(cost), request_id))
+                return
             owner = row["account_id"]
             carry = db.execute(
                 "SELECT remainder_usd FROM openrouter_accounts WHERE account_id=?", (owner,)
@@ -221,7 +233,7 @@ class OpenRouterStore:
                 dict(row)
                 for row in self._conn.execute(
                     "SELECT id,model,generation_id,state,cost_usd,fee_usd,debit_cents,"
-                    "hold_cents,created_at "
+                    "hold_cents,wallet_exempt,created_at "
                     "FROM openrouter_requests WHERE account_id=? "
                     "ORDER BY created_at DESC LIMIT 50",
                     (owner,),

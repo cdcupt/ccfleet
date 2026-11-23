@@ -35,12 +35,16 @@ def page(service, cfg, account, session_id, *, issued=None):
         )
 
     balance = wallet.display(service.store.wallet_balance(owner))
+    price = (label("Fleet covers this admin account’s OpenRouter usage.",
+                   "Fleet 承担此管理员账户的 OpenRouter 用量费用。")
+             if service.admin_covered(account)
+             else label("Your Fleet balance pays the OpenRouter usage cost plus a 5% service fee.",
+                        "Fleet 余额支付 OpenRouter 的实际用量费及 5% 服务费。"))
     body = (
         '<h1>OpenRouter</h1><div class="card"><p>'
+        + price + " "
         + label(
-            "Your Fleet balance pays the OpenRouter usage cost plus a 5% service fee. "
             "OpenRouter and the selected provider receive the conversation and tool results.",
-            "Fleet 余额支付 OpenRouter 的实际用量费及 5% 服务费。"
             "OpenRouter 和所选服务商会收到对话和工具结果。",
         )
         + "</p><p>"
@@ -81,6 +85,9 @@ def page(service, cfg, account, session_id, *, issued=None):
                 if row["state"] == "released"
                 else label("Reserved", "已预留") + " " + wallet.display(row["hold_cents"])
             )
+        elif row["wallet_exempt"]:
+            detail = (label("OpenRouter usage", "OpenRouter 用量费") + " $" + cost + " · "
+                      + label("Fleet wallet charge", "Fleet 余额扣费") + " $0.00")
         else:
             fee = Decimal(row["fee_usd"])
             detail = (

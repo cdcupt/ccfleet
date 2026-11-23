@@ -144,6 +144,7 @@ class Config:
     stripe_subscription_webhook_secret_file: str = ""
     stripe_subscription_portal_configuration_id: str = ""
     # Public model requests are an explicit, separate authority from opaque SSH.
+    openrouter_admin_account_id: str = ""
     openrouter_models: str = ""
     openrouter_key_file: str = ""
     gateway_enabled: bool = False
@@ -293,6 +294,7 @@ class Config:
                 ENV_PREFIX + "STRIPE_SUBSCRIPTION_WEBHOOK_SECRET_FILE", ""),
             stripe_subscription_portal_configuration_id=env.get(
                 ENV_PREFIX + "STRIPE_SUBSCRIPTION_PORTAL_CONFIGURATION_ID", ""),
+            openrouter_admin_account_id=env.get(ENV_PREFIX + "OPENROUTER_ADMIN_ACCOUNT_ID", ""),
             openrouter_models=env.get(ENV_PREFIX + "OPENROUTER_MODELS", "").strip(),
             openrouter_key_file=env.get(ENV_PREFIX + "OPENROUTER_KEY_FILE", "").strip(),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),

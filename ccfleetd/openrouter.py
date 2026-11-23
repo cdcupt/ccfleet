@@ -193,12 +193,19 @@ class Service:
         self.key = read_key(cfg.openrouter_key_file) if self.models else None
         self.stop = threading.Event()
 
+    def admin_covered(self, account):
+        return bool(account and account["id"] == self.cfg.openrouter_admin_account_id
+                    and account["role"] == "admin")
+
     def catalog(self, owner):
+        covered = self.admin_covered(self.store.get_account(owner))
+        price = " · Fleet $0" if covered else " · Fleet +5%"
         recent = self.store.openrouter_recent_models(owner, self.models)
         ordered = dict.fromkeys([*recent, *self.models])
-        rows = [{"id": model, "type": "model", "display_name": model + " · Fleet +5%",
+        rows = [{"id": model, "type": "model", "display_name": model + price,
                  "fleet_recent": model in recent} for model in ordered]
-        return {"data": rows, "has_more": False, "first_id": rows[0]["id"],
+        return {"data": rows, "fleet_billing": "admin_covered" if covered else "usage_plus_fee",
+                "has_more": False, "first_id": rows[0]["id"],
                 "last_id": rows[-1]["id"]}
 
     def connect(self):
@@ -245,7 +252,10 @@ class Service:
         try:
             value = prepare(value, self.models)
             cents = hold_cents(body_size, value["max_tokens"], self.models[value["model"]])
-            request_id = store.openrouter_reserve(owner, token, value["model"], cents)
+            request_id = store.openrouter_reserve(
+                owner, token, value["model"], cents,
+                admin_account_id=self.cfg.openrouter_admin_account_id,
+            )
         except BillingError as exc:
             gateway.model_error(handler, 402, str(exc))
             return

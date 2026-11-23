@@ -2896,7 +2896,10 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
         token = getpass.getpass("Fleet key from https://ccfleet.io/account/openrouter: ")
     if not re.fullmatch(r"ccf_or_[A-Za-z0-9_-]{43}", token):
         raise CliError("enter a Fleet OpenRouter key from your CC Fleet account")
-    rows = api_json(base + "/v1/models", token, method="GET").get("data")
+    catalog = api_json(base + "/v1/models", token, method="GET")
+    rows = catalog.get("data")
+    covered = catalog.get("fleet_billing") == "admin_covered"
+    price = "OpenRouter · Fleet $0" if covered else "OpenRouter + 5%"
     pattern = r"[A-Za-z0-9~][A-Za-z0-9_.~-]{0,63}/[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}"
     if (not isinstance(rows, list) or not 1 <= len(rows) <= 64
             or any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
@@ -2911,7 +2914,7 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
         print("Default: " + models[0])
         if recent:
             print("Recently used: " + ", ".join(recent))
-        print("Available via Fleet at OpenRouter usage cost + 5%: " + ", ".join(models))
+        print("Available (" + price + "): " + ", ".join(models))
         return 0
     claude = prepare_agent("claude")
     ensure_home()
@@ -2925,9 +2928,10 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
     settings["env"].update(tiers)
     env.update(tiers)
     settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": [
-        {"model": m, "label": m + (" · Recent" if m in recent else "") + " · OpenRouter + 5%"}
+        {"model": m, "label": m + (" · Recent" if m in recent else "") + " · " + price}
         for m in models]}
-    print("OpenRouter usage is charged to your Fleet balance at cost + 5%.", file=sys.stderr)
+    print("Fleet covers this admin account’s OpenRouter usage." if covered else
+          "OpenRouter usage is charged to your Fleet balance at cost + 5%.", file=sys.stderr)
     with tempfile.NamedTemporaryFile(dir=home(), mode="w", suffix=".json") as options:
         json.dump(settings, options)
         options.flush()

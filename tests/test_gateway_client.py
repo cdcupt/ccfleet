@@ -615,3 +615,12 @@ def test_openrouter_remembered_default_override_and_picker(client, monkeypatch, 
         options = settings["modelPicker"]["options"]
         assert [o["model"] for o in options] == [saved, other, unused]
         assert ["Recent" in o["label"] for o in options] == [True, True, False]
+
+
+def test_openrouter_owner_pricing_from_authenticated_catalog(client, monkeypatch, capsys):
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "c" * 43)
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: {
+        "data": [{"id": "example/one"}], "fleet_billing": "admin_covered"})
+    assert client.loaded["main"](["openrouter"]) == 0
+    assert "Fleet covers" in capsys.readouterr().err
+    assert "Fleet $0" in client.calls[0][3]["modelPicker"]["options"][0]["label"]
