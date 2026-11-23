@@ -1,0 +1,275 @@
+{
+  "version": "0.2.23",
+  "verified_utc": "2026-11-23T14:35:40+00:00",
+  "public_updater": {
+    "before": "0.2.22",
+    "after": "0.2.23",
+    "updater": "CC Fleet 0.2.23\nVerified signed release.",
+    "public_source": "baa0cbc1bb5a7e3e93d9ca2ca2bd69747acc7b70",
+    "commands": true
+  },
+  "signed_upgrade_and_rollback": {
+    "signed": true,
+    "version": "0.2.23",
+    "public_source": "baa0cbc1bb5a7e3e93d9ca2ca2bd69747acc7b70",
+    "verified_prior": "0.2.22",
+    "upgrade": true,
+    "rollback": true,
+    "commands": true,
+    "channel_commit": "3652c13881d2d6d5781bd315c93224211e2b71de"
+  },
+  "full_macos_suite": "11595 passed, 14 skipped, 35 warnings in 1152.70s (0:19:12)",
+  "macos_python39_focused": "140 passed in 12.93s",
+  "terminal": {
+    "cli_signed": true,
+    "native_model": "gemini-4-neon-xhigh",
+    "terminal_build_and_test": true,
+    "independent_tests": 3,
+    "exact_selected_commit": true,
+    "no_per_tool_prompt": true,
+    "explicit_turns": 5,
+    "original_session_resumed": true,
+    "interrupted_shell_submitted_once": true,
+    "late_command_side_effect_absent": true,
+    "grant_revoked_mid_session": true,
+    "fresh_file_approval_declined": true,
+    "missing_remote_denied_without_external_write": true,
+    "clean_exit": true,
+    "private_tls_websocket": true,
+    "authenticated_ssh_connections": 5
+  },
+  "t3": {
+    "installed_t3": "0.1.7",
+    "model": "gemini-4-neon-xhigh",
+    "fixture": "private local socketpair replaces controller and SSH",
+    "stages": {
+      "grant_from_local_cli": true,
+      "automatic_local_edit_and_real_unittest": true,
+      "bare_python3_unittest_succeeded": true,
+      "verified_git_commit_without_approval": true,
+      "steer_cancelled_local_shell_and_followup_completed": true,
+      "revoked_next_turn_returned_supervised_and_decline_wrote_nothing": true
+    },
+    "same_t3_thread": true,
+    "google_turns": 5,
+    "same_google_session": true,
+    "normal_active_turn_permissions": 0,
+    "revoked_turn_permission_cards": 1
+  },
+  "github": {
+    "real_subscription_model": "gemini-4-neon-xhigh",
+    "observed_typed_actions": [
+      "push",
+      "create_review"
+    ],
+    "exact_branch": "feature/gemini-project-shell-023-public",
+    "verified_github_tip": "3652c13881d2d6d5781bd315c93224211e2b71de",
+    "review_url": "https://github.com/cdcupt/ccfleet/pull/259",
+    "review_api_gets": 2,
+    "clean_exit": true
+  },
+  "gitlab": {
+    "candidate_publisher_sha256": "9e5d10057dc525da5349c383c0a7e3ddc160d6d76b5139016ab287385a6ea098",
+    "glab": "1.131.0",
+    "official_binary_release_checksum_verified": true,
+    "real_git_smart_https": true,
+    "git_http_401_challenge_and_real_helper_get": true,
+    "test_remote_received_exact_branch_commit": true,
+    "real_curl_https": true,
+    "mock_gitlab_api": true,
+    "nested_project_percent_encoded": true,
+    "matching_existing_mr_reused": true,
+    "mr_posts": 1,
+    "api_401_fails_closed": true,
+    "isolated_fake_home_and_credential": true,
+    "published_to_real_gitlab": false,
+    "glab_release": "https://gitlab.com/gitlab-org/cli/-/releases/v1.131.0",
+    "official_helper_source": "https://gitlab.com/gitlab-org/cli/-/blob/v1.131.0/internal/commands/auth/login/helper.go",
+    "official_merge_request_api": "https://docs.gitlab.com/api/merge_requests/",
+    "darwin_binary_archive_sha256": "905271694af2dd68cc254d9a2f3dae80036e5c752a82ea16dec5220f4bff1de7"
+  },
+  "herdr": {
+    "version": "herdr 0.9.5",
+    "passed": true,
+    "transport_and_model": "deterministic registered-device fixture",
+    "model_calls": 0
+  },
+  "plain_language_publishing": {
+    "observed_typed_actions": [
+      "push",
+      "create_review"
+    ],
+    "real_signed_terminal": true,
+    "one_existing_open_review": true,
+    "checkout_unchanged": true,
+    "denied_other_model_calls": 0
+  },
+  "installed_slot_smoke": {
+    "version": "0.2.23",
+    "installed_slot_worker": true,
+    "installed_helper_distribution": true,
+    "existing_google_signin": true,
+    "native_model": "gemini-4-neon-xhigh",
+    "one_time_cli_grant": true,
+    "no_per_action_approval": true,
+    "local_command_calls": 6,
+    "independent_script_output": "23",
+    "local_git_commit_verified": true,
+    "clean_git_status": true,
+    "cli_signed": true,
+    "authenticated_ssh_connections": 3,
+    "temporary_resources_cleaned": true,
+    "production_controller_used": false
+  },
+  "frontend_workload": {
+    "version": "0.2.23",
+    "requested_model": "gemini-4-neon-xhigh",
+    "real_subscription_model": true,
+    "original_synthetic_project": "152e3de14767daeb6fa5a901383e60a0931922a7",
+    "model_repair_turns": 1,
+    "completed_first_attempt": true,
+    "baseline_red_tests": [
+      "pure time mapping, tempo clamping, re-anchoring, and deterministic noise",
+      "non-looping playback ends cleanly at arrangement end; looping wraps seamlessly into next cycle",
+      "16. undo history is strictly bounded by maxHistory capacity"
+    ],
+    "baseline_red_modules": [
+      "audio.test.cjs",
+      "model.test.cjs"
+    ],
+    "baseline_passing": 25,
+    "repaired_tests": 28,
+    "randomized_actions": {
+      "seed": 2718281,
+      "actions": 2500,
+      "changed": 1583,
+      "rejected": 743,
+      "undoChecks": 223,
+      "rejectedImports": 180,
+      "maxClips": 92
+    },
+    "independent_browser": {
+      "viewport": 1440,
+      "opened_as_file": false,
+      "tracks": 5,
+      "clips": 15,
+      "checkpoints": [
+        "grouped pattern editor below arrangement and selectable clip context",
+        "starter arrangement, scope and viewport",
+        "actual audible output measured, playhead progresses, pause and stop",
+        "tempo, undo/redo and persistent project",
+        "validated JSON import/export round trip and non-destructive rejection",
+        "16-step note editing and keyboard undo/redo restored exact project",
+        "clip rename, move, resize, duplicate, delete, insert and undo/redo",
+        "physical drag and edge resize commit exactly one undo entry each",
+        "track mute/solo/volume persist and input shortcuts are isolated"
+      ],
+      "real_audio_peak": 0.41417,
+      "rms": 0.23801,
+      "resources_local": true
+    },
+    "agent_shell_tool_calls": 8,
+    "model_ran_red_and_green": true,
+    "changed_files": [
+      "audio.js",
+      "model.js"
+    ],
+    "code_deltas": [
+      "1\t1\taudio.js",
+      "1\t1\tmodel.js"
+    ],
+    "test_files_unchanged": true,
+    "diff_check_clean": true,
+    "git_worktree_clean": true,
+    "commits_created": 1,
+    "remote_configured": false,
+    "local_commit": "ee7eebe642a6c497d11109fd190f96fb0df20eff",
+    "commit_subject": "Fix Cue Room history and transport regressions",
+    "clean_exit": true,
+    "cli_signed": true,
+    "public_source": "baa0cbc1bb5a7e3e93d9ca2ca2bd69747acc7b70",
+    "fetched_helpers_through_ssh": [
+      "0",
+      "0"
+    ],
+    "authenticated_ssh_connections": 3,
+    "private_enrollment": true,
+    "private_tls_websocket": true,
+    "temporary_resources_cleaned": true,
+    "production_controller_used": false,
+    "production_grants_changed": false
+  },
+  "website": {
+    "revision": "708f0baff2f1a4a4ebff87c93cb1f12b0f1dcd2b",
+    "checks": [
+      {
+        "language": "en",
+        "width": 390,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      },
+      {
+        "language": "en",
+        "width": 1280,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      },
+      {
+        "language": "zh",
+        "width": 390,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      },
+      {
+        "language": "zh",
+        "width": 1280,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      }
+    ],
+    "private_account_synthetic": false
+  },
+  "editorial_review": {
+    "reviewer": "gemini-4-neon-high",
+    "runtime": "existing native Antigravity CLI",
+    "public_copy_only": true,
+    "languages": [
+      "en",
+      "zh-Hans"
+    ],
+    "explicit_authenticate_requested": false,
+    "repo_writes": false,
+    "stop_reason": "end_turn",
+    "at": 1795444142.270987,
+    "public_copy_sha256": "05bfe78bb8152124495ea53554fd45c68202b17be32e603342fcae4db7a72f33",
+    "verdict": "Ready",
+    "release": "0.2.23",
+    "serving_revision": "3a0ce5f8d346c14b50de9b467a043d7a51470623"
+  },
+  "slot_rehearsal_and_activation": true,
+  "prs": [
+    "https://github.com/cdcupt/ccfleet/pull/260",
+    "https://github.com/cdcupt/ccfleet/pull/259"
+  ],
+  "guide": {
+    "en": "https://ccfleet.io/en/docs/guide#gemini-project-access",
+    "zh": "https://ccfleet.io/zh/docs/guide#gemini-project-access"
+  },
+  "scope": "The test clients ran on the Mac mini in isolated local projects. GitHub was live. GitLab used a real CLI, local smart HTTPS and a test MR API. The Orca GUI was not reopened."
+}

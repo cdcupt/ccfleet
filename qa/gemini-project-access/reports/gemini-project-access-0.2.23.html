@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CCFleet 0.2.23 · Project access verification</title><style>body{max-width:48rem;margin:3rem auto;padding:0 1.25rem;font:17px/1.55 system-ui,sans-serif;color:#1e302e;background:#fbfaf6}h1,h2{line-height:1.18}pre{padding:1em;background:#eaece6;overflow:auto}a{color:#12645d}li+li{margin-top:.6rem}</style></head><body><main>
+<h1>CCFleet 0.2.23 project access</h1>
+<p>The signed public updater installed 0.2.23 from 0.2.22. The local grant belongs to one checkout on the connecting Mac.</p>
+<h2>Enable it</h2><p>In a terminal in the project directory, run the following commands. Check the displayed project path and publishing destination before typing <code>ENABLE</code>.</p>
+<pre>ccfleet update
+ccfleet gemini --full-access</pre>
+<p>Open <code>ccfleet gemini</code> or select CCFleet Gemini in T3. To revoke access for that checkout, run <code>ccfleet gemini --revoke-full-access</code> in the same directory.</p>
+<h2>What the live tests exercised</h2><ul>
+<li>Gemini Neon‑xhigh reproduced a failing Python test, edited the implementation and test, reran the suite, and committed both files locally. The signed terminal completed 5 explicit turns through TLS WebSocket and pinned SSH.</li>
+<li>After a link cut, a running command stopped before its final file write. The next instruction resumed the same Google conversation. After revocation, a new file request required approval and declining left the file absent.</li>
+<li>In real T3, Gemini ran Python tests and created a local commit. Steer stopped an active command. A second application check used the real Herdr TUI and a simulated provider.</li>
+<li>Real Gemini pushed the expected release commit to GitHub. Plain-language requests to push and open a PR selected the publishing actions and returned <a href="https://github.com/cdcupt/ccfleet/pull/259">the existing pull request</a>. Repeating the request preserved a single PR.</li>
+<li>In a fresh Cue Room frontend checkout, Gemini diagnosed seeded regressions and the resulting changes were checked against the application tests and randomized edits. See the detailed record for the run.</li>
+</ul><h2>Publishing and test scope</h2><p>The shell works offline in the trusted checkout. Authenticated pushes and reviews use the repository approved on that Mac. Use a standalone Git checkout for Git commits and publication. A linked worktree can be edited and built within its directory.</p>
+<p>GitLab checks used the official <code>glab</code> client, Git over local HTTPS, and a simulated GitLab MR API. A live GitLab.com account was unavailable. The test clients ran on the Mac mini using isolated project folders.</p>
+<p>macOS repository suite: 11595 passed, 14 skipped, 35 warnings in 1152.70s (0:19:12).</p>
+<p><a href="https://ccfleet.io/en/docs/guide#gemini-project-access">English setup guide</a> · <a href="https://ccfleet.io/zh/docs/guide#gemini-project-access">中文指南</a> · <a href="gemini-project-access-0.2.23.json">Detailed verification</a></p></main></body></html>

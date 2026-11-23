@@ -1,0 +1,312 @@
+{
+  "version": "0.2.24",
+  "verified_utc": "2026-11-23T17:25:26+00:00",
+  "public_updater": {
+    "before": "0.2.23",
+    "after": "0.2.24",
+    "updater": "CC Fleet 0.2.24\nVerified signed release.",
+    "public_source": "9e126cac8204e4f03714b7b592e65cd50b8a6df3",
+    "commands": true
+  },
+  "signed_candidate": {
+    "signed": true,
+    "version": "0.2.24",
+    "public_source": "9e126cac8204e4f03714b7b592e65cd50b8a6df3",
+    "verified_prior": "0.2.23",
+    "upgrade": true,
+    "rollback": true,
+    "commands": true,
+    "channel_commit": "e9a8a6b4fe9379b78aced815daf5100238e3a486"
+  },
+  "macos_tests": {
+    "commit": "5fc87bc67a45f49295211076700a0f5c1e54aef9",
+    "signed_manifest_present": true,
+    "module_count": 288,
+    "seconds": 1224.0,
+    "result": 0,
+    "summary": "11630 passed, 14 skipped, 35 warnings in 1221.65s (0:20:21)"
+  },
+  "focused_python_39": "247 passed in 39.29s",
+  "public_home_setup": {
+    "actual_public_client": "0.2.24",
+    "true_os_account_home": true,
+    "disposable_user_grant_registry": true,
+    "owner_opt_in_count": 1,
+    "repeat_approvals": 0,
+    "eligible_project_inherited_access": true,
+    "revoked_offline": true,
+    "temporary_resources_removed": true
+  },
+  "terminal_real_google": {
+    "ccfleet": "0.2.24",
+    "real_model": "gemini-4-neon-xhigh",
+    "physical_home_navigation": true,
+    "grant_saved_in_disposable_config_only": true,
+    "one_initial_grant": true,
+    "no_repeat_setup_prompts": true,
+    "two_independent_real_git_commits": true,
+    "same_original_google_conversation": true,
+    "permission_prompts_while_enabled": 0,
+    "unselected_home_action_returned_locally": true,
+    "workspace_controls_sent_to_model": 0,
+    "separate_same_named_project_files": true,
+    "recalled_previous_project_word": true,
+    "revoked_without_pairing_change": true,
+    "model_turns": 2,
+    "external_git_writes": false,
+    "cli_signed": true,
+    "public_source": "9e126cac8204e4f03714b7b592e65cd50b8a6df3",
+    "fetched_helpers_through_ssh": [
+      "0",
+      "0"
+    ],
+    "authenticated_ssh_connections": 3,
+    "private_enrollment": true,
+    "private_tls_websocket": true,
+    "temporary_resources_cleaned": true,
+    "production_controller_used": false,
+    "production_grants_changed": false
+  },
+  "harness_checks": {
+    "source": "5fc87bc67a45f49295211076700a0f5c1e54aef9",
+    "t3": {
+      "model": "gemini-4-neon-xhigh",
+      "installed_t3": "0.1.7",
+      "fixture": "private local socketpair replaces controller and SSH",
+      "google_turns": 3,
+      "real_t3_browser_composer": {
+        "normal_enter": true,
+        "delivered_to_adapter": true
+      },
+      "same_t3_thread": true,
+      "same_acp_session": true,
+      "same_google_session": true,
+      "normal_active_turn_permissions": 0,
+      "revoked_turn_permission_cards": 1,
+      "fixture_removed": true,
+      "seconds": 93.76,
+      "passed": true
+    },
+    "terminal_programs": [
+      {
+        "harness": "terminal",
+        "old_slot": false,
+        "idempotent_home_grant_no_prompt": true,
+        "same_session_two_git_commits": true,
+        "cross_project_stale_read_or_approval_refused": true,
+        "no_prompt_if_grant_changes_during_turn": true,
+        "explicit_revoke_restores_supervision_on_next_turn": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      },
+      {
+        "harness": "terminal",
+        "old_slot": false,
+        "idempotent_home_grant_no_prompt": true,
+        "locally_opened_checkout_inherits_without_workspace_command": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      },
+      {
+        "harness": "terminal",
+        "old_slot": true,
+        "idempotent_home_grant_no_prompt": true,
+        "old_slot_tool_sequences_denied": 1,
+        "explicit_update_diagnostic": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      },
+      {
+        "harness": "orca-entry",
+        "old_slot": false,
+        "idempotent_home_grant_no_prompt": true,
+        "same_session_two_git_commits": true,
+        "cross_project_stale_read_or_approval_refused": true,
+        "no_prompt_if_grant_changes_during_turn": true,
+        "explicit_revoke_restores_supervision_on_next_turn": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      },
+      {
+        "harness": "orca-entry",
+        "old_slot": false,
+        "idempotent_home_grant_no_prompt": true,
+        "orca_default_worktree_layout_local_edit_and_python_run": true,
+        "linked_git_metadata_outside_project_excluded": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      },
+      {
+        "harness": "herdr-tui",
+        "old_slot": false,
+        "idempotent_home_grant_no_prompt": true,
+        "herdr": "herdr 0.9.5",
+        "same_session_two_git_commits": true,
+        "cross_project_stale_read_or_approval_refused": true,
+        "no_prompt_if_grant_changes_during_turn": true,
+        "explicit_revoke_restores_supervision_on_next_turn": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      },
+      {
+        "harness": "herdr-desktop",
+        "old_slot": false,
+        "idempotent_home_grant_no_prompt": true,
+        "herdr": "herdr-app 0.1.17",
+        "same_session_two_git_commits": true,
+        "cross_project_stale_read_or_approval_refused": true,
+        "no_prompt_if_grant_changes_during_turn": true,
+        "explicit_revoke_restores_supervision_on_next_turn": true,
+        "approval_prompts_while_full": 0,
+        "selector_or_checkout_path_in_provider_prompt": false
+      }
+    ],
+    "old_acp": {
+      "revision": "6c566e2283dfd924966f2a4a63a95f142ccbbcf0",
+      "signed_source_pins_match": true,
+      "runtime": "system Python and real ccfleet gemini --acp",
+      "slot": "deterministic pre-projectShell capability fixture",
+      "physical_home_grant_in_temporary_account": true,
+      "old_slot_diagnostic": "Update the private Mac slot to use full access.",
+      "permission_requests": 0,
+      "local_file_mutations": 0,
+      "provider_calls": 0,
+      "slot_received_model_prompt": true,
+      "acp_shutdown_clean": true,
+      "temporary_profile_removed": true,
+      "requested_shell_mkdir_and_file_approval_denied": true
+    },
+    "signed_legacy_permissions": {
+      "versions": [
+        "0.2.23",
+        "0.2.24"
+      ],
+      "real_signed_cli_and_helper_bytes": true,
+      "fixture_home_registry_removed": true,
+      "existing_pinned_grant_preserved": true,
+      "older_cli_regrant_cannot_override_new_exclusion": true,
+      "older_cli_deletion_cannot_lift_exclusion": true,
+      "new_cli_local_grant_reenables_checkout": true,
+      "global_revoke_preserves_independent_checkout_grant": true,
+      "no_provider_or_publish_calls": true
+    },
+    "orca_gui_opened": false,
+    "t3_official_mac_binary_second_version": {
+      "t3": "0.1.11",
+      "passed": true,
+      "fixture": "private local socketpair replaces controller and SSH",
+      "model": "gemini-4-neon-xhigh",
+      "google_turns": 3,
+      "same_acp_session": true,
+      "same_google_session": true,
+      "normal_active_turn_permissions": 0,
+      "revoked_turn_permission_cards": 1,
+      "model_prompt_scope_inspected": 3,
+      "local_selector_and_selected_paths_absent_from_all_model_prompts": true,
+      "real_t3_browser_composer": {
+        "normal_enter": true,
+        "delivered_to_adapter": true
+      },
+      "fixture_removed": true
+    }
+  },
+  "older_slot_acp": {
+    "revision": "6c566e2283dfd924966f2a4a63a95f142ccbbcf0",
+    "signed_source_pins_match": true,
+    "runtime": "system Python and real ccfleet gemini --acp",
+    "slot": "deterministic pre-projectShell capability fixture",
+    "physical_home_grant_in_temporary_account": true,
+    "old_slot_diagnostic": "Update the private Mac slot to use full access.",
+    "permission_requests": 0,
+    "local_file_mutations": 0,
+    "provider_calls": 0,
+    "slot_received_model_prompt": true,
+    "acp_shutdown_clean": true,
+    "temporary_profile_removed": true,
+    "requested_shell_mkdir_and_file_approval_denied": true
+  },
+  "slot_continuity": {
+    "existing_pairings_preserved": true,
+    "listening_sockets_preserved": true
+  },
+  "web": {
+    "revision": "a3415d580bcc3b13f5e53a1676432120f36c5421",
+    "checks": [
+      {
+        "language": "en",
+        "width": 390,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      },
+      {
+        "language": "en",
+        "width": 1280,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      },
+      {
+        "language": "zh",
+        "width": 390,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      },
+      {
+        "language": "zh",
+        "width": 1280,
+        "pages": [
+          "/docs/guide",
+          "/docs/library/docs/public-gateway.html",
+          "/docs/library/docs/platform-comparison.html"
+        ],
+        "links_verified": true
+      }
+    ],
+    "private_account_synthetic": false
+  },
+  "account_links": {
+    "synthetic_owner": true,
+    "verified_locales": [
+      "en",
+      "zh"
+    ],
+    "live_account_navigation": true
+  },
+  "docs_review": {
+    "reviewer": "gemini-4-neon-high",
+    "runtime": "existing native Antigravity CLI",
+    "public_copy_only": true,
+    "languages": [
+      "en",
+      "zh-Hans"
+    ],
+    "explicit_authenticate_requested": false,
+    "repo_writes": false,
+    "stop_reason": "end_turn",
+    "at": 1795452828.759527,
+    "public_copy_sha256": "427784810011d7fa26874ea3e4245025f22ebe668ba0e926945e8748c3fc79b6",
+    "verdict": "Ready",
+    "release": "0.2.24",
+    "serving_revision": "a3415d580bcc3b13f5e53a1676432120f36c5421",
+    "copy_also_verified_for_source": "5fc87bc67a45f49295211076700a0f5c1e54aef9"
+  },
+  "pull_requests": [
+    "https://github.com/cdcupt/ccfleet/pull/261",
+    "https://github.com/cdcupt/ccfleet/pull/262"
+  ],
+  "guides": {
+    "en": "https://ccfleet.io/en/docs/guide#gemini-project-access",
+    "zh": "https://ccfleet.io/zh/docs/guide#gemini-project-access"
+  }
+}
