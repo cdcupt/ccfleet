@@ -144,6 +144,9 @@ class Config:
     stripe_subscription_webhook_secret_file: str = ""
     stripe_subscription_portal_configuration_id: str = ""
     # Public model requests are an explicit, separate authority from opaque SSH.
+    openrouter_admin_account_id: str = ""
+    openrouter_models: str = ""
+    openrouter_key_file: str = ""
     gateway_enabled: bool = False
     devin_trial_enabled: bool = False
     devin_trial_directory: str = ""
@@ -291,6 +294,9 @@ class Config:
                 ENV_PREFIX + "STRIPE_SUBSCRIPTION_WEBHOOK_SECRET_FILE", ""),
             stripe_subscription_portal_configuration_id=env.get(
                 ENV_PREFIX + "STRIPE_SUBSCRIPTION_PORTAL_CONFIGURATION_ID", ""),
+            openrouter_admin_account_id=env.get(ENV_PREFIX + "OPENROUTER_ADMIN_ACCOUNT_ID", ""),
+            openrouter_models=env.get(ENV_PREFIX + "OPENROUTER_MODELS", "").strip(),
+            openrouter_key_file=env.get(ENV_PREFIX + "OPENROUTER_KEY_FILE", "").strip(),
             gateway_enabled=_env_bool(env, "GATEWAY_ENABLED", False),
             devin_trial_enabled=_env_bool(env, "DEVIN_TRIAL_ENABLED", False),
             devin_trial_directory=env.get(ENV_PREFIX + "DEVIN_TRIAL_DIRECTORY", ""),
@@ -408,6 +414,13 @@ class Config:
                               ("MODEL_MAP_DIGEST", cfg.gateway_devin_model_map_digest)):
             if value and not re.fullmatch(r"[0-9a-f]{64}", value):
                 raise ConfigError("CCFLEET_GATEWAY_DEVIN_" + suffix + " must be a SHA-256 digest")
+        if not cfg.broker_only and (cfg.openrouter_key_file or cfg.openrouter_models):
+            from .openrouter import parse_models
+            if (not os.path.isabs(cfg.openrouter_key_file)
+                    or not parse_models(cfg.openrouter_models)
+                    or not cfg.usd_slot_credit_enabled or not _public_origin(cfg.public_url)):
+                raise ConfigError("OpenRouter requires a key file, model prices, Fleet credit "
+                                  "and a public origin.")
         if cfg.gateway_enabled:
             from . import cli_access
             public = urllib.parse.urlsplit(cfg.public_url)

@@ -41,6 +41,7 @@ from . import (
     gemini_setup_store,
     names,
     offers,
+    openrouter_billing,
     payments,
     pricing,
     private_owner,
@@ -622,7 +623,8 @@ def _row_to_alert(row: sqlite3.Row) -> dict[str, Any]:
             "opened_at": row["opened_at"], "closed_at": row["closed_at"]}
 
 
-class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMixin,
+class Store(openrouter_billing.OpenRouterStore,
+            gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMixin,
             private_owner.PrivateOwnerStoreMixin,
             slot_subscriptions.SlotSubscriptionStoreMixin,
             wallet_topups.TopupStoreMixin):
@@ -643,7 +645,7 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
             if path != ":memory:":
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(SCHEMA + wallet_topups.SCHEMA + slot_subscriptions.SCHEMA
-                                     + api_model_routes.SCHEMA)
+                                     + api_model_routes.SCHEMA + openrouter_billing.SCHEMA)
             self._add_missing_columns("private_owner_nodes", {
                 "public_usage_enabled": "INTEGER NOT NULL DEFAULT 0",
             })
@@ -759,6 +761,9 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
         # Allocate names under the database write lock, including when two
         # server/CLI Stores open an older database at the same time.
         with self._write_txn() as conn:
+            self._add_missing_columns("openrouter_requests", {
+                "wallet_exempt": "INTEGER NOT NULL DEFAULT 0 CHECK(wallet_exempt IN (0,1))",
+            })
             self._add_missing_columns("slots", {"pool_name": "TEXT"})
             self._add_missing_columns("nodes", {
                 "public_status_number": "INTEGER CHECK (public_status_number > 0)",
@@ -2146,10 +2151,13 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
             raise StoreError("no such credit account")
 
     @staticmethod
-    def _wallet_balance(conn: sqlite3.Connection, account_id: str) -> int:
+    def _wallet_balance(conn: sqlite3.Connection, account_id: str, *, holds: bool = True) -> int:
         amount = conn.execute(
-            "SELECT COALESCE(SUM(delta_cents), 0) FROM wallet_entries WHERE account_id = ?",
-            (account_id,)).fetchone()[0]
+            "SELECT (SELECT COALESCE(SUM(delta_cents),0) FROM wallet_entries WHERE account_id=?) "
+            "- COALESCE(SUM(CASE WHEN state='settled' THEN debit_cents "
+            "WHEN ? AND state IN ('held','submitted') THEN hold_cents ELSE 0 END),0) "
+            "FROM openrouter_requests WHERE account_id=?", (account_id, holds, account_id)
+        ).fetchone()[0]
         if type(amount) is not int or not 0 <= amount <= wallet.MAX_CENTS:
             raise StoreError("the stored credit balance is outside the supported range")
         return amount
@@ -2331,7 +2339,7 @@ class Store(gemini_setup_store.GeminiSetupStore, usage_ledger.UsageLedgerStoreMi
                     (original_entry_id,)).fetchone()[0]
                 if returned + cents > order["amount_cents"]:
                     raise StoreError("the credit return exceeds the purchase's unreturned amount")
-            balance = self._wallet_balance(conn, account_id)
+            balance = self._wallet_balance(conn, account_id, holds=delta < 0)
             if balance + delta < 0:
                 raise InsufficientWalletCredit(
                     "the credit adjustment exceeds the available balance")

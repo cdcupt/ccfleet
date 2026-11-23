@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.24"
+CLIENT_VERSION = "0.2.25"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -2884,6 +2884,61 @@ def native_settings(env: dict[str, str], base_url: str, secret: str, *,
     return {"env": pinned, "apiKeyHelper": ""}
 
 
+def cmd_openrouter(args: argparse.Namespace) -> int:
+    """Launch native Claude against the account-funded Fleet endpoint, without a slot."""
+    check_managed_route()
+    extra = native_extra_args(args)
+    base = DEFAULT_SERVER + "/openrouter"
+    token = os.environ.get("CCFLEET_OPENROUTER_TOKEN", "")
+    if not token:
+        if not sys.stdin.isatty():
+            raise CliError("set CCFLEET_OPENROUTER_TOKEN to your Fleet OpenRouter key")
+        token = getpass.getpass("Fleet key from https://ccfleet.io/account/openrouter: ")
+    if not re.fullmatch(r"ccf_or_[A-Za-z0-9_-]{43}", token):
+        raise CliError("enter a Fleet OpenRouter key from your CC Fleet account")
+    catalog = api_json(base + "/v1/models", token, method="GET")
+    rows = catalog.get("data")
+    covered = catalog.get("fleet_billing") == "admin_covered"
+    price = "OpenRouter · Fleet $0" if covered else "OpenRouter + 5%"
+    pattern = r"[A-Za-z0-9~][A-Za-z0-9_.~-]{0,63}/[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}"
+    if (not isinstance(rows, list) or not 1 <= len(rows) <= 64
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                   or not re.fullmatch(pattern, row["id"]) for row in rows)):
+        raise CliError("invalid OpenRouter catalog from Fleet")
+    models = [row["id"] for row in rows]
+    recent = [row["id"] for row in rows if row.get("fleet_recent") is True]
+    model = args.model or models[0]
+    if model not in models:
+        raise CliError("choose an offered OpenRouter model: " + ", ".join(models))
+    if args.check:
+        print("Default: " + models[0])
+        if recent:
+            print("Recently used: " + ", ".join(recent))
+        print("Available (" + price + "): " + ", ".join(models))
+        return 0
+    claude = prepare_agent("claude")
+    ensure_home()
+    env = dict(os.environ)
+    env.pop("CCFLEET_OPENROUTER_TOKEN", None)
+    native_proxy_exclusions(env, Path.cwd(), extra)
+    settings = native_settings(env, base, token, bare="--bare" in extra)
+    tiers = {name: model for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL")}
+    settings["env"].update(tiers)
+    env.update(tiers)
+    settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": [
+        {"model": m, "label": m + (" · Recent" if m in recent else "") + " · " + price}
+        for m in models]}
+    print("Fleet covers this admin account’s OpenRouter usage." if covered else
+          "OpenRouter usage is charged to your Fleet balance at cost + 5%.", file=sys.stderr)
+    with tempfile.NamedTemporaryFile(dir=home(), mode="w", suffix=".json") as options:
+        json.dump(settings, options)
+        options.flush()
+        return subprocess.call([claude, "--settings", options.name, "--model", model, *extra],
+                               env=env)
+
+
 def add_api_models(settings: dict[str, Any], route: dict[str, Any]) -> None:
     models = route.get("answer", {}).get("api_models", [])
     if not models:
@@ -3895,6 +3950,10 @@ def parser() -> argparse.ArgumentParser:
                        help="explicitly approve ending this computer's old live-folder sessions")
     setup.add_argument("--server", default=os.environ.get("CCFLEET_SERVER", DEFAULT_SERVER),
                        help="server used only when pairing a new computer")
+    router = sub.add_parser("openrouter", help="run local Claude with Fleet-billed OpenRouter models")
+    router.add_argument("--model", help="OpenRouter model ID")
+    router.add_argument("--check", action="store_true", help="show the default, recent models and full catalog without inference")
+    router.add_argument("claude_args", nargs=argparse.REMAINDER)
     gateway = sub.add_parser("gateway", help="configure HTTPS access to your own provider accounts")
     gateway_sub = gateway.add_subparsers(dest="gateway_action")
     for action in ("setup", "status", "remove"):
@@ -4172,6 +4231,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return cmd_login(args)
         if args.command == "setup":
             return cmd_setup(args)
+        if args.command == "openrouter":
+            return cmd_openrouter(args)
         if args.command == "gateway":
             return cmd_gateway(args)
         if args.command == "launcher":

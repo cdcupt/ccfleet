@@ -15,6 +15,7 @@ CURRENT_PAGES = frozenset({
     '/account/usage', '/account/available', '/account/purchase',
     '/account/renew',
     '/account/topup', '/account/subscribe', '/account/subscriptions', '/account/devin-trial',
+    '/account/openrouter',
     '/privacy', '/status', '/docs', '/docs/guide',
     '/docs/how-it-works', '/docs/terms', '/docs/library', '/docs/library/',
     '/docs/library/docs/index.html', '/docs/library/docs/public-gateway.html',
@@ -36,6 +37,7 @@ SLOT_ACTIONS = frozenset({'release', 'signin', 'switch', 'code', 'cancel', 'cli'
                         'cli-revoke', 'update', 'stable', 'rename', 'quota'})
 POST_PAGES = frozenset({'/account/gemini/start', '/account/gemini/finish',
                        '/account/gemini/disconnect', '/account/gemini/workspace',
+                       '/account/openrouter/create', '/account/openrouter/revoke',
                        '/account/devin-trial/create', '/account/devin-trial/revoke',
                        '/account/claim', '/account/outage-emails', '/auth/signout',
                        '/account/purchase', '/account/renew', '/account/topup',
@@ -304,6 +306,8 @@ class _Projection(HTMLParser):
                 # replaying the action or carrying one-time credentials.
                 if admin_form(path):
                     switch_target = '/admin'
+                elif path in {'/account/openrouter/create', '/account/openrouter/revoke'}:
+                    switch_target = '/account/openrouter'
                 elif path in {'/account/devin-trial/create', '/account/devin-trial/revoke'}:
                     switch_target = '/account/devin-trial'
                 elif _form(path) and path not in {'/account/topup', '/account/subscribe'}:
