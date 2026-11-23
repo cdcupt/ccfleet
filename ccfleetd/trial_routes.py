@@ -29,21 +29,32 @@ log = logging.getLogger(__name__)
 
 # This helper only copies text already visible on the page, never sends a key.
 COPY_COMMAND_JS = r'''(()=>{'use strict';
-const button=document.querySelector('[data-trial-copy]');
-if(!button)return;button.hidden=false;
-button.addEventListener('click',async()=>{
+const zh=document.documentElement.lang.toLowerCase().startsWith('zh');
+function selectNode(node){const range=document.createRange();range.selectNodeContents(node);
+const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);}
+const trial=document.querySelector('[data-trial-copy]');
+if(trial){trial.hidden=false;trial.addEventListener('click',async()=>{
 const command=document.querySelector('#trial-command code');
 const feedback=document.getElementById('trial-copy-feedback');
-const zh=document.documentElement.lang.toLowerCase().startsWith('zh');
 if(!command||!feedback)return;
 try{await navigator.clipboard.writeText(command.textContent);
 feedback.textContent=zh?'已复制。请在自己的电脑终端中粘贴。':
 'Copied. Paste this into a terminal on your computer.';
-}catch(error){const range=document.createRange();range.selectNodeContents(command);
-const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+}catch(error){selectNode(command);
 feedback.textContent=zh?'已选中命令。请按 Ctrl+C（Mac 上为 ⌘C）复制。':
-'Command selected. Press Ctrl+C (⌘C on Mac) to copy.';}
-});
+'Command selected. Press Ctrl+C (⌘C on Mac) to copy.';}});}
+document.querySelectorAll('button[data-copy-code]').forEach(btn=>{
+btn.hidden=false;btn.addEventListener('click',async()=>{
+const box=btn.closest('[data-code-box]')||btn.parentElement;
+const code=box&&box.querySelector('pre code');
+if(!code)return;
+const prev=btn.textContent;
+try{await navigator.clipboard.writeText(code.textContent);
+btn.textContent=zh?'已复制':'Copied';
+setTimeout(()=>{btn.textContent=prev;},1800);
+}catch(error){selectNode(code);
+btn.textContent=zh?'已选中':'Selected';
+setTimeout(()=>{btn.textContent=prev;},2200);}});});
 })();'''
 COPY_COMMAND_CSP = "'sha256-" + base64.b64encode(
     hashlib.sha256(COPY_COMMAND_JS.encode()).digest()
@@ -53,11 +64,11 @@ TRIAL_CSS = """
 .trial-page{max-width:1100px;margin:0 auto;min-width:0}
 .trial-page p{max-width:70ch}
 .trial-back{display:inline-flex;font-size:13px;text-decoration:none;margin-bottom:24px}
-.trial-hero{margin-bottom:30px;max-width:760px}
+.trial-hero{margin-bottom:32px;max-width:760px}
 .trial-eyebrow{color:var(--acc);font-size:12px;font-weight:700;letter-spacing:.08em;
 text-transform:uppercase;margin:0 0 10px}
-.trial-hero h1{font-size:clamp(30px,4vw,44px);line-height:1.15;letter-spacing:-.045em;
-margin:0 0 16px;max-width:20ch}
+.trial-hero h1{font-family:var(--serif);font-size:clamp(34px,4.4vw,48px);font-weight:500;
+line-height:1.1;letter-spacing:-.028em;margin:0 0 16px;max-width:20ch}
 .trial-hero>p:last-child{font-size:16px;line-height:1.7;color:var(--muted);margin:0;max-width:62ch}
 .trial-status{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--acc-line);
 background:var(--acc-soft);border-radius:14px;padding:18px 22px;margin-bottom:22px}
@@ -70,10 +81,11 @@ margin-top:8px;flex:none}
 .trial-status.success{background:var(--ok-bg);border-color:var(--ok-line)}
 .trial-status.success .trial-status-dot{background:var(--ok)}
 .trial-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:22px;align-items:start}
-.trial-panel{background:var(--panel);border:1px solid var(--rule);border-radius:18px;
+.trial-panel{background:var(--panel);border:1px solid var(--rule);border-radius:16px;
 box-shadow:var(--shadow);min-width:0;overflow:hidden}
 .trial-panel-heading{padding:24px 28px 20px;border-bottom:1px solid var(--rule-soft)}
-.trial-panel h2{font-size:20px;letter-spacing:-.025em;margin:0}
+.trial-panel h2{font-family:var(--serif);font-size:22px;font-weight:500;
+letter-spacing:-.018em;margin:0}
 .trial-panel-heading p{font-size:13px;color:var(--muted);margin:5px 0 0}
 .trial-steps{list-style:none;padding:0 28px;margin:0;counter-reset:trial-step}
 .trial-step{padding:26px 0;border-bottom:1px solid var(--rule-soft);counter-increment:trial-step}
@@ -81,9 +93,9 @@ box-shadow:var(--shadow);min-width:0;overflow:hidden}
 .trial-step h3{display:flex;align-items:center;gap:11px;font-size:16px;letter-spacing:-.01em;
 margin:0 0 10px;line-height:1.5}
 .trial-step h3::before{content:counter(trial-step);display:grid;place-items:center;flex:none;
-width:27px;height:27px;border:1px solid var(--acc-line);border-radius:8px;
-background:var(--acc-soft);
-color:var(--acc);font-size:13px;font-weight:650;font-variant-numeric:tabular-nums}
+width:27px;height:27px;border:1px solid var(--cta);border-radius:50%;
+background:var(--cta);color:var(--on-cta);font-size:13px;font-weight:650;
+font-variant-numeric:tabular-nums}
 .trial-step p{font-size:14px;color:var(--muted);margin:0 0 15px;line-height:1.75}
 .trial-step p:last-child{margin-bottom:0}
 .trial-page form{margin:0}
@@ -107,8 +119,8 @@ padding:18px;margin-top:14px}
 .trial-placeholder p{font-size:13px;margin:0}
 .trial-allowance{padding:24px}
 .trial-allowance .trial-eyebrow{margin-bottom:15px}
-.trial-allowance h2{font-size:38px;line-height:1.1;font-variant-numeric:tabular-nums;
-letter-spacing:-.05em;margin:0 0 7px;overflow-wrap:anywhere}
+.trial-allowance h2{font-family:var(--serif);font-size:40px;font-weight:500;line-height:1.1;
+font-variant-numeric:tabular-nums;letter-spacing:-.03em;margin:0 0 7px;overflow-wrap:anywhere}
 .trial-allowance .trial-budget{font-size:13px;color:var(--muted);margin:0 0 16px}
 .trial-allowance meter{display:block;width:100%;height:10px;margin:0 0 17px;appearance:none;
 background:var(--inset);border:0;border-radius:99px;overflow:hidden}
@@ -381,7 +393,19 @@ def _trial_setup(cfg, csrf, token):
 
 def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=False):
     if runtime is None:
-        return 404, usersite._shell("Devin trial", "<h1>Not found</h1>")
+        return 404, usersite._shell(
+            "Devin trial",
+            '<div class="card door">'
+            + usersite.MARK
+            + "<h1>"
+            + label("Not found", "页面不存在", inline=True)
+            + "</h1><p>"
+            + label("There is nothing here.", "没有找到这个页面。", inline=True)
+            + '</p><p><a class="back" href="/account">&larr; '
+            + label("Your slots", "我的槽位", inline=True)
+            + "</a></p></div>",
+            door=True,
+        )
     if account is None:
         return 200, usersite._signed_out(cfg).replace("next=/account", "next=/account/devin-trial")
     csrf = usersite.csrf_for(session_id, cfg.cookie_secret)
@@ -393,10 +417,19 @@ def page(runtime, cfg, account, session_id, *, token="", failed=False, revoked=F
     except Exception:
         return 403, usersite._shell(
             "Devin trial",
-            label(
+            '<div class="card door">'
+            + usersite.MARK
+            + "<h1>"
+            + label("Sign-in required", "需要验证登录", inline=True)
+            + "</h1>"
+            + label(
                 "A verified Fleet Google sign-in is required.",
                 "请先使用已验证的 Google 账号登录 Fleet。",
-            ),
+            )
+            + '<p><a class="back" href="/account">&larr; '
+            + label("Your slots", "我的槽位", inline=True)
+            + "</a></p></div>",
+            door=True,
         )
     token_limit = allowance["token_limit"]
     global_limit = allowance["global_token_limit"]

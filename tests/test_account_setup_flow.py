@@ -297,3 +297,20 @@ def test_CSS_has_flexible_desktop_grid_mobile_stack_and_wrapping_commands(setup_
     assert re.search(r"@media\s*\(max-width:\s*\d+px\)\s*\{\s*\.account-dashboard \.slots\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)", css)
     assert re.search(r"\.account-dashboard pre\s*\{[^}]*max-width:\s*100%[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere", css)
     assert re.search(r"\.account-dashboard \.connect-steps>li>div\s*\{[^}]*min-width:\s*0", css)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_command_copy_buttons_are_hidden_without_js_and_single_language(setup_context, language):
+    source = rendered(setup_context, language)
+    page = Flow(source)
+    buttons = [
+        el for el in page.inside(connection(page), "button")
+        if "data-copy-code" in el.attrs
+    ]
+    assert len(buttons) == 3
+    expected = "Copy" if language == "en" else "复制"
+    assert all(
+        b.attrs.get("type") == "button" and "hidden" in b.attrs and b.text == expected
+        for b in buttons
+    )
+    assert "data-copy-code" in source and "navigator.clipboard.writeText" in source

@@ -558,21 +558,28 @@ def percent(up: int, counted: int) -> str:
 #: pages carry these rules with the rest of the user site's.
 LINE_CSS = """
 /* A machine's state: a dot in its colour, beside the words. */
-.st-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--off);
+.st-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--off);
 flex:none}
-.st-dot.green{background:var(--ok)}.st-dot.yellow{background:var(--warn)}
-.st-dot.red{background:var(--bad)}
-.machine-line{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin:0 0 12px;
-font-size:14px}
-.health-check{border-left:3px solid var(--off);padding:8px 12px;margin:10px 0;
+.st-dot.green{background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg);
+animation:cf-pulse 3.2s ease-in-out infinite}
+.st-dot.yellow{background:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+.st-dot.red{background:var(--bad);box-shadow:0 0 0 3px var(--bad-bg)}
+.machine-line{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0 0 10px;
+font-size:13.5px;color:var(--ink)}
+.machine-line a{font-size:12.5px;font-weight:600}
+.health-check{border:1px solid var(--rule-soft);border-left:3px solid var(--off);
+border-radius:10px;background:var(--surface-subtle);padding:10px 13px;margin:8px 0 12px;
 font-size:13px;overflow-wrap:anywhere}
-.health-check[data-health=green]{border-color:var(--ok)}
-.health-check[data-health=yellow]{border-color:var(--warn)}
-.health-check[data-health=red]{border-color:var(--bad)}
-.health-check p{margin:5px 0}.health-observed{color:var(--muted);font-size:12px}
+.health-check[data-health=green]{border-left-color:var(--ok)}
+.health-check[data-health=yellow]{border-left-color:var(--warn);background:var(--warn-bg);
+border-color:var(--warn-line)}
+.health-check[data-health=red]{border-left-color:var(--bad);background:var(--bad-bg);
+border-color:var(--bad-line)}
+.health-check p{margin:4px 0}.health-observed{color:var(--muted);font-size:12px}
 .health-check .health-metrics{display:grid;
-grid-template-columns:repeat(auto-fit,minmax(min(100%,140px),1fr));gap:4px 12px;margin:8px 0}
-.health-check .health-metric{min-width:0;font-variant-numeric:tabular-nums}
+grid-template-columns:repeat(auto-fit,minmax(min(100%,140px),1fr));gap:6px 12px;margin:8px 0 4px}
+.health-check .health-metric{min-width:0;font-variant-numeric:tabular-nums;
+font-size:12.5px;color:var(--muted)}
 """
 LINE_WORDS = {GREEN: "operational", YELLOW: "degraded", RED: "down"}
 

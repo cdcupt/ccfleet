@@ -379,51 +379,60 @@ def panel(
 
 GATEWAY_CSS = """
 #gateway{padding:0;scroll-margin-top:96px}
-#gateway>summary{padding:20px 24px;font-size:16px}
+#gateway>summary{padding:18px 22px;font-size:15px}
 #gateway[open]>summary{border-bottom:1px solid var(--rule-soft)}
-#gateway .gateway-advanced-body{padding:6px 24px 20px;min-width:0}
+#gateway .gateway-advanced-body{padding:10px 22px 22px;min-width:0}
 #gateway h3{font-size:16px;margin:0 0 10px;letter-spacing:-.01em}
-#gateway p{line-height:1.6;margin:8px 0}
-#gateway .gateway-badge{display:inline-flex;align-items:center;padding:5px 9px;
-border:1px solid var(--rule-soft);border-radius:8px;background:var(--inset);
-font-size:12px;line-height:1.4;font-weight:550;color:var(--muted)}
+#gateway p{line-height:1.65;margin:8px 0}
+#gateway .gateway-badge{display:inline-flex;align-items:center;padding:4px 9px;
+border:1px solid var(--rule-soft);border-radius:var(--radius-sm);background:var(--inset);
+font-size:12px;line-height:1.4;font-weight:600;color:var(--muted)}
 #gateway .gateway-address{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;
 align-items:center;padding:13px 16px;border:1px solid var(--rule-soft);border-radius:10px;
-background:var(--inset);font-size:13px}
-#gateway .gateway-address>div{color:var(--muted);font-weight:600}
+background:var(--surface-subtle);font-size:13.5px}
+#gateway .gateway-address>div{color:var(--muted);font-weight:620}
 #gateway code{overflow-wrap:anywhere}
 #gateway .gateway-count{display:inline-block;margin-left:10px;font-size:12px;
 font-weight:600;color:var(--muted)}
 #gateway .gateway-keys{margin:16px 0}
 #gateway .gateway-keys>summary{font-size:14px;padding:8px 0}
 #gateway .gateway-hint{font-size:13px;color:var(--muted)}
-#gateway summary{cursor:pointer;font-weight:600;border-radius:8px}
-#gateway summary:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
+#gateway summary{cursor:pointer;font-weight:620;border-radius:var(--radius-sm)}
+#gateway summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #gateway .gateway-endpoint,#gateway .gateway-create{border:1px solid var(--rule);
-border-radius:12px;margin:10px 0;background:var(--panel)}
-#gateway .gateway-endpoint>summary,#gateway .gateway-create>summary{padding:15px 18px}
+border-radius:var(--radius-md);margin:12px 0;background:var(--panel);box-shadow:var(--shadow-sm);
+overflow:hidden}
+#gateway .gateway-endpoint>summary,#gateway .gateway-create>summary{padding:15px 18px;
+transition:background-color .14s var(--ease)}
+#gateway .gateway-endpoint>summary:hover,#gateway .gateway-create>summary:hover{
+background:var(--surface-subtle)}
 #gateway .gateway-endpoint-name{overflow-wrap:anywhere}
 #gateway .gateway-badges{display:inline-flex;flex-wrap:wrap;gap:6px;margin-left:10px}
 #gateway .gateway-endpoint[open]>summary,#gateway .gateway-create[open]>summary{
 border-bottom:1px solid var(--rule-soft)}
-#gateway .gateway-endpoint-body{padding:4px 18px 18px}
+#gateway .gateway-endpoint-body{padding:6px 18px 18px}
 #gateway .gateway-form{margin:12px 0 0}
-#gateway .gateway-field{display:block;font-size:13px;font-weight:600;margin:16px 0 8px}
+#gateway .gateway-field{display:block;font-size:13px;font-weight:620;margin:16px 0 8px}
 #gateway .gateway-field>input,#gateway .gateway-field>select{display:block;
-margin-top:7px;width:100%;max-width:100%;font-weight:400}
-#gateway .gateway-slots{min-width:0;border:1px solid var(--rule-soft);border-radius:10px;
-padding:12px 15px 6px;margin:20px 0 16px}
-#gateway .gateway-slots legend{font-size:13px;font-weight:650;padding:0 6px}
+margin-top:7px;width:100%;max-width:100%;font-weight:400;min-height:40px;
+padding:9px 12px;border:1px solid var(--rule);border-radius:10px;background:var(--panel);
+color:var(--ink);font:inherit}
+#gateway .gateway-slots{min-width:0;border:1px solid var(--rule-soft);
+border-radius:var(--radius-md);padding:12px 16px 8px;margin:20px 0 16px;
+background:var(--surface-subtle)}
+#gateway .gateway-slots legend{font-size:13px;font-weight:660;padding:0 6px}
 #gateway .gateway-slot-list{margin:12px 0 4px}
 #gateway .gateway-slot{display:flex;justify-content:space-between;align-items:center;gap:16px;
 padding:11px 0;border-top:1px solid var(--rule-soft)}
 #gateway .gateway-slot-identity{min-width:0;overflow-wrap:anywhere}
-#gateway .gateway-slot-identity b{display:block;font-family:var(--mono);font-size:13px}
+#gateway .gateway-slot-identity b{display:block;font-family:var(--mono);font-size:13.5px}
 #gateway .gateway-slot-identity small{display:block;font-size:12px;color:var(--muted);
 margin-top:4px}
 #gateway .gateway-slot-priority{display:flex;align-items:center;justify-content:flex-end;
-gap:10px;font-size:12px;color:var(--muted);flex-shrink:0}
-#gateway .gateway-slot input{width:76px;max-width:76px;margin:0}
+gap:10px;font-size:12.5px;color:var(--muted);flex-shrink:0}
+#gateway .gateway-slot input{width:76px;max-width:76px;margin:0;min-height:38px;
+padding:6px 10px;border:1px solid var(--rule);border-radius:var(--radius-sm);
+background:var(--panel);color:var(--ink);font:inherit}
 #gateway .gateway-help{margin:12px 0;color:var(--muted);font-size:13px}
 #gateway .gateway-help summary{color:var(--ink);font-size:13px}
 #gateway .gateway-form-actions{margin:18px 0 4px}
@@ -431,18 +440,19 @@ gap:10px;font-size:12px;color:var(--muted);flex-shrink:0}
 flex-wrap:wrap;gap:12px;margin-top:20px;padding-top:14px;border-top:1px solid var(--rule-soft)}
 #gateway .gateway-revoke>.bi{flex:1 1 280px}
 #gateway .gateway-revoke form{margin:0}
-#gateway .gateway-key-reference{font-size:11px;margin-top:14px;overflow-wrap:anywhere}
+#gateway .gateway-key-reference{font-size:12px;margin-top:14px;overflow-wrap:anywhere;
+color:var(--muted)}
 #gateway .gateway-empty{margin:14px 0;padding:18px;border:1px dashed var(--rule);
-border-radius:12px;background:var(--inset)}
+border-radius:var(--radius-md);background:var(--surface-subtle)}
 #gateway .gateway-technical{padding-top:16px;margin-top:20px;border-top:1px solid var(--rule-soft)}
 @media(max-width:620px){
-#gateway>summary{padding:18px}
-#gateway .gateway-advanced-body{padding:4px 18px 16px}
+#gateway>summary{padding:16px}
+#gateway .gateway-advanced-body{padding:6px 16px 16px}
 #gateway .gateway-address{grid-template-columns:minmax(0,1fr);gap:6px}
 #gateway .gateway-badges{display:flex;margin:8px 0 0 16px}
-#gateway .gateway-endpoint-body{padding:3px 13px 14px}
-#gateway .gateway-endpoint>summary,#gateway .gateway-create>summary{padding:13px}
-#gateway .gateway-slots{padding:10px 11px 5px}
+#gateway .gateway-endpoint-body{padding:4px 14px 14px}
+#gateway .gateway-endpoint>summary,#gateway .gateway-create>summary{padding:13px 14px}
+#gateway .gateway-slots{padding:10px 12px 6px}
 #gateway .gateway-slot{align-items:flex-start;gap:10px}
 #gateway .gateway-slot-priority{display:block;text-align:right}
 #gateway .gateway-slot input{display:block;margin-top:5px}
