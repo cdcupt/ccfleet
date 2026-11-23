@@ -1,0 +1,80 @@
+{
+  "version": "0.2.23",
+  "verified_on": "2026-11-23",
+  "release": {
+    "source": "baa0cbc1bb5a7e3e93d9ca2ca2bd69747acc7b70",
+    "public_merge": "bd411b151b806928d9c54330fc2e05bcf9ffe206",
+    "serving_merge": "ea1373846f3299fb571254a2250c74d47f8921e7",
+    "pull_requests": [
+      "https://github.com/cdcupt/ccfleet/pull/259",
+      "https://github.com/cdcupt/ccfleet/pull/260"
+    ],
+    "channel_snapshot": "https://raw.githubusercontent.com/cdcupt/ccfleet/bd411b151b806928d9c54330fc2e05bcf9ffe206/laptop/releases/stable.json",
+    "manifest": "https://raw.githubusercontent.com/cdcupt/ccfleet/ba9c883a52ec27cb697635fb6a3a8b1381fcdd3c/laptop/releases/0.2.23.json",
+    "manifest_signature": "https://raw.githubusercontent.com/cdcupt/ccfleet/ba9c883a52ec27cb697635fb6a3a8b1381fcdd3c/laptop/releases/0.2.23.json.sig",
+    "verified_manifest_files": 8,
+    "upgraded_from": "0.2.22",
+    "candidate_rollback_verified": true
+  },
+  "project_access_checks": [
+    {
+      "surface": "Signed ccfleet gemini terminal",
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Isolated controller and PTY",
+      "turns": 5,
+      "result": "Fixed failing Python tests and committed both files without another approval. A dropped connection interrupted a local command. The follow-up resumed the same conversation, and revoking the grant restored supervised file edits."
+    },
+    {
+      "surface": "T3 0.1.7",
+      "source": "708f0baff2f1a4a4ebff87c93cb1f12b0f1dcd2b",
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Isolated local transport",
+      "result": "Passed local Python tests and committed in the checkout without an approval card. Steer cancelled a running command. After revocation, one supervised approval was declined and the proposed file stayed absent."
+    },
+    {
+      "surface": "Herdr TUI",
+      "version": "herdr 0.9.5",
+      "provider": "Simulated",
+      "result": "A single grant enabled a local Git commit. Revocation was rechecked by the same client."
+    }
+  ],
+  "publishing_checks": {
+    "github": {
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Signed client and live GitHub",
+      "verified_pushed_commit": "3652c13881d2d6d5781bd315c93224211e2b71de",
+      "existing_pull_request": "https://github.com/cdcupt/ccfleet/pull/259",
+      "duplicate_review_created": false
+    },
+    "gitlab": {
+      "cli": "glab 1.131.0",
+      "environment": "Real Git and glab over local HTTPS with a simulated GitLab merge request API",
+      "result": "Verified credential challenge, exact branch contents, duplicate review handling and HTTP 401 rejection.",
+      "live_host_verified": false
+    }
+  },
+  "frontend_regression": {
+    "surface": "Signed terminal",
+    "provider": "Live Gemini Neon-xhigh",
+    "seeded_failing_tests": 3,
+    "project_tests_passed": 28,
+    "randomized_editing_actions": 2500,
+    "browser_checkpoints_passed": 9,
+    "test_files_unchanged": true
+  },
+  "repository_tests": {
+    "platform": "macOS",
+    "source": "5a4ffe2ab88a947b566cf71802ecf7e514f99c4a",
+    "passed": 11595,
+    "skipped": 14
+  },
+  "documentation": {
+    "en": "https://ccfleet.io/en/docs/guide#gemini-project-access",
+    "zh": "https://ccfleet.io/zh/docs/guide#gemini-project-access",
+    "browser_widths_px": [
+      390,
+      1280
+    ]
+  },
+  "detailed_results": "https://github.com/cdcupt/ccfleet/blob/764e370e7b7e032662444ebce8b9178d6912376c/qa/gemini-project-access/reports/gemini-project-access-0.2.23.json"
+}

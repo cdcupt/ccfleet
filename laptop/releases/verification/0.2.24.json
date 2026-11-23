@@ -1,0 +1,93 @@
+{
+  "version": "0.2.24",
+  "verified_on": "2026-11-23",
+  "release": {
+    "source": "9e126cac8204e4f03714b7b592e65cd50b8a6df3",
+    "public_merge": "82d2d4cdd395a7faf840f7e1bb36bdf3613ea0a4",
+    "serving_merge": "f09df80abb6cba0c70c096b9517ffb800a82fe14",
+    "pull_requests": [
+      "https://github.com/cdcupt/ccfleet/pull/261",
+      "https://github.com/cdcupt/ccfleet/pull/262"
+    ],
+    "channel_snapshot": "https://raw.githubusercontent.com/cdcupt/ccfleet/82d2d4cdd395a7faf840f7e1bb36bdf3613ea0a4/laptop/releases/stable.json",
+    "manifest": "https://raw.githubusercontent.com/cdcupt/ccfleet/33152ebbc558bbd1b146b47b2e10920017f14bbd/laptop/releases/0.2.24.json",
+    "manifest_signature": "https://raw.githubusercontent.com/cdcupt/ccfleet/33152ebbc558bbd1b146b47b2e10920017f14bbd/laptop/releases/0.2.24.json.sig",
+    "verified_manifest_files": 8,
+    "upgraded_from": "0.2.23",
+    "candidate_rollback_verified": true
+  },
+  "access_checks": [
+    {
+      "surface": "Public ccfleet CLI",
+      "source": "9e126cac8204e4f03714b7b592e65cd50b8a6df3",
+      "owner_opt_ins": 1,
+      "repeat_approvals": 0,
+      "result": "Enabled cross-project access from the account home. A second setup and an eligible project inherited the grant. Revocation worked offline."
+    },
+    {
+      "surface": "Signed ccfleet gemini terminal",
+      "source": "9e126cac8204e4f03714b7b592e65cd50b8a6df3",
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Isolated controller, TLS WebSocket, SSH and PTY",
+      "model_turns": 2,
+      "approval_prompts_while_enabled": 0,
+      "result": "Workspace selections stayed local. Gemini kept one conversation and made a separate local commit in each of two projects."
+    },
+    {
+      "surface": "T3 Code",
+      "source": "5fc87bc67a45f49295211076700a0f5c1e54aef9",
+      "versions": [
+        "0.1.7",
+        "0.1.11"
+      ],
+      "provider": "Live Gemini Neon-xhigh",
+      "environment": "Actual T3 browser composer and isolated local transport",
+      "model_turns_per_run": 3,
+      "approval_prompts_while_enabled": 0,
+      "supervised_approvals_after_revocation": 1,
+      "result": "The workspace selector kept the same ACP session and Google conversation. Declining the supervised edit after revocation left the file absent."
+    },
+    {
+      "surface": "Herdr desktop and TUI",
+      "source": "5fc87bc67a45f49295211076700a0f5c1e54aef9",
+      "versions": [
+        "herdr-app 0.1.17",
+        "herdr 0.9.5"
+      ],
+      "provider": "Simulated",
+      "environment": "Actual apps and their CCFleet Gemini terminal program",
+      "approval_prompts_while_enabled": 0,
+      "result": "Each switched between two checkouts, committed independently in both, and rejected stale edit approval."
+    },
+    {
+      "surface": "Orca Quick Command terminal entry point",
+      "source": "5fc87bc67a45f49295211076700a0f5c1e54aef9",
+      "provider": "Simulated",
+      "environment": "Local PTY",
+      "gui_exercised": false,
+      "approval_prompts_while_enabled": 0,
+      "result": "The command switched between independent checkouts. A linked-worktree case verified a local edit and Python run while shared Git metadata remained outside the workspace."
+    }
+  ],
+  "compatibility": {
+    "older_slot_approval_prompts": 0,
+    "older_slot_project_mutations": 0,
+    "existing_0_2_23_publishing_pins_preserved": true,
+    "older_client_cannot_lift_checkout_exclusion": true
+  },
+  "macos_suite": {
+    "source": "5fc87bc67a45f49295211076700a0f5c1e54aef9",
+    "passed": 11630,
+    "skipped": 14
+  },
+  "documentation": {
+    "en": "https://ccfleet.io/en/docs/guide#gemini-project-access",
+    "zh": "https://ccfleet.io/zh/docs/guide#gemini-project-access",
+    "orca_quick_commands": "https://ccfleet.io/en/docs/guide#agent-apps",
+    "browser_widths_px": [
+      390,
+      1280
+    ]
+  },
+  "detailed_results": "https://github.com/cdcupt/ccfleet/blob/764e370e7b7e032662444ebce8b9178d6912376c/qa/gemini-project-access/reports/gemini-all-projects-0.2.24.json"
+}
