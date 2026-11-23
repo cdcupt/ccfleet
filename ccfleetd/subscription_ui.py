@@ -258,7 +258,7 @@ def _checkout_controls(order: Mapping[str, Any], csrf: str) -> str:
 
 
 def summary(orders: Sequence[Mapping[str, Any]], *, csrf: str,
-            management_ready: bool = True) -> str:
+            management_ready: bool = True, navigation: str = "") -> str:
     """Render already-authorized local rows without reflecting provider identities."""
     if type(management_ready) is not bool:
         raise ValueError("management readiness must be an explicit server boolean")
@@ -358,5 +358,6 @@ def summary(orders: Sequence[Mapping[str, Any]], *, csrf: str,
                 "An unfinished checkout does not start monthly billing.",
                 "订阅确认后才会显示 Stripe 订阅管理入口。尚未完成的付款不会开通月付。",
                 inline=True) + '</p>'
-    return ('<section class="subscription-ui subscription-summary"><h2>'
-            + label("Monthly slots", "月付槽位", inline=True) + '</h2>' + body + '</section>')
+    return ('<div class="pagehead"><h1>' + label("Monthly slots", "月付槽位", inline=True)
+            + '</h1></div>' + navigation + '<section class="subscription-ui subscription-summary">'
+            + body + '</section>')
