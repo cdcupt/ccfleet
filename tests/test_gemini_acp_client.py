@@ -4,6 +4,7 @@ import io
 import json
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -233,7 +234,7 @@ def test_cancel_and_late_approval_cannot_mutate_file(host):
         approval = host.get()
         if approval.get("method") == "session/request_permission":
             break
-    assert host.recv(host.prompt(sid, "overlap"))["error"]["code"] == -32000
+    assert host.recv(host.prompt(sid, "overlap"))["error"]["code"] == -32603
     pid = int(host.pid.read_text())
     host.send("session/cancel", {"sessionId": sid}, notify=True)
     assert host.recv(turn)["result"]["stopReason"] == "cancelled"
@@ -431,6 +432,7 @@ def test_busy_exhaustion_and_nonretryable_open_errors(host, monkeypatch, message
     host.recv(host.send("initialize", {"protocolVersion": 1}))
     reply = host.recv(host.send("session/new", {"cwd": str(host.project)}))
     assert ("using your slot" in reply["error"]["message"]) == is_busy
+    assert_t3_auth_state(reply["error"], message == "Sign in to the Antigravity editor")
     pids = list(map(int, attempts.read_text().splitlines()))
     assert (1 < len(pids) < 12) if is_busy else len(pids) == 1
     for pid in pids:
@@ -453,3 +455,101 @@ def test_disconnecting_editor_ends_busy_backoff(host, monkeypatch):
     host.close()
     assert len(attempts.read_text().splitlines()) == 1
     assert not host.bridge.worker.is_alive()
+
+
+def assert_t3_auth_state(error, requires_auth):
+    # T3 classifies either the reserved ACP code or sign-in wording as an auth failure.
+    classified = error["code"] == -32000 or re.search(
+        r"auth|credential|log.?in|sign.?in", error["message"], re.IGNORECASE) is not None
+    assert classified is requires_auth
+    assert error["code"] == (-32000 if requires_auth else -32603)
+
+
+def open_reply(host):
+    host.recv(host.send("initialize", {"protocolVersion": 1}))
+    return host.recv(host.send("session/new", {"cwd": str(host.project)}))
+
+
+@pytest.mark.parametrize(("stderr", "expected"), [
+    (b"ccfleet: broker refused the WebSocket connection (HTTP 401)\n", "ccfleet pair gemini --replace"),
+    (b"ccfleet: broker refused the WebSocket connection (HTTP 403)\n", "refused slot access"),
+    (b"ccfleet: broker refused the WebSocket connection (HTTP 502)\n", "HTTP 502"),
+    (b"ccfleet: broker refused the WebSocket connection (HTTP 503)\n", "HTTP 503"),
+    (b"ccfleet: broker refused the WebSocket connection (HTTP 504)\n", "HTTP 504"),
+    (b"", acp.OPEN_TRANSPORT),
+    (b"private-ssh-detail\n", acp.OPEN_TRANSPORT),
+    (b"x" * 1024 + b"ccfleet: broker refused the WebSocket connection (HTTP 401)\n",
+     acp.OPEN_TRANSPORT),
+    (b"ccfleet: broker refused the WebSocket connection (HTTP 401) private-ssh-detail\n",
+     acp.OPEN_TRANSPORT),
+])
+def test_open_reports_only_complete_allowlisted_transport_status(host, stderr, expected):
+    # Produce more than a pipeful before the connection closes and use the actual Channel reader.
+    program = ("import os, sys; os.write(2, b'x'*100000 + b'\\n' + bytes.fromhex(sys.argv[1])); "
+               "sys.stdin.buffer.read(4)")
+    host.bridge.command = [sys.executable, "-I", "-c", program, stderr.hex()]
+    reply = open_reply(host)
+    assert_t3_auth_state(reply["error"], stderr == b"ccfleet: broker refused the WebSocket connection (HTTP 401)\n")
+    message = reply["error"]["message"]
+    assert expected in message and "private-ssh-detail" not in message
+    if b"403" in stderr:
+        assert "--replace" not in message
+    assert host.bridge.session is None
+
+
+@pytest.mark.parametrize(("reason", "expected"), [
+    ("The Gemini editor is unavailable on the private Mac. Reopen it to try again.",
+     "private Mac could not start its Gemini editor"),
+    ("The Gemini slot timed out. Reopen the editor to continue.", acp.OPEN_TIMEOUT),
+    ("The Google editor agent stopped on the slot.", "Antigravity stopped during startup"),
+    ("The signed-in Google account has no available Gemini editor model.", "no Gemini models"),
+    ("The Google editor declined the model change.", "declined the starting Gemini model"),
+    ("Sign in to the Antigravity editor", "Open CCFleet Gemini Sign In"),
+    ("Open CCFleet Gemini Sign In in the private Mac owner's Applications folder, then reconnect.",
+     "Open CCFleet Gemini Sign In"),
+    ("Unknown /private/provider/path and private-key data", acp.OPEN_REFUSED),
+    ("Sign in to the Antigravity editor: private-key", acp.OPEN_REFUSED),
+])
+def test_open_slot_diagnostics_stay_pre_prompt_private_and_nonretryable(host, reason, expected):
+    attempts = admission_slot(host, [reason])
+    reply = open_reply(host)
+    assert_t3_auth_state(reply["error"], reason in acp.SLOT_LOGIN_REQUIRED)
+    assert expected in reply["error"]["message"]
+    assert "private-key" not in reply["error"]["message"]
+    assert len(attempts.read_text().splitlines()) == 1
+    assert host.bridge.session is None
+
+
+@pytest.mark.parametrize(("response", "expected"), [
+    ({"type": "ready", "model": "gemini-test", "models": ["bad/private"]}, acp.BAD_READY),
+    ({"type": "text", "text": "private-documents"}, acp.BAD_READY),
+])
+def test_open_rejects_invalid_startup_reply_without_sending_a_prompt(host, response, expected):
+    start = SLOT.index('put({"type":"ready"')
+    host.bridge.command[4] = SLOT[:start] + "put(" + repr(response) + ");sys.exit(0)"
+    assert open_reply(host)["error"] == {"code": -32603, "message": expected}
+    assert [json.loads(line)["type"] for line in host.log.read_text().splitlines()] == ["open"]
+
+
+def test_open_local_transport_and_startup_timeout(host, monkeypatch):
+    def timeout(*args, **kwargs):
+        raise TimeoutError("private path")
+
+    monkeypatch.setattr(editor.Channel, "receive", timeout)
+    assert open_reply(host)["error"]["message"] == acp.OPEN_TIMEOUT
+    host.bridge.command = [str(host.root / "absent command")]
+    result = host.recv(host.send("session/new", {"cwd": str(host.project)}))
+    assert result["error"]["message"] == "CCFleet could not start the local SSH transport."
+
+
+def test_reported_session_expiry_survives_a_closed_ssh_write_pipe(host):
+    # The server expires an established session between requests. The final diagnostic
+    # can already be queued on stdout when writing the next request gets a broken pipe.
+    replacement = f"put({{'type': 'error', 'message': {acp.SLOT_SESSION_TIMEOUT!r}}});sys.exit(2)"
+    host.bridge.command[4] = SLOT.partition("while True:\n    req=get()")[0] + replacement
+    sid = host.open()
+    host.bridge.session.process.wait(timeout=5)
+    res = host.recv(host.prompt(sid, "must not be retried"))
+    assert "slot reported that this Gemini session timed out" in res["error"]["message"]
+    assert host.bridge.session is None
+    assert [json.loads(line)["type"] for line in host.log.read_text().splitlines()] == ["open"]
