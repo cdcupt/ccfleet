@@ -123,3 +123,15 @@ def test_provider_transport_respects_active_turn_budget(monkeypatch, active, pac
     monkeypatch.setattr(slot, "time", SimpleNamespace(monotonic=lambda: now[0]))
     assert handler._readable(peer) == ([peer] if at_end == packet_at else [])
     assert now[0] == at_end
+
+
+def test_large_valid_assistant_output_is_streamed_without_closing_the_turn(monkeypatch):
+    text = "Synth loop 🎵 at beat 32\n" * 11000
+    assert slot.MAX_TEXT < len(text.encode()) < slot.ACP_LIMIT
+    frames = rpc(monkeypatch, [
+        (10, update("agent_message_chunk", content={"type": "text", "text": text})),
+        (10, DONE),
+    ])
+    assert len(frames) > 1 and all(frame["type"] == "text" for frame in frames)
+    assert all(len(frame["text"].encode()) <= slot.MAX_TEXT for frame in frames)
+    assert "".join(frame["text"] for frame in frames) == text

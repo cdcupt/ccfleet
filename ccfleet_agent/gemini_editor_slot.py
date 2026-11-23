@@ -725,7 +725,14 @@ class Agent:
                         now = time.monotonic()
                         until = now + timeout
                         if event == "agent_message_chunk":
-                            self.device.send({"type": "text", "text": text_value(content["text"])})
+                            # A valid ACP output block can exceed the local file-tool
+                            # limit. Forward it in bounded frames without changing edits.
+                            output = text_value(content["text"], ACP_LIMIT)
+                            for start in range(0, len(output), 16 * 1024):
+                                if not self.active.is_set():
+                                    break
+                                self.device.send({"type": "text",
+                                                  "text": output[start:start + 16 * 1024]})
                             next_progress = now + 60
                         elif (turn is not None and self.device.resume_enabled
                               and now >= next_progress):

@@ -24,6 +24,8 @@ VERSION = "0.2.22"
 AUTH_REQUIRED = -32000
 INTERNAL_ERROR = -32603
 MAX_RECORD = 4 * 1024 * 1024
+# T3 limits each received ACP text block to 65,536 UTF-16 code units.
+TEXT_CHUNK_CHARS = 8192
 SLOT_BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 BUSY_RETRY_WINDOW = 10.0
 BUSY_RETRY_DELAY = 0.4
@@ -426,14 +428,22 @@ class Session:
                 try:
                     channel.send({"type": "cancel", "turn": turn})
                 except (OSError, ValueError):
-                    if self.channel is channel:
-                        self.interrupt()
+                    # If SSH fails while sending cancel, let the active worker report
+                    # the uncertain turn and detach. Explicit session close is separate.
+                    with self.lock:
+                        proc = self.process if self.channel is channel else None
+                        if proc is not None and proc.poll() is None:
+                            with contextlib.suppress(ProcessLookupError):
+                                os.killpg(proc.pid, signal.SIGKILL)
 
     def _expire_cancel(self):
         with self.lock:
             if self.cancel_timer is not threading.current_thread():
                 return
-            self.cancelled.set()
+            # A silent transport is uncertain too. Only a fresh, authenticated
+            # session/resume may establish that the original conversation survived.
+            if not self.resume_token:
+                self.cancelled.set()
             if self.process is not None and self.process.poll() is None:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.process.pid, signal.SIGKILL)
@@ -496,9 +506,13 @@ class Session:
         }})
 
     def text(self, value):
-        if self.turn_cancelled.is_set():
-            return
-        self.update("agent_message_chunk", content={"type": "text", "text": value})
+        # Keep the whole proposed patch reviewable, including astral Unicode.
+        for start in range(0, len(value), TEXT_CHUNK_CHARS):
+            if self.turn_cancelled.is_set():
+                return
+            self.update("agent_message_chunk", content={
+                "type": "text", "text": value[start:start + TEXT_CHUNK_CHARS],
+            })
 
     def config(self):
         return [{"id": "model", "name": "Model", "category": "model", "type": "select",
@@ -840,7 +854,9 @@ class Bridge:
             recoverable = (isinstance(exc, (OSError, EOFError, subprocess.TimeoutExpired))
                            or isinstance(exc, ValueError) and str(exc) in INTERRUPTED_SLOT_ERRORS)
             if (recoverable and method != "session/new" and not session.cancelled.is_set()
-                    and not session.turn_cancelled.is_set()):
+                    and (not session.turn_cancelled.is_set() or session.resume_token)):
+                # EOF can arrive after Steer was sent but before its acknowledgement.
+                # Keep only the separately authorized resume handle, never replay the turn.
                 session.detach()
                 status = ("The slot reported that this Gemini session timed out. "
                           if str(exc) == SLOT_SESSION_TIMEOUT else "")

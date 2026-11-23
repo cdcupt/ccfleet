@@ -1035,3 +1035,50 @@ assert get()=={"type":"close"}
         "interrupted original", "revised instruction",
     ]
     assert [m["type"] for m in wire].count("resume") == 2
+
+
+@pytest.mark.parametrize("fault", ["eof", "silent"])
+def test_link_loss_after_cancel_before_ack_keeps_recoverable_chat(host, monkeypatch, fault):
+    monkeypatch.setattr(acp, "CANCEL_GRACE", 0.2)
+    reconnecting_peer(host, """
+ready()
+first = get()
+put({"type":"text","text":"working"})
+assert get() == {"type":"cancel","turn":first["turn"]}
+# The connection closes or stops responding before the turn outcome is known.
+""" + ("time.sleep(15)" if fault == "silent" else ""), """
+ready(resumed=True)
+followup = get()
+assert followup["text"] == "check the result"
+put({"type":"end","turn":followup["turn"],"reason":"end_turn"})
+assert get() == {"type":"close"}
+""")
+    sid = host.open()
+    original = host.bridge.session
+    first = host.prompt(sid, "edit once")
+    while host.get().get("method") != "session/update":
+        pass
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    assert any(acp.TURN_LOST in str(msg) for msg in host.history)
+    assert host.bridge.session is original and original.channel is None
+    assert host.recv(host.prompt(sid, "check the result"))["result"] == {"stopReason": "end_turn"}
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    frames = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [f["text"] for f in frames if f["type"] == "prompt"] == ["edit once", "check the result"]
+
+
+def test_large_unicode_edit_preview_survives_t3_text_block_limit(host):
+    sid = host.open()
+    session = host.bridge.session
+    proposed = ("line with 🎵 and reviewable text\n" * 2700) + "LAST LINE"
+    preview = acp.edit_preview("engine.js", "", proposed, editor.terminal_text)
+    assert len(preview.encode("utf-16-le")) // 2 > 65536
+    session.text(preview)
+    chunks = []
+    while not host.output.inbox.empty():
+        chunks.append(host.get()["params"]["update"]["content"]["text"])
+    assert len(chunks) > 1
+    assert all(len(chunk.encode("utf-16-le")) // 2 <= 65536 for chunk in chunks)
+    assert "".join(chunks) == preview and "LAST LINE" in chunks[-1]
+    host.recv(host.send("session/close", {"sessionId": sid}))
