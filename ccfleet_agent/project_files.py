@@ -16,9 +16,11 @@ from __future__ import annotations
 import base64
 import binascii
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
+import pwd
 import re
 import selectors
 import stat
@@ -198,8 +200,91 @@ def _parent(root_fd: int, path: str, *, create: bool = False) -> Iterator[Option
         os.close(fd)
 
 
+def _account_home() -> Path:
+    return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
+
+
+def _private_record(registry, name):
+    """An absent record can inherit; an invalid or inaccessible record must fail closed."""
+    try:
+        fd = os.open(name, _FILE_FLAGS, dir_fd=registry)
+    except FileNotFoundError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_nlink != 1
+                or st.st_mode & 0o077 or not 0 < st.st_size <= 2048):
+            raise ProjectError("invalid local project access record")
+        data = json.loads(os.read(fd, 2049))
+        if not isinstance(data, dict):
+            raise ProjectError("invalid local project access record")
+        return data
+    finally:
+        os.close(fd)
+
+
+def _write_private_record(registry, name, data):
+    temp = "." + uuid.uuid4().hex
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                 dir_fd=registry)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, name, src_dir_fd=registry, dst_dir_fd=registry)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp, dir_fd=registry)
+
+
+def _generation(record):
+    value = record.get("generation")
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ProjectError("invalid local project access generation")
+    return value
+
+
+_PROJECT_MANIFESTS = ("package.json", "pyproject.toml", "Cargo.toml", "go.mod", "Makefile")
+_PERSONAL_COLLECTIONS = {"applications", "bin", "sbin", "desktop", "documents", "downloads",
+                         "library", "movies", "music", "pictures", "public"}
+
+
+def _owned_marker(directory, name, *, text=False):
+    """Inspect one ordinary user-owned marker; never follow a link or block on a FIFO."""
+    fd = os.open(name, _FILE_FLAGS, dir_fd=directory)
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                or st.st_nlink != 1 or st.st_mode & 0o022):
+            raise ProjectError("unsafe project marker")
+        if text:
+            if not 0 < st.st_size <= 4096:
+                raise ProjectError("invalid Git checkout marker")
+            return os.read(fd, 4097).decode("utf-8").rstrip("\n")
+        return st
+    finally:
+        os.close(fd)
+
+
+def _git_directory(directory):
+    # HEAD, refs and the object store distinguish a checkout from an empty .git directory.
+    st = os.fstat(directory)
+    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+        return False
+    head = _owned_marker(directory, "HEAD", text=True)
+    if not re.fullmatch(r"(?:ref: refs/heads/[^\x00-\x20]+|[0-9a-f]{40}|[0-9a-f]{64})", head):
+        return False
+    for entry in ("objects", "refs"):
+        child = os.stat(entry, dir_fd=directory, follow_symlinks=False)
+        if not stat.S_ISDIR(child.st_mode) or child.st_uid != os.getuid() or child.st_mode & 0o022:
+            return False
+    return True
+
+
 class ProjectAccess:
-    """One explicit local grant, bound to an owned directory and its filesystem identity."""
+    """Resolve local access for a checkout and for projects selected on this Mac."""
+    _ALL = "all-projects.json"
 
     def __init__(self, project: Path, fleet_home: Path):
         self.project = Path(os.path.abspath(project))
@@ -210,8 +295,7 @@ class ProjectAccess:
     def project_fd(self):
         # Never follow a replaced project or path component at execution time.
         project = self.project
-        import pwd
-        homes = {Path.home().resolve(), Path(pwd.getpwuid(os.getuid()).pw_dir)}
+        homes = {Path.home().resolve(), _account_home()}
         protected = [self.fleet_home.resolve(), Path("/Library/Keychains")]
         protected.extend(h / name for h in homes for name in (
             "Library", ".local", ".ssh", ".config", ".ccfleet", ".agents", ".claude",
@@ -269,7 +353,7 @@ class ProjectAccess:
         return [st.st_uid, st.st_dev, st.st_ino, born]
 
     @contextlib.contextmanager
-    def _registry(self, create=False):
+    def _registry(self, create=False, *, write=False):
         # The directory is separate from files the stock project editor may write.
         # All child names are fixed or hashed, and all operations are relative to a held fd.
         root = _open_root(self.fleet_home, create=create)
@@ -287,32 +371,177 @@ class ProjectAccess:
                 st = os.fstat(fd)
                 if st.st_uid != os.getuid() or st.st_mode & 0o077:
                     raise ProjectError("the project access registry must be private")
+                fcntl.flock(fd, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
                 yield fd
             finally:
                 os.close(fd)
         finally:
             os.close(root)
 
-    def snapshot(self):
-        """A local generation and optional pinned remote, or None; safe for polling."""
+    def is_home(self):
+        return self.project == _account_home()
+
+    @staticmethod
+    def _home_id():
+        fd = _open_root(_account_home())
         try:
-            with self.project_fd() as project, self._registry() as registry:
-                fd = os.open(self._file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-                             dir_fd=registry)
+            if os.fstat(fd).st_uid != os.getuid():
+                raise ProjectError("the home directory belongs to another user")
+            return ProjectAccess._project_id(fd)
+        finally:
+            os.close(fd)
+
+    def _all_generation(self, registry):
+        data = _private_record(registry, self._ALL)
+        if data is None or data.get("home") != self._home_id():
+            return None
+        return _generation(data)
+
+    def all_enabled(self):
+        try:
+            with self._registry() as registry:
+                return self._all_generation(registry) is not None
+        except (OSError, ValueError, RuntimeError, RecursionError):
+            return False
+
+    def navigation(self):
+        return self.is_home() and self.all_enabled()
+
+    def enable_all(self):
+        if not self.is_home():
+            raise ProjectError("enable all-projects access from your home directory")
+        home_id = self._home_id()
+        with self._registry(create=True, write=True) as registry:
+            if self._all_generation(registry) is None:
+                _write_private_record(registry, self._ALL,
+                                      {"home": home_id, "generation": uuid.uuid4().hex})
+
+    def disable_all(self):
+        if not self.is_home():
+            raise ProjectError("revoke all-projects access from your home directory")
+        try:
+            with self._registry(write=True) as registry:
+                os.unlink(self._ALL, dir_fd=registry)
+        except FileNotFoundError:
+            pass
+        except ProjectError:
+            if self.fleet_home.exists() or self.fleet_home.is_symlink():
+                raise
+
+    def _ordinary_project_path(self):
+        home = _account_home()
+        if not self.project.is_relative_to(home):
+            return False
+        parts = tuple(p.casefold() for p in self.project.relative_to(home).parts)
+        if (not parts or any(p.startswith(".") or p.endswith(".app") for p in parts)
+                or parts[0] in ("applications", "bin", "sbin", "library")
+                or parts[:2] in (("go", "bin"), ("go", "pkg"))):
+            return False
+        if len(parts) == 1 and parts[0] in _PERSONAL_COLLECTIONS:
+            return False
+        # An untrusted shared parent must not be able to redirect the grant to a
+        # different checkout. Explicit grants continue to use the original policy.
+        for ancestor in self.project.parents:
+            if ancestor == home:
+                break
+            info = os.stat(ancestor, follow_symlinks=False)
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o022):
+                return False
+        return True
+
+    def _linked_checkout(self, project):
+        marker = _owned_marker(project, ".git", text=True)
+        if not marker.startswith("gitdir: "):
+            return False
+        target = self.project / marker.removeprefix("gitdir: ")
+        gitdir = target.resolve(strict=True)
+        if (gitdir != _absolute(target) or gitdir.parent.name != "worktrees"
+                or gitdir.parent.parent.name != ".git"):
+            return False
+        main = ProjectAccess(gitdir.parents[2], self.fleet_home)
+        if not main._ordinary_project_path():
+            return False
+        with main.project_fd() as common, _parent(common, ".git/worktrees/slot") as registry:
+            if registry is None:
+                return False
+            fd = os.open(gitdir.name, _DIR_FLAGS, dir_fd=registry)
+            try:
+                st = os.fstat(fd)
+                if st.st_uid != os.getuid() or st.st_mode & 0o022:
+                    return False
+                backlink = gitdir / _owned_marker(fd, "gitdir", text=True)
+                if (_absolute(backlink) != self.project / ".git"
+                        or backlink.resolve(strict=True) != self.project / ".git"
+                        or _owned_marker(fd, "commondir", text=True) != "../.."
+                        or not _owned_marker(fd, "HEAD", text=True)):
+                    return False
+            finally:
+                os.close(fd)
+            meta = os.open(".git", _DIR_FLAGS, dir_fd=common)
+            try:
+                return _git_directory(meta)
+            finally:
+                os.close(meta)
+
+    def _eligible(self, project):
+        if not self._ordinary_project_path() or os.fstat(project).st_mode & 0o022:
+            return False
+        try:
+            marker = os.stat(".git", dir_fd=project, follow_symlinks=False)
+        except FileNotFoundError:
+            for name in _PROJECT_MANIFESTS:
                 try:
-                    st = os.fstat(fd)
-                    if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
-                            or st.st_nlink != 1 or st.st_mode & 0o077 or st.st_size > 2048):
+                    if _owned_marker(project, name).st_size:
+                        return True
+                except FileNotFoundError:
+                    continue
+            return False
+        if stat.S_ISREG(marker.st_mode):
+            return self._linked_checkout(project)
+        if not stat.S_ISDIR(marker.st_mode):
+            return False
+        fd = os.open(".git", _DIR_FLAGS, dir_fd=project)
+        try:
+            return _git_directory(fd)
+        finally:
+            os.close(fd)
+
+    def eligible_checkout(self):
+        try:
+            with self.project_fd() as project:
+                return self._eligible(project)
+        except (OSError, ValueError, RuntimeError, RecursionError):
+            return False
+
+    def snapshot(self):
+        """Return an opaque generation, optional pinned destination and exact project identity."""
+        try:
+            with self._registry() as registry, self.project_fd() as project:
+                local = _private_record(registry, self._file)
+                epoch = self._all_generation(registry)
+                identity = self._project_id(project)
+                if local is not None and "excluded" in local:
+                    exclusion = local["excluded"]
+                    if (set(local) != {"excluded"} or not isinstance(exclusion, str)
+                            or not re.fullmatch(r"[0-9a-f]{32}", exclusion)
+                            or epoch is None or exclusion == epoch):
                         return None
-                    data = json.loads(os.read(fd, 2049))
-                finally:
-                    os.close(fd)
-                if (not isinstance(data, dict) or data.get("project") != self._project_id(project)
-                        or not isinstance(data.get("generation"), str)
-                        or not re.fullmatch(r"[a-f0-9]{32}", data["generation"])
-                        or not self._valid_remote(data.get("remote"))):
-                    return None
-                return data["generation"], data.get("remote"), data["project"]
+                    local = None
+                if local is not None:
+                    generation = _generation(local)
+                    if not self._valid_remote(local.get("remote")):
+                        return None
+                    if local.get("project") == identity:
+                        # Either grant changing invalidates overlapping active work.
+                        if epoch:
+                            generation = (generation, epoch)
+                        return generation, local.get("remote"), identity
+                    # A re-clone may independently qualify for the Mac grant.
+                    # The previous checkout's publishing destination never follows it.
+                if epoch is not None and self._eligible(project):
+                    return epoch, None, identity
+                return None
         except (OSError, ValueError, RuntimeError, RecursionError):
             return None
 
@@ -335,28 +564,21 @@ class ProjectAccess:
     def grant(self, remote=None):
         if not self._valid_remote(remote):
             raise ProjectError("invalid project publishing remote")
-        with self.project_fd() as project, self._registry(create=True) as registry:
+        with self.project_fd() as project, self._registry(create=True, write=True) as registry:
             data = {"project": self._project_id(project), "generation": uuid.uuid4().hex,
                     "remote": remote}
-            temp = "." + uuid.uuid4().hex
-            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
-                         dir_fd=registry)
-            try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(data, f)
-                    f.flush()
-                    os.fsync(f.fileno())
-                if not os.path.samestat(os.fstat(project), self.project.stat()):
-                    raise ProjectError("project moved while granting access")
-                os.replace(temp, self._file, src_dir_fd=registry, dst_dir_fd=registry)
-            finally:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(temp, dir_fd=registry)
+            if not os.path.samestat(os.fstat(project), self.project.stat()):
+                raise ProjectError("project moved while granting access")
+            _write_private_record(registry, self._file, data)
 
     def revoke(self):
         try:
-            with self._registry() as fd:
-                os.unlink(self._file, dir_fd=fd)
+            with self._registry(write=True) as fd:
+                epoch = self._all_generation(fd)
+                if epoch is None:
+                    os.unlink(self._file, dir_fd=fd)
+                else:
+                    _write_private_record(fd, self._file, {"excluded": epoch})
         except FileNotFoundError:
             pass
         except ProjectError:

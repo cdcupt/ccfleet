@@ -78,3 +78,49 @@ def test_remote_rejections_do_not_echo_user_input(controls, raw):
     with pytest.raises(cli["CliError"]) as exc:
         cli["canonical_publish_remote"](raw)
     assert raw not in str(exc.value)
+
+
+def test_mac_opt_in_from_home_and_no_repeat_approval(tmp_path, monkeypatch, capsys):
+    import os
+    import pwd
+    from types import SimpleNamespace
+
+    personal = tmp_path.resolve() / "personal"
+    personal.mkdir(mode=0o700)
+    project = personal / "development" / "calculator"
+    project.mkdir(parents=True)
+    (project / "pyproject.toml").write_text("[project]\nname='calculator'\n")
+    fleet = personal / ".config" / "ccfleet"
+    monkeypatch.setenv("CCFLEET_HOME", str(fleet))
+    monkeypatch.setenv("HOME", str(personal))
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(personal),
+                                                                     pw_uid=os.getuid()))
+    monkeypatch.setattr(sys, "platform", "darwin")
+    tmp_cli = runpy.run_path(str(ROOT / "laptop/ccfleet"))
+    scope = tmp_cli["main"].__globals__
+    monkeypatch.setitem(scope, "project_files", lambda: project_files)
+    for name in ("load_config", "pair_gemini", "ssh_transport_command", "slot_component"):
+        monkeypatch.setitem(scope, name, lambda *_a, **_k: pytest.fail("unexpected slot call"))
+
+    def call(folder, *flags):
+        return tmp_cli["main"](["gemini", "--project", str(folder), *flags])
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert call(personal, "--full-access") != 0
+    assert call(personal, "--full-access", "--publish-to", "https://github.com/owner/repo") != 0
+    assert not project_files.ProjectAccess(project, fleet).enabled()
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr("termios.tcflush", lambda *_: None)
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda question: prompts.append(question) or "ENABLE")
+    assert call(personal, "--full-access") == 0
+    assert project_files.ProjectAccess(project, fleet).enabled()
+    assert project_files.ProjectAccess(project, fleet).remote() is None
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert call(personal, "--full-access") == 0 and call(project, "--full-access") == 0
+    assert len(prompts) == 1
+    assert call(personal, "--revoke-full-access") == 0
+    assert not project_files.ProjectAccess(project, fleet).enabled()
+    assert "All-projects access revoked" in capsys.readouterr().out
