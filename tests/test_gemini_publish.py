@@ -3,6 +3,8 @@
 import contextlib
 import json
 import os
+import pwd
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -90,7 +92,15 @@ class FakeHost:
 
     def handle(self, args, cwd, env, check, *, data=b"", limit=32768, mutation=False):
         assert cwd.resolve() != self.source.resolve() and not cwd.is_relative_to(self.source)
-        assert env["HOME"] == str(cwd) and env["PATH"] == "/usr/bin:/bin"
+        owner_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        assert env["HOME"] == str(owner_home if args[0] == self.helper else cwd)
+        assert env["PATH"] == "/usr/bin:/bin"
+        if args[0] == self.helper:
+            assert env.get("GH_CONFIG_DIR", env.get("GLAB_CONFIG_DIR")) == str(
+                owner_home / (".config/gh" if self.host == "github.com" else ".config/glab-cli")
+            )
+        else:
+            assert "GH_CONFIG_DIR" not in env and "GLAB_CONFIG_DIR" not in env
         assert "GH_TOKEN" not in env and "HTTPS_PROXY" not in env
         assert "GIT_CONFIG_PARAMETERS" not in env and "GIT_CONFIG_COUNT" not in env
         check()
@@ -106,14 +116,12 @@ class FakeHost:
                 and "http.sslVerify=true" in args
                 and "credential.helper=" in args
             )
-            assert (
-                "credential.https://"
-                + self.host
-                + ".helper=!"
-                + self.helper
-                + " auth git-credential"
-                in args
-            )
+            prefix = f"credential.https://{self.host}.helper=!"
+            (helper_arg,) = [arg[len(prefix) :] for arg in args if arg.startswith(prefix)]
+            helper_cmd = shlex.split(helper_arg)
+            assert helper_cmd[:2] == ["/usr/bin/env", "-i"]
+            assert helper_cmd[-3:] == [self.helper, "auth", "git-credential"]
+            assert "HOME=" + str(owner_home) in helper_cmd
             assert "--force" not in args and self.url in args
             op = "push" if "push" in args else "ls-remote"
             self.git_calls.append((op, mutation))
@@ -319,7 +327,9 @@ def test_refusal_and_untrusted_helper_output_do_not_expose_credentials(monkeypat
     r = fake.publish({"action": "create_review"})
     assert r["exit"] == 1
     assert "test-private" not in r["output"] and not fake.api_calls
-    fake.credential_reply = b"protocol=https\nhost=gitlab.com\npassword=test-private\n"
+    fake.credential_reply = (
+        b"protocol=https\nhost=gitlab.com\nusername=user\npassword=test-private\n"
+    )
     fake.status = 301
     r = fake.publish({"action": "create_review"})
     assert r["exit"] == 1 and "301" in r["output"] and "test-private" not in r["output"]
@@ -379,3 +389,39 @@ def test_incomplete_pack_is_not_published(monkeypatch, checkout):
     checkout[2].write_bytes(damaged[:-40])
     result = fake.publish({"action": "push"})
     assert result["exit"] == 1 and not fake.git_calls
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        b"capability[]=authtype\nusername=glab\npassword=test-private\n",
+        b"capability[]=authtype\ncapability[]=state\nusername=oauth2\npassword=test-private\n"
+        b"password_expiry_utc=2000000000\noauth_refresh_token=fixture-refresh\n",
+    ],
+)
+def test_gitlab_get_accepts_standard_helper_reply_without_coordinates(monkeypatch, checkout, reply):
+    fake = FakeHost(monkeypatch, checkout, "gitlab.com")
+    fake.credential_reply = reply
+    assert fake.publish({"action": "push"})["exit"] == 0
+    result = fake.publish({"action": "create_review", "title": "Feature title", "body": "Details"})
+    assert result["exit"] == 0
+    assert "fixture-refresh" not in result["output"] and "test-private" not in result["output"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        b"protocol=http",
+        b"host=other.invalid",
+        b"path=other/repo.git",
+        b"username=duplicate",
+        b"authType=custom",
+        b"password=second",
+        b"oauth_refresh_token=" + b"x" * 4097,
+    ],
+)
+def test_contradictory_helper_reply_stops_before_api(monkeypatch, checkout, extra):
+    fake = FakeHost(monkeypatch, checkout, "gitlab.com")
+    fake.credential_reply = b"username=user\npassword=test-private\n" + extra + b"\n"
+    assert fake.publish({"action": "push"})["exit"] == 0
+    assert fake.publish({"action": "create_review"})["exit"] == 1 and not fake.api_calls

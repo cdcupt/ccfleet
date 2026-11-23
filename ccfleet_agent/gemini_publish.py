@@ -86,10 +86,8 @@ def _helper(host):
 
 
 def _environment(scratch, host):
-    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    # Git and curl see neither the user's project, startup files, .netrc, nor proxy/trace
-    # settings. Only the chosen provider CLI receives its normal local config directory.
-    env = {
+    # Git and curl never consult the user's checkout, configuration or .netrc.
+    return {
         "HOME": str(scratch),
         "TMPDIR": str(scratch),
         "PATH": "/usr/bin:/bin",
@@ -100,16 +98,27 @@ def _environment(scratch, host):
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ASKPASS": "/usr/bin/false",
         "GIT_NO_REPLACE_OBJECTS": "1",
-        "GH_PROMPT_DISABLED": "1",
-        "GH_NO_UPDATE_NOTIFIER": "1",
-        "DO_NOT_TRACK": "1",
     }
+
+
+def _helper_environment(scratch, host):
+    # OS credential stores may depend on the account's real HOME. Only the fixed
+    # provider CLI receives it, with an explicit host config and no ambient tokens.
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    env = _environment(scratch, host)
+    env.update(HOME=str(home), DO_NOT_TRACK="1")
     if host == "github.com":
-        env["GH_CONFIG_DIR"] = str(real_home / ".config/gh")
+        env.update(
+            GH_CONFIG_DIR=str(home / ".config/gh"),
+            GH_PROMPT_DISABLED="1",
+            GH_NO_UPDATE_NOTIFIER="1",
+        )
     else:
-        env["GLAB_CONFIG_DIR"] = str(real_home / ".config/glab-cli")
-        env["GLAB_PROMPT_DISABLED"] = "true"
-        env["NO_PROMPT"] = "true"
+        env.update(
+            GLAB_CONFIG_DIR=str(home / ".config/glab-cli"),
+            GLAB_PROMPT_DISABLED="true",
+            NO_PROMPT="true",
+        )
     return env
 
 
@@ -181,6 +190,7 @@ class _Publisher:
         self.env = _environment(scratch, self.host)
         self.check = check
         self.helper = _helper(self.host)
+        self.helper_env = _helper_environment(scratch, self.host)
         self.commit = None
         self.branch = None
 
@@ -209,11 +219,22 @@ class _Publisher:
             "credential.helper=",
         ]
         if protocol == "https":
+            # Git appends the helper action (get/store/erase). Replace its environment
+            # before invoking the one absolute helper binary chosen by the client.
+            helper = shlex.join(
+                [
+                    "/usr/bin/env",
+                    "-i",
+                    *(key + "=" + val for key, val in self.helper_env.items()),
+                    self.helper,
+                    "auth",
+                    "git-credential",
+                ]
+            )
             cmd.extend(
                 [
                     "-c",
-                    f"credential.https://{self.host}.helper="
-                    f"!{shlex.quote(self.helper)} auth git-credential",
+                    f"credential.https://{self.host}.helper=!{helper}",
                     "-c",
                     "credential.useHttpPath=true",
                 ]
@@ -275,7 +296,7 @@ class _Publisher:
         code, raw = _run(
             [self.helper, "auth", "git-credential", "get"],
             self.scratch,
-            self.env,
+            self.helper_env,
             self.check,
             data=request,
             limit=8192,
@@ -285,6 +306,8 @@ class _Publisher:
             if not line:
                 continue
             k, sep, v = line.partition(b"=")
+            if k == b"capability[]" and sep and re.fullmatch(rb"[A-Za-z0-9_.-]{1,64}", v):
+                continue
             if (
                 not sep
                 or k in fields
@@ -296,17 +319,22 @@ class _Publisher:
                     b"username",
                     b"password",
                     b"password_expiry_utc",
+                    b"oauth_refresh_token",
                 }
+                or len(v) > 4096
             ):
                 raise PublishError("The local credential helper returned an invalid response.")
             fields[k] = v
         token = fields.get(b"password", b"")
+        # Git helpers may respond with only username/password. The request already
+        # pins HTTPS, host and path. Reject contradictory coordinates when echoed.
         if (
             code
-            or fields.get(b"protocol") != b"https"
-            or fields.get(b"host") != self.host.encode()
+            or fields.get(b"protocol", b"https") != b"https"
+            or fields.get(b"host", self.host.encode()) != self.host.encode()
             or fields.get(b"path", (self.project + ".git").encode())
             != (self.project + ".git").encode()
+            or not re.fullmatch(rb"[!-~]{1,256}", fields.get(b"username", b""))
             or not re.fullmatch(rb"[!-~]{1,4096}", token)
         ):
             raise PublishError("Sign in to the repository host's CLI on the connecting Mac.")
