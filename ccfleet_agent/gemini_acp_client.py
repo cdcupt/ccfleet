@@ -541,8 +541,14 @@ class Session:
                 "locations": [{"path": str(location)}], "content": content}
         self.update("tool_call", **tool)
         tool_id = tool["toolCallId"]
-        if automatic or self.host.ask(self, tool):
+        if automatic:
             return tool_id
+        try:
+            if self.host.ask(self, tool):
+                return tool_id
+        except self.host.editor.FullAccessUnavailable:
+            self.finish_tool(tool_id, False)
+            raise
         self.finish_tool(tool_id, False)
         return None
 
@@ -869,16 +875,19 @@ class Bridge:
                 return False
             self.pending[ident] = answer
         try:
+            session.commands.check_mutation()
             self.write({"id": ident, "method": "session/request_permission", "params": {
                 "sessionId": session.id, "toolCall": tool, "options": [ALLOW, DECLINE],
             }})
             # The slot's device callback allows ten minutes for a human decision.
             deadline = time.monotonic() + 590
             while not session.unavailable() and time.monotonic() < deadline:
+                session.commands.check_mutation()
                 try:
                     reply = answer.get(timeout=0.25)
                 except queue.Empty:
                     continue
+                session.commands.check_mutation()
                 return (not session.unavailable() and isinstance(reply, dict)
                         and reply.get("outcome") == {"outcome": "selected", "optionId": "allow"})
             return False

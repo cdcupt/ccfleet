@@ -200,6 +200,12 @@ class ProjectCommands:
         return self.grant is not None and self.bound() and self.grant == self.access.snapshot()
 
     def check_mutation(self):
+        if (self.in_turn and not self.no_prompt
+                and (self.access.all_enabled() or self.access.enabled())):
+            # The user enabled full access during a supervised turn. Retire its
+            # pending decisions; only the next explicit turn can use the new grant.
+            self.no_prompt = True
+            raise FullAccessUnavailable("Project access changed. Send a new instruction.")
         if self.no_prompt and not self.allowed():
             if not self.capable:
                 raise FullAccessUnavailable("Update the private Mac slot to use full access.")
@@ -239,6 +245,7 @@ class Editor:
         self.commands = ProjectCommands(tools, files, self.workspace.path, fleet_home,
                                         root_fd=self.workspace.root_fd)
         self.channel = None
+        self.expired_input = False
         self.seen = {}
         self.approval = None
 
@@ -248,18 +255,29 @@ class Editor:
     def answer(self, question):
         # Keep the tty in canonical mode so unfinished or pasted approval input
         # can be flushed when the pinned SSH connection closes.
+        self.commands.check_mutation()
         if self.channel is None or not sys.stdin.isatty():
-            return input(question)
+            answer = input(question)
+            self.commands.check_mutation()
+            return answer
         fd = sys.stdin.fileno()
         termios.tcflush(fd, termios.TCIFLUSH)
         print(question, end="", flush=True)
-        while not self.disconnected():
-            if select.select([fd], [], [], 0.15)[0]:
-                answer = sys.stdin.readline()
-                if not answer:
-                    raise EOFError
-                if not self.disconnected():
-                    return answer.rstrip("\n")
+        try:
+            while not self.disconnected():
+                self.commands.check_mutation()
+                if select.select([fd], [], [], 0.15)[0]:
+                    answer = sys.stdin.readline()
+                    if not answer:
+                        raise EOFError
+                    self.commands.check_mutation()
+                    if not self.disconnected():
+                        return answer.rstrip("\n")
+        except FullAccessUnavailable:
+            self.expired_input = True
+            termios.tcflush(fd, termios.TCIFLUSH)
+            print()
+            raise
         termios.tcflush(fd, termios.TCIFLUSH)
         print()
         raise ApprovalInterrupted
@@ -272,6 +290,7 @@ class Editor:
             approved = confirm(question)
         else:
             approved = self.answer(question + " [y/N] ").strip().lower() in ("y", "yes")
+        self.commands.check_mutation()
         if self.disconnected():
             raise ApprovalInterrupted
         return approved
@@ -712,8 +731,8 @@ def session(connection):
         parts = prompt.split(maxsplit=1)
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else ""
-        if stale_answer:
-            stale_answer = False
+        if stale_answer or editor.expired_input:
+            stale_answer = editor.expired_input = False
             if prompt.lower() in ("y", "yes", "n", "no"):
                 print("That approval expired. Enter a new instruction.")
                 continue

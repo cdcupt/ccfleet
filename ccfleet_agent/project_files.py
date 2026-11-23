@@ -289,7 +289,11 @@ class ProjectAccess:
     def __init__(self, project: Path, fleet_home: Path):
         self.project = Path(os.path.abspath(project))
         self.fleet_home = Path(os.path.abspath(fleet_home))
-        self._file = hashlib.sha256(os.fsencode(self.project)).hexdigest() + ".json"
+        digest = hashlib.sha256(os.fsencode(self.project)).hexdigest()
+        self._file = digest + ".json"
+        # Old clients remove only the exact-grant file during revoke. Keep their
+        # cleanup from accidentally re-enabling inherited access on a newer client.
+        self._exclusion = digest + ".excluded"
 
     @contextlib.contextmanager
     def project_fd(self):
@@ -521,13 +525,10 @@ class ProjectAccess:
                 local = _private_record(registry, self._file)
                 epoch = self._all_generation(registry)
                 identity = self._project_id(project)
-                if local is not None and "excluded" in local:
-                    exclusion = local["excluded"]
-                    if (set(local) != {"excluded"} or not isinstance(exclusion, str)
-                            or not re.fullmatch(r"[0-9a-f]{32}", exclusion)
-                            or epoch is None or exclusion == epoch):
+                if epoch:
+                    exclusion = _private_record(registry, self._exclusion)
+                    if exclusion is not None and _generation(exclusion) == epoch:
                         return None
-                    local = None
                 if local is not None:
                     generation = _generation(local)
                     if not self._valid_remote(local.get("remote")):
@@ -570,15 +571,17 @@ class ProjectAccess:
             if not os.path.samestat(os.fstat(project), self.project.stat()):
                 raise ProjectError("project moved while granting access")
             _write_private_record(registry, self._file, data)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(self._exclusion, dir_fd=registry)
 
     def revoke(self):
         try:
             with self._registry(write=True) as fd:
                 epoch = self._all_generation(fd)
-                if epoch is None:
-                    os.unlink(self._file, dir_fd=fd)
-                else:
-                    _write_private_record(fd, self._file, {"excluded": epoch})
+                if epoch:
+                    # Record the exclusion first so a partial update fails closed.
+                    _write_private_record(fd, self._exclusion, {"generation": epoch})
+                os.unlink(self._file, dir_fd=fd)
         except FileNotFoundError:
             pass
         except ProjectError:

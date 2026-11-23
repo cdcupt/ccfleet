@@ -308,3 +308,22 @@ def test_all_grant_registered_and_revoked_across_local_runtimes(owner):
     assert a.enabled()
     owner.disable_all()
     assert other(a.project, "enabled") == "False"
+
+
+def test_legacy_checkout_grant_changes_cannot_lift_global_opt_out(owner):
+    a = checkout(owner, "src/application")
+    a.grant("https://github.com/team/application")
+    registry = owner.fleet_home / "project-access"
+    exact = registry / a._file
+    legacy_record = exact.read_bytes()
+    owner.enable_all()
+    a.revoke()
+    assert not a.enabled() and not exact.exists()
+    # Simulate an older installed client's grant and revoke, limited to its known file.
+    exact.write_bytes(legacy_record)
+    exact.chmod(0o600)
+    assert not a.enabled()
+    exact.unlink()
+    assert not a.enabled()
+    a.grant("https://github.com/team/verified-again")
+    assert a.enabled() and a.remote() == "https://github.com/team/verified-again"

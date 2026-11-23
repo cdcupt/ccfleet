@@ -325,3 +325,79 @@ def test_unavailable_test_subfolder_in_full_access_never_reads_terminal_input(
                 editor.handle({"type": "request", "id": 1, "op": "test"})
     finally:
         editor.workspace.close()
+
+
+def test_t3_grant_enabled_during_pending_approval_expires_old_decision(navigation):
+    host, owner = navigation
+    owner.disable_all()
+    host.project = owner.project / "second"
+    slot_peer(
+        host,
+        {"projectShell": True},
+        """
+assert get().get("projectShell") is None
+assert not tool(1,"approve",path="old",content="review pending")
+assert not tool(2,"mkdir",path="subsequent")
+assert not tool(3,"write",path="old",content="review pending")
+put({"type":"end","reason":"end_turn"})
+assert get()["projectShell"] is True
+assert tool(1,"mkdir",path="new-turn")
+put({"type":"end","reason":"end_turn"})
+assert get()=={"type":"close"}
+""",
+    )
+    try:
+        sid = host.open()
+        turn = host.prompt(sid, "first instruction")
+        while True:
+            card = host.get()
+            if card.get("method") == "session/request_permission":
+                break
+        owner.enable_all()
+        assert host.recv(turn)["result"]["stopReason"] == "end_turn"
+        host.bridge.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": card["id"],
+                "result": {"outcome": {"outcome": "selected", "optionId": "allow"}},
+            }
+        )
+        assert host.recv(host.prompt(sid, "next"))["result"]["stopReason"] == "end_turn"
+        assert "result" in host.recv(host.send("session/close", {"sessionId": sid}))
+    finally:
+        host.close()
+    assert sum(e.get("method") == "session/request_permission" for e in host.history) == 1
+    assert not (host.project / "old").exists() and not (host.project / "subsequent").exists()
+    assert (host.project / "new-turn").is_dir()
+
+
+def test_terminal_grant_enabled_during_pending_answer_does_not_approve(navigation, monkeypatch):
+    host, owner = navigation
+    owner.disable_all()
+    host.project = owner.project / "second"
+    attempts = []
+
+    def enable_while_asking(question):
+        assert not attempts
+        attempts.append(question)
+        owner.enable_all()
+        return True
+
+    monkeypatch.setattr(terminal, "confirm", enable_while_asking)
+    slot_peer(
+        host,
+        {"projectShell": True},
+        """
+assert get().get("projectShell") is None
+assert not tool(1,"mkdir",path="old")
+assert not tool(2,"approve",path="subsequent",content="stale")
+put({"type":"end","reason":"end_turn"})
+assert get()["projectShell"] is True
+assert tool(1,"mkdir",path="new-turn")
+put({"type":"end","reason":"end_turn"})
+assert get()=={"type":"close"}
+""",
+    )
+    session(host, "terminal", ["initial", "next"], monkeypatch)
+    assert len(attempts) == 1 and not (host.project / "old").exists()
+    assert (host.project / "new-turn").is_dir()
