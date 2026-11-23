@@ -1559,10 +1559,14 @@ def guide(
         + bi(
             '<p>Using T3 Code with a private Mac slot on ccfleet.io? '
             '<a href="/docs/library/docs/public-gateway.html#gemini-subscription">'
-            'Pair your Mac for Gemini</a>.</p>',
+            'Pair your Mac for Gemini</a>. For Orca or Herdr, see the '
+            '<a href="/docs/library/docs/platform-comparison.html#orca-herdr">'
+            'Claude and Gemini project terminals</a>.</p>',
             '<p>在 T3 Code 中使用 ccfleet.io 上的专属 Mac 槽位？'
             '<a href="/docs/library/docs/public-gateway.html#gemini-subscription">'
-            '为 Gemini 配对本机 Mac</a>。</p>',
+            '为 Gemini 配对本机 Mac</a>。Orca 和 Herdr 用户请参阅'
+            '<a href="/docs/library/docs/platform-comparison.html#orca-herdr">'
+            'Claude 和 Gemini 项目终端配置</a>。</p>',
         )
         + '<div class="card" id="setup">'
         + bi("<h2>Install, check, then start</h2>", "<h2>安装、检查，然后开始</h2>")
