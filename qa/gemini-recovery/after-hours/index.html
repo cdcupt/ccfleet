@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>After Hours — San Francisco Independent Jazz Festival · June 11–13, 2027</title>
+  <meta
+    name="description"
+    content="After Hours is an independent late-night jazz festival across three San Francisco rooms, June 11–13, 2027."
+  />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="app.js" defer></script>
+</head>
+<body id="top">
+  <a class="skip-link" href="#program">Skip to festival schedule</a>
+
+  <div id="page-shell">
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="After Hours home">
+          <span class="brand-name">After Hours</span>
+          <span class="brand-meta">SF · Jun 11–13, 2027</span>
+        </a>
+
+        <nav class="primary-nav" aria-label="Primary navigation">
+          <ul class="nav-list">
+            <li><a class="nav-link" href="#program">Program</a></li>
+            <li><a class="nav-link" href="#rooms">Rooms</a></li>
+            <li><a class="nav-link" href="#notes">House Notes</a></li>
+          </ul>
+        </nav>
+
+        <div class="header-actions">
+          <button
+            type="button"
+            class="lineup-trigger"
+            id="open-lineup-btn"
+            aria-haspopup="dialog"
+            aria-controls="lineup-drawer"
+            aria-expanded="false"
+          >
+            <span class="lineup-trigger-label">My Lineup</span>
+            <span class="lineup-count" id="header-lineup-count" aria-hidden="true">0</span>
+            <span class="sr-only" id="header-lineup-sr">0 sets saved</span>
+          </button>
+
+          <button
+            type="button"
+            class="menu-toggle"
+            id="menu-toggle-btn"
+            aria-controls="mobile-nav"
+            aria-expanded="false"
+            aria-label="Open navigation menu"
+          >
+            <span class="menu-toggle-bars" aria-hidden="true"></span>
+            <span class="menu-toggle-text">Menu</span>
+          </button>
+        </div>
+      </div>
+
+      <nav class="mobile-nav" id="mobile-nav" aria-label="Mobile navigation" hidden>
+        <div class="container mobile-nav-inner">
+          <a class="mobile-nav-link" href="#program">Program &amp; Schedule</a>
+          <a class="mobile-nav-link" href="#rooms">The Three Rooms</a>
+          <a class="mobile-nav-link" href="#notes">House Notes</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-media" aria-hidden="true">
+          <img
+            src="assets/club.jpg"
+            alt=""
+            class="hero-photo"
+            decoding="async"
+            fetchpriority="high"
+          />
+          <div class="hero-scrim"></div>
+        </div>
+
+        <div class="container hero-inner">
+          <div class="hero-copy">
+            <p class="hero-dates">San Francisco · June 11–13, 2027</p>
+            <h1 class="hero-title" id="hero-title">
+              After<br />Hours
+            </h1>
+            <p class="hero-lede">
+              Three nights of independent acoustic, modal, and late-night jazz across three intimate San Francisco rooms.
+            </p>
+
+            <div class="hero-actions">
+              <a class="btn btn-lime" href="#program">Explore the Schedule</a>
+              <button
+                type="button"
+                class="btn btn-ink-outline"
+                id="hero-lineup-btn"
+                aria-haspopup="dialog"
+                aria-controls="lineup-drawer"
+              >
+                My Lineup
+              </button>
+            </div>
+          </div>
+
+          <dl class="hero-facts">
+            <div class="hero-fact">
+              <dt>Nights</dt>
+              <dd>Fri 11 · Sat 12 · Sun 13</dd>
+            </div>
+            <div class="hero-fact">
+              <dt>Rooms</dt>
+              <dd>The Cellar · Blue Room · Foundry Loft</dd>
+            </div>
+            <div class="hero-fact">
+              <dt>Program</dt>
+              <dd>12 Live Sets · 18:30 to 01:00</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="program-section" id="program" aria-labelledby="program-heading">
+        <div class="container">
+          <div class="section-header">
+            <div class="section-title-group">
+              <h2 class="section-title" id="program-heading">Three Nights in San Francisco</h2>
+            </div>
+            <p class="section-intro">
+              Select a night and filter by room. Open any set for full personnel and notes, or save sets to build your personal route.
+            </p>
+          </div>
+
+          <div class="program-controls">
+            <div class="day-tabs" role="tablist" aria-label="Festival dates">
+              <button
+                type="button"
+                class="day-tab"
+                role="tab"
+                id="tab-fri"
+                data-day="fri"
+                aria-selected="true"
+                aria-controls="schedule-panel"
+                tabindex="0"
+              >
+                <span class="day-tab-date">Fri · Jun 11</span>
+                <span class="day-tab-sub">Opening Night</span>
+              </button>
+              <button
+                type="button"
+                class="day-tab"
+                role="tab"
+                id="tab-sat"
+                data-day="sat"
+                aria-selected="false"
+                aria-controls="schedule-panel"
+                tabindex="-1"
+              >
+                <span class="day-tab-date">Sat · Jun 12</span>
+                <span class="day-tab-sub">Late Edition</span>
+              </button>
+              <button
+                type="button"
+                class="day-tab"
+                role="tab"
+                id="tab-sun"
+                data-day="sun"
+                aria-selected="false"
+                aria-controls="schedule-panel"
+                tabindex="-1"
+              >
+                <span class="day-tab-date">Sun · Jun 13</span>
+                <span class="day-tab-sub">Closing Sessions</span>
+              </button>
+            </div>
+
+            <div class="venue-filter-bar">
+              <span class="filter-label" id="venue-filter-label">Room</span>
+              <div class="venue-filters" role="group" aria-labelledby="venue-filter-label">
+                <button type="button" class="venue-chip" data-venue="all" aria-pressed="true">
+                  All Rooms
+                </button>
+                <button type="button" class="venue-chip" data-venue="the-cellar" aria-pressed="false">
+                  The Cellar
+                </button>
+                <button type="button" class="venue-chip" data-venue="blue-room" aria-pressed="false">
+                  Blue Room
+                </button>
+                <button type="button" class="venue-chip" data-venue="foundry-loft" aria-pressed="false">
+                  Foundry Loft
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="schedule-panel"
+            id="schedule-panel"
+            role="tabpanel"
+            aria-labelledby="tab-fri"
+            tabindex="-1"
+          >
+            <div class="schedule-meta-bar">
+              <p class="schedule-summary" id="schedule-summary" aria-live="polite"></p>
+              <button
+                type="button"
+                class="text-action-btn"
+                id="reset-venue-btn"
+                hidden
+              >
+                Show all rooms
+              </button>
+            </div>
+
+            <ol class="schedule-list" id="schedule-list"></ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="rooms-section" id="rooms" aria-labelledby="rooms-heading">
+        <div class="container">
+          <div class="section-header">
+            <div class="section-title-group">
+              <h2 class="section-title" id="rooms-heading">Three Listening Spaces</h2>
+            </div>
+            <p class="section-intro">
+              Every set is tuned to its room — from unamplified brick acoustics in North Beach to late-night horn sections in Dogpatch.
+            </p>
+          </div>
+
+          <div class="rooms-grid" id="rooms-grid"></div>
+        </div>
+      </section>
+
+      <section class="notes-section" id="notes" aria-labelledby="notes-heading">
+        <div class="container">
+          <div class="section-header">
+            <div class="section-title-group">
+              <h2 class="section-title" id="notes-heading">Practical &amp; Listening Etiquette</h2>
+            </div>
+          </div>
+
+          <div class="notes-grid">
+            <article class="note-item">
+              <h3 class="note-title">Listening Policy</h3>
+              <p class="note-body">
+                Doors open 30 minutes before each set. Conversations drop to a whisper once the first tune counts off; flash photography stays off all weekend.
+              </p>
+            </article>
+            <article class="note-item">
+              <h3 class="note-title">Moving Between Rooms</h3>
+              <p class="note-body">
+                North Beach and Fillmore sit 15 minutes apart via the 30/22 Muni corridors. Foundry Loft sits directly on the T-Third line in Dogpatch.
+              </p>
+            </article>
+            <article class="note-item">
+              <h3 class="note-title">Your Personal Route</h3>
+              <p class="note-body">
+                Sets you save in My Lineup stay stored locally in this browser across visits, with automatic overlap flags and offline calendar export.
+              </p>
+              <button
+                type="button"
+                class="note-action-link"
+                id="notes-lineup-btn"
+                aria-haspopup="dialog"
+                aria-controls="lineup-drawer"
+              >
+                Review My Lineup →
+              </button>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <div class="footer-brand">
+          <p class="footer-title">After Hours</p>
+          <p class="footer-sub">Independent Jazz Festival · San Francisco · June 11–13, 2027</p>
+        </div>
+        <div class="footer-links">
+          <a class="footer-link" href="#program">Program</a>
+          <a class="footer-link" href="#rooms">Rooms</a>
+          <a class="footer-link" href="#top">Back to top ↑</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Set Detail Modal Dialog -->
+  <div class="overlay-backdrop" id="dialog-backdrop" hidden>
+    <div
+      class="set-dialog"
+      id="set-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="dialog-artist-title"
+      aria-describedby="dialog-description"
+      tabindex="-1"
+    >
+      <div class="dialog-top">
+        <p class="dialog-kicker" id="dialog-kicker"></p>
+        <button
+          type="button"
+          class="icon-close-btn"
+          id="dialog-close-btn"
+          aria-label="Close set details"
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      </div>
+
+      <div class="dialog-body">
+        <h2 class="dialog-title" id="dialog-artist-title"></h2>
+        <p class="dialog-style" id="dialog-style"></p>
+
+        <dl class="dialog-facts" id="dialog-facts"></dl>
+
+        <p class="dialog-description" id="dialog-description"></p>
+
+        <div class="dialog-personnel-block">
+          <h3 class="dialog-subheading">Personnel</h3>
+          <ul class="dialog-personnel-list" id="dialog-personnel"></ul>
+        </div>
+
+        <p class="dialog-note" id="dialog-room-note"></p>
+      </div>
+
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-dialog-lineup" id="dialog-lineup-toggle"></button>
+        <button type="button" class="btn btn-paper-outline" id="dialog-venue-filter-btn"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- My Lineup Slide-Over Drawer -->
+  <div class="overlay-backdrop drawer-backdrop" id="drawer-backdrop" hidden>
+    <aside
+      class="lineup-drawer"
+      id="lineup-drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="drawer-title"
+      tabindex="-1"
+    >
+      <div class="drawer-header">
+        <div>
+          <p class="drawer-kicker">Saved Route · Jun 11–13</p>
+          <h2 class="drawer-title" id="drawer-title">
+            My Lineup
+            <span class="drawer-count-pill" id="drawer-count-pill">0</span>
+          </h2>
+        </div>
+        <button
+          type="button"
+          class="icon-close-btn icon-close-btn-dark"
+          id="drawer-close-btn"
+          aria-label="Close My Lineup drawer"
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      </div>
+
+      <div class="drawer-body" id="drawer-body"></div>
+
+      <div class="drawer-footer" id="drawer-footer">
+        <p class="drawer-footer-summary" id="drawer-footer-summary"></p>
+        <div class="drawer-footer-actions">
+          <button
+            type="button"
+            class="btn btn-export-ics"
+            id="export-ics-btn"
+            disabled
+          >
+            Export calendar (.ics)
+          </button>
+          <button type="button" class="btn btn-clear-lineup" id="clear-lineup-btn" hidden>
+            Clear all
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="sr-only" id="sr-announcer" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

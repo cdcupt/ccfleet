@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CCFleet 0.2.22 Gemini test workspaces</title></head><body><main>
+<h1>Gemini recovery test workspaces</h1>
+<p>These fictional, offline projects were built during development of CCFleet 0.2.22. Check out this branch and open either project’s index.html in a browser. The artwork and font licenses are included alongside the assets.</p>
+<h2>Cue Room</h2><p><a href="cue-room/index.html">Open the audio sequencer</a>. The 88-minute T3 run included two forced disconnects. To reproduce the project checks, run the following from the <code>cue-room</code> directory with Node.js.</p>
+<pre>node --test model.test.cjs audio.test.cjs
+node randomized-edits.cjs</pre>
+<p><a href="previews/cue-room-desktop.png">Desktop preview</a> · <a href="previews/cue-room-mobile.png">Mobile preview</a> · <a href="previews/cue-room-preview.wav">Listen to the starter arrangement</a></p>
+<h2>After Hours</h2><p><a href="after-hours/index.html">Open the festival planner</a>. This earlier recovery test used a local project with a schedule and calendar export.</p>
+<p><a href="previews/after-hours-desktop.png">Desktop preview</a> · <a href="previews/after-hours-mobile.png">Mobile preview</a></p>
+<p>The <a href="../../laptop/releases/verification/0.2.22.json">release verification record</a> identifies the revisions and test environments. <a href="SHA256SUMS">File checksums</a> cover the projects, independent randomized test and preview media.</p></main></body></html>

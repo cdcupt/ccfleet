@@ -1,0 +1,8 @@
+After Hours • artwork and type
+
+club.jpg is original artwork generated with the built-in ImageGen tool for this fictional festival.
+
+Image prompt
+Create a single, wide 3:2 editorial photograph for an independent jazz festival's printed program. A dim small San Francisco jazz club after midnight, a real-looking anonymous saxophonist with a tenor saxophone on the right half of the composition in three-quarter silhouette, sharp highlights on brass keys and hands, out-of-focus drummer and upright bass behind, subtle warm amber stage light, rich deep charcoal shadows on the left, authentic 35mm film grain, striking cinematic composition. Sophisticated, energetic, intimate, tactile. No writing, no text, no logo, no watermark, no poster frame. The website will overlay its own typography; leave the left third calm. It should look like a candid concert photograph, not an illustration.
+
+Instrument Serif and DM Sans are bundled from the Google Fonts repository under the SIL Open Font License; the two license files are included.

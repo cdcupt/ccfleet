@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cue Room — Multitrack Arrangement Workstation</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./model.js"></script>
+  <script defer src="./audio.js"></script>
+  <script defer src="./timeline.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#arrangement-main">Skip to arrangement timeline</a>
+
+  <div id="app" class="app-shell" data-status="stopped" data-loop="true">
+    <!-- Top Transport & Project Actions Bar -->
+    <header class="topbar" role="banner">
+      <div class="topbar-brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="brand-bar b1"></span>
+          <span class="brand-bar b2"></span>
+          <span class="brand-bar b3"></span>
+          <span class="brand-bar b4"></span>
+        </div>
+        <div class="brand-identity">
+          <span class="brand-wordmark">Cue Room</span>
+          <label class="sr-only" for="project-name-input">Project name</label>
+          <input id="project-name-input" class="project-name-input" type="text" value="Midnight Relay" maxlength="80" spellcheck="false" aria-label="Project name">
+        </div>
+      </div>
+
+      <div class="transport-cluster" role="group" aria-label="Transport controls">
+        <div class="transport-buttons">
+          <button id="btn-play-pause" class="btn btn-transport btn-play" type="button" aria-pressed="false" aria-label="Play" data-action="toggle-play">
+            <span class="icon-play" aria-hidden="true"></span>
+            <span class="btn-label">Play</span>
+          </button>
+          <button id="btn-stop" class="btn btn-transport btn-stop" type="button" aria-label="Stop and return to bar 1" data-action="stop">
+            <span class="icon-stop" aria-hidden="true"></span>
+            <span class="btn-label">Stop</span>
+          </button>
+          <button id="btn-loop" class="btn btn-transport btn-loop" type="button" aria-pressed="true" aria-label="Toggle arrangement loop" data-action="toggle-loop">
+            <span class="btn-label">Loop</span>
+          </button>
+        </div>
+
+        <div class="transport-position-group">
+          <div class="readout-box" aria-label="Playhead position">
+            <span class="readout-caption">POS</span>
+            <output id="transport-position" class="readout-value" for="transport-scrub">1.1.1</output>
+          </div>
+          <label class="sr-only" for="transport-scrub">Scrub playhead position in beats</label>
+          <input id="transport-scrub" class="scrub-slider" type="range" min="0" max="32" step="0.25" value="0" aria-label="Playhead position in beats" aria-valuetext="Bar 1, Beat 1">
+        </div>
+
+        <div class="transport-tempo-group" role="group" aria-label="Tempo in beats per minute">
+          <span class="readout-caption">BPM</span>
+          <button id="btn-tempo-down" class="btn btn-icon-xs" type="button" aria-label="Decrease tempo by 1 BPM" data-action="tempo-down">&minus;</button>
+          <label class="sr-only" for="tempo-input">Tempo BPM</label>
+          <input id="tempo-input" class="tempo-input" type="number" min="40" max="240" step="1" value="124" aria-label="Tempo in BPM">
+          <button id="btn-tempo-up" class="btn btn-icon-xs" type="button" aria-label="Increase tempo by 1 BPM" data-action="tempo-up">+</button>
+        </div>
+
+        <div class="transport-master-group" role="group" aria-label="Master output">
+          <label class="readout-caption" for="master-volume">OUT</label>
+          <input id="master-volume" class="master-slider" type="range" min="0" max="100" step="1" value="85" aria-label="Master output volume">
+          <div class="meter-track" aria-hidden="true">
+            <div id="master-meter-fill" class="meter-fill" style="--meter-level: 0;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="project-actions" role="group" aria-label="Project history and file actions">
+        <div class="action-pair">
+          <button id="btn-undo" class="btn btn-action" type="button" disabled aria-label="Undo last edit" data-action="undo">Undo</button>
+          <button id="btn-redo" class="btn btn-action" type="button" disabled aria-label="Redo edit" data-action="redo">Redo</button>
+        </div>
+        <div class="action-pair">
+          <button id="btn-save-local" class="btn btn-action" type="button" aria-label="Save project to local storage" data-action="save-local">Save</button>
+          <button id="btn-reset-project" class="btn btn-action" type="button" aria-label="Reset to starter arrangement" data-action="reset-project">Reset</button>
+        </div>
+        <div class="action-pair">
+          <button id="btn-import" class="btn btn-action" type="button" aria-label="Import project JSON file" data-action="import">Import</button>
+          <button id="btn-export" class="btn btn-action" type="button" aria-label="Export project as JSON" data-action="export">Export</button>
+          <input id="import-file-input" class="sr-only" type="file" accept=".json,application/json" tabindex="-1" aria-hidden="true">
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workstation Grid: Arrangement + Pattern Desk & Right Inspector -->
+    <main id="arrangement-main" class="workspace">
+      <section class="arrangement-pane" aria-label="Multitrack arrangement timeline and pattern sequencer">
+        <div class="arrangement-toolbar">
+          <div class="toolbar-left">
+            <button id="btn-add-clip" class="btn btn-accent-subtle" type="button" data-action="add-clip">+ Add Clip</button>
+            <div class="toolbar-field">
+              <label class="field-label-inline" for="length-bars-select">Length</label>
+              <select id="length-bars-select" class="select-compact" aria-label="Arrangement length in bars">
+                <option value="4">4 bars</option>
+                <option value="8" selected>8 bars</option>
+                <option value="12">12 bars</option>
+                <option value="16">16 bars</option>
+                <option value="32">32 bars</option>
+              </select>
+            </div>
+            <div class="toolbar-zoom" role="group" aria-label="Timeline horizontal zoom">
+              <button id="btn-zoom-out" class="btn btn-icon-xs" type="button" aria-label="Zoom out timeline" data-action="zoom-out">&minus;</button>
+              <span id="zoom-readout" class="zoom-readout" aria-live="off">100%</span>
+              <button id="btn-zoom-in" class="btn btn-icon-xs" type="button" aria-label="Zoom in timeline" data-action="zoom-in">+</button>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="arrangement-summary" class="arrangement-summary">5 tracks &middot; 15 clips &middot; 8 bars</span>
+            <span id="status-region" class="status-region" role="status" aria-live="polite">Ready</span>
+          </div>
+        </div>
+
+        <!-- Scrollable Timeline Viewport with Sticky Left Track Headers & Sticky Top Bar Ruler -->
+        <div id="timeline-scroll" class="timeline-scroll" tabindex="0" aria-label="Scrollable multitrack timeline">
+          <div id="timeline-grid" class="timeline-grid" style="--total-beats: 32; --playhead-beat: 0;">
+            <div class="ruler-row">
+              <div class="ruler-corner" aria-hidden="true">
+                <span class="corner-label">Tracks</span>
+                <span class="corner-scale">4/4</span>
+              </div>
+              <div id="timeline-ruler" class="timeline-ruler" role="slider" tabindex="0" aria-label="Timeline beat ruler" aria-valuemin="0" aria-valuemax="32" aria-valuenow="0" aria-valuetext="Bar 1, Beat 1" data-action="ruler-seek">
+                <div class="ruler-bar" data-bar="1"><span class="bar-num">1</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="2"><span class="bar-num">2</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="3"><span class="bar-num">3</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="4"><span class="bar-num">4</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="5"><span class="bar-num">5</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="6"><span class="bar-num">6</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="7"><span class="bar-num">7</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="ruler-bar" data-bar="8"><span class="bar-num">8</span><span class="beat-ticks" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div id="playhead-handle" class="playhead-handle" aria-hidden="true"></div>
+              </div>
+            </div>
+
+            <!-- Track Rows (Seeded Midnight Relay 5-Track / 15-Clip Arrangement) -->
+            <div id="timeline-tracks" class="timeline-tracks" role="list" aria-label="Arrangement tracks">
+              <div id="playhead-line" class="playhead-line" aria-hidden="true"></div>
+
+              <!-- Track 1: Kick -->
+              <div class="track-row" role="listitem" data-track-id="trk-kick" data-track-type="kick" data-selected="true" data-muted="false" data-solo="false">
+                <div class="track-header" data-action="select-track" data-track-id="trk-kick">
+                  <span class="track-rail" aria-hidden="true"></span>
+                  <div class="track-header-top">
+                    <button class="track-select-btn" type="button" data-action="select-track" data-track-id="trk-kick" aria-pressed="true">
+                      <span class="track-name">Kick</span>
+                      <span class="track-kind">Kick</span>
+                    </button>
+                    <div class="track-ms">
+                      <button class="btn-ms btn-mute" type="button" aria-pressed="false" aria-label="Mute Kick" data-action="toggle-mute" data-track-id="trk-kick">M</button>
+                      <button class="btn-ms btn-solo" type="button" aria-pressed="false" aria-label="Solo Kick" data-action="toggle-solo" data-track-id="trk-kick">S</button>
+                    </div>
+                  </div>
+                  <div class="track-header-bottom">
+                    <input class="track-vol-slider" type="range" min="0" max="100" value="90" aria-label="Kick track volume" data-action="track-volume" data-track-id="trk-kick">
+                    <span class="track-vol-readout">90%</span>
+                  </div>
+                </div>
+                <div class="track-lane" data-track-id="trk-kick" data-track-type="kick">
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="true" aria-label="Four on Floor on Kick, bar 1 to bar 5" data-clip-id="clip-kick-1" data-track-id="trk-kick" data-start-beat="0" data-duration-beats="16" style="--start-beat:0;--duration-beats:16">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Four on Floor</span><span class="clip-len">4b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:5%;--y:62%;--v:1"></i><i style="--x:6.25%;--w:5%;--y:62%;--v:.94"></i><i style="--x:12.5%;--w:5%;--y:62%;--v:.98"></i><i style="--x:18.75%;--w:5%;--y:62%;--v:.94"></i><i style="--x:25%;--w:5%;--y:62%;--v:1"></i><i style="--x:31.25%;--w:5%;--y:62%;--v:.94"></i><i style="--x:37.5%;--w:5%;--y:62%;--v:.98"></i><i style="--x:43.75%;--w:5%;--y:62%;--v:.94"></i><i style="--x:50%;--w:5%;--y:62%;--v:1"></i><i style="--x:56.25%;--w:5%;--y:62%;--v:.94"></i><i style="--x:62.5%;--w:5%;--y:62%;--v:.98"></i><i style="--x:68.75%;--w:5%;--y:62%;--v:.94"></i><i style="--x:75%;--w:5%;--y:62%;--v:1"></i><i style="--x:81.25%;--w:5%;--y:62%;--v:.94"></i><i style="--x:87.5%;--w:5%;--y:62%;--v:.98"></i><i style="--x:93.75%;--w:5%;--y:62%;--v:.94"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Drop Drive on Kick, bar 6 to bar 8" data-clip-id="clip-kick-2" data-track-id="trk-kick" data-start-beat="20" data-duration-beats="8" style="--start-beat:20;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Drop Drive</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:9%;--y:62%;--v:1"></i><i style="--x:12.5%;--w:9%;--y:62%;--v:.95"></i><i style="--x:25%;--w:9%;--y:62%;--v:.98"></i><i style="--x:37.5%;--w:9%;--y:62%;--v:.95"></i><i style="--x:43.75%;--w:5%;--y:72%;--v:.65"></i><i style="--x:50%;--w:9%;--y:62%;--v:1"></i><i style="--x:62.5%;--w:9%;--y:62%;--v:.95"></i><i style="--x:75%;--w:9%;--y:62%;--v:.98"></i><i style="--x:87.5%;--w:9%;--y:62%;--v:.95"></i><i style="--x:93.75%;--w:5%;--y:72%;--v:.65"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Sync Turnaround on Kick, bar 8 to bar 9" data-clip-id="clip-kick-3" data-track-id="trk-kick" data-start-beat="28" data-duration-beats="4" style="--start-beat:28;--duration-beats:4">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Sync Turnaround</span><span class="clip-len">1b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:16%;--y:62%;--v:1"></i><i style="--x:25%;--w:16%;--y:62%;--v:.92"></i><i style="--x:43.75%;--w:10%;--y:72%;--v:.6"></i><i style="--x:62.5%;--w:14%;--y:62%;--v:.88"></i><i style="--x:75%;--w:16%;--y:62%;--v:.95"></i><i style="--x:93.75%;--w:6%;--y:68%;--v:.72"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Track 2: Snare & Clap -->
+              <div class="track-row" role="listitem" data-track-id="trk-snare" data-track-type="snare" data-selected="false" data-muted="false" data-solo="false">
+                <div class="track-header" data-action="select-track" data-track-id="trk-snare">
+                  <span class="track-rail" aria-hidden="true"></span>
+                  <div class="track-header-top">
+                    <button class="track-select-btn" type="button" data-action="select-track" data-track-id="trk-snare" aria-pressed="false">
+                      <span class="track-name">Snare &amp; Clap</span>
+                      <span class="track-kind">Snare</span>
+                    </button>
+                    <div class="track-ms">
+                      <button class="btn-ms btn-mute" type="button" aria-pressed="false" aria-label="Mute Snare and Clap" data-action="toggle-mute" data-track-id="trk-snare">M</button>
+                      <button class="btn-ms btn-solo" type="button" aria-pressed="false" aria-label="Solo Snare and Clap" data-action="toggle-solo" data-track-id="trk-snare">S</button>
+                    </div>
+                  </div>
+                  <div class="track-header-bottom">
+                    <input class="track-vol-slider" type="range" min="0" max="100" value="78" aria-label="Snare and Clap track volume" data-action="track-volume" data-track-id="trk-snare">
+                    <span class="track-vol-readout">78%</span>
+                  </div>
+                </div>
+                <div class="track-lane" data-track-id="trk-snare" data-track-type="snare">
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Backbeat Clap on Snare and Clap, bar 2 to bar 5" data-clip-id="clip-snare-1" data-track-id="trk-snare" data-start-beat="4" data-duration-beats="12" style="--start-beat:4;--duration-beats:12">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Backbeat Clap</span><span class="clip-len">3b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:8.3%;--w:6%;--y:44%;--v:.9"></i><i style="--x:8.3%;--w:6%;--y:24%;--v:.75"></i><i style="--x:25%;--w:6%;--y:44%;--v:.94"></i><i style="--x:25%;--w:6%;--y:24%;--v:.78"></i><i style="--x:31.25%;--w:3%;--y:58%;--v:.45"></i><i style="--x:41.6%;--w:6%;--y:44%;--v:.9"></i><i style="--x:41.6%;--w:6%;--y:24%;--v:.75"></i><i style="--x:58.3%;--w:6%;--y:44%;--v:.94"></i><i style="--x:58.3%;--w:6%;--y:24%;--v:.78"></i><i style="--x:64.5%;--w:3%;--y:58%;--v:.45"></i><i style="--x:75%;--w:6%;--y:44%;--v:.9"></i><i style="--x:75%;--w:6%;--y:24%;--v:.75"></i><i style="--x:91.6%;--w:6%;--y:44%;--v:.94"></i><i style="--x:91.6%;--w:6%;--y:24%;--v:.78"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Tension Build on Snare and Clap, bar 5 to bar 7" data-clip-id="clip-snare-2" data-track-id="trk-snare" data-start-beat="16" data-duration-beats="8" style="--start-beat:16;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Tension Build</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:12.5%;--w:7%;--y:28%;--v:.72"></i><i style="--x:25%;--w:5%;--y:50%;--v:.62"></i><i style="--x:31.25%;--w:5%;--y:46%;--v:.7"></i><i style="--x:37.5%;--w:5%;--y:40%;--v:.82"></i><i style="--x:43.75%;--w:5%;--y:34%;--v:.86"></i><i style="--x:46.8%;--w:4%;--y:26%;--v:.95"></i><i style="--x:62.5%;--w:7%;--y:28%;--v:.72"></i><i style="--x:75%;--w:5%;--y:50%;--v:.62"></i><i style="--x:81.25%;--w:5%;--y:46%;--v:.7"></i><i style="--x:87.5%;--w:5%;--y:40%;--v:.82"></i><i style="--x:93.75%;--w:5%;--y:30%;--v:.92"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Peak Snap on Snare and Clap, bar 7 to bar 9" data-clip-id="clip-snare-3" data-track-id="trk-snare" data-start-beat="24" data-duration-beats="8" style="--start-beat:24;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Peak Snap</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:12.5%;--w:8%;--y:44%;--v:.9"></i><i style="--x:12.5%;--w:8%;--y:24%;--v:.75"></i><i style="--x:37.5%;--w:8%;--y:44%;--v:.94"></i><i style="--x:37.5%;--w:8%;--y:24%;--v:.78"></i><i style="--x:62.5%;--w:8%;--y:44%;--v:.9"></i><i style="--x:62.5%;--w:8%;--y:24%;--v:.75"></i><i style="--x:87.5%;--w:8%;--y:44%;--v:.94"></i><i style="--x:87.5%;--w:8%;--y:24%;--v:.78"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Track 3: Hi-Hats -->
+              <div class="track-row" role="listitem" data-track-id="trk-hat" data-track-type="hat" data-selected="false" data-muted="false" data-solo="false">
+                <div class="track-header" data-action="select-track" data-track-id="trk-hat">
+                  <span class="track-rail" aria-hidden="true"></span>
+                  <div class="track-header-top">
+                    <button class="track-select-btn" type="button" data-action="select-track" data-track-id="trk-hat" aria-pressed="false">
+                      <span class="track-name">Hi-Hats</span>
+                      <span class="track-kind">Hat</span>
+                    </button>
+                    <div class="track-ms">
+                      <button class="btn-ms btn-mute" type="button" aria-pressed="false" aria-label="Mute Hi-Hats" data-action="toggle-mute" data-track-id="trk-hat">M</button>
+                      <button class="btn-ms btn-solo" type="button" aria-pressed="false" aria-label="Solo Hi-Hats" data-action="toggle-solo" data-track-id="trk-hat">S</button>
+                    </div>
+                  </div>
+                  <div class="track-header-bottom">
+                    <input class="track-vol-slider" type="range" min="0" max="100" value="68" aria-label="Hi-Hats track volume" data-action="track-volume" data-track-id="trk-hat">
+                    <span class="track-vol-readout">68%</span>
+                  </div>
+                </div>
+                <div class="track-lane" data-track-id="trk-hat" data-track-type="hat">
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Offbeat Pulse on Hi-Hats, bar 1 to bar 4" data-clip-id="clip-hat-1" data-track-id="trk-hat" data-start-beat="0" data-duration-beats="12" style="--start-beat:0;--duration-beats:12">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Offbeat Pulse</span><span class="clip-len">3b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:2.5%;--y:58%;--v:.45"></i><i style="--x:4.2%;--w:4.5%;--y:26%;--v:.85"></i><i style="--x:12.5%;--w:4.5%;--y:26%;--v:.82"></i><i style="--x:20.8%;--w:4.5%;--y:26%;--v:.86"></i><i style="--x:29.2%;--w:4.5%;--y:26%;--v:.84"></i><i style="--x:37.5%;--w:4.5%;--y:26%;--v:.85"></i><i style="--x:45.8%;--w:4.5%;--y:26%;--v:.82"></i><i style="--x:54.2%;--w:4.5%;--y:26%;--v:.86"></i><i style="--x:62.5%;--w:4.5%;--y:26%;--v:.84"></i><i style="--x:70.8%;--w:4.5%;--y:26%;--v:.85"></i><i style="--x:79.2%;--w:4.5%;--y:26%;--v:.82"></i><i style="--x:87.5%;--w:4.5%;--y:26%;--v:.86"></i><i style="--x:95.8%;--w:4%;--y:26%;--v:.84"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="16th Shimmer on Hi-Hats, bar 4 to bar 7" data-clip-id="clip-hat-2" data-track-id="trk-hat" data-start-beat="12" data-duration-beats="12" style="--start-beat:12;--duration-beats:12">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">16th Shimmer</span><span class="clip-len">3b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:2%;--y:56%;--v:.52"></i><i style="--x:4.2%;--w:4%;--y:24%;--v:.78"></i><i style="--x:8.3%;--w:2%;--y:56%;--v:.55"></i><i style="--x:12.5%;--w:3%;--y:40%;--v:.74"></i><i style="--x:16.6%;--w:2%;--y:56%;--v:.52"></i><i style="--x:20.8%;--w:4%;--y:24%;--v:.82"></i><i style="--x:25%;--w:2%;--y:56%;--v:.56"></i><i style="--x:29.2%;--w:4%;--y:24%;--v:.86"></i><i style="--x:37.5%;--w:4%;--y:24%;--v:.78"></i><i style="--x:45.8%;--w:3%;--y:40%;--v:.74"></i><i style="--x:54.2%;--w:4%;--y:24%;--v:.82"></i><i style="--x:62.5%;--w:4%;--y:24%;--v:.86"></i><i style="--x:70.8%;--w:4%;--y:24%;--v:.78"></i><i style="--x:79.2%;--w:3%;--y:40%;--v:.74"></i><i style="--x:87.5%;--w:4%;--y:24%;--v:.82"></i><i style="--x:95.8%;--w:4%;--y:24%;--v:.86"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Open Drive on Hi-Hats, bar 7 to bar 9" data-clip-id="clip-hat-3" data-track-id="trk-hat" data-start-beat="24" data-duration-beats="8" style="--start-beat:24;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Open Drive</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:3%;--y:56%;--v:.62"></i><i style="--x:6.25%;--w:8%;--y:22%;--v:.9"></i><i style="--x:18.75%;--w:8%;--y:22%;--v:.88"></i><i style="--x:31.25%;--w:8%;--y:22%;--v:.92"></i><i style="--x:43.75%;--w:8%;--y:22%;--v:.9"></i><i style="--x:56.25%;--w:8%;--y:22%;--v:.9"></i><i style="--x:68.75%;--w:8%;--y:22%;--v:.88"></i><i style="--x:81.25%;--w:8%;--y:22%;--v:.92"></i><i style="--x:93.75%;--w:6%;--y:22%;--v:.9"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Track 4: Analog Bass -->
+              <div class="track-row" role="listitem" data-track-id="trk-bass" data-track-type="bass" data-selected="false" data-muted="false" data-solo="false">
+                <div class="track-header" data-action="select-track" data-track-id="trk-bass">
+                  <span class="track-rail" aria-hidden="true"></span>
+                  <div class="track-header-top">
+                    <button class="track-select-btn" type="button" data-action="select-track" data-track-id="trk-bass" aria-pressed="false">
+                      <span class="track-name">Analog Bass</span>
+                      <span class="track-kind">Bass</span>
+                    </button>
+                    <div class="track-ms">
+                      <button class="btn-ms btn-mute" type="button" aria-pressed="false" aria-label="Mute Analog Bass" data-action="toggle-mute" data-track-id="trk-bass">M</button>
+                      <button class="btn-ms btn-solo" type="button" aria-pressed="false" aria-label="Solo Analog Bass" data-action="toggle-solo" data-track-id="trk-bass">S</button>
+                    </div>
+                  </div>
+                  <div class="track-header-bottom">
+                    <input class="track-vol-slider" type="range" min="0" max="100" value="82" aria-label="Analog Bass track volume" data-action="track-volume" data-track-id="trk-bass">
+                    <span class="track-vol-readout">82%</span>
+                  </div>
+                </div>
+                <div class="track-lane" data-track-id="trk-bass" data-track-type="bass">
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="A-Minor Root on Analog Bass, bar 1 to bar 5" data-clip-id="clip-bass-1" data-track-id="trk-bass" data-start-beat="0" data-duration-beats="16" style="--start-beat:0;--duration-beats:16">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">A-Minor Root</span><span class="clip-len">4b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:3%;--y:64%;--v:.94"></i><i style="--x:9.4%;--w:3%;--y:48%;--v:.86"></i><i style="--x:15.6%;--w:3%;--y:26%;--v:.88"></i><i style="--x:21.8%;--w:3%;--y:74%;--v:.84"></i><i style="--x:25%;--w:3%;--y:64%;--v:.94"></i><i style="--x:34.4%;--w:3%;--y:48%;--v:.86"></i><i style="--x:40.6%;--w:3%;--y:26%;--v:.88"></i><i style="--x:46.8%;--w:3%;--y:74%;--v:.84"></i><i style="--x:50%;--w:3%;--y:64%;--v:.94"></i><i style="--x:59.4%;--w:3%;--y:48%;--v:.86"></i><i style="--x:65.6%;--w:3%;--y:26%;--v:.88"></i><i style="--x:71.8%;--w:3%;--y:74%;--v:.84"></i><i style="--x:75%;--w:3%;--y:64%;--v:.94"></i><i style="--x:84.4%;--w:3%;--y:48%;--v:.86"></i><i style="--x:90.6%;--w:3%;--y:26%;--v:.88"></i><i style="--x:96.8%;--w:3%;--y:74%;--v:.84"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Lift Pedal on Analog Bass, bar 5 to bar 7" data-clip-id="clip-bass-2" data-track-id="trk-bass" data-start-beat="16" data-duration-beats="8" style="--start-beat:16;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Lift Pedal</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:5.5%;--y:74%;--v:.9"></i><i style="--x:12.5%;--w:5.5%;--y:74%;--v:.88"></i><i style="--x:18.75%;--w:5%;--y:42%;--v:.76"></i><i style="--x:25%;--w:5.5%;--y:62%;--v:.92"></i><i style="--x:37.5%;--w:5.5%;--y:62%;--v:.9"></i><i style="--x:43.75%;--w:5.5%;--y:30%;--v:.82"></i><i style="--x:50%;--w:5.5%;--y:74%;--v:.9"></i><i style="--x:62.5%;--w:5.5%;--y:74%;--v:.88"></i><i style="--x:68.75%;--w:5%;--y:42%;--v:.76"></i><i style="--x:75%;--w:5.5%;--y:62%;--v:.92"></i><i style="--x:87.5%;--w:5.5%;--y:62%;--v:.9"></i><i style="--x:93.75%;--w:5.5%;--y:30%;--v:.82"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Octave Roll on Analog Bass, bar 7 to bar 9" data-clip-id="clip-bass-3" data-track-id="trk-bass" data-start-beat="24" data-duration-beats="8" style="--start-beat:24;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Octave Roll</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:5%;--y:72%;--v:.96"></i><i style="--x:6.25%;--w:4%;--y:20%;--v:.82"></i><i style="--x:18.75%;--w:5%;--y:58%;--v:.88"></i><i style="--x:25%;--w:5%;--y:72%;--v:.92"></i><i style="--x:31.25%;--w:4%;--y:20%;--v:.84"></i><i style="--x:37.5%;--w:5%;--y:48%;--v:.88"></i><i style="--x:43.75%;--w:5%;--y:40%;--v:.9"></i><i style="--x:50%;--w:5%;--y:72%;--v:.96"></i><i style="--x:56.25%;--w:4%;--y:20%;--v:.82"></i><i style="--x:68.75%;--w:5%;--y:58%;--v:.88"></i><i style="--x:75%;--w:5%;--y:72%;--v:.92"></i><i style="--x:81.25%;--w:4%;--y:20%;--v:.84"></i><i style="--x:93.75%;--w:5%;--y:40%;--v:.9"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Track 5: Poly Synth -->
+              <div class="track-row" role="listitem" data-track-id="trk-synth" data-track-type="synth" data-selected="false" data-muted="false" data-solo="false">
+                <div class="track-header" data-action="select-track" data-track-id="trk-synth">
+                  <span class="track-rail" aria-hidden="true"></span>
+                  <div class="track-header-top">
+                    <button class="track-select-btn" type="button" data-action="select-track" data-track-id="trk-synth" aria-pressed="false">
+                      <span class="track-name">Poly Synth</span>
+                      <span class="track-kind">Synth</span>
+                    </button>
+                    <div class="track-ms">
+                      <button class="btn-ms btn-mute" type="button" aria-pressed="false" aria-label="Mute Poly Synth" data-action="toggle-mute" data-track-id="trk-synth">M</button>
+                      <button class="btn-ms btn-solo" type="button" aria-pressed="false" aria-label="Solo Poly Synth" data-action="toggle-solo" data-track-id="trk-synth">S</button>
+                    </div>
+                  </div>
+                  <div class="track-header-bottom">
+                    <input class="track-vol-slider" type="range" min="0" max="100" value="72" aria-label="Poly Synth track volume" data-action="track-volume" data-track-id="trk-synth">
+                    <span class="track-vol-readout">72%</span>
+                  </div>
+                </div>
+                <div class="track-lane" data-track-id="trk-synth" data-track-type="synth">
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Glass Chords on Poly Synth, bar 2 to bar 5" data-clip-id="clip-synth-1" data-track-id="trk-synth" data-start-beat="4" data-duration-beats="12" style="--start-beat:4;--duration-beats:12">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Glass Chords</span><span class="clip-len">3b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:6%;--y:64%;--v:.74"></i><i style="--x:0%;--w:6%;--y:48%;--v:.7"></i><i style="--x:0%;--w:6%;--y:32%;--v:.72"></i><i style="--x:12.5%;--w:4%;--y:22%;--v:.72"></i><i style="--x:20.8%;--w:6%;--y:74%;--v:.72"></i><i style="--x:20.8%;--w:6%;--y:32%;--v:.74"></i><i style="--x:33.3%;--w:6%;--y:64%;--v:.74"></i><i style="--x:33.3%;--w:6%;--y:48%;--v:.7"></i><i style="--x:33.3%;--w:6%;--y:32%;--v:.72"></i><i style="--x:54.1%;--w:6%;--y:74%;--v:.72"></i><i style="--x:54.1%;--w:6%;--y:32%;--v:.74"></i><i style="--x:66.6%;--w:6%;--y:64%;--v:.74"></i><i style="--x:66.6%;--w:6%;--y:48%;--v:.7"></i><i style="--x:66.6%;--w:6%;--y:32%;--v:.72"></i><i style="--x:87.5%;--w:6%;--y:32%;--v:.74"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Rising Arp on Poly Synth, bar 5 to bar 7" data-clip-id="clip-synth-2" data-track-id="trk-synth" data-start-beat="16" data-duration-beats="8" style="--start-beat:16;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Rising Arp</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:4%;--y:76%;--v:.72"></i><i style="--x:6.25%;--w:4%;--y:66%;--v:.74"></i><i style="--x:12.5%;--w:4%;--y:54%;--v:.78"></i><i style="--x:18.75%;--w:4%;--y:44%;--v:.82"></i><i style="--x:25%;--w:4%;--y:36%;--v:.86"></i><i style="--x:31.25%;--w:4%;--y:44%;--v:.78"></i><i style="--x:37.5%;--w:5%;--y:26%;--v:.88"></i><i style="--x:43.75%;--w:5%;--y:16%;--v:.92"></i><i style="--x:50%;--w:4%;--y:76%;--v:.72"></i><i style="--x:56.25%;--w:4%;--y:66%;--v:.74"></i><i style="--x:62.5%;--w:4%;--y:54%;--v:.78"></i><i style="--x:68.75%;--w:4%;--y:44%;--v:.82"></i><i style="--x:75%;--w:4%;--y:36%;--v:.86"></i><i style="--x:87.5%;--w:5%;--y:26%;--v:.88"></i><i style="--x:93.75%;--w:5%;--y:16%;--v:.92"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                  <div class="clip-block" role="button" tabindex="0" aria-selected="false" aria-label="Night Hook on Poly Synth, bar 7 to bar 9" data-clip-id="clip-synth-3" data-track-id="trk-synth" data-start-beat="24" data-duration-beats="8" style="--start-beat:24;--duration-beats:8">
+                    <span class="clip-resize-handle is-left" data-resize="left" aria-hidden="true"></span>
+                    <div class="clip-header"><span class="clip-title">Night Hook</span><span class="clip-len">2b</span></div>
+                    <div class="clip-pattern" aria-hidden="true"><i style="--x:0%;--w:6%;--y:42%;--v:.86"></i><i style="--x:9.4%;--w:5%;--y:30%;--v:.8"></i><i style="--x:18.75%;--w:6%;--y:16%;--v:.9"></i><i style="--x:25%;--w:5%;--y:24%;--v:.78"></i><i style="--x:31.25%;--w:6%;--y:30%;--v:.84"></i><i style="--x:37.5%;--w:5%;--y:48%;--v:.8"></i><i style="--x:43.75%;--w:6%;--y:58%;--v:.86"></i><i style="--x:50%;--w:6%;--y:42%;--v:.86"></i><i style="--x:59.4%;--w:5%;--y:30%;--v:.8"></i><i style="--x:68.75%;--w:6%;--y:16%;--v:.9"></i><i style="--x:81.25%;--w:6%;--y:30%;--v:.84"></i><i style="--x:93.75%;--w:6%;--y:58%;--v:.86"></i></div>
+                    <span class="clip-resize-handle is-right" data-resize="right" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom 16-Step Pattern Sequencer Desk -->
+        <section id="pattern-desk" class="pattern-desk" aria-labelledby="pattern-desk-heading" data-track-type="kick">
+          <div class="pattern-desk-head">
+            <div class="pattern-desk-context">
+              <h2 id="pattern-desk-heading" class="desk-heading">Step Sequencer</h2>
+              <span id="desk-track-badge" class="track-pill" data-track-type="kick">Kick</span>
+              <span id="desk-clip-name" class="desk-clip-name">Four on Floor</span>
+              <span id="desk-clip-meta" class="desk-clip-meta">Bar 1, Beat 1 &middot; 4b</span>
+            </div>
+            <div class="pattern-desk-controls">
+              <div class="desk-pitch-group">
+                <label class="field-label-inline" for="step-pitch-select">Voice</label>
+                <select id="step-pitch-select" class="select-compact" aria-label="Step pitch">
+                  <option value="36" selected>Kick (36)</option>
+                </select>
+                <button id="btn-audition-note" class="btn btn-xs" type="button" aria-label="Audition selected voice pitch" data-action="audition-note">Hear</button>
+              </div>
+              <span id="desk-density-readout" class="desk-stats" aria-live="off">4 / 16 active</span>
+            </div>
+          </div>
+
+          <div id="pattern-desk-empty" class="pattern-desk-empty" hidden>
+            <p class="empty-note">Select a clip on the timeline or add one to program its 16-step pattern.</p>
+          </div>
+
+          <div id="pattern-desk-body" class="pattern-desk-body">
+            <div id="step-grid" class="step-grid" role="group" aria-label="16-step clip pattern">
+              <div class="step-beat-group" data-beat-group="1" role="group" aria-label="Beat 1, steps 1 to 4">
+                <div class="step-beat-header"><span class="step-beat-label">Beat 1</span><span class="step-beat-sub">1&ndash;4</span></div>
+                <div class="step-beat-cells">
+                  <button class="step-cell" type="button" data-step="0" data-downbeat="true" aria-pressed="true" aria-label="Step 1, Beat 1, Kick (36) active, velocity 100%"><span class="step-cell-top"><span class="step-num">1</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:1"></span></span><span class="step-cell-foot">100</span></button>
+                  <button class="step-cell" type="button" data-step="1" aria-pressed="false" aria-label="Step 2, Beat 1, inactive"><span class="step-cell-top"><span class="step-num">2</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="2" aria-pressed="false" aria-label="Step 3, Beat 1, inactive"><span class="step-cell-top"><span class="step-num">3</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="3" aria-pressed="false" aria-label="Step 4, Beat 1, inactive"><span class="step-cell-top"><span class="step-num">4</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                </div>
+              </div>
+              <div class="step-beat-group" data-beat-group="2" role="group" aria-label="Beat 2, steps 5 to 8">
+                <div class="step-beat-header"><span class="step-beat-label">Beat 2</span><span class="step-beat-sub">5&ndash;8</span></div>
+                <div class="step-beat-cells">
+                  <button class="step-cell" type="button" data-step="4" data-downbeat="true" aria-pressed="true" aria-label="Step 5, Beat 2, Kick (36) active, velocity 94%"><span class="step-cell-top"><span class="step-num">5</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0.94"></span></span><span class="step-cell-foot">94</span></button>
+                  <button class="step-cell" type="button" data-step="5" aria-pressed="false" aria-label="Step 6, Beat 2, inactive"><span class="step-cell-top"><span class="step-num">6</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="6" aria-pressed="false" aria-label="Step 7, Beat 2, inactive"><span class="step-cell-top"><span class="step-num">7</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="7" aria-pressed="false" aria-label="Step 8, Beat 2, inactive"><span class="step-cell-top"><span class="step-num">8</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                </div>
+              </div>
+              <div class="step-beat-group" data-beat-group="3" role="group" aria-label="Beat 3, steps 9 to 12">
+                <div class="step-beat-header"><span class="step-beat-label">Beat 3</span><span class="step-beat-sub">9&ndash;12</span></div>
+                <div class="step-beat-cells">
+                  <button class="step-cell" type="button" data-step="8" data-downbeat="true" aria-pressed="true" aria-label="Step 9, Beat 3, Kick (36) active, velocity 98%"><span class="step-cell-top"><span class="step-num">9</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0.98"></span></span><span class="step-cell-foot">98</span></button>
+                  <button class="step-cell" type="button" data-step="9" aria-pressed="false" aria-label="Step 10, Beat 3, inactive"><span class="step-cell-top"><span class="step-num">10</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="10" aria-pressed="false" aria-label="Step 11, Beat 3, inactive"><span class="step-cell-top"><span class="step-num">11</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="11" aria-pressed="false" aria-label="Step 12, Beat 3, inactive"><span class="step-cell-top"><span class="step-num">12</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                </div>
+              </div>
+              <div class="step-beat-group" data-beat-group="4" role="group" aria-label="Beat 4, steps 13 to 16">
+                <div class="step-beat-header"><span class="step-beat-label">Beat 4</span><span class="step-beat-sub">13&ndash;16</span></div>
+                <div class="step-beat-cells">
+                  <button class="step-cell" type="button" data-step="12" data-downbeat="true" aria-pressed="true" aria-label="Step 13, Beat 4, Kick (36) active, velocity 94%"><span class="step-cell-top"><span class="step-num">13</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0.94"></span></span><span class="step-cell-foot">94</span></button>
+                  <button class="step-cell" type="button" data-step="13" aria-pressed="false" aria-label="Step 14, Beat 4, inactive"><span class="step-cell-top"><span class="step-num">14</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="14" aria-pressed="false" aria-label="Step 15, Beat 4, inactive"><span class="step-cell-top"><span class="step-num">15</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                  <button class="step-cell" type="button" data-step="15" aria-pressed="false" aria-label="Step 16, Beat 4, inactive"><span class="step-cell-top"><span class="step-num">16</span><span class="step-other-dot" aria-hidden="true"></span></span><span class="step-vel-well" aria-hidden="true"><span class="step-vel-bar" style="--vel:0"></span></span><span class="step-cell-foot">&middot;</span></button>
+                </div>
+              </div>
+            </div>
+
+            <div id="desk-note-strip" class="desk-note-strip" role="group" aria-label="Voices present in clip">
+              <div class="desk-voice-list">
+                <button class="voice-chip" type="button" data-pitch="36" aria-pressed="true">Kick (36) <span class="voice-chip-count">&times;4</span></button>
+              </div>
+              <span class="desk-vel-summary">Vel 94&ndash;100% &middot; 1/16 grid</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Right Inspector Pane: Clip Layer & Track Channel Layer -->
+      <aside id="inspector-panel" class="inspector-pane" aria-label="Clip and track inspector">
+        <section id="clip-inspector" class="inspector-section" aria-labelledby="clip-inspector-heading">
+          <div class="inspector-section-head">
+            <h2 id="clip-inspector-heading" class="inspector-heading">Clip</h2>
+            <span id="clip-track-badge" class="track-pill" data-track-type="kick">Kick</span>
+          </div>
+
+          <div id="inspector-empty" class="inspector-empty" hidden>
+            <p class="empty-note">Select a clip on the timeline or add one to inspect its timing, pattern preset, and gain.</p>
+          </div>
+
+          <div id="clip-inspector-body" class="inspector-body">
+            <div class="field-row">
+              <label class="field-label" for="clip-name-input">Name</label>
+              <input id="clip-name-input" class="input-text" type="text" value="Four on Floor" maxlength="80">
+            </div>
+
+            <div class="field-grid-2">
+              <div class="field-group">
+                <label class="field-label" for="clip-start-input">Start (beat)</label>
+                <div class="stepper-row">
+                  <button id="btn-clip-nudge-left" class="btn btn-icon-xs" type="button" aria-label="Nudge clip earlier by 1 beat" data-action="clip-nudge-left">&minus;</button>
+                  <input id="clip-start-input" class="input-num" type="number" min="0" max="31.5" step="0.25" value="0">
+                  <button id="btn-clip-nudge-right" class="btn btn-icon-xs" type="button" aria-label="Nudge clip later by 1 beat" data-action="clip-nudge-right">+</button>
+                </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="clip-duration-input">Length (beats)</label>
+                <div class="stepper-row">
+                  <button id="btn-clip-shorten" class="btn btn-icon-xs" type="button" aria-label="Shorten clip by 1 beat" data-action="clip-shorten">&minus;</button>
+                  <input id="clip-duration-input" class="input-num" type="number" min="0.5" max="32" step="0.25" value="16">
+                  <button id="btn-clip-lengthen" class="btn btn-icon-xs" type="button" aria-label="Lengthen clip by 1 beat" data-action="clip-lengthen">+</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="field-row">
+              <label class="field-label" for="clip-pattern-select">Pattern</label>
+              <select id="clip-pattern-select" class="input-select">
+                <option value="kick-four" selected>Four on Floor</option>
+                <option value="kick-drive">Drop Drive</option>
+                <option value="kick-turnaround">Sync Turnaround</option>
+                <option value="custom">Custom Pattern</option>
+              </select>
+            </div>
+
+            <div class="field-row">
+              <div class="field-label-split">
+                <label class="field-label" for="clip-gain-input">Clip Gain</label>
+                <output id="clip-gain-value" class="field-value" for="clip-gain-input">95%</output>
+              </div>
+              <input id="clip-gain-input" class="range-slider" type="range" min="0" max="100" step="1" value="95">
+            </div>
+
+            <div class="inspector-actions">
+              <button id="btn-clip-duplicate" class="btn btn-action" type="button" data-action="clip-duplicate">Duplicate</button>
+              <button id="btn-clip-delete" class="btn btn-danger-subtle" type="button" data-action="clip-delete">Delete Clip</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="track-inspector" class="inspector-section" aria-labelledby="track-inspector-heading">
+          <div class="inspector-section-head">
+            <h2 id="track-inspector-heading" class="inspector-heading">Track Channel</h2>
+            <span id="track-type-badge" class="track-pill" data-track-type="kick">Kick</span>
+          </div>
+
+          <div class="inspector-body">
+            <div class="field-row">
+              <label class="field-label" for="track-name-input">Track Name</label>
+              <input id="track-name-input" class="input-text" type="text" value="Kick" maxlength="80">
+            </div>
+
+            <div class="channel-toggles" role="group" aria-label="Selected track mute and solo">
+              <button id="inspector-track-mute" class="btn btn-toggle-mute" type="button" aria-pressed="false" data-action="inspector-mute">Mute</button>
+              <button id="inspector-track-solo" class="btn btn-toggle-solo" type="button" aria-pressed="false" data-action="inspector-solo">Solo</button>
+              <button id="btn-track-add-clip" class="btn btn-action" type="button" data-action="track-add-clip">+ Clip</button>
+            </div>
+
+            <div class="field-row">
+              <div class="field-label-split">
+                <label class="field-label" for="inspector-track-volume">Volume</label>
+                <output id="inspector-track-volume-value" class="field-value" for="inspector-track-volume">90%</output>
+              </div>
+              <input id="inspector-track-volume" class="range-slider" type="range" min="0" max="100" step="1" value="90">
+            </div>
+
+            <div class="field-row">
+              <div class="field-label-split">
+                <label class="field-label" for="inspector-track-pan">Pan</label>
+                <output id="inspector-track-pan-value" class="field-value" for="inspector-track-pan">Center</output>
+              </div>
+              <input id="inspector-track-pan" class="range-slider" type="range" min="-100" max="100" step="1" value="0">
+            </div>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>
