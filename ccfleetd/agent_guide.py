@@ -253,11 +253,52 @@ def t3_gemini() -> str:
         + label("Let Gemini run project commands", "允许 Gemini 运行项目命令", inline=True)
         + '</h3>'
         + bi(
-            '<p>CCFleet 0.2.23 lets you authorize one checkout on one Mac. Update the client '
-            'and the private slot service first. In the local terminal where the project files '
-            'live, run the following commands from the project directory.</p>',
-            '<p>CCFleet 0.2.23 可为一台 Mac 上的一个项目目录授权。先更新客户端和专属槽位服务，'
-            '然后在存放项目文件的 Mac 上打开终端，进入项目目录并运行以下命令。</p>',
+            '<p>With CCFleet 0.2.24, you can authorize development projects under your Mac '
+            'home once. In a local terminal on the Mac that holds your files, run:</p>',
+            '<p>从 CCFleet 0.2.24 起，可一次性授权 Mac 主目录下的开发项目。'
+            '在存放文件的 Mac 上打开本地终端，运行以下命令。</p>',
+        )
+        + '<pre><code>ccfleet update\ncd ~\nccfleet gemini --full-access</code></pre>'
+        + bi(
+            '<p>Read the scope and type <code>ENABLE</code> once. The command saves the grant '
+            'and exits. Use your existing Gemini pairing and provider in T3, the CCFleet '
+            'terminal, Orca Quick Commands, or Herdr desktop and TUI. Open a project normally '
+            'to use it immediately.</p>',
+            '<p>核对授权范围后输入一次 <code>ENABLE</code>。命令保存授权后即退出。'
+            '继续使用已有的 Gemini 配对和服务商，在 T3、CCFleet 终端、Orca Quick Commands '
+            '或 Herdr 桌面版和 TUI 中打开项目即可。</p>',
+        )
+        + bi(
+            '<p>You can also open <code>~</code> in the client and select a project from '
+            'the conversation. For example, send <code>/workspace ~/code/app</code>. '
+            'Send it again with a different project to switch in the same conversation. '
+            'Use <code>/workspace</code> by itself to see which local directory Gemini is '
+            'using. T3, Orca and Herdr keep their own project panels and terminal directories.</p>',
+            '<p>也可以在客户端打开 <code>~</code>，然后在对话中发送 '
+            '<code>/workspace ~/code/app</code> 选择项目。再次发送并换一个路径，即可在同一对话中'
+            '切换项目。单独发送 <code>/workspace</code> 可查看 Gemini 当前使用的本地目录。'
+            'T3、Orca 和 Herdr 自身的项目面板及终端目录保持原状。</p>',
+        )
+        + bi(
+            '<p>The grant covers eligible projects you own, including Git projects and '
+            'projects with a root manifest such as <code>package.json</code> or '
+            '<code>pyproject.toml</code>. Home is a starting point for '
+            'navigation. Shell commands run offline inside the selected project. Full access '
+            'runs permitted actions without approval prompts. If an action is unavailable, '
+            'CCFleet reports it. To remove the all-projects grant, run '
+            '<code>ccfleet gemini --revoke-full-access</code> from <code>~</code>. '
+            'Checkouts with a separate local grant keep that grant.</p>',
+            '<p>授权范围包括你拥有的合格项目，例如 Git 项目或包含受支持开发配置文件的项目。'
+            '主目录用于选择项目，Shell 命令在选中的项目内离线运行。启用完全访问后，'
+            '已获授权的操作直接执行；无法执行的操作会返回错误，不弹出确认请求。'
+            '在 <code>~</code> 运行 <code>ccfleet gemini --revoke-full-access</code> '
+            '可撤销跨项目授权。之前单独授权的项目仍保留各自的权限。</p>',
+        )
+        + bi(
+            '<p>To grant a single folder, use the existing CCFleet 0.2.23 flow. Run the '
+            'following commands from that project directory.</p>',
+            '<p>如仅需授权一个目录，可沿用 CCFleet 0.2.23 的单项目方式。'
+            '在该项目目录运行以下命令。</p>',
         )
         + '<pre><code>ccfleet update\nccfleet gemini --full-access</code></pre>'
         + bi(
@@ -275,22 +316,25 @@ def t3_gemini() -> str:
             'checkout. Command output can be sent to Gemini. Install any needed dependencies '
             'yourself first. For Git writes, use '
             'a standalone clone with its own <code>.git</code> directory. Linked worktrees '
-            'usually keep their Git data outside the checkout. Other projects and older '
-            'clients or slots keep the usual approval flow.</p>',
+            'usually keep their Git data outside the checkout. Without a grant, projects use '
+            'the supervised flow. Project commands require a compatible slot.</p>',
             '<p>项目授权生效后，Gemini 可以修改文件、运行测试、构建项目和创建本地 Git 提交，'
             '无需逐次确认。命令在项目目录内离线运行，输出可能会发送给 Gemini。'
             '请先自行安装所需依赖。需要写入 Git 时，'
             '请使用带有独立 <code>.git</code> 目录的克隆。链接工作树通常将 Git 数据保存在目录'
-            '之外。其他项目以及旧版客户端或槽位仍使用原有的确认流程。</p>',
+            '之外。未授权的项目使用逐次确认模式。项目命令需要兼容的槽位。</p>',
         )
         + bi(
-            '<p>To publish, sign in locally with <code>gh</code> for GitHub.com or '
+            '<p>All-projects access covers local development. To publish, use a destination '
+            'pinned to the checkout and sign in locally with <code>gh</code> for GitHub.com or '
             '<code>glab</code> for GitLab.com. At authorization, CCFleet uses a recognized '
             '<code>origin</code> by default. If it cannot identify a repository, local commands '
-            'still work. To choose the publishing destination, pass its URL with the grant.</p>',
+            'still work. To add publishing to an all-projects grant, run the following in the '
+            'specific checkout and supply its destination URL.</p>',
             '<p>如需发布，请在本机用 <code>gh</code> 登录 GitHub.com，或用 <code>glab</code> '
             '登录 GitLab.com。授权时 CCFleet 默认使用可识别的 <code>origin</code>。未识别出仓库时，'
-            '仍可运行本地命令。要指定发布目标，请在授权时传入仓库网址。</p>',
+            '仍可运行本地命令。已启用跨项目授权时，请在需要发布的项目目录执行以下命令，'
+            '指定该项目的仓库网址。</p>',
         )
         + '<pre><code>ccfleet gemini --full-access --publish-to https://github.com/OWNER/REPO</code></pre>'
         + bi(
