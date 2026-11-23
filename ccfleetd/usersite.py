@@ -508,37 +508,50 @@ body.site{font-size:15.5px;display:flex;flex-direction:column;min-height:100vh}
 .site main [id]{scroll-margin-top:144px}
 @media(max-width:760px){.site main [id]{scroll-margin-top:164px}}
 .site main{flex:1 0 auto;width:100%}
-.site .page{max-width:1200px;padding-block:44px 80px}
-.site .page.narrow{max-width:880px}
-.site .page.doc{max-width:840px}
+.site .page{max-width:1240px;padding-block:48px 88px}
+.site .page.narrow{max-width:900px}
+.site .page.doc{max-width:860px}
 
-/* The bar's links to the pages anybody can read. */
-.doc-nav{display:flex;align-items:center;gap:3px;font-size:13px;min-width:0;
+/* The bar's links: crisp editorial navigation with sliding bottom rule. */
+.doc-nav{display:flex;align-items:center;gap:6px;font-size:14px;min-width:0;
 overflow-x:auto;scrollbar-width:none}
 .doc-nav::-webkit-scrollbar{display:none}
-.doc-nav a{color:var(--muted);text-decoration:none;padding:8px 9px;border-radius:8px;
-white-space:nowrap;font-weight:560}
-.doc-nav a:hover{color:var(--ink);background:var(--inset)}
-.doc-nav a.here{color:var(--acc);background:var(--acc-soft)}
+.doc-nav a{position:relative;color:var(--muted);text-decoration:none;padding:8px 9px;
+border-radius:0;white-space:nowrap;font-weight:500;transition:color .2s var(--ease)}
+.doc-nav a::after{content:"";position:absolute;left:9px;right:9px;bottom:0;height:2px;
+background:var(--ink);transform:scaleX(0);transform-origin:left center;
+transition:transform .26s var(--ease)}
+.doc-nav a:hover{color:var(--ink);background:transparent}
+.doc-nav a:hover::after{transform:scaleX(1);opacity:.38}
+.doc-nav a.here{color:var(--ink);background:transparent;font-weight:640}
+.doc-nav a.here::after{transform:scaleX(1);opacity:1}
 
-/* The footer: the same ways out, from every page. */
-.sitefoot{border-top:1px solid var(--rule);background:var(--panel)}
-.sitefoot-in{max-width:1200px;margin:0 auto;padding:32px 28px 40px;display:flex;
-flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:14px 40px;
-font-size:13.5px;color:var(--muted)}
+/* Full-bleed obsidian editorial footer — Anthropic News broadsheet contrast band. */
+.sitefoot{border-top:1px solid #2a2926;background:#141413;color:#b0aea5}
+.sitefoot-in{max-width:1240px;margin:0 auto;padding:52px 28px 60px;display:flex;
+flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:24px 48px;
+font-size:13.5px;color:#b0aea5}
 .sitefoot-identity{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
-.sitefoot .brand{font-size:15px}
+.sitefoot .brand{font-size:16px;color:#faf9f5}
+.sitefoot .brand:hover{color:#faf9f5}
 .sitefoot .brand .mark{width:22px;height:22px}
-.sitefoot p{margin:10px 0 0;max-width:46ch}
-.sitefoot nav{display:flex;flex-wrap:wrap;gap:8px 20px;padding-top:3px}
-.sitefoot nav a{color:var(--muted);text-decoration:none}
-.sitefoot nav a:hover{color:var(--ink)}
+.sitefoot .brand .mark .m-bg{fill:#faf9f5}
+.sitefoot .brand .mark .m-unit{fill:#141413}
+.sitefoot .brand .mark .m-led{fill:#d97757}
+.sitefoot .alpha-badge{background:rgba(217,119,87,.16);color:#f2a68d;
+border-color:rgba(217,119,87,.42)}
+.sitefoot p{margin:12px 0 0;max-width:46ch;line-height:1.68;color:#b0aea5}
+.sitefoot nav{display:flex;flex-wrap:wrap;gap:12px 26px;padding-top:4px}
+.sitefoot nav a{color:#dedcd3;text-decoration:none;font-weight:500;
+transition:color .14s var(--ease)}
+.sitefoot nav a:hover{color:#e38b6d}
 
 /* A page's title, and the line under it. */
-.pagehead{margin:0 0 30px}
+.pagehead{margin:0 0 28px;animation:cf-rise .44s var(--ease) both}
 .pagehead .sub{margin-top:8px;font-size:15px}
-.note-banner{border:1px solid var(--rule);border-radius:12px;padding:12px 16px;
-margin:0 0 18px;font-weight:550;background:var(--panel)}
+.note-banner{border:1px solid var(--rule);border-radius:var(--radius-md);padding:13px 16px;
+margin:0 0 18px;font-weight:580;background:var(--panel);box-shadow:var(--shadow-sm);
+animation:cf-rise .36s var(--ease) both}
 .note-banner.ok{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
 .note-banner.warn{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
 .lapsed{color:var(--warn);font-weight:650}
@@ -580,7 +593,8 @@ animation:ccfleet-slide 1.6s ease-in-out infinite}
 .rc{position:relative;padding-left:18px;margin:4px 0 14px}
 .rc::before{content:"";position:absolute;left:0;top:.55em;width:8px;height:8px;
 border-radius:50%;background:var(--off)}
-.rc.on::before{background:var(--led);box-shadow:0 0 0 3px var(--ok-bg)}
+.rc.on::before{background:var(--led);box-shadow:0 0 0 3px var(--ok-bg);
+animation:cf-pulse 3.2s ease-in-out infinite}
 .usage{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:18px 28px;
 align-items:start;margin:4px 0 14px;padding:16px 18px;border-radius:12px;
 background:var(--inset);border:1px solid var(--rule-soft)}
@@ -636,59 +650,63 @@ border-radius:12px;background:var(--panel)}
 border:1px solid var(--rule-soft);border-radius:12px}
 .site .relay-usage>summary{font-weight:650;cursor:pointer}
 .site .relay-usage p{line-height:1.65}
-.site .usage-ranking{margin-top:64px;padding:28px}
-.usage-ranking h2{margin:0;font-size:26px;letter-spacing:-.03em}
-.usage-ranking p{font-size:13px;line-height:1.65;color:var(--muted);margin:10px 0}
+.site .usage-ranking{margin-top:68px;padding:30px 32px;box-shadow:var(--shadow);
+border-top:2px solid var(--ink)}
+.usage-ranking h2{margin:0;font-family:var(--serif);font-size:clamp(24px,2.8vw,30px);
+font-weight:500;letter-spacing:-.02em}
+.usage-ranking p{font-size:13.5px;line-height:1.65;color:var(--muted);margin:10px 0}
 .usage-ranking .usage-ranking-lead{margin:6px 0 0}
 .usage-ranking-sheet{max-width:100%;overflow-x:auto;border:1px solid var(--rule-soft);
-border-radius:14px;margin:18px 0 12px}
-.usage-ranking table{width:100%;min-width:440px;border-collapse:collapse;font-size:14px}
-.usage-ranking th,.usage-ranking td{padding:18px 20px;text-align:left;vertical-align:top;
+border-radius:14px;margin:18px 0 14px;background:var(--panel)}
+.usage-ranking table{width:100%;min-width:460px;border-collapse:collapse;font-size:14px}
+.usage-ranking th,.usage-ranking td{padding:16px 20px;text-align:left;vertical-align:top;
 border-bottom:1px solid var(--rule-soft);font-variant-numeric:tabular-nums}
-.usage-ranking thead th{background:var(--inset);font-size:11px;color:var(--muted);
-letter-spacing:.04em;white-space:nowrap}
+.usage-ranking thead th{background:var(--surface-subtle);font-size:12px;color:var(--muted);
+letter-spacing:.02em;white-space:nowrap;border-bottom:1px solid var(--rule)}
 .usage-ranking tbody th{background:none;text-transform:none}
 .usage-ranking .usage-ranking-row th,.usage-ranking .usage-ranking-row td{border-bottom:0}
-.usage-ranking .usage-rank{width:72px;color:var(--muted);font-size:12px}
-.usage-ranking .usage-user{min-width:140px;padding-top:20px;font-weight:650}
-.usage-ranking .usage-observed{min-width:115px}
-.usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:19px;font-weight:700;
+.usage-ranking .usage-rank{width:72px;color:var(--muted);font-size:12.5px;font-weight:600}
+.usage-ranking .usage-user{min-width:140px;padding-top:18px;font-weight:680;color:var(--ink)}
+.usage-ranking .usage-observed{min-width:120px}
+.usage-ranking .usage-observed>strong,.usage-estimate-value{font-size:19px;font-weight:720;
 line-height:1.3;color:var(--ink);white-space:nowrap}
-.usage-ranking small{display:block;margin-top:5px;font-size:11.5px;line-height:1.5;
+.usage-ranking small{display:block;margin-top:5px;font-size:12px;line-height:1.5;
 color:var(--muted)}
-.usage-ranking .usage-estimate{min-width:180px}
+.usage-ranking .usage-estimate{min-width:185px}
 .usage-estimate-value{display:flex;align-items:center;gap:8px}
-.usage-ranking .usage-badge{display:inline-flex;font-size:10px;font-weight:650;line-height:1.4;
-padding:2px 6px;border-radius:999px;color:var(--acc);background:var(--acc-soft)}
+.usage-ranking .usage-badge{display:inline-flex;font-size:11.5px;font-weight:650;line-height:1.35;
+padding:2px 8px;border-radius:var(--radius-pill);color:var(--acc);background:var(--acc-soft);
+border:1px solid var(--acc-line)}
 .usage-ranking .usage-ranking-detail>td{padding:0 20px 18px}
 .usage-ranking details{text-transform:none;font-weight:400}
-.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12px;line-height:1.7;
-padding-block:5px}
+.usage-ranking summary{cursor:pointer;color:var(--acc);font-size:12.5px;font-weight:600;
+line-height:1.65;padding-block:5px}
 .usage-ranking .usage-reported-models{display:block;
-margin-top:9px;color:var(--ink);font-size:11px;font-weight:500;line-height:1.6;
-white-space:normal;overflow-wrap:anywhere;max-width:26ch}
+margin-top:8px;color:var(--ink);font-size:12px;font-weight:520;line-height:1.6;
+white-space:normal;overflow-wrap:anywhere;max-width:28ch}
 .usage-ranking .usage-model-coverage{display:block;max-width:30ch;white-space:normal;
-font-weight:400;color:var(--muted);font-size:11px;line-height:1.6;margin-top:5px}
+font-weight:400;color:var(--muted);font-size:12px;line-height:1.6;margin-top:5px}
 .usage-ranking .usage-models{display:grid;gap:10px;margin:12px 0 0}
 .usage-family-summary{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
 .usage-family{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:4px;
-padding:6px 10px;border:1px solid var(--rule-soft);border-radius:8px;font-size:12px}
-.usage-family-fable{border-color:var(--acc);background:var(--panel);color:var(--ink)}
+padding:6px 11px;border:1px solid var(--rule-soft);border-radius:var(--radius-sm);font-size:12.5px;
+background:var(--surface-subtle)}
+.usage-family-fable{border-color:var(--acc-line);background:var(--acc-soft);color:var(--ink)}
 .usage-family-other{color:var(--muted)}
-.usage-ranking .usage-family-heading{margin:18px 0 8px;font-size:14px;font-weight:650}
-.usage-ranking .usage-model-explanation{font-size:12px;line-height:1.6;color:var(--muted)}
-.usage-model{padding:16px 18px;border:1px solid var(--rule-soft);border-radius:10px;
+.usage-ranking .usage-family-heading{margin:18px 0 8px;font-size:14px;font-weight:680}
+.usage-ranking .usage-model-explanation{font-size:12.5px;line-height:1.6;color:var(--muted)}
+.usage-model{padding:16px 18px;border:1px solid var(--rule-soft);border-radius:var(--radius-md);
 background:var(--inset);white-space:normal;min-width:0}
 .usage-model-head{display:flex;flex-wrap:wrap;justify-content:space-between;
 align-items:baseline;gap:6px 16px}
-.usage-model-name{font-size:13px;font-weight:650;overflow-wrap:anywhere}
-.usage-model-value{font-size:14px;font-weight:650;white-space:nowrap}
+.usage-model-name{font-size:13.5px;font-weight:660;overflow-wrap:anywhere}
+.usage-model-value{font-size:14.5px;font-weight:680;white-space:nowrap;color:var(--ink)}
 .usage-token-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0}
-.usage-token-grid dt{font-size:10.5px;color:var(--muted);text-transform:none;letter-spacing:0}
-.usage-token-grid dd{margin:3px 0 0;font-size:14px;color:var(--ink);font-weight:600}
+.usage-token-grid dt{font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0}
+.usage-token-grid dd{margin:3px 0 0;font-size:14px;color:var(--ink);font-weight:640}
 .usage-ranking .usage-method{border-top:1px solid var(--rule-soft);padding-top:14px;margin-top:18px}
-.usage-ranking .usage-units{font-size:11px;margin:0}
-.usage-ranking .usage-scope{color:var(--ink);font-size:12px}
+.usage-ranking .usage-units{font-size:12px;margin:0}
+.usage-ranking .usage-scope{color:var(--ink);font-size:12.5px}
 .usage-ranking .usage-token{font-variant-numeric:tabular-nums}
 .usage-ranking .usage-ranking-empty{padding:20px;color:var(--muted)}
 @media(max-width:640px){.site .usage-ranking{padding:22px 16px;margin-top:44px}
@@ -705,39 +723,31 @@ align-items:baseline;gap:6px 16px}
 /* All secondary panels share comfortable summary targets; compact data details
    retain their own layout and the account menu remains a separate popover. */
 .site main details>summary{cursor:pointer;overflow-wrap:anywhere}
-.site main details>summary:focus-visible{outline:3px solid var(--acc);outline-offset:3px}
+.site main details>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .site .account-advanced,.site .relay-usage{border-color:var(--rule);border-radius:14px}
 .site .account-advanced>summary{list-style:none;display:flex;align-items:center;
-gap:16px;font-size:14px;padding:18px 22px;color:var(--ink)}
+gap:16px;font-size:14.5px;padding:18px 22px;color:var(--ink);
+transition:background-color .15s var(--ease)}
+.site .account-advanced>summary:hover{background:var(--surface-subtle)}
 .site .account-advanced>summary::-webkit-details-marker{display:none}
 .site .account-advanced>summary::marker{content:""}
 .site .account-advanced>summary::after{content:"+";margin-left:auto;color:var(--acc);
-font:400 21px/1 var(--mono)}
+font:400 20px/1 var(--mono)}
 .site .account-advanced[open]>summary::after{content:"−"}
 .site .account-advanced[open]>summary{border-bottom:1px solid var(--rule-soft)}
-.site .st-performance,.site .st-machines,.site .st-diagnosis{padding:26px 28px}
-.site .st-performance h2,.site .st-machines>h2{font-size:22px;letter-spacing:-.02em}
-.site .st-perf-metric{padding:18px;border-radius:12px;background:var(--bg)}
-.site .st-perf-metric dd{font-size:30px;letter-spacing:-.035em}
-.site .st-health-item{padding:18px;background:var(--bg);border-radius:12px}
 .site .st-perf-help>summary,.site .offer-policy>summary{padding:12px 0;font-size:14px}
-.site .offer-table{font-size:13.5px}
-.site .offer-table th,.site .offer-table td{padding:16px}
-.site .offer-table thead th{font-size:12px;letter-spacing:0}
-.site .offer-example{padding:24px;border-radius:14px}
-.site .offer-example h3{font-size:18px;letter-spacing:-.02em}
-.site .slot-filters{padding:18px;background:var(--inset);border:1px solid var(--rule-soft);
-border-radius:12px;gap:14px}
-.site .offer-breakdown{line-height:1.7}
-.site .offer-breakdown>summary{padding-block:4px}
 .site .page.doc details:not(.doc-disclosure){margin:18px 0;padding:12px 18px;
-border:1px solid var(--rule);border-radius:12px;background:var(--inset)}
+border:1px solid var(--rule);border-radius:var(--radius-md);background:var(--inset)}
 .site .page.doc details:not(.doc-disclosure)>summary{padding:6px 0;font-size:14px;
 font-weight:600;color:var(--ink)}
-.site .wallet-ui,.site .subscription-ui{padding:26px;border-color:var(--rule);
-border-radius:16px;box-shadow:var(--shadow)}
-.site .wallet-ui p,.site .subscription-ui p{font-size:14px;line-height:1.75}
-.site .wallet-ui h2,.site .subscription-ui h2{font-size:21px;letter-spacing:-.02em}
+/* Reusable code block with optional one-click copy button (hidden without JS). */
+.code-box{position:relative;margin:8px 0 0}
+.code-box>pre{margin:0;padding-right:76px}
+.copy-cmd{position:absolute;top:7px;right:7px;min-height:28px;padding:4px 10px;
+font:600 12px/1.3 var(--sans);border-radius:7px;border:1px solid var(--rule);
+background:var(--panel);color:var(--muted);box-shadow:var(--shadow-sm)}
+.copy-cmd:hover{border-color:var(--ink);color:var(--ink);background:var(--inset)}
+.copy-cmd[hidden]{display:none}
 @media(max-width:760px){.site .topbar-end{margin-left:auto;gap:8px}
 .site .page.doc .card{padding:20px 18px}
 .site .doc-nav{flex-wrap:nowrap;overflow-x:auto;margin:0;gap:3px}
@@ -748,7 +758,7 @@ border-radius:16px;box-shadow:var(--shadow)}
 .site .row-line .actions .cc-say{max-width:100%}}
 
 /* The doors: signing in, the console's, and a page that is not there. */
-.door{max-width:520px;margin:32px auto 0;padding:34px 36px 30px}
+.door{max-width:520px;margin:32px auto 0;padding:34px 36px 30px;box-shadow:var(--shadow-lg)}
 .door .mark{width:44px;height:44px}
 .door h1{margin:18px 0 10px}
 .door .btn.big{width:100%;margin:8px 0 4px}
@@ -770,15 +780,22 @@ padding-top:4px;border-top:1px solid var(--rule-soft)}
 .usage{grid-template-columns:minmax(0,1fr);padding:14px}
 .ways{grid-template-columns:minmax(0,1fr)}
 .door{padding:22px 20px 20px}
-.sitefoot-in{padding-left:16px;padding-right:16px}
-.site .st-performance,.site .st-machines,.site .st-diagnosis{padding:22px 18px}
-.site .st-perf-metric{padding:15px}.site .st-perf-metric dd{font-size:27px}
-.site .slot-filters{padding:14px}
-.site .wallet-ui,.site .subscription-ui{padding:22px 18px}}
+.sitefoot-in{padding-left:16px;padding-right:16px}}
 """ + status.LINE_CSS + """
-.account-nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 20px}
-.account-nav [aria-current=page]{background:var(--acc-soft);color:var(--acc);
-border-color:var(--acc-line)}
+.account-nav{display:flex;flex-wrap:wrap;gap:4px 22px;margin:0 0 26px;padding:0;
+border:0;border-bottom:1px solid var(--rule);border-radius:0;background:transparent;max-width:100%}
+.account-nav .btn{position:relative;border:0;border-radius:0;background:transparent;
+box-shadow:none;color:var(--muted);padding:10px 2px 12px;margin-bottom:-1px;font-size:14px;
+font-weight:520}
+.account-nav .btn::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
+background:var(--ink);transform:scaleX(0);transform-origin:left center;
+transition:transform .26s var(--ease)}
+.account-nav .btn:hover,.account-nav .btn:active{color:var(--ink);background:transparent;
+transform:none;box-shadow:none}
+.account-nav .btn:hover::after{transform:scaleX(1);opacity:.35}
+.account-nav [aria-current=page]{background:transparent;color:var(--ink);font-weight:660;
+box-shadow:none}
+.account-nav [aria-current=page]::after{transform:scaleX(1);opacity:1}
 .slot-browse-link{min-width:0}.slot-browse-link p{margin:0 0 8px}
 
 /* Account setup: one clear action per slot; details stay available on demand. */
@@ -792,114 +809,169 @@ border-color:var(--acc-line)}
 background:var(--slot-assigned-bg);border-color:var(--slot-assigned-line)}
 .account-dashboard{min-width:0}
 .account-dashboard .account-heading{display:flex;justify-content:space-between;
-align-items:center;gap:20px;margin-bottom:24px}
+align-items:flex-end;gap:20px;margin-bottom:22px;animation:cf-rise .44s var(--ease) both}
 .account-dashboard .account-heading>div{min-width:0}
-.account-dashboard .account-eyebrow{margin:0 0 8px;color:var(--acc);font-size:11px;
-font-weight:750;letter-spacing:.14em}
-.account-dashboard .account-heading h1{font-size:32px;letter-spacing:-.035em}
-.account-dashboard .account-heading .sub{margin-top:10px;line-height:1.6}
-.account-dashboard .account-heading>.btn{flex-shrink:0;font-size:13px}
-.account-dashboard .account-nav{margin-bottom:18px}
-.account-dashboard .card.allowance{padding:14px 18px;margin-bottom:22px;box-shadow:none;
-border-color:var(--rule-soft);gap:12px 20px}
-.account-dashboard .allowance h2{font-size:12px;font-weight:650;color:var(--muted)}
-.account-dashboard .allowance p{font-size:13px;line-height:1.6}
-.account-dashboard .allowance .btn{font-size:13px;padding:9px 14px}
+.account-dashboard .account-eyebrow{margin:0 0 8px;color:var(--acc);font-size:11.5px;
+font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.account-dashboard .account-heading h1{font-family:var(--serif);
+font-size:clamp(30px,3.6vw,40px);font-weight:500;letter-spacing:-.025em}
+.account-dashboard .account-heading .sub{margin-top:8px;line-height:1.6;
+display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.account-dashboard .account-heading a[data-fleet-status]{display:inline-flex;align-items:center;
+gap:5px;padding:4px 11px;border:1px solid var(--rule);border-radius:var(--radius-pill);
+background:var(--panel);color:var(--ink);font-size:12.5px;font-weight:600;text-decoration:none;
+box-shadow:var(--shadow-sm)}
+.account-dashboard .account-heading a[data-fleet-status]:hover{border-color:var(--ink);
+background:var(--inset)}
+.account-dashboard .account-heading>.btn{flex-shrink:0;font-size:13.5px}
+.account-dashboard .account-nav{margin-bottom:22px}
+.account-dashboard .card.allowance{padding:15px 22px;margin-bottom:24px;box-shadow:var(--shadow-sm);
+border-color:var(--rule);background:var(--panel);gap:12px 20px}
+.account-dashboard .allowance h2{font-family:var(--sans);font-size:12px;font-weight:680;
+color:var(--muted)}
+.account-dashboard .allowance p{font-size:13.5px;line-height:1.6}
+.account-dashboard .allowance .btn{font-size:13px;padding:8px 14px}
 .account-dashboard .slot-browse-link{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.account-dashboard .slot-browse-link p{margin:0;font-size:12px}
+.account-dashboard .slot-browse-link p{margin:0;font-size:13px}
 .account-dashboard .slots{grid-template-columns:repeat(2,minmax(0,1fr));
-align-items:start;gap:20px}
-.account-dashboard .slots>.card.slot{min-width:0;margin:0;box-shadow:var(--shadow)}
-.account-dashboard .slot-head{padding:20px 20px 17px;background:var(--panel)}
-.account-dashboard .slot-head h2{font-family:var(--sans);font-size:20px;
-letter-spacing:-.025em;overflow-wrap:anywhere}
-.account-dashboard .slot-head .pill{font-size:11px;letter-spacing:0;padding:5px 8px}
-.account-dashboard .slot-body{padding:4px 20px 12px;min-width:0}
-.slot-quota-primary{margin:16px 0 20px;padding:18px;border:1px solid var(--acc-line);
-border-radius:12px;background:var(--inset)}
-.slot-quota-primary>p{margin:14px 0 0;font-size:12px}
-.private-owner-slot>.usage-bars{margin:18px 0;padding:18px;border:1px solid var(--acc-line);
-border-radius:12px;background:var(--inset)}
-.account-dashboard .slot-body p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+align-items:start;gap:24px}
+.account-dashboard .slots>.card.slot{min-width:0;margin:0;box-shadow:var(--shadow);
+border-color:var(--rule);animation:cf-rise .48s var(--ease) both;
+transition:transform .26s var(--ease),border-color .22s var(--ease),
+box-shadow .26s var(--ease)}
+.account-dashboard .slots>.card.slot:nth-child(2){animation-delay:.06s}
+.account-dashboard .slots>.card.slot:nth-child(3){animation-delay:.12s}
+.account-dashboard .slots>.card.slot:nth-child(4){animation-delay:.18s}
+.account-dashboard .slots>.card.slot:hover{border-color:var(--acc-line);
+transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.account-dashboard .slot-head{padding:18px 22px 16px;background:var(--surface-subtle);
+border-bottom:1px solid var(--rule-soft)}
+.account-dashboard .slot-head h2{font-family:var(--sans);font-size:19px;font-weight:680;
+letter-spacing:-.02em;overflow-wrap:anywhere}
+.account-dashboard .slot-head .pill{font-size:12px;letter-spacing:0;padding:4px 10px 4px 8px}
+.account-dashboard .slot-body{padding:14px 22px 16px;min-width:0}
+.slot-billing-strip{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+gap:8px 12px;padding:10px 14px;margin:10px 0 14px;border:1px solid var(--rule-soft);
+border-radius:10px;background:var(--surface-subtle)}
+.slot-billing-strip.attention{border-color:var(--warn-line);background:var(--warn-bg)}
+.slot-billing-strip>p{margin:0;font-size:13px}
+.slot-billing-strip .btn{padding:6px 12px;font-size:12.5px}
+.slot-quota-primary{margin:4px 0 16px;padding:18px;border:1px solid var(--rule);
+border-radius:var(--radius-md);background:var(--inset);box-shadow:inset 0 2px 0 var(--acc-brand)}
+.slot-quota-primary>p{margin:12px 0 0;font-size:12.5px;font-weight:600}
+.private-owner-slot>.usage-bars{margin:16px 0;padding:18px;border:1px solid var(--rule);
+border-radius:var(--radius-md);background:var(--inset);box-shadow:inset 0 2px 0 var(--acc-brand)}
+.account-dashboard .slot-body>p{font-size:13.5px;line-height:1.65;overflow-wrap:anywhere;
+margin:10px 0}
+.account-dashboard .slot-body p{font-size:13.5px;line-height:1.65;overflow-wrap:anywhere}
 .account-dashboard .machine-line .bi-inline .st-dot{margin-inline-end:8px}
 .account-dashboard .machine-line .bi-inline a{margin-inline-start:8px}
-.account-dashboard .slot-connect{margin:14px 0;border:1px solid var(--acc-line);
-border-radius:12px;overflow:hidden;background:var(--panel)}
+.account-dashboard .slot-connect{margin:14px 0;border:1px solid var(--rule);
+border-radius:var(--radius-md);overflow:hidden;background:var(--panel);box-shadow:var(--shadow-sm)}
 .account-dashboard .slot-connect>summary{display:flex;align-items:center;
-justify-content:space-between;gap:14px;list-style:none;padding:14px 16px;cursor:pointer;
-background:var(--acc);color:var(--on-acc);font-size:14px;font-weight:650;line-height:1.5}
-.account-dashboard .slot-connect>summary:hover{background:var(--acc-strong)}
-.account-dashboard .slot-connect>summary:focus-visible{outline:2px solid var(--on-acc);
-outline-offset:-5px}
+justify-content:space-between;gap:14px;list-style:none;padding:14px 18px;cursor:pointer;
+background:var(--cta);color:var(--on-cta);font-size:14.5px;font-weight:620;line-height:1.45;
+transition:background-color .15s var(--ease)}
+.account-dashboard .slot-connect>summary:hover{background:var(--cta-hover)}
+.account-dashboard .slot-connect>summary:focus-visible{outline:2px solid var(--on-cta);
+outline-offset:-4px}
 .account-dashboard .slot-connect>summary::-webkit-details-marker{display:none}
 .account-dashboard .slot-connect>summary::marker{content:""}
-.account-dashboard .connect-arrow{font-size:20px;line-height:1;flex-shrink:0}
+.account-dashboard .connect-arrow{font-size:18px;line-height:1;flex-shrink:0;
+transition:transform .18s var(--ease)}
 .account-dashboard .slot-connect[open]>summary .connect-arrow{transform:rotate(90deg)}
-.account-dashboard .connect-body{padding:4px 16px 16px;min-width:0}
+.account-dashboard .connect-body{padding:6px 18px 18px;min-width:0}
 .account-dashboard .connect-body>p{margin:12px 0}
+.account-dashboard .connect-returning{margin:12px 0;padding:11px 14px;
+border:1px solid var(--ok-line);border-radius:10px;background:var(--ok-bg);color:var(--ink)}
+.account-dashboard .connect-returning p{margin:0;font-size:13px;line-height:1.6}
 .account-dashboard .connect-steps{list-style:decimal;
 margin:18px 0 0;padding:0 0 0 23px}
 .account-dashboard .connect-steps>li{display:list-item;
-margin:0 0 18px;padding-left:5px}
+margin:0 0 18px;padding-left:6px}
 .account-dashboard .connect-steps>li:last-child{margin-bottom:10px}
-.account-dashboard .connect-steps>li::marker{color:var(--acc);font-size:13px;font-weight:750}
+.account-dashboard .connect-steps>li::marker{color:var(--acc);font-size:13.5px;font-weight:750}
 .account-dashboard .connect-steps>li>div{min-width:0}
-.account-dashboard .connect-steps b{display:block;font-size:13px;line-height:25px}
+.account-dashboard .connect-steps b{display:block;font-size:13.5px;line-height:24px;
+color:var(--ink)}
 .account-dashboard pre{max-width:100%;min-width:0;white-space:pre-wrap;
-overflow-wrap:anywhere;word-break:break-word;font-size:12px;line-height:1.7;
-padding:12px 13px;border-radius:9px;background:var(--inset)}
+overflow-wrap:anywhere;word-break:break-word;font-size:12.5px;line-height:1.7;
+padding:12px 14px;border-radius:9px;background:var(--inset);border:1px solid var(--rule-soft)}
 .account-dashboard .connect-steps pre{margin:8px 0 0}
+.account-dashboard .connect-steps .code-box>pre{margin:0;padding-right:76px}
 .account-dashboard code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .account-dashboard pre code{white-space:pre-wrap}
 .account-dashboard .connect-hint{color:var(--muted);padding-top:12px;
-border-top:1px solid var(--rule-soft)}
-.account-dashboard .connect-first-time{margin:14px 0;padding:10px 12px;
-border:1px solid var(--rule-soft);border-radius:9px;background:var(--inset)}
-.account-dashboard .connect-first-time>summary{cursor:pointer;font-size:12px;font-weight:600}
+border-top:1px solid var(--rule-soft);font-size:13px}
+.account-dashboard .connect-first-time{margin:14px 0;padding:12px 14px;
+border:1px solid var(--rule);border-radius:10px;background:var(--surface-subtle)}
+.account-dashboard .connect-first-time>summary{cursor:pointer;font-size:13px;font-weight:640;
+color:var(--ink)}
 .account-dashboard .devin-optional{margin:12px 0;padding:0;border:0}
 .account-dashboard .provider-optional{border:1px solid var(--acc-line);
-border-radius:12px;background:var(--panel);overflow:hidden}
+border-radius:var(--radius-md);background:var(--panel);overflow:hidden}
 .account-dashboard .provider-optional>summary{display:flex;align-items:center;gap:12px;
-min-height:52px;padding:12px 14px;list-style:none;cursor:pointer;color:var(--acc);
-font-size:13px;font-weight:650;line-height:1.5;transition:background .15s,border-color .15s}
+min-height:50px;padding:12px 14px;list-style:none;cursor:pointer;color:var(--acc);
+font-size:13.5px;font-weight:640;line-height:1.5;transition:background-color .15s var(--ease)}
 .account-dashboard .provider-optional>summary:hover{background:var(--acc-soft)}
 .account-dashboard .provider-optional>summary:focus-visible{outline:2px solid var(--acc);
 outline-offset:-4px}
 .account-dashboard .provider-optional>summary::-webkit-details-marker{display:none}
 .account-dashboard .provider-optional>summary::marker{content:""}
 .account-dashboard .provider-add-icon{display:grid;place-items:center;flex:0 0 26px;
-width:26px;height:26px;border-radius:8px;background:var(--acc-soft);font-size:20px;
-font-weight:400;line-height:1}
+width:26px;height:26px;border-radius:8px;background:var(--acc-soft);font-size:19px;
+font-weight:500;line-height:1}
 .account-dashboard .provider-add-label{flex:1;min-width:0;overflow-wrap:anywhere}
-.account-dashboard .provider-add-arrow{flex-shrink:0;font-size:24px;font-weight:400;line-height:1}
+.account-dashboard .provider-add-arrow{flex-shrink:0;font-size:22px;font-weight:400;line-height:1;
+transition:transform .16s var(--ease)}
 .account-dashboard .provider-optional[open]>summary{background:var(--acc-soft)}
 .account-dashboard .provider-optional[open]>summary .provider-add-arrow{transform:rotate(90deg)}
-.account-dashboard .provider-add-body{padding:0 14px 10px;border-top:1px solid var(--acc-line)}
+.account-dashboard .provider-add-body{padding:4px 14px 12px;border-top:1px solid var(--acc-line)}
 .account-dashboard .slot-disclosure,.account-dashboard .provider-other{margin:0;
 padding:0;border:0;border-top:1px solid var(--rule-soft)}
+.account-dashboard .card.slot[data-state="claimed"] .slot-account[open],
+.account-dashboard .slot-account[open]:has(.flow){margin:14px 0;padding:0 16px;
+border:1px solid var(--acc-line);border-radius:var(--radius-md);background:var(--surface-subtle);
+box-shadow:var(--shadow-sm)}
+.account-dashboard .card.slot[data-state="claimed"] .slot-account[open]>summary,
+.account-dashboard .slot-account[open]:has(.flow)>summary{color:var(--acc);font-weight:660}
+.site .copy-zh{font-family:system-ui,-apple-system,"PingFang SC","Hiragino Sans GB",
+"Microsoft YaHei","Noto Sans SC",sans-serif;letter-spacing:0;line-height:1.8}
+.site .language-control{gap:2px;background:var(--inset);border-color:var(--rule)}
+.site .language-control a{padding:5px 10px;
+transition:color .14s var(--ease),background-color .14s var(--ease)}
+.site .language-control a:hover{color:var(--ink)}
+.site .language-control a[aria-current="page"]{background:var(--panel);color:var(--ink);
+font-weight:650;box-shadow:var(--shadow-sm)}
 .account-dashboard .slot-disclosure>summary,.account-dashboard .provider-other>summary{
 display:flex;align-items:center;justify-content:space-between;gap:12px;list-style:none;
-padding:17px 0;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)}
+padding:14px 0;cursor:pointer;font-size:13.5px;font-weight:620;color:var(--muted);
+transition:color .14s var(--ease)}
+.account-dashboard .slot-disclosure>summary:hover,
+.account-dashboard .provider-other>summary:hover{color:var(--ink)}
 .account-dashboard .slot-disclosure>summary::-webkit-details-marker,
 .account-dashboard .provider-other>summary::-webkit-details-marker{display:none}
 .account-dashboard .slot-disclosure>summary::marker,
 .account-dashboard .provider-other>summary::marker{content:""}
 .account-dashboard .slot-disclosure>summary::after,
-.account-dashboard .provider-other>summary::after{content:"+";font-size:17px;font-weight:400}
+.account-dashboard .provider-other>summary::after{content:"+";font-size:17px;font-weight:400;
+color:var(--muted)}
 .account-dashboard .slot-disclosure[open]>summary,
 .account-dashboard .provider-other[open]>summary{color:var(--ink)}
 .account-dashboard .slot-disclosure[open]>summary::after,
-.account-dashboard .provider-other[open]>summary::after{content:"−"}
-.account-dashboard .disclosure-body{padding:0 0 12px;min-width:0}
+.account-dashboard .provider-other[open]>summary::after{content:"−";color:var(--acc)}
+.account-dashboard .disclosure-body{padding:0 0 14px;min-width:0}
 .account-dashboard .slot-traffic .disclosure-body>.traffic-grid{
 grid-template-columns:minmax(0,1fr)}
 .account-dashboard .traffic-panel{padding:16px;border-color:var(--rule-soft);border-radius:12px}
 .account-dashboard .traffic-panel h3,.account-dashboard .traffic-panel h4{font-size:16px}
 .account-dashboard .traffic-metric{padding:12px}
 .account-dashboard .traffic-metric dd{font-size:20px}
-.account-dashboard .slot-return>summary{font-size:11px}
+.account-dashboard .slot-return{margin-top:6px}
+.account-dashboard .slot-return>summary{font-size:12.5px;color:var(--muted)}
 .account-dashboard .slot-return>summary:hover{color:var(--bad)}
 .account-dashboard .slot-return[open]>summary{color:var(--bad)}
+.account-dashboard .slot-return[open]>summary::after{color:var(--bad)}
 .account-dashboard .slot-return .row-line.release{margin:0;padding:4px 0 8px;border:0}
 .account-dashboard .row-line,.account-dashboard .actions{min-width:0;max-width:100%;
 flex-wrap:wrap;gap:9px}
@@ -909,14 +981,14 @@ flex-wrap:wrap;gap:9px}
 min-width:0;max-width:100%}
 .account-dashboard .btn,.account-dashboard button{white-space:normal;overflow-wrap:anywhere}
 .account-dashboard .usage{grid-template-columns:minmax(0,1fr);padding:12px}
-.account-dashboard .account-advanced{margin:20px 0 0;border:1px solid var(--rule-soft);
-border-radius:12px;background:var(--panel);min-width:0}
-.account-dashboard .account-advanced>summary{padding:18px 20px;cursor:pointer;
-font-size:14px;font-weight:600;color:var(--ink)}
+.account-dashboard .account-advanced{margin:20px 0 0;border:1px solid var(--rule);
+border-radius:14px;background:var(--panel);box-shadow:var(--shadow-sm);min-width:0;overflow:hidden}
+.account-dashboard .account-advanced>summary{padding:18px 22px;cursor:pointer;
+font-size:14.5px;font-weight:640;color:var(--ink)}
 .account-dashboard .account-advanced[open]>summary{color:var(--ink)}
 .account-dashboard .account-advanced>p,
 .account-dashboard .account-advanced>div:not(.gateway-advanced-body){
-margin:0 20px 18px;font-size:13px;line-height:1.7}
+margin:14px 22px 18px;font-size:13.5px;line-height:1.7}
 @media(max-width:860px){
 .account-dashboard .slots{grid-template-columns:minmax(0,1fr);gap:18px}}
 @media(max-width:760px){
@@ -927,14 +999,16 @@ overflow-x:auto;justify-content:flex-start}
 .account-dashboard .account-heading{align-items:flex-start;gap:12px}
 .account-dashboard .account-heading h1{font-size:28px}
 .account-dashboard .account-heading .sub{font-size:13px}
-.account-dashboard .account-heading>.btn{font-size:12px;padding:7px 10px}
-.account-dashboard .card.allowance{padding:13px 16px}
-.account-dashboard .slot-head{padding:17px 16px 15px}
-.account-dashboard .slot-body{padding:3px 16px 10px}
-.account-dashboard .slot-connect>summary{padding:13px;font-size:13px}
-.account-dashboard .connect-body{padding:3px 12px 12px}
+.account-dashboard .account-heading>.btn{font-size:12.5px;padding:7px 12px}
+.account-dashboard .account-nav{gap:2px 14px;flex-wrap:nowrap;overflow-x:auto}
+.account-dashboard .account-nav .btn{white-space:nowrap;flex:0 0 auto}
+.account-dashboard .card.allowance{padding:14px 16px}
+.account-dashboard .slot-head{padding:16px 16px 14px}
+.account-dashboard .slot-body{padding:10px 16px 12px}
+.account-dashboard .slot-connect>summary{padding:13px 14px;font-size:13.5px}
+.account-dashboard .connect-body{padding:4px 14px 14px}
 .account-dashboard .connect-steps b{line-height:23px}
-.account-dashboard .connect-steps pre{padding:10px;font-size:12.5px}
+.account-dashboard .connect-steps pre{padding:10px 12px;font-size:12.5px}
 .account-dashboard .account-advanced>summary{padding:15px 16px}}
 """
 
@@ -962,9 +1036,16 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
     corner = (viewer.menu() if viewer is not None else "" if door else
               '<a class="btn primary" href="/account">'
               + label("Sign in", "登录", inline=True) + '</a>')
-    title_text = {"sign in": "Sign in", "your slots": "Your slots", "privacy": "Privacy",
+    title_text = {"about": "Overview", "getting started": "Getting started",
+                  "how it works": "How it works", "terms": "Terms",
+                  "sign in": "Sign in", "your slots": "Your slots", "privacy": "Privacy",
                   "status": "Service status", "console": "Console",
                   "connect a computer": "Connect a computer"}.get(title, title)
+    copy_script = ""
+    if "data-copy-code" in body:
+        from . import trial_routes
+
+        copy_script = "<script>" + trial_routes.COPY_COMMAND_JS + "</script>"
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"{refresh}<title>CC Fleet · {escape(title_text)}</title>"
@@ -1009,6 +1090,7 @@ def _shell(title: str, body: str, refresh: str = "", extra_css: str = "", *,
             + '</a></nav></div></footer>' + LOCAL_TIMES_TAG + SCRIPT_TAG
             + (QUOTA_POLL_TAG + PANEL_ACTION_TAG
                if title in ("your slots", "Usage & limits") else "")
+            + copy_script
             + '</body></html>')
 
 
@@ -2972,12 +3054,15 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
                    _notice('To connect a different computer, first renew a Claude-ready slot.',
                            '如需连接另一台电脑，请先续费一个已登录 Claude 的槽位。'))
                 + '</details>')
-        steps = ''.join('<li><div><b>' + label(en, zh, inline=True)
-                        + '</b><pre><code>' + escape(command) + '</code></pre></div></li>'
-                        for en, zh, command in (
-                            ('Update Fleet', '更新 Fleet', 'ccfleet update'),
-                            ('Save this connection', '保存这个连接', setup),
-                            ('Start coding', '开始写代码', launch)))
+        steps = ''.join(
+            '<li><div><b>' + label(en, zh, inline=True)
+            + '</b><div class="code-box" data-code-box><pre><code>' + escape(command)
+            + '</code></pre><button type="button" class="copy-cmd" data-copy-code hidden>'
+            + label('Copy', '复制', inline=True) + '</button></div></div></li>'
+            for en, zh, command in (
+                ('Update Fleet', '更新 Fleet', 'ccfleet update'),
+                ('Save this connection', '保存这个连接', setup),
+                ('Start coding', '开始写代码', launch)))
         pilot = (bi(
             '<p class="connect-hint">The Devin pilot starts with Claude Code’s built-in tools. '
             'Custom plugins and MCP tools are off for this session.</p>',
@@ -2986,11 +3071,13 @@ def _slot_connect(slot: Mapping[str, Any], report: Mapping[str, Any], csrf: str,
         result.append(start + '<div class="connect-body">' + bi(
             '<p>Open Terminal in your project folder. Run these commands in order.</p>',
             '<p>在项目文件夹中打开终端，按顺序运行下面的命令。</p>')
-            + (bi('<p>A computer connection is already saved for your Fleet account. '
-                  'Use it to add this slot; no separate pairing is needed on that computer. '
-                  'The commands below select this one slot.</p>',
-                  '<p>你的 Fleet 账号已有电脑连接。在已连接的电脑上添加这个槽位，'
-                  '无需再次配对。下面的命令会固定使用这一个槽位。</p>') if connected else '')
+            + ('<div class="connect-returning">' + bi(
+                '<p>A computer connection is already saved for your Fleet account. '
+                'Use it to add this slot; no separate pairing is needed on that computer. '
+                'The commands below select this one slot.</p>',
+                '<p>你的 Fleet 账号已有电脑连接。在已连接的电脑上添加这个槽位，'
+                '无需再次配对。下面的命令会固定使用这一个槽位。</p>')
+               + '</div>' if connected else '')
             + pair + '<ol class="connect-steps">' + steps + '</ol>' + bi(
                 '<p class="connect-hint">Keep the setup command: it saves the connection '
                 'that the start command needs. Your tools and files stay on your computer; '
@@ -3147,6 +3234,10 @@ def _slot_card(
         )
         + f"</span></span>{mine}</h2></div><div class=\"slot-body\">",
     ]
+    # Zone 1: Machine health stays immediately visible at the top of the card.
+    if machine_line:
+        parts.append(machine_line)
+    # Zone 2: Current quota stays visible above connection instructions.
     if slot['state'] == slotstates.ACTIVE or own:
         parts.append('<section class="slot-quota-primary">'
                      + _account_quota(slot, report, now, csrf, heard=heard,
@@ -3163,12 +3254,6 @@ def _slot_card(
         + "</p>"]
     if node.get("offer") is not None:
         technical.append(offer_ui.details(node))
-    # Its machine's state, as the status page says it (status.slot_line).
-    if machine_line:
-        parts.append(machine_line)
-    if traffic_html:
-        parts.append(_slot_disclosure('Network & API traffic', '网络与 API 流量', traffic_html,
-                                      'slot-traffic'))
     public_number = status.public_machine_number(node)
     if public_number is not None:
         public_label = label(f"Public status: Machine {public_number}",
@@ -3194,37 +3279,72 @@ def _slot_card(
                  if recurring else label(
                       "Paid month active" if paid_access else "Renew to reconnect",
                       "已付费月份有效" if paid_access else "续费后可重新连接", inline=True))
-        parts.append('<p class="' + ('muted' if paid_access else 'lapsed') + '">' + state
-                     + ' · ' + escape(wallet_ui._date(payment_end)) + '</p>')
+        billing_action = ""
         if recurring:
-            parts.append('<p><a class="btn" href="/account/subscriptions">'
-                         + label("Manage monthly payment", "管理月付", inline=True) + '</a></p>')
+            billing_action = ('<a class="btn" href="/account/subscriptions">'
+                              + label("Manage monthly payment", "管理月付", inline=True) + '</a>')
         elif (wallet_routes.enabled(cfg)
               and slot["state"] in (slotstates.CLAIMED, slotstates.ACTIVE)):
-            parts.append('<p><a class="btn" href="/account/renew?'
-                         + urllib.parse.urlencode({"slot_id": slot["id"]}) + '">'
-                         + label("Renew one month", "续费一个月", inline=True) + '</a></p>')
+            billing_action = ('<a class="btn" href="/account/renew?'
+                              + urllib.parse.urlencode({"slot_id": slot["id"]}) + '">'
+                              + label("Renew one month", "续费一个月", inline=True) + '</a>')
+        strip_cls = "slot-billing-strip" + ("" if paid_access else " attention")
+        parts.append('<div class="' + strip_cls + '"><p class="'
+                     + ('muted' if paid_access else 'lapsed') + '">' + state
+                     + ' · ' + escape(wallet_ui._date(payment_end)) + '</p>'
+                     + billing_action + '</div>')
     elif not paid_access:
         if recurring:
-            parts.append('<p class="lapsed">' + label(
+            parts.append('<div class="slot-billing-strip attention"><p class="lapsed">' + label(
                 "This monthly rental is paused. Check your monthly payment before reconnecting.",
                 "此月付槽位已暂停，请先查看月付款项，再重新连接。", inline=True)
                 + ' <a href="/account/subscriptions">'
-                + label("Monthly payments", "月付管理", inline=True) + '</a></p>')
+                + label("Monthly payments", "月付管理", inline=True) + '</a></p></div>')
         else:
-            parts.append('<p class="lapsed">' + label(
+            parts.append('<div class="slot-billing-strip attention"><p class="lapsed">' + label(
                 "Payment status is unavailable. New connections are paused.",
-                "付费状态暂不可用，已暂停新连接。", inline=True) + '</p>')
+                "付费状态暂不可用，已暂停新连接。", inline=True) + '</p></div>')
+    if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):
+        # The machine is working on it. The sentence above says what; this
+        # says it is still moving, which a still page otherwise cannot.
+        parts.append('<div class="progress" aria-hidden="true"><i></i></div>')
+    if slot["state"] in CAN_SIGN_IN:
+        for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
+            if rule in flagged:
+                chinese = (
+                    (
+                        "此 Claude 账号还登录在 Fleet 的另一台机器上。"
+                        "同一账号只能用于一台机器，请退出其中一台。"
+                    )
+                    if rule == "account_elsewhere"
+                    else (
+                        "槽位当前登录的账号与原绑定不一致。请重新登录原账号，"
+                        "或用“更换账号”更新绑定。"
+                    )
+                )
+                parts.append('<p class="lapsed">' + label(words, chinese, inline=True) + "</p>")
+    if ended and slot["state"] in CAN_SIGN_IN:
+        parts.append(_ended(ended))
+    # Zone 3: State-driven primary action (Connect & launch, or required Claude sign-in).
     parts.append(_slot_connect(slot, report, csrf, cfg, devin_state, authorizer,
                                connected=bool(account_devices), paid_access=paid_access))
     account_parts = []
     if not own and slot["state"] in CAN_SIGN_IN:
         account_parts.append(_account_health(slot, report, login, heard, cfg, now, listening))
-    if slot["state"] in (slotstates.CLAIMING, slotstates.RELEASING):
-        # The machine is working on it. The sentence above says what; this
-        # says it is still moving, which a still page otherwise cannot.
-        parts.append('<div class="progress" aria-hidden="true"><i></i></div>')
     signed_in = (report.get("credentials") or {}).get("logged_in") is True
+    if slot["state"] in CAN_SIGN_IN:
+        account_parts.append(_sign_in(slot, report, login, csrf, now))
+        technical.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
+    needs_sign_in = not signed_in or bool(login)
+    if account_parts and devin_slot:
+        account_parts.insert(0, _notice(
+            'Sign in to your own Claude account to use Anthropic. '
+            'Your Devin connection is configured separately.',
+            '登录你自己的 Claude 账号即可使用 Anthropic。Devin 连接单独配置。'))
+    if account_parts and needs_sign_in:
+        parts.append(_slot_disclosure('Claude account', 'Claude 账号',
+            ''.join(account_parts), 'slot-account', expanded=True))
+    # Zone 4: Calm secondary disclosures grouped below the primary action.
     if signed_in if own else slot["state"] == slotstates.ACTIVE:
         usage = [
             _in_use(
@@ -3246,42 +3366,19 @@ def _slot_card(
             )
         parts.append(_slot_disclosure('Measured usage & sign-in', '观测用量与登录状态',
                                       ''.join(usage), 'slot-usage'))
-    if slot["state"] in CAN_SIGN_IN:
-        for rule, words in (("account_elsewhere", ELSEWHERE), ("account_changed", CHANGED)):
-            if rule in flagged:
-                chinese = (
-                    (
-                        "此 Claude 账号还登录在 Fleet 的另一台机器上。"
-                        "同一账号只能用于一台机器，请退出其中一台。"
-                    )
-                    if rule == "account_elsewhere"
-                    else (
-                        "槽位当前登录的账号与原绑定不一致。请重新登录原账号，"
-                        "或用“更换账号”更新绑定。"
-                    )
-                )
-                parts.append('<p class="lapsed">' + label(words, chinese, inline=True) + "</p>")
-    if ended and slot["state"] in CAN_SIGN_IN:
-        parts.append(_ended(ended))
-    if slot["state"] in CAN_SIGN_IN:
-        account_parts.append(_sign_in(slot, report, login, csrf, now))
-        technical.append(_claude_row(slot, node, report, update or {}, channels or {}, csrf))
-        if not own:
-            parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
-                _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access,
-                    account_devices=account_devices if gateway_ui.available(cfg) else None,
-                    authorizer=authorizer, provider='devin' if devin_only else 'anthropic',
-                    provider_ready=devin_only or slot["state"] == slotstates.ACTIVE and signed_in),
-                'slot-devices'))
-    if account_parts:
-        if devin_slot:
-            account_parts.insert(0, _notice(
-                'Sign in to your own Claude account to use Anthropic. '
-                'Your Devin connection is configured separately.',
-                '登录你自己的 Claude 账号即可使用 Anthropic。Devin 连接单独配置。'))
-        needs_sign_in = not signed_in or bool(login)
+    if traffic_html:
+        parts.append(_slot_disclosure('Network & API traffic', '网络与 API 流量', traffic_html,
+                                      'slot-traffic'))
+    if slot["state"] in CAN_SIGN_IN and not own:
+        parts.append(_slot_disclosure('Connected computers', '已连接的电脑',
+            _cli_access(slot, node, cli_devices or [], csrf, now, paid_access=paid_access,
+                account_devices=account_devices if gateway_ui.available(cfg) else None,
+                authorizer=authorizer, provider='devin' if devin_only else 'anthropic',
+                provider_ready=devin_only or slot["state"] == slotstates.ACTIVE and signed_in),
+            'slot-devices'))
+    if account_parts and not needs_sign_in:
         parts.append(_slot_disclosure('Claude account', 'Claude 账号',
-            ''.join(account_parts), 'slot-account', expanded=needs_sign_in))
+            ''.join(account_parts), 'slot-account', expanded=False))
     parts.append(_slot_disclosure('About Devin', '关于 Devin', devin_html, 'slot-provider')
                  if devin_only else devin_html)
     if slot["state"] in CAN_SIGN_IN and not own:

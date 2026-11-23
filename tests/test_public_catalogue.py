@@ -204,6 +204,16 @@ def test_network_badges_have_distinct_accessible_neutral_colors_and_text_labels(
                                    ('#374151', '#f3f4f6')):
         ratio = (luminance(background) + 0.05) / (luminance(foreground) + 0.05)
         assert ratio >= 4.5
+    dark = css.split('@media(prefers-color-scheme:dark)', 1)[1]
+    for kind, foreground, background in (
+        ('residential', '#e9d5ff', '#2e1065'),
+        ('isp', '#bfdbfe', '#172554'),
+        ('datacenter', '#e2e8f0', '#1e293b'),
+    ):
+        rule = re.search(r'\.ip-category\.' + kind + r'\{([^}]+)', dark)[1]
+        assert foreground in rule and background in rule
+        ratio = (luminance(foreground) + 0.05) / (luminance(background) + 0.05)
+        assert ratio >= 4.5
     assert 'Residential' in project_html(offer_ui.ip_label('residential'), 'en')
     assert 'ISP' in project_html(offer_ui.ip_label('isp'), 'en')
     assert 'Datacenter' in project_html(offer_ui.ip_label('datacenter'), 'en')
