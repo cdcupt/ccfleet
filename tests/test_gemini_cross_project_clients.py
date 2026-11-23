@@ -469,7 +469,7 @@ ed.run(Path(sys.argv[2])/'second',json.loads(sys.argv[4]),{'PATH':os.defpath},to
     try:
         wait_for("You › ")
         os.write(master, b"first instruction\n")
-        wait_for("old) [y/N] ")
+        wait_for("Create directory on this Mac (old)? [y/N] ")
         os.write(master, b"y")
         owner.enable_all()
         wait_for("Project access changed.")
