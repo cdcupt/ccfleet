@@ -27,6 +27,7 @@ if __package__:
     from . import (
         antigravity_slot,
         gemini_preview,
+        gemini_recovery,
         mac_policy,
         mac_relay_client,
         project_files,
@@ -37,6 +38,7 @@ else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import antigravity_slot
     import gemini_preview
+    import gemini_recovery
     import mac_policy
     import mac_relay_client
     import project_files
@@ -49,6 +51,8 @@ ACP_LIMIT = 4 * 1024 * 1024
 MCP_NAME = "ccfleetlocal"
 MAX_MODELS = 128
 CANCEL_GRACE = 12.0
+PROMPT_IDLE_SECONDS = 900
+PROXY_IDLE_SECONDS = 180
 CANCEL_WAKE = object()
 CURRENT_TURN = object()
 MCP_TOOLS = {"list_project": "list", "make_project_directory": "mkdir", "test_project": "test"}
@@ -74,6 +78,13 @@ BUSY = "Another Gemini editor is using this slot. Close it and reconnect."
 
 class EditorError(ValueError):
     """Fixed user-facing error. Never include a credential, provider payload or host path."""
+
+
+STOPPED_AGENT = "The Google editor agent stopped on the slot."
+
+
+class PromptFailed(EditorError):
+    """A completed provider error for this turn; the RPC stream remains synchronized."""
 
 
 class ModelUnavailable(EditorError):
@@ -132,6 +143,11 @@ class Device:
         self.turn_id = None
         self.cancelled_turn = None
         self.cancelled_at = 0.0
+        self.resume_enabled = False
+        self.resume_token = None
+        self.transport_lost = False
+        self.discard_profile = False
+        self.idle_expiry = False
 
     def start(self):
         threading.Thread(target=self._read, daemon=True).start()
@@ -142,6 +158,16 @@ class Device:
         try:
             while not self.closed.is_set():
                 msg = gemini_preview.receive(self.input)
+                if msg == {"type": "enableResume"} and self.resume_token:
+                    self.resume_enabled = True
+                    continue
+                if msg == {"type": "close"}:
+                    self.discard_profile = True
+                    if self.agent is not None and self.agent.active.is_set():
+                        self.abort()
+                        return
+                    self.messages.put_nowait(msg)
+                    return
                 tag = msg.get("turn")
                 if msg.get("type") == "prompt" and "turn" in msg:
                     if type(tag) is not int or not last_turn < tag <= 2**53 - 1:
@@ -159,19 +185,25 @@ class Device:
                         self.agent.cancel_turn(tag)
                     continue
                 self.messages.put_nowait(msg)
-        except (OSError, EOFError, ValueError, RecursionError, queue.Full):
+        except (OSError, EOFError):
+            self.transport_lost = True
+            self.abort()
+        except (ValueError, RecursionError, queue.Full):
+            self.discard_profile = True
             self.abort()
 
     def _watch(self):
         try:
             while not self.closed.wait(1):
                 if not self.authorized():
+                    self.discard_profile = True
                     break
                 if (self.turn_id is not None and self.cancelled_turn == self.turn_id
                         and time.monotonic() - self.cancelled_at >= CANCEL_GRACE):
+                    self.discard_profile = True
                     break
         except (OSError, ValueError, KeyError):
-            pass
+            self.discard_profile = True
         self.abort()
 
     def attach(self, proc):
@@ -378,6 +410,22 @@ GOOGLE_HOSTS = frozenset(
 class GoogleConnection(socketserver.StreamRequestHandler):
     """Relay opaque Google TLS only; all provider credentials remain inside its signed binary."""
 
+    def _readable(self, upstream):
+        # A healthy long-running model can spend minutes between TLS records. Give an
+        # active turn its normal inactivity budget; release unused pooled sockets sooner.
+        since = time.monotonic()
+        while True:
+            turn = self.server.active_prompt
+            active = turn is not None and turn.is_set()
+            limit = PROMPT_IDLE_SECONDS if active else PROXY_IDLE_SECONDS
+            left = limit - (time.monotonic() - since)
+            if left <= 0:
+                return []
+            ready, _, _ = select.select([self.request, upstream], [], [],
+                                        min(left, PROXY_IDLE_SECONDS))
+            if ready:
+                return ready
+
     def handle(self):
         try:
             self.request.settimeout(12)
@@ -403,7 +451,7 @@ class GoogleConnection(socketserver.StreamRequestHandler):
                 self.wfile.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
                 upstream.settimeout(30)
                 while True:
-                    ready, _, _ = select.select([self.request, upstream], [], [], 180)
+                    ready = self._readable(upstream)
                     if not ready:
                         return
                     for src in ready:
@@ -417,6 +465,7 @@ class GoogleConnection(socketserver.StreamRequestHandler):
 
 class GoogleProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True
+    active_prompt = None
 
 
 def _sandbox(agent, home, session):
@@ -426,6 +475,10 @@ def _sandbox(agent, home, session):
         "HOME_DIR=" + str(home),
         "-D",
         "PROJECT=" + str(session),
+        "-D",
+        "SESSION_PARENT=" + str(session.parent),
+        "-D",
+        "SESSION_GRANDPARENT=" + str(session.parent.parent),
         "-D",
         "PYTHON=" + str(Path(sys.executable).resolve()),
         "-D",
@@ -467,6 +520,8 @@ SANDBOX = """
 (allow file-read* (literal (param "EXE")) (literal (param "HELPER"))
     (literal "/Users") (literal "/private/tmp") (literal (param "HOME_DIR"))
     (literal (param "LIBRARY")) (literal (param "PREF")))
+(allow file-read-metadata (literal (param "SESSION_PARENT"))
+    (literal (param "SESSION_GRANDPARENT")))
 (allow file-read* file-write* (subpath (param "KEYCHAINS")))
 (allow file-read* file-write* (subpath (param "PROJECT")) (literal "/dev/null"))
 (deny file-write* (subpath (param "GUARDS")) (literal (param "PROJECT"))
@@ -605,7 +660,9 @@ class Agent:
                 "jsonrpc": "2.0", "id": self.seq, "method": method, "params": params
             })
             self.prompt_turn = turn
-        until = time.monotonic() + timeout
+        now = time.monotonic()
+        until = now + timeout
+        next_progress = now + 60
         while True:
             if turn is not None and self.device.cancelled_turn == turn:
                 until = min(until, self.device.cancelled_at + CANCEL_GRACE)
@@ -618,7 +675,7 @@ class Agent:
             if time.monotonic() > until:
                 raise EditorError("The Gemini slot timed out. Reopen the editor to continue.")
             if msg is None:
-                raise EditorError("The Google editor agent stopped on the slot.")
+                raise EditorError(STOPPED_AGENT)
             if msg is CANCEL_WAKE:
                 continue
             if "method" not in msg:
@@ -633,8 +690,13 @@ class Agent:
                     if (turn is not None and self.device.cancelled_turn == turn
                             and error["code"] == -32800):
                         return {"stopReason": "cancelled"}
-                    if method == "session/new" and error["code"] == -32000:
+                    if method in ("session/new", "session/prompt") and error["code"] == -32000:
                         raise EditorError(LOGIN_NEEDED)
+                    if method == "session/prompt" and error["code"] == -32603:
+                        raise PromptFailed(
+                            "Gemini could not finish this reply. Check any changes before "
+                            "sending your next instruction in this thread."
+                        )
                     if method == "session/set_model":
                         raise ModelUnavailable("The Google editor declined the model change.")
                     raise EditorError("The Google editor could not complete this request.")
@@ -650,14 +712,43 @@ class Agent:
                     and isinstance(p.get("update"), dict)
                 ):
                     update = p["update"]
-                    if update.get("sessionUpdate") == "agent_message_chunk":
-                        content = update.get("content", {})
-                        if content.get("type") == "text":
-                            self.device.send({"type": "text", "text": text_value(content["text"])})
+                    event = update.get("sessionUpdate")
+                    content = update.get("content")
+                    text_chunk = (event in ("agent_message_chunk", "agent_thought_chunk")
+                                  and isinstance(content, dict) and content.get("type") == "text"
+                                  and isinstance(content.get("text"), str)
+                                  and bool(content["text"]))
+                    tool_progress = (event in ("tool_call", "tool_call_update")
+                                     and isinstance(update.get("toolCallId"), str)
+                                     and bool(update["toolCallId"]))
+                    if method == "session/prompt" and (text_chunk or tool_progress):
+                        now = time.monotonic()
+                        until = now + timeout
+                        if event == "agent_message_chunk":
+                            # A valid ACP output block can exceed the local file-tool
+                            # limit. Forward it in bounded frames without changing edits.
+                            output = text_value(content["text"], ACP_LIMIT)
+                            for start in range(0, len(output), 16 * 1024):
+                                if not self.active.is_set():
+                                    break
+                                self.device.send({"type": "text",
+                                                  "text": output[start:start + 16 * 1024]})
+                            next_progress = now + 60
+                        elif (turn is not None and self.device.resume_enabled
+                              and now >= next_progress):
+                            # Only the liveness signal crosses the wire; private thought/tool
+                            # details stay on the slot. Old clients never receive this frame.
+                            self.device.send({"type": "progress", "turn": turn})
+                            next_progress = now + 60
                 continue
             try:
                 answer = self.callback(msg["method"], p)
                 reply = {"result": answer}
+                if (method == "session/prompt" and self.active.is_set()
+                        and p.get("sessionId") == self.sid
+                        and msg["method"] in ("fs/read_text_file", "fs/write_text_file",
+                                               "session/request_permission")):
+                    until = time.monotonic() + timeout
             except (ValueError, KeyError, TypeError):
                 reply = {
                     "error": {
@@ -683,12 +774,30 @@ class Agent:
             raise EditorError(
                 "The installed Google editor agent is incompatible. Update CCFleet on the slot."
             )
+        capabilities = result.get("agentCapabilities", {})
+        sessions = capabilities.get("sessionCapabilities") or {}
+        self.supports_resume = (isinstance(sessions, dict)
+                                and isinstance(sessions.get("resume"), dict))
 
     def session(self, project, mcp):
         result = self.rpc("session/new", {"cwd": str(project), "mcpServers": mcp})
         self.sid = result["sessionId"]
         if not isinstance(self.sid, str) or not self.sid:
             raise ValueError("invalid session")
+        return self._models(result)
+
+    def resume(self, project, mcp, sid, model):
+        if not self.supports_resume:
+            raise EditorError(gemini_recovery.NO_SESSION)
+        try:
+            result = self.rpc("session/resume", {"sessionId": sid, "cwd": str(project),
+                                                 "mcpServers": mcp})
+            self.sid = sid
+            return self._models(result, selected=model)
+        except (EditorError, ValueError, KeyError):
+            raise EditorError(gemini_recovery.NO_SESSION) from None
+
+    def _models(self, result, selected=None):
         models = result.get("models", {})
         available = models.get("availableModels") if isinstance(models, dict) else None
         if not isinstance(available, list):
@@ -703,7 +812,9 @@ class Agent:
         )[:MAX_MODELS]
         if not self.models:
             raise EditorError("The signed-in Google account has no available Gemini editor model.")
-        preferred = ("gemini-3.8-flash-low", models.get("currentModelId"))
+        if selected is not None and selected not in self.models:
+            raise EditorError(gemini_recovery.NO_SESSION)
+        preferred = (selected, "gemini-3.8-flash-low", models.get("currentModelId"))
         self.model = None
         self.select_model(next((m for m in preferred if m in self.models), self.models[0]))
         return self.model
@@ -846,17 +957,31 @@ def session_profile(home, session):
     return profile
 
 
-def interact(agent, device):
+def interact(agent, device, lease=None):
     device.agent = agent
-    device.send({"type": "ready", "model": agent.model, "models": agent.models,
-                 "capabilities": {"cancelTurn": True}})
+    ready = {"type": "ready", "model": agent.model, "models": agent.models,
+             "capabilities": {"cancelTurn": True}}
+    if lease is not None and agent.supports_resume:
+        device.resume_token = lease.token
+        lease.sid, lease.model = agent.sid, agent.model
+        ready["capabilities"]["resumeSession"] = True
+        ready["resumeToken"] = lease.token
+        if lease.state:
+            ready["resumed"] = True
+    device.send(ready)
     while True:
-        msg = device.receive(3600)
+        try:
+            msg = device.receive(3600)
+        except EditorError:
+            device.idle_expiry = True
+            raise
         if msg == {"type": "close"}:
             return
         if set(msg) == {"type", "model"} and msg["type"] == "set_model":
             try:
                 agent.select_model(msg["model"])
+                if lease is not None:
+                    lease.model = agent.model
             except ModelUnavailable as exc:
                 device.send({"type": "model", "model": agent.model, "error": str(exc)})
             else:
@@ -877,9 +1002,12 @@ def interact(agent, device):
                     "sessionId": agent.sid,
                     "prompt": [{"type": "text", "text": GUIDE + prompt}],
                 },
-                timeout=900,
+                timeout=PROMPT_IDLE_SECONDS,
                 turn=tag,
             )
+        except PromptFailed as exc:
+            device.send({"type": "text", "text": str(exc)})
+            response = {"stopReason": "refusal"}
         finally:
             device.finish_turn()
             agent.approvals.clear()
@@ -894,10 +1022,19 @@ def interact(agent, device):
         device.send(end)
 
 
-def run_editor(home, device, binary, session):
-    profile = session_profile(home, session)
+def run_editor(home, device, binary, session, lease=None):
+    if lease is not None and lease.state:
+        profile = session / "home"
+        # The prior worker has stopped; remove only its socket before binding the new MCP server.
+        path = session / "m.sock"
+        if path.exists():
+            if not stat.S_ISSOCK(path.lstat().st_mode):
+                raise EditorError(gemini_recovery.NO_SESSION)
+            path.unlink()
+    else:
+        profile = session_profile(home, session)
+        (session / "project").mkdir(mode=0o700)
     project = session / "project"
-    project.mkdir(mode=0o700)
     path = session / "m.sock"
     mcp = [
         {
@@ -930,11 +1067,15 @@ def run_editor(home, device, binary, session):
             service.device = device
             service.project = project
             service.turn = agent.active
+            google.active_prompt = agent.active
             threading.Thread(target=service.serve_forever, daemon=True).start()
             try:
                 agent.initialize()
-                agent.session(project, mcp)
-                interact(agent, device)
+                if lease is not None and lease.state:
+                    agent.resume(project, mcp, lease.sid, lease.model)
+                else:
+                    agent.session(project, mcp)
+                interact(agent, device, lease)
             finally:
                 service.shutdown()
         finally:
@@ -952,39 +1093,68 @@ def worker(fd):
         if len(fingerprint) != 32:
             return 2
 
-        def authorized():
-            return antigravity_slot.permitted(home, fingerprint)
+        return serve_device(home, sock, fingerprint,
+                            lambda fp: antigravity_slot.permitted(home, fp))
 
-        if not authorized():
+
+def serve_device(home, sock, fingerprint, permitted, *, recovery_root=None,
+                 spawn_reaper=gemini_recovery.start_reaper, runtime_fn=None):
+    """Serve one already authenticated peer; test harnesses may isolate the lease namespace."""
+    if not permitted(fingerprint):
+        return 2
+    root = recovery_root or gemini_recovery.root_path()
+    sock.settimeout(None)
+    device = Device(sock, lambda: permitted(fingerprint))
+    device.start()
+    lease = None
+    retain = False
+    try:
+        opening = device.receive(15)
+        if type(opening.get("version")) is not int or opening["version"] != 1:
+            raise EditorError("Update your CCFleet client to open the Gemini editor.")
+        if set(opening) == {"type", "version", "resumeToken"} and opening["type"] == "resume":
+            try:
+                lease = gemini_recovery.Profile.resume(root, fingerprint, opening["resumeToken"],
+                                                       permitted)
+            except (OSError, ValueError):
+                raise EditorError(gemini_recovery.NO_SESSION) from None
+        elif opening == {"type": "open", "version": 1}:
+            try:
+                lease = gemini_recovery.Profile.create(root, fingerprint, permitted, spawn_reaper)
+            except (OSError, ValueError):
+                lease = None  # Initial sessions remain available without a safe recovery directory.
+        else:
+            raise EditorError("Update your CCFleet client to open the Gemini editor.")
+        require_personal(home)
+        binary = (runtime_fn or runtime)(home)
+        if device.closed.is_set() or not permitted(fingerprint):
+            retain = device.transport_lost and lease is not None and bool(lease.state)
             return 2
-        sock.settimeout(None)
-        device = Device(sock, authorized)
-        device.start()
-        try:
-            opening = device.receive(15)
-            if opening != {"type": "open", "version": 1} or type(opening["version"]) is not int:
-                raise EditorError("Update your CCFleet client to open the Gemini editor.")
-            require_personal(home)
-            binary = runtime(home)
-            if not device.closed.is_set() and authorized():
-                with tempfile.TemporaryDirectory(
-                    dir="/private/tmp", prefix="ccfleet-editor-"
-                ) as tmp:
-                    run_editor(home, device, binary, Path(tmp))
-            return 0
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError, EOFError) as exc:
-            with contextlib.suppress(OSError, EOFError):
-                device.send(
-                    {
-                        "type": "error",
-                        "message": str(exc) if isinstance(exc, EditorError) else UNAVAILABLE,
-                    }
-                )
-            return 2
-        finally:
-            device.abort()
-            device.input.close()
-            device.output.close()
+        if lease:
+            run_editor(home, device, binary, lease.sandbox, lease)
+        else:
+            with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="ccfleet-editor-") as tmp:
+                run_editor(home, device, binary, Path(tmp))
+        return 0
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, EOFError) as exc:
+        disconnected = (device.transport_lost
+                        or isinstance(exc, (BrokenPipeError, ConnectionResetError)))
+        # Generic provider errors or malformed client requests never become resumable.
+        lost_agent = isinstance(exc, EditorError) and str(exc) == STOPPED_AGENT
+        retain = ((disconnected and (isinstance(exc, (EOFError, OSError)) or lost_agent))
+                  or device.idle_expiry)
+        with contextlib.suppress(OSError, EOFError):
+            device.send({"type": "error", "message": str(exc) if isinstance(exc, EditorError)
+                         else UNAVAILABLE})
+        return 2
+    finally:
+        device.abort()
+        device.input.close()
+        device.output.close()
+        if lease is not None:
+            resumable = retain and not device.discard_profile
+            opted_in = device.resume_enabled or bool(lease.state)
+            lease.finish(resumable and opted_in, permitted, renew=device.resume_enabled)
 
 
 def serve():
@@ -995,6 +1165,9 @@ def serve():
     os.close(directory)
     with (root / "gemini-editor.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with contextlib.suppress(OSError, ValueError):
+            gemini_recovery.restart_reapers(gemini_recovery.root_path(),
+                lambda fp: antigravity_slot.permitted(Path(owner.pw_dir), fp))
         path = root / SOCKET
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
@@ -1088,6 +1261,11 @@ def main(argv):
         return serve()
     if argv == ["login"]:
         return login()
+    if (len(argv) == 4 and argv[0] == "reap"
+            and all(re.fullmatch(r"[0-9]{1,8}", arg) for arg in argv[2:])):
+        owner = mac_policy.authenticated_owner()
+        return gemini_recovery.reap(argv[1], lambda fp: antigravity_slot.permitted(
+            Path(owner.pw_dir), fp), inherited=(int(argv[2]), int(argv[3])))
     if len(argv) == 2 and argv[0] == "worker":
         return worker(int(argv[1]))
     return 2

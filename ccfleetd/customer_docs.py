@@ -1620,6 +1620,25 @@ def _agent_app_guide() -> str:
         )
         + '</article></div>'
         + bi(
+            '<p><strong>If Gemini disconnects in Orca or Herdr</strong>, leave '
+            '<code>ccfleet gemini</code> running in the same project terminal. Check your local '
+            'edits before continuing. Pending approvals expire, and CCFleet never resends the '
+            'interrupted request. With 0.2.22 and a compatible slot, send your next '
+            'instruction within five minutes to try to resume, or use <code>/reconnect</code> '
+            'to check first. If the conversation has expired, use <code>/reconnect</code> '
+            'when prompted to start fresh. If 0.2.21 has already returned you to the shell, '
+            'run <code>ccfleet update</code> and start <code>ccfleet gemini</code> again in '
+            'the same project. <a href="#gemini-recovery">T3 recovery and upgrade details</a>.</p>',
+            '<p><strong>如果 Orca 或 Herdr 中的 Gemini 断线</strong>，请保持原项目终端中的 '
+            '<code>ccfleet gemini</code> 继续运行。先检查本地已写入的更改。待确认的操作会'
+            '失效，CCFleet 不会重发中断的请求。使用 0.2.22 和兼容槽位时，断线后五分钟内'
+            '发送下一条指令即可尝试恢复，也可以先输入 <code>/reconnect</code> 检查连接。'
+            '若原对话已过期，可按提示输入 <code>/reconnect</code> 重新开始。如果使用 0.2.21 '
+            '时已退回命令行，请运行 <code>ccfleet update</code>，再在原项目中启动 '
+            '<code>ccfleet gemini</code>。<a href="#gemini-recovery">'
+            '查看 T3 的恢复和升级说明</a>。</p>',
+        )
+        + bi(
             '<p><strong>One launcher, one selected slot.</strong> Changing '
             '<code>ccfleet use</code> or the app’s native account/profile does not switch '
             'this launcher’s Fleet slot. Create and select another launcher for a different '

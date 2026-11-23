@@ -131,3 +131,26 @@ def test_t3_subscription_recipe_matches_the_account_provider_steps(language):
         assert "Local ACP command" in source and "command -v ccfleet" in source
         assert "gemini" in source and "--acp" in source and "Supervised" in source
     assert "--preview" not in section.text and "ANTHROPIC_BASE_URL" not in section.text
+
+
+@pytest.mark.parametrize("language,window,fresh,expired", [
+    ("en", "five minutes", "fresh", "expire"),
+    ("zh", "五分钟", "重新开始", "失效"),
+])
+def test_account_and_project_guides_explain_gemini_recovery(language, window, fresh, expired):
+    from ccfleetd import gemini_setup_ui
+
+    guide = Flow(rendered(language))
+    heading, = guide.find("h3", id="gemini-recovery")
+    t3, = guide.find("section", id="t3-gemini")
+    apps, = guide.find("section", id="agent-apps")
+    assert heading in guide.inside(t3, "h3")
+    assert "Steer" in t3.text
+    for section in (t3, apps):
+        text = normalized(section.text)
+        assert all(term in text for term in ("0.2.21", "0.2.22", "ccfleet update", "/reconnect",
+                                             window, fresh, expired))
+    account = Flow(bilingual.project_html(gemini_setup_ui.t3_setup(), language, "/account/gemini"))
+    for source, section in ((guide, apps), (account, account.find("details")[0])):
+        targets = [bilingual.route_target(link.attrs["href"]) for link in source.inside(section, "a")]
+        assert any(target and target[0] == "/docs/guide#gemini-recovery" for target in targets)

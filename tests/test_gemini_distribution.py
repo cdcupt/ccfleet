@@ -225,7 +225,7 @@ def test_approved_slot_distributes_all_signed_editor_generations(tmp_path, monke
     assert invoke(tmp_path, {"op": op}) == (2, b"")
 
 
-@pytest.mark.parametrize("version", ["0.2.18", "0.2.20"])
+@pytest.mark.parametrize("version", ["0.2.18", "0.2.20", "0.2.21"])
 def test_acp_component_requires_its_own_signed_digest(tmp_path, monkeypatch, version):
     op = "acp-client"
     name = dist.EDITOR_FILES[op]

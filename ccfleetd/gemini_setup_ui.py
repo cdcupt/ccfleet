@@ -398,7 +398,9 @@ def pairing_help():
 def t3_setup():
     return ('<details class="gm-disconnect"><summary>'
             + tr("Add Gemini to T3 Code", "在 T3 Code 中添加 Gemini") + '</summary>'
-            + agent_guide.t3_provider_steps() + '</details>')
+            + agent_guide.t3_provider_steps()
+            + '<p><a href="/docs/guide#gemini-recovery">'
+            + tr("Recover a Gemini conversation", "恢复 Gemini 对话") + '</a></p></details>')
 
 
 def workspace_panel(csrf, ready, pairing, slot_id):

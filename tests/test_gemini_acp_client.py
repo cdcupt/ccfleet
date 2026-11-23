@@ -473,7 +473,8 @@ def test_dead_transport_while_waiting_for_approval(host):
     os.kill(int(host.pid.read_text()), signal.SIGKILL)
     assert "error" in host.recv(rid)
     assert host.note.read_bytes() == before
-    assert host.bridge.session is None
+    assert host.bridge.session.id == sid and host.bridge.session.process is None
+    assert not host.bridge.pending and not host.bridge.session.approved
 
 
 def test_sigterm_reaps_the_separate_ssh_process_group(tmp_path):
@@ -715,5 +716,369 @@ def test_reported_session_expiry_survives_a_closed_ssh_write_pipe(host):
     host.bridge.session.process.wait(timeout=5)
     res = host.recv(host.prompt(sid, "must not be retried"))
     assert "slot reported that this Gemini session timed out" in res["error"]["message"]
-    assert host.bridge.session is None
+    assert host.bridge.session.id == sid and host.bridge.session.process is None
     assert [json.loads(line)["type"] for line in host.log.read_text().splitlines()] == ["open"]
+
+
+def reconnecting_peer(host, *attachments):
+    # A replacement process represents a new authenticated SSH attachment to the same slot.
+    framing = SLOT.split('assert get()=={"type":"open"', 1)[0]
+    setup = """
+index_path = log.with_name("attachments")
+index = int(index_path.read_text()) if index_path.exists() else 0
+index_path.write_text(str(index + 1))
+token = "ab" * 32   # Fixed, synthetic resume capability, deliberately absent from ACP output.
+def ready(resumed=False, expected=None, *, enable=True):
+    opener = get()
+    assert opener == ({"type":"resume", "version":1, "resumeToken":token} if resumed
+                      else {"type":"open","version":1})
+    put({"type":"ready","model":"gemini-low","models":["gemini-low","gemini-high"],
+         "capabilities":{"cancelTurn":True,"resumeSession":True},
+         "resumeToken":token if expected is None else expected, "resumed":resumed})
+    if enable:
+        assert get()=={"type":"enableResume"}
+"""
+    host.bridge.command[4] = framing + setup + "\nexec(" + repr(attachments) + "[index])"
+
+
+def test_reconnect_restores_original_context_and_model_without_replaying_the_turn(host):
+    reconnecting_peer(host, """
+ready(enable=False)
+assert get()=={"type":"set_model","model":"gemini-high"}
+put({"type":"model","model":"gemini-high"})
+assert get()=={"type":"enableResume"}
+first=get()
+put({"type":"progress","turn":first["turn"]})
+put({"type":"text","text":"partial output"})
+""", """
+ready(resumed=True)
+assert get()=={"type":"set_model","model":"gemini-high"}
+put({"type":"model","model":"gemini-high"})
+turn=get()
+assert turn["text"]=="show me the result"
+put({"type":"end","turn":turn["turn"],"reason":"end_turn"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    session = host.bridge.session
+    host.recv(host.send("session/set_model", {"sessionId": sid, "modelId": "gemini-high"}))
+    first = session.process
+    interrupted = host.recv(host.prompt(sid, "perform side effects once"))
+    assert "will not resend" in interrupted["error"]["message"]
+    assert_t3_auth_state(interrupted["error"], False)
+    assert first.poll() is not None and session.process is None
+    assert host.bridge.session is session
+    assert host.recv(host.prompt(sid, "show me the result"))["result"] == {"stopReason": "end_turn"}
+    assert session.current == "gemini-high" and session.id == sid
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["text"] for m in wire if m["type"] == "prompt"] == [
+        "perform side effects once", "show me the result",
+    ]
+    assert [m["type"] for m in wire].count("open") == 1
+    assert [m["type"] for m in wire].count("resume") == 1
+    assert "ab" * 32 not in json.dumps(host.history)
+
+
+def test_missing_native_resume_needs_explicit_fresh_context(host):
+    reconnecting_peer(host, "ready(); get()", """
+assert get()=={"type":"resume","version":1,"resumeToken":token}
+put({"type":"error","message":"The previous Gemini session cannot be resumed."})
+""", """
+ready()
+p=get();assert p["text"]=="new instructions"
+put({"type":"end","turn":p["turn"],"reason":"end_turn"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    assert "error" in host.recv(host.prompt(sid, "cut wire"))
+    res = host.recv(host.prompt(sid, "must not create a new thread"))
+    assert "/reconnect" in res["error"]["message"]
+    assert "error" in host.recv(host.prompt(sid, "also not forwarded"))
+    assert host.recv(host.prompt(sid, "/reconnect"))["result"]["stopReason"] == "end_turn"
+    assert any("fresh Gemini conversation" in str(m) for m in host.history)
+    assert host.recv(host.prompt(sid, "new instructions"))["result"]["stopReason"] == "end_turn"
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["text"] for m in wire if m["type"] == "prompt"] == ["cut wire", "new instructions"]
+
+
+def test_temporary_reconnect_failure_keeps_token_and_revoked_device_cannot_continue(host):
+    reconnecting_peer(host, "ready(); get()", """
+assert get()["type"]=="resume"
+print("ccfleet: broker refused the WebSocket connection (HTTP 503)",file=sys.stderr)
+""", """
+assert get()["type"]=="resume"
+print("ccfleet: broker refused the WebSocket connection (HTTP 401)",file=sys.stderr)
+""")
+    sid = host.open()
+    assert "error" in host.recv(host.prompt(sid, "cut wire"))
+    res = host.recv(host.prompt(sid, "new one"))
+    assert "503" in res["error"]["message"] and host.bridge.session.process is None
+    assert_t3_auth_state(res["error"], False)
+    res = host.recv(host.prompt(sid, "new two"))
+    assert "401" in res["error"]["message"] and host.bridge.session is None
+    assert_t3_auth_state(res["error"], True)
+    assert "error" in host.recv(host.prompt(sid, "/reconnect"))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["type"] for m in wire] == ["open", "enableResume", "prompt", "resume", "resume"]
+
+
+@pytest.mark.parametrize("incorrect", [
+    'put({"type":"ready","model":"gemini-low"})',
+    'put({"type":"ready","model":"gemini-low","resumed":False,"resumeToken":token,'
+    '"capabilities":{"resumeSession":True}})',
+    'put({"type":"ready","model":"gemini-low","resumed":True,"resumeToken":"cd"*32,'
+    '"capabilities":{"resumeSession":True}})',
+])
+def test_resume_requires_confirmation_from_the_same_slot_context(host, incorrect):
+    reconnecting_peer(host, "ready(); get()", "assert get()['type']=='resume'\n" + incorrect)
+    sid = host.open()
+    host.recv(host.prompt(sid, "old"))
+    result = host.recv(host.prompt(sid, "must not be sent on wrong context"))
+    assert result["error"]["message"] == acp.BAD_READY
+    assert host.bridge.session is None
+    assert [json.loads(s)["type"] for s in host.log.read_text().splitlines()].count("prompt") == 1
+
+
+def test_disconnected_legacy_slot_can_start_a_fresh_context_only_on_request(host):
+    host.bridge.command[4] = SLOT.replace('command=req["text"]',
+                                         'command=req["text"]\n    if command=="cut":sys.exit()')
+    sid = host.open()
+    result = host.recv(host.prompt(sid, "cut"))
+    assert "/reconnect" in result["error"]["message"]
+    assert "error" in host.recv(host.prompt(sid, "/reconnect replay something"))
+    assert "error" in host.recv(host.prompt(sid, "don't retry automatically"))
+    assert host.recv(host.prompt(sid, "/reconnect"))["result"]["stopReason"] == "end_turn"
+    assert host.recv(host.prompt(sid, "continue fresh"))["result"]["stopReason"] == "end_turn"
+    frames = [json.loads(s) for s in host.log.read_text().splitlines()]
+    assert [m["text"] for m in frames if m["type"] == "prompt"] == ["cut", "continue fresh"]
+
+
+def test_idle_resume_sends_new_instruction_once_and_close_invalidates_it(host):
+    reconnecting_peer(host, """
+ready()
+prior=get();put({"type":"end","turn":prior["turn"],"reason":"end_turn"})
+""", """
+ready(resumed=True)
+turn=get();assert turn["text"]=="first message after idle"
+put({"type":"end","turn":turn["turn"],"reason":"end_turn"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    first_process = host.bridge.session.process
+    assert host.recv(host.prompt(sid, "earlier turn"))["result"]["stopReason"] == "end_turn"
+    first_process.wait(timeout=5)
+    assert host.recv(host.prompt(sid, "first message after idle"))["result"]["stopReason"] == "end_turn"
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    assert "error" in host.recv(host.prompt(sid, "late message"))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["text"] for m in wire if m["type"] == "prompt"] == [
+        "earlier turn", "first message after idle",
+    ]
+
+
+def test_active_close_relays_explicit_close_and_removes_local_resume_capability(host):
+    reconnecting_peer(host, """
+ready();get()
+put({"type":"text","text":"waiting"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    session = host.bridge.session
+    turn = host.prompt(sid, "active")
+    while host.get().get("method") != "session/update":
+        pass
+    assert host.recv(host.send("session/close", {"sessionId": sid}))["result"] == {}
+    assert host.recv(turn)["result"]["stopReason"] == "cancelled"
+    assert host.bridge.session is None and session.resume_token is None
+    assert "error" in host.recv(host.prompt(sid, "late message"))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["type"] for m in wire] == ["open", "enableResume", "prompt", "close"]
+
+
+@pytest.mark.parametrize("frame", [
+    {"type": "progress", "turn": 99},
+    {"type": "progress", "turn": True},
+    {"type": "progress", "turn": 1, "content": "private"},
+])
+def test_invalid_progress_frame_invalidates_context(host, frame):
+    reconnecting_peer(host, 'ready(); get(); put(' + repr(frame) + ')')
+    sid = host.open()
+    result = host.recv(host.prompt(sid, "one"))
+    assert "error" in result and "private" not in repr(result.get("error", {}).get("data", ""))
+    assert host.bridge.session is None and "error" in host.recv(host.prompt(sid, "two"))
+
+
+def test_unanswered_approval_cannot_cross_a_resume_boundary(host):
+    reconnecting_peer(host, """
+ready()
+first=get()
+assert tool(1,"read",path="note.txt")
+put({"type":"request","op":"approve","id":2,"path":"note.txt","content":"unapproved"})
+time.sleep(30)
+""", """
+ready(resumed=True)
+turn=get()
+assert not tool(3,"write",path="note.txt",content="unapproved")
+assert not tool(4,"approve",path="note.txt",content="new attempt without reading")
+put({"type":"end","turn":turn["turn"],"reason":"end_turn"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    first = host.prompt(sid, "propose an edit")
+    before = host.note.read_bytes()
+    while True:
+        approval = host.get()
+        if approval.get("method") == "session/request_permission":
+            break
+    os.kill(host.bridge.session.process.pid, signal.SIGKILL)
+    assert "will not resend" in host.recv(first)["error"]["message"]
+    assert not host.bridge.pending and not host.bridge.session.seen
+    host.bridge.handle({"jsonrpc":"2.0", "id":approval["id"], "result":{
+        "outcome":{"outcome":"selected","optionId":"allow"},
+    }})
+    assert host.recv(host.prompt(sid, "review only"))["result"]["stopReason"] == "end_turn"
+    assert host.note.read_bytes() == before
+
+
+def test_close_of_detached_session_never_reopens_original_context(host):
+    reconnecting_peer(host, "ready(); get()")
+    sid = host.open()
+    original = host.bridge.session
+    host.recv(host.prompt(sid, "drop"))
+    assert original.resume_token is not None and original.process is None
+    assert host.recv(host.send("session/close", {"sessionId": sid}))["result"] == {}
+    assert original.resume_token is None and host.bridge.session is None
+    assert host.recv(host.prompt(sid, "try again"))["error"]["code"] == -32602
+    assert not any(json.loads(line)["type"] == "resume" for line in host.log.read_text().splitlines())
+
+
+def test_discovery_and_local_commands_never_opt_in_to_retaining_a_profile(host):
+    reconnecting_peer(host, """
+ready(enable=False)
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    for prompt in ("/help", "/model", "/reconnect"):
+        assert host.recv(host.prompt(sid, prompt))["result"]["stopReason"] == "end_turn"
+    assert host.bridge.session.resume_token is None
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    assert [json.loads(line)["type"] for line in host.log.read_text().splitlines()] == ["open", "close"]
+
+
+def test_steer_after_transport_retirement_preserves_interruption_notice_and_session(host, monkeypatch):
+    reconnecting_peer(host, "ready(); get()", """
+ready(resumed=True)
+followup=get(); assert followup["text"]=="show the outcome"
+put({"type":"end","turn":followup["turn"],"reason":"end_turn"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    session = host.bridge.session
+    retired, settle = threading.Event(), threading.Event()
+    detach = session.detach
+
+    def pause_after_retirement():
+        detach()
+        retired.set()
+        assert settle.wait(3)
+
+    monkeypatch.setattr(session, "detach", pause_after_retirement)
+    first = host.prompt(sid, "create only once")
+    try:
+        assert retired.wait(3)
+        assert session.channel is None and session.active_turn is not None
+        host.send("session/cancel", {"sessionId": sid}, notify=True)
+    finally:
+        settle.set()
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    assert any(acp.TURN_LOST in str(msg) for msg in host.history)
+    assert host.bridge.session is session
+    assert host.recv(host.prompt(sid, "show the outcome"))["result"] == {"stopReason": "end_turn"}
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["text"] for m in wire if m["type"] == "prompt"] == [
+        "create only once", "show the outcome",
+    ]
+    assert not any(m["type"] == "cancel" for m in wire)
+
+
+def test_steer_while_native_resume_is_opening_cancels_only_the_unsent_instruction(host):
+    awaiting = host.root / "resume-is-opening"
+    reconnecting_peer(host, "ready(); get()", f"""
+assert get()=={{"type":"resume","version":1,"resumeToken":token}}
+Path({str(awaiting)!r}).touch()
+time.sleep(60)
+""", """
+ready(resumed=True)
+turn=get(); assert turn["text"]=="revised instruction"
+put({"type":"end","turn":turn["turn"],"reason":"end_turn"})
+assert get()=={"type":"close"}
+""")
+    sid = host.open()
+    session = host.bridge.session
+    assert "error" in host.recv(host.prompt(sid, "interrupted original"))
+    in_flight = host.prompt(sid, "do not send this instruction")
+    for _ in range(200):
+        if awaiting.exists():
+            break
+        threading.Event().wait(.01)
+    assert awaiting.exists()
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    assert host.recv(in_flight)["result"] == {"stopReason": "cancelled"}
+    assert host.bridge.session is session and session.process is None
+    assert host.recv(host.prompt(sid, "revised instruction"))["result"] == {"stopReason": "end_turn"}
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    wire = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [m["text"] for m in wire if m["type"] == "prompt"] == [
+        "interrupted original", "revised instruction",
+    ]
+    assert [m["type"] for m in wire].count("resume") == 2
+
+
+@pytest.mark.parametrize("fault", ["eof", "silent"])
+def test_link_loss_after_cancel_before_ack_keeps_recoverable_chat(host, monkeypatch, fault):
+    monkeypatch.setattr(acp, "CANCEL_GRACE", 0.2)
+    reconnecting_peer(host, """
+ready()
+first = get()
+put({"type":"text","text":"working"})
+assert get() == {"type":"cancel","turn":first["turn"]}
+# The connection closes or stops responding before the turn outcome is known.
+""" + ("time.sleep(15)" if fault == "silent" else ""), """
+ready(resumed=True)
+followup = get()
+assert followup["text"] == "check the result"
+put({"type":"end","turn":followup["turn"],"reason":"end_turn"})
+assert get() == {"type":"close"}
+""")
+    sid = host.open()
+    original = host.bridge.session
+    first = host.prompt(sid, "edit once")
+    while host.get().get("method") != "session/update":
+        pass
+    host.send("session/cancel", {"sessionId": sid}, notify=True)
+    assert host.recv(first)["result"] == {"stopReason": "cancelled"}
+    assert any(acp.TURN_LOST in str(msg) for msg in host.history)
+    assert host.bridge.session is original and original.channel is None
+    assert host.recv(host.prompt(sid, "check the result"))["result"] == {"stopReason": "end_turn"}
+    host.recv(host.send("session/close", {"sessionId": sid}))
+    frames = [json.loads(line) for line in host.log.read_text().splitlines()]
+    assert [f["text"] for f in frames if f["type"] == "prompt"] == ["edit once", "check the result"]
+
+
+def test_large_unicode_edit_preview_survives_t3_text_block_limit(host):
+    sid = host.open()
+    session = host.bridge.session
+    proposed = ("line with 🎵 and reviewable text\n" * 2700) + "LAST LINE"
+    preview = acp.edit_preview("engine.js", "", proposed, editor.terminal_text)
+    assert len(preview.encode("utf-16-le")) // 2 > 65536
+    session.text(preview)
+    chunks = []
+    while not host.output.inbox.empty():
+        chunks.append(host.get()["params"]["update"]["content"]["text"])
+    assert len(chunks) > 1
+    assert all(len(chunk.encode("utf-16-le")) // 2 <= 65536 for chunk in chunks)
+    assert "".join(chunks) == preview and "LAST LINE" in chunks[-1]
+    host.recv(host.send("session/close", {"sessionId": sid}))
