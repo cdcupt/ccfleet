@@ -199,11 +199,11 @@ def t3_provider_steps() -> str:
                     inline=True)
             + '<ol><li><code>gemini</code></li><li><code>--acp</code></li></ol></li><li>'
             + bi('Save the provider. Open your local project and start a thread with '
-                 '<strong>CCFleet Gemini</strong>. Choose <strong>Supervised</strong> to approve '
-                 'each file edit and each enabled test run before it executes on your Mac.',
+                 '<strong>CCFleet Gemini</strong>. With the default project settings, choose '
+                 '<strong>Supervised</strong> to approve each edit and test run on your Mac.',
                  '保存服务商，打开本地项目，用 <strong>CCFleet Gemini</strong> 新建对话。'
-                 '选择 <strong>Supervised</strong> 后，文件修改和已启用的本地测试'
-                 '都需经你逐次确认后才会执行。',
+                 '使用默认项目设置时，选择 <strong>Supervised</strong> 可逐次确认'
+                 '文件修改和本地测试。',
                  inline=True)
             + '</li></ol>')
 
@@ -249,6 +249,61 @@ def t3_gemini() -> str:
              '<p>配对完成后会返回终端。每台 Mac 都有独立的连接，可在 Gemini 页面单独移除。</p>')
         + '<h3>' + label("Set up T3 Code once", "首次配置 T3 Code", inline=True) + '</h3>'
         + t3_provider_steps()
+        + '<h3 id="gemini-project-access">'
+        + label("Let Gemini run project commands", "允许 Gemini 运行项目命令", inline=True)
+        + '</h3>'
+        + bi(
+            '<p>CCFleet 0.2.23 lets you authorize one checkout on one Mac. Update the client '
+            'and the private slot service first. In the local terminal where the project files '
+            'live, run the following commands from the project directory.</p>',
+            '<p>CCFleet 0.2.23 可为一台 Mac 上的一个项目目录授权。先更新客户端和专属槽位服务，'
+            '然后在存放项目文件的 Mac 上打开终端，进入项目目录并运行以下命令。</p>',
+        )
+        + '<pre><code>ccfleet update\nccfleet gemini --full-access</code></pre>'
+        + bi(
+            '<p>Check the displayed folder and publishing destination. Type <code>ENABLE</code> '
+            'once to save the grant. When the command returns, run <code>ccfleet gemini</code>, '
+            'or open the same project in T3, Orca or Herdr. Use your existing Gemini provider '
+            'or terminal command. Pairing is separate.</p>',
+            '<p>核对显示的目录和发布目标，输入一次 <code>ENABLE</code> 保存授权。命令结束后，'
+            '运行 <code>ccfleet gemini</code>，或在 T3、Orca、Herdr 中打开同一目录，沿用已配置的 '
+            'Gemini 服务商或终端命令。设备配对是单独的步骤。</p>',
+        )
+        + bi(
+            '<p>In a trusted project, Gemini can edit files, run tests, build and make local '
+            'Git commits without further approval prompts. Commands run offline inside the '
+            'checkout. Command output can be sent to Gemini. Install any needed dependencies '
+            'yourself first. For Git writes, use '
+            'a standalone clone with its own <code>.git</code> directory. Linked worktrees '
+            'usually keep their Git data outside the checkout. Other projects and older '
+            'clients or slots keep the usual approval flow.</p>',
+            '<p>项目授权生效后，Gemini 可以修改文件、运行测试、构建项目和创建本地 Git 提交，'
+            '无需逐次确认。命令在项目目录内离线运行，输出可能会发送给 Gemini。'
+            '请先自行安装所需依赖。需要写入 Git 时，'
+            '请使用带有独立 <code>.git</code> 目录的克隆。链接工作树通常将 Git 数据保存在目录'
+            '之外。其他项目以及旧版客户端或槽位仍使用原有的确认流程。</p>',
+        )
+        + bi(
+            '<p>To publish, sign in locally with <code>gh</code> for GitHub.com or '
+            '<code>glab</code> for GitLab.com. At authorization, CCFleet uses a recognized '
+            '<code>origin</code> by default. If it cannot identify a repository, local commands '
+            'still work. To choose the publishing destination, pass its URL with the grant.</p>',
+            '<p>如需发布，请在本机用 <code>gh</code> 登录 GitHub.com，或用 <code>glab</code> '
+            '登录 GitLab.com。授权时 CCFleet 默认使用可识别的 <code>origin</code>。未识别出仓库时，'
+            '仍可运行本地命令。要指定发布目标，请在授权时传入仓库网址。</p>',
+        )
+        + '<pre><code>ccfleet gemini --full-access --publish-to https://github.com/OWNER/REPO</code></pre>'
+        + bi(
+            '<p>Ask Gemini to push the current branch, then open a pull request or merge '
+            'request in that repository. The publisher verifies that the remote branch '
+            'already points to the exact local commit before opening a review. Google sign-in '
+            'stays on the slot. Revoke access from the project directory at any time, '
+            'including offline.</p>',
+            '<p>可以让 Gemini 先推送当前分支，再在该仓库创建拉取请求或合并请求。创建请求前，'
+            '发布工具会验证远端分支是否已指向当前本地提交。Google 登录保留在槽位上。'
+            '随时可在项目目录运行以下命令撤销授权，离线也可执行。</p>',
+        )
+        + '<pre><code>ccfleet gemini --revoke-full-access</code></pre>'
         + '<h3 id="gemini-recovery">'
         + label("Recover a Gemini conversation", "恢复 Gemini 对话", inline=True) + '</h3>'
         + bi(
