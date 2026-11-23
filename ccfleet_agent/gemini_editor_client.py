@@ -24,6 +24,7 @@ MAX_PROMPT = 64 * 1024
 REQUEST_FIELDS = {
     "read": {"path"}, "list": {"path"}, "mkdir": {"path"},
     "approve": {"path", "content"}, "write": {"path", "content"}, "test": set(),
+    "shell": {"command"}, "publish": {"request"},
 }
 
 
@@ -65,12 +66,80 @@ class SlotError(ValueError):
     """A well-formed error frame from the paired slot."""
 
 
+def request_operation(message):
+    op = message.get("op")
+    fields = REQUEST_FIELDS.get(op) if isinstance(op, str) else None
+    if fields is None or set(message) != {"type", "id", "op"} | fields:
+        raise ValueError("invalid editor operation")
+    if op == "publish":
+        request = message["request"]
+        if not isinstance(request, dict) or request.get("action") not in ("push", "create_review"):
+            raise ValueError("invalid repository action")
+    elif any(not isinstance(message[k], str) for k in fields):
+        raise ValueError("invalid editor operation arguments")
+    return op
+
+
+class ProjectCommands:
+    """Local authority for the duration of one explicitly negotiated model turn."""
+
+    def __init__(self, tools, files, project, fleet_home):
+        self.tools = tools
+        self.access = files.ProjectAccess(project, fleet_home)
+        self.capable = False
+        self.grant = None
+
+    def connected(self, ready):
+        caps = ready.get("capabilities")
+        self.capable = isinstance(caps, dict) and caps.get("projectShell") is True
+
+    @contextlib.contextmanager
+    def turn(self, frame):
+        # A grant revoked and then recreated belongs to a later user decision.
+        # Queued actions from this turn may only use its original generation.
+        self.grant = self.access.snapshot() if self.capable else None
+        try:
+            if self.grant is not None:
+                frame["projectShell"] = True
+            yield
+        finally:
+            self.grant = None
+
+    def allowed(self):
+        return self.grant is not None and self.grant == self.access.snapshot()
+
+    def title(self, msg):
+        if not self.allowed():
+            raise ValueError("project commands are disabled for this turn")
+        if msg["op"] == "shell":
+            command = msg["command"]
+            if not command.strip() or "\x00" in command or len(command.encode()) > 16 * 1024:
+                raise ValueError("invalid local command")
+            text = terminal_text(command).replace("\n", "\\n").replace("\t", "\\t")
+            return "Run project command: " + text
+        if msg["request"]["action"] == "push":
+            return "Push to the project's authorized remote"
+        return "Create a review on the project's authorized remote"
+
+    def execute(self, msg, cancelled):
+        def interrupted():
+            return cancelled() or not self.allowed()
+
+        if interrupted():
+            raise ValueError("project command unavailable")
+        if msg["op"] == "shell":
+            return self.tools.run_local_command(self.access, msg["command"], cancelled=interrupted)
+        return self.tools.publish_project(self.access, msg["request"], cancelled=interrupted)
+
+
 class Editor:
     def __init__(self, project, tools, files, test=None, *, fleet_home=None):
         self.tools = tools
-        private = tools.PrivateFolders(fleet_home or Path.home() / ".config" / "ccfleet")
+        fleet_home = fleet_home or Path.home() / ".config" / "ccfleet"
+        private = tools.PrivateFolders(fleet_home)
         self.workspace = tools.Workspace(project, self._confirm_workspace, test, file_tools=files,
                                          private_folders=private, cancelled=self.disconnected)
+        self.commands = ProjectCommands(tools, files, self.workspace.path, fleet_home)
         self.channel = None
         self.seen = {}
         self.approval = None
@@ -109,8 +178,13 @@ class Editor:
     def _confirm_workspace(self, action, detail):
         if action == "Save file":
             # The immediately enclosing write verifies this approval and its content.
-            return self.approval is not None and self.approval[0] == detail
+            return (not self.disconnected() and self.approval is not None
+                    and self.approval[0] == detail
+                    and (not self.approval[3] or self.commands.allowed()))
         if action in ("Create directory", "Run local tests"):
+            if self.commands.allowed() and not self.disconnected():
+                print(f"{action} on this Mac ({terminal_text(detail)})", flush=True)
+                return True
             return self.confirm(f"{action} on this Mac ({terminal_text(detail)})?")
         return False
 
@@ -124,9 +198,10 @@ class Editor:
             raise ValueError("the file must be read again before editing")
         show_patch(path, current["text"] if current else "", content)
         action = "Edit" if current else "Create"
-        if not self.confirm(f"{action} {terminal_text(path)} on this Mac?"):
+        automatic = self.commands.allowed()
+        if not automatic and not self.confirm(f"{action} {terminal_text(path)} on this Mac?"):
             return False
-        self.approval = (path, hashlib.sha256(content.encode("utf-8")).hexdigest(), expected)
+        self.approval = (path, hashlib.sha256(content.encode()).hexdigest(), expected, automatic)
         return True
 
     def _write(self, path, content):
@@ -144,12 +219,17 @@ class Editor:
             self.approval = None
 
     def handle(self, request):
-        op = request.get("op")
-        fields = REQUEST_FIELDS.get(op, set()) if isinstance(op, str) else set()
-        if (not isinstance(op, str) or op not in REQUEST_FIELDS
-                or set(request) != {"type", "id", "op"} | fields
-                or any(not isinstance(request[field], str) for field in fields)):
-            raise ValueError("invalid editor operation")
+        op = request_operation(request)
+        if op in ("shell", "publish"):
+            print(self.commands.title(request), flush=True)
+            try:
+                result = self.commands.execute(request, self.disconnected)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                print("Local operation failed.", flush=True)
+                raise
+            print(terminal_text(result["output"]), end="")
+            print(f"\nLocal operation exited with {result['exit']}.", flush=True)
+            return result
         if op == "read":
             path = request["path"]
             item = self.workspace.call("read_project", {"path": path})
@@ -261,9 +341,17 @@ def turn(channel, editor, prompt, *, number=None, progress=False):
     request = {"type": "prompt", "text": prompt}
     if number is not None:
         request["turn"] = number
-    channel.send(request)
-    ids = set()
     editor.approval = None
+    try:
+        with editor.commands.turn(request):
+            channel.send(request)
+            receive_turn(channel, editor, number, progress)
+    finally:
+        editor.approval = None
+
+
+def receive_turn(channel, editor, number, progress):
+    ids = set()
     while True:
         message = channel.receive()
         kind = message.get("type")
@@ -275,7 +363,6 @@ def turn(channel, editor, prompt, *, number=None, progress=False):
                     raise ValueError("unexpected Gemini progress frame")
                 continue
         if kind == "end" and isinstance(message.get("reason"), str):
-            editor.approval = None
             reason = message["reason"]
             if reason == "end_turn":
                 print()
@@ -317,6 +404,8 @@ COMMAND_HELP = """Gemini commands
   /reconnect                 Rejoin the previous conversation, or start fresh after expiry
   /exit or /quit             Close this session
 
+To enable project commands, launch ccfleet gemini --full-access in a local terminal.
+To revoke access in that project, run ccfleet gemini --revoke-full-access.
 Type a message to talk to Gemini."""
 MODEL_ID = re.compile(r"gemini-[a-z0-9.-]{1,80}\Z")
 
@@ -408,6 +497,7 @@ class TerminalSession:
 
     def detach(self):
         self.channel = self.editor.channel = None
+        self.editor.commands.capable = False
         self.offered = None
         self.editor.approval = None
         self.editor.seen.clear()
@@ -428,6 +518,7 @@ class TerminalSession:
             channel.send({"type": "enableResume"})
         self.current, self.models = current, models
         self.tagged = tagged
+        self.editor.commands.connected(ready)
         self.channel, self.offered = channel, offered
         self.editor.channel = channel
 
@@ -480,8 +571,16 @@ def session(connection):
     connection.connect()
     project = terminal_text(str(editor.workspace.path))
     print(f"Gemini · {terminal_text(connection.current)} · {project}")
-    print("Gemini reads requested project files through your slot. Edits and local tests "
-          "ask for approval. Type /help for commands.")
+    if editor.commands.access.enabled():
+        if editor.commands.capable:
+            print("Project access enabled. Gemini can edit files and run local project commands. "
+                  "Type /help for controls.")
+        else:
+            print("Update the private Mac slot to use project commands. Edits and local tests "
+                  "ask for approval in this session. Type /help for controls.")
+    else:
+        print("Gemini reads requested project files through your slot. Edits and local tests "
+              "ask for approval. Type /help for commands.")
     stale_answer = False
     while True:
         try:

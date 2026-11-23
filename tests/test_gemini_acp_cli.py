@@ -36,7 +36,7 @@ def test_acp_cli_launches_pinned_bridge_without_terminal_or_provider_credentials
         assert scope["home"]() == root / "antigravity-workspace"
         return ["assigned-slot"]
     monkeypatch.setitem(scope, "ssh_transport_command", ssh)
-    tools, editor, files = object(), object(), object()
+    tools, editor, files = SimpleNamespace(), object(), SimpleNamespace(ProjectAccess=object())
     monkeypatch.setitem(scope, "project_files", lambda: files)
     def run(command, environment, editor_module, tools_module, file_module, *,
             fleet_home, test, test_folder):

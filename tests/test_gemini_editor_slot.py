@@ -169,7 +169,7 @@ def test_model_menu_uses_one_acp_session_and_no_inference_for_commands(agent):
     replies = [c.args[0] for c in agent.device.send.call_args_list]
     assert replies == [
         {"type": "ready", "model": model_a, "models": [model_a, model_b],
-         "capabilities": {"cancelTurn": True}},
+         "capabilities": {"cancelTurn": True, "projectShell": True}},
         {"type": "model", "model": model_a},
         {"type": "model", "model": model_a, "error": "Choose a Gemini model offered by this slot."},
         {
@@ -207,7 +207,7 @@ def test_switch_without_upstream_confirmation_terminates_session(agent):
         slot.interact(agent, agent.device)
     agent.device.send.assert_called_once_with(
         {"type": "ready", "model": "gemini-a", "models": ["gemini-a", "gemini-b"],
-         "capabilities": {"cancelTurn": True}}
+         "capabilities": {"cancelTurn": True, "projectShell": True}}
     )
     agent.device.request.assert_not_called()
 
@@ -349,6 +349,10 @@ def test_remote_cannot_register_mcp_or_start_login(agent):
         ("client_edit_file", {}, "allow"),
         ("call_mcp_tool", {"ServerName": "ccfleetlocal", "ToolName": "test_project"}, "allow"),
         ("call_mcp_tool", {"ServerName": "elsewhere", "ToolName": "test_project"}, "deny"),
+        ("call_mcp_tool", {"ServerName": "ccfleetlocal", "ToolName": "run_local_command"}, "allow"),
+        ("call_mcp_tool", {"ServerName": "ccfleetlocal", "ToolName": "publish_project"}, "allow"),
+        ("run_local_command", {"ServerName": "elsewhere", "ToolName": "run_local_command"}, "deny"),
+        ("run_command", {"ServerName": "ccfleetlocal", "ToolName": "run_local_command"}, "deny"),
         ("test_project", {"ServerName": "ccfleetlocal", "ToolName": "test_project"}, "allow"),
         ("list_project", {"ServerName": "ccfleetlocal", "ToolName": "list_project"}, "allow"),
         ("list_project", {"ServerName": "ccfleetlocal", "ToolName": "test_project"}, "deny"),
