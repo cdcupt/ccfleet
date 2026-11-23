@@ -18,10 +18,12 @@ PREDECESSORS = {
         "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
     },
     "gemini_editor_slot.py": {
+        "bdb0a586c2eb21f219ee29faf05311fb2a00295bb0a49b32c47c2c0c7807de32",
         "a51e16dc133df2c5eb3fdb069118f8b6145cf716ac5cff94fb31e0704039e462",
         "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
     },
     "gemini_distribution.py": {
+        "cdc1afafee1816d0e6831a5b196b3c093c166843ca6e6f537e4ddbe755e47cfa",
         "8b8b84c94c5ed44bd69b91c6b80d498276a664a217f3894e26874cd9bacf16ad",
         "9eb1a0f14f36b629e3aef2701b260c3363c0b2536b5bbf0fd7fbf534edb00a94",
         "cad07805383d75038973e8bdff335f83cb73e5b168ffa48c40127229bee90d30",
@@ -120,7 +122,7 @@ def install():
     components = {root / name: (source / name).read_bytes() for name in (
         "antigravity_entry.py", "antigravity_slot.py", "gemini_preview.py",
         "gemini_distribution.py", "workspace_io.py", "gemini_editor_distribution.py",
-        "gemini_editor_slot.py", "project_files.py")}
+        "gemini_editor_slot.py", "gemini_recovery.py", "project_files.py")}
     for op, name in dist.EDITOR_FILES.items():
         for version, revision, pins in dist.EDITOR_HISTORY:
             if op not in pins:
