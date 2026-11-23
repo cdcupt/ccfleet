@@ -36,6 +36,7 @@ FIELDS = {
     "top_k",
     "stop_sequences",
     "thinking",
+    "safeguards",
     "output_config",
     "context_management",
     "cache_control",
@@ -111,10 +112,10 @@ def prepare(value, models):
         if (
             not isinstance(msg, dict)
             or msg.keys() != {"role", "content"}
-            or msg["role"] not in ("user", "assistant")
+            or msg["role"] not in ("user", "assistant", "system")
         ):
             raise ValueError("Invalid message.")
-        prepare_blocks(msg["content"], history=True)
+        prepare_blocks(msg["content"], history=msg["role"] != "system")
     tools = value.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("Invalid tool declarations.")

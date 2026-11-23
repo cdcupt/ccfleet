@@ -158,12 +158,16 @@ def test_direct_native_messages_model_switch_and_precise_fee(router, provider):
             ).encode(),
         )
     )
-    body = payload(MODELS[0], tools=[tool], metadata={"user_id": "private"})
+    safeguard = {"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}
+    body = payload(MODELS[0], tools=[tool], safeguards=[safeguard], metadata={"user_id": "private"})
+    body["messages"].append({"role": "system", "content": [{"type": "text", "text": "Use local tools."}]})
     assert json.loads(api(c, key, body)[2])["content"] == content
     assert calls[0][0] == "/api/v1/messages"
     assert calls[0][1]["Authorization"] == "Bearer sk-or-synthetic-test-only"
     assert key not in repr(calls) and "PRIVATE-CLIENT" not in repr(calls)
     assert "metadata" not in calls[0][2] and calls[0][2]["model"] == MODELS[0]
+    assert calls[0][2]["safeguards"] == [safeguard]
+    assert calls[0][2]["messages"] == body["messages"]
     body["messages"] += [
         {"role": "assistant", "content": content},
         {
