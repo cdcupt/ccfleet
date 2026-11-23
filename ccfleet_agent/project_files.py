@@ -17,6 +17,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import json
 import os
 import re
 import selectors
@@ -195,6 +196,172 @@ def _parent(root_fd: int, path: str, *, create: bool = False) -> Iterator[Option
         yield fd
     finally:
         os.close(fd)
+
+
+class ProjectAccess:
+    """One explicit local grant, bound to an owned directory and its filesystem identity."""
+
+    def __init__(self, project: Path, fleet_home: Path):
+        self.project = Path(os.path.abspath(project))
+        self.fleet_home = Path(os.path.abspath(fleet_home))
+        self._file = hashlib.sha256(os.fsencode(self.project)).hexdigest() + ".json"
+
+    @contextlib.contextmanager
+    def project_fd(self):
+        # Never follow a replaced project or path component at execution time.
+        project = self.project
+        import pwd
+        homes = {Path.home().resolve(), Path(pwd.getpwuid(os.getuid()).pw_dir)}
+        protected = [self.fleet_home.resolve(), Path("/Library/Keychains")]
+        protected.extend(h / name for h in homes for name in (
+            "Library", ".local", ".ssh", ".config", ".ccfleet", ".agents", ".claude",
+            ".codex", ".gemini", ".gnupg", ".aws", ".azure", ".kube", ".password-store",
+        ))
+        def folded(path):
+            return Path(unicodedata.normalize("NFD", os.fspath(path)).casefold())
+        root = folded(project)
+        for path in protected:
+            target = folded(path)
+            if root == target or target in root.parents or root in target.parents:
+                raise ProjectError("choose a project outside personal or CCFleet settings")
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        if (project in (temp_root, *temp_root.parents) or os.path.ismount(project)
+                or _excluded(os.fspath(project))
+                or any(root.is_relative_to(p) for p in ("/bin", "/sbin", "/usr", "/system",
+                                                        "/library", "/applications", "/opt"))):
+            raise ProjectError("choose an ordinary project folder for development access")
+        fd = _open_root(project)
+        try:
+            st = os.fstat(fd)
+            if st.st_uid != os.getuid():
+                raise ProjectError("development access requires a project owned by this user")
+            # The same directory can have alternate names through macOS firmlinks.
+            for ancestor in {p for path in [*protected, temp_root] for p in (path, *path.parents)}:
+                try:
+                    if os.path.samestat(st, ancestor.stat()):
+                        raise ProjectError("choose a project outside personal or CCFleet settings")
+                except FileNotFoundError:
+                    pass
+            yield fd
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _project_id(fd):
+        st = os.fstat(fd)
+        if hasattr(st, "st_birthtime"):
+            # The system Python and newer Python clients must encode the same
+            # birth time. Only newer Python exposes the precise nanosecond field.
+            born = round(st.st_birthtime * 1_000_000_000)
+        else:
+            # The supported client is macOS. Linux fixtures use statx birth time
+            # via coreutils rather than accepting an inode recycled by the filesystem.
+            try:
+                born = subprocess.check_output(
+                    ["/usr/bin/stat", "-L", "-c", "%w", f"/proc/self/fd/{fd}"],
+                    env={"LC_ALL": "C"}, pass_fds=(fd,), stderr=subprocess.DEVNULL,
+                    timeout=3, text=True,
+                ).strip()
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ProjectError("this filesystem cannot identify a project grant") from exc
+            if not born or born == "-":
+                raise ProjectError("this filesystem cannot identify a project grant")
+        return [st.st_uid, st.st_dev, st.st_ino, born]
+
+    @contextlib.contextmanager
+    def _registry(self, create=False):
+        # The directory is separate from files the stock project editor may write.
+        # All child names are fixed or hashed, and all operations are relative to a held fd.
+        root = _open_root(self.fleet_home, create=create)
+        try:
+            st = os.fstat(root)
+            if st.st_uid != os.getuid() or st.st_mode & 0o022:
+                raise ProjectError("the CCFleet settings directory must be private to this user")
+            if create:
+                try:
+                    os.mkdir("project-access", 0o700, dir_fd=root)
+                except FileExistsError:
+                    pass
+            fd = os.open("project-access", _DIR_FLAGS, dir_fd=root)
+            try:
+                st = os.fstat(fd)
+                if st.st_uid != os.getuid() or st.st_mode & 0o077:
+                    raise ProjectError("the project access registry must be private")
+                yield fd
+            finally:
+                os.close(fd)
+        finally:
+            os.close(root)
+
+    def snapshot(self):
+        """A local generation and optional pinned remote, or None; safe for polling."""
+        try:
+            with self.project_fd() as project, self._registry() as registry:
+                fd = os.open(self._file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=registry)
+                try:
+                    st = os.fstat(fd)
+                    if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                            or st.st_nlink != 1 or st.st_mode & 0o077 or st.st_size > 2048):
+                        return None
+                    data = json.loads(os.read(fd, 2049))
+                finally:
+                    os.close(fd)
+                if (not isinstance(data, dict) or data.get("project") != self._project_id(project)
+                        or not isinstance(data.get("generation"), str)
+                        or not re.fullmatch(r"[a-f0-9]{32}", data["generation"])
+                        or not self._valid_remote(data.get("remote"))):
+                    return None
+                return data["generation"], data.get("remote"), data["project"]
+        except (OSError, ValueError, RuntimeError, RecursionError):
+            return None
+
+    @staticmethod
+    def _valid_remote(remote):
+        return remote is None or (
+            isinstance(remote, str) and len(remote) <= 512
+            and re.fullmatch(r"https://(?:github|gitlab)\.com/[A-Za-z0-9_.-]+"
+                             r"(?:/[A-Za-z0-9_.-]+)+", remote) is not None
+            and all(part not in (".", "..") for part in remote.split("/")[3:])
+        )
+
+    def enabled(self):
+        return self.snapshot() is not None
+
+    def remote(self):
+        grant = self.snapshot()
+        return grant[1] if grant else None
+
+    def grant(self, remote=None):
+        if not self._valid_remote(remote):
+            raise ProjectError("invalid project publishing remote")
+        with self.project_fd() as project, self._registry(create=True) as registry:
+            data = {"project": self._project_id(project), "generation": uuid.uuid4().hex,
+                    "remote": remote}
+            temp = "." + uuid.uuid4().hex
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                         dir_fd=registry)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                if not os.path.samestat(os.fstat(project), self.project.stat()):
+                    raise ProjectError("project moved while granting access")
+                os.replace(temp, self._file, src_dir_fd=registry, dst_dir_fd=registry)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(temp, dir_fd=registry)
+
+    def revoke(self):
+        try:
+            with self._registry() as fd:
+                os.unlink(self._file, dir_fd=fd)
+        except FileNotFoundError:
+            pass
+        except ProjectError:
+            if self.fleet_home.exists() or self.fleet_home.is_symlink():
+                raise
 
 
 def _identity(st: os.stat_result) -> tuple:

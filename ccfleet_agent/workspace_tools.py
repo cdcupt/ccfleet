@@ -13,6 +13,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unicodedata
@@ -43,6 +44,266 @@ TEST_SANDBOX = """
   (literal "/dev/null"))
 (deny file-read-data file-write* (regex #"/[.]git(/|$)"))
 """
+
+
+
+COMMAND_LIMIT = 16 * 1024
+COMMAND_OUTPUT_LIMIT = 32 * 1024
+COMMAND_TIMEOUT = 300
+BUNDLE_LIMIT = 64 * 1024 * 1024
+# Only trusted system or package-manager tools, without user shell startup files.
+APPLE_DEV_TOOLS = ("/Library/Developer/CommandLineTools/usr/bin",
+                   "/Applications/Xcode.app/Contents/Developer/usr/bin")
+DEV_PATH = ":".join(("/opt/homebrew/bin", "/usr/local/bin", *APPLE_DEV_TOOLS,
+                     "/usr/bin", "/bin", "/usr/sbin", "/sbin"))
+
+# sandbox-exec applies the policy before any repository code or shell expression runs.
+# File writes are limited to the project and per-command scratch. Protect Git control
+# files that can execute or redirect later Git commands outside this session.
+DEV_SANDBOX = """
+(version 1)
+(deny default)
+(import "system.sb")
+(allow process-exec process-fork sysctl-read file-read-metadata)
+(allow file-read* (subpath (param "PROJECT")) (subpath (param "SCRATCH"))
+  (subpath "/usr") (subpath "/System") (subpath "/Library/Developer")
+  (subpath "/Applications/Xcode.app") (subpath "/opt/homebrew") (subpath "/bin")
+  (subpath "/sbin") (subpath "/private/var/db/dyld")
+  (literal "/private/etc/localtime"))
+(allow file-write* (subpath (param "PROJECT")) (subpath (param "SCRATCH"))
+  (literal "/dev/null"))
+(deny network*)
+(deny file-read* file-write* (subpath "/dev"))
+(allow file-read* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random")
+  (literal "/dev/urandom") (subpath "/dev/fd"))
+(allow file-write* (literal "/dev/null") (subpath "/dev/fd"))
+(deny file-read-data file-write* (subpath "/usr/local/etc") (subpath "/usr/local/var")
+  (subpath "/opt/homebrew/etc") (subpath "/opt/homebrew/var"))
+; Keep descendants in the invocation's process group even if a tool daemonizes.
+; posix_spawn can set process-group attributes inside the kernel. ENOSYS makes
+; runtimes such as libuv fall back to fork/exec, where the group policy applies.
+(deny syscall-unix (syscall-number SYS_setpgid SYS_setsid))
+(deny syscall-unix (syscall-number SYS_posix_spawn) (with errno ENOSYS))
+"""
+
+# Case-insensitive volumes can resolve a differently cased spelling to the same file.
+# Seatbelt regexes are POSIX EREs, so expand fixed ASCII names before compiling.
+def _git_controls():
+    def folded(word):
+        return "".join(f"[{c}{c.upper()}]" if c.isalpha() else c for c in word)
+
+    meta = "/[.]" + folded("git")
+    subtrees = "|".join(map(folded, ("hooks", "info", "modules", "worktrees",
+                                    "remotes", "branches", "objects/info")))
+    controls = "|".join(map(folded, ("config", "gitdir", "commondir")))
+    rules = (meta + "$", f"{meta}/({subtrees})(/|$)", f"{meta}/({controls})([.]|$)")
+    return "(deny file-write* " + " ".join(f'(regex #"{rule}")' for rule in rules) + ")"
+
+
+# chdir("/dev/fd/N") does not work on macOS. Use fchdir in an isolated helper,
+# before exec'ing Seatbelt, without using Python preexec_fn in the threaded ACP host.
+SANDBOX_ENTRY = """import os, resource, sys
+fd = int(sys.argv[1])
+os.fchdir(fd)
+os.close(fd)
+if not os.path.samestat(os.stat("."), os.stat(sys.argv[2])):
+    sys.exit(125)
+if sys.argv[3]:
+    size = int(sys.argv[3])
+    resource.setrlimit(resource.RLIMIT_FSIZE, (size, size))
+os.execv(sys.argv[4], sys.argv[4:])
+"""
+
+if __package__:
+    from .project_files import ProjectAccess  # noqa: F401
+
+
+def _developer_git():
+    # Skip the /usr/bin/git xcrun shim: it may prompt to install Xcode or try to
+    # create a host-side cache outside the development sandbox.
+    return next((str(Path(d) / "git") for d in APPLE_DEV_TOOLS
+                 if os.access(Path(d) / "git", os.X_OK)), None)
+
+
+def _git_identity():
+    # Read two data values from global config. No project config, includes or
+    # credential helpers are involved. Keep a deterministic identity without a login.
+    values = {"user.name": "CCFleet Gemini", "user.email": "ccfleet-gemini@localhost"}
+    git = _developer_git()
+    if git is None:
+        return values
+    try:
+        data = subprocess.run(
+            [git, "config", "--global", "--no-includes", "--null", "--get-regexp",
+             r"^user\.(name|email)$"],
+            cwd="/", env={"HOME": str(Path.home()), "PATH": "/usr/bin:/bin"},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return values
+    for record in data.stdout.decode(errors="replace").split("\0"):
+        key, _, value = record.partition("\n")
+        if key in values and 0 < len(value) <= 256 and value.isprintable():
+            values[key] = value
+    return values
+
+
+def _command_environment(scratch):
+    env = {"PATH": DEV_PATH, "HOME": str(scratch), "TMPDIR": str(scratch), "CI": "1",
+           "TERM": "dumb", "LANG": "en_US.UTF-8", "GIT_CONFIG_NOSYSTEM": "1",
+           "OPENSSL_CONF": "/dev/null", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "3",
+           "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "/dev/null",
+           "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false",
+           "GIT_CONFIG_KEY_2": "gc.auto", "GIT_CONFIG_VALUE_2": "0"}
+    # Apple's Python framework launcher requires posix_spawn even for --version.
+    # Use the same framework interpreter directly when the installed launcher is
+    # a wrapper. Other interpreters and project virtualenvs retain normal lookup.
+    python = shutil.which("python3", path=DEV_PATH)
+    if python:
+        framework = Path(python).resolve().parent.parent
+        real = framework / "Resources/Python.app/Contents/MacOS/Python"
+        if real.is_file() and os.access(real, os.X_OK):
+            shims = scratch / "bin"
+            shims.mkdir(mode=0o700)
+            (shims / "python3").symlink_to(real)
+            env["PATH"] = str(shims) + ":" + DEV_PATH
+    # A neutral scratch global config supplies the user's ordinary commit identity;
+    # a repo-local identity can still override it.
+    identity = _git_identity()
+    lines = ["[user]"]
+    for key, value in identity.items():
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'    {key.split(".")[1]} = "{escaped}"')
+    (scratch / ".gitconfig").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return env
+
+
+def _display_output(raw, truncated):
+    text = raw.decode("utf-8", errors="replace")
+    encoded = text.encode("utf-8")
+    if truncated or len(encoded) > COMMAND_OUTPUT_LIMIT:
+        marker = "[Earlier command output truncated]\n"
+        text = marker + encoded[-(COMMAND_OUTPUT_LIMIT - len(marker)):].decode(errors="ignore")
+    return text
+
+
+def _sandbox_command(access, grant, argv, scratch, env, cancelled, file_limit=""):
+    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
+        raise ValueError("local development commands require the macOS sandbox")
+    if access.snapshot() != grant or not grant or (cancelled and cancelled()):
+        raise ValueError("local development access is unavailable")
+    options = ["-D", "PROJECT=" + str(access.project), "-D", "SCRATCH=" + str(scratch)]
+    profile = DEV_SANDBOX + "\n" + _git_controls()
+    denied = []
+    # Even an unusual owner-selected project cannot expose the client's control directory.
+    for i, path in enumerate(PrivateFolders(access.fleet_home).locations):
+        key = f"PRIVATE_{i}"
+        options.extend(("-D", key + "=" + str(path)))
+        denied.append(f'(subpath (param "{key}"))')
+    profile += "\n(deny file-read-data file-write* " + " ".join(denied) + ")"
+    with access.project_fd() as fd:
+        if access._project_id(fd) != grant[2] or access.snapshot() != grant:
+            raise ValueError("the trusted project changed")
+        command = ["/usr/bin/python3", "-I", "-S", "-B", "-c", SANDBOX_ENTRY, str(fd),
+                   str(access.project), str(file_limit), "/usr/bin/sandbox-exec",
+                   *options, "-p", profile, *argv]
+        proc = subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, pass_fds=(fd,),
+                                start_new_session=True)
+    output = bytearray()
+    truncated = False
+    deadline = time.monotonic() + COMMAND_TIMEOUT
+    stream = True
+    try:
+        while stream or proc.poll() is None:
+            if (cancelled and cancelled()) or access.snapshot() != grant:
+                raise ValueError("local command interrupted; changes may already have been made")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError("local command timed out; changes may already have been made")
+            wait = min(0.2, remaining)
+            if not stream:
+                time.sleep(wait)
+                continue
+            if select.select([proc.stdout], [], [], wait)[0]:
+                part = os.read(proc.stdout.fileno(), 32768)
+                stream = bool(part)
+                output.extend(part)
+                if len(output) > COMMAND_OUTPUT_LIMIT:
+                    truncated = True
+                    del output[:-COMMAND_OUTPUT_LIMIT]
+        return {"exit": proc.wait(), "output": _display_output(output, truncated)}
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        proc.stdout.close()
+
+
+def run_local_command(access, command, *, cancelled=None):
+    """Run a user-authorized development command in the selected checkout's OS sandbox."""
+    if (not isinstance(command, str) or not command.strip() or "\0" in command
+            or len(command.encode("utf-8")) > COMMAND_LIMIT):
+        raise ValueError("invalid or oversized local command")
+    grant = access.snapshot()
+    if not grant:
+        raise ValueError("enable local development access for this project")
+    with tempfile.TemporaryDirectory(prefix="ccfleet-project-command-") as temp:
+        scratch = Path(temp).resolve()
+        return _sandbox_command(access, grant, ["/bin/sh", "-c", command], scratch,
+                                _command_environment(scratch), cancelled)
+
+
+@contextlib.contextmanager
+def export_branch_bundle(access, *, cancelled=None):
+    """Export only the current named branch from inside the scoped shell sandbox."""
+    grant = access.snapshot()
+    if not grant or not grant[1]:
+        raise ValueError("the project has no pinned publishing remote")
+    with (tempfile.TemporaryDirectory(prefix="ccfleet-export-") as producer,
+          tempfile.TemporaryDirectory(prefix="ccfleet-publish-") as consumer):
+        source = Path(producer).resolve()
+        target = Path(consumer).resolve() / "branch.bundle"
+        env = _command_environment(source)
+        executable = _developer_git() or shutil.which("git", path=DEV_PATH)
+        if not executable:
+            raise ValueError("Git is unavailable for publishing")
+        git = [executable, "-c", "core.hooksPath=/dev/null", "-c", "protocol.allow=never"]
+        ref = _sandbox_command(access, grant, [*git, "symbolic-ref", "--quiet", "HEAD"],
+                               source, env, cancelled)
+        branch = ref["output"].rstrip("\n").removeprefix("refs/heads/")
+        if (ref["exit"] or ref["output"] != f"refs/heads/{branch}\n"
+                or not 1 <= len(branch) <= 200 or not branch.isascii()
+                or not branch[0].isalnum()
+                or any(not (c.isalnum() or c in "._/-") for c in branch)):
+            raise ValueError("select a named branch before publishing")
+        result = _sandbox_command(access, grant,
+                                  [*git, "bundle", "create", str(source / "out.bundle"),
+                                   "refs/heads/" + branch],
+                                  source, env, cancelled, BUNDLE_LIMIT)
+        if result["exit"] or access.snapshot() != grant or (cancelled and cancelled()):
+            raise ValueError("unable to export the current branch within the publishing limits")
+        fd = os.open(source / "out.bundle", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as incoming:
+            st = os.fstat(fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_nlink != 1
+                    or not 0 < st.st_size <= BUNDLE_LIMIT):
+                raise ValueError("invalid project bundle")
+            # A different scratch root ensures the producer cannot alter the accepted bundle.
+            with target.open("xb") as dest:
+                remaining = st.st_size
+                while remaining:
+                    data = incoming.read(min(remaining, 65536))
+                    if not data:
+                        raise ValueError("incomplete project bundle")
+                    remaining -= dest.write(data)
+                after = os.fstat(fd)
+                if (incoming.read(1) or after.st_size != st.st_size
+                        or after.st_ctime_ns != st.st_ctime_ns):
+                    raise ValueError("project bundle changed during export")
+        if access.snapshot() != grant or (cancelled and cancelled()):
+            raise ValueError("local publishing authorization changed")
+        yield branch, target
 
 
 def tool(name, description, fields, required):

@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_SERVER = "https://ccfleet.io"
-CLIENT_VERSION = "0.2.22"
+CLIENT_VERSION = "0.2.23"
 RELEASE_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJAfp/o543ltpXhS4vumv2mParGmmLV8mQ42xW9usGhn"
 )
@@ -62,7 +62,7 @@ PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontA
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
 PROJECT_RE = re.compile(r"^[0-9a-f]{32}$")
 PROJECT_MAX_FRAME = 32 * 1024 * 1024
-PROJECT_FILES_SHA256 = "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9"
+PROJECT_FILES_SHA256 = "853eb15e1d44738b23ad78329b398637423f72c98bcd32e01e44fd83194cb8c9"
 LIVE_FILES_SHA256 = "95370599f8da87ddb3b666cba7b243104eba1aecf8c1bd3e212b505a2951ea3f"
 LIVE_CLIENT_SHA256 = "aef11ce63810e11fc3c62afc55184f24206998c439abc26b1eed3cde45b0257e"
 INFERENCE_CLIENT_SHA256 = "8ee72d4c67dcb6098c585d472b10409842c9728007694312e7df44fc033c2f2a"
@@ -1389,9 +1389,10 @@ WORKSPACE_EXECUTABLE_HASH = "787fd61a76db66b34efd3ee5cefa94dc6dd288cafa222499245
 
 
 PREVIEW_COMPONENT_HASH = "3b3ab6584180bae7ef3b2942ed9782162dac0fac99ce2717b6db5fd559373a73"
-WORKSPACE_TOOLS_HASH = "a25cae8d7ef75f66b194cac2f61b3547ebf94afd6452620bad3f06a985f68c70"
-EDITOR_CLIENT_HASH = "8418832422a73d721b1dcf14380ed210731ec191cba087212d793933f6370c24"
-ACP_CLIENT_HASH = "8028b5eb2ec51c2322942e04608b2a003884a23c8874c493ef3925e4cd08f64d"
+WORKSPACE_TOOLS_HASH = "8083d29214ee5819b28e459470e746b75601552baaf5fb4dfe642a63516587b3"
+EDITOR_CLIENT_HASH = "80db3dae15b8d23830ef47f439d7d456db963f35ccd9438217b89a66774fc5c7"
+GEMINI_PUBLISH_HASH = "e49123677f0bd46759c8b5225f2507d3d226692c287dd6dfad5e94df7c8f13f6"
+ACP_CLIENT_HASH = "bd217cadfe47a7d435a536a1399bd41e0a9d7cab531e608172d7bc5107ff7634"
 
 
 def slot_component(name, digest, operation, slot_command):
@@ -1493,10 +1494,110 @@ def cmd_pair_gemini(args: argparse.Namespace) -> int:
     return 0
 
 
+def canonical_publish_remote(raw: str) -> str:
+    # Convert standard origin spellings to one HTTPS destination. Never echo an
+    # invalid origin: it may contain a password, token, or terminal controls.
+    match = re.fullmatch(r"(?:https://|ssh://git@)(github\.com|gitlab\.com)/([^:?#@\s]+)"
+                         r"|git@(github\.com|gitlab\.com):([^:?#@\s]+)", raw)
+    if not match or len(raw) > 512:
+        raise CliError("use a GitHub.com or GitLab.com repository URL without credentials")
+    host = match[1] or match[3]
+    parts = (match[2] or match[4]).removesuffix("/").removesuffix(".git").split("/")
+    if (len(parts) < 2 or host == "github.com" and len(parts) != 2
+            or any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", p) for p in parts)):
+        raise CliError("invalid publishing repository path")
+    return "https://" + host + "/" + "/".join(parts)
+
+
+def project_origin(access) -> Optional[str]:
+    # Only inspect this checkout's own literal config. Git includes, helpers,
+    # rewrites and subprocess commands from the project are never evaluated.
+    with access.project_fd() as directory:
+        try:
+            gitdir = os.open(".git", os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        try:
+            fd = os.open("config", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=gitdir)
+            with os.fdopen(fd, "rb") as f:
+                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    return None
+                config = f.read(1024 * 1024 + 1)
+        except FileNotFoundError:
+            return None
+        finally:
+            os.close(gitdir)
+    if len(config) > 1024 * 1024:
+        return None
+    for key in ("remote.origin.pushurl", "remote.origin.url"):
+        reply = subprocess.run(
+            ["/usr/bin/git", "config", "--no-includes", "--file", "-", "--null", "--get-all", key],
+            input=config, cwd="/", env={"PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1",
+                                        "GIT_CONFIG_GLOBAL": "/dev/null", "HOME": "/"},
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        if reply.returncode == 1:
+            continue
+        values = reply.stdout.split(b"\0")
+        if reply.returncode or len(values) != 2 or values[-1]:
+            return None
+        try:
+            return canonical_publish_remote(values[0].decode("utf-8"))
+        except (UnicodeError, CliError):
+            return None
+    return None
+
+
+def gemini_project_access(args: argparse.Namespace) -> int:
+    if args.pair or args.slot or args.test or args.test_folder:
+        raise CliError("choose project access separately from pairing, a slot or a test runner")
+    project = existing_directory(args.project)
+    access = project_files().ProjectAccess(project, home().absolute())
+    if args.revoke_full_access:
+        if args.publish_to:
+            raise CliError("--publish-to is used with --full-access")
+        access.revoke()
+        print("Gemini project access revoked on this Mac.")
+        return 0
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise CliError("enable Gemini project access in a local interactive terminal")
+    remote = (canonical_publish_remote(args.publish_to) if args.publish_to
+              else project_origin(access))
+    print("Gemini can run local project commands, edit files and make Git commits without "
+          "asking again in " + ascii(str(project)) + ".")
+    print("Commands can read this checkout, including secrets stored in project files. "
+          "The shell runs offline. Command output may be sent to Gemini.")
+    if remote:
+        print("You also authorize pushing branches and opening reviews at " + remote + ".")
+    else:
+        print("Publishing is off. To enable it, add --publish-to with the repository URL.")
+    try:
+        import termios
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        answer = input("Type ENABLE to trust this checkout on this Mac: ").strip()
+    except EOFError:
+        answer = ""
+    if answer != "ENABLE":
+        print("Project access was not changed.")
+        return 1
+    access.grant(remote)
+    print("Project access saved. Open ccfleet gemini or use its T3 provider in this folder. "
+          "Revoke with ccfleet gemini --revoke-full-access.")
+    return 0
+
+
 def cmd_gemini(args: argparse.Namespace) -> int:
     acp = getattr(args, "acp", False)
     runner = getattr(args, "test", None)
     test_folder = getattr(args, "test_folder", None)
+    access_command = (getattr(args, "full_access", False)
+                      or getattr(args, "revoke_full_access", False))
+    if getattr(args, "publish_to", None) is not None and not getattr(args, "full_access", False):
+        raise CliError("--publish-to requires --full-access")
+    if access_command:
+        if sys.platform != "darwin":
+            raise CliError("Gemini project access currently requires macOS")
+        return gemini_project_access(args)
     if acp and args.pair:
         raise CliError("pair this Mac first with ccfleet pair gemini, then reconnect T3")
     if acp and args.project != ".":
@@ -1530,12 +1631,21 @@ def cmd_gemini(args: argparse.Namespace) -> int:
             tools = slot_component("workspace_tools", WORKSPACE_TOOLS_HASH, "workspace-tools",
                                    release_command)
             command = [*transport, "ccfleet-gemini-editor-v1"]
+            files = project_files()
+
+            def publish(access, request, *, cancelled=None):
+                helper = slot_component("gemini_publish", GEMINI_PUBLISH_HASH, "project-publish",
+                                        release_command)
+                return helper.publish_project(access, request, cancelled=cancelled,
+                                              export_bundle=tools.export_branch_bundle)
+
+            tools.publish_project = publish
             if acp:
                 adapter = slot_component("gemini_acp_client", ACP_CLIENT_HASH, "acp-client",
                                          release_command)
-                return adapter.run(command, project_environment(), editor, tools, project_files(),
+                return adapter.run(command, project_environment(), editor, tools, files,
                                    fleet_home=root, test=runner, test_folder=test_folder)
-            editor.run(project, command, project_environment(), tools, project_files(),
+            editor.run(project, command, project_environment(), tools, files,
                        runner, fleet_home=root)
             return 0
         print("Native Gemini gateway preview: local agy will read and edit a disposable file "
@@ -3878,6 +3988,12 @@ def parser() -> argparse.ArgumentParser:
                              help="serve T3 Code's Local ACP command over stdin and stdout")
     gemini_mode.add_argument("--preview", action="store_true",
                              help="verify a synthetic edit without model billing")
+    gemini_mode.add_argument("--full-access", action="store_true",
+                             help="authorize local project commands and edits, then exit")
+    gemini_mode.add_argument("--revoke-full-access", action="store_true",
+                             help="revoke the local project grant, then exit")
+    gemini.add_argument("--publish-to", metavar="URL",
+                        help="pin a GitHub.com or GitLab.com repository during --full-access")
     gemini.add_argument("--project", default=".", help="local project (default: current directory)")
     gemini.add_argument("--slot", default="", help="one paired private Mac slot")
     gemini.add_argument("--pair", action="store_true", help="pair a computer using a fresh code")
