@@ -108,6 +108,19 @@ def test_retention_size_and_number_bounds(registry, monkeypatch):
     assert not other.folder.exists()
 
 
+def test_long_native_conversation_remains_resumable(registry):
+    profile = begin(registry)
+    # The native helper, conversation database and transcripts grow independently.
+    for name, mib in (("encoder", 12), ("conversation.db", 30), ("transcripts", 10)):
+        with (profile.sandbox / name).open("wb") as f:
+            f.truncate(mib * 1024 * 1024)
+    profile.finish(True, lambda _: True)
+    resumed = recovery.Profile.resume(registry, A, profile.token, lambda _: True)
+    assert resumed.sid == "test-provider-id"
+    assert (resumed.sandbox / "conversation.db").stat().st_size == 30 * 1024 * 1024
+    resumed.finish(False, lambda _: True)
+
+
 def test_resume_native_uses_known_id_and_requires_original_model(monkeypatch):
     a = object.__new__(slot.Agent)
     a.supports_resume = True

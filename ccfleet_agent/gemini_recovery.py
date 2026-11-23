@@ -25,7 +25,9 @@ else:
 TTL = 300
 MAX_PROFILES = 4
 MAX_FILES = 4096
-MAX_BYTES = 32 * 1024 * 1024
+# A native helper alone uses 12 MiB, before conversation history and transcripts.
+# Four short-lived holds retain at most 512 MiB of native sandbox data in total.
+MAX_BYTES = 128 * 1024 * 1024
 TOKEN = re.compile(r"[0-9a-f]{64}")
 NAME = re.compile(r"[0-9a-f]{48}")
 NO_SESSION = "The previous Gemini session cannot be resumed."
