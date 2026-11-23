@@ -68,6 +68,9 @@ ccfleet pair gemini</code></pre></li>
 <li>In T3 Code’s <strong>local environment</strong>, open <strong>Settings → Providers → Add provider → Show more → Local ACP command</strong>. Name the provider <strong>CCFleet Gemini</strong>. Set the executable to <code>ccfleet</code>. Add two arguments on separate rows, first <code>gemini</code>, then <code>--acp</code>. If T3 cannot find the executable, enter the full path printed by <code>command -v ccfleet</code>.</li>
 <li>Open a new thread in your local project, choose <strong>CCFleet Gemini</strong> and set permissions to <strong>Supervised</strong>. T3 asks for approval before each edit and before each enabled test run. Requested file contents and test output travel to the slot and can reach Google as model context.</li>
 </ol>
+<h3>After a T3 disconnect</h3>
+<p>Keep the same T3 thread open on the paired Mac and review any local edits. With CCFleet 0.2.22 and an updated slot, your next instruction can resume the previous Gemini conversation for up to five minutes after the link drops. Enter <code>/reconnect</code> to check the connection without sending a model prompt. CCFleet never resends the interrupted request. Pending approvals expire, including any old card still visible in T3.</p>
+<p>The slot can retain up to four eligible profiles, each up to 128 MiB. If the previous conversation is unavailable, enter <code>/reconnect</code> when prompted to start a fresh one in the same T3 thread. See the <a href="https://ccfleet.io/en/docs/guide#gemini-recovery">recovery and upgrade instructions</a> if you still use 0.2.21.</p>
 <p>Each paired Mac has its own device credential. Removing a Mac revokes that device’s access. If it still has the reusable code, replace or disable the code to prevent it from pairing again. Other paired Macs keep working. For a terminal chat, run <code>ccfleet gemini</code> in the project directory.</p>
 </div><div class="copy-zh" lang="zh-Hans">
 <p>在本机 Mac 的 T3 Code 中打开项目。CCFleet 将 T3 连接到专属 Mac 槽位上的 Antigravity。Google 登录凭据保存在槽位上，Gemini 使用该账号的订阅额度。</p>
@@ -79,6 +82,9 @@ ccfleet pair gemini</code></pre></li>
 <li>在 T3 Code 的<strong>本地环境</strong>中，打开 <strong>Settings → Providers → Add provider → Show more → Local ACP command</strong>。将服务商命名为 <strong>CCFleet Gemini</strong>，可执行文件填 <code>ccfleet</code>。分两行添加参数，第一行填 <code>gemini</code>，第二行填 <code>--acp</code>。如果 T3 找不到命令，则填写 <code>command -v ccfleet</code> 输出的完整路径。</li>
 <li>在本地项目中新建对话，选择 <strong>CCFleet Gemini</strong>，将权限设为 <strong>Supervised</strong>。每次修改文件或运行已启用的测试前，T3 都会先请求你批准。按需读取的文件内容和测试输出会传到槽位，也可能作为模型上下文发送给 Google。</li>
 </ol>
+<h3>T3 断线后如何继续</h3>
+<p>在已配对的 Mac 上保持原 T3 对话打开，先检查本地文件的更改。使用 CCFleet 0.2.22 和已更新的槽位时，断线后五分钟内发送下一条指令即可尝试恢复原 Gemini 对话。输入 <code>/reconnect</code> 可检查连接，这不会向模型发送消息。CCFleet 不会重发中断的请求。待确认的操作会失效，T3 中仍显示的旧确认卡片也会失效。</p>
+<p>每个槽位最多可保留四份符合条件的会话数据，每份上限为 128 MiB。如果原对话无法恢复，可按提示输入 <code>/reconnect</code>，在当前 T3 对话窗口重新开始。如果仍在使用 0.2.21，请参阅<a href="https://ccfleet.io/zh/docs/guide#gemini-recovery">恢复和升级说明</a>。</p>
 <p>每台已配对的 Mac 都有独立的设备凭据。移除一台 Mac 即可撤销它的访问权限。如果它仍保存着配对码，请更换或停用该码，防止再次配对。其他已配对的 Mac 可继续使用。想在终端中对话时，在项目目录运行 <code>ccfleet gemini</code>。</p>
 </div></div></section>
 <section id="api-model-picker"><div class="bi"><div class="copy-en" lang="en">

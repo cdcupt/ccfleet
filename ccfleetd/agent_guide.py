@@ -248,7 +248,41 @@ def t3_gemini() -> str:
              'which you can remove from the Gemini account page.</p>',
              '<p>配对完成后会返回终端。每台 Mac 都有独立的连接，可在 Gemini 页面单独移除。</p>')
         + '<h3>' + label("Set up T3 Code once", "首次配置 T3 Code", inline=True) + '</h3>'
-        + t3_provider_steps() + '</section>'
+        + t3_provider_steps()
+        + '<h3 id="gemini-recovery">'
+        + label("Recover a Gemini conversation", "恢复 Gemini 对话", inline=True) + '</h3>'
+        + bi(
+            '<p>CCFleet 0.2.22 can resume a conversation after a connection drops. If you use '
+            '0.2.21, run <code>ccfleet update</code> on the Mac that holds your project before '
+            'opening your next Gemini session. Your private Mac slot also needs the updated '
+            'Gemini service. Your existing pairing still works.</p>',
+            '<p>从 CCFleet 0.2.22 起，连接中断后可以恢复原对话。如果你使用的是 0.2.21，请在'
+            '存放项目的 Mac 上运行 <code>ccfleet update</code>，再开始下一次 Gemini 对话。'
+            '专属 Mac 槽位也需要新版 Gemini 服务。原有配对仍然有效。</p>',
+        )
+        + bi(
+            '<p>In T3, keep the same thread open on the paired Mac. To change your instruction '
+            'while Gemini is working, use <strong>Steer</strong>. If the connection drops, '
+            'review your local changes first. CCFleet leaves completed edits in place, expires '
+            'pending approvals and never resends the interrupted request. Ignore any old '
+            'approval card that T3 still displays.</p>',
+            '<p>在已配对的 Mac 上保持当前 T3 对话打开。要在 Gemini 工作时修改指令，可使用 '
+            '<strong>Steer</strong>。如果连接中断，先检查本地文件的变化。已完成的修改会保留，'
+            '待确认的操作会失效，CCFleet 不会重发中断的请求。如果 T3 仍显示旧的确认卡片，'
+            '可以忽略。</p>',
+        )
+        + bi(
+            '<p>Within five minutes of the disconnect, send your next instruction in that thread '
+            'to try to resume, or enter <code>/reconnect</code> to check the connection without '
+            'sending a model prompt. If CCFleet says the old conversation is unavailable, enter '
+            '<code>/reconnect</code> when prompted to start a fresh conversation in the same '
+            'thread. Give Gemini the context it needs before continuing.</p>',
+            '<p>断线后五分钟内，在原对话中发送下一条指令即可尝试恢复。也可以输入 '
+            '<code>/reconnect</code> 检查连接，这不会向模型发送消息。如果 CCFleet 提示原对话'
+            '已无法恢复，可按提示输入 <code>/reconnect</code>，在当前 T3 对话窗口重新开始。'
+            '继续之前，请向 Gemini 说明所需的背景。</p>',
+        )
+        + '</section>'
     )
 
 
