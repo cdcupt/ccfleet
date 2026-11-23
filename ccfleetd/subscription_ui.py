@@ -11,77 +11,81 @@ from .bilingual import label
 
 CSS = """
 body.site:has(.subscription-review) .topbar .doc-nav{display:none}
-.subscription-ui{min-width:0;max-width:100%;margin:20px 0;padding:24px;
-border:1px solid var(--rule-soft);border-radius:14px;background:var(--panel)}
-.subscription-ui h1{margin:0 0 10px;font-size:clamp(26px,4vw,32px);
-letter-spacing:-.035em;line-height:1.2}
-.subscription-ui h2{margin:0;font-size:18px;line-height:1.3}
-.subscription-ui h3{margin:0;font-size:15px;overflow-wrap:anywhere}
-.subscription-ui p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.subscription-ui{min-width:0;max-width:100%;margin:20px 0;padding:26px;
+border:1px solid var(--rule);border-radius:var(--radius);background:var(--panel);
+box-shadow:var(--shadow)}
+.subscription-ui h1{margin:0 0 10px;font-family:var(--serif);font-size:clamp(28px,4vw,36px);
+font-weight:500;letter-spacing:-.024em;line-height:1.18}
+.subscription-ui h2{margin:0;font-family:var(--serif);font-size:22px;font-weight:500;
+line-height:1.28;letter-spacing:-.018em}
+.subscription-ui h3{margin:0;font-size:15.5px;overflow-wrap:anywhere}
+.subscription-ui p{font-size:14px;line-height:1.7;overflow-wrap:anywhere}
 .subscription-ui .subscription-muted{color:var(--muted)}
-.subscription-ui .subscription-back{display:inline-flex;gap:7px;font-size:13px;
+.subscription-ui .subscription-back{display:inline-flex;gap:7px;font-size:13.5px;font-weight:600;
 color:var(--muted);margin-bottom:20px;text-decoration:none}
+.subscription-ui .subscription-back:hover{color:var(--acc)}
 .subscription-ui .subscription-price{padding:20px;margin:22px 0;background:var(--inset);
-border:1px solid var(--rule-soft);border-radius:12px}
-.subscription-ui .subscription-price p{margin:0 0 8px;font-weight:600}
-.subscription-ui .subscription-price strong{font-size:36px;letter-spacing:-.04em;
-line-height:1.2;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+border:1px solid var(--rule);border-radius:var(--radius-md)}
+.subscription-ui .subscription-price p{margin:0 0 8px;font-weight:620}
+.subscription-ui .subscription-price strong{font-family:var(--serif);font-size:38px;font-weight:500;
+letter-spacing:-.03em;line-height:1.15;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .subscription-ui .subscription-price small{font-size:14px;color:var(--muted);margin-left:6px}
 .subscription-ui .subscription-facts{display:grid;gap:10px;padding-left:20px;
-margin:20px 0;font-size:13px;line-height:1.6}
+margin:20px 0;font-size:13.5px;line-height:1.65}
 .subscription-ui .subscription-consent{display:flex;align-items:flex-start;gap:10px;
-padding:16px;border:1px solid var(--rule);border-radius:10px;cursor:pointer;
-font-size:13px;line-height:1.6;background:var(--inset)}
+padding:16px;border:1px solid var(--rule);border-radius:var(--radius-md);cursor:pointer;
+font-size:13.5px;line-height:1.6;background:var(--surface-subtle)}
 .subscription-ui .subscription-consent input{flex:0 0 auto;width:18px;height:18px;
 margin:2px 0 0;accent-color:var(--acc)}
 .subscription-ui .subscription-submit{display:flex;align-items:center;justify-content:center;
 gap:10px;width:100%;min-height:48px;margin-top:16px;white-space:normal;
-font-size:14px;font-weight:650;overflow-wrap:anywhere}
+font-size:14.5px;font-weight:660;overflow-wrap:anywhere}
 .subscription-ui .subscription-payment-note{margin:10px 0 0;text-align:center;
-font-size:12px;color:var(--muted)}
+font-size:12.5px;color:var(--muted)}
 .subscription-ui .subscription-separate{border-top:1px solid var(--rule-soft);
 padding-top:16px;margin:20px 0 0;color:var(--muted)}
 .subscription-ui .subscription-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
-gap:12px;margin:18px 0}
-.subscription-ui .subscription-card{min-width:0;border:1px solid var(--rule-soft);
-border-radius:12px;padding:18px;background:var(--inset)}
+gap:14px;margin:18px 0}
+.subscription-ui .subscription-card{min-width:0;border:1px solid var(--rule);
+border-radius:var(--radius-md);padding:18px 20px;background:var(--surface-subtle)}
 .subscription-ui .subscription-card-head{display:flex;flex-wrap:wrap;align-items:center;
 justify-content:space-between;gap:8px 12px}
-.subscription-ui .subscription-status{display:inline-flex;padding:4px 8px;
-border:1px solid var(--rule);border-radius:999px;font-size:11px;line-height:1.35;
-font-weight:600;color:var(--muted);max-width:100%;overflow-wrap:anywhere}
-.subscription-ui .subscription-status.active{color:var(--ok,#22784f);border-color:currentColor}
-.subscription-ui .subscription-status.attention{color:var(--warn,#94620a);
-border-color:currentColor}
-.subscription-ui .subscription-card-price{font-size:24px;font-weight:650;
-letter-spacing:-.035em;font-variant-numeric:tabular-nums;margin:18px 0 12px}
-.subscription-ui .subscription-card-price small{font-size:12px;letter-spacing:0;
-font-weight:400;color:var(--muted)}
+.subscription-ui .subscription-status{display:inline-flex;padding:4px 10px;
+border:1px solid var(--rule);border-radius:var(--radius-pill);font-size:12px;line-height:1.35;
+font-weight:620;color:var(--muted);max-width:100%;overflow-wrap:anywhere}
+.subscription-ui .subscription-status.active{color:var(--ok);background:var(--ok-bg);
+border-color:var(--ok-line)}
+.subscription-ui .subscription-status.attention{color:var(--warn);background:var(--warn-bg);
+border-color:var(--warn-line)}
+.subscription-ui .subscription-card-price{font-family:var(--serif);font-size:28px;
+font-weight:500;letter-spacing:-.025em;font-variant-numeric:tabular-nums;margin:16px 0 12px}
+.subscription-ui .subscription-card-price small{font-size:12.5px;letter-spacing:0;
+font-weight:450;color:var(--muted)}
 .subscription-ui .subscription-dates{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-gap:9px 14px;margin:0;font-size:12px;line-height:1.5}
+gap:9px 14px;margin:0;font-size:12.5px;line-height:1.5}
 .subscription-ui .subscription-dates dt{color:var(--muted)}
 .subscription-ui .subscription-dates dd{margin:0;text-align:right;overflow-wrap:anywhere}
-.subscription-ui .subscription-cancel-note{margin:14px 0 0;font-size:12px;color:var(--muted)}
+.subscription-ui .subscription-cancel-note{margin:14px 0 0;font-size:12.5px;color:var(--muted)}
 .subscription-ui .subscription-cancel-form{margin:16px 0 0;padding-top:14px;
 border-top:1px solid var(--rule-soft)}
 .subscription-ui .subscription-cancel-form button{min-height:42px;white-space:normal}
-.subscription-ui .subscription-cancel-form p{margin:8px 0 0;font-size:12px;color:var(--muted)}
+.subscription-ui .subscription-cancel-form p{margin:8px 0 0;font-size:12.5px;color:var(--muted)}
 .subscription-ui .subscription-checkout{margin-top:16px;padding-top:14px;
 border-top:1px solid var(--rule-soft)}
 .subscription-ui .subscription-checkout-actions{display:flex;flex-wrap:wrap;gap:8px}
 .subscription-ui .subscription-checkout-actions form{margin:0;max-width:100%}
 .subscription-ui .subscription-checkout button{min-height:42px;white-space:normal}
 .subscription-ui .subscription-checkout button:disabled{opacity:.58;cursor:not-allowed}
-.subscription-ui .subscription-checkout p{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.subscription-ui .subscription-checkout p{margin:10px 0 0;font-size:12.5px;color:var(--muted)}
 .subscription-ui .subscription-manage{display:flex;flex-wrap:wrap;align-items:center;
 gap:10px 16px;margin-top:18px}
 .subscription-ui .subscription-manage form{margin:0;max-width:100%}
 .subscription-ui .subscription-manage .btn{min-height:44px;white-space:normal;
 overflow-wrap:anywhere}
-.subscription-ui .subscription-manage p{margin:0;color:var(--muted);font-size:12px}
+.subscription-ui .subscription-manage p{margin:0;color:var(--muted);font-size:12.5px}
 .subscription-ui input:focus-visible,.subscription-ui button:focus-visible,
-.subscription-ui a:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
-@media(max-width:560px){.subscription-ui{padding:18px 16px;border-radius:12px}
+.subscription-ui a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+@media(max-width:560px){.subscription-ui{padding:20px 16px;border-radius:14px}
 .subscription-ui .subscription-grid{grid-template-columns:minmax(0,1fr)}
 .subscription-ui .subscription-price{padding:16px;margin:18px 0}
 .subscription-ui .subscription-price strong{font-size:32px}

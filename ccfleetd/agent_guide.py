@@ -400,7 +400,7 @@ def section() -> str:
              'through CCFleet to the assigned Claude slot. Orca, Herdr and T3 have '
              '<a href="#agent-apps">Fleet launcher instructions</a>. Launcher checks passed. '
              'Full app sessions have not been verified for all three.</p>',
-             '<p><strong>通过 CCFleet 使用 Claude</strong>在需要修改文件和运行测试的电脑上'
+             '<p><strong>通过 CCFleet 使用 Claude。</strong>在需要修改文件和运行测试的电脑上'
              '打开项目。本地 Claude Code 通过 CCFleet 使用分配给你的 Claude 槽位。'
              'Orca、Herdr 和 T3 有<a href="#agent-apps">Fleet 启动器设置说明</a>。'
              '启动器检查已通过，三款应用的完整会话尚未逐一验证。</p>')
@@ -408,7 +408,7 @@ def section() -> str:
              '<a href="#t3-gemini">open your local project in T3 Code</a> or run '
              '<code>ccfleet gemini</code> in the project directory for a terminal chat. '
              'Both use the Antigravity subscription on your private Mac slot.</p>',
-             '<p><strong>通过 CCFleet 使用 Gemini</strong>在已配对的 Mac 上，'
+             '<p><strong>通过 CCFleet 使用 Gemini。</strong>在已配对的 Mac 上，'
              '<a href="#t3-gemini">用 T3 Code 打开本地项目</a>，或在项目目录运行 '
              '<code>ccfleet gemini</code> 开始终端对话。两种方式都使用专属 Mac 槽位上的 '
              'Antigravity 订阅。</p>')

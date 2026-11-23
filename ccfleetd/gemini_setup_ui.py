@@ -15,18 +15,30 @@ CSS = """
 .gemini-page .gm-back{display:inline-flex;align-items:center;gap:7px;min-height:38px;
 color:var(--muted);font-size:14px;text-decoration:none;font-weight:600}
 .gemini-page .gm-back:hover{color:var(--acc);text-decoration:underline}
-.gm-header{margin:16px 0 26px}.gm-header h1{font-size:clamp(29px,4vw,39px);margin:0}
+.gm-header{margin:16px 0 28px;padding-bottom:20px;border-bottom:1px solid var(--rule);
+animation:cf-rise .44s var(--ease) both}
+.gm-header h1{font-family:var(--serif);font-size:clamp(32px,4.2vw,44px);font-weight:500;
+letter-spacing:-.025em;margin:0}
 .gm-header p{margin:10px 0 0;max-width:70ch;color:var(--muted);line-height:1.65}
 .gm-grid{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(235px,1fr);
 gap:22px;align-items:start}.gm-grid>*{min-width:0}
 .gemini-page .gm-panel{background:var(--panel);border:1px solid var(--rule);
-border-radius:var(--radius);box-shadow:var(--shadow);padding:clamp(20px,3vw,32px)}
-.gemini-page .gm-panel h2{font-size:20px;line-height:1.4;margin:0 0 20px}
+border-radius:var(--radius);box-shadow:var(--shadow);padding:clamp(20px,3vw,32px);
+animation:cf-rise .48s var(--ease) both}
+.gemini-page .gm-panel+.gm-panel{margin-top:20px}
+.gemini-page .gm-panel pre:not(.gm-code){max-width:100%;overflow-x:auto;padding:12px 14px;
+border-radius:10px;background:var(--inset);border:1px solid var(--rule-soft);font-size:13px;
+line-height:1.65}
+.gemini-page .gm-panel h2{font-family:var(--serif);font-size:22px;font-weight:500;
+line-height:1.35;margin:0 0 20px}
 .gm-form{display:grid;gap:20px;margin:0}.gm-field{display:grid;align-content:start;gap:7px;min-width:0}
 .gemini-page .gm-field label{margin:0;color:var(--ink);font-size:14px;font-weight:650}
 .gemini-page .gm-field :is(input,select){display:block;width:100%;min-width:0;
-min-height:46px;border:1px solid var(--rule);border-radius:9px;background:var(--panel);
-color:var(--ink);font:inherit;font-size:16px;line-height:1.4;padding:11px 12px}
+min-height:46px;border:1px solid var(--rule);border-radius:10px;background:var(--panel);
+color:var(--ink);font:inherit;font-size:15.5px;line-height:1.4;padding:11px 13px;
+transition:border-color .14s var(--ease),box-shadow .14s var(--ease)}
+.gemini-page .gm-field :is(input,select):focus{border-color:var(--acc);
+box-shadow:0 0 0 3px var(--acc-soft);outline:none}
 .gemini-page .gm-field :is(input,select):focus-visible{outline:2px solid var(--acc);
 outline-offset:2px}.gm-field input::placeholder{color:var(--muted)}
 .gm-help,.gm-secondary{font-size:13px;line-height:1.6;color:var(--muted)}
@@ -37,9 +49,9 @@ padding-top:18px;border-top:1px solid var(--rule-soft)}
 .gemini-page .gm-actions button{min-height:44px;padding:10px 18px}
 .gm-metahead{display:flex;align-items:center;gap:12px}
 .gm-device{width:36px;height:36px;display:grid;place-items:center;flex:0 0 auto;
-background:var(--acc-soft);border-radius:10px;color:var(--acc)}
+background:var(--inset);border:1px solid var(--rule);border-radius:10px;color:var(--acc)}
 .gm-device:before{content:"";width:18px;height:13px;border:2px solid currentColor;
-border-radius:4px;box-shadow:0 4px 0 -2px var(--acc-soft),0 6px 0 -3px currentColor}
+border-radius:4px;box-shadow:0 4px 0 -2px var(--inset),0 6px 0 -3px currentColor}
 .gemini-page .gm-metahead h2{margin:0;font-size:17px}.gm-meta{margin:18px 0 0}
 .gm-meta>div{display:grid;gap:3px;padding:11px 0;border-top:1px solid var(--rule-soft)}
 .gm-subscription{margin:10px 0 0;padding-top:12px;border-top:1px solid var(--rule-soft);
@@ -51,6 +63,8 @@ border-radius:10px;padding:12px 15px;margin:0 0 18px}
 .gm-disconnect{margin-top:20px;border-top:1px solid var(--rule);padding-top:16px}
 .gm-panel form:has(.gm-check input:invalid) .gm-actions button.primary{
 background:var(--panel);border-color:var(--rule);color:var(--ink)}
+.gm-panel form:has(.gm-check input:invalid) .gm-actions button.primary:hover{
+background:var(--inset);border-color:var(--rule);color:var(--ink);transform:none;box-shadow:none}
 .gm-disconnect summary{cursor:pointer;color:var(--muted);font-weight:600;font-size:14px}
 .gm-disconnect form{display:grid;gap:12px;margin-top:14px}
 .gemini-page .gm-check{display:flex;align-items:flex-start;gap:10px;color:var(--ink);
