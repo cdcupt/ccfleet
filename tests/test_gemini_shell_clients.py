@@ -28,6 +28,12 @@ def local_tools(monkeypatch):
         def enabled(self):
             return self.project in trusted
 
+        def all_enabled(self):
+            return False
+
+        def navigation(self):
+            return False
+
         def snapshot(self):
             return ("original", None) if self.enabled() else None
 

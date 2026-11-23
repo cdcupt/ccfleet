@@ -80,33 +80,136 @@ def request_operation(message):
     return op
 
 
+class FullAccessUnavailable(ValueError):
+    """Safe local diagnostic. A full-access operation cannot fall back to asking."""
+
+
+PICK_WORKSPACE = "Choose a local project with /workspace ~/path/to/project."
+SWITCH_NOTICE = ("The user switched the connected computer to another project. Earlier file "
+                 "paths, reads and proposed edits belong to the old project. Reread the current "
+                 "project before making changes.\n\n")
+
+
 class ProjectCommands:
     """Local authority for the duration of one explicitly negotiated model turn."""
 
-    def __init__(self, tools, files, project, fleet_home):
-        self.tools = tools
+    def __init__(self, tools, files, project, fleet_home, *, root_fd=None):
+        self.tools, self.files = tools, files
         self.access = files.ProjectAccess(project, fleet_home)
+        self.identity = os.fstat(root_fd) if root_fd is not None else Path(project).stat()
         self.capable = False
         self.grant = None
+        self.no_prompt = False
+        self.switched = False
+        self.in_turn = False
 
     def connected(self, ready):
         caps = ready.get("capabilities")
         self.capable = isinstance(caps, dict) and caps.get("projectShell") is True
 
+    def select_workspace(self, workspace, argument):
+        """Called only for a local terminal line or an explicit single ACP text command."""
+        if not argument:
+            return workspace, "Current local folder: " + terminal_text(str(workspace.path))
+        if self.in_turn:
+            raise FullAccessUnavailable("Finish the current operation before switching projects.")
+        if not self.access.all_enabled():
+            raise FullAccessUnavailable(
+                "Enable all-projects access with ccfleet gemini --full-access at your Mac home.")
+        if (not argument.strip() or len(os.fsencode(argument)) > 4096
+                or any(unicodedata.category(c).startswith("C") for c in argument)):
+            raise FullAccessUnavailable("Use /workspace followed by a single local project path.")
+        home = self.files._account_home()
+        if argument == "~" or argument.startswith("~/"):
+            target = home / argument[2:]
+        else:
+            target = home / argument
+        if not target.is_relative_to(home) or ".." in target.parts:
+            raise FullAccessUnavailable("Choose an eligible project under your Mac home.")
+        access = self.files.ProjectAccess(target, self.access.fleet_home)
+        grant = access.snapshot()
+        if target != home and (grant is None or not access.eligible_checkout()):
+            raise FullAccessUnavailable("This directory is unavailable for local project commands.")
+        try:
+            new = self.tools.Workspace(target, workspace.approve, file_tools=self.files,
+                                       private_folders=workspace.private_folders,
+                                       test_path=workspace.test_path, cancelled=workspace.cancelled)
+        except (ValueError, OSError, RuntimeError):
+            raise FullAccessUnavailable("This local project could not be opened.") from None
+        try:
+            new._check()
+            if (new.path != target or not access.all_enabled()
+                    or target != home and access.snapshot() != grant):
+                raise FullAccessUnavailable("Local workspace or project access changed.")
+            self.identity = os.fstat(new.root_fd)
+        except BaseException:
+            new.close()
+            raise
+        workspace.close()
+        self.access = access
+        self.switched = True
+        msg = PICK_WORKSPACE if target == home else "Selected local project: " + terminal_text(
+            str(target))
+        return new, msg
+
+    def bound(self):
+        try:
+            return os.path.samestat(self.identity, self.access.project.stat())
+        except OSError:
+            return False
+
+    def blocked_workspace(self):
+        if not self.access.all_enabled():
+            return None
+        if self.access.snapshot() is not None and self.bound():
+            return None
+        if self.access.is_home():
+            return PICK_WORKSPACE
+        return "This folder is unavailable for full access. " + PICK_WORKSPACE
+
     @contextlib.contextmanager
     def turn(self, frame):
-        # A grant revoked and then recreated belongs to a later user decision.
-        # Queued actions from this turn may only use its original generation.
-        self.grant = self.access.snapshot() if self.capable else None
+        # Retain the local mode even if the slot is old or the grant changes:
+        # neither case can silently turn a full-access callback into a question.
+        grant = self.access.snapshot()
+        self.no_prompt = grant is not None or self.access.all_enabled()
+        self.grant = grant if self.capable and self.bound() else None
+        self.in_turn = True
         try:
+            if self.no_prompt and grant is None:
+                raise FullAccessUnavailable("This folder is unavailable for this full-access turn.")
             if self.grant is not None:
                 frame["projectShell"] = True
+            if self.switched:
+                if len((SWITCH_NOTICE + frame["text"]).encode("utf-8")) > MAX_PROMPT:
+                    raise FullAccessUnavailable("Shorten the first message in this project.")
+                frame["text"] = SWITCH_NOTICE + frame["text"]
             yield
         finally:
             self.grant = None
+            self.no_prompt = False
+            self.in_turn = False
+
+    def retire_stale_input(self, connection):
+        # At an idle boundary the paired slot has drained all tool callbacks before
+        # sending "end". An unsolicited buffered frame belongs to the old attachment.
+        if self.switched and connection.channel is not None and connection.channel.has_input():
+            connection.detach()
 
     def allowed(self):
-        return self.grant is not None and self.grant == self.access.snapshot()
+        return self.grant is not None and self.bound() and self.grant == self.access.snapshot()
+
+    def check_mutation(self):
+        if (self.in_turn and not self.no_prompt
+                and (self.access.all_enabled() or self.access.enabled())):
+            # The user enabled full access during a supervised turn. Retire its
+            # pending decisions; only the next explicit turn can use the new grant.
+            self.no_prompt = True
+            raise FullAccessUnavailable("Project access changed. Send a new instruction.")
+        if self.no_prompt and not self.allowed():
+            if not self.capable:
+                raise FullAccessUnavailable("Update the private Mac slot to use full access.")
+            raise FullAccessUnavailable("Local project access changed. This operation stopped.")
 
     def title(self, msg):
         if not self.allowed():
@@ -139,8 +242,10 @@ class Editor:
         private = tools.PrivateFolders(fleet_home)
         self.workspace = tools.Workspace(project, self._confirm_workspace, test, file_tools=files,
                                          private_folders=private, cancelled=self.disconnected)
-        self.commands = ProjectCommands(tools, files, self.workspace.path, fleet_home)
+        self.commands = ProjectCommands(tools, files, self.workspace.path, fleet_home,
+                                        root_fd=self.workspace.root_fd)
         self.channel = None
+        self.expired_input = False
         self.seen = {}
         self.approval = None
 
@@ -150,27 +255,42 @@ class Editor:
     def answer(self, question):
         # Keep the tty in canonical mode so unfinished or pasted approval input
         # can be flushed when the pinned SSH connection closes.
+        self.commands.check_mutation()
         if self.channel is None or not sys.stdin.isatty():
-            return input(question)
+            answer = input(question)
+            self.commands.check_mutation()
+            return answer
         fd = sys.stdin.fileno()
         termios.tcflush(fd, termios.TCIFLUSH)
         print(question, end="", flush=True)
-        while not self.disconnected():
-            if select.select([fd], [], [], 0.15)[0]:
-                answer = sys.stdin.readline()
-                if not answer:
-                    raise EOFError
-                if not self.disconnected():
-                    return answer.rstrip("\n")
+        try:
+            while not self.disconnected():
+                self.commands.check_mutation()
+                if select.select([fd], [], [], 0.15)[0]:
+                    answer = sys.stdin.readline()
+                    if not answer:
+                        raise EOFError
+                    self.commands.check_mutation()
+                    if not self.disconnected():
+                        return answer.rstrip("\n")
+        except FullAccessUnavailable:
+            self.expired_input = True
+            termios.tcflush(fd, termios.TCIFLUSH)
+            print()
+            raise
         termios.tcflush(fd, termios.TCIFLUSH)
         print()
         raise ApprovalInterrupted
 
     def confirm(self, question):
+        self.commands.check_mutation()
+        if self.commands.no_prompt:
+            raise FullAccessUnavailable("This operation is unavailable in full-access mode.")
         if self.channel is None or not sys.stdin.isatty():
             approved = confirm(question)
         else:
             approved = self.answer(question + " [y/N] ").strip().lower() in ("y", "yes")
+        self.commands.check_mutation()
         if self.disconnected():
             raise ApprovalInterrupted
         return approved
@@ -220,6 +340,8 @@ class Editor:
 
     def handle(self, request):
         op = request_operation(request)
+        if self.commands.grant is not None or op not in ("list", "read"):
+            self.commands.check_mutation()
         if op in ("shell", "publish"):
             print(self.commands.title(request), flush=True)
             try:
@@ -250,6 +372,8 @@ class Editor:
         if self.workspace.command is None:
             raise ValueError("tests are disabled; the user can enable a runner with /test")
         if self.workspace.test_directory() is None:
+            if self.commands.no_prompt:
+                raise FullAccessUnavailable("Set a valid local test subfolder with /test.")
             folder = self.answer("Which project subfolder should run the tests? "
                                  "(blank to skip) ").strip()
             if not folder:
@@ -284,7 +408,11 @@ class Editor:
                     return
             self.workspace.test_relative = folder
             self.workspace.command = self.tools.COMMANDS[name]
-            print("Local tests will ask before running " + " ".join(self.workspace.command) + ".")
+            if self.commands.access.enabled() or self.commands.access.all_enabled():
+                print("Selected local test command: " + " ".join(self.workspace.command) + ".")
+            else:
+                print("Local tests will ask before running " + " ".join(self.workspace.command)
+                      + ".")
         else:
             print("Unknown test runner. Use /test to list available commands.")
 
@@ -299,6 +427,9 @@ class Channel:
         poller = select.poll()
         poller.register(self.pipe.stdout, select.POLLHUP | select.POLLERR)
         return bool(poller.poll(0))
+
+    def has_input(self):
+        return bool(select.select([self.pipe.stdout], [], [], 0)[0])
 
     def send(self, message):
         raw = json.dumps(message, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -346,6 +477,7 @@ def turn(channel, editor, prompt, *, number=None, progress=False):
         with editor.commands.turn(request):
             channel.send(request)
             receive_turn(channel, editor, number, progress)
+            editor.commands.switched = False
     finally:
         editor.approval = None
 
@@ -389,6 +521,9 @@ def receive_turn(channel, editor, number, progress):
             reply["result"] = editor.handle(message)
         except (OSError, UnicodeError, subprocess.TimeoutExpired):
             reply["error"] = "local file or test runner unavailable"
+        except FullAccessUnavailable as exc:
+            print(str(exc), flush=True)
+            reply["error"] = str(exc)
         except ValueError as exc:
             reply["error"] = str(exc)[:512]
         channel.send(reply)
@@ -401,10 +536,13 @@ COMMAND_HELP = """Gemini commands
   /test                      Show the current test command
   /test <runner> [subfolder] Choose pytest, npm, go or cargo for local tests
   /test off                  Disable local tests
+  /workspace [path]          Show the local folder or switch projects with all-projects access
   /reconnect                 Rejoin the previous conversation, or start fresh after expiry
   /exit or /quit             Close this session
 
-To enable project commands, launch ccfleet gemini --full-access in a local terminal.
+Run ccfleet gemini --full-access in your Mac home to enable all-projects access.
+Use /workspace ~/path/to/project to select another project in this conversation.
+To enable a single checkout, run ccfleet gemini --full-access there.
 To revoke access in that project, run ccfleet gemini --revoke-full-access.
 Type a message to talk to Gemini."""
 MODEL_ID = re.compile(r"gemini-[a-z0-9.-]{1,80}\Z")
@@ -571,13 +709,14 @@ def session(connection):
     connection.connect()
     project = terminal_text(str(editor.workspace.path))
     print(f"Gemini · {terminal_text(connection.current)} · {project}")
-    if editor.commands.access.enabled():
+    if blocked := editor.commands.blocked_workspace():
+        print(blocked)
+    elif editor.commands.access.enabled():
         if editor.commands.capable:
             print("Project access enabled. Gemini can edit files and run local project commands. "
                   "Type /help for controls.")
         else:
-            print("Update the private Mac slot to use project commands. Edits and local tests "
-                  "ask for approval in this session. Type /help for controls.")
+            print("Update the private Mac slot to use full access. Local changes are unavailable.")
     else:
         print("Gemini reads requested project files through your slot. Edits and local tests "
               "ask for approval. Type /help for commands.")
@@ -592,8 +731,8 @@ def session(connection):
         parts = prompt.split(maxsplit=1)
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else ""
-        if stale_answer:
-            stale_answer = False
+        if stale_answer or editor.expired_input:
+            stale_answer = editor.expired_input = False
             if prompt.lower() in ("y", "yes", "n", "no"):
                 print("That approval expired. Enter a new instruction.")
                 continue
@@ -604,6 +743,20 @@ def session(connection):
             return
         if command == "/help":
             print(COMMAND_HELP)
+            continue
+        if command == "/workspace":
+            try:
+                selected, message = editor.commands.select_workspace(editor.workspace, argument)
+                if selected is not editor.workspace:
+                    editor.seen.clear()
+                    editor.approval = None
+                    editor.workspace = selected
+                    editor.commands.retire_stale_input(connection)
+                print(message)
+            except FullAccessUnavailable as exc:
+                print(str(exc))
+            except (ValueError, OSError, RuntimeError):
+                print("This local project could not be opened.")
             continue
         if command == "/test":
             editor.test_command("/test " + argument)
@@ -618,6 +771,7 @@ def session(connection):
             if len(prompt.encode("utf-8")) > MAX_PROMPT:
                 print("The message is too long. Please shorten it.")
                 continue
+        editor.commands.retire_stale_input(connection)
         if connection.channel is not None and editor.disconnected():
             connection.detach()
         if command == "/reconnect":
@@ -625,6 +779,9 @@ def session(connection):
                 connection.reconnect(fresh=True)
             else:
                 print("The Gemini connection is already open.")
+            continue
+        if command != "/model" and (blocked := editor.commands.blocked_workspace()):
+            print(blocked)
             continue
         if connection.channel is None and not connection.reconnect(fresh=False):
             continue
@@ -634,6 +791,8 @@ def session(connection):
                                                    connection.models, argument)
             else:
                 connection.send_prompt(prompt)
+        except FullAccessUnavailable as exc:
+            print(str(exc))
         except (EOFError, OSError, subprocess.TimeoutExpired, SlotError) as exc:
             if isinstance(exc, SlotError) and str(exc) not in INTERRUPTED_ERRORS:
                 raise

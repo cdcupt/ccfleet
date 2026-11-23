@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-VERSION = "0.2.23"
+VERSION = "0.2.24"
 # ACP reserves -32000 for sessions which require authentication.
 AUTH_REQUIRED = -32000
 INTERNAL_ERROR = -32603
@@ -204,7 +204,8 @@ class Session:
         except (ValueError, OSError, RuntimeError, KeyError) as exc:
             raise invalid("The local workspace or test runner is unavailable.") from exc
         self.commands = host.editor.ProjectCommands(
-            host.tools, host.files, self.workspace.path, host.fleet_home)
+            host.tools, host.files, self.workspace.path, host.fleet_home,
+            root_fd=self.workspace.root_fd)
         self.resume_token = None
         self.offered_token = None
         self.reconnecting = False
@@ -529,6 +530,10 @@ class Session:
     def permission(self, title, kind, location, content, *, automatic=False):
         if self.unavailable():
             return False
+        self.commands.check_mutation()
+        if self.commands.no_prompt and not automatic:
+            raise self.host.editor.FullAccessUnavailable(
+                "This operation is unavailable in full-access mode.")
         if automatic and (self.command_unavailable() or not self.commands.allowed()):
             return False
         tool = {"toolCallId": secrets.token_urlsafe(16), "title": title, "kind": kind,
@@ -536,8 +541,14 @@ class Session:
                 "locations": [{"path": str(location)}], "content": content}
         self.update("tool_call", **tool)
         tool_id = tool["toolCallId"]
-        if automatic or self.host.ask(self, tool):
+        if automatic:
             return tool_id
+        try:
+            if self.host.ask(self, tool):
+                return tool_id
+        except self.host.editor.FullAccessUnavailable:
+            self.finish_tool(tool_id, False)
+            raise
         self.finish_tool(tool_id, False)
         return None
 
@@ -628,6 +639,8 @@ class Session:
         if self.unavailable():
             raise EOFError
         op = self.host.editor.request_operation(msg)
+        if self.commands.grant is not None or op not in ("read", "list"):
+            self.commands.check_mutation()
         if op in ("shell", "publish"):
             return self.project_command(msg)
         path = msg.get("path")
@@ -678,11 +691,36 @@ class Session:
     def prompt(self, params):
         prompt = prompt_text(params.get("prompt"), self.host.editor.MAX_PROMPT, self.workspace)
         parts = prompt.strip().split(maxsplit=1)
+        if parts[0] == "/workspace":
+            # A workspace change is a local management action, never an instruction
+            # obtained by concatenating attachments, multiple blocks or multiline text.
+            blocks = params["prompt"]
+            if (len(blocks) != 1 or set(blocks[0]) != {"type", "text"}
+                    or blocks[0]["type"] != "text" or any(c in prompt for c in "\r\n\x00")
+                    or params.keys() - {"sessionId", "prompt"}):
+                raise invalid("Send /workspace as one plain text message, without attachments.")
+            try:
+                selected, message = self.commands.select_workspace(
+                    self.workspace, parts[1] if len(parts) == 2 else "")
+            except self.host.editor.FullAccessUnavailable as exc:
+                raise invalid(str(exc)) from None
+            except (ValueError, OSError, RuntimeError):
+                raise invalid("This local workspace could not be selected.") from None
+            if selected is not self.workspace:
+                self.seen.clear()
+                self.approved.clear()
+                self.writing = self.local_tool = None
+                self.workspace = selected
+                self.commands.retire_stale_input(self)
+            self.text(message)
+            return {"stopReason": "end_turn"}
         if parts[0] == "/help":
             self.text("Use T3’s model picker or /model to see available Gemini models. "
                       "Use Supervised mode to review changes in the default editor. "
                       "For project commands, run ccfleet gemini --full-access in a local "
-                      "terminal in this project. Revoke with ccfleet gemini --revoke-full-access. "
+                      "terminal. With all-projects access enabled on this Mac, "
+                      "use /workspace ~/path/to/project to select a project or /workspace to show "
+                      "the active folder. Revoke with ccfleet gemini --revoke-full-access. "
                       "If the private connection "
                       "drops, /reconnect checks it without sending a prompt.")
             return {"stopReason": "end_turn"}
@@ -715,11 +753,22 @@ class Session:
                 except RpcError as exc:
                     self.text(str(exc))
             return {"stopReason": "end_turn"}
+        self.commands.retire_stale_input(self)
+        blocked = self.commands.blocked_workspace()
+        if blocked:
+            self.text(blocked)
+            return {"stopReason": "end_turn"}
         if self.channel is None:
             self.reconnect(allow_fresh=False)
         request = {"type": "prompt", "text": prompt}
-        with self.commands.turn(request):
-            return self.prompt_turn(request)
+        try:
+            with self.commands.turn(request):
+                result = self.prompt_turn(request)
+                if result["stopReason"] != "cancelled":
+                    self.commands.switched = False
+                return result
+        except self.host.editor.FullAccessUnavailable as exc:
+            raise invalid(str(exc)) from None
 
     def prompt_turn(self, request):
         ids = set()
@@ -765,6 +814,9 @@ class Session:
                 response = {"type": "response", "id": ident}
                 try:
                     response["result"] = self.file_action(msg)
+                except self.host.editor.FullAccessUnavailable as exc:
+                    self.text(str(exc))
+                    response["error"] = str(exc)
                 except (EOFError, OSError, ValueError, subprocess.TimeoutExpired):
                     response["error"] = "Local operation declined, protected or unavailable."
                 # A slot-side callback may still be awaiting this reply after cancel.
@@ -823,16 +875,19 @@ class Bridge:
                 return False
             self.pending[ident] = answer
         try:
+            session.commands.check_mutation()
             self.write({"id": ident, "method": "session/request_permission", "params": {
                 "sessionId": session.id, "toolCall": tool, "options": [ALLOW, DECLINE],
             }})
             # The slot's device callback allows ten minutes for a human decision.
             deadline = time.monotonic() + 590
             while not session.unavailable() and time.monotonic() < deadline:
+                session.commands.check_mutation()
                 try:
                     reply = answer.get(timeout=0.25)
                 except queue.Empty:
                     continue
+                session.commands.check_mutation()
                 return (not session.unavailable() and isinstance(reply, dict)
                         and reply.get("outcome") == {"outcome": "selected", "optionId": "allow"})
             return False
