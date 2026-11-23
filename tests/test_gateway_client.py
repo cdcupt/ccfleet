@@ -594,3 +594,24 @@ def test_openrouter_launch_uses_account_key_and_catalog_without_slot(client, mon
     assert settings["env"]["ANTHROPIC_API_KEY"] == ""
     assert settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == ids[1]
     assert [v["model"] for v in settings["modelPicker"]["options"]] == ids
+
+
+def test_openrouter_remembered_default_override_and_picker(client, monkeypatch, capsys):
+    saved, other, unused = "example/saved", "example/prior", "example/unused"
+    monkeypatch.setenv("CCFLEET_OPENROUTER_TOKEN", "ccf_or_" + "b" * 43)
+    rows = [{"id": m, "fleet_recent": m != unused} for m in (saved, other, unused)]
+    monkeypatch.setitem(client.scope, "api_json", lambda *a, **kw: {"data": rows})
+    main = client.loaded["main"]
+    assert main(["openrouter", "--check"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "Default: " + saved in lines
+    assert "Recently used: " + saved + ", " + other in lines
+    assert not client.calls
+    assert main(["openrouter"]) == 0
+    assert main(["openrouter", "--model", unused]) == 0
+    for call, expected in zip(client.calls, (saved, unused)):
+        command, _, _, settings, _ = call
+        assert command[command.index("--model") + 1] == expected
+        options = settings["modelPicker"]["options"]
+        assert [o["model"] for o in options] == [saved, other, unused]
+        assert ["Recent" in o["label"] for o in options] == [True, True, False]

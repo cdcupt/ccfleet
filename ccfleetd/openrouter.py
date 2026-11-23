@@ -192,6 +192,14 @@ class Service:
         self.key = read_key(cfg.openrouter_key_file) if self.models else None
         self.stop = threading.Event()
 
+    def catalog(self, owner):
+        recent = self.store.openrouter_recent_models(owner, self.models)
+        ordered = dict.fromkeys([*recent, *self.models])
+        rows = [{"id": model, "type": "model", "display_name": model + " · Fleet +5%",
+                 "fleet_recent": model in recent} for model in ordered]
+        return {"data": rows, "has_more": False, "first_id": rows[0]["id"],
+                "last_id": rows[-1]["id"]}
+
     def connect(self):
         return http.client.HTTPSConnection(HOST, timeout=10)
 

@@ -1371,13 +1371,12 @@ def make_handler(ctx: Context) -> type[BaseHTTPRequestHandler]:
                 service = ctx.gateway.openrouter
                 if not self._payment_site() or not service.models:
                     self._json(404, {"error": "OpenRouter unavailable"})
-                elif not ctx.store.openrouter_principal(openrouter.credential(self.headers)):
+                    return
+                owner = ctx.store.openrouter_principal(openrouter.credential(self.headers))
+                if not owner:
                     self._json(401, {"error": "A Fleet OpenRouter key is required."})
                 else:
-                    models = [{"id": m, "type": "model", "display_name": m + " · Fleet +5%"}
-                              for m in service.models]
-                    self._json(200, {"data": models, "has_more": False, "first_id": models[0]["id"],
-                                     "last_id": models[-1]["id"]}, {"Cache-Control": "no-store"})
+                    self._json(200, service.catalog(owner), {"Cache-Control": "no-store"})
                 return
             if path == "/v1/models":
                 if not self._product_site() or ctx.cfg.broker_only or not ctx.gateway.enabled:

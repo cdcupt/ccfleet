@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS openrouter_requests (
     debit_cents INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_openrouter_account ON openrouter_requests(account_id,created_at);
+CREATE INDEX IF NOT EXISTS ix_openrouter_used_model ON openrouter_requests(account_id,model)
+    WHERE state='settled';
 """
 
 
@@ -195,6 +197,23 @@ class OpenRouterStore:
                 [(now, row["id"]) for row in rows],
             )
             return rows
+
+    def openrouter_recent_models(self, owner, offered):
+        """Return up to ten enabled models from the most recent settled requests."""
+        if not offered:
+            return []
+        # One indexed last-row lookup per offered model (catalogs have at most 64).
+        # A late settlement of an older request must not displace a newer choice.
+        placeholders = ",".join("(?)" for _ in offered)
+        with self._lock:
+            rows = self._conn.execute(
+                f"WITH offered(model) AS (VALUES {placeholders}) "
+                "SELECT model, (SELECT MAX(r.rowid) FROM openrouter_requests AS r "
+                "WHERE r.account_id=? AND r.model=offered.model AND r.state='settled') AS last_use "
+                "FROM offered ORDER BY last_use DESC LIMIT 10",
+                (*offered, owner),
+            ).fetchall()
+        return [model for model, last_use in rows if last_use is not None]
 
     def openrouter_receipts(self, owner):
         with self._lock:

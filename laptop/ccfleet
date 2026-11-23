@@ -2903,10 +2903,14 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
                    or not re.fullmatch(pattern, row["id"]) for row in rows)):
         raise CliError("invalid OpenRouter catalog from Fleet")
     models = [row["id"] for row in rows]
+    recent = [row["id"] for row in rows if row.get("fleet_recent") is True]
     model = args.model or models[0]
     if model not in models:
         raise CliError("choose an offered OpenRouter model: " + ", ".join(models))
     if args.check:
+        print("Default: " + models[0])
+        if recent:
+            print("Recently used: " + ", ".join(recent))
         print("Available via Fleet at OpenRouter usage cost + 5%: " + ", ".join(models))
         return 0
     claude = prepare_agent("claude")
@@ -2921,7 +2925,8 @@ def cmd_openrouter(args: argparse.Namespace) -> int:
     settings["env"].update(tiers)
     env.update(tiers)
     settings["modelPicker"] = {"replaceBuiltInOptions": True, "options": [
-        {"model": m, "label": m + " · OpenRouter + 5%"} for m in models]}
+        {"model": m, "label": m + (" · Recent" if m in recent else "") + " · OpenRouter + 5%"}
+        for m in models]}
     print("OpenRouter usage is charged to your Fleet balance at cost + 5%.", file=sys.stderr)
     with tempfile.NamedTemporaryFile(dir=home(), mode="w", suffix=".json") as options:
         json.dump(settings, options)
@@ -3943,7 +3948,7 @@ def parser() -> argparse.ArgumentParser:
                        help="server used only when pairing a new computer")
     router = sub.add_parser("openrouter", help="run local Claude with Fleet-billed OpenRouter models")
     router.add_argument("--model", help="OpenRouter model ID")
-    router.add_argument("--check", action="store_true", help="list available models without inference")
+    router.add_argument("--check", action="store_true", help="show the default, recent models and full catalog without inference")
     router.add_argument("claude_args", nargs=argparse.REMAINDER)
     gateway = sub.add_parser("gateway", help="configure HTTPS access to your own provider accounts")
     gateway_sub = gateway.add_subparsers(dest="gateway_action")

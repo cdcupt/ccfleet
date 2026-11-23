@@ -285,3 +285,44 @@ def test_zero_priced_model_has_zero_hold_and_zero_fee(router, provider):
     assert receipt["state"] == "settled" and receipt["hold_cents"] == 0
     assert Decimal(receipt["fee_usd"]) == 0 and receipt["debit_cents"] == 0
     assert calls[0][2]["provider"]["max_price"]["completion"] == 0
+
+
+def test_recent_catalog_is_personal_deduplicated_and_limited_to_ten(router):
+    c = router
+    offered = [f"example/model-{n}" for n in range(13)]
+    c.service.models = dict.fromkeys(offered, (Decimal(0), Decimal(0)))
+    alice = c.store.openrouter_key("alice")
+    bob = c.store.openrouter_key("bob")
+
+    def submit(model):
+        rid = c.store.openrouter_reserve("alice", alice, model, 0)
+        c.store.openrouter_submit(rid, "alice", alice)
+        c.store.openrouter_identify(rid, "gen-" + rid)
+        return rid
+
+    def settle(rid):
+        c.store.openrouter_settle(rid, "gen-" + rid, Decimal(0))
+
+    pending = submit(offered[0])
+    for model in offered[1:]:
+        settle(submit(model))
+    settle(pending)  # Reconciliation can finish out of order.
+    settle(submit(offered[4]))
+    removed = offered[-1]
+    del c.service.models[removed]
+    submit(offered[0])  # An unresolved request does not move this model to the front.
+    c.store.openrouter_release(c.store.openrouter_reserve("alice", alice, offered[0], 0))
+    new_key = c.store.openrouter_key("alice")
+
+    status, headers, raw = api(c, new_key)
+    catalog = json.loads(raw)
+    rows = catalog["data"]
+    recent = [offered[n] for n in (4, 11, 10, 9, 8, 7, 6, 5, 3, 2)]
+    assert status == 200 and headers["Cache-Control"] == "no-store"
+    assert catalog["first_id"] == recent[0] and catalog["last_id"] == offered[1]
+    assert [r["id"] for r in rows if r["fleet_recent"]] == recent
+    assert [r["id"] for r in rows] == [*recent, offered[0], offered[1]]
+    assert api(c, alice)[0] == 401
+    fresh = json.loads(api(c, bob)[2])["data"]
+    assert [r["id"] for r in fresh] == offered[:-1]
+    assert not any(r["fleet_recent"] for r in fresh)
