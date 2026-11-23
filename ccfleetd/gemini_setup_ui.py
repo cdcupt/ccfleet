@@ -400,7 +400,7 @@ def t3_setup():
             + tr("Add Gemini to T3 Code", "在 T3 Code 中添加 Gemini") + '</summary>'
             + agent_guide.t3_provider_steps()
             + '<p><a href="/docs/guide#gemini-project-access">'
-            + tr("Enable local commands for one project", "为一个项目启用本地命令") + '</a></p>'
+            + tr("Enable local commands across projects", "为多个项目启用本地命令") + '</a></p>'
             + '<p><a href="/docs/guide#gemini-recovery">'
             + tr("Recover a Gemini conversation", "恢复 Gemini 对话") + '</a></p></details>')
 

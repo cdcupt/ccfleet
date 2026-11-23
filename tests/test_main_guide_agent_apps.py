@@ -175,3 +175,13 @@ def test_gemini_project_access_setup_links_and_commands(language, phrases):
     for source, section in ((guide, apps), (account, account.find("details")[0])):
         targets = [bilingual.route_target(link.attrs["href"]) for link in source.inside(section, "a")]
         assert any(t and t[0] == "/docs/guide#gemini-project-access" for t in targets)
+
+
+@pytest.mark.parametrize("language,term", [("en", "without approval prompts"), ("zh", "不弹出确认请求")])
+def test_all_projects_home_grant_uses_one_local_setup(language, term):
+    html = rendered(language)
+    guide = Flow(html)
+    t3, = guide.find("section", id="t3-gemini")
+    assert "ccfleet update\ncd ~\nccfleet gemini --full-access" in Document(html).pre_codes
+    assert all(v in normalized(t3.text) for v in ("0.2.24", "/workspace ~/code/app", term,
+                                                   "Orca", "Herdr", "--revoke-full-access"))

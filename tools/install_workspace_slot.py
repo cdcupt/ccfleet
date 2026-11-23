@@ -13,6 +13,7 @@ EDITOR_LABEL = "io.ccfleet.private-owner-gemini-editor"
 
 PREDECESSORS = {
     "project_files.py": {
+        "853eb15e1d44738b23ad78329b398637423f72c98bcd32e01e44fd83194cb8c9",
         "36eb61aa64f5d70a546fe26f4f9e5a6775a0d33bef647e8621818c1dfb8dcde9",
     },
     "antigravity_entry.py": {
@@ -21,12 +22,14 @@ PREDECESSORS = {
         "92d538c2b46ced80e3d4e15422d404da4ea073a4c523c53f3c560fe6040ac24b",
     },
     "gemini_editor_slot.py": {
+        "feac0c1c087361fa2b7c8d7ff4009f86bb2b0f12cc083f2f926e8cc22272b2ea",
         "8f14f817069275d80350d88a50a5acd5e4f463c3d421a738ac9b80f0192a88bb",
         "bdb0a586c2eb21f219ee29faf05311fb2a00295bb0a49b32c47c2c0c7807de32",
         "a51e16dc133df2c5eb3fdb069118f8b6145cf716ac5cff94fb31e0704039e462",
         "f7c7a281de2483d82a80758c88c95247e2bf869497818f4d724faf1f213cf3ab",
     },
     "gemini_distribution.py": {
+        "e5d70199be537bf5efba1b34cd9f43dd2c6042c909f23f414dc7cf82d046fc27",
         "ba506bc0e1ae0c224a866a90920d8f4b23e99b0874f3a85481dd628005bf70b3",
         "cdc1afafee1816d0e6831a5b196b3c093c166843ca6e6f537e4ddbe755e47cfa",
         "8b8b84c94c5ed44bd69b91c6b80d498276a664a217f3894e26874cd9bacf16ad",

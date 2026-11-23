@@ -1536,13 +1536,13 @@ def _agent_app_guide() -> str:
             'private Mac slot. Pair this Mac once with <code>ccfleet pair gemini</code> '
             'using your <a href="/account/gemini#subscription">saved setup code</a>. '
             'By default, edits and test runs ask for approval in the Gemini terminal. '
-            '<a href="#gemini-project-access">Enable commands for this project</a>.</p>',
+            '<a href="#gemini-project-access">Enable commands across projects</a>.</p>',
             '<p>在保存项目文件的 MacBook 上打开项目。在 Orca 和 Herdr 桌面应用的项目终端中，'
             '可以运行 <code>ccfleet claude</code> 和 <code>ccfleet gemini</code>。Gemini 使用'
             '专属 Mac 槽位上的 Antigravity 个人订阅。用<a href="/account/gemini#subscription">'
             '已保存的配对码</a>运行 <code>ccfleet pair gemini</code>，每台 Mac 配对一次。'
             '默认情况下，修改文件和运行测试前会请求确认。可<a href="#gemini-project-access">'
-            '为此项目启用命令</a>。</p>',
+            '启用跨项目命令</a>。</p>',
         )
         + bi('<p>For a fixed-slot Claude launcher, finish <a href="#setup">Fleet setup</a>, '
              'select a Claude-backed slot and keep original Claude Code installed. The launcher '
